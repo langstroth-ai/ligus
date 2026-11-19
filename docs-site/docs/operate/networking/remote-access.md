@@ -220,8 +220,8 @@ If the relay also gates access with tokens (`LANGSTROTH_RELAY_ACCESS_TOKENS` or
 
 Check the relay with `GET https://<relay-url>/v1/tunnel/info`. A relay with
 the tunnel on answers `{"versions":[1],"push":…,"billing":"none"}`; one with
-it off answers 404. The open-source relay always reports `"billing":"none"`
-(a field kept for wire compatibility), and the app needs nothing more.
+it off answers 404. `"billing"` is always `"none"` (a field kept for wire
+compatibility), and the app needs nothing more.
 
 !!! note "Run one relay instance"
     The relay keeps each box's control connection in memory, so a phone's
@@ -259,7 +259,7 @@ yourself under the same team.
     A dev build and an App Store build have different bundle ids. The app
     tells the relay its bundle id with its push token, and the relay pushes
     with that topic when it is `LANGSTROTH_RELAY_APNS_TOPIC` or listed in
-    `LANGSTROTH_RELAY_APNS_TOPICS` (relay v0.3 and later); any other is refused.
+    `LANGSTROTH_RELAY_APNS_TOPICS`; any other is refused.
     `auto` uses the environment each phone reports: sandbox for development
     builds (run from Xcode), production for TestFlight and App Store builds. Keep the `.p8`
     readable only by the relay's user and out of version control.

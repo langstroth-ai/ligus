@@ -21,7 +21,7 @@ column says which. The relay's own variables are on
 | `LIGUS_WORKSPACE` | `default` | CLI; desktop on first launch only | relay room |
 | `LIGUS_WORKSPACE_KEY` | from `config.toml` | CLI; desktop on first launch only | E2EE workspace passphrase. Sync refuses to run without one |
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |
-| `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 0.1: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
+| `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
 | `LIGUS_NATIVE_PASSKEYS` | on | desktop | `0`: passkey prompts always use the browser hand-off instead of the macOS or Windows passkey dialog ([native passkeys](../security/native-passkeys.md)) |
 | `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../../ligus/concepts/identity.md#key-storage)) |
@@ -100,9 +100,9 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_SERVE_LABEL` | `$HOSTNAME`, else `home host` | the host's label |
 | `LIGUS_SERVE_NAME` | unset | display name of the box (its own service member) |
 | `LIGUS_ADMISSION_FILE` | unset | a file holding a box admission code, redeemed at start-up by `ligus serve` and `ligus worker` (the chart mounts a Secret here); denied to agent processes. See [Admitting a box](../ops/admitting-a-box.md) |
-| `LIGUS_SERVE_OWNER` | removed | refused with a migration error since 0.1: a box is never a person's device |
+| `LIGUS_SERVE_OWNER` | removed | refused with an error: a box is never a person's device |
 | `LIGUS_SERVE_DEFAULT_AGENT` | unset | agent that gets phone messages that mention nobody |
-| `LIGUS_SERVE_APPLY_ON_APPROVE` | removed | ignored since 0.1: there is no auto-apply; a box applies only a person's request naming it ([Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
+| `LIGUS_SERVE_APPLY_ON_APPROVE` | removed | ignored: there is no auto-apply; a box applies only a person's request naming it ([Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
 | `LIGUS_SERVE_PALETTE` / `LIGUS_SERVE_APPEARANCE` | unset | theme for *Match host* |
 | `LIGUS_DESKTOP_DATA_DIR` | the OS app-data dir for `ai.ligus.desktop` | where to read the desktop's theme on the same machine |
 | `LIGUS_REPOS_DIR` | `<data dir>/repos` | checkouts the phone may bind and clone into |
@@ -122,8 +122,12 @@ first time it is created; after that, Settings is the source of truth.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LIGUS_VERSION` | latest | version `install.sh` installs |
-| `LIGUS_INSTALL_DIR` | see `install.sh` | where it installs `ligus` |
+| `LIGUS_VERSION` | latest | release `install.sh` installs: `latest`, or a release tag such as `v0.1.0` (or `0.1.0`); anything else is refused |
+| `LIGUS_INSTALL_DIR` | `$HOME/.local/bin` | where it installs `ligus` |
+
+`install.sh` downloads `ligus-<target>.sha256` next to the binary from the
+same release and refuses to install when the checksum file is missing or
+doesn't match.
 
 ## Build time
 

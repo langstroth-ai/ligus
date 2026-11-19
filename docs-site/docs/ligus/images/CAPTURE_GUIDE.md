@@ -1,7 +1,7 @@
 # Screenshot Capture Guide
 
 A handoff doc for whoever (human or agent) captures the PNGs the docs site
-references. It reflects the **current 1.0 Rust + Tauri Ligus UI** (rail + sidebar
+references. It reflects the **current 0.1 Rust + Tauri Ligus UI** (rail + sidebar
 + right-rail panes; tabbed Settings; **5-step** onboarding). Recipes run
 top-to-bottom in one ~15-minute session — later states build on earlier ones.
 
@@ -12,7 +12,7 @@ elements).
 > **Filenames are load-bearing.** The docs link these exact names; keep them.
 > A ⚠️ marks something that changed since the last capture pass and should be
 > **verified against the live build** before you shoot — the rewrite moved a few
-> surfaces. The bottom section lists *new 1.0 surfaces* (Workflows, multi-agent,
+> surfaces. The bottom section lists *new 0.1 surfaces* (Workflows, multi-agent,
 > CLI, scheduling) whose docs pages don't embed a screenshot yet; capture them
 > so we can wire them in.
 
@@ -52,7 +52,7 @@ elements).
   like `/Users/alice/Projects/demo`, and test-only invite/access codes. If you
   sign in with GitHub for a shot, prefer a throwaway/test account.
 
-### Current UI reference (verified against source, 1.0)
+### Current UI reference (verified against source, 0.1)
 
 - **Onboarding — 5 steps** with a 5-segment progress bar:
   1. **Identity** ("Who are you?" — GitHub sign-in or display name)
@@ -137,7 +137,7 @@ Ollama), the relevant field (API key, or the Ollama localhost endpoint), and
 ## 4b. `onboarding-team.png` — used by `features/onboarding.md` *(new step)*
 
 **State.** Onboarding **step 4** ("Team & sync"), the collaboration choice added
-in 1.0.
+in 0.1.
 
 **Recipe.** From step 3 click **Next**. Step 4 offers three modes: **Just me
 (no sync)** (local-only), **Join a team** (invite / short code), **Sync through
@@ -286,9 +286,9 @@ incoming request, and connected friends with presence dots.
 
 ---
 
-## New 1.0 surfaces (capture so we can wire them into their pages)
+## New 0.1 surfaces (capture so we can wire them into their pages)
 
-These shipped in 1.0 and their docs pages exist but don't embed a screenshot
+These shipped in 0.1 and their docs pages exist but don't embed a screenshot
 yet. Capture with the suggested names; we'll add the `![…]` refs when the pages
 are refreshed.
 
@@ -370,7 +370,7 @@ Preview against the docs, then commit:
 ```bash
 bash scripts/serve-docs.sh && open http://127.0.0.1:8000/ligus/
 git add docs-site/docs/ligus/images/*.png
-git commit -m "docs: refresh UI screenshots for the 1.0 app"
+git commit -m "docs: refresh UI screenshots for the 0.1 app"
 ```
 
 The docs build runs in strict mode, so a page can't embed an image that doesn't

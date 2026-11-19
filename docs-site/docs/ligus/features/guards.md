@@ -2,9 +2,8 @@
 
 Ligus keeps a workspace inside safe bounds with a few guards that work the
 same whatever runtime your agents use. You find them in **Settings → Guards**.
-They are named after the honeybee colony Ligus takes its name from
-(*Apis mellifera ligustica*): colonies post more guards and narrow their
-entrance in a dearth, when robbers are about.
+The names come from beekeeping: a colony posts more guards and narrows its
+entrance in a dearth.
 
 ## Dearth mode
 
@@ -56,7 +55,7 @@ for a second approval is admitted.
 ## Chat lockdown
 
 A chat locks itself down when one of its agent turns shows a sign of
-infection, the way a colony fights a pathogen by sealing more of the nest:
+infection:
 
 - a **prompt-injection marker** in something an agent read: a tool or MCP
   result telling it to ignore its instructions, pretend to be a system
@@ -108,12 +107,10 @@ repository (**Sweep now** in Settings → Guards runs it at once):
 Subscription runtimes (Claude Code, Codex, Copilot, Antigravity) have usage
 windows, such as Claude's five-hour and weekly limits. Instead of every agent
 running at full speed until the window is exhausted and then all stopping at
-once, Ligus backs off in steps, the way a hive holds its brood nest in a
-narrow temperature band with many bees reacting at slightly different
-thresholds:
+once, Ligus backs off in steps:
 
 - **Your own requests always run.** A message you send, a regenerate, a
-  proposal you act on: never throttled. They are the brood.
+  proposal you act on: never throttled.
 - **Scheduled runs pause first**, from about 70 % of the window. A due
   schedule simply waits and fires once there's room again.
 - **Workflow stages and agent-to-agent hand-offs pause next**, from about
@@ -136,7 +133,7 @@ A runtime that reports nothing is never throttled.
 
 ## Long agent loops: the patch-leaving rule
 
-A forager leaves a patch of flowers once it stops paying off. When an agent
+When an agent
 works through Ligus's own tools (the built-in file tools and MCP, used by API
 and local models), Ligus measures its progress instead of taking its word for
 it: a write that actually changes a file, or a test run with more tests
@@ -149,9 +146,7 @@ loops and are not affected.
 
 ## Growing the workspace when it's ready
 
-Beekeepers start a colony in a small "nuc" box and add space when about seven
-of ten frames are drawn, not before: empty comb nobody patrols invites pests.
-Ligus does the same. A workspace starts with one agent on your device, and a
+A workspace starts with one agent on your device, and a
 small card above the chat suggests growing it only when the workspace's
 occupancy says so:
 

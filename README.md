@@ -78,7 +78,9 @@ curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh
 ```
 
 It installs to `~/.local/bin` by default; set `LIGUS_INSTALL_DIR` to change
-that or `LIGUS_VERSION` to pin a tag.
+that or `LIGUS_VERSION` to pin a release (`v0.1.0` or `0.1.0`). It checks the
+binary against the release's `ligus-<target>.sha256` and refuses to install
+on a missing or mismatched checksum.
 
 More: [Install with Homebrew](https://docs.langstroth.ai/ligus/getting-started/homebrew/) ·
 [First launch](https://docs.langstroth.ai/ligus/getting-started/first-launch/).
