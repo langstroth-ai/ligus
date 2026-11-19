@@ -64,7 +64,7 @@ pub async fn task_state(State(s): S, Path(id): Path<String>) -> ApiResult<Json<V
     let chat = load_chat(&s, &id)?;
     let now = hive_core::flow::now_ms();
     let mut slots: Vec<&memory::TaskSlot> = chat.flow.tasks.iter().filter(|t| !t.stale(now)).collect();
-    slots.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+    slots.sort_by_key(|t| std::cmp::Reverse(t.at_ms));
     let out: Vec<Value> = slots
         .into_iter()
         .map(|t| json!({"slot": t, "agentName": agent_name(&s, &t.update.agent_key), "active": t.active(now), "expiresAtMs": t.expires_at_ms()}))

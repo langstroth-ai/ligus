@@ -516,12 +516,6 @@ fn backdate(w: &SignedWorld, env: &mut SessionEventEnvelope, log: &[SessionEvent
     sign_envelope(env, p.device_id, &p.device);
 }
 
-fn resign_as(w: &SignedWorld, env: &mut SessionEventEnvelope, by: &str) {
-    env.clear_raw();
-    let p = &w.people[by];
-    sign_envelope(env, p.device_id, &p.device);
-}
-
 fn create(id: Uuid, title: &str) -> FlowRecord {
     FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: title.into(), body: "b".into(), ..Default::default() })
 }
@@ -705,7 +699,7 @@ fn a_removed_members_backdated_memory_write_is_refused() {
     let wid = f.w.wid;
     let watermark = hive_core::watermark::heads_of(&f.w.cfg, hive_core::workspace_config_session_id(wid), &signers);
     f.w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark });
-    assert!(f.w.roster().members.get("mara").is_none());
+    assert!(!f.w.roster().members.contains_key("mara"));
     let mut env = f.w.draft("mara", None, rec(create(Uuid::new_v4(), "after the cut")), None);
     let cfg = f.w.cfg.clone();
     backdate(&f.w, &mut env, &cfg, before, "mara");
@@ -724,5 +718,4 @@ fn a_removed_members_backdated_memory_write_is_refused() {
     sign_envelope(&mut env, f.agent_key.0, &f.agent_key.1);
     let id = f.w.push_env(None, env);
     assert_eq!(f.w.verdict(id), Verdict::Denied);
-    let _ = resign_as;
 }
