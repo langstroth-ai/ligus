@@ -1581,6 +1581,8 @@ fn usage() -> ! {
          phone remote access through a relay tunnel (off by default)\n  \
          ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
+         ligus phones certify <ligusphone1:code> | --code-file PATH --recovery-words-file PATH [--fingerprint F]\n                                       \
+         certify a phone's key as one of your devices (headless \"Add this phone\")\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
          ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
@@ -1932,7 +1934,15 @@ fn run() -> Result<()> {
                         .unwrap_or_else(|| cfg.data_dir.join("serve.token"));
                     cli::phones_revoke(&cfg.data_dir, positional.get(1).map(|s| s.as_str()), &token_file, has("--keep-token"))
                 }
-                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke"),
+                Some("certify") => admit::cmd_phones_certify(
+                    &cfg,
+                    positional.get(1).map(|s| s.as_str()),
+                    flag_val("--code-file"),
+                    flag_val("--recovery-words-file"),
+                    flag_val("--fingerprint"),
+                )
+                .map(|_| ()),
+                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke|certify"),
             }
         }
         "dashboard" => match positional.first().map(|s| s.as_str()) {

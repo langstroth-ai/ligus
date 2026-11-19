@@ -368,6 +368,54 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
     Ok(())
 }
 
+/// `ligus phones certify`: "Add this phone" for a headless identity. Certify
+/// the phone whose code (`ligusphone1:…`, from the app's Settings > This
+/// phone) is given, as a phone of this CLI identity's person, confirming with
+/// their recovery key (`--recovery-words-file`). `--fingerprint` makes the
+/// check the desktop's sheet asks a person to do: the code is refused unless
+/// its key has that fingerprint. Never from a box. Sync to publish.
+pub fn cmd_phones_certify(
+    cfg: &Config,
+    code: Option<&str>,
+    code_file: Option<String>,
+    words: Option<String>,
+    fingerprint: Option<String>,
+) -> Result<hive_runtime::phone_enroll::PhoneCode> {
+    use hive_runtime::phone_enroll::{PhoneCode, PhoneStanding};
+    let usage = "usage: ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH [--fingerprint XXXX-XXXX-XXXX]";
+    let text = match (code, code_file) {
+        (Some(c), None) => c.to_string(),
+        (None, Some(path)) => read_code_file(Path::new(&path))?,
+        _ => bail!(usage),
+    };
+    let phone = PhoneCode::decode(&text).map_err(|e| anyhow!(e))?;
+    if let Some(f) = fingerprint {
+        if !f.trim().eq_ignore_ascii_case(&phone.fingerprint()) {
+            bail!("the phone code's fingerprint is {}, not {}: don't certify it", phone.fingerprint(), f.trim());
+        }
+    }
+    let Some(words) = words else {
+        bail!("certifying a phone needs its person's presence: use the desktop (My devices > Add this phone), or pass --recovery-words-file");
+    };
+    if identity(cfg).load()?.is_some_and(|s| s.service) {
+        bail!("this data dir is a box (a service member); a phone is certified by its own person's identity");
+    }
+    let mut svc = crate::open_service(cfg)?;
+    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
+    let ws = uuid_of_room(&cfg.room);
+    if svc.phone_standing(ws, &phone)? == PhoneStanding::AlreadyMine {
+        println!("phone {} ({}) is already one of your devices", phone.device_id, phone.fingerprint());
+        return Ok(phone);
+    }
+    let id = svc.certify_phone_code(ws, &phone)?;
+    println!(
+        "certified phone '{}' ({id}, fingerprint {}) as one of your devices (the phone tier). Sync to publish it; then pair the phone with your box.",
+        phone.label,
+        phone.fingerprint()
+    );
+    Ok(phone)
+}
+
 /// Write a secret the user asked for (`--out PATH`) owner-only (0600) and
 /// atomically. Unlike the data-dir writer it never creates or chmods the
 /// parent directory: that directory is the user's (a home dir, `/tmp`, a

@@ -47,6 +47,7 @@ mod forges;
 pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_ui;
+mod phones_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
@@ -15045,6 +15046,8 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_start,
             ligus_auth_ui::ligus_auth_poll,
             ligus_auth_ui::ligus_auth_sign_out,
+            phones_ui::inspect_phone_code,
+            phones_ui::certify_phone_code,
             passkey_ui::security_status,
             passkey_ui::passkey_register,
             passkey_ui::recovery_key_create,

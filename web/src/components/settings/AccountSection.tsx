@@ -26,6 +26,7 @@ import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { LinkedAccountsSection } from "@/components/settings/LinkedAccountsSection";
+import { AddPhonePanel } from "@/components/settings/AddPhonePanel";
 
 /// Profile page: your name, picture, safety code and commit email, and the
 /// devices that act as you. Your account is a key made on this device; no
@@ -236,6 +237,7 @@ export function DevicesSection() {
   const requests = useQuery({ queryKey: ["device-requests"], queryFn: listDeviceRequests, refetchInterval: 15_000 });
   const revocations = useQuery({ queryKey: ["device-revocations"], queryFn: listDeviceRevocations, refetchInterval: 15_000 });
   const [adding, setAdding] = useState(false);
+  const [addingPhone, setAddingPhone] = useState(false);
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<DeviceCodeDto | null>(null);
   const [retire, setRetire] = useState(true);
@@ -302,10 +304,15 @@ export function DevicesSection() {
     <Section
       title="My devices"
       action={
-        !adding ? (
-          <Button size="sm" onClick={() => setAdding(true)}>
-            Add a device
-          </Button>
+        !adding && !addingPhone ? (
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => setAddingPhone(true)}>
+              Add this phone
+            </Button>
+            <Button size="sm" onClick={() => setAdding(true)}>
+              Add a device
+            </Button>
+          </div>
         ) : undefined
       }
     >
@@ -323,6 +330,15 @@ export function DevicesSection() {
           its log) and paste the code with <em>Add a device</em>.
         </div>
       ))}
+      {addingPhone && (
+        <AddPhonePanel
+          onDone={() => {
+            setAddingPhone(false);
+            refresh();
+          }}
+          onCancel={() => setAddingPhone(false)}
+        />
+      )}
       {adding && (
         <div className="space-y-2 rounded-xl border px-3 py-3" style={fieldStyle}>
           <textarea

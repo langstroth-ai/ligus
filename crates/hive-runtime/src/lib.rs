@@ -58,6 +58,7 @@ pub mod mentions;
 pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
+pub mod phone_enroll;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
 pub mod private_file;

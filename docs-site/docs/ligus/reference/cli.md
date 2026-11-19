@@ -164,6 +164,7 @@ it stops with a migration error. See
 | `ligus remote reset` | new host keys and host id; every phone must pair again |
 | `ligus phones list` (or `ligus phones`) | phones paired over the relay |
 | `ligus phones revoke <pid\|name> [--keep-token] [--token-file PATH]` | revokes one phone; also rotates `serve.token` unless `--keep-token` |
+| `ligus phones certify <ligusphone1:code> \| --code-file PATH --recovery-words-file PATH [--fingerprint XXXX-XXXX-XXXX]` | "Add this phone" without a desktop: certifies the phone's key (the code its app shows) as one of this identity's devices, at the phone tier, confirmed with the recovery key. `--fingerprint` refuses a code whose key doesn't match. Never from a box; sync to publish |
 | `ligus bind-repo <name\|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]` | binds a checkout for agent file tools (workspace default, or one chat) |
 | `ligus repos` | shows the repos dir and the bindings |
 | `ligus dashboard check [--file PATH]` | validates `dashboard.toml` and evaluates it once |

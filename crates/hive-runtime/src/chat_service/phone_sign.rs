@@ -257,5 +257,46 @@ impl ChatService {
     }
 }
 
+// "Add this phone" (`crate::phone_enroll`).
+impl ChatService {
+    /// Where `code`'s device stands in `workspace_id`.
+    pub fn phone_standing(&self, workspace_id: Uuid, code: &crate::phone_enroll::PhoneCode) -> Result<crate::phone_enroll::PhoneStanding> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let account = self.author.account_id;
+        Ok(match timeline.current().devices.get(&code.device_id) {
+            None => crate::phone_enroll::PhoneStanding::New,
+            Some(d) if d.revoked => crate::phone_enroll::PhoneStanding::Revoked,
+            Some(d) if !d.phone => crate::phone_enroll::PhoneStanding::Conflict("that device id is a desktop or box of this workspace, not a phone".into()),
+            Some(d) if d.public_key != code.public_key => {
+                crate::phone_enroll::PhoneStanding::Conflict("that phone is certified here with a different key".into())
+            }
+            Some(d) if account.is_some_and(|a| d.accounts.contains(&a)) => crate::phone_enroll::PhoneStanding::AlreadyMine,
+            Some(_) => crate::phone_enroll::PhoneStanding::Conflict("that phone is someone else's".into()),
+        })
+    }
+
+    /// "Add this phone": certify the phone `code` names as this person's
+    /// phone in `workspace_id` (a P-256 certificate, the phone tier), after
+    /// the checks [`Self::phone_standing`] makes. The person's passkey
+    /// presence is asked for by the presence provider (the desktop's sheet,
+    /// a CLI's recovery key). Returns the certificate's device id.
+    pub fn certify_phone_code(&mut self, workspace_id: Uuid, code: &crate::phone_enroll::PhoneCode) -> Result<Uuid> {
+        code.verify().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        crate::phone_enroll::check_device_id(code.device_id, &code.public_key).map_err(ChatError::Unauthorized)?;
+        match self.phone_standing(workspace_id, code)? {
+            crate::phone_enroll::PhoneStanding::New => {}
+            crate::phone_enroll::PhoneStanding::AlreadyMine => return Ok(code.device_id),
+            crate::phone_enroll::PhoneStanding::Revoked => {
+                return Err(ChatError::Unauthorized(
+                    "this phone was revoked here: reset its device key in the app (Settings > This phone) and use its new code".into(),
+                ))
+            }
+            crate::phone_enroll::PhoneStanding::Conflict(why) => return Err(ChatError::Unauthorized(why)),
+        }
+        let cert = self.certify_phone(workspace_id, code.device_id, &code.public_key)?;
+        Ok(cert.device_id)
+    }
+}
+
 /// The refusal of a phone draft whose chain link went stale.
 pub const STALE_DRAFT: &str = "this phone signed something else here since the draft; prepare it again";
