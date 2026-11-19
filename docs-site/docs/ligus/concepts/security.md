@@ -163,14 +163,16 @@ turns refused, where neither is available. The table shows the first.
 
 | | macOS (Seatbelt, `sandbox-exec`) | Linux (bubblewrap + Landlock + seccomp) |
 |---|---|---|
-| Writes | the turn's worktree (only when the turn may write), its scratch dir, the runtime's own state dirs (`~/.claude`, `~/.codex`, `~/.copilot`, …) | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
-| Never readable | Ligus's data dir (keys, `settings.json`, the database, `serve.token`), a `--token-file` elsewhere, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, `~/.netrc`, `~/.git-credentials` | the same (tmpfs over them), plus `$XDG_RUNTIME_DIR`, so the D-Bus session bus and Secret Service are out of reach |
+| Your home dir | **denied** (reads and writes) except what [the home allow-list](#home-default-deny) lets back in | an empty tmpfs over it, with the allow-list bound back in read-only |
+| Writes | the turn's worktree (only when the turn may write), its scratch dir and per-turn home, signed read-write grants | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
+| Never readable | Ligus's data dir (keys, `settings.json`, the database, `serve.token`), a `--token-file` elsewhere, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, forge CLI logins (`~/.config/gh`, `glab-cli`, `tea`, `hub`), even inside a granted dir | the same (tmpfs over them, mounted after every bind so a grant of a parent dir can't bring them back), plus `$XDG_RUNTIME_DIR`, so the D-Bus session bus and Secret Service are out of reach |
 | Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `hive.config.toml`, `.envrc`, matched by name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`) | the same names at the top level (a missing one is pinned by an empty read-only directory); Linux file systems are case-sensitive, so `.CLAUDE/` is a different directory no CLI reads. Nested names are not pinned, but Ligus's own file tools and ACP `fs/*` refuse them |
 | Network | denied except the turn's egress proxy on loopback | a fresh network namespace; the only way out is the egress proxy through a socket |
 | Other | | seccomp denies `ptrace`, `process_vm_*`, `mount`, `bpf`, `keyctl`, kernel-module and `kexec` calls, new user namespaces, and new unix sockets (`socket(AF_UNIX)`), so `docker.sock`, an ssh-agent or a desktop service can't be reached; `socketpair` still works, and the Ligus MCP server is reached through a loopback forwarder inside the sandbox. Known host sockets (`docker.sock`, `podman.sock`, `containerd.sock`, `$SSH_AUTH_SOCK`) are also masked. `LIGUS_SANDBOX_UNIX_SOCKETS=allow` on the device lifts the unix-socket filter (the masks stay) for tools that need sockets of their own |
 
 - **cwd and HOME.** An agent never runs in your home directory, in `/` or in
-  Ligus's data dir; a turn without a worktree gets a fresh scratch dir
+  Ligus's data dir, and `HOME` is never your real home (see
+  [below](#home-default-deny)); a turn without a worktree gets a fresh scratch dir
   (`$TMPDIR/ligus-turn-…`, mode 0700). Claude Code's own scratch
   (`CLAUDE_CODE_TMPDIR`) points there too, because it can't write
   `/tmp/claude-<uid>` inside the sandbox. The dir is removed when the turn
@@ -195,9 +197,13 @@ turns refused, where neither is available. The table shows the first.
   simply has no network. To let agents reach more hosts on your device under
   the normal envelope, switch on an [egress preset](#egress-presets) or set
   `LIGUS_SANDBOX_EGRESS_ALLOW`.
-- **Keychain (macOS).** Subscription CLIs (Claude Code, Codex, Copilot,
-  Antigravity) keep access to the login keychain, because their logins live
-  there; every other agent process can't read the keychain files. Ligus's own
+- **Keychain (macOS).** Copilot and Antigravity keep read access to the
+  login keychain files, because their sign-ins live there. Claude Code's
+  keychain sign-in is copied into its turn home as a credentials file and
+  Codex signs in from `auth.json`, so those turns (and any turn that runs on
+  a key configured in Ligus) lose the keychain: anything that can run
+  `/usr/bin/security` reads every item that trusts it without a prompt.
+  Every other agent process can't read the keychain files. Ligus's own
   keychain items are protected by their access lists, not by the profile.
 - **Codex** runs its commands inside Ligus's sandbox instead of its own
   (Seatbelt and bubblewrap sandboxes can't nest).
@@ -239,6 +245,122 @@ turns refused, where neither is available. The table shows the first.
 - **One control among several.** The sandbox does not replace the author
   gate, the MCP role gate, review of proposals or the human gate, and it is
   not a boundary against kernel bugs.
+
+### Your home dir is default-deny {#home-default-deny}
+
+Every process Ligus starts for a turn (a CLI agent, `run_command`, an
+approved command, a pre-flight test, a stdio MCP server) runs with your home
+dir unreadable and unwritable, on Seatbelt, bubblewrap and Landlock alike.
+Only these come back:
+
+- **the turn's worktree** (writable when the turn may write; `.git` and the
+  protected config stay read-only), even when it sits under your home;
+- **the turn's scratch dir and its own home** (`$TMPDIR/ligus-turn-…/home`).
+  `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and
+  `XDG_CACHE_HOME` point there, so `~/.npm`, `~/.cache/pip`,
+  `~/.cargo/registry` and the like are the turn's own and disappear with it.
+  A CLI agent's turn home also holds copies of the config and sign-in files
+  it needs to start; the turn home of any other process is empty but for
+  a `.gitconfig` with your git identity;
+- **read-only, the allow-list below**, plus the read-only paths of the
+  [signed grants](#sandbox-grants);
+- **read-write, the read-write paths of the signed grants** and
+  `LIGUS_SANDBOX_WRITE_ALLOW` on that device.
+
+Directories on the way to an allowed path keep their metadata readable on
+macOS (so `stat`, `getcwd` and `realpath` work), but they can't be listed.
+
+**The git identity.** Ligus reads `user.name` and `user.email` from your
+global git config (on the host, outside the sandbox) and writes only those
+two values into the turn home's `.gitconfig`. The rest of your git config
+can name credential helpers, URL rewrites that embed tokens, and includes of
+other files, so it is never copied and `~/.gitconfig` is not readable.
+
+**Toolchain roots.** A per-turn home would hide toolchains from their own
+shims (rustup looks for `$HOME/.rustup`), so these variables point at your
+real, read-only dirs when they exist (a value you set yourself is kept):
+`RUSTUP_HOME` (`~/.rustup`), `PYENV_ROOT` (`~/.pyenv`), `VOLTA_HOME`
+(`~/.volta`), `NVM_DIR` (`~/.nvm`), `ASDF_DATA_DIR` (`~/.asdf`),
+`MISE_DATA_DIR` (`~/.local/share/mise`), `UV_PYTHON_INSTALL_DIR`
+(`~/.local/share/uv/python`), `SDKMAN_DIR` (`~/.sdkman`) and `PNPM_HOME`
+(`~/Library/pnpm` on macOS, `~/.local/share/pnpm` on Linux). `CARGO_HOME`
+is not among them: cargo's default, `$HOME/.cargo`, is then the turn's own,
+so downloads and the registry cache are the turn's.
+
+#### The allow-list (read-only) {#home-allow-list}
+
+Each entry is read-only, is added only when it exists, and never includes
+a credential dir. Install dirs only: binaries, libraries and version files.
+
+| Path under `~` | Who gets it | Why it is safe to read |
+|---|---|---|
+| `.cargo/bin` | every process | rustup proxies and cargo-installed tools; binaries only (`~/.cargo` holds registry credentials and stays denied) |
+| `.rustup` | every process | Rust toolchains and the default-toolchain setting; no credentials |
+| `.local/bin` | every process | user-level launchers (pipx, `uv tool`, `pip --user`, the Claude Code installer) |
+| `.local/share/claude` | every process | Claude Code's native install (the versions `~/.local/bin/claude` points to) |
+| `.claude/local` | every process | Claude Code's local npm install |
+| `.nvm/versions` | every process | nvm's Node versions and their global packages (codex, copilot, pi) |
+| `.volta` | every process | Volta's Node toolchains and shims |
+| `.local/share/fnm`, `.fnm` | every process | fnm's Node versions |
+| `.npm-global` | every process | a user npm prefix for global packages |
+| `.bun/bin`, `.deno/bin` | every process | Bun, Deno |
+| `.pyenv` | every process | pyenv's Python versions, shims and version file |
+| `.local/share/uv/python` | every process | Python builds uv manages (a venv links to its interpreter) |
+| `.local/share/uv/tools` | every process | tools installed with `uv tool` (aider) |
+| `.local/pipx/venvs`, `.local/share/pipx/venvs` | every process | pipx's app venvs (aider) |
+| `.asdf`, `.local/share/mise` | every process | asdf's and mise's installs and shims |
+| `.sdkman/candidates` | every process | SDKMAN's JDKs and build tools |
+| `Library/pnpm`, `.local/share/pnpm` | every process | pnpm's home (macOS, Linux) |
+| `go/bin` | every process | Go tools installed with `go install` |
+| every `PATH` entry under your home | every process | you put its binaries on `PATH`; the home itself and anything in or above a credential dir are left out |
+| the program's own install dir | that process | when the program (or the `PATH` launcher that links to it) lives under your home: the directory it resolves to, or the prefix above it when that is a `bin` (Codex's standalone install under `~/.codex/packages/…`, a venv, an npm package). Never the home itself |
+| `Library/Keychains`, `Library/Preferences/com.apple.security*.plist` (macOS) | Claude Code, Codex, Copilot, Antigravity | the login keychain their sign-in may live in; taken away again when the turn's sign-in is a file (Claude Code, Codex) or a key configured in Ligus |
+| `.claude/plugins`, `skills`, `agents`, `commands` | Claude Code, with the workspace's opt-in to your own setup | your own Claude Code setup, linked into the turn home read-only |
+| `LIGUS_SANDBOX_READ_ALLOW` | every process on that device | your device-local choice; the only way to open a credential dir such as `~/.aws` |
+
+Deliberately **not** on it: `~/.cargo` itself (`credentials.toml`,
+`config.toml` can carry registry tokens), `~/.gitconfig`, `~/.npmrc`,
+`~/.config/*` (tool configs and logins), the CLIs' real config dirs (the
+turn home holds the copies they need), your documents, other repositories
+and other workspaces' worktrees, and every credential dir in the table
+above.
+
+The Landlock tier keeps its limit inside the worktree: nothing can be
+created directly in the worktree's top-level directory.
+
+#### Signed grants: more paths, chosen by the workspace {#sandbox-grants}
+
+When agents need more (a dataset, a shared cache, a scratch dir), an Admin
+grants it in **Settings → Sandbox**. Grants are a signed event on the
+workspace config log (`WorkspaceSandboxSet`, the whole set each time), so
+every device judges them the same way:
+
+- **Paths** for every agent or for one agent, read-only or read-write: an
+  Admin's change, confirmed with a passkey. Each path is `~/…` (under the
+  home of whichever host runs the agent) or absolute, normalized, at most
+  256 bytes, never `~` or `/` itself; at most 32 paths per list and 64 agents.
+- **An agent's shell grant** ([below](#owner-only-shell)): the Owner's,
+  confirmed with a passkey. An Admin's set that turns any agent's shell on
+  or off is refused.
+- **Never an agent's.** Agents can't hold presence, so no agent, and no
+  phone key, sets grants.
+- **A grant never opens Ligus's data dir, a secret file or a credential
+  dir**, even one naming it or a dir above it: those stay denied inside it.
+  `LIGUS_SANDBOX_READ_ALLOW` and `LIGUS_SANDBOX_WRITE_ALLOW` stay
+  device-local, and only the read list may open a credential dir.
+
+#### See the effective policy {#effective-policy}
+
+Settings → Sandbox shows, per runtime the workspace's agents use (or for one
+agent), every path an agent turn may read or write on this device with the
+reason, what is denied, the shell rule, and the grants in force. On a box:
+
+```sh
+ligus doctor --sandbox [--runtime claude|codex|copilot|agy|aider|pi|hermes|commands] [--agent <agent id>]
+```
+
+prints the same lines and the signed grants for its workspace. Both are built
+from the plan the executors enforce.
 
 ### What a plain Claude Code turn tries to reach {#refused-optional}
 
@@ -309,7 +431,7 @@ never sees. So every Claude Code turn Ligus starts (desktop, `ligus serve`,
 | Feature | In a Ligus turn | How |
 |---|---|---|
 | Read, edit, write, search files; in-process sub-agents | **Yes**, at the chat's permission tier | `--tools` allow-list. Sub-agents run in the same process, sandbox and tool set. |
-| Shell (`Bash`) | At the *Edits + shell* tier and up, while egress is open | `--tools`; denied under dearth mode or a lockdown |
+| Shell (`Bash`) | At the *Edits + shell* tier and up, while egress is open, in a turn the workspace Owner started (or with an Owner's grant to the agent) | `--tools`; denied under dearth mode or a lockdown, and [for other members' turns](#owner-only-shell) |
 | Ligus's own tools (`mcp__ligus__*`) | **Yes**, pre-approved | `--allowedTools mcp__ligus`. Ligus authorizes each call itself. |
 | The chat's MCP servers (Settings → MCP, filtered by the envelope) | **Yes**; pre-approved when the author may write | `--strict-mcp-config` with only those servers, `--allowedTools mcp__<id>` |
 | Web search and web fetch | Only while the chat's egress is open | Web search runs on Anthropic's side, so the egress proxy never sees it; Ligus follows the chat's egress policy instead and removes both tools when egress is restricted. |
@@ -472,6 +594,38 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   still posts it as your message, at your role.
 - One shared function (`ChatService::trigger_author_role`) decides this on
   the desktop, `ligus worker`, `ligus serve` and `ligus agent`.
+
+## The shell is the Owner's {#owner-only-shell}
+
+A shell (`run_command`, a CLI's Bash or shell tool, an ACP `execute`
+request) runs anything the sandbox lets it. So it is on only when **every
+person behind the turn is the workspace Owner** (followed through the same
+chain as the author gate), or, in the device-local workspace, the device
+owner. For agents acting for any other member it is off, unless an Owner
+granted that agent the shell in Settings → Sandbox (signed, with a passkey).
+A person who can't be resolved means no shell.
+
+It is a second gate next to the author gate, and stricter on purpose: your
+own message on your own device always clears the tool floor, but in a
+shared workspace the shell gate uses your workspace role at the message, so
+an Admin's own message runs without a shell unless the agent has the grant.
+
+Without the shell, each runtime still runs where it can:
+
+| Runtime | Without the shell |
+|---|---|
+| Claude Code | Bash is taken off its tool list and denied; the permission tier is capped at accepting edits |
+| Copilot | `--deny-tool=shell` (deny rules beat allow rules); tier capped at read and write |
+| Antigravity | `--mode accept-edits` instead of `auto` or the bypass |
+| pi | `--exclude-tools bash` |
+| an ACP session (any CLI) | `execute` permission requests are denied outright, never escalated: a person answering the prompt can't widen the gate |
+| HTTP models | no `run_command` |
+| Codex, aider, Hermes | they run shell commands with no way to turn them off, so the turn is refused with a note |
+
+One function decides this on every host (`author_gate::shell_allowed`,
+from `ChatService::trigger_shell_role` and the grants in force): the
+desktop, `ligus worker`, `ligus serve` and `ligus agent` (which has no agent
+id to carry a grant, so only the Owner's turns get a shell there).
 
 ## Trust this workspace {#workspace-trust}
 

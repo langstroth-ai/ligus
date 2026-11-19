@@ -299,8 +299,12 @@ it.
    the [OS sandbox](../../ligus/concepts/security.md#os-sandbox) (Seatbelt on macOS,
    bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
    seeds, workspace keys, `settings.json`, `serve.token`), credential dirs and
-   direct network. The sandbox shares your user and kernel: it is not a
-   boundary against kernel bugs. A host without it (Windows, Linux without
+   direct network, and since Phase C your whole
+   [home dir](../../ligus/concepts/security.md#home-default-deny) but the
+   worktree, the turn's own dirs, a read-only toolchain allow-list and
+   signed grants. The sandbox shares your user and kernel: it is not a
+   boundary against kernel bugs, and a same-user process outside it (an LSP
+   server, your terminal) is not confined. A host without it (Windows, Linux without
    bubblewrap and user namespaces or Landlock, `LIGUS_SANDBOX=off`) runs no
    agent process at all: CLI agent turns at every tier, commands, pre-flight
    tests and stdio MCP servers are refused, and HTTP models answer without
@@ -526,7 +530,36 @@ it.
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
-28. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
+28. **What the home allow-list and grants leave open.** The home is
+    denied by default, but some of it stays readable to every agent
+    process: the [toolchain allow-list](../../ligus/concepts/security.md#home-allow-list)
+    (binaries and libraries can be read and copied, never written), and
+    every `PATH` entry under your home, which Ligus trusts as an install
+    dir; a program's own install dir under your home is readable to that
+    process. A [signed grant](../../ligus/concepts/security.md#sandbox-grants)
+    applies on every host that runs the agent, including other members'
+    hosts and boxes, wherever `~/…` points there; it never opens a data dir
+    or credential dir. On macOS, Copilot and Antigravity keep the login
+    keychain files readable because their sign-ins live there. `/usr/bin/git`
+    and other `xcrun` shims print `couldn't create cache file` warnings
+    under the sandbox (their cache lives in the per-user temp dir, which
+    stays unwritable); the commands still run. The Landlock tier can't hide
+    other processes and can't create entries at the worktree's top level;
+    the bubblewrap tier is not exercised on hosts whose AppArmor restricts
+    user namespaces (Ubuntu 24.04 without the profile). `git commit` inside
+    the worktree stays denied by design: agents' changes are captured as a
+    diff.
+29. **The shell is the Owner's, not a boundary.** For a turn another member
+    starts, the [owner-only shell](../../ligus/concepts/security.md#owner-only-shell)
+    takes away each CLI's shell tool, ACP `execute` requests and
+    `run_command`, and refuses Codex, aider and Hermes, which can't run
+    without one. Edits stay, and so do the CLIs' other tools: a tool that
+    runs a program for the agent without being its shell (a build or test
+    tool an MCP server offers, an editor action) is not covered, and the OS
+    sandbox, not the shell gate, bounds what any of them reaches. An
+    Owner's per-agent grant turns the shell on for everyone's turns of that
+    agent.
+30. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
     Every event names the newest event of its log its author held
     (`logHead`) and its lamport is exactly one past it, so a lamport is
     never more than the longest chain of real events on its log (a lamport
@@ -661,6 +694,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | Turn claims were keyed by the trigger message alone, so when one reply handed off to two agents on two devices, the second receiver never ran | Hand-off receivers claim (trigger, agent); user-message turns keep the plain claim, so older devices still coordinate |
 | Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
 | Host (authority) | The author gate read only the immediate trigger's author, and a message every event of which this device signed as its user cleared every floor. An agent reply the host signed for an agent without its own key (the device-local workspace, no agent vault, a key that couldn't be certified) counted as the host user's own message, so a Contributor's request handed to another agent, or an @mention cascade from it, ran at the host's Owner tier. Workflow stage prompts, posted as the driving device's user, ran at that user's tier whoever started the run | An agent's message has no role of its own: every host resolves it through its reply links (hand-offs, cascades) to the lowest role of the humans behind the chain, caps a peer's agent output at that peer's role, and runs a chain with no human read-only. A stage prompt is linked to its run and judged at the lower of its poster's and the run initiator's role. Verified by `handoff_chain_author_role_is_min_of_chain`, `mention_cascade_never_raises_tier`, `host_signed_agent_output_carries_no_role`, `agent_signed_reply_resolves_to_the_chain_human` and `workflow_stage_role_is_the_run_initiators` |
+| Sandbox (Phase C, home) | Agent processes could read everything in your home outside a short deny list: documents, other repositories and other workspaces' worktrees, `~/.gitconfig` (URL rewrites with tokens), `~/.npmrc`, `~/.cargo/credentials.toml`, tool configs under `~/.config` | The home is default-deny for every agent process on Seatbelt, bubblewrap and Landlock; each child gets a per-turn home; a read-only allow-list of toolchain install dirs, each with its reason, and signed grants let paths back in; a grant never opens a data or credential dir. Verified by `sandbox_home_is_default_deny`, `sandbox_home_grants_open_only_what_they_name`, `sandbox_turn_home_has_only_the_git_identity`, `bwrap_home_is_a_tmpfs_and_hard_denies_come_last`, and the `sandbox_home_regression` runs (git, `cargo build`, node, pip into a venv, Claude Code `-p`, `codex login status`) |
+| Host (Phase C, shell) | Any member at the write floor (Admin) drove a CLI's shell tool or `run_command` on the host's machine | The shell is on only when every person behind the turn is the workspace Owner (the device owner in the local workspace) or an Owner granted it to the agent with a passkey; otherwise each CLI runs without its shell, ACP `execute` is denied, and Codex, aider and Hermes are refused. Verified by `the_shell_is_the_owners_unless_granted`, `shell_free_args_cap_every_cli_at_edits`, `no_shell_takes_bash_away`, `shell_role_is_the_workspace_role_outside_the_local_workspace` and the `sandbox_grants_fold` tests, including a property test against a reference model |
 | Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
 | Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is quarantined as impersonation, and held from an uncertified device. The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
 | Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |
