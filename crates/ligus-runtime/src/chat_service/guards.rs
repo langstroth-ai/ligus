@@ -370,6 +370,25 @@ mod tests {
         assert_eq!(svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().len(), 2);
     }
 
+    /// Final review (area B): a registered secret with punctuation in it
+    /// (a password from settings) split across two streamed chunks never
+    /// puts its start on the log.
+    #[test]
+    fn final_review_a_registered_secret_split_across_chunks_never_leaks_its_start() {
+        let secret = "zq7!final-review-secret-value";
+        crate::secret_redact::register(secret);
+        let mut svc = service();
+        let ws = Uuid::new_v4();
+        let chat = svc.create_chat("c", ws, "anthropic").unwrap();
+        let mid = svc.begin_assistant_message(chat.id, ws, "Agent", "anthropic", None, None).unwrap();
+        svc.append_chunk(chat.id, ws, mid, "the password is zq7!fin").unwrap();
+        svc.append_chunk(chat.id, ws, mid, "al-review-secret-value and more").unwrap();
+        svc.complete_assistant_message(chat.id, ws, mid, format!("the password is {secret} and more")).unwrap();
+        let raw: String = svc.store().list(chat.id).unwrap().iter().map(|e| serde_json::to_string(e).unwrap()).collect();
+        assert!(!raw.contains("zq7!"), "the secret's start reached the log: {raw}");
+        assert!(!raw.contains("final-review-secret"), "{raw}");
+    }
+
     #[test]
     fn dearth_round_trip_admits_current_devices_and_gates_on_role() {
         let mut svc = service();

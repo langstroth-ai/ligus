@@ -346,15 +346,11 @@ impl Drop for EgressProxy {
 /// multicast. A name that resolves there (DNS rebinding, or a numeric form
 /// such as `127.1`) would turn the allow-list into a tunnel to local
 /// services. Private LAN ranges stay reachable (a self-hosted MCP server).
+/// The same list the model gateway refuses (`model_gateway::addr_forbidden`),
+/// so the other metadata addresses (100.100.100.200, fd00:ec2::254) are out
+/// too.
 fn ip_forbidden(ip: IpAddr) -> bool {
-    let ip = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
-        v4 => v4,
-    };
-    match ip {
-        IpAddr::V4(a) => a.is_loopback() || a.is_link_local() || a.is_unspecified() || a.is_multicast() || a.is_broadcast() || a.octets()[0] == 0,
-        IpAddr::V6(a) => a.is_loopback() || a.is_unspecified() || a.is_multicast() || (a.segments()[0] & 0xffc0) == 0xfe80,
-    }
+    crate::model_gateway::addr_forbidden(ip, false)
 }
 
 /// Connect to an allow-listed endpoint. A loopback entry goes to this
@@ -894,6 +890,19 @@ pub fn refused_notice(denied: &[HostPort]) -> Option<String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Final review (area B): every cloud metadata address the model gateway
+    /// refuses, the egress proxy refuses too (a plain-HTTP allow-list name
+    /// rebound to Alibaba's or AWS's IPv6 metadata service).
+    #[test]
+    fn final_review_proxy_refuses_every_metadata_address() {
+        for ip in ["169.254.169.254", "100.100.100.200", "fd00:ec2::254", "::ffff:100.100.100.200", "127.0.0.1", "::1"] {
+            assert!(ip_forbidden(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["10.0.0.5", "192.168.1.2", "140.82.112.3"] {
+            assert!(!ip_forbidden(ip.parse().unwrap()), "{ip}");
+        }
+    }
 
     /// A minimal TLS 1.2-shaped ClientHello record carrying `sni`.
     pub(crate) fn client_hello(sni: Option<&str>) -> Vec<u8> {

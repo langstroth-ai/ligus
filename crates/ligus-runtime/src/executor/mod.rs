@@ -1603,16 +1603,28 @@ pub fn check_cwd(cwd: &Path, host: &HostPaths) -> io::Result<()> {
     if c.parent().is_none() {
         return Err(refuse(format!("refusing to run an agent process with cwd {}", c.display())));
     }
-    if let Some(h) = home_dir() {
-        if c == canonical(&h) {
-            return Err(refuse("refusing to run an agent process in your home directory; bind a repository or folder"));
-        }
+    for h in home_dir().into_iter().chain(passwd_home()) {
+        refuse_home_or_above(&c, &h)?;
     }
     for d in &host.data_dirs {
         let d = canonical(d);
         if c.starts_with(&d) && !host.allow_read.iter().any(|a| c.starts_with(canonical(a))) {
             return Err(refuse(format!("refusing to run an agent process inside Ligus's data dir ({})", d.display())));
         }
+    }
+    Ok(())
+}
+
+/// Refuse a cwd that is `home` or a directory above it (`/Users`): the
+/// worktree is readable as a whole, so a cwd above the home would bring the
+/// whole home back past its default deny.
+fn refuse_home_or_above(cwd: &Path, home: &Path) -> io::Result<()> {
+    let h = canonical(home);
+    if cwd == h {
+        return Err(refuse("refusing to run an agent process in your home directory; bind a repository or folder"));
+    }
+    if h.starts_with(cwd) {
+        return Err(refuse(format!("refusing to run an agent process in {}, which holds your home directory; bind a repository or folder", cwd.display())));
     }
     Ok(())
 }
@@ -1873,8 +1885,16 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     // No turn in scope: an agent CLI runs read-only with only its model
     // (`TurnPolicy::outside_turn`); a command or pre-flight test, which a
     // person started, runs under the baseline.
+    // A pre-flight test runs a proposal's code (an agent's or a teammate's)
+    // and belongs to its chat's envelope: without one in scope it gets no
+    // network at all, never the open baseline.
     let policy = match spec.purpose {
         Purpose::Agent(_) => agent_policy(),
+        Purpose::Preflight => current_turn().unwrap_or_else(|| {
+            let mut p = TurnPolicy::baseline(HostKind::Desktop);
+            p.envelope.egress = ligus_core::sandbox::EgressPolicy::Closed;
+            Arc::new(p)
+        }),
         _ => current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop))),
     };
     let rt = current_runtime().unwrap_or_default();
@@ -1896,6 +1916,7 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     let cwd = match spec.cwd {
         Some(c) if !c.as_os_str().is_empty() => {
             check_cwd(c, &host)?;
+            refuse_home_or_above(&canonical(c), &home)?;
             canonical(c)
         }
         _ => tmp.clone(),

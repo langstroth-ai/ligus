@@ -232,6 +232,39 @@ fn home_rules(plan: &EnforcementPlan) -> String {
     p
 }
 
+/// The hard denies (the plan's `deny_read` and the other turns' scratch
+/// dirs) that lie strictly inside a path the profile re-opens for reading
+/// (the worktree, `allow_read`), denied again, with the allowed paths inside
+/// them (and this turn's own dir) opened after.
+fn inner_denies(plan: &EnforcementPlan) -> String {
+    let opened: Vec<std::path::PathBuf> = std::iter::once(&plan.worktree).chain(plan.allow_read.iter()).map(|o| canonical(o)).collect();
+    let mut hard: Vec<std::path::PathBuf> = plan.deny_read.iter().map(|d| canonical(d)).collect();
+    hard.extend(super::sibling_turns_root(&plan.tmp).map(|r| canonical(&r)));
+    let inner: Vec<std::path::PathBuf> = hard.into_iter().filter(|d| opened.iter().any(|o| d.starts_with(o) && d != o)).collect();
+    if inner.is_empty() {
+        return String::new();
+    }
+    let mut p = String::from("(deny file-read* file-write*");
+    for d in &inner {
+        p.push_str(&format!(" (subpath {})", q(d)));
+    }
+    p.push_str(")\n");
+    let inside = |b: &Path| inner.iter().any(|d| b.starts_with(d));
+    let back: Vec<std::path::PathBuf> = plan.allow_read.iter().map(|a| canonical(a)).filter(|b| inside(b)).collect();
+    if !back.is_empty() {
+        p.push_str("(allow file-read*");
+        for b in &back {
+            p.push_str(&format!(" (subpath {})", q(b)));
+        }
+        p.push_str(")\n");
+    }
+    let tmp = canonical(&plan.tmp);
+    if inside(&tmp) {
+        p.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", q(&tmp)));
+    }
+    p
+}
+
 /// The SBPL profile for `plan` (`proxy_port`: the egress proxy's port).
 pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
@@ -276,6 +309,13 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
         p.push_str(&format!(" (subpath {})", q(a)));
     }
     p.push_str(")\n");
+    // That rule re-opens a worktree (or an allowed path) inside a denied
+    // dir; it must not re-open a denied dir inside the worktree (a dotfiles
+    // checkout at `~/.config` holds `gh/hosts.yml`, a folder bound above the
+    // data dir holds its keys). Deny those again, then re-allow what lies
+    // inside them on purpose (a checkout under the data dir, this turn's
+    // own scratch dir).
+    p.push_str(&inner_denies(plan));
     if plan.worktree_writable {
         // Re-allow writes in the worktree if it sits inside a denied dir,
         // then re-deny its protected parts.

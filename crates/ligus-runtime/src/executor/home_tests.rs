@@ -560,3 +560,108 @@ fn review_agent_outside_a_turn_is_read_only_live() {
         assert!(!out.contains("WROTE") && !d.worktree.join("planted.txt").exists(), "{kind:?} wrote the checkout outside a turn: {out}");
     }
 }
+
+/// Final review (area B): a checkout that holds a denied dir (a dotfiles
+/// repo at `~/.config` holds `gh/hosts.yml`; a folder bound above the data
+/// dir holds `settings.json`) never brings it back. The worktree's read
+/// rule comes after the hard denies so a worktree *inside* a denied dir
+/// works, but it must not re-open a denied dir *inside* the worktree.
+#[cfg(unix)]
+#[test]
+fn final_review_denied_dirs_inside_the_worktree_stay_denied() {
+    let Some(e) = super::tests::real_executor() else { return };
+    eprintln!("sandbox tier: {:?}", e.kind());
+    let d = DecoyHome::new();
+    let gh = d.home.join(".config/gh/hosts.yml");
+    std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
+    std::fs::write(&gh, "DECOY-GH-TOKEN").unwrap();
+    std::fs::write(d.home.join(".config/app.toml"), "dotfile-ok").unwrap();
+    // The data dir's parent (`~/Library/Application Support`, `~/.local/share`).
+    let data_parent = d.home.join(data_dir_rel()).parent().unwrap().to_path_buf();
+    std::fs::write(data_parent.join("other-app.txt"), "sibling-ok").unwrap();
+    for (wt, secret, ok_file) in [
+        (d.home.join(".config"), gh.clone(), "app.toml"),
+        (data_parent.clone(), d.home.join(data_dir_rel()).join("settings.json"), "other-app.txt"),
+    ] {
+        let wt = canonical(&wt);
+        for purpose in PURPOSES {
+            let policy = TurnPolicy { worktree_is_isolated: true, ..TurnPolicy::baseline(HostKind::Desktop) };
+            let (ok, out) = with_turn_sync(policy, || {
+                let script = format!("cat '{ok_file}'; cat '{}'", secret.display());
+                let spec = SpawnSpec::new(*purpose, "/bin/sh", ["-c", script.as_str(), "sh", "--permission-mode", "acceptEdits"]).cwd(Some(&wt));
+                let mut p = prepare_in(&*e, spec, &d.home, d.host()).expect("prepare");
+                let out = p.command.output().expect("spawn");
+                drop(p.guard);
+                (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+            });
+            assert!(out.contains("-ok"), "{purpose:?} in {}: the worktree itself must read: {out}", wt.display());
+            assert!(!ok && !out.contains("DECOY"), "{purpose:?} in {} read {}: {out}", wt.display(), secret.display());
+        }
+    }
+}
+
+/// Final review (area B): a cwd above the home (`/Users`, `/home`) would
+/// make the whole home readable as "the worktree": refused like the home.
+#[cfg(unix)]
+#[test]
+fn final_review_cwd_above_the_home_is_refused() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let above = d.home.parent().unwrap().to_path_buf();
+    for purpose in PURPOSES {
+        let spec = SpawnSpec::new(*purpose, "/bin/sh", ["-c", "cat home/Documents/taxes.txt"]).cwd(Some(&above));
+        match prepare_in(&*e, spec, &d.home, d.host()) {
+            Err(err) => assert!(err.to_string().contains("home directory"), "{purpose:?}: {err}"),
+            Ok(mut p) => {
+                let out = p.command.output().expect("spawn");
+                panic!("{purpose:?}: a cwd above the home ran: {}", String::from_utf8_lossy(&out.stdout));
+            }
+        }
+    }
+}
+
+/// Final review (area B): an agent process can't read the environment of
+/// a process outside its sandbox (another turn's provider key, the host's
+/// own secrets): bubblewrap hides other processes, and Landlock refuses
+/// `ptrace`-class access such as `/proc/<pid>/environ` to them.
+#[cfg(target_os = "linux")]
+#[test]
+fn final_review_no_reading_another_processs_environment() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let mut outside = std::process::Command::new("sleep").arg("30").env("FR_DECOY_KEY", "DECOY-ENV-SECRET").spawn().unwrap();
+    let pid = outside.id();
+    for purpose in PURPOSES {
+        let (_, out) = run_in(&*e, &d, *purpose, &format!("cat /proc/{pid}/environ; cat /proc/{}/environ", std::process::id()), PathGrants::default());
+        assert!(!out.contains("DECOY-ENV-SECRET"), "{purpose:?} read another process's env: {out}");
+    }
+    let _ = outside.kill();
+    let _ = outside.wait();
+}
+
+/// Final review (area B): a pre-flight test runs a proposal's code. With no
+/// chat policy in scope it gets no network at all, not even this device's
+/// opt-in widenings (`LIGUS_SANDBOX_EGRESS_ALLOW`, presets), which a locked
+/// down or dearth-mode chat must not get; in a chat's scope it follows that
+/// chat's envelope.
+#[cfg(unix)]
+#[test]
+fn final_review_preflight_outside_a_turn_has_no_network() {
+    let Some(e) = super::tests::real_executor() else { return };
+    assert!(current_turn().is_none());
+    let d = DecoyHome::new();
+    let mut host = d.host();
+    host.extra_egress = vec![crate::egress::HostPort { host: "registry.example".into(), port: 443 }];
+    let plan_of = |host: &HostPaths| {
+        let spec = SpawnSpec::new(Purpose::Preflight, "/bin/sh", ["-c", "true"]).cwd(Some(&d.worktree));
+        let p = prepare_in(&*e, spec, &d.home, host.clone()).expect("prepare");
+        p.guard.plan().egress.clone()
+    };
+    assert!(matches!(plan_of(&host), EgressPlan::Closed), "pre-flight outside a turn: {:?}", plan_of(&host));
+    // An open chat's scope: the device's widening applies.
+    with_turn_sync(TurnPolicy::baseline(HostKind::Desktop), || assert!(matches!(plan_of(&host), EgressPlan::Proxy { .. })));
+    // A locked-down chat's scope: closed.
+    let mut locked = TurnPolicy::baseline(HostKind::Desktop);
+    locked.envelope.egress = ligus_core::sandbox::EgressPolicy::Closed;
+    with_turn_sync(locked, || assert!(matches!(plan_of(&host), EgressPlan::Closed)));
+}
