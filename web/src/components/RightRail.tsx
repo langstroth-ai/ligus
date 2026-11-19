@@ -24,6 +24,8 @@ import {
   addVault,
   getContextTelemetry,
   implementProposal,
+  askAgentToRebase,
+  openChatCheckout,
   requestApplyOnHost,
   withdrawApplyRequest,
   installMcpServer,
@@ -1228,6 +1230,51 @@ function DiffFileBlock({
   );
 }
 
+export type ApplyConflictKind = "conflict" | "dirty";
+
+/// Which apply failure on a repo chat's branch this is (the backend's
+/// "Not applied: …" sentences): a patch that conflicts with what landed
+/// since (rebase it, or look at it), or local changes in the chat's folder
+/// that are in the way (look at them). Anything else is a plain error.
+export function applyConflictKind(message: string): ApplyConflictKind | null {
+  if (!message.startsWith("Not applied")) return null;
+  if (message.includes("doesn't apply on this chat's branch")) return "conflict";
+  if (message.includes("local changes in the way")) return "dirty";
+  return null;
+}
+
+/// "Ask the agent to rebase" files a follow-up turn with the conflict;
+/// "Open in editor" opens the chat's folder for its repository.
+export function ApplyConflictActions({
+  conflict,
+  busy,
+  rebasing,
+  onRebase,
+  onOpen,
+}: {
+  conflict: { kind: ApplyConflictKind; message: string };
+  busy: boolean;
+  rebasing: boolean;
+  onRebase: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div role="alert" className="mt-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="mb-1.5">{conflict.message}</div>
+      <div className="flex flex-wrap gap-2">
+        {conflict.kind === "conflict" && (
+          <Button size="sm" variant="primary" disabled={busy} onClick={onRebase}>
+            {rebasing ? "Asking…" : "Ask the agent to rebase"}
+          </Button>
+        )}
+        <Button size="sm" disabled={busy} onClick={onOpen}>
+          Open in editor
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ProposalCard({
   proposal,
   sessionId,
@@ -1272,13 +1319,33 @@ function ProposalCard({
     onError: (e) => toast.error(`Couldn't record your vote: ${errMsg(e)}`),
   });
 
+  // An apply that didn't land on the chat's branch: what to do next.
+  const [applyConflict, setApplyConflict] = useState<{ kind: ApplyConflictKind; message: string } | null>(null);
   const implement = useMutation({
     mutationFn: (target: string | null) => implementProposal(sessionId, proposal.id, target),
     onSuccess: () => {
+      setApplyConflict(null);
       onChanged();
       toast.success(proposal.workflow ? "Workflow added." : proposal.argv ? "Command ran." : "Sent to the agent to implement.");
     },
-    onError: (e) => toast.error(`Couldn't implement: ${errMsg(e)}`),
+    onError: (e) => {
+      const kind = applyConflictKind(errMsg(e));
+      if (kind) setApplyConflict({ kind, message: errMsg(e) });
+      else toast.error(`Couldn't implement: ${errMsg(e)}`);
+    },
+  });
+  const rebase = useMutation({
+    mutationFn: () => askAgentToRebase(sessionId, proposal.id),
+    onSuccess: () => {
+      setApplyConflict(null);
+      onChanged();
+      toast.success("Asked the agent to rebase it.");
+    },
+    onError: (e) => toast.error(`Couldn't ask the agent: ${errMsg(e)}`),
+  });
+  const openEditor = useMutation({
+    mutationFn: () => openChatCheckout(sessionId),
+    onError: (e) => toast.error(`Couldn't open it: ${errMsg(e)}`),
   });
   // Apply on a host (Phase B): one named host applies it, once.
   const openRequest = proposal.applyRequests?.find((r) => r.state === "open");
@@ -1343,6 +1410,7 @@ function ProposalCard({
   const busy =
     vote.isPending ||
     implement.isPending ||
+    rebase.isPending ||
     refine.isPending ||
     sendBack.isPending ||
     requestApply.isPending ||
@@ -1521,6 +1589,16 @@ function ProposalCard({
           <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
+
+      {applyConflict && proposal.status !== "applied" && (
+        <ApplyConflictActions
+          conflict={applyConflict}
+          busy={busy}
+          onRebase={() => rebase.mutate()}
+          onOpen={() => openEditor.mutate()}
+          rebasing={rebase.isPending}
+        />
+      )}
 
       {/* Apply on a host: the requests a person filed, and how each ended. */}
       {(proposal.applyRequests?.length ?? 0) > 0 && (

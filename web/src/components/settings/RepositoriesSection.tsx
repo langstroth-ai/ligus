@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceRepo,
   bindRepoCheckout,
+  cloneWorkspaceRepo,
   listWorkspaceRepos,
   pickWorkspaceFolder,
   removeWorkspaceRepo,
@@ -99,6 +100,7 @@ export function RepoSuggestion({ data, onDone }: { data: WorkspaceReposDto; onDo
 }
 
 function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceReposDto; refresh: () => void }) {
+  const [cloning, setCloning] = useState(false);
   const run = async (what: string, f: () => Promise<unknown>) => {
     try {
       await f();
@@ -179,6 +181,32 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
               >
                 Bind folder…
               </Button>
+              {!r.canonical.startsWith("local:") && r.here.state !== "cloning" && (
+                <Button
+                  size="sm"
+                  disabled={cloning}
+                  title={`Clone ${r.canonical} into a folder you pick, through this device's connection to its host`}
+                  onClick={async () => {
+                    const parent = await pickWorkspaceFolder();
+                    if (!parent) return;
+                    setCloning(true);
+                    try {
+                      const c = await cloneWorkspaceRepo(r.id, parent);
+                      toast.success(`Cloned ${r.name} into ${c.path}.`);
+                      if (c.rootMatches === false) {
+                        toast.error(`${r.name}'s clone doesn't contain the first commit the workspace entry names. Check it's the right repository.`);
+                      }
+                      refresh();
+                    } catch (e) {
+                      toast.error(`Couldn't clone ${r.name}: ${errMsg(e)}`);
+                    } finally {
+                      setCloning(false);
+                    }
+                  }}
+                >
+                  {cloning ? "Cloning…" : "Clone into…"}
+                </Button>
+              )}
             </>
           )}
           {r.here.found.map((f) => (

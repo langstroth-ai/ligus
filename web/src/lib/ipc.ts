@@ -81,8 +81,10 @@ export const getChat = (sessionId: string) =>
 export const getContextTelemetry = (sessionId: string) =>
   invoke<ContextTelemetryDto | null>("get_context_telemetry", { sessionId });
 
-export const sendMessage = (sessionId: string, body: string) =>
-  invoke<void>("send_message", { sessionId, body });
+/// `runHere`: "Run here this time" — a message to an agent pinned to a host
+/// without the chat's repository runs on this device instead, once.
+export const sendMessage = (sessionId: string, body: string, runHere?: boolean) =>
+  invoke<void>("send_message", runHere ? { sessionId, body, runHere: true } : { sessionId, body });
 
 /// Stop the in-flight turn for a session (the composer's Stop button). Aborts
 /// generation and kills any CLI subprocess; safe no-op if nothing is running.
@@ -1977,6 +1979,18 @@ export interface ChatWorkspaceRepoDto {
   basePinned: boolean;
   /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
   here: { state: string; reason: string };
+  /// The chat's agents pinned to another host that says it has no checkout
+  /// of this repo (the composer's warning).
+  pinnedElsewhere?: PinnedElsewhere[];
+}
+
+export interface PinnedElsewhere {
+  agentId: string;
+  agentName: string;
+  hostId: string;
+  hostLabel: string;
+  /// This device has the repo, runs the agent's runtime, and the agent is yours.
+  canRunHere: boolean;
 }
 
 export const listWorkspaceRepos = () => invoke<WorkspaceReposDto>("list_workspace_repos");
@@ -1998,3 +2012,12 @@ export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("se
 export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
 export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
   invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });
+/// "Clone into…": clone a workspace repo by id into `parent` through this
+/// device's connection to its host, and bind it here.
+export const cloneWorkspaceRepo = (repoId: string, parent: string) =>
+  invoke<{ path: string; rootMatches: boolean | null }>("clone_workspace_repo", { repoId, parent });
+/// Open the chat's folder for its repository with the OS's default handler.
+export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat_checkout", { sessionId });
+/// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
+export const askAgentToRebase = (sessionId: string, proposalId: string) =>
+  invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });
