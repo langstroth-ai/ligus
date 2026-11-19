@@ -86,8 +86,10 @@ pub mod workflow_tool;
 pub mod workspace_invite;
 pub mod workspace_trust;
 
-#[cfg(test)]
-mod test_relay;
+// The in-process mock relay: this crate's tests, and other clients' tests
+// through the `test-relay` feature (a dev-dependency only).
+#[cfg(any(test, feature = "test-relay"))]
+pub mod test_relay;
 #[cfg(test)]
 mod dearth_roster_tests;
 #[cfg(test)]
