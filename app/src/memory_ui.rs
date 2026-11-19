@@ -147,6 +147,7 @@ pub(crate) fn memory_decide(
 /// Propose a change as this device's person (for a member who can't write:
 /// a Contributor proposing an edit of someone else's entry).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn memory_propose(
     app: AppHandle,
     state: tauri::State<'_, AppState>,

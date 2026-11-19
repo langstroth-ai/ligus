@@ -130,7 +130,7 @@ enum Op {
 
 fn via_of(by: u8, via: u8) -> Via {
     match via % 6 {
-        0 | 1 | 2 => Via::Person(by as usize % WRITERS.len()),
+        0..=2 => Via::Person(by as usize % WRITERS.len()),
         3 => Via::Agent,
         4 => Via::Runtime,
         _ => Via::Phone,
