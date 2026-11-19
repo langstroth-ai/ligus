@@ -87,18 +87,22 @@ scheme, user, port or address.
 
 A shared alias changes nothing on a device until someone there accepts it:
 **accept here** next to the alias, or `ligus repos accept <alias>`. Accepting
-records what the alias points to, so if an Admin later points it somewhere
-else, it stops counting here until someone accepts it again; if the Admin
-removes it, it stops counting everywhere. A checkout that matches only through
+records what the alias points to (in Settings, what you saw: if an Admin
+pointed it elsewhere in the meantime, accepting refuses and you look again),
+so if an Admin later points it somewhere else, it stops counting here until
+someone accepts it again; if the Admin removes it, it stops counting
+everywhere, binding a checkout included. A checkout that matches only through
 an alias shows "via alias", and a checkout found by a scan still needs
 **Use it**.
 
 Ligus refuses an alias that would make two repositories hard to tell apart:
 
 - an alias that is already a repository's name or another repository's alias;
-- a look-alike of either (Ligus compares names with `0`/`o`, `1`/`l`/`i`,
-  `rn`/`m` and `vv`/`w` folded and `.`, `-`, `_` ignored), except a spelling
-  that differs from the repository's own name only in upper and lower case;
+- a look-alike of either (Ligus compares names the same way it flags
+  look-alike repositories: case, `0`/`o`, `1`/`l`/`i`/`|`, `5`/`s`, `8`/`b`,
+  `rn`/`m` and `vv`/`w` folded and `.`, `-`, `_` ignored first, so `r-n`
+  reads as `m` too), except a spelling that differs from the repository's
+  own name only in upper and lower case;
 - a host alias for a host a repository already uses, or a look-alike of one;
 - a new repository whose name an alias already holds, or that sits on an
   aliased host.
@@ -164,7 +168,10 @@ The host that runs a turn is the only judge of whether it can:
 While a host is cloning the repository, a turn it has already claimed waits
 for the clone (up to ten minutes). Coverage shown elsewhere is a hint: the
 router skips an agent whose host says it lacks the chat's repository, and a
-workflow names the stage whose host has none before it starts.
+workflow names the stage whose host has none before it starts. Each host
+signs its own coverage with its device key, and other devices use a report
+only when the signature checks out against that host's certified device, so
+no one can report coverage for a host that isn't theirs.
 
 ### Which device answers
 
@@ -183,8 +190,21 @@ settle it through the chat itself:
   the other.
 - If the holder goes quiet (no answer within about 25 seconds and no longer
   online), another device that may answer takes the turn over and answers
-  it. A device that was revoked, or whose person left the workspace, loses
-  its turns at once, and nothing it writes afterwards counts.
+  it. A holder that stays online but hasn't started answering after two
+  minutes is replaced too (one that has the repository only by another
+  device that has it). A device that was revoked, or whose person left the
+  workspace, loses its turns at once, and nothing it writes afterwards
+  counts.
+- A take-over only counts when it is signed at least 15 seconds after the
+  claim it replaces, and an answer the holder wrote before it was replaced
+  still counts, so a member's device can't slip in afterwards and take a
+  turn that was answered promptly. A device holds one turn at most twice.
+- Regenerating removes the answer and claims the turn again, so a host that
+  sees the turn open again doesn't run it a second time. Only the answer's
+  author or an Admin can remove an answer.
+- Hidden duplicates stay out of everything: the chat on the desktop and
+  phone, notifications, the next turn's context, summaries, exports, agents'
+  read tools and workflow stage outputs.
 - A device on its own (no relay, or a workspace with only you in it) always
   answers its own turns.
 - While devices run mixed versions, an older build reads a hand-over as a

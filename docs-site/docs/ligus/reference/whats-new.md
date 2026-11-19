@@ -22,8 +22,15 @@ Full release notes are on the
   a checkout of the chat's repository claims first and takes the turn from
   one without it, a duplicate answer from a network split is hidden on every
   device, a holder that goes quiet is replaced after about 25 seconds, and a
-  revoked device loses its turns at once. See
+  revoked device loses its turns at once. A member's device can't take over
+  a turn that was answered promptly. See
   [Which device answers](../features/repositories.md#which-device-answers).
+- **Signed coverage, owner-only repository actions on the box.** Each host
+  signs its own report of which repositories it has, so no one can report
+  another host's. On a box, cloning, renaming, picking a chat's repository
+  and rescanning are the box owner's (their certified phone, or the operator
+  on loopback). See
+  [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
 - **Shared repository and host aliases.** An Admin can name a repository's
   other spellings (an old owner, a case split) and a forge's SSH host once for
   the whole workspace, with a passkey. They are names only, never where git

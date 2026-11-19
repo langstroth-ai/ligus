@@ -83,6 +83,14 @@ workspace repositories or change their shared aliases; an Admin does that from
 a desktop or the phone. The box does decide, like every host, whether it
 accepts a shared alias for itself.
 
+Cloning (by name or by id), renaming a repository, picking a chat's
+repository, a rescan and confirming a found checkout spend the box's own
+code-host access, so only the box's owner can ask for them: the phone of the
+Admin who admitted the box, certified to their account (**Add this phone**
+on their desktop), over its own pairing, or the operator with `serve.token`
+on a box that listens on loopback. Any other phone, and the token over the
+network, gets `403 owner_required`.
+
 When the box and a desktop could both answer a turn, the one with a checkout
 of the chat's repository claims it first, and if the holder goes quiet the
 other takes it over (see
@@ -124,6 +132,10 @@ host**, still lists the box's checkouts, and can still clone public repos.
 
 Tap the repo chip in a chat's header (or its details sheet) to see the bound
 repo and branch, then:
+
+Switch and Clone are the box owner's (see
+[above](#workspace-repositories-on-the-box)); Pull latest and Open pull
+request are any paired phone's.
 
 - **Switch** the chat to another checkout. The chat stays the same. Ligus posts
   a note in the chat, and the agent's next turn is told which repository and
@@ -198,7 +210,9 @@ remote branch has moved, the push is refused and the phone says so.
   it passes `LIGUS_REPOS_MAX_CLONE_MB` (default 2048), and leaves nothing
   behind. Two clones can run at a time.
 - Changing repos needs the phone's pairing, a box that can write, and at
-  least the Contributor role in the workspace.
+  least the Contributor role in the workspace; cloning, switching a chat's
+  repository, renaming, rescanning and confirming also need the box owner's
+  certified phone (or the operator on loopback).
 - The phone never sees paths on the box, only checkout names.
 
 The API is documented in `docs/ios-app.md` in the Ligus repository.

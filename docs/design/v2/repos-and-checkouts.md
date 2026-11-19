@@ -291,6 +291,17 @@ per hour for `default_head` drift, so the volume is similar to host
 heartbeats. **No paths, no remotes, no branch names** beyond what the repo
 entry already says.
 
+**As built (0.1.0).** Coverage rides the presence beat (`HostBeat.seq`,
+`coverage`), not the log. Since the dispatcher review (2026-11-18) each host
+signs its report with its own device key (`HostBeat.coverageSig`, Ed25519
+over `"ligus-coverage-v1\0" ‖ workspace(16) ‖ device(16) ‖ u64le(seq) ‖
+u32le(n) ‖ n × (repo(16) ‖ u32le(len) state ‖ u32le(len) code ‖ via_fork
+byte)`; golden vectors in `crates/hive-core/tests/coverage_sig.rs`). A
+reader records a beat's coverage only when the signature verifies against
+the device its `hostId` names, as its current roster has it (certified, not
+revoked, not a phone, acting for a current member); otherwise only the
+beat's liveness counts. Unsigned liveness is a residual (11.6).
+
 ---
 
 ## 3. Where data lives
@@ -840,13 +851,18 @@ repo differs from the viewed one (the turn's directory is per chat; MCP and
 runtime catalogs still follow the viewed folder), workspace-synced repo and
 and renaming the `hive/` branch prefix.
 
-Built since (2026-11-18, branch `feat/device-dispatcher`): the device-keyed
-dispatcher (section 11: `hive_core::dispatch`, `ChatService::dispatch_turn`,
-both desktop gates, the deferred claim, hand-offs and the worker) and
-workspace-synced repo and host aliases (section 12). Still open from those:
-workflow stage claims (`offer_stage_here`) and the desktop's regenerate and
-revision turns still use the plain first claim, and the phone app shows the
-aliases the box API now lists only once the phone repository adopts them.
+Built since (2026-11-18, branch `feat/device-dispatcher`, reviewed and
+completed on `feat/device-dispatcher-v2`): the device-keyed dispatcher
+(section 11: `hive_core::dispatch`, `ChatService::dispatch_turn`, both
+desktop gates, the deferred claim, hand-offs, the worker, workflow stage
+offers, the desktop's revision and regenerate turns) and workspace-synced
+repo and host aliases (section 12); signed coverage (2.8, repos review
+residual 1); the box's repo actions limited to its owner (repos review F12
+and residual 2: clone by spec or id, rename, set-chat-repo, rescan and
+confirm need a phone certified to the account of the Admin who admitted the
+box, or the `serve.token` bearer on a loopback listener; 403
+`owner_required` otherwise). Still open: the phone app shows the aliases the
+box API lists only once the phone repository adopts them.
 
 ---
 
@@ -902,17 +918,32 @@ existing reader uses).
    non-covering holder. Once the holder covers, nothing displaces it at that
    epoch.
 4. Hand-over: `epoch == current + 1` and `supersedes == current holder`
-   (at most 64 epochs). A claim naming a stale holder or skipping an epoch
-   is ignored, so two devices that take over from the same holder at once
-   converge on the first in canonical order, and a third must name the new
-   holder.
+   (at most 64 epochs, unless the holder is gone at the claim's position).
+   A claim naming a stale holder or skipping an epoch is ignored, so two
+   devices that take over from the same holder at once converge on the
+   first in canonical order, and a third must name the new holder. Since
+   the review: never to the holder itself, a device holds one turn at most
+   twice (`MAX_HOLDS_PER_DEVICE`), and a hand-over signed (envelope
+   timestamp) less than `CLAIM_TIMEOUT - HANDOVER_SKEW` (15 s) after the
+   holder's claim is ignored unless the holder is gone at its position. The
+   slot keeps the displaced holders and when each was displaced (`before`).
 5. Answer: the first verified answer from the holder at its position
-   commits. Every other answer to that key (from a non-holder, or after a
-   commit) is marked `superseded` and is hidden from the transcript, the
-   answered checks, cascades and the next turn's context. An answer to a
-   key nobody claimed (a local cascade, a relay-less device) commits under
-   the trigger and under `(trigger, responder)`, so a late claim can't run
-   it again.
+   commits. A displaced holder's answer signed before the hand-over that
+   displaced it also commits, and displaces an answer a later holder
+   committed (so a member can't slip a hand-over in by lamport between a
+   holder's claim and the answer it wrote at once, then answer itself).
+   Every other answer to that key (from a non-holder, or after a commit) is
+   marked `superseded` and is hidden from every view (the transcript on the
+   desktop and phone, notifications and push, the answered checks,
+   cascades, the next turn's context and summaries, exports, the facts
+   export, the MCP read tools, workflow stage outputs). An answer by
+   another agent than the committed one (a message that mentions several,
+   each run where it lives) is its own turn under `(trigger, responder)`.
+   An answer to a key nobody claimed (a local cascade, a relay-less device)
+   commits under the trigger and under `(trigger, responder)`, so a late
+   claim can't run it again. The origin is the signer, or the host that
+   certified the signing agent key, as the workspace roster at the answer's
+   position has it.
 6. Removing the committed answer (regenerate, on any device) starts the
    turn over: its slot and claim are dropped, so the next answer commits
    whoever writes it.
@@ -954,6 +985,8 @@ longer a member, in the current roster).
 | other holder that doesn't cover, I cover | claim the same epoch with `repo_id` (displaces it) |
 | other holder gone | claim `epoch + 1`, `supersedes` it, now |
 | other holder silent for `CLAIM_TIMEOUT` (25 s) and not live, trigger younger than 15 min | claim `epoch + 1`, `supersedes` it |
+| other holder live but no answer for `HOLDER_COMMIT_TIMEOUT` (120 s); a covering holder only by a covering device | claim `epoch + 1`, `supersedes` it |
+| I held it twice already, or epoch 64 and the holder isn't gone | stand down |
 | otherwise | wait and look again |
 
 A claim is followed by a re-fold; the device runs only if it is then the
@@ -998,11 +1031,29 @@ is live, so no takeover fires (review F8's race).
   started) are not retracted; proposals still need their approvals.
 - Liveness relies on wall-clock timers and the presence beat; with every
   eligible device partitioned from the holder for longer than
-  `CLAIM_TIMEOUT`, two may execute and one answer is hidden.
+  `CLAIM_TIMEOUT`, two may execute and one answer is hidden. "How long" is
+  one clock per holder and epoch in `ChatService` (every gate, the watcher
+  and the worker share it), so a new holder starts it over.
+- Eligibility stays local: the fold accepts any member device's claim. A
+  hostile member's device can claim turns it isn't meant to answer and
+  answer them (as any member can post a reply); what the review closed is
+  that it can't hold one forever (a live holder that doesn't answer is
+  replaced after 120 s, a device holds a turn at most twice), can't lock it
+  by chaining hand-overs to the epoch cap without as many devices, and
+  can't retroactively fence an answer written promptly. A member with many
+  certified devices can still exhaust a turn's epochs; removing the member
+  makes its holds gone, which a hand-over may pass the cap for.
+- Timestamps are the signer's word: a hostile member can sign a hand-over
+  in the future, which only helps the displaced holder's answer.
+- Presence liveness is unsigned: a member can make a dead holder look live,
+  which delays a hand-over by at most `HOLDER_COMMIT_TIMEOUT`.
 
 Tests: `prop_dispatch_converges_and_commits_at_most_once` (N simulated
 devices with random partitions, delivery orders, crashes, coverage and
-eligibility; every local view at every step has at most one committed
+eligibility, a revoked device writing backdated events, and a hostile
+member's device that stays live, claims with forged coverage, hands over
+to itself and others with backdated lamports and chosen times, and
+answers; every local view at every step has at most one committed
 answer; all views converge; after healing, exactly one when an eligible
 device stays up, from a covering device for a repo chat), plus unit tests
 for each fold rule, revoked and removed holders, backdated claims and the
@@ -1033,8 +1084,9 @@ order-independent):
 - A repo alias is not a live repo's canonical, not another live repo's
   alias, and not listed twice.
 - **Look-alikes.** Every canonical, alias and host is compared by a
-  skeleton (ASCII-lowercased, with `0→o`, `1/l/i→l`, `rn→m`, `vv→w` and
-  `_`/`.`/`-` dropped). An alias whose skeleton equals a live canonical's or
+  skeleton, the same fold as the repo look-alike flags
+  (`confusable_skeleton`: ASCII-lowercased, `0→o`, `1/i/|→l`, `5→s`, `8→b`,
+  `_`/`.`/`-` dropped, then `rn→m`, `vv→w`; `local:` names exactly). An alias whose skeleton equals a live canonical's or
   another alias's is refused, except an alias that differs from its own
   repo's canonical only in ASCII case (the case-split fix review Q10
   recommends).
@@ -1047,7 +1099,12 @@ order-independent):
 
 **Local confirmation.** A synced alias changes nothing on a device until a
 person there accepts it (`accepted_aliases` in `hive.db`, keyed by alias
-and target, so a changed target needs a new acceptance). Accepted aliases
+and target, so a changed target needs a new acceptance; the desktop sends
+the target it showed, and accepting refuses when the workspace has since
+pointed the alias elsewhere). An acceptance counts only while the roster a
+device reads names that alias with that target: without a roster (a bind
+that reads the device's own fold of the config log, never a cached
+acceptance alone) only the device's own SSH aliases count. Accepted aliases
 join identity matching only (scan, bind, coverage, the turn gate); a match
 that needed one shows "via alias". A detected checkout is still recorded
 unconfirmed.

@@ -213,7 +213,10 @@ Phase 3 blockers:
 ## Residual risks (after the revisions)
 
 - Coverage remains self-reported. A host can claim Present and then refuse
-  turns, which is a liveness nuisance, not a safety issue.
+  turns, which is a liveness nuisance, not a safety issue. Since
+  2026-11-18 each host signs its own report with its device key, so another
+  member can't report it (the beat itself is only sealed with the workspace
+  key); liveness on the beat is still unsigned.
 - SSH-alias users need a device-local alias step before their checkouts
   match. Some will see "Missing" and clone a second copy.
 - Case-preserving unknown forges can split one repo into two entries until
