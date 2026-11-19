@@ -569,13 +569,58 @@ const HYGIENE_FIRST_AFTER: Duration = Duration::from_secs(180);
 // Hygienic removal
 // ---------------------------------------------------------------------------
 
+/// An open diff proposal the sweep checks: (chat, proposal, title, diff, repo).
+type OpenDiff = (Uuid, Uuid, String, String, Option<Uuid>);
+
+/// What the hygiene sweep knows about chats: every chat this device holds,
+/// in any workspace, with whether it is live (keyed by branch slug), every
+/// streaming turn, and the open diff proposals of `ws` (the workspace being
+/// swept). A checkout can be bound by several workspaces on one device, and
+/// their chat worktrees share its `.ligus/worktrees`: only the swept
+/// workspace's archived or gone chats are its to remove; another workspace's
+/// chats count as live here and are left to that workspace's own sweep.
+pub(crate) fn sweep_inputs(
+    svc: &ligus_runtime::ChatService,
+    ws: Uuid,
+) -> (std::collections::HashMap<String, ligus_runtime::hygiene::ChatStatus>, std::collections::HashSet<String>, Vec<OpenDiff>) {
+    use ligus_runtime::hygiene::{self, ChatStatus};
+    let mut chats = std::collections::HashMap::new();
+    let mut live_turns = std::collections::HashSet::new();
+    let mut open_diffs: Vec<OpenDiff> = Vec::new();
+    for id in svc.store().list_session_ids().unwrap_or_default() {
+        let Ok(Some(s)) = svc.load(id) else { continue };
+        if id == ligus_core::workspace_config_session_id(s.workspace_id) {
+            continue;
+        }
+        for m in s.messages.iter().filter(|m| m.is_streaming) {
+            live_turns.insert(hygiene::slug(&m.id.to_string()));
+        }
+        if s.workspace_id != ws {
+            chats.insert(hygiene::slug(&id.to_string()), ChatStatus::Live);
+            continue;
+        }
+        chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
+        if s.archived {
+            continue;
+        }
+        for p in &s.proposals {
+            if p.status == ligus_core::ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none() && !s.guards.stale_proposals.contains(&p.id) {
+                if let Some(d) = &p.diff {
+                    open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
+                }
+            }
+        }
+    }
+    (chats, live_turns, open_diffs)
+}
+
 /// Sweep the active workspace's bound repository: remove crash-leftover turn
 /// worktrees (saving their edits), remove checkouts of gone or archived chats
 /// (keeping their branches), and mark open proposals whose diff no longer
 /// applies as stale (taking them out of the inbox).
 pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportDto {
     use ligus_core::signal::{HygieneKind, WorktreeState};
-    use ligus_runtime::hygiene::{self, ChatStatus, SweepAction};
+    use ligus_runtime::hygiene::{self, SweepAction};
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
     let mut report = ligus_proto::HygieneReportDto { ran_at: crate::rfc3339(ligus_core::Timestamp::now()), ..Default::default() };
@@ -612,41 +657,12 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
         return report;
     }
     report.repo_bound = true;
-    // The workspace's chats, their streaming turns and open diff proposals.
-    let mut chats = std::collections::HashMap::new();
-    let mut live_turns = std::collections::HashSet::new();
-    let mut open_diffs: Vec<(Uuid, Uuid, String, String, Option<Uuid>)> = Vec::new();
-    let device = {
+    // Every chat on this device, their streaming turns, and the active
+    // workspace's open diff proposals.
+    let (chats, live_turns, open_diffs, device) = {
         let svc = state.service.lock().unwrap();
-        let config_id = ligus_core::workspace_config_session_id(ws);
-        for id in svc.store().list_session_ids().unwrap_or_default() {
-            if id == config_id {
-                continue;
-            }
-            let Ok(Some(s)) = svc.load(id) else { continue };
-            if s.workspace_id != ws {
-                continue;
-            }
-            chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
-            for m in s.messages.iter().filter(|m| m.is_streaming) {
-                live_turns.insert(hygiene::slug(&m.id.to_string()));
-            }
-            if s.archived {
-                continue;
-            }
-            for p in &s.proposals {
-                if p.status == ligus_core::ProposalStatus::Open
-                    && !p.dismissed
-                    && p.superseded_by.is_none()
-                    && !s.guards.stale_proposals.contains(&p.id)
-                {
-                    if let Some(d) = &p.diff {
-                        open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
-                    }
-                }
-            }
-        }
-        svc.device_id()
+        let (chats, live_turns, open_diffs) = sweep_inputs(&svc, ws);
+        (chats, live_turns, open_diffs, svc.device_id())
     };
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
@@ -2005,6 +2021,48 @@ mod tests {
         assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
         assert!(!body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("), "a policy built without the shell gate");
         assert!(body.contains("policy: sandbox_policy,"), "the engine runs under the turn's policy");
+    }
+
+    /// Runtime review: a checkout bound by two workspaces holds both
+    /// workspaces' chat worktrees under one `.ligus/worktrees`. The sweep of
+    /// one workspace only knew its own chats, so it force-removed the other
+    /// workspace's live chat checkouts as "gone".
+    #[test]
+    fn hygiene_never_sweeps_another_workspaces_chat_checkouts() {
+        use ligus_runtime::hygiene::{plan_sweep, slug, SweepAction, WorktreeEntry};
+        let store = ligus_runtime::EventStore::open_in_memory().unwrap();
+        let author = ligus_core::ActorIdentity::new("u1", "Mara", ligus_core::ActorKind::Human);
+        let mut svc = ligus_runtime::ChatService::new(
+            store,
+            ligus_core::crypto::SigningKeypair::generate().unwrap(),
+            ligus_core::crypto::SigningKeypair::generate().unwrap(),
+            author,
+        );
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        svc.ensure_workspace_config(a).unwrap();
+        svc.ensure_workspace_config(b).unwrap();
+        let mine = svc.create_chat("mine", a, "rt").unwrap().id;
+        let archived = svc.create_chat("old", a, "rt").unwrap().id;
+        svc.set_archived(archived, a, true).unwrap();
+        let theirs = svc.create_chat("theirs", b, "rt").unwrap().id;
+        let theirs_archived = svc.create_chat("theirs old", b, "rt").unwrap().id;
+        svc.set_archived(theirs_archived, b, true).unwrap();
+        let (chats, _, _) = sweep_inputs(&svc, a);
+        let owned = std::path::PathBuf::from("/repo/.ligus/worktrees");
+        let entry = |id: Uuid| WorktreeEntry {
+            path: owned.join(format!("chat-{id}")),
+            branch: Some(format!("ligus/chat/{}", slug(&id.to_string()))),
+        };
+        let entries = [entry(mine), entry(archived), entry(theirs), entry(theirs_archived)];
+        let plan = plan_sweep(&owned, &entries, &Default::default(), &chats, &|_| false);
+        let removed: Vec<String> = plan
+            .iter()
+            .filter_map(|p| match p {
+                SweepAction::RemoveChatCheckout { chat_slug, .. } => Some(chat_slug.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, vec![slug(&archived.to_string())], "only the swept workspace's archived chat");
     }
 
     #[test]

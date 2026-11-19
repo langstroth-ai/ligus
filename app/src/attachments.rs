@@ -351,9 +351,9 @@ pub(crate) fn save_received_attachment_sync(state: State<AppState>, session_id: 
     }
     // Re-verified from the private cache: what was checked is what is saved.
     let bytes = blob::cached(&blob::verified_cache_dir(&state.data_dir), a).ok_or("check the file again")?;
-    // The policy may have changed since the check.
-    let detected = attachment::detect(&bytes);
-    if let Some(why) = rules.policy.file_refusal(&attachment::type_tokens(&a.name, Some(&detected)), a.size) {
+    // The policy may have changed since the check: judge the file as the
+    // check does, the types inside an archive included.
+    if let Some(why) = safety::policy_refusal(&rules.policy, &a.name, a.size, &bytes) {
         return Err(why);
     }
     let Some(chosen) = rfd::FileDialog::new().set_title("Save attachment").set_file_name(&a.name).save_file() else {

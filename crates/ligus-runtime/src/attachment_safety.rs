@@ -19,6 +19,24 @@ use std::time::Duration;
 
 use ligus_core::attachment::{self, ArchiveLimits, Assessment};
 
+/// Why `policy` refuses the file `name` with these `bytes`, judged as a
+/// receive's check does: by its name, its detected type, and, for an
+/// archive, the types of what it holds (a zip of programs is refused where
+/// programs are), plus a decompression bomb. A save re-runs it against the
+/// policy as it is now, since the policy may have changed since the check.
+pub fn policy_refusal(policy: &attachment::AttachmentPolicy, name: &str, size: u64, bytes: &[u8]) -> Option<String> {
+    let assessment = attachment::assess(name, bytes);
+    let archive = archive_report(bytes, &assessment);
+    let mut tokens = attachment::type_tokens(name, Some(&assessment.detected));
+    if let Some(r) = &archive {
+        tokens.extend(r.entry_types.iter().cloned());
+    }
+    if let Some(why) = policy.file_refusal(&tokens, size) {
+        return Some(if archive.is_some() { format!("{why} (inside this archive)") } else { why });
+    }
+    archive.and_then(|r| r.bomb).map(|bomb| format!("this archive looks like a decompression bomb ({bomb})"))
+}
+
 /// Why an archive looks like a decompression bomb, if it does.
 pub fn archive_bomb(bytes: &[u8], a: &Assessment) -> Option<String> {
     archive_report(bytes, a).and_then(|r| r.bomb)
@@ -871,6 +889,21 @@ mod tests {
 
     fn report(bytes: &[u8]) -> attachment::ArchiveReport {
         archive_report(bytes, &attachment::assess("a.zip", bytes)).expect("a zip is inspected")
+    }
+
+    /// Runtime review: saving an archive re-checked only its outer type
+    /// against the current policy, so a zip of programs checked before an
+    /// Admin blocked programs was still saved.
+    #[test]
+    fn a_save_rechecks_the_types_inside_an_archive() {
+        let zip = build_zip(&[ent("bin/tool.exe", b"MZ\x90\0".to_vec())]);
+        let open = attachment::AttachmentPolicy::default();
+        assert_eq!(policy_refusal(&open, "tools.zip", zip.len() as u64, &zip), None);
+        let strict = attachment::AttachmentPolicy { blocked_types: vec!["@executable".into()], ..Default::default() };
+        let why = policy_refusal(&strict, "tools.zip", zip.len() as u64, &zip).expect("refused");
+        assert!(why.contains("inside this archive"), "{why}");
+        let notes = build_zip(&[ent("notes.txt", b"hello".to_vec())]);
+        assert_eq!(policy_refusal(&strict, "notes.zip", notes.len() as u64, &notes), None);
     }
 
     /// Second review: what an extractor would actually unpack is what the

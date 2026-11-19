@@ -786,9 +786,13 @@ pub(crate) async fn apply_proposal_set(
     Ok(dto)
 }
 
-/// Revert an applied file change: reverse its patch where it was applied (the
-/// chat's base worktree, committed; else the workspace root) and mark it
-/// reverted.
+/// Revert an applied file change where it was applied, through the same
+/// path as the apply: a workspace repo's proposal on this device's checkout
+/// of that repo (after the turn gate: still that repo, managed by this
+/// host), as a commit on the chat branch carrying the `Ligus-Revert`
+/// trailer a ledger replay reads; a proposal without a repo in its own
+/// workspace's folder (never one another host manages), else that folder's
+/// root. Then mark it reverted.
 #[tauri::command]
 pub(crate) async fn revert_proposal(
     app: AppHandle,
@@ -798,35 +802,52 @@ pub(crate) async fn revert_proposal(
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
-    let (wid, p) = {
+    let (session, p) = {
         let svc = state.service.lock().unwrap();
         let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
         let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
-        (session.workspace_id, p)
+        (session, p)
     };
+    let wid = session.workspace_id;
     if p.status != ProposalStatus::Applied || p.reverted {
         return Err("only an applied change that hasn't been reverted can be reverted".into());
     }
     let diff = p.diff.clone().ok_or("only file changes can be reverted here")?;
-    let repo = state.workspace_repo_root();
-    let root = state.workspace_root.lock().unwrap().clone();
     let title = p.title.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let repo_path = std::path::Path::new(&repo);
-        let chat = (!repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(repo_path))
-            .then(|| ligus_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok())
-            .flatten();
-        match chat {
-            Some(wt) => {
-                let wt = wt.to_string_lossy().into_owned();
-                reverse_patch(&wt, &diff)?;
-                crate::commit_worktree(&wt, &format!("Revert proposal: {title}"))
-            }
-            None => reverse_patch(&root, &diff),
+    match revert_target(p.repo_id, session.repo.as_ref().and_then(|r| r.repo_id))? {
+        RevertTarget::Repo => {
+            let prepared = crate::repos_ui::turn_repo(&state, &session)?.ok_or("this chat has no repository on this device")?;
+            let checkout = prepared.checkout.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                ligus_runtime::repos::apply::revert_on_chat_branch(&checkout, &sid.to_string(), &diff, &title, pid)
+            })
+            .await
+            .map_err(map_err)?
+            .map_err(|e| format!("Not reverted: {e}. Nothing changed."))?;
         }
-    })
-    .await
-    .map_err(map_err)??;
+        RevertTarget::Legacy => {
+            let repo = crate::legacy_folder(&state, wid)?;
+            if repo.trim().is_empty() {
+                return Err("this workspace has no folder on this device to revert in".into());
+            }
+            tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+                let repo_path = std::path::Path::new(&repo);
+                let chat = ligus_runtime::git_worktree::is_git_repo(repo_path)
+                    .then(|| ligus_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok())
+                    .flatten();
+                match chat {
+                    Some(wt) => {
+                        let wt = wt.to_string_lossy().into_owned();
+                        reverse_patch(&wt, &diff)?;
+                        crate::commit_worktree(&wt, &ligus_runtime::repos::apply::legacy_revert_message(&title))
+                    }
+                    None => reverse_patch(&repo, &diff),
+                }
+            })
+            .await
+            .map_err(map_err)??;
+        }
+    }
     {
         let mut svc = state.service.lock().unwrap();
         svc.mark_proposal_reverted(sid, wid, pid).map_err(map_err)?;
@@ -834,6 +855,26 @@ pub(crate) async fn revert_proposal(
     }
     let _ = app.emit("workspace://synced", 1);
     Ok(())
+}
+
+/// Where a revert runs, by the proposal's repository and the chat's.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RevertTarget {
+    /// The chat's repository checkout on this device (its chat branch).
+    Repo,
+    /// The workspace's bound folder (a proposal without a repository).
+    Legacy,
+}
+
+/// A proposal made in a repository reverts only in that repository's
+/// checkout, never the workspace folder (as its apply, review F1); a chat
+/// that moved to another repository can't revert it here.
+pub(crate) fn revert_target(proposal_repo: Option<Uuid>, chat_repo: Option<Uuid>) -> Result<RevertTarget, String> {
+    match proposal_repo {
+        None => Ok(RevertTarget::Legacy),
+        Some(r) if chat_repo == Some(r) => Ok(RevertTarget::Repo),
+        Some(_) => Err("This chat now works in another repository; switch it back to revert this change.".into()),
+    }
 }
 
 fn reverse_patch(dir: &str, diff: &str) -> Result<(), String> {
@@ -973,6 +1014,19 @@ mod tests {
             group_same_trigger(&mut svc, sid2, wid, id);
         }
         assert!(svc.load(sid2).unwrap().unwrap().proposal_sets.is_empty());
+    }
+
+    /// Runtime review: a revert ignored the proposal's repository and
+    /// reversed the patch in the workspace's bound folder.
+    #[test]
+    fn a_repo_proposal_reverts_only_in_its_repository() {
+        let (r, other) = (Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(revert_target(Some(r), Some(r)), Ok(RevertTarget::Repo));
+        assert!(revert_target(Some(r), Some(other)).is_err());
+        assert!(revert_target(Some(r), None).is_err(), "never the bound folder");
+        assert_eq!(revert_target(None, Some(r)), Ok(RevertTarget::Legacy));
+        let msg = ligus_runtime::repos::apply::legacy_revert_message("x\n\nLigus-Revert: y");
+        assert!(!msg.contains('\n'), "a legacy revert's message is one line: {msg}");
     }
 
     #[test]

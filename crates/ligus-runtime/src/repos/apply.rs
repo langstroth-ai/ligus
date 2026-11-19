@@ -229,6 +229,32 @@ pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String 
     m
 }
 
+/// The message of the commit that takes proposal `id` back out of the chat
+/// branch: its title's first line only (an agent's text, which must not
+/// end in a trailer block), and the `Ligus-Revert` trailer a ledger replay
+/// reads ([`replay_ledger`]), so the revert is never replayed twice.
+pub fn revert_message(title: &str, id: Uuid) -> String {
+    format!("Revert proposal: {}\n\n{REVERT_TRAILER}: {id}\n", title.lines().next().unwrap_or(""))
+}
+
+/// A person's revert of applied proposal `id` on the chat's branch in
+/// `checkout`: the reverse patch as one commit with the `Ligus-Revert`
+/// trailer, by compare-and-swap like any apply. Refused when the branch
+/// already carries that revert.
+pub fn revert_on_chat_branch(checkout: &Path, chat_id: &str, diff: &str, title: &str, id: Uuid) -> Result<Applied, ApplyError> {
+    if branch_has_trailer(checkout, chat_id, REVERT_TRAILER, id) {
+        return Err(ApplyError::Other("this change was already reverted on the chat's branch".into()));
+    }
+    apply_to_chat_branch(checkout, chat_id, diff, &revert_message(title, id), true, None)
+}
+
+/// The message of a legacy revert commit (a proposal without a repo, in the
+/// workspace folder's chat branch): its title's first line, no trailer,
+/// like [`legacy_apply_message`].
+pub fn legacy_revert_message(title: &str) -> String {
+    format!("Revert proposal: {}", title.lines().next().unwrap_or(""))
+}
+
 /// The commit the chat's branch was cut from: the first commit on its
 /// first-parent line, from the tip down, that carries no Ligus trailer
 /// (every apply, replay and revert commit carries one). `None` without a
