@@ -467,7 +467,7 @@ fn hostile_repo_config_runs_nothing_during_scan_and_coverage() {
     let _ = git::root_commit(&e.checkout);
     let _ = coverage(&e.store, e.ws, &[wefit()], &HashSet::new());
     let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), id: repo_id(&format!("local:{}", "a".repeat(40))), ..wefit() };
-    let _ = checkout_matches(&e.checkout, &local, &BTreeMap::new());
+    let _ = checkout_matches(&e.checkout, &local, &Default::default());
     assert!(!pwn.exists(), "repo config ran a command");
 }
 
