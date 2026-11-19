@@ -96,15 +96,25 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
             SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
         }
-        PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
-            record: FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
-                proposal_id: Uuid::new_v4(),
-                op: op.clone(),
-                proposer: String::new(),
-                source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None },
-                rationale: rationale.clone(),
-            }),
-        },
+        PhoneAction::ProposeMemory { chat_id, op, rationale } => {
+            // A new entry is named by its proposal (the box's id).
+            let id = Uuid::new_v4();
+            let op = match op {
+                hive_core::memory::MemoryOp::Create { title, body, tags, .. } => {
+                    hive_core::memory::MemoryOp::Create { entry_id: id, title: title.clone(), body: body.clone(), tags: tags.clone() }
+                }
+                other => other.clone(),
+            };
+            SessionEvent::FlowRecorded {
+                record: FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                    proposal_id: id,
+                    op,
+                    proposer: String::new(),
+                    source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None, egress: None },
+                    rationale: rationale.clone(),
+                }),
+            }
+        }
     }
 }
 

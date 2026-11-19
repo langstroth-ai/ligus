@@ -470,7 +470,7 @@ fn memory_goldens() {
     let ws = u(2);
     let chat = u(3);
     let cfg = hive_core::workspace_config_session_id(ws);
-    let source = MemorySource { chat_id: Some(chat), message_id: Some(u(0x6031)), turn_id: Some(u(0x6032)) };
+    let source = MemorySource { chat_id: Some(chat), message_id: Some(u(0x6031)), turn_id: Some(u(0x6032)), egress: None };
     let cases = [
         ("flowRecorded/memoryWritten", cfg, FlowRecord::MemoryWritten(MemoryWrite {
             entry_id: u(0x6001),

@@ -207,16 +207,21 @@ fn run(ops: &[Op]) -> (Fixture, Log) {
                     (1, Some(e)) => MemoryOp::Edit { entry_id: e, base: rev(e, r).unwrap_or_else(Uuid::new_v4), title: format!("prop {n}"), body: format!("proposed {n}"), tags: vec![] },
                     (2, Some(e)) => MemoryOp::Remove { entry_id: e, base: rev(e, r).unwrap_or_else(Uuid::new_v4) },
                     _ => {
+                        // A created entry is named by its proposal's id.
                         let id = Uuid::new_v4();
                         log.entries.push(id);
                         MemoryOp::Create { entry_id: id, title: format!("prop {n}"), body: format!("proposed {n}"), tags: vec![] }
                     }
                 };
+                let proposal_id = match &op {
+                    MemoryOp::Create { entry_id, .. } => *entry_id,
+                    _ => Uuid::new_v4(),
+                };
                 let proposer = match via {
                     Via::Agent | Via::Runtime => f.agent_id.to_string(),
                     _ => String::new(),
                 };
-                (via, FlowRecord::MemoryProposed(MemoryProposal { proposal_id: Uuid::new_v4(), op, proposer, source: Default::default(), rationale: String::new() }))
+                (via, FlowRecord::MemoryProposed(MemoryProposal { proposal_id, op, proposer, source: Default::default(), rationale: String::new() }))
             }
             Op::Decide { by, via, proposal, accept } => {
                 let _ = accept;
@@ -426,13 +431,7 @@ fn forbidden_writers_are_refused_with_reasons() {
     // the phone's too; the Viewer's proposal is refused (role floor).
     let ok = f.sign(Via::Person(2), None, rec(w(9)));
     assert_eq!(f.w.verdict(ok), Verdict::Allowed);
-    let prop = |proposer: String| FlowRecord::MemoryProposed(MemoryProposal {
-        proposal_id: Uuid::new_v4(),
-        op: MemoryOp::Create { entry_id: Uuid::new_v4(), title: "p".into(), body: "b".into(), tags: vec![] },
-        proposer,
-        source: Default::default(),
-        rationale: String::new(),
-    });
+    let prop = |proposer: String| proposal(Uuid::new_v4(), new_note(), proposer);
     let agent = f.agent_id.to_string();
     let a = f.sign(Via::Agent, None, rec(prop(agent.clone())));
     assert_eq!(f.w.verdict(a), Verdict::Allowed);
@@ -520,7 +519,13 @@ fn create(id: Uuid, title: &str) -> FlowRecord {
     FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: title.into(), body: "b".into(), ..Default::default() })
 }
 
+/// A proposal under `id`; a create names the new entry by the proposal's id
+/// (the binding), whatever id `op` carried.
 fn proposal(id: Uuid, op: MemoryOp, proposer: String) -> FlowRecord {
+    let op = match op {
+        MemoryOp::Create { title, body, tags, .. } => MemoryOp::Create { entry_id: id, title, body, tags },
+        other => other,
+    };
     FlowRecord::MemoryProposed(MemoryProposal { proposal_id: id, op, proposer, source: Default::default(), rationale: String::new() })
 }
 
@@ -718,4 +723,79 @@ fn a_removed_members_backdated_memory_write_is_refused() {
     sign_envelope(&mut env, f.agent_key.0, &f.agent_key.1);
     let id = f.w.push_env(None, env);
     assert_eq!(f.w.verdict(id), Verdict::Denied);
+}
+
+/// An accepted create can't be pre-empted: a Contributor who sees an open
+/// create proposal can't take its entry id first (with her own content and
+/// authorship) so the person's acceptance fails or lands on her note.
+#[test]
+fn an_accepted_create_cant_be_pre_empted() {
+    let mut f = fixture();
+    let pid = Uuid::new_v4();
+    let agent = f.agent_id.to_string();
+    let op = MemoryOp::Create { entry_id: pid, title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] };
+    let filed = f.sign(Via::Agent, None, rec(proposal(pid, op, agent)));
+    assert_eq!(f.w.verdict(filed), Verdict::Allowed);
+    // A create proposal names a new entry under its own id; any other id
+    // could be taken first.
+    let other = MemoryOp::Create { entry_id: Uuid::new_v4(), title: "x".into(), body: "y".into(), tags: vec![] };
+    let unbound = MemoryProposal { proposal_id: Uuid::new_v4(), op: other, proposer: f.agent_id.to_string(), source: Default::default(), rationale: String::new() };
+    let unbound = f.sign(Via::Agent, None, rec(FlowRecord::MemoryProposed(unbound)));
+    assert_eq!(f.w.verdict(unbound), Verdict::Denied, "a create proposal names an entry id other than its own");
+    // Mara squats the entry id before adm accepts: as a direct create it
+    // must carry the proposal's event id, an equivocation (a denial of
+    // both, never a takeover).
+    let squat = f.sign(Via::Person(2), None, rec(create(pid, "mara's squat")));
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
+    let m = f.memory();
+    assert_ne!(f.w.verdict(squat), Verdict::Allowed, "the squat was allowed");
+    assert!(m.entries.get(&pid).is_none_or(|e| e.created_by.id != "mara"), "mara took the proposed entry over");
+    let _ = accept;
+}
+
+/// The attack the binding closes, as the first review left it: a create
+/// proposal naming an entry id of the proposer's choice, squatted first.
+#[test]
+fn a_squatted_create_proposal_never_lands_on_the_squatters_note() {
+    let mut f = fixture();
+    let (pid, e) = (Uuid::new_v4(), Uuid::new_v4());
+    let agent = f.agent_id.to_string();
+    let op = MemoryOp::Create { entry_id: e, title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] };
+    let p = MemoryProposal { proposal_id: pid, op, proposer: agent, source: Default::default(), rationale: String::new() };
+    let filed = f.sign(Via::Agent, None, rec(FlowRecord::MemoryProposed(p)));
+    let squat = f.sign(Via::Person(2), None, rec(create(e, "mara's squat")));
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
+    if f.w.verdict(filed) == Verdict::Allowed {
+        assert_eq!(f.w.verdict(squat), Verdict::Allowed);
+        assert_eq!(f.w.verdict(accept), Verdict::Allowed, "the person's acceptance was refused: the entry id was squatted");
+    }
+}
+
+/// An agent rebound to another host mid-flight: its old host's key and its
+/// old host's runtime effects no longer speak for it (proposals or task
+/// state), while what it filed before the move stays (judged at its own
+/// position) for a person to decide.
+#[test]
+fn an_agent_moved_to_another_host_no_longer_speaks_through_the_old_one() {
+    let mut f = fixture();
+    let chat = f.chat;
+    let agent = f.agent_id.to_string();
+    let before = f.sign(Via::Agent, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
+    assert_eq!(f.w.verdict(before), Verdict::Allowed);
+    // The owner moves the agent to the owner's own device.
+    let mut moved = f.w.config().workspace_agents.iter().find(|a| a.id == f.agent_id).unwrap().clone();
+    moved.host_id = f.w.people["owner"].device_id.to_string();
+    f.w.push("owner", SessionEvent::AgentUpserted { agent: moved });
+    let by_key = f.sign(Via::Agent, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
+    let by_old_host = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), agent.clone())));
+    let t = rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: agent.clone(), turn_id: Uuid::new_v4(), summary: "still here".into(), ..Default::default() }));
+    let slot_by_old_host = f.sign(Via::Person(2), Some(chat), t.clone());
+    let slot_by_key = f.sign(Via::Agent, Some(chat), t);
+    for (what, id) in [("key proposal", by_key), ("old host proposal", by_old_host), ("old host slot", slot_by_old_host), ("key slot", slot_by_key)] {
+        assert_eq!(f.w.verdict(id), Verdict::Denied, "{what} after the move");
+    }
+    assert_eq!(f.w.verdict(before), Verdict::Allowed, "a proposal filed before the move stays");
+    let accept = f.sign(Via::Person(2), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: before, accepted: true, ..Default::default() })));
+    assert_eq!(f.w.verdict(accept), Verdict::Allowed);
+    assert!(f.memory().entries[&before].live(), "the accepted entry is named by its proposal");
 }

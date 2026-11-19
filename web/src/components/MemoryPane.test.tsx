@@ -63,6 +63,30 @@ describe("memory pane", () => {
     expect(saved).toEqual([{ entryId: "e1", base: "r2", title: "Relay ports", body: "It's 8080.", tags: [], resolves: ["r3"] }]);
   });
 
+  it("marks a note written under restricted egress", () => {
+    setup(view({ entries: [{ ...entry, conflicts: [], egress: { mode: "closed" } }] }));
+    const badge = screen.getByText("Restricted");
+    expect(badge.getAttribute("title")).toMatch(/only agent turns with egress closed/);
+  });
+
+  it("shows an edit that sorted after a removal instead of losing it", () => {
+    const bo = { id: "bo", name: "Bo", kind: "human" as const };
+    const tomb: MemoryEntry = {
+      id: "e7",
+      current: { rev: "r1", title: "", body: "", author: ana, atMs: 1 },
+      createdBy: ana,
+      createdAtMs: 1,
+      revisionCount: 1,
+      removed: { rev: "r2", base: "r1", title: "", body: "", author: ana, atMs: 2, removal: true },
+      editedAfterRemoval: [{ rev: "r3", base: "r1", title: "", body: "", author: bo, atMs: 3 }],
+    };
+    setup(view({ editedAfterRemoval: [tomb] }));
+    expect(screen.getByText("Edited after removal")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-late-edit")).toHaveTextContent(/removed by Ana/);
+    expect(screen.getByTestId("memory-late-edit")).toHaveTextContent(/Bo/);
+    expect(screen.getByTestId("memory-late-edit")).toHaveTextContent(/wasn't applied/);
+  });
+
   it("lists agent proposals and decides them", () => {
     const { decided } = setup(view());
     expect(screen.getByText("Proposals (1)")).toBeInTheDocument();

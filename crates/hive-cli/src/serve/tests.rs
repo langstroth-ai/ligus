@@ -4245,6 +4245,7 @@ async fn the_phone_reads_memory_and_task_state_and_proposes_a_note() {
     assert_eq!(p["proposal"]["proposalId"], json!(pid), "{ps}");
     assert_eq!(p["by"]["id"], json!(person));
     assert_eq!(p["proposal"]["source"]["chatId"], json!(chat_id));
+    assert_eq!(p["proposal"]["op"]["entryId"], json!(pid), "a new entry is named by its proposal");
     assert!(p.get("decision").is_none(), "open until a person decides on a desktop");
 
     // Task state: the chat's runtime reports, the phone reads it.

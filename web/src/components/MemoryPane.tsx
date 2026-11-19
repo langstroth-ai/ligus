@@ -9,6 +9,7 @@ import {
   canChange,
   decideMemoryProposal,
   draftProblem,
+  egressNote,
   memoryView,
   parseTags,
   proposedBy,
@@ -138,6 +139,15 @@ export function MemoryPaneView({
           }}
         />
       )}
+      {(view.editedAfterRemoval ?? []).length > 0 && (
+        <Section title="Edited after removal">
+          <ul className="space-y-2">
+            {(view.editedAfterRemoval ?? []).map((e) => (
+              <LateEditCard key={e.id} e={e} />
+            ))}
+          </ul>
+        </Section>
+      )}
       <Section title={query ? `Matches (${view.entries.length} of ${view.total})` : `Notes (${view.total})`}>
         {view.entries.length === 0 ? (
           <EmptyHint text={query ? "No note matches every word." : "No notes yet. Add one, or accept an agent's proposal."} />
@@ -174,6 +184,7 @@ function EntryCard({
   const mine = canChange(e, view.me, view.moderator);
   const conflicts = e.conflicts ?? [];
   const src = e.current.source?.chatId;
+  const restricted = egressNote(e);
   return (
     <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-entry">
       {editing ? (
@@ -201,7 +212,14 @@ function EntryCard({
             <button className="min-w-0 text-left font-semibold" onClick={() => setExpanded((x) => !x)} aria-expanded={expanded}>
               <bdi>{e.current.title}</bdi>
             </button>
-            {conflicts.length > 0 && <Badge tone="warn">{conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`}</Badge>}
+            <div className="flex shrink-0 gap-1">
+              {restricted && (
+                <Badge tone="info" title={restricted}>
+                  Restricted
+                </Badge>
+              )}
+              {conflicts.length > 0 && <Badge tone="warn">{conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`}</Badge>}
+            </div>
           </div>
           {(e.current.tags ?? []).length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
@@ -263,6 +281,30 @@ function EntryCard({
           )}
         </>
       )}
+    </li>
+  );
+}
+
+/// A removed note that someone edited after its removal: the edit wasn't
+/// applied (a removed note never comes back), and its text stays in the
+/// workspace history only. Shown so it isn't lost silently.
+function LateEditCard({ e }: { e: MemoryEntry }) {
+  const removed = e.removed;
+  return (
+    <li className="rounded-lg border px-2.5 py-2 text-xs" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-late-edit">
+      <div>
+        A note {removed ? `removed by ${provenance(removed)} on ${when(removed.atMs)}` : "that was removed"} was edited after its removal:
+      </div>
+      <ul className="mt-0.5 list-disc pl-4" style={{ color: "var(--hive-ink-soft)" }}>
+        {(e.editedAfterRemoval ?? []).map((r) => (
+          <li key={r.rev}>
+            {provenance(r)} · {when(r.atMs)}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-0.5" style={{ color: "var(--hive-ink-soft)" }}>
+        The edit wasn't applied; its text is in the workspace history only. Write a new note if it's still needed.
+      </div>
     </li>
   );
 }

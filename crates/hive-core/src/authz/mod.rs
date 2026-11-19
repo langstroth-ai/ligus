@@ -289,7 +289,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if let Err(why) = crate::memory::id_binding_ok(record, env.event_id) {
                 return Decision::deny(why);
             }
-            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, env.signer_device_id) {
+            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, env.signer_device_id, author) {
                 return Decision::deny(why);
             }
             // A daily outcome summary speaks for the device that signed it:

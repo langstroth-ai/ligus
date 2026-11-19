@@ -853,7 +853,8 @@ impl LigusMcp {
             "ligus_memory_search" => {
                 let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, mem::MAX_SEARCH_RESULTS as u64) as usize;
                 let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
-                let hits = mem::search(&m, &s("query"), &strs("tags"), limit);
+                let visible = self.memory_visibility(st, &m);
+                let hits = mem::search_where(&m, &s("query"), &strs("tags"), limit, |e| visible(e));
                 if let Err(r) = Self::charge_reads(st, hits.len() as u32) {
                     return (r, None);
                 }
@@ -871,6 +872,9 @@ impl LigusMcp {
                 let Some(id) = uuid("entryId") else { return (bad("entryId is an entry's id"), None) };
                 let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
                 let Some(e) = m.entries.get(&id).filter(|e| e.live()) else { return (bad("no such memory entry"), None) };
+                if !self.memory_visibility(st, &m)(e) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that note was written under stricter egress than this turn's"})), None);
+                }
                 if let Err(r) = Self::charge_reads(st, 1 + e.conflicts.len() as u32) {
                     return (r, None);
                 }
@@ -916,7 +920,7 @@ impl LigusMcp {
                         return (bad(why), None);
                     }
                 }
-                let source = MemorySource { chat_id: Some(st.spec.chat_id), message_id: None, turn_id: Some(st.spec.message_id) };
+                let source = MemorySource { chat_id: Some(st.spec.chat_id), message_id: None, turn_id: Some(st.spec.message_id), egress: None };
                 let rationale = s("rationale");
                 let agent = st.spec.agent_id;
                 match self.svc(|svc| svc.propose_memory_as_agent(ws, agent, op.clone(), &rationale, source.clone())) {
@@ -977,6 +981,36 @@ impl LigusMcp {
                 )
             }
             _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
+        }
+    }
+
+    /// Which memory entries this turn may see (design R10): an entry's
+    /// tier is the strictest egress it was recorded under, tightened by its
+    /// source chats' egress now (a lockdown raised after the note was
+    /// written still counts); the turn sees it only when its own chat's
+    /// egress is at least as strict (the cross-chat read rule). An entry
+    /// with no recorded tier and no source chat is the workspace default,
+    /// which every turn satisfies.
+    fn memory_visibility(&self, st: &TurnState, m: &hive_core::memory::MemoryState) -> impl Fn(&hive_core::memory::MemoryEntry) -> bool {
+        use hive_core::sandbox::{envelope_for_session, EgressPolicy};
+        let ws = st.spec.workspace_id;
+        let chats: std::collections::BTreeSet<Uuid> = m.live().flat_map(hive_core::memory::source_chats).collect();
+        let (reader, now) = self.svc(|svc| {
+            let reader = svc.load(st.spec.chat_id).ok().flatten().map(|c| envelope_for_session(&c).egress).unwrap_or(EgressPolicy::Open);
+            let now: std::collections::BTreeMap<Uuid, EgressPolicy> = chats
+                .iter()
+                .filter_map(|c| svc.load(*c).ok().flatten().filter(|s| s.workspace_id == ws).map(|s| (*c, envelope_for_session(&s).egress)))
+                .collect();
+            (reader, now)
+        });
+        move |e| {
+            let mut tier = e.egress.clone().unwrap_or(EgressPolicy::Open);
+            for c in hive_core::memory::source_chats(e) {
+                if let Some(x) = now.get(&c) {
+                    tier = tier.stricter(x);
+                }
+            }
+            hive_core::memory::egress_allows(&reader, &tier)
         }
     }
 

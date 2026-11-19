@@ -150,7 +150,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
                 proposal_id: u(0x12),
                 op: op.clone(),
                 proposer: String::new(),
-                source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None },
+                source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None, egress: None },
                 rationale: rationale.clone(),
             }),
         },
@@ -338,13 +338,19 @@ fn phone_memory_goldens() {
     let mut out = String::new();
     // (label, tweak): 0 as drafted; 1 the box changes the body; 2 the box
     // files it under an agent's name; 3 on the chat's log; 4 under a
-    // proposal id that isn't the event's (`memory::bound_event_id`).
+    // proposal id that isn't the event's (`memory::bound_event_id`); 5 a new
+    // entry not named by its proposal; 6 the box records the chat's closed
+    // egress (accepted: it only narrows who reads the note). The phone's own
+    // entry id for a create (0x13) is never used: the box names the entry by
+    // the proposal.
     for (n, (label, tweak)) in [
         ("proposeMemory", 0u8),
         ("refuse/proposeMemory-other-body", 1),
         ("refuse/proposeMemory-as-agent", 2),
         ("refuse/proposeMemory-on-chat-log", 3),
         ("refuse/proposeMemory-unbound-id", 4),
+        ("refuse/proposeMemory-unbound-entry", 5),
+        ("proposeMemory-closed-egress", 6),
     ]
         .into_iter()
         .enumerate()
@@ -353,6 +359,9 @@ fn phone_memory_goldens() {
         if let SessionEvent::FlowRecorded { record: FlowRecord::MemoryProposed(p) } = &mut ev {
             // The proposal is known by the event that files it (`draft`'s id).
             p.proposal_id = if tweak == 4 { u(0x12) } else { u(0x200 + 40 + n as u128) };
+            if let MemoryOp::Create { entry_id, .. } = &mut p.op {
+                *entry_id = if tweak == 5 { u(0x13) } else { p.proposal_id };
+            }
             match tweak {
                 1 => {
                     if let MemoryOp::Create { body, .. } = &mut p.op {
@@ -360,6 +369,7 @@ fn phone_memory_goldens() {
                     }
                 }
                 2 => p.proposer = u(0x14).to_string(),
+                6 => p.source.egress = Some(hive_core::sandbox::EgressPolicy::Closed),
                 _ => {}
             }
         }
@@ -372,7 +382,7 @@ fn phone_memory_goldens() {
             Ok(_) => "ok".to_string(),
             Err(why) => why.to_string(),
         };
-        assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
+        assert_eq!(expect == "ok", tweak == 0 || tweak == 6, "{label}: {expect}");
         let mut line = serde_json::json!({
             "label": label,
             "workspaceId": i.ws,
@@ -383,7 +393,7 @@ fn phone_memory_goldens() {
             "publicKey": pk,
             "expect": expect,
         });
-        if tweak == 0 {
+        if expect == "ok" {
             line["signature"] = serde_json::json!(b64url(&sign_p256(&key, &preimage)));
         }
         out.push_str(&serde_json::to_string(&line).unwrap());
@@ -399,7 +409,15 @@ fn propose_memory_vectors_are_present() {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
         .collect();
-    for want in ["proposeMemory", "refuse/proposeMemory-other-body", "refuse/proposeMemory-as-agent", "refuse/proposeMemory-on-chat-log", "refuse/proposeMemory-unbound-id"] {
+    for want in [
+        "proposeMemory",
+        "refuse/proposeMemory-other-body",
+        "refuse/proposeMemory-as-agent",
+        "refuse/proposeMemory-on-chat-log",
+        "refuse/proposeMemory-unbound-id",
+        "refuse/proposeMemory-unbound-entry",
+        "proposeMemory-closed-egress",
+    ] {
         assert!(labels.iter().any(|l| l == want), "missing {want}");
     }
 }

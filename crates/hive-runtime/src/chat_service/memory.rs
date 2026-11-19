@@ -49,6 +49,16 @@ impl ChatService {
         Ok(())
     }
 
+    /// Record the source chat's egress on `source` (design R10): the
+    /// stricter of what the caller gave and that chat's sandbox egress now.
+    /// No source chat (or one this device doesn't hold) records nothing: the
+    /// workspace default, which every turn in the workspace satisfies.
+    pub fn stamp_memory_egress(&self, workspace_id: Uuid, source: &mut MemorySource) {
+        let chat = source.chat_id.and_then(|c| self.load(c).ok().flatten()).filter(|c| c.workspace_id == workspace_id);
+        let now = chat.map(|c| hive_core::sandbox::envelope_for_session(&c).egress);
+        source.egress = hive_core::memory::tighten(source.egress.as_ref(), now.as_ref());
+    }
+
     fn append_config_record(&mut self, workspace_id: Uuid, record: FlowRecord) -> Result<Uuid> {
         let target = self.ensure_workspace_config(workspace_id)?;
         let env = self.append_signed(target, workspace_id, SessionEvent::FlowRecorded { record })?;
@@ -63,13 +73,15 @@ impl ChatService {
             return Err(ChatError::Unauthorized("an edit names the entry and the version it was made from".into()));
         }
         let entry_id = draft.entry_id.unwrap_or_else(Uuid::new_v4);
+        let mut source = draft.source;
+        self.stamp_memory_egress(workspace_id, &mut source);
         let w = MemoryWrite {
             entry_id,
             base: draft.base,
             title: draft.title.trim().to_string(),
             body: draft.body,
             tags: hive_core::memory::normalize_tags(&draft.tags),
-            source: draft.source,
+            source,
             resolves: draft.resolves,
         };
         let rev = self.append_config_record(workspace_id, FlowRecord::MemoryWritten(w))?;
@@ -95,10 +107,11 @@ impl ChatService {
     }
 
     /// File a memory proposal as this device's person (or service member).
-    pub fn propose_memory(&mut self, workspace_id: Uuid, op: MemoryOp, rationale: &str, source: MemorySource) -> Result<Uuid> {
+    pub fn propose_memory(&mut self, workspace_id: Uuid, op: MemoryOp, rationale: &str, mut source: MemorySource) -> Result<Uuid> {
         self.refuse_effects()?;
         let proposal_id = Uuid::new_v4();
-        let p = MemoryProposal { proposal_id, op: normalized(op), proposer: String::new(), source, rationale: rationale.trim().to_string() };
+        self.stamp_memory_egress(workspace_id, &mut source);
+        let p = MemoryProposal { proposal_id, op: normalized(op, proposal_id), proposer: String::new(), source, rationale: rationale.trim().to_string() };
         self.append_config_record(workspace_id, FlowRecord::MemoryProposed(p))?;
         Ok(proposal_id)
     }
@@ -113,10 +126,11 @@ impl ChatService {
         agent: Option<Uuid>,
         op: MemoryOp,
         rationale: &str,
-        source: MemorySource,
+        mut source: MemorySource,
     ) -> Result<Uuid> {
         let proposal_id = Uuid::new_v4();
-        let p = MemoryProposal { proposal_id, op: normalized(op), proposer: flow::agent_key(agent), source, rationale: rationale.trim().to_string() };
+        self.stamp_memory_egress(workspace_id, &mut source);
+        let p = MemoryProposal { proposal_id, op: normalized(op, proposal_id), proposer: flow::agent_key(agent), source, rationale: rationale.trim().to_string() };
         let record = FlowRecord::MemoryProposed(p);
         let target = self.ensure_workspace_config(workspace_id)?;
         if let Some(agent_id) = agent {
@@ -148,10 +162,13 @@ impl ChatService {
     }
 }
 
-fn normalized(op: MemoryOp) -> MemoryOp {
+/// Trimmed title, normalised tags, and a create's entry named by its
+/// proposal (`hive_core::memory`: a proposed new entry's id is the
+/// proposal's id, so it can't be taken first).
+pub(crate) fn normalized(op: MemoryOp, proposal_id: Uuid) -> MemoryOp {
     match op {
-        MemoryOp::Create { entry_id, title, body, tags } => {
-            MemoryOp::Create { entry_id, title: title.trim().to_string(), body, tags: hive_core::memory::normalize_tags(&tags) }
+        MemoryOp::Create { title, body, tags, .. } => {
+            MemoryOp::Create { entry_id: proposal_id, title: title.trim().to_string(), body, tags: hive_core::memory::normalize_tags(&tags) }
         }
         MemoryOp::Edit { entry_id, base, title, body, tags } => {
             MemoryOp::Edit { entry_id, base, title: title.trim().to_string(), body, tags: hive_core::memory::normalize_tags(&tags) }
