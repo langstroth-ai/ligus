@@ -3,7 +3,7 @@
 > Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
 
 Status: approved scope (owner, 2026-11-18), designed here before code.
-Branch `feat/workspace-memory` off `release/v2.0.0`. Ligus is short for
+Branch `feat/workspace-memory` off `release/v0.1.0`. Ligus is short for
 *ligustica*, the Italian honeybee.
 
 Two features:
@@ -97,7 +97,9 @@ memoryProposed       { proposalId, op, proposer, source?, rationale? }
                    | { op: "remove", entryId, base }
   proposer:          agent key (an agent id, or "primary") or empty for a person
 memoryProposalDecided { proposalId, accepted, note?, resolves? }
-source:              { chatId?, messageId?, turnId? }
+source:              { chatId?, messageId?, turnId?, egress? }
+  egress:            the source chat's EgressPolicy when not open
+                     ({mode: "allowList", mcpServers} | {mode: "closed"})
 taskState            { taskId, agentKey, turnId, status, summary, progress?,
                        openQuestions?, partialResults?, ttlMs? }
   status:            "working" | "blocked" | "waiting" | "done" | "abandoned"
@@ -117,12 +119,26 @@ already accepted (which the fold would then apply with the decider's
 authority). With the binding, a second record under the id is a second
 event under one event id, which every fold denies as an equivocation.
 
+A create proposal's `entryId` is its `proposalId` (a fold rule): the entry an
+accepted create makes is named by the proposal. With an id of the
+proposer's choice, a Contributor who saw the open proposal could create an
+entry under that id first, and the person's acceptance would be refused.
+Taking it now means an event under the proposal's own event id: an
+equivocation (a denial of both, residual R8), never a takeover. The phone
+can't know the box's proposal id, so the phone check compares a create's
+title, body and tags as asked and requires the entry id to be the proposal
+id.
+
 Provenance is never taken from the payload where the envelope can say it:
 the author's id, display name and kind come from the signed actor stamp, the
 time from the signed envelope timestamp, the revision id from the event id.
 The payload's `source` (chat, message, turn) is the author's claim, shown as
 such; for an agent proposal the host fills it from the turn credential, which
-binds the chat and turn (`ligus_mcp/cred.rs`).
+binds the chat and turn (`ligus_mcp/cred.rs`). `source.egress` is the source
+chat's sandbox egress when the record was written (`ChatService` fills it
+from the chat's envelope; section 8.1). It can only narrow which turns read
+the note, so a writer that leaves it out gains nothing it couldn't already
+do.
 
 ## 3. Bounds
 
@@ -135,6 +151,9 @@ Fold rules (`authz::bounds`), so every device drops the same over-limit event:
 | Tags | at most 8, each 1 to 32 characters of `a-z 0-9 - _ . :` |
 | Live entries | at most 1000 |
 | Entry ids ever used (live plus tombstones) | at most 10 000; a create past it is refused |
+| Entry ids one person ever uses | at most 2000, counted for the writer of a create or the person who accepts a proposed one (residual R7) |
+| Edits kept on a tombstone | at most 4 (section 4, rule 3) |
+| A recorded egress allow-list | at most 32 MCP server ids of 1 to 128 characters |
 | Revision ids remembered per entry | the newest 32; an edit whose base is older is refused ("edited from a version too old") |
 | Unresolved conflicts per entry | at most 4; a fifth concurrent edit is refused |
 | Open memory proposals | at most 256 in the workspace and 32 per signer (a device or an agent key, whatever proposer it names) |
@@ -144,7 +163,7 @@ Fold rules (`authz::bounds`), so every device drops the same over-limit event:
 | Open questions, partial results | at most 8 each; 300 and 600 characters per item |
 | Task-state slots per signer per chat | at most 8; a new slot past it replaces that signer's least recently updated slot |
 | Task-state slots per chat | at most 64; a new slot past it evicts the oldest finished slot (`done` or `abandoned`, by signed time, then id), and is refused if none is finished |
-| Task-state lifetime | `ttlMs` at most 24 hours, default 2 hours |
+| Task-state lifetime | `ttlMs` at most 24 hours, default 2 hours; a slot signed more than 5 minutes ahead of the reader's clock is stale |
 
 The largest live memory is about 1000 × 4 KB = 4 MB of text; the config fold
 holds one copy plus 32 revision ids per entry. That bounds the cost memory
@@ -179,6 +198,13 @@ Rules, in canonical `(lamport, event_id)` order:
    dropped from the fold, the id stays used forever (no resurrection), and
    who removed it and when are kept. With an older `base`, the removal is kept
    as a conflict ("removed while someone edited it"), and the entry stays.
+   An edit that sorts after the removal, made from a revision the entry
+   remembers (its author hadn't seen the removal), is neither applied nor
+   refused: it is kept on the tombstone as **edited after removal**, with
+   who, when and its base but never its text (the removal dropped the
+   content, and a removed secret must not come back through a racing edit).
+   The pane lists such tombstones. At most 4 per tombstone; a second removal
+   is refused (it changes nothing).
 4. **Resolving.** An edit or removal at the head may name, in `resolves`,
    conflicts it has seen; those are cleared (from the head, each named
    conflict must exist). A person resolves in the app by
@@ -199,6 +225,7 @@ names one operation and the proposer. A person decides it with
 `memoryProposalDecided`:
 
 - Accepted: the fold applies the operation as a write by the **decider**
+  (an accepted create makes the entry named by the proposal id, section 2.1)
   (the decider must be allowed to do it, section 4, rule 5), with the
   proposal id and proposer kept in the revision's provenance ("proposed by
   agent X in chat Y, accepted by Ana"). The accepting event's id is the
@@ -262,8 +289,11 @@ newest in canonical order, its signed time, the turn that wrote it, and an
 update count.
 
 **Expiry.** Read-time only (the fold never reads a clock, rule 4 of the spec):
-a slot is **active** while its status is `working`, `blocked` or `waiting`
-and now is before its signed time plus `ttlMs`; a finished slot (`done`,
+a slot is **active** while its status is `working`, `blocked` or `waiting`,
+now is before its signed time plus `ttlMs`, and its signed time is not more
+than 5 minutes ahead of now (a slot signed far in the future would otherwise
+stay active, in every other agent's context, for as long as it was
+forward-dated); a finished slot (`done`,
 `abandoned`) shows as finished until the same deadline; after it, it's
 stale and hidden from agents (people can still see it, dimmed). A turn that
 ends without a final update leaves its slot to expire.
@@ -339,10 +369,47 @@ agent's proposal, once accepted, is text a model produced.
   (`[[`, `]]`) in the content is neutralised before rendering, so content
   can't close its own block or forge a directive the host would parse.
   Invisible characters (zero-width, word joiners, the byte-order mark, bidi
-  overrides and isolates) are dropped first, fullwidth and small bracket
+  overrides and isolates, Unicode tag characters, variation selectors, the
+  combining grapheme joiner and the fillers: text a person can't see but a
+  model reads) are dropped first, fullwidth and small bracket
   forms are read as brackets, and the replacement runs to a fixed point
-  (one pass over `[[[` would leave `[[`). Task state in the flow context
-  goes through the same rendering (`render_slot`).
+  (one pass over `[[[` would leave `[[`). The nonce is replaced only when it
+  is ASCII letters and digits (every nonce `fresh_nonce` makes), and by
+  `[·]`, which holds none, so no replacement can make a new nonce and every
+  pass lowers a finite count: the loop ends, in a few passes even on
+  pathological runs. (A short nonce such as `e`, replaced by text holding
+  `e`, used to loop for ever.) Task state in the flow context goes through
+  the same rendering (`render_slot`). A title also refuses these characters
+  (an emoji's presentation selector excepted) and line separators.
+
+### 8.1 Egress
+
+A note can carry content a chat's egress was cut to keep in: written from a
+locked-down chat (egress closed) or one under dearth mode (an allow-list),
+read by a turn whose egress is open, it could leave through that turn's web,
+shell or MCP tools. So memory follows the cross-chat read rule
+(`ligus_read_chat`): a turn sees a note only when its own egress is at least
+as strict as the note's (`memory::egress_allows`: the reader's reach lies
+within the note's).
+
+- The tier is the source chat's `EgressPolicy` (open, allow-listed MCP
+  servers, closed), recorded in the signed `source.egress` when written
+  (`ChatService::stamp_memory_egress`, for people's writes, agents'
+  proposals and phone proposals) and folded per entry as the strictest of
+  all its revisions' (`memory::tighten`; edits never loosen it).
+- At read time the Ligus MCP server tightens it further with each source
+  chat's egress now (`memory_visibility`), so a lockdown raised after the
+  note was written still holds it.
+- No recorded tier and no source chat: the workspace default, which every
+  turn satisfies (each turn's envelope starts there and only narrows).
+- Searches skip notes the turn may not see; a read by id is refused.
+- People see every note (the pane marks restricted ones); egress limits
+  what agent turns carry out, not what members read.
+
+There is no per-chat model-provider tier today (the egress policy is about
+a turn's tools and network, not which model provider sees the prompt), so
+the rule can't yet keep a note from a provider the source chat wouldn't use
+(residual R10).
 - Provenance is shown with each entry (author kind, proposer, source chat),
   so a reader can weigh an agent-proposed note differently from a person's.
 - Writes go through a person: an injected agent can file a proposal, never
@@ -376,6 +443,10 @@ fixtures with marker strings in every text field and asserts none leaves.
 | T12 | One device flooding proposals by cycling proposer names | Proposer bound to the signer; the per-proposer bound counts per signer |
 | T9 | Content leaking into telemetry | Counts-only facts; content-free audit |
 | T10 | A backdated or withheld edit | Lamport and `logHead` bounds: an edit sorts where it was drafted; a stale base becomes a conflict, never a rewrite of later history |
+| T13 | A Contributor pre-empts an open create proposal by taking its entry id, so the person's acceptance is refused | A proposed entry is named by its proposal id (itself bound to its event): taking it is an equivocation, a denial (R8), never a takeover |
+| T14 | A note carries quarantined content (a lockdown's, an allow-list's) to a turn with open egress | The source chat's egress recorded on the entry and checked again at read time; a turn reads only notes its egress allows (section 8.1) |
+| T15 | Invisible text (Unicode tag characters) a person approving a proposal can't see, read by every later agent | Dropped from every rendering for agents; refused in titles |
+| T16 | A forward-dated task-state slot stays active, in other agents' context, indefinitely | A slot more than 5 minutes ahead of the reader's clock is stale |
 
 ## 11. Surfaces
 
@@ -403,6 +474,20 @@ fixtures with marker strings in every text field and asserts none leaves.
   resolution); tombstones never resurrect; bounds hold for any sequence;
   only human Contributors+ change memory, whatever mix of agents, phones,
   services and Viewers writes; task-state slots are single-writer.
+- Second review (prove, then fix; each failed before its fix):
+  `an_accepted_create_cant_be_pre_empted`,
+  `a_squatted_create_proposal_never_lands_on_the_squatters_note`,
+  `an_agent_moved_to_another_host_no_longer_speaks_through_the_old_one`
+  (props); `one_person_cant_use_up_the_workspaces_entry_ids`,
+  `an_edit_after_a_removal_is_kept_on_the_tombstone`,
+  `an_entry_keeps_the_strictest_egress_and_readers_are_filtered`,
+  `neutralising_terminates_and_drops_tag_characters`,
+  `a_future_dated_slot_is_not_active`,
+  `a_signer_at_its_share_never_evicts_anothers_slot` (`memory::tests`);
+  `memory_from_a_locked_down_chat_stays_behind_its_egress` (Ligus MCP);
+  phone vectors `refuse/proposeMemory-unbound-entry` and
+  `proposeMemory-closed-egress`; web: the Restricted badge and the "Edited
+  after removal" list.
 - Unit and integration: conflict and resolve cases, proposal accept and
   reject, decider rules, search ranking, the untrusted rendering
   (adversarial content can't close its block), golden vectors, MCP tool
@@ -430,18 +515,41 @@ fixtures with marker strings in every text field and asserts none leaves.
   signed.
 - **R6 Local stores are plaintext** to the device's own OS account, as for
   every log; E2EE protects the wire and the relay.
-- **R7 Entry ids run out.** The 10 000-ids-ever bound counts tombstones, so a
-  Contributor who creates and removes notes in a loop can use every id and
-  stop new notes for the whole workspace; only compaction (R2) undoes it.
+- **R7 Entry ids run out (narrowed).** The 10 000-ids-ever bound counts
+  tombstones; one person can now use at most 2000 of them (creates they
+  write or accept), so a single Contributor looping create and remove stops
+  only their own notes. Five or more accounts acting together (or an Admin
+  admitting them) can still use every id; only compaction (R2) undoes it.
 - **R8 Equivocation as denial.** A member who copies a proposal's or a new
   entry's event id into their own record makes both copies denied (the
   general forged-equivocation issue, fixed separately): a denial of that
-  record, never a takeover.
-- **R9 An edit after a removal is refused.** A removal at the head that
-  sorts before a concurrent edit tombstones the entry; the edit's text is in
-  the log only, not shown as a conflict (tombstones never resurrect).
-- **R10 Memory crosses egress tiers.** A note's source chat may be stricter
-  than a turn that reads it; memory is workspace-wide by design.
+  record, never a takeover. With the create binding (section 2.1) this is
+  also the only way to interfere with an open create proposal.
+- **R9 An edit after a removal is not applied (closed as a silent loss).**
+  It is kept on the tombstone as "edited after removal" (who, when, base)
+  and listed in the pane; its text is in the log only, by design (the
+  removal may have been of a secret).
+- **R10 Egress, not providers.** Memory reads follow the source chat's
+  egress policy (section 8.1). There is no per-chat model-provider set
+  today, so a note from a chat that would only use a local model can still
+  reach a turn on a hosted provider when both chats' egress is open. When a
+  provider tier exists, it should join the recorded tier the same way.
+  Content inside a turn's own context (its own chat's messages) is not
+  covered by this rule; nor is a note's text that a person copies by hand.
 - **R11 The device-local workspace skips role and identity checks** (it never
   syncs); there the "agents only propose" rule rests on `ChatService` and
-  the MCP server, not on the fold.
+  the MCP server, not on the fold. Bounds and the id binding still hold
+  there (`authz::authorize` judges them before the trusted shortcut).
+- **R12 A chat's task-state slots can be filled.** Each signer holds at most
+  8 slots on a chat, but every agent key is its own signer and a
+  Contributor can add agents and certify keys for them, so one member can
+  fill a chat's 64 slots with working ones; new writers on that chat are then
+  refused until those slots finish (existing writers still update theirs).
+  Eviction never removes another signer's active slot; at 64 slots a new
+  slot evicts the oldest finished one, whoever wrote it. The fold can't
+  expire slots (it reads no clock), so a fairer rule needs a per-owner count
+  through the roster.
+- **R13 One member can fill the proposal inbox the same way**: 32 open
+  proposals per signer, 256 per workspace, and agent keys are signers. A
+  person rejects them in bulk; the per-turn MCP budget (4) limits honest
+  agents.
