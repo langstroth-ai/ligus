@@ -35,6 +35,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_AGENT_TIMEOUT_SECS\"", "LIGUS_AGENT_TIMEOUT_SECS", "subprocess turn timeout"),
     ("\"LIGUS_PATCH_LEAVING_CALLS\"", "LIGUS_PATCH_LEAVING_CALLS", "agent tool-loop stall limit"),
     ("IDLE_TIMEOUT_ENV", "LIGUS_TURN_IDLE_TIMEOUT_SECS", "provider stream idle timeout"),
+    ("\"LIGUS_TURN_TIMEOUT_SECS\"", "LIGUS_TURN_TIMEOUT_SECS", "the turn engine's wall-clock backstop for a turn"),
     ("PREFLIGHT_TEST_ENV", "LIGUS_PREFLIGHT_TEST", "pre-flight test command (a side effect, recorded as an event)"),
     ("&WorkspaceCredential::env_var(secret_ref)", "LIGUS_CRED_FOLD_ENV", "a runtime credential for a turn"),
     ("MIN_ROLE_ENV", "LIGUS_MCP_MIN_ROLE", "this host's tool floor for a turn (H1 author gate)"),
