@@ -603,3 +603,16 @@ class AllVersionsMatch < Minitest::Test
     end
   end
 end
+
+# Release builds bake the code-host device-flow client ids the code reads
+# (ligus-forge option_env!), not the removed 0.x sign-in id.
+class ForgeClientIds < Minitest::Test
+  def test_desktop_and_cli_builds_get_the_forge_client_ids
+    tauri_env = tauri_step.fetch("env")
+    cli_env = steps(RELEASE_CLI, "build").find { |s| s["name"] == "Build ligus CLI" }.fetch("env", {})
+    [tauri_env, cli_env].each do |env|
+      refute env.key?("LIGUS_GITHUB_CLIENT_ID"), "LIGUS_GITHUB_CLIENT_ID is read by nothing since 0.1"
+      %w[LIGUS_GITHUB_APP_CLIENT_ID LIGUS_GITLAB_CLIENT_ID].each { |k| assert env.key?(k), "#{k} is not baked in" }
+    end
+  end
+end

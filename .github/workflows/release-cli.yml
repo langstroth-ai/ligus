@@ -64,6 +64,10 @@ jobs:
         run: scripts/check-release-config.sh "$TAG"
 
       - name: Build ligus CLI
+        env:
+          # Public device-flow client ids baked in by ligus-forge (see release.yml).
+          LIGUS_GITHUB_APP_CLIENT_ID: ${{ vars.LIGUS_GITHUB_APP_CLIENT_ID }}
+          LIGUS_GITLAB_CLIENT_ID: ${{ vars.LIGUS_GITLAB_CLIENT_ID }}
         run: cargo build --release --locked -p ligus-cli --target ${{ matrix.target }}
 
       - name: Stage asset
@@ -100,7 +104,7 @@ jobs:
   # are uploaded, so `brew install langstroth-ai/ligus/ligus` tracks releases. The
   # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
   # collide). Never write the old
-  # Formula/hive-cli.rb: the tap's formula_renames.json maps it to ligus. Needs
+  # Formula/hive-cli.rb: the tap keeps it, disabled, pointing at ligus. Needs
   # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
   # langstroth-ai/homebrew-ligus); skips cleanly when absent.
   formula:

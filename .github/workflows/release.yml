@@ -27,7 +27,7 @@ name: Release (desktop app)
 #            APPLE_TEAM_ID (the keychain unlock item's designated requirement),
 #            APPLE_PROVISIONING_PROFILE (optional, base64: native passkeys)
 #   updater: TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-#   GitHub sign-in: LIGUS_GITHUB_CLIENT_ID (the OAuth App client id)
+#   variables (not secrets): LIGUS_GITHUB_APP_CLIENT_ID, LIGUS_GITLAB_CLIENT_ID
 #   Homebrew: HOMEBREW_TAP_TOKEN (the cask job skips without it)
 #   Windows: Azure Trusted Signing via a signCommand (added later)
 
@@ -199,11 +199,13 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The GitHub OAuth App client id, baked in by build.rs so GitHub
-          # sign-in (device flow) works in release builds. The id is public (not
-          # a secret) but lives in a repo var/secret so it's not committed.
-          # Without it, sign-in errors "needs a github oauth client id".
-          LIGUS_GITHUB_CLIENT_ID: ${{ secrets.LIGUS_GITHUB_CLIENT_ID }}
+          # The code-host device-flow client ids (the Ligus GitHub App and the
+          # gitlab.com OAuth application), baked in by ligus-forge at build
+          # time. They are public ids, so they are repository variables, not
+          # secrets. Unset: connecting github.com or gitlab.com needs the id
+          # set at run time or on the connection.
+          LIGUS_GITHUB_APP_CLIENT_ID: ${{ vars.LIGUS_GITHUB_APP_CLIENT_ID }}
+          LIGUS_GITLAB_CLIENT_ID: ${{ vars.LIGUS_GITLAB_CLIENT_ID }}
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
           # prompt. Bump docs-site/docs/version.json to this tag when publishing.
@@ -299,7 +301,7 @@ jobs:
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
           cd tap
           # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
-          # the tap's cask_renames.json maps hive to ligus-app.
+          # the tap keeps it, disabled, pointing hive users at Ligus.
           test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; exit 1; }
           sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
           sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
