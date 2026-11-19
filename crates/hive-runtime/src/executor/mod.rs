@@ -1656,17 +1656,21 @@ pub const TURN_ROOT_PREFIX: &str = "ligus-turns-";
 /// its CLI's sign-in). Refused when it isn't a real dir this user owns
 /// (someone else made it first in a shared `/tmp`).
 pub fn turn_root() -> io::Result<PathBuf> {
+    // SAFETY: `getuid` has no preconditions and can't fail.
     #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
     #[cfg(not(unix))]
     let uid = 0u32;
     let root = canonical(&std::env::temp_dir()).join(format!("{TURN_ROOT_PREFIX}{uid}"));
-    let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let b = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut b = std::fs::DirBuilder::new();
         b.mode(0o700);
-    }
+        b
+    };
+    #[cfg(not(unix))]
+    let b = std::fs::DirBuilder::new();
     match b.create(&root) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}

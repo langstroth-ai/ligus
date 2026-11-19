@@ -2,8 +2,10 @@
 //! review's fixes): each probe was written to fail first, then fixed. Decoy
 //! homes in temp dirs only; nothing here reads the user's own files.
 
+#[cfg(unix)]
 use super::home_tests::{plan_for, run_in, DecoyHome};
 use super::*;
+#[cfg(unix)]
 use hive_core::sandbox::PathGrants;
 
 #[cfg(unix)]
