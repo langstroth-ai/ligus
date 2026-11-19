@@ -582,10 +582,23 @@ impl Scanner {
     }
 
     /// Run the scanner on `file` (blocking, bounded by the timeout).
+    ///
+    /// The scanner reads an untrusted file, so it runs confined as far as
+    /// this host allows: a fresh scratch dir is its home, temp dir and
+    /// working dir; on Unix its environment is only `PATH` and the locale
+    /// (none of Ligus's own tokens or keys); and where the agent sandbox
+    /// runs (macOS Seatbelt, Linux bubblewrap) it has no IP network and
+    /// writes only its scratch dir. A local socket (clamd's) still works.
     pub fn scan(&self, file: &Path) -> ScanResult {
         let scanner = self.name();
-        let mut cmd = std::process::Command::new(&self.program);
+        let scratch = match ScanScratch::new() {
+            Ok(s) => s,
+            Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't make its scratch dir: {e}") },
+        };
+        let (mut cmd, wrapped) = confined_scanner(&self.program, &scratch.0);
         cmd.args(&self.args).arg(file).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        cmd.current_dir(&scratch.0);
+        scanner_env(&mut cmd, &scratch.0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't start: {e}") },
@@ -608,12 +621,105 @@ impl Scanner {
             let _ = s.by_ref().take(4096).read_to_string(&mut out);
         }
         let detail: String = out.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
+        // The sandbox itself failing to start is no verdict (bubblewrap exits
+        // 1 then, which would read as "infected").
+        if wrapped && status.code() != Some(0) {
+            let mut err = String::new();
+            if let Some(mut s) = child.stderr.take() {
+                let _ = s.by_ref().take(4096).read_to_string(&mut err);
+            }
+            if err.lines().any(|l| l.starts_with("bwrap:") || l.starts_with("sandbox-exec:")) {
+                let why: String = err.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
+                return ScanResult::Failed { scanner, detail: format!("its sandbox didn't start: {why}") };
+            }
+        }
         match status.code() {
             Some(0) => ScanResult::Clean { scanner },
             Some(1) => ScanResult::Infected { scanner, detail },
             other => ScanResult::Failed { scanner, detail: format!("exit {other:?} {detail}") },
         }
     }
+}
+
+/// A scan's own scratch dir (its home, temp and working dir), removed after.
+struct ScanScratch(PathBuf);
+
+impl ScanScratch {
+    fn new() -> std::io::Result<Self> {
+        let dir = std::env::temp_dir().join(format!("ligus-scan-{}", uuid::Uuid::new_v4()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&dir)?;
+        // The real path: the sandbox profile matches resolved paths
+        // (`/var` is `/private/var` on macOS).
+        Ok(Self(std::fs::canonicalize(&dir).unwrap_or(dir)))
+    }
+}
+
+impl Drop for ScanScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The scanner's environment: on Unix only `PATH`, the locale and a scratch
+/// home and temp dir; elsewhere the inherited one with the temp dirs and
+/// home pointed at the scratch dir (Windows programs need their system
+/// variables).
+fn scanner_env(cmd: &mut std::process::Command, scratch: &Path) {
+    #[cfg(unix)]
+    {
+        let keep: Vec<(String, std::ffi::OsString)> = std::env::vars_os()
+            .filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v)))
+            .filter(|(k, _)| k == "PATH" || k == "LANG" || k.starts_with("LC_"))
+            .collect();
+        cmd.env_clear();
+        cmd.envs(keep);
+        cmd.env("HOME", scratch).env("TMPDIR", scratch);
+    }
+    #[cfg(not(unix))]
+    {
+        cmd.env("TEMP", scratch).env("TMP", scratch).env("USERPROFILE", scratch).env("HOME", scratch);
+    }
+}
+
+/// The scanner's command, wrapped in this host's sandbox where there is one:
+/// no IP network, writes only in `scratch`. `true` when it is wrapped.
+fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, bool) {
+    #[cfg(target_os = "macos")]
+    if crate::executor::seatbelt::available() {
+        let mut cmd = std::process::Command::new(crate::executor::seatbelt::SANDBOX_EXEC);
+        cmd.arg("-p").arg(scanner_profile(scratch)).arg(program);
+        return (cmd, true);
+    }
+    #[cfg(target_os = "linux")]
+    if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Bwrap {
+        if let Some(bwrap) = find_on_path("bwrap") {
+            let mut cmd = std::process::Command::new(bwrap);
+            cmd.args(["--ro-bind", "/", "/", "--dev", "/dev"]).arg("--bind").arg(scratch).arg(scratch);
+            cmd.args(["--unshare-net", "--die-with-parent", "--new-session", "--"]).arg(program);
+            return (cmd, true);
+        }
+    }
+    let _ = scratch;
+    (std::process::Command::new(program), false)
+}
+
+/// The Seatbelt profile a scanner runs under: everything a scanner needs to
+/// read (its signatures, the file), no IP network but clamd's loopback port
+/// (a local socket to a scanning daemon works too), writes only in its
+/// scratch dir.
+#[cfg(target_os = "macos")]
+fn scanner_profile(scratch: &Path) -> String {
+    let q = |p: &Path| p.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "(version 1)\n(allow default)\n(deny network-outbound (remote ip))\n(deny network-inbound (local ip))\n(deny network-bind (local ip))\n(allow network-outbound (remote ip \"localhost:3310\"))\n(deny file-write*)\n(allow file-write* (subpath \"{}\") (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n",
+        q(scratch)
+    )
 }
 
 fn find_on_path(bin: &str) -> Option<PathBuf> {
@@ -980,5 +1086,58 @@ mod tests {
         assert!(rel.is_relative());
         assert!(find_in("clean.sh", rel.as_os_str()).is_none(), "{rel:?}");
         assert_eq!(find_in("clean.sh", dir.path().as_os_str()), Some(dir.path().join("clean.sh")));
+    }
+
+    /// The scanner runs with a scratch home and none of Ligus's environment.
+    #[cfg(unix)]
+    #[test]
+    fn the_scanner_runs_with_a_scratch_home_and_no_inherited_secrets() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("env.sh");
+        // `infected` so its first output line comes back as the detail.
+        std::fs::write(&p, "#!/bin/sh\necho \"home=$HOME token=${CARGO_MANIFEST_DIR:-none}\"; exit 1\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.path().join("f.bin");
+        std::fs::write(&file, b"data").unwrap();
+        let s = Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) };
+        match s.scan(&file) {
+            ScanResult::Infected { detail, .. } => {
+                assert!(detail.contains("ligus-scan-"), "its home is a scratch dir: {detail}");
+                assert!(detail.contains("token=none"), "no inherited variables: {detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Under the macOS sandbox the scanner has no IP network and can't
+    /// write outside its scratch dir.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_scanner_has_no_network_and_writes_only_its_scratch_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        if !crate::executor::seatbelt::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let outside = dir.path().join("written-outside");
+        let p = dir.path().join("probe.sh");
+        let body = format!(
+            "#!/bin/sh\necho x > '{}' 2>/dev/null\nif /usr/bin/nc -z -G 2 127.0.0.1 {port} 2>/dev/null; then echo NET; else echo nonet; fi\necho y > \"$HOME/ok\" && echo scratch-ok\nexit 1\n",
+            outside.display()
+        );
+        std::fs::write(&p, body).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.path().join("f.bin");
+        std::fs::write(&file, b"data").unwrap();
+        let s = Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) };
+        match s.scan(&file) {
+            ScanResult::Infected { detail, .. } => assert_eq!(detail, "nonet", "no IP network for the scanner"),
+            other => panic!("{other:?}"),
+        }
+        assert!(!outside.exists(), "the scanner wrote outside its scratch dir");
+        drop(listener);
     }
 }
