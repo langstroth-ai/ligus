@@ -1387,3 +1387,53 @@ async fn refused_pairings_say_why() {
     assert_eq!(code_of(e), (4041, "device_revoked".to_string()));
     h.handle.shutdown();
 }
+
+/// Serve hardening: `admissions/prepare` through the tunnel drafts only for
+/// the phone the pairing proved it holds, as phone actions do. Another
+/// certified phone of an Admin, named by this pairing, is refused before
+/// anything is drafted. And no tunnel answer hands out the operator token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admission_prepare_is_bound_to_the_pairings_phone() {
+    use tower::ServiceExt;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (_t, _, _, pid, _, _phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    let other = ligus_core::testkit::Phone::new();
+    {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, other.device_id, &other.public_key()).unwrap();
+    }
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the other phone", Duration::from_secs(15), || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, other.device_id).is_ok()
+    })
+    .await;
+    let call = |method: &str, uri: &str, body: serde_json::Value| {
+        let mut req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri.to_string())
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
+        let shared = h.handle.shared.clone();
+        async move {
+            let r = crate::serve::api::router(shared).oneshot(req).await.unwrap();
+            let status = r.status().as_u16();
+            let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+            (status, String::from_utf8_lossy(&bytes).into_owned())
+        }
+    };
+    let (status, body) = call("POST", "/v1/admissions/prepare", json!({ "deviceId": other.device_id })).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("this pairing isn't that phone's"), "{body}");
+    let op = std::fs::read_to_string(h.handle.shared.cfg.data_dir.join("serve.operator.token")).unwrap_or_default();
+    assert_eq!(op.trim().len(), 64, "the operator token exists");
+    let (status, body) = call("GET", "/v1/tunnel/direct", json!(null)).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains(&h.handle.shared.token()) && !body.contains(op.trim()), "{body}");
+    h.handle.shutdown();
+}

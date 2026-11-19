@@ -12,10 +12,24 @@ There are two ways in, and both reach the same router:
 
 | Path | Transport | Authentication |
 |---|---|---|
-| **Direct** | plain HTTP to `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`) | `Authorization: Bearer <token>`, the 64-hex-character token in `<data dir>/serve.token` (or `LIGUS_SERVE_TOKEN_FILE`). One token for every direct client; compared in constant time |
+| **Direct** | plain HTTP to `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`) | `Authorization: Bearer <token>`: the phones' token in `<data dir>/serve.token` (or `LIGUS_SERVE_TOKEN_FILE`), one for every direct-path phone, or the **operator token** in `<data dir>/serve.operator.token`. Both are 64 hex characters, created 0600 at first start, compared in constant time |
 | **Relay tunnel** | the phone's Noise session through the relay (`hive-tunnel/1`) | the phone's own paired key and `hpc1` credential. Any `Authorization` header is stripped. Each request re-checks that the phone isn't revoked |
 
 - Only `GET /v1/health` answers without a token.
+- **Two bearer tokens.** `serve.token` goes to phones (in the pairing link,
+  and over the tunnel from `GET /v1/tunnel/direct`). `serve.operator.token`
+  is for the person at the box (curl, scripts) and is never in a pairing
+  link or a tunnel answer. Both reach every route a phone uses. Only the
+  operator token, and only on a **loopback** listener, counts as the box
+  owner ([Owner](#workspace-repositories) routes) and as a secure channel
+  (invite codes, admission codes, code-host tokens, `GET /v1/me` on
+  loopback). A reverse proxy on the same host (TLS for the phones) puts
+  every phone on loopback too, which is why the phones' token never counts.
+  Off loopback neither token does; use the tunnel. Where this page says
+  *tunnel or loopback only*, loopback means the operator token on a
+  loopback listener; anything else gets the route's 403. Replace the operator
+  token by writing a new one (`openssl rand -hex 32`) into the file; the
+  server re-reads it within 2 s.
 - A missing or wrong token is `401 {"error":"missing or invalid bearer token"}`;
   a revoked phone gets `401` "this phone's pairing was revoked".
 - There are no per-route roles at the HTTP layer. Writes run as the **box's
@@ -24,6 +38,8 @@ There are two ways in, and both reach the same router:
   need Contributor or above. A box that is revoked, or waiting for owner
   approval, can't write.
 - All errors are JSON: `{"error": "…"}`.
+- A 500 answers `{"error": "internal error: see the box's log"}`; what went
+  wrong is in the log, never in the answer.
 - No TLS on the listener, no CORS headers, no general rate limit. Keep the
   listener on loopback, LAN or tailnet (the bind guard enforces this; see
   [Bind address](#bind-address)), or use the relay tunnel.
@@ -39,7 +55,7 @@ There are two ways in, and both reach the same router:
 ```console
 $ curl -s http://127.0.0.1:8787/v1/health
 {"ok":true,"version":"0.1.0"}
-$ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
+$ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.operator.token)"
 {"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F-9A41-07CE","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
 ```
 
@@ -47,15 +63,16 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 
 The phone's setup in one call: after [Add this phone](../../ligus/features/phone-app.md#add-this-phone)
 and pairing, the app asks the box who it is and needs nothing typed in.
-Through the relay tunnel or on a loopback listener only (a LAN or tailnet
-bind answers `403 {"error":"secure_channel_required"}`).
+Through the relay tunnel, or with the operator token on a loopback listener
+(anything else, the phones' token on loopback included, answers
+`403 {"error":"secure_channel_required"}`).
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `GET /v1/me` | through the tunnel: nothing (the phone is the workspace device its pairing proved; a `deviceId` in the query is ignored). On loopback: `?deviceId=<uuid>` | `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`. `configLogId` is the workspace config log's session id; `role` is the person's (`owner`, `admin`, `contributor`, `viewer`), which caps the phone; `rpId` and `origins` are the passkey relying party every presence ceremony uses. `403 {"error":"device_not_certified","message"}` when the box doesn't know the device as a certified phone of a member yet (certify it on the desktop, let the box sync); `400 {"error":"device_id_required"}` on loopback without `deviceId` |
+| `GET /v1/me` | through the tunnel: nothing (the phone is the workspace device its pairing proved; a `deviceId` in the query is ignored). On loopback, with the operator token: `?deviceId=<uuid>` | `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`. `configLogId` is the workspace config log's session id; `role` is the person's (`owner`, `admin`, `contributor`, `viewer`), which caps the phone; `rpId` and `origins` are the passkey relying party every presence ceremony uses. `403 {"error":"device_not_certified","message"}` when the box doesn't know the device as a certified phone of a member yet (certify it on the desktop, let the box sync); `400 {"error":"device_id_required"}` on loopback without `deviceId` |
 
 ```console
-$ curl -s "http://127.0.0.1:8787/v1/me?deviceId=6f1c…" -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
+$ curl -s "http://127.0.0.1:8787/v1/me?deviceId=6f1c…" -H "Authorization: Bearer $(cat ~/.ligus/serve.operator.token)"
 {"account":{"displayName":"Ana","id":"0b6e…","memberId":"0b6e…","role":"owner"},"configLogId":"9d2a…","device":{"fingerprint":"3F1A-9C0B-77D2-E804-5B6A","id":"6f1c…","tier":"phone"},"origins":["https://ligus.ai"],"room":"acme","rpId":"ligus.ai","workspaceId":"c41e…","workspaceName":""}
 ```
 
@@ -116,8 +133,8 @@ founder pin; names are cleaned (bidi, zero-width and control characters
 removed) and never an identifier: the safety code is.
 
 Invite codes carry the workspace passphrase and epoch keys (a DM's room key),
-so they move **through the tunnel or on a loopback bind only**, like
-code-host tokens. On a plain-HTTP network bind these answer 403 with a message
+so they move **through the tunnel, or to the operator token on a loopback
+bind, only**, like code-host tokens. Anything else answers 403 with a message
 to show: `POST /v1/invites`, `presence/prepare {action: "invite"}` (and its
 `commit` when prepared elsewhere), `inspect`, `join`, and a `POST /v1/dms`
 that founds a DM. Listing, opening a kept DM and the pending routes (codes
@@ -164,7 +181,7 @@ only (the answer carries the admission code). See
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/admissions/prepare` | `{deviceId, request?, ttlMinutes?}` | `deviceId` is the phone's workspace device id; `request` the box's join request (`ligusjoin1:…`; absent: a bearer code). Drafts the box admission as the phone's person, signed by that phone, and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, origins, allowCredentials, boxFingerprint?, boxLabel?, sealed}}`. 403 when `deviceId` isn't an enrolled phone of a member. `prepareId` is single use and lasts 5 minutes |
+| `POST /v1/admissions/prepare` | `{deviceId, request?, ttlMinutes?}` | `deviceId` is the phone's workspace device id; `request` the box's join request (`ligusjoin1:…`; absent: a bearer code). Drafts the box admission as the phone's person, signed by that phone, and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, origins, allowCredentials, boxFingerprint?, boxLabel?, sealed}}`. 403 when `deviceId` isn't an enrolled phone of a member, or, through the tunnel, isn't the device the pairing proved it holds. `prepareId` is single use and lasts 5 minutes |
 | `POST /v1/admissions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | puts the passkey assertion over `challenge` into the stamp: `{preimage}` (base64url), the bytes the phone signs with its P-256 key (ECDSA, SHA-256). **The phone checks them before signing** (`ligus_core::admission::check_phone_admission_preimage`): a `hive-envelope-v3` preimage of a `joinApproved` box admission on this workspace's config log, stamped for this phone (P-256) with presence, whose presence digest is the `challenge` the passkey just signed. The box drafted it, so anything else (a vote or a post as the person, another admission) is refused, and the phone shows the terms it read from the bytes, not the `preview` |
 | `POST /v1/admissions/commit` | `{prepareId, signature}` | `signature`: 64 bytes, base64url. Appends and syncs the admission: `{committed, eventId, code, sealed, expiresInMinutes}`. 403 when the signature doesn't verify against the phone's certificate, the person isn't an Admin or the presence doesn't verify; 409 before `presence` |
 
@@ -319,7 +336,8 @@ voter's account, so they never act as the person (see
 
 **Owner** (repos review F12): the request comes from a phone certified to
 the account of the Admin who admitted this box, over its own pairing, or
-with the `serve.token` bearer on a box whose listener is loopback. Anything
+with the operator token (`serve.operator.token`) on a box whose listener is
+loopback. The phones' `serve.token` never counts, on any listener. Anything
 else answers `403` with `owner_required`: these spend the box's own
 code-host access or steer its checkouts.
 
@@ -419,7 +437,10 @@ Service and NetworkPolicies).
 | Clone jobs | 2 at once; `LIGUS_REPOS_MAX_CLONE_MB` (2048) and `LIGUS_REPOS_CLONE_TIMEOUT_SECS` (900) |
 | Tunnel | 8 sessions (or the relay's `maxSessions`), 32 streams per session, 16 KiB frames; handshake 10 s, idle 90 s, session 24 h |
 | Push | see [Push notifications](../../ligus/features/phone-app.md#push-notifications) |
-| Token rotation | the server re-reads `serve.token` every 2 s |
+| Token rotation | the server re-reads `serve.token` and `serve.operator.token` every 2 s |
+| Connections | 30 s to send a request's headers (also the longest an idle keep-alive connection waits); closed after 300 s with no byte either way |
+| Event streams | 8 open per credential (each tunnel pairing, the phones' token, the operator token), 64 per box; one more answers `429 {"error":"too_many_streams"}` with `Retry-After: 5` |
+| Drafts | `presence`, `admissions` and `phone-actions` drafts are kept per credential (8, 4 and 8 each; 32, 16 and 32 per box) for 5 minutes. A caller sees and spends only its own; a full box answers 503 |
 | Typing | republish at most every 3 s, expire after 6 s quiet, 30 requests per 10 s, others polled every 2 s while a stream is open |
 
 There is no separate readiness endpoint; use `/v1/health`. Relay sync state

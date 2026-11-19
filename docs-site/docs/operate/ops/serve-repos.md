@@ -87,9 +87,10 @@ Cloning (by name or by id), renaming a repository, picking a chat's
 repository, a rescan and confirming a found checkout spend the box's own
 code-host access, so only the box's owner can ask for them: the phone of the
 Admin who admitted the box, certified to their account (**Add this phone**
-on their desktop), over its own pairing, or the operator with `serve.token`
-on a box that listens on loopback. Any other phone, and the token over the
-network, gets `403 owner_required`.
+on their desktop), over its own pairing, or the operator with
+`serve.operator.token` on a box that listens on loopback. Any other phone,
+the phones' `serve.token` (even on loopback, through a reverse proxy), and
+any token over the network get `403 owner_required`.
 
 When the box and a desktop could both answer a turn, the one with a checkout
 of the chat's repository claims it first, and if the holder goes quiet the

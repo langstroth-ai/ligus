@@ -513,7 +513,10 @@ pub const OWNER_REQUIRED: &str = "owner_required";
 /// the log.
 pub(super) fn owner_gate(s: &Shared, peer: Option<&super::tunnel::TunnelPeer>) -> ApiResult<()> {
     let ok = match peer {
-        None => s.opts.listen.ip().is_loopback(),
+        // D5: the operator's own token on a loopback listener. The phones'
+        // `serve.token` reaches loopback too, through a reverse proxy on
+        // this host, so it never counts.
+        None => s.opts.listen.ip().is_loopback() && super::api::is_operator(),
         Some(p) => {
             let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).filter(|r| r.is_active()).and_then(|r| r.device_id);
             device.is_some_and(|d| {

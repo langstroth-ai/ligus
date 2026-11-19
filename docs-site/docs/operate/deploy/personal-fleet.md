@@ -26,7 +26,7 @@ Time: about 30 minutes. You'll end with:
 | Device | Holds | Doesn't hold |
 |---|---|---|
 | Laptop | your account key, its device key, the workspace key, all events | |
-| Home server | its own device key (certified by your account), the workspace key, all events, `serve.token`, tunnel host keys, checkouts | your account key |
+| Home server | its own device key (certified by your account), the workspace key, all events, `serve.token`, `serve.operator.token`, tunnel host keys, checkouts | your account key |
 | Relay | ciphertext, metadata, (tunnel) host public keys and push tokens | any key that decrypts the workspace |
 | Phone | a bearer token and/or its tunnel credential and pairing key | the workspace key, any device key |
 
@@ -170,6 +170,8 @@ Check:
 ```sh
 curl -s http://192.0.2.10:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
+# On the server itself (loopback), the operator uses its own token:
+# curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.operator.token)"
 # {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.1.0",…}
 ```
 
