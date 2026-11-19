@@ -47,6 +47,12 @@ changes workspace settings.
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
+| `ligus_offer_file` | `path`, `title`, `body?` | Offers a file from your worktree as a proposal, only when the workspace lets agents offer files. Nothing is shared until a person approves it; blocked types and files holding a host credential are refused. See [Sharing files](../features/attachments.md#files-from-agents). The in-process tool loops (API and local runtimes) don't have it |
+| `ligus_memory_search` | `query`, `tags? ≤ 8`, `limit ≤ 20` | Keyword search over the [workspace memory](../features/memory.md): every word must match |
+| `ligus_memory_read` | `entryId` | One note, its current version (`rev`) and any unsettled conflicts |
+| `ligus_memory_propose` | `op: create\|edit\|remove`, `entryId?`, `base?`, `title?`, `body?`, `tags?`, `rationale?` | Proposes a memory change for a person to accept or reject. An edit or removal names the `rev` it was made from. Memory doesn't change until a person accepts |
+| `ligus_task_update` | `status: working\|blocked\|waiting\|done\|abandoned`, `summary ≤ 400`, `progress? 0-100`, `openQuestions? ≤ 8`, `partialResults? ≤ 8`, `taskId?`, `ttlSecs? ≤ 86400` | Your live progress on this chat, seen by its people and agents as you go; each call replaces the last |
+| `ligus_task_state` | `chatId?` | The agents' live task state on a chat (default: this one), under the same egress rule as `ligus_read_chat` |
 | `ligus_forge_list_prs` | `repo?`, `state?: open\|closed\|all`, `limit ≤ 50` | Pull or merge requests on the chat's [code host](../features/code-hosts.md) |
 | `ligus_forge_read_pr` | `repo?`, `number` | One pull or merge request with its review comments and CI |
 | `ligus_forge_list_issues` / `ligus_forge_read_issue` | `repo?`, `state?`, `limit?` / `repo?`, `number` | Issues |
@@ -75,6 +81,27 @@ never enters the agent's sandbox. `repo` is the chat's bound repository
 egress gets none of them, an allow-listed chat only when its list names
 `ligus.forge`, and each turn may make at most 16 of them
 (`LIGUS_MCP_MAX_FORGE_CALLS`).
+
+### Memory and task state {#memory}
+
+There is no tool that writes memory or decides a proposal: an agent only
+proposes, signed with its own key (or, before its host has certified one, by
+the host marked as an agent's effect, never as the host's person), and every
+device's fold refuses a direct memory write from anything but a person.
+`ligus_memory_search`, `ligus_memory_read` and `ligus_task_state` return a
+`content` text in which each note or card is wrapped in
+`<<<entry NONCE …>>> … <<<end NONCE>>>` (or `<<<task …>>>`) with a random
+nonce per call, after a header that says it is data, not instructions;
+content can't contain the markers, the nonce or `[[` directive openers,
+and invisible characters (including Unicode tag characters) are dropped.
+A turn sees only the notes its chat's egress allows: a note written from a
+chat with restricted or closed egress (a lockdown, dearth mode) is left out
+of searches and refused by id for a turn whose egress is more open (the
+same rule as reading another chat). Each note read counts against the read
+budget. Tool-loop runtimes reach the
+same through `ligus_read` (`what: memory | memoryEntry | taskState`),
+`ligus_propose` (`kind: memory`, with `op`) and `ligus_flow`
+(`op: taskUpdate`). See [Workspace memory and task state](../features/memory.md).
 
 ## Who signs what {#signing}
 
@@ -116,7 +143,8 @@ Per turn, and set per device:
 | Proposals (any kind) | 8 | `LIGUS_MCP_MAX_PROPOSALS` |
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
 | Questions (ACP permission requests included) | 3 | `LIGUS_MCP_MAX_ASKS` |
-| Messages and proposals read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
+| Memory proposals | 4 | `LIGUS_MCP_MAX_MEMORY_PROPOSALS` |
+| Messages, proposals, memory notes and task-state cards read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
 | Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`; see [Spend budget](#spend) |
 
 One human message can fan out: a turn hands off, the receiver hands off

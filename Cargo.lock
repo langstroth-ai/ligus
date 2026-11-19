@@ -16,6 +16,9 @@ dependencies = [
  "hive-runtime",
  "notify",
  "notify-debouncer-full",
+ "objc2",
+ "objc2-authentication-services",
+ "objc2-foundation",
  "portable-pty",
  "reqwest",
  "rfd",
@@ -2586,6 +2589,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.23.1",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "hive-core",
@@ -4292,6 +4296,18 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-quartz-core",
+]
+
+[[package]]
+name = "objc2-authentication-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee6d6f7dab884a28adaec1012eb3889257a49cc145724e35f93ece2d209f8b25"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
 ]
 
 [[package]]

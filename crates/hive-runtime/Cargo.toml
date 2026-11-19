@@ -37,6 +37,9 @@ aho-corasick = "1"
 # Egress proxy allow-list parsing (already in the tree via hive-core).
 url = "2"
 walkdir = "2"
+# Attachment archive-bomb checks: inflate a gzip stream into a counter,
+# bounded (issue #118; already in the tree via reqwest/zip).
+flate2 = "1"
 # Zeroized secret buffers (B2; already in the tree).
 zeroize = "1"
 # Identity links (IDENTITY-AND-FORGES §2.5): SSHSIG verification for
@@ -47,6 +50,8 @@ zeroize = "1"
 ssh-key = { version = "0.6", default-features = false, features = ["alloc", "std", "ecdsa", "ed25519", "p256"] }
 rsa = { version = "0.10.0", default-features = false, features = ["std", "pkcs1v15"] }
 iroh = { version = "1.4.1", optional = true }
+# The in-process mock relay for other clients' tests (`test-relay`).
+axum = { version = "0.8", optional = true }
 
 # B2: Ligus's own keychain file on macOS (already in the tree via rustls).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -64,7 +69,7 @@ libc = "0.2"
 # Whether a turn dir's owner process is still running (`executor::pid_alive`).
 # The version Tauri and the app already pull, so no new crate.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [features]
 # P2P is ON by default. The Windows *cross-compile* (cargo-xwin) is the one
@@ -79,6 +84,10 @@ p2p = ["dep:iroh"]
 # `ChatService::enable_test_presence`, a recovery key that confirms every
 # presence prompt. Never enabled by a normal or release build.
 test-presence = []
+# Tests only (other crates' dev-dependencies): exposes `test_relay`, the
+# in-process mock relay, so a client's integration tests sync two devices
+# without a relay binary. Never enabled by a normal or release build.
+test-relay = ["dep:axum"]
 
 [dev-dependencies]
 tempfile = "3"

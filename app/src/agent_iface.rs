@@ -40,6 +40,11 @@ impl LigusHost for AppHost {
         let _ = self.app.emit("workspace://synced", 1);
     }
 
+    fn stage_attachment(&self, proposal_id: Uuid, sha256: &str, bytes: &[u8]) -> Result<(), String> {
+        let state = self.app.state::<AppState>();
+        crate::attachments::stage(&state.data_dir, proposal_id, sha256, bytes)
+    }
+
     /// The code host of the turn's own chat (review F14): its repo's
     /// checkout on this device, else its workspace's bound folder; never
     /// the folder the window happens to show (another chat's forge and

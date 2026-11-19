@@ -387,37 +387,29 @@ pub async fn drain_tick(
 /// the result written back. Never on this host's own approval: only a
 /// person's `ProposalApplyRequested` names a host.
 pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, hive_runtime::apply_host::Outcome)> {
-    let jobs = {
-        let s = lock(svc);
-        if s.write_block().is_some() {
-            return Vec::new();
-        }
-        match hive_runtime::apply_host::pending(&s, ctx.ws) {
-            Ok(j) => j,
-            Err(e) => {
-                eprintln!("apply: listing requests failed: {e}");
-                return Vec::new();
-            }
-        }
-    };
-    let mut out = Vec::new();
-    for job in jobs {
-        // A proposal with a repo applies only in this box's checkout of that
-        // repo; one without, in the legacy binding.
-        let legacy = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), job.chat_id);
-        let repo = hive_runtime::apply_host::checkout_for(&lock(svc), &job, legacy);
-        if let Some(r) = repo.as_deref().filter(|_| job.proposal.repo_id.is_none()) {
+    let repo_for = |chat: Uuid| {
+        // Called only for a proposal without a repo: one with a repo applies
+        // only in this box's checkout of that repo (apply_host::checkout_for,
+        // in the apply tick).
+        let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
+        if let Some(r) = repo.as_deref() {
             crate::repos::ensure_chat_base(r);
         }
-        match hive_runtime::apply_host::fulfil(svc, &job, repo.as_deref()) {
-            Ok(o) => {
-                eprintln!("apply: request {} on proposal {}: {o:?}", job.request.id, job.proposal.id);
-                out.push((job.request.id, o));
-            }
-            Err(e) => eprintln!("apply: request {} failed: {e}", job.request.id),
+        repo
+    };
+    // This box serves one workspace: its pin is the service's own.
+    let founder = lock(svc).trusted_founder().map(str::to_string);
+    let tick = hive_runtime::sync_service::apply_tick(svc, ctx.ws, founder.as_deref(), &repo_for);
+    if let Some(e) = &tick.listing_error {
+        eprintln!("apply: listing requests failed: {e}");
+    }
+    for (request, proposal, outcome) in &tick.results {
+        match outcome {
+            Ok(o) => eprintln!("apply: request {request} on proposal {proposal}: {o:?}"),
+            Err(e) => eprintln!("apply: request {request} failed: {e}"),
         }
     }
-    out
+    tick.outcomes()
 }
 
 /// The note a reply cut off by a restart ends with.
@@ -528,7 +520,11 @@ async fn run_turn(
         }
     };
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
-    crate::materialize_turns(ctx.cfg, &mut turns).await;
+    let (head, me) = {
+        let g = lock(svc);
+        (g.attachment_rules(s.workspace_id).unwrap_or_default(), g.author().id.clone())
+    };
+    crate::materialize_turns(ctx.cfg, &s, &head, &me, &mut turns).await;
     let system = format!(
         "You are @{}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
         agent.name,

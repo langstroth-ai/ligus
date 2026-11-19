@@ -60,3 +60,27 @@ describe("Team sync relay URL", () => {
     expect(screen.queryByRole("button", { name: "Use the community relay" })).toBeNull();
   });
 });
+
+describe("Team sync limited state", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("shows a full workspace as syncing with writes waiting, not as an error", async () => {
+    vi.mocked(ipc.syncStatus).mockResolvedValue({
+      relayConfigured: true,
+      relayUrl: "https://relay.example",
+      room: "acme",
+      encrypted: true,
+      connectionState: "limited",
+      lastError: "workspace full: the relay is not taking new writes for this workspace (room_bytes)",
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TeamSyncSection />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Syncing, but writes are waiting")).toBeTruthy();
+    expect(screen.getByText(/workspace full/)).toBeTruthy();
+    expect(screen.queryByText("Sync error")).toBeNull();
+  });
+});

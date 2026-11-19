@@ -102,6 +102,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
         // Moving a chat's pinned base rewrites every host's chat branch.
         SessionEvent::ChatBaseRepinned { .. } => true,
+        // Attachments (issue #118): the policy decides who shares what, so
+        // changing it is a person's, with presence; lifting a block widens
+        // it too. Blocking a hash only narrows; sharing and deleting are
+        // content, judged by the policy.
+        SessionEvent::AttachmentPolicySet { .. } | SessionEvent::AttachmentHashUnblocked { .. } => true,
+        SessionEvent::AttachmentHashBlocked { .. } | SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => false,
         // Everything else is content, coordination or a self-validating
         // publication.
         SessionEvent::SessionSnapshot { .. }

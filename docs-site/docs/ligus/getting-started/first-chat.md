@@ -23,8 +23,11 @@ The composer is at the bottom. A few affordances worth knowing:
   the conversation's context window, and `/linear` pulls your
   [Linear issues](../addons/linear.md) into the composer.
 - **Attach files.** Use the 📎 **Attach files** button in the composer
-  to add files (including images); they're saved and referenced by path
-  when you send — handy for "explain this" without pasting.
+  to add files (including images). In your own workspace, or a team
+  workspace whose Admin hasn't turned file sharing on, they stay on your
+  device and are referenced by path, which your agents can read. Where
+  sharing is on, they are encrypted and shared with the chat; see
+  [Sharing files](../features/attachments.md).
 - **Context at a glance.** The **⬡ pill** in the chat header shows how
   much of the model's context window the next reply will use; click it
   for the full breakdown and controls. See

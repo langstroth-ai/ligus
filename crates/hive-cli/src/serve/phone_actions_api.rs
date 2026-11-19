@@ -155,6 +155,17 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             v["hostLabel"] = json!(label.unwrap_or_else(|| host_device_id.to_string()));
         }
         PhoneAction::WithdrawApply { .. } => v["summary"] = json!("Withdraw an apply request"),
+        PhoneAction::ProposeMemory { op, .. } => {
+            use hive_core::memory::MemoryOp;
+            let m = s.lock().memory(s.ws).unwrap_or_default();
+            let (summary, title) = match op {
+                MemoryOp::Create { title, .. } => ("Propose a new memory note", title.clone()),
+                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
+                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
+            };
+            v["summary"] = json!(summary);
+            v["noteTitle"] = json!(title);
+        }
     }
     v
 }
@@ -245,7 +256,7 @@ pub struct CommitReq {
 }
 
 /// `POST /v1/phone-actions/commit` → `{committed, eventId, kind, messageId?,
-/// requestId?}`.
+/// requestId?, proposalId?}`.
 pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
     let p = s.phone_action_drafts.take(&req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if p.presence_required && !p.presence {
@@ -269,6 +280,9 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
                 // This box applies it on its next worker tick.
                 s.worker_kick.notify_one();
             }
+        }
+        (PhoneAction::ProposeMemory { .. }, hive_core::SessionEvent::FlowRecorded { record: hive_core::flow::FlowRecord::MemoryProposed(p) }) => {
+            out["proposalId"] = json!(p.proposal_id);
         }
         (PhoneAction::ClearLockdown { chat_id, .. }, _) => {
             let who = env.actor_stamp.as_ref().map(|st| st.actor.display_name.clone()).unwrap_or_default();

@@ -28,7 +28,13 @@ pub fn phone_tier_allows(event: &SessionEvent, device: Uuid) -> Result<(), Strin
         // and clearing a lockdown (a person's call, with their passkey
         // presence like on any device).
         SessionEvent::ProposalApplyWithdrawn { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
-        SessionEvent::FlowRecorded { record } => matches!(record, FlowRecord::HumanAnswered(_)),
+        // Answering an agent, and proposing a memory change as its person
+        // (a proposal grants nothing; a person decides it on a desktop).
+        SessionEvent::FlowRecorded { record } => match record {
+            FlowRecord::HumanAnswered(_) => true,
+            FlowRecord::MemoryProposed(p) => p.proposer.is_empty(),
+            _ => false,
+        },
         // Its own revocation (a lost phone revoking itself is harmless).
         SessionEvent::DeviceRevoked { device_id, .. } => *device_id == device,
         // Phase B: a box admission (a service member, at most Contributor),

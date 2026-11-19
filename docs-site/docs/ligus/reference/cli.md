@@ -164,6 +164,7 @@ it stops with a migration error. See
 | `ligus remote reset` | new host keys and host id; every phone must pair again |
 | `ligus phones list` (or `ligus phones`) | phones paired over the relay |
 | `ligus phones revoke <pid\|name> [--keep-token] [--token-file PATH]` | revokes one phone; also rotates `serve.token` unless `--keep-token` |
+| `ligus phones certify <ligusphone1:code> \| --code-file PATH --recovery-words-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX` | "Add this phone" without a desktop: certifies the phone's key (the code its app shows) as one of this identity's devices, at the phone tier, confirmed with the recovery key. The fingerprint (on the phone, Settings > This phone) is required: a code whose key doesn't match is refused. Without `--fingerprint`, at a terminal it shows the fingerprint and asks you to confirm it; anywhere else it refuses. Never from a box; sync to publish |
 | `ligus bind-repo <name\|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]` | binds a checkout for agent file tools (workspace default, or one chat) |
 | `ligus repos [list]` | the workspace's repositories, this host's checkouts of them, the repos dir and the bindings |
 | `ligus repos add <remote\|canonical\|path> [--name N] [--kind K] [--branch B]` | adds a workspace repository (Admin, with presence); a path also binds it here |
@@ -189,6 +190,31 @@ Run `ligus pair` to show the phone pairing code.
 See [Remote access for your phone](../../operate/networking/remote-access.md),
 [Running ligus serve as your own device](../../operate/ops/serve-box.md) and the
 [serve API reference](../../operate/reference/serve-api.md).
+
+## Workspace memory {#memory}
+
+[Workspace memory](../features/memory.md) and live task state. Writes are
+this CLI identity's and are judged like any device's: a person's identity
+writes and decides; a box (a service member) can read only.
+
+| Command | What it does |
+|---|---|
+| `ligus memory list [--tag a,b] [--json]` (or `ligus memory`) | the live notes, newest first |
+| `ligus memory search <words…> [--tag a,b] [--json]` | notes matching every word (title, body or tags), best first |
+| `ligus memory show <id> [--json]` | one note: its version (`rev`), author, source chat, tags, body and any conflicts |
+| `ligus memory add <title> [--body TEXT] [--tag a,b]` | a new note; the body is `--body` or standard input |
+| `ligus memory edit <id> [--title T] [--body TEXT] [--tag a,b] [--base REV]` | a new version (body from `--body` or standard input). From the current version it also settles the note's conflicts; `--base` edits from an older one (kept as a conflict) |
+| `ligus memory rm <id> [--base REV]` | removes a note (its history stays in the workspace log) |
+| `ligus memory proposals [--json]` | proposed changes, open first |
+| `ligus memory accept <proposal-id>` / `ligus memory reject <proposal-id> [--note TEXT]` | decide a proposal |
+| `ligus task-state <chat-id> [--json]` | what the agents on a chat report about their work in progress |
+
+```console
+$ echo "The team relay listens on 8443." | ligus memory add Relay ports --tag infra
+0931232f-6dd8-44f6-a076-c083d9544085  rev 6924eae5-65b5-49d6-aadf-e9f2dc9a6266
+$ ligus memory search relay
+0931232f-6dd8-44f6-a076-c083d9544085  Relay ports [infra]  by Ana
+```
 
 ## Environment variables
 

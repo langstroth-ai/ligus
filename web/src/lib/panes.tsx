@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   IconActivity,
   IconBook,
+  IconFile,
   IconFlow,
   IconHexagon,
   IconInbox,
@@ -25,6 +26,7 @@ export type UtilityPane =
   | "vaults"
   | "workflows"
   | "flow"
+  | "memory"
   | "activity";
 
 export interface PaneDef {
@@ -43,5 +45,6 @@ export const PANES: PaneDef[] = [
   { id: "vaults", label: "Vaults", icon: (s) => <IconBook size={s} /> },
   { id: "workflows", label: "Workflows", icon: (s) => <IconFlow size={s} /> },
   { id: "flow", label: "Flow", icon: (s) => <IconComb size={s} /> },
+  { id: "memory", label: "Memory", icon: (s) => <IconFile size={s} /> },
   { id: "activity", label: "Activity", icon: (s) => <IconActivity size={s} /> },
 ];

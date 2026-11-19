@@ -24,6 +24,17 @@ Per-OS artifacts:
 - **macOS** — set `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
   `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`; Tauri signs
   and notarizes during `tauri build`.
+  - **Native passkeys** need the associated-domains entitlement
+    (`app/Ligus.entitlements`: `webcredentials:ligus.ai`, app id
+    `H5H3NNR456.ai.ligus.desktop`) and, because that entitlement is restricted, a
+    Developer ID provisioning profile with Associated Domains embedded as
+    `Contents/embedded.provisionprofile`. Put the profile at
+    `app/embedded.provisionprofile` (gitignored) and build with
+    `cargo tauri build --config app/tauri.passkeys.conf.json`. Never sign the
+    entitlement without the profile: macOS refuses to launch the app. The site must
+    serve `https://ligus.ai/.well-known/apple-app-site-association` with
+    `{"webcredentials":{"apps":["H5H3NNR456.ai.ligus.desktop", ...]}}`. See
+    docs-site `operate/security/native-passkeys.md`.
 - **Windows** — provide a code-signing cert; configure `bundle.windows.certificateThumbprint`
   (or sign the produced `.msi`/`.exe` via `signtool`).
 - **Linux** — unsigned AppImage/deb are usable; sign repos/packages as needed.

@@ -10,6 +10,8 @@
 use hive_core::SessionEventEnvelope;
 use thiserror::Error;
 
+pub use crate::relay_refusal::{RefusalClass, RelayRefusal};
+
 #[derive(Debug, Error)]
 pub enum RelayError {
     #[error("http error: {}", http_error_text(.0))]
@@ -24,9 +26,57 @@ pub enum RelayError {
     /// The relay returned an unexpected non-2xx status.
     #[error("relay returned HTTP {0}")]
     Status(u16),
+    /// A `429` or `507` with its code and `Retry-After` (see
+    /// [`crate::relay_refusal`]). A rate limit was already retried in place
+    /// as long as its wait was short.
+    #[error("{0}")]
+    Refused(RelayRefusal),
     /// A local error (e.g. sealing an attachment before upload).
     #[error("{0}")]
     Message(String),
+    /// The blob channel refused with a stable code (`blob_too_large`,
+    /// `no_workspace`, …) and a message. A `429`/`507` is [`Self::Refused`]
+    /// instead (a short rate limit was already retried in place).
+    #[error("{message} (relay: HTTP {status} {code})")]
+    BlobRefused { status: u16, code: String, message: String },
+}
+
+/// What the relay answers to a blob upload.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobUploaded {
+    pub id: String,
+    pub size: u64,
+    #[serde(default)]
+    pub sha256: String,
+    #[serde(default)]
+    pub expires_at: i64,
+}
+
+/// A refusal's JSON body (`{"error","message"}`), or the bare status.
+async fn refusal(status: u16, resp: reqwest::Response) -> RelayError {
+    #[derive(serde::Deserialize)]
+    struct Body {
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        message: String,
+    }
+    let text = resp.text().await.unwrap_or_default();
+    match serde_json::from_str::<Body>(&text) {
+        Ok(b) if !b.error.is_empty() => {
+            let message = match (b.error.as_str(), status) {
+                ("blob_too_large", _) => "the file is larger than the relay accepts".to_string(),
+                ("no_workspace", _) => "the relay holds nothing for this workspace yet; sync first".to_string(),
+                (_, 507) => "the relay's storage for this workspace is full".to_string(),
+                (_, 429) => "too many uploads; try again in a moment".to_string(),
+                _ if !b.message.is_empty() => b.message.chars().take(200).filter(|c| !c.is_control()).collect(),
+                _ => format!("refused ({})", b.error),
+            };
+            RelayError::BlobRefused { status, code: b.error.chars().take(64).filter(|c| c.is_ascii_graphic()).collect(), message }
+        }
+        _ => RelayError::Status(status),
+    }
 }
 
 /// A transport error's text. A builder error means the request URL itself
@@ -48,11 +98,53 @@ async fn json_ok<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Res
     let status = resp.status();
     if status.is_success() {
         Ok(resp.json().await?)
-    } else if matches!(status.as_u16(), 401 | 403) {
-        Err(RelayError::Unauthorized)
     } else {
-        Err(RelayError::Status(status.as_u16()))
+        Err(status_error(resp).await)
     }
+}
+
+/// The error for a non-2xx response: a typed refusal for `429`/`507`,
+/// `Unauthorized` for `401`/`403`, else the bare status.
+async fn status_error(resp: reqwest::Response) -> RelayError {
+    let code = resp.status().as_u16();
+    match RelayRefusal::from_response(resp).await {
+        Ok(r) => RelayError::Refused(r),
+        Err(_) if matches!(code, 401 | 403) => RelayError::Unauthorized,
+        Err(_) => RelayError::Status(code),
+    }
+}
+
+impl RelayError {
+    /// The relay's refusal, when this is one.
+    pub fn refusal(&self) -> Option<&RelayRefusal> {
+        match self {
+            RelayError::Refused(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// The `Idempotency-Key` for pushing the envelope `event_id` from the client
+/// holding `secret`: stable across that client's re-pushes (a re-sealed body
+/// differs, the key doesn't), and derived so the relay learns no event id.
+///
+/// The relay dedups by this key across the whole room, for every writer, so
+/// the key must not be computable from the event id alone: a co-member who
+/// learned an id before this device pushed it (a P2P peer, a box relaying a
+/// phone's event) could otherwise push junk under the key first and make the
+/// relay answer this device's push with the junk's seq, swallowing the event.
+/// `secret` is this client's ([`crate::SyncEngine`] draws one per engine). A
+/// re-push from another client (or after a restart) is a separate write: at
+/// worst a second copy of the same signed envelope, which every fold treats
+/// as that envelope.
+pub fn idempotency_key(secret: &[u8; 32], event_id: uuid::Uuid) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    // FROZEN context.
+    h.update(b"ligus-push-idempotency-v1\0");
+    h.update(secret);
+    h.update(event_id.as_bytes());
+    h.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Envelopes per page a client asks the relay for. The relay also caps a page
@@ -248,6 +340,31 @@ impl RelayClient {
         }
     }
 
+    /// Send the request `make` builds (authed), retrying a rate-limit refusal
+    /// in place: wait its `Retry-After`, then send the same request again, at
+    /// most [`crate::relay_refusal::MAX_INLINE_RETRIES`] times and only while
+    /// the wait is at most [`crate::relay_refusal::MAX_INLINE_WAIT`]. Any
+    /// other `429`/`507` (or a rate limit past those bounds) is returned as
+    /// [`RelayError::Refused`]; every other response comes back as is.
+    pub(crate) async fn send_retrying(&self, make: impl Fn() -> reqwest::RequestBuilder) -> Result<reqwest::Response, RelayError> {
+        use crate::relay_refusal::{MAX_INLINE_RETRIES, MAX_INLINE_WAIT};
+        let mut tries = 0u32;
+        loop {
+            let resp = self.authed(make()).send().await?;
+            let refusal = match RelayRefusal::from_response(resp).await {
+                Err(resp) => return Ok(resp),
+                Ok(r) => r,
+            };
+            if refusal.class() == RefusalClass::RateLimited && tries < MAX_INLINE_RETRIES && refusal.retry_after <= MAX_INLINE_WAIT {
+                tries += 1;
+                tracing::debug!(target: "sync", code = %refusal.code, wait = ?refusal.retry_after, "relay rate limit: retrying the same request");
+                tokio::time::sleep(refusal.retry_after).await;
+                continue;
+            }
+            return Err(RelayError::Refused(refusal));
+        }
+    }
+
     /// Push an envelope to a workspace; returns the relay-assigned sequence.
     pub async fn push(
         &self,
@@ -265,47 +382,107 @@ impl RelayClient {
         workspace: &str,
         body: &serde_json::Value,
     ) -> Result<u64, RelayError> {
+        self.push_value_keyed(workspace, body, None).await
+    }
+
+    /// [`Self::push_value`] with an `Idempotency-Key` ([`idempotency_key`]),
+    /// so this client's re-push of the same event (after a refusal or a lost
+    /// answer) gets its original seq instead of a second copy. A rate limit
+    /// is retried in place with the same body and key.
+    pub async fn push_value_keyed(
+        &self,
+        workspace: &str,
+        body: &serde_json::Value,
+        key: Option<&str>,
+    ) -> Result<u64, RelayError> {
         let url = format!("{}/v1/workspaces/{}/envelopes", self.base, workspace);
-        let resp = self.authed(self.http.post(url)).json(body).send().await?;
+        let resp = self
+            .send_retrying(|| {
+                let rb = self.http.post(&url).json(body);
+                match key {
+                    Some(k) => rb.header("Idempotency-Key", k),
+                    None => rb,
+                }
+            })
+            .await?;
         let value: serde_json::Value = json_ok(resp).await?;
         Ok(value.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0))
     }
 
-    /// Upload an opaque file blob (a sealed attachment) to a workspace. The relay
-    /// is content-blind: `bytes` is ciphertext the caller sealed with the
-    /// workspace key. `id` is a client-chosen opaque key (a UUID). The open
-    /// relay doesn't serve this route yet and returns 404/405.
-    pub async fn put_blob(
-        &self,
-        workspace: &str,
-        id: &str,
-        bytes: Vec<u8>,
-    ) -> Result<(), RelayError> {
-        let url = format!("{}/v1/workspaces/{}/blobs/{}", self.base, workspace, id);
+    /// Upload a sealed attachment to the workspace's blob channel
+    /// (`POST /v1/workspaces/{id}/blobs`, issue #118). The relay is
+    /// content-blind: `bytes` is ciphertext. The relay mints the blob id (a
+    /// random 43-character token), so ids can't be guessed or enumerated.
+    /// Its refusals (413 too large, 507 a quota, 429 a rate, 404 a relay
+    /// without the channel or a workspace with nothing stored yet) come back
+    /// as [`RelayError::Refused`] with the relay's code and message.
+    pub async fn post_blob(&self, workspace: &str, bytes: Vec<u8>) -> Result<BlobUploaded, RelayError> {
+        let url = format!("{}/v1/workspaces/{}/blobs", self.base, workspace);
         let resp = self
-            .authed(self.http.put(url))
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            .body(bytes)
-            .send()
+            .send_retrying(|| {
+                self.http
+                    .post(&url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .body(bytes.clone())
+            })
             .await?;
-        resp.error_for_status()?; // non-2xx (401/403/413/404) → error
-        Ok(())
+        let status = resp.status().as_u16();
+        if resp.status().is_success() {
+            return Ok(resp.json().await?);
+        }
+        if matches!(status, 401 | 403) {
+            return Err(RelayError::Unauthorized);
+        }
+        Err(refusal(status, resp).await)
     }
 
-    /// Fetch an opaque file blob's ciphertext. `Ok(None)` = the relay returned 404
-    /// (never uploaded, aged out, or an open relay without the blob route).
-    pub async fn get_blob(
-        &self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Vec<u8>>, RelayError> {
+    /// Fetch a blob's ciphertext, at most `max_bytes` of it (a relay that
+    /// sends more is refused before it is buffered). `Ok(None)` = the relay
+    /// has no such blob (never uploaded, expired, deleted, or a relay
+    /// without the channel).
+    pub async fn get_blob(&self, workspace: &str, id: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, RelayError> {
+        use futures_util::StreamExt;
         let url = format!("{}/v1/workspaces/{}/blobs/{}", self.base, workspace, id);
-        let resp = self.authed(self.http.get(url)).send().await?;
+        let resp = self.send_retrying(|| self.http.get(&url)).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let resp = resp.error_for_status()?;
-        Ok(Some(resp.bytes().await?.to_vec()))
+        if matches!(resp.status().as_u16(), 401 | 403) {
+            return Err(RelayError::Unauthorized);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            return Err(refusal(status, resp).await);
+        }
+        if resp.content_length().is_some_and(|n| n > max_bytes) {
+            return Err(RelayError::Message("the relay sent a larger blob than the attachment names".into()));
+        }
+        let mut out = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if out.len() as u64 + chunk.len() as u64 > max_bytes {
+                return Err(RelayError::Message("the relay sent a larger blob than the attachment names".into()));
+            }
+            out.extend_from_slice(&chunk);
+        }
+        Ok(Some(out))
+    }
+
+    /// Delete a blob (`DELETE /v1/workspaces/{id}/blobs/{blob}`). Idempotent:
+    /// the relay answers 204 whether or not it held it. Issued only after a
+    /// signed `AttachmentDeleted`.
+    pub async fn delete_blob(&self, workspace: &str, id: &str) -> Result<(), RelayError> {
+        let url = format!("{}/v1/workspaces/{}/blobs/{}", self.base, workspace, id);
+        let resp = self.authed(self.http.delete(url)).send().await?;
+        let status = resp.status().as_u16();
+        if resp.status().is_success() || status == 404 {
+            return Ok(());
+        }
+        if matches!(status, 401 | 403) {
+            return Err(RelayError::Unauthorized);
+        }
+        Err(refusal(status, resp).await)
     }
 
     /// Cheap connectivity + auth check: an authed GET of the envelope list.
@@ -345,7 +522,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}&limit={}",
             self.base, workspace, after, limit
         );
-        let resp = self.authed(self.http.get(url)).send().await?;
+        let resp = self.send_retrying(|| self.http.get(&url)).await?;
         let header = |name: &str| {
             resp.headers()
                 .get(name)
@@ -384,7 +561,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(self.authed(self.http.get(url)).send().await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
         Ok(rows
             .into_iter()
             .map(|row| {
@@ -405,7 +582,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(self.authed(self.http.get(url)).send().await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let seq = row.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0);
@@ -452,7 +629,10 @@ impl RelayClient {
             return Err(match status.as_u16() {
                 404 => SseConnectError::Unsupported,
                 401 | 403 => SseConnectError::Unauthorized,
-                c => SseConnectError::Status(c),
+                c => match RelayRefusal::from_response(resp).await {
+                    Ok(r) => SseConnectError::Refused(r),
+                    Err(_) => SseConnectError::Status(c),
+                },
             });
         }
         // A small buffer: nudges are cheap and coalesce naturally (any pending
@@ -508,8 +688,8 @@ impl RelayClient {
     ) -> Result<(String, u64), RelayError> {
         let url = format!("{}/v1/pair", self.base);
         let body = serde_json::json!({ "payload": payload, "ttl_secs": ttl_secs });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        let value: serde_json::Value = resp.json().await?;
+        let resp = self.send_retrying(|| self.http.post(&url).json(&body)).await?;
+        let value: serde_json::Value = json_ok(resp).await?;
         let code = value
             .get("code")
             .and_then(serde_json::Value::as_str)
@@ -520,10 +700,29 @@ impl RelayClient {
     }
 
     /// Resolve a short pairing code back to its payload. `Ok(None)` if the code
-    /// is unknown or expired.
+    /// is unknown or expired. After a `pair_lockout` (too many wrong codes)
+    /// nothing is sent to this relay until it ends: the lookup is refused
+    /// here with the time left.
     pub async fn resolve_pairing(&self, code: &str) -> Result<Option<String>, RelayError> {
+        use crate::relay_refusal::{note_pair_lockout, pair_lockout_left};
+        if let Some(left) = pair_lockout_left(&self.base) {
+            return Err(RelayError::Refused(RelayRefusal {
+                status: 429,
+                code: "pair_lockout".into(),
+                message: String::new(),
+                retry_after: left.max(std::time::Duration::from_secs(1)),
+            }));
+        }
         let url = format!("{}/v1/pair/{}", self.base, code.trim());
-        let resp = self.authed(self.http.get(url)).send().await?;
+        let resp = match self.send_retrying(|| self.http.get(&url)).await {
+            Err(RelayError::Refused(r)) => {
+                if r.class() == RefusalClass::PairLockout {
+                    note_pair_lockout(&self.base, &r);
+                }
+                return Err(RelayError::Refused(r));
+            }
+            other => other?,
+        };
         if !resp.status().is_success() {
             return Ok(None);
         }
@@ -543,7 +742,9 @@ impl RelayClient {
     ) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
         let body = serde_json::to_value(rotation)?;
-        self.authed(self.http.post(url)).json(&body).send().await?;
+        // A refusal (a full keyring) is an error; any other answer is
+        // ignored as before (the config log carries the rotation either way).
+        self.send_retrying(|| self.http.post(&url).json(&body)).await?;
         Ok(())
     }
 
@@ -555,9 +756,9 @@ impl RelayClient {
     /// carries the rotation either way.
     pub async fn publish_keyring_row(&self, workspace: &str, body: &serde_json::Value) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        let resp = self.authed(self.http.post(url)).json(body).send().await?;
+        let resp = self.send_retrying(|| self.http.post(&url).json(body)).await?;
         if !resp.status().is_success() {
-            return Err(RelayError::Status(resp.status().as_u16()));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }
@@ -565,7 +766,7 @@ impl RelayClient {
     /// Every raw row of a workspace's keyring route (opaque JSON).
     pub async fn fetch_keyring_rows(&self, workspace: &str) -> Result<Vec<serde_json::Value>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        json_ok(self.authed(self.http.get(url)).send().await?).await
+        json_ok(self.send_retrying(|| self.http.get(&url)).await?).await
     }
 
     /// Fetch all key rotations published to a workspace's keyring.
@@ -574,7 +775,7 @@ impl RelayClient {
         workspace: &str,
     ) -> Result<Vec<hive_core::e2ee::WorkspaceKeyRotation>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        let rows: Vec<serde_json::Value> = json_ok(self.authed(self.http.get(url)).send().await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
         Ok(rows
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
@@ -763,8 +964,9 @@ mod tests {
         let _ = c.fetch_values(&ws, 0).await;
         let _ = c.fetch(&ws, 0).await;
         let _ = c.probe(&ws).await;
-        let _ = c.put_blob(&ws, "b", vec![1, 2]).await;
-        let _ = c.get_blob(&ws, "b").await;
+        let _ = c.post_blob(&ws, vec![1, 2]).await;
+        let _ = c.get_blob(&ws, "b", 10).await;
+        let _ = c.delete_blob(&ws, "b").await;
         let _ = c.publish_presence(&ws, "d", &serde_json::json!({})).await;
         let _ = c.list_presence(&ws).await;
         let _ = c.publish_pairing("x", None).await;
