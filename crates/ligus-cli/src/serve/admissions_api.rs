@@ -122,7 +122,7 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         "origins": r.policy.origins,
         "allowCredentials": r.credential_ids,
         "boxFingerprint": request.as_ref().map(|q| q.fingerprint()),
-        "boxLabel": request.as_ref().map(|q| q.label.clone()),
+        "boxLabel": request.as_ref().map(|q| ligus_runtime::display::shown(&q.label)),
         "sealed": request.is_some(),
     });
     let challenge = b64url(&r.challenge);

@@ -26,6 +26,7 @@
 //! Drafts are single use, in memory, for five minutes. Through the tunnel,
 //! `deviceId` must be the device the pairing proved it holds.
 
+use ligus_runtime::display::shown;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -121,14 +122,14 @@ pub struct PrepareReq {
 /// what it parsed from the preimage, not this).
 fn preview(s: &Shared, action: &PhoneAction) -> Value {
     let chat = s.lock().load(action.chat_id()).ok().flatten();
-    let title = chat.as_ref().map(|c| c.title.clone()).unwrap_or_default();
+    let title = chat.as_ref().map(|c| shown(&c.title)).unwrap_or_default();
     let mut v = json!({ "chatTitle": title });
     match action {
         PhoneAction::Post { .. } => v["summary"] = json!("Post a message"),
         PhoneAction::Vote { proposal_id, approved, .. } => {
             let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!(if *approved { "Approve a proposal" } else { "Reject a proposal" });
-            v["proposalTitle"] = json!(p.map(|p| p.title.clone()).unwrap_or_default());
+            v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
         }
         PhoneAction::Answer { ask_id, .. } => {
             v["summary"] = json!("Answer an agent's question");
@@ -149,9 +150,9 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
         PhoneAction::RequestApply { proposal_id, host_device_id, .. } => {
             let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!("Apply an approved proposal on a host");
-            v["proposalTitle"] = json!(p.map(|p| p.title.clone()).unwrap_or_default());
+            v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
             let hosts = s.lock().list_hosts(s.ws).unwrap_or_default();
-            let label = hosts.iter().find(|h| h.id == host_device_id.to_string()).map(|h| h.label.clone());
+            let label = hosts.iter().find(|h| h.id == host_device_id.to_string()).map(|h| shown(&h.label));
             v["hostLabel"] = json!(label.unwrap_or_else(|| host_device_id.to_string()));
         }
         PhoneAction::WithdrawApply { .. } => v["summary"] = json!("Withdraw an apply request"),
@@ -159,9 +160,9 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             use ligus_core::memory::MemoryOp;
             let m = s.lock().memory(s.ws).unwrap_or_default();
             let (summary, title) = match op {
-                MemoryOp::Create { title, .. } => ("Propose a new memory note", title.clone()),
-                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
-                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
+                MemoryOp::Create { title, .. } => ("Propose a new memory note", shown(title)),
+                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
+                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
             };
             v["summary"] = json!(summary);
             v["noteTitle"] = json!(title);

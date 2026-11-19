@@ -60,7 +60,7 @@ pub(crate) fn inspect_phone_code_sync(state: State<AppState>, code: String) -> R
     let (standing, problem) = standing_dto(svc.phone_standing(ws, &c).map_err(|e| e.to_string())?);
     Ok(PhoneCodeDto {
         device_id: c.device_id.to_string(),
-        label: c.label.clone(),
+        label: crate::shown(&c.label),
         fingerprint: c.fingerprint(),
         standing,
         problem,

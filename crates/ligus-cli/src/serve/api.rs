@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use super::tunnel::TunnelPeer;
 use super::{dashboard, lab, pair, Shared};
+use ligus_runtime::display::shown;
 
 type S = State<Arc<Shared>>;
 
@@ -307,7 +308,7 @@ pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
         .unwrap_or_default();
     json!({
         "id": s.id,
-        "title": if s.title.trim().is_empty() { "Untitled" } else { s.title.as_str() },
+        "title": match shown(&s.title) { t if t.is_empty() => "Untitled".to_string(), t => t },
         "updatedAt": iso(updated_at(s)),
         "preview": preview,
         "unread": unread,
@@ -345,7 +346,7 @@ pub(super) fn proposal_author(s: &ChatSession, p: &ActionProposal) -> String {
     }
     p.producing_agent_id
         .and_then(|id| s.workspace_agents.iter().find(|a| a.id == id))
-        .map(|a| format!("@{}", a.name))
+        .map(|a| format!("@{}", shown(&a.name)))
         .unwrap_or_default()
 }
 
@@ -353,7 +354,7 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
     let mut v = json!({
         "id": p.id,
         "chatId": s.id,
-        "title": p.title,
+        "title": shown(&p.title),
         "body": p.body,
         "kind": kind_str(p.kind),
         "status": status_str(p.status),
@@ -414,7 +415,7 @@ fn ask_state_dto(s: &ChatSession, st: &ligus_core::flow::AskState) -> Value {
     let mut v = ask_dto(s.id, &st.ask);
     v["agentName"] = json!(ligus_core::flow::agent_from_key(&st.ask.agent_key)
         .and_then(|id| s.workspace_agents.iter().find(|a| a.id == id))
-        .map(|a| format!("@{}", a.name))
+        .map(|a| format!("@{}", shown(&a.name)))
         .unwrap_or_else(|| "@ligus".into()));
     v["open"] = json!(st.is_open());
     if let Some(a) = &st.answer {
@@ -442,7 +443,7 @@ pub(super) fn actor_name(s: &ChatSession, actor_id: &str) -> String {
         }
     }
     if let Some(a) = s.workspace_agents.iter().find(|a| a.id.to_string() == actor_id) {
-        return format!("@{}", a.name);
+        return format!("@{}", shown(&a.name));
     }
     let short = actor_id.get(..8).unwrap_or(actor_id);
     if short.is_empty() { "someone".into() } else { short.into() }
@@ -916,8 +917,8 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
     };
     let mut v = json!({
         "id": a.id,
-        "name": a.name,
-        "runtimeLabel": rt.map(|r| r.name.clone()).unwrap_or_else(|| a.runtime_id.clone()),
+        "name": shown(&a.name),
+        "runtimeLabel": shown(&rt.map(|r| r.name.clone()).unwrap_or_else(|| a.runtime_id.clone())),
     });
     // Who may grant the agent's permission requests (with this host's
     // person); the phone compares it with its own actor.
@@ -932,7 +933,7 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
         let label = if a.host_id == s.host_id {
             Some(format!("{} (this host)", s.opts.label))
         } else {
-            hosts.iter().find(|h| h.id == a.host_id).map(|h| h.label.clone())
+            hosts.iter().find(|h| h.id == a.host_id).map(|h| shown(&h.label))
         };
         if let Some(l) = label {
             v["hostLabel"] = json!(l);
@@ -974,7 +975,7 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
         .iter()
         .filter(|(_, l)| !l.is_empty())
         .map(|(chat, l)| {
-            let title = chats.iter().find(|c| c.id == *chat).map(|c| c.title.clone()).unwrap_or_default();
+            let title = chats.iter().find(|c| c.id == *chat).map(|c| shown(&c.title)).unwrap_or_default();
             json!({
                 "chatId": chat,
                 "chatTitle": title,
@@ -1043,13 +1044,13 @@ async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {
             let is_this = h.id == s.host_id;
             let mut v = json!({
                 "id": h.id,
-                "label": h.label,
+                "label": shown(&h.label),
                 "isThis": is_this,
                 "online": is_this || s.presence.is_online(h, &now),
             });
             // The model gateways the host offers (names and wire only),
             // left out when none.
-            let gws: Vec<Value> = h.offered_gateways().map(|g| json!({ "name": g.name, "api": g.api })).collect();
+            let gws: Vec<Value> = h.offered_gateways().map(|g| json!({ "name": shown(&g.name), "api": g.api })).collect();
             if !gws.is_empty() {
                 v["modelGateways"] = Value::Array(gws);
             }

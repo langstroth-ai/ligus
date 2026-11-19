@@ -848,7 +848,7 @@ fn node_status_str(s: NodeRunStatus) -> &'static str {
 fn node_dto(n: &wf::WorkflowNode) -> WorkflowNodeDto {
     let base = WorkflowNodeDto {
         id: n.id.clone(),
-        name: n.name.clone(),
+        name: crate::shown(&n.name),
         depends_on: n.depends_on.clone(),
         kind: String::new(),
         agent_id: None,
@@ -889,7 +889,7 @@ fn node_dto(n: &wf::WorkflowNode) -> WorkflowNodeDto {
 pub(crate) fn definition_dto(def: &wf::WorkflowDefinition) -> WorkflowDefinitionDto {
     WorkflowDefinitionDto {
         id: def.id.to_string(),
-        name: def.name.clone(),
+        name: crate::shown(&def.name),
         description: def.description.clone(),
         input_label: def.input_label.clone(),
         nodes: def.nodes.iter().map(node_dto).collect(),
@@ -903,7 +903,7 @@ pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunD
         lease: None,
         id: run.id.to_string(),
         definition_id: run.definition_id.to_string(),
-        definition_name: run.definition.name.clone(),
+        definition_name: crate::shown(&run.definition.name),
         input: run.input.clone(),
         status: run_status_str(run.status).to_string(),
         nodes: run
@@ -913,7 +913,7 @@ pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunD
                 let node = run.definition.nodes.iter().find(|n| n.id == s.node_id);
                 WorkflowNodeRunDto {
                     node_id: s.node_id.clone(),
-                    name: node.map(|n| n.name.clone()).unwrap_or_else(|| s.node_id.clone()),
+                    name: node.map(|n| crate::shown(&n.name)).unwrap_or_else(|| s.node_id.clone()),
                     kind: match node.map(|n| &n.kind) {
                         Some(WorkflowNodeKind::Gate { .. }) => "gate".into(),
                         _ => "agent".into(),

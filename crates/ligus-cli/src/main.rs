@@ -36,6 +36,7 @@ use ligus_runtime::{
     parse_mentions, pending_mentions, resolve_workspace_credential, turns_for, ChatService,
     ChatTurn, EventStore, IdentityStore, RelayClient, ResolvedRuntime, SyncEngine,
 };
+use ligus_runtime::display::shown;
 use ligus_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
@@ -484,7 +485,7 @@ fn cmd_whoami(cfg: &Config) -> Result<()> {
     let stored = bootstrap_identity(&identity)?;
     println!("account : {}", stored.account.id);
     println!("device  : {}", stored.device.id);
-    println!("name    : {}", stored.account.display_name);
+    println!("name    : {}", shown(&stored.account.display_name));
     println!("data dir: {}", cfg.data_dir.display());
     println!("room    : {}", cfg.room);
     Ok(())
@@ -506,7 +507,7 @@ fn cmd_chats(cfg: &Config) -> Result<()> {
             }
             any = true;
             let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
-            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&shown(&s.title), 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
         }
     }
     if !any {
@@ -887,7 +888,7 @@ fn cmd_runtimes(cfg: &Config) -> Result<()> {
             WorkspaceCredential::Inline { .. } => "inline".into(),
             WorkspaceCredential::None => "keyless".into(),
         };
-        println!("{:<16} {:<22} {:?}/{}  [{cred}]", r.id, r.name, r.provider, r.model);
+        println!("{:<16} {:<22} {:?}/{}  [{cred}]", r.id, shown(&r.name), r.provider, r.model);
     }
     Ok(())
 }
@@ -1155,7 +1156,7 @@ fn cmd_agents(cfg: &Config) -> Result<()> {
     }
     for a in agents {
         let host = if a.host_id.is_empty() { "owner-device".into() } else { a.host_id.clone() };
-        println!("@{:<20} runtime={:<14} host={}", a.name, a.runtime_id, host);
+        println!("@{:<20} runtime={:<14} host={}", shown(&a.name), a.runtime_id, host);
     }
     Ok(())
 }
@@ -1171,7 +1172,7 @@ fn cmd_hosts(cfg: &Config) -> Result<()> {
     }
     for h in hosts {
         let mark = if h.id == me { "  ← this box" } else { "" };
-        println!("{:<38} {:?}  {}{mark}", h.id, h.kind, h.label);
+        println!("{:<38} {:?}  {}{mark}", h.id, h.kind, shown(&h.label));
     }
     Ok(())
 }

@@ -8,6 +8,7 @@
 //! `/v1/people`, `/v1/agents` and chat details, never per chat row, so a chat
 //! list stays small. A chat row names its recent speakers by id instead.
 
+use ligus_runtime::display::shown;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -163,13 +164,13 @@ pub async fn list_people(State(s): S) -> ApiResult<Json<Value>> {
 fn channel_dto(c: &ligus_core::Channel) -> Value {
     let mut v = json!({
         "id": c.id,
-        "name": c.name,
+        "name": shown(&c.name),
         "position": c.position,
         "archived": c.archived,
         "defaultChatId": c.default_chat_id,
     });
     if let Some(p) = non_empty(c.purpose.as_ref()) {
-        v["purpose"] = json!(p);
+        v["purpose"] = json!(shown(p));
     }
     v
 }
@@ -267,7 +268,7 @@ pub(super) fn primary_availability(s: &Shared, chat: &ChatSession, hosts: &[Work
     // the durable record of a desktop still on an older build.
     desktops.sort_by_key(|h| std::cmp::Reverse(s.presence.last_seen(h)));
     match desktops.iter().find(|h| s.presence.is_online(h, &now)) {
-        Some(h) => Availability::Online(h.label.clone()),
+        Some(h) => Availability::Online(shown(&h.label)),
         None => Availability::DesktopOffline,
     }
 }
@@ -297,7 +298,7 @@ fn default_responder(
         "kind": "primary",
         "name": "ligus",
         "via": "untagged",
-        "runtimeLabel": rt.map(|r| r.name.clone()).unwrap_or_else(|| {
+        "runtimeLabel": rt.map(|r| shown(&r.name)).unwrap_or_else(|| {
             if chat.runtime_id.trim().is_empty() { "Default runtime".into() } else { chat.runtime_id.clone() }
         }),
     });
@@ -363,7 +364,7 @@ fn run_coordinator(s: &Shared, chat: &ChatSession, r: &ligus_core::WorkflowRun, 
     let label = if is_this {
         format!("{} (this host)", s.opts.label)
     } else {
-        host.map(|h| h.label.clone()).unwrap_or_default()
+        host.map(|h| shown(&h.label)).unwrap_or_default()
     };
     let now = ligus_core::Timestamp::now();
     json!({
@@ -387,7 +388,7 @@ fn workflow_run_dto(chat: &ChatSession, r: &ligus_core::WorkflowRun) -> Value {
         .unwrap_or_default();
     let mut v = json!({
         "id": r.id,
-        "name": r.definition.name,
+        "name": shown(&r.definition.name),
         "status": camel(&r.status),
         "startedAt": super::api::iso(r.started_at),
         "updatedAt": super::api::iso(r.updated_at),
@@ -451,7 +452,7 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
         .iter()
         .map(|k| {
             let summary = k.instructions.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-            let mut v = json!({ "id": k.id, "name": k.name, "summary": clip(summary.trim_start_matches('#').trim(), 140) });
+            let mut v = json!({ "id": k.id, "name": shown(&k.name), "summary": clip(summary.trim_start_matches('#').trim(), 140) });
             if let Some(u) = non_empty(k.source_url.as_ref()) {
                 v["sourceUrl"] = json!(u);
             }

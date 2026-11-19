@@ -12,6 +12,8 @@ use axum::Json;
 use ligus_core::memory;
 use serde_json::{json, Value};
 
+use ligus_runtime::display::{self, shown};
+
 use super::api::{load_chat, ApiError, ApiResult};
 use super::Shared;
 
@@ -26,7 +28,7 @@ fn agent_name(s: &Shared, key: &str) -> String {
     }
     let Some(id) = ligus_core::flow::agent_from_key(key) else { return String::new() };
     let config = s.lock().load(ligus_core::workspace_config_session_id(s.ws)).ok().flatten();
-    config.and_then(|c| c.workspace_agents.into_iter().find(|a| a.id == id).map(|a| a.name)).unwrap_or_default()
+    config.and_then(|c| c.workspace_agents.into_iter().find(|a| a.id == id).map(|a| shown(&a.name))).unwrap_or_default()
 }
 
 /// `GET /v1/memory?q=…&tag=…&limit=…`: live entries matching every keyword
@@ -36,7 +38,7 @@ pub async fn list(State(s): S, Query(q): Query<HashMap<String, String>>) -> ApiR
     let tags: Vec<String> = q.get("tag").map(|t| t.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
     let limit = q.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(50).clamp(1, MAX_LIST);
     let hits = memory::search(&m, q.get("q").map(String::as_str).unwrap_or(""), &tags, limit);
-    let entries: Vec<Value> = hits.iter().map(|h| json!({"entry": h.entry, "score": h.score})).collect();
+    let entries: Vec<Value> = hits.iter().map(|h| json!({"entry": display::memory_entry(h.entry), "score": h.score})).collect();
     Ok(Json(json!({ "total": m.live_count(), "entries": entries, "openProposals": m.open_proposals().count() })))
 }
 
@@ -46,7 +48,7 @@ pub async fn get_entry(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Va
     let m = s.lock().memory(s.ws)?;
     let e = m.entries.get(&id).filter(|e| e.live()).ok_or_else(|| ApiError::not_found("memory entry"))?;
     let proposer = (!e.current.proposer.is_empty()).then(|| agent_name(&s, &e.current.proposer));
-    Ok(Json(json!({ "entry": e, "proposerName": proposer })))
+    Ok(Json(json!({ "entry": display::memory_entry(e), "proposerName": proposer })))
 }
 
 /// `GET /v1/memory/proposals`: open proposals first, then the decided ones.
@@ -54,7 +56,7 @@ pub async fn proposals(State(s): S) -> ApiResult<Json<Value>> {
     let m = s.lock().memory(s.ws)?;
     let mut ps: Vec<&memory::ProposalState> = m.proposals.values().collect();
     ps.sort_by(|a, b| a.decision.is_some().cmp(&b.decision.is_some()).then(b.at_ms.cmp(&a.at_ms)));
-    let out: Vec<Value> = ps.into_iter().take(MAX_LIST).map(|p| json!({"proposal": p, "proposerName": agent_name(&s, &p.proposal.proposer)})).collect();
+    let out: Vec<Value> = ps.into_iter().take(MAX_LIST).map(|p| json!({"proposal": display::memory_proposal(p), "proposerName": agent_name(&s, &p.proposal.proposer)})).collect();
     Ok(Json(json!({ "proposals": out })))
 }
 
@@ -67,7 +69,7 @@ pub async fn task_state(State(s): S, Path(id): Path<String>) -> ApiResult<Json<V
     slots.sort_by_key(|t| std::cmp::Reverse(t.at_ms));
     let out: Vec<Value> = slots
         .into_iter()
-        .map(|t| json!({"slot": t, "agentName": agent_name(&s, &t.update.agent_key), "active": t.active(now), "expiresAtMs": t.expires_at_ms()}))
+        .map(|t| json!({"slot": display::task_slot(t), "agentName": agent_name(&s, &t.update.agent_key), "active": t.active(now), "expiresAtMs": t.expires_at_ms()}))
         .collect();
     Ok(Json(json!({ "slots": out })))
 }

@@ -581,6 +581,83 @@ async fn a_box_starts_from_a_read_only_mounted_secret() {
     assert!(!toml.contains(desktop.key.as_deref().unwrap()), "no secret in config.toml");
 }
 
+/// Apps residuals: memory titles, workflow and stage names, agent names,
+/// channel names and chat titles reached the phone and lt raw, so an RLO or
+/// a zero-width character in one reordered or hid text in a list row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn peer_names_reach_the_api_cleaned() {
+    const EVIL: &str = "\u{202E}gnp\u{200B}.exe\u{2028}x";
+    let hidden = |v: &Value| {
+        let t = v.to_string();
+        t.contains('\u{202E}') || t.contains('\u{200B}') || t.contains('\u{2028}')
+    };
+    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "gpt-4o", &[("README.md", "# demo\n")]).await;
+    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
+    let (evil_agent, chat_id) = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let mut agent = WorkspaceAgent::new(format!("rev{EVIL}"), "gw");
+        agent.owner_actor_id = svc.author().id.clone();
+        let evil_agent = agent.id;
+        svc.add_agent(ws, ws, agent).unwrap();
+        // The fold refuses a memory title with these characters; the
+        // author's name rides the entry unchecked.
+        svc.set_author_display_name(format!("Ana{EVIL}"));
+        svc.write_memory(ws, ligus_runtime::chat_service::MemoryDraft { title: "Notes".into(), body: "b".into(), ..Default::default() }).unwrap();
+        let (_, chat) = svc.create_channel(ws, &format!("chan{EVIL}"), Some(format!("purpose{EVIL}")), "gw").unwrap();
+        let def = ligus_core::WorkflowDefinition {
+            id: Uuid::new_v4(),
+            name: format!("Ship{EVIL}"),
+            description: String::new(),
+            input_label: None,
+            nodes: vec![ligus_core::workflow::WorkflowNode {
+                id: "draft".into(),
+                name: format!("Draft{EVIL}"),
+                depends_on: vec![],
+                kind: ligus_core::WorkflowNodeKind::Agent { agent_id: None, prompt_template: "go".into() },
+                x: None,
+                y: None,
+            }],
+            created_at: ligus_core::Timestamp::now(),
+            disabled: false,
+        };
+        let me = svc.author().id.clone();
+        svc.upsert_workflow_run(chat.id, ws, ligus_core::workflow::new_run(&def, "now", me)).unwrap();
+        (evil_agent, chat.id)
+    };
+    sync_once(&h.desktop).await.unwrap();
+    let mut agents = Value::Null;
+    for _ in 0..50 {
+        agents = h.get("/v1/agents").await;
+        let memory = h.get("/v1/memory").await;
+        if agents["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["id"] == json!(evil_agent)))
+            && memory["total"].as_u64() == Some(1)
+            && h.get("/v1/chats").await["chats"].as_array().is_some_and(|c| c.iter().any(|c| c["id"] == json!(chat_id)))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let a = agents["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(evil_agent)).expect("agent synced").clone();
+    assert_eq!(a["name"], "revgnp.exe x");
+    assert!(!hidden(&agents), "{agents}");
+    let memory = h.get("/v1/memory").await;
+    assert_eq!(memory["entries"][0]["entry"]["current"]["author"]["name"], "Anagnp.exe x");
+    assert!(!hidden(&memory), "{memory}");
+    let id = memory["entries"][0]["entry"]["id"].as_str().unwrap().to_string();
+    let one = h.get(&format!("/v1/memory/{id}")).await;
+    assert!(!hidden(&one), "{one}");
+    let channels = h.get("/v1/channels").await;
+    assert!(!hidden(&channels), "{channels}");
+    let details = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    assert_eq!(details["workflowRuns"][0]["name"], "Shipgnp.exe x");
+    assert!(!hidden(&details), "{details}");
+    let chats = h.get("/v1/chats").await;
+    assert!(!hidden(&chats), "{chats}");
+    let flow = h.get("/v1/flow").await;
+    assert!(!hidden(&flow), "{flow}");
+}
+
 /// People, channels and chat details: avatars and host kinds ride the roster,
 /// chats carry their channel and recent speakers, and details mirror the
 /// desktop's right-hand panel (agents, people, default responder, context,

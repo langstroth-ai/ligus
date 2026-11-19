@@ -350,7 +350,7 @@ pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession,
         .workspace_hosts
         .iter()
         .find(|h| h.id == lease.current.holder.to_string())
-        .map(|h| h.label.clone())
+        .map(|h| crate::shown(&h.label))
         .unwrap_or_default();
     Some(RunLeaseDto {
         holder: lease.current.holder.to_string(),
@@ -1262,7 +1262,7 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
     let applied = if here.apply { grants.clone() } else { ligus_core::sandbox::SandboxGrants::default() };
     let agents: Vec<SandboxAgentDto> = agents_cfg
         .iter()
-        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
+        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: crate::shown(&a.name), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
         .collect();
     let chosen = agent_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
     let mut policies = Vec::new();

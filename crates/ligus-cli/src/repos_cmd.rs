@@ -3,6 +3,7 @@
 //! `ligus repos …` commands.
 
 
+use ligus_runtime::display::shown;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -188,7 +189,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             }
             for e in &es {
                 let tag = if e.removed { " (removed)" } else { "" };
-                println!("{}  {}  {}{tag}", &e.repo.id.to_string()[..8], e.repo.display_name, e.repo.canonical);
+                println!("{}  {}  {}{tag}", &e.repo.id.to_string()[..8], shown(&e.repo.display_name), e.repo.canonical);
                 for m in maps.iter().filter(|m| m.repo_id == e.repo.id) {
                     let state = if m.confirmed { if m.primary { "primary" } else { "confirmed" } } else { "found, unconfirmed" };
                     println!("    here: {} ({}, {state}{})", m.path.display(), m.source.as_str(), if m.via_fork { ", via a fork" } else { "" });
@@ -211,7 +212,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             };
             let kind = flag("--kind").unwrap_or_else(|| guess_kind(&input));
             let repo = svc.add_workspace_repo(ws, &input, &flag("--name").unwrap_or_default(), &kind, &flag("--branch").or(branch).unwrap_or_default(), root)?;
-            println!("added {} ({}) to the workspace.", repo.display_name, repo.canonical);
+            println!("added {} ({}) to the workspace.", shown(&repo.display_name), repo.canonical);
             if let Some(p) = as_path {
                 let m = rr::bind(svc.store(), svc.device_id(), host_label, ws, &repo, &p, CheckoutSource::Bound)?;
                 println!("bound {} here.", m.path.display());
@@ -221,14 +222,14 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
         Some("remove") => {
             let r = find_repo(&entries()?, pos.get(1).ok_or_else(|| anyhow!("usage: ligus repos remove <repo>"))?)?;
             svc.remove_workspace_repo(ws, r.id)?;
-            println!("removed {} from the workspace (its chats keep naming it).", r.display_name);
+            println!("removed {} from the workspace (its chats keep naming it).", shown(&r.display_name));
             Ok(())
         }
         Some("rename") => {
             let (Some(sel), Some(name)) = (pos.get(1), pos.get(2)) else { bail!("usage: ligus repos rename <repo> <name> [--branch B]") };
             let r = find_repo(&entries()?, sel)?;
             svc.update_workspace_repo(ws, r.id, name, &flag("--branch").unwrap_or(r.default_branch.clone()))?;
-            println!("renamed {} to {name}.", r.display_name);
+            println!("renamed {} to {name}.", shown(&r.display_name));
             Ok(())
         }
         Some(verb @ ("bind" | "confirm")) => {
@@ -236,7 +237,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             let r = find_repo(&entries()?, sel)?;
             let p = resolve_path(&repos_dir(data_dir), path);
             let m = rr::bind(svc.store(), svc.device_id(), host_label, ws, &r, &p, if verb == "bind" { CheckoutSource::Bound } else { CheckoutSource::Detected })?;
-            println!("{} is {} on this host{}.", m.path.display(), r.display_name, if m.via_fork { " (through a fork)" } else { "" });
+            println!("{} is {} on this host{}.", m.path.display(), shown(&r.display_name), if m.via_fork { " (through a fork)" } else { "" });
             Ok(())
         }
         Some("unbind") => {
@@ -258,7 +259,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             let roster = svc.workspace_roster(ws)?;
             let found = rr::detect(svc.store(), ws, &roster, &[repos_dir(data_dir)])?;
             for f in &found {
-                let name = roster.repos.get(&f.repo_id).map(|e| e.repo.display_name.clone()).unwrap_or_default();
+                let name = roster.repos.get(&f.repo_id).map(|e| shown(&e.repo.display_name)).unwrap_or_default();
                 println!("found {name} at {} (confirm: ligus repos confirm {} {})", f.path.display(), &f.repo_id.to_string()[..8], f.path.display());
             }
             if found.is_empty() {
@@ -307,7 +308,7 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             let accepted = svc.store().accepted_aliases(ws)?;
             let used = |kind: &str, a: &str, t: &str| if accepted.iter().any(|(k, x, y)| k == kind && x == a && y == t) { "accepted here" } else { "not accepted here (ligus repos accept <alias>)" };
             for (id, list) in &roster.repo_aliases {
-                let name = roster.repos.get(id).map(|e| e.repo.display_name.clone()).unwrap_or_default();
+                let name = roster.repos.get(id).map(|e| shown(&e.repo.display_name)).unwrap_or_default();
                 for a in list {
                     println!("{a}  is {name}  ({})", used("repo", a, &id.to_string()));
                 }
@@ -325,9 +326,9 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
             let names: Vec<String> = pos[2..].iter().map(|s| s.to_string()).collect();
             let set = svc.set_repo_aliases(ws, r.id, &names)?;
             if set.is_empty() {
-                println!("{} has no aliases now (sync to share).", r.display_name);
+                println!("{} has no aliases now (sync to share).", shown(&r.display_name));
             } else {
-                println!("{} is also known as {} (sync to share; each host uses them after `ligus repos accept`).", r.display_name, set.join(", "));
+                println!("{} is also known as {} (sync to share; each host uses them after `ligus repos accept`).", shown(&r.display_name), set.join(", "));
             }
             Ok(())
         }

@@ -686,7 +686,7 @@ async fn run_turn(
     policy.grants = grants.paths_for(Some(agent.id));
 
     sink.status(s.id, agent.id, TurnState::Running, None);
-    println!("↳ @{} replying in {} …", agent.name, s.id);
+    println!("↳ @{} replying in {} …", ligus_runtime::display::shown(&agent.name), s.id);
     let host = WorkerHost {
         svc,
         sink,
@@ -750,10 +750,10 @@ async fn run_turn(
             sink.changed();
             if outcome.empty {
                 sink.status(s.id, agent.id, TurnState::Error, Some("the model returned an empty reply"));
-                println!("   @{} returned an empty reply", agent.name);
+                println!("   @{} returned an empty reply", ligus_runtime::display::shown(&agent.name));
             } else {
                 sink.status(s.id, agent.id, TurnState::Done, None);
-                println!("   @{} done", agent.name);
+                println!("   @{} done", ligus_runtime::display::shown(&agent.name));
             }
             Ok(())
         }

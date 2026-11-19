@@ -515,7 +515,7 @@ pub(crate) fn roster_report(state: &AppState, workspace_id: Uuid) -> RosterRepor
         let (judged, approved) = flow::career::track_record(&samples, &key);
         rows.push(RosterRow {
             agent_id: Some(a.id),
-            name: a.name.clone(),
+            name: crate::shown(&a.name),
             runtime_id: a.runtime_id.clone(),
             career: c,
             why: why.to_string(),
@@ -643,11 +643,11 @@ pub(crate) fn board(view: &WorkspaceView, now: i64) -> Vec<BoardRow> {
                 .filter(|t| t.is_finite())
                 .min_by(f64::total_cmp);
             BoardRow {
-                chat_title: view.sessions.iter().find(|s| s.id == item.session_id).map(|s| s.title.clone()).unwrap_or_default(),
+                chat_title: view.sessions.iter().find(|s| s.id == item.session_id).map(|s| crate::shown(&s.title)).unwrap_or_default(),
                 suggested: pick.map(|p| p.agent.clone()),
-                suggested_name: pick.map(|p| p.name.clone()),
+                suggested_name: pick.map(|p| crate::shown(&p.name)),
                 nearest_threshold: nearest,
-                item,
+                item: flow::board::BoardItem { title: crate::shown(&item.title), ..item },
             }
         })
         .collect()
@@ -859,7 +859,7 @@ pub(crate) fn home_report(state: &AppState, workspace_id: Uuid) -> HomeReport {
     let now = ligus_core::Timestamp::now();
     let (coordinator_label, coordinator_online) = match beacon.as_ref().filter(|b| !b.coordinator_host_id.is_empty()) {
         Some(b) => match hosts.iter().find(|h| h.id == b.coordinator_host_id) {
-            Some(h) => (h.label.clone(), Some(state.host_presence.is_online(h, &now))),
+            Some(h) => (crate::shown(&h.label), Some(state.host_presence.is_online(h, &now))),
             None => (b.coordinator_host_id.chars().take(8).collect(), None),
         },
         None => (String::new(), None),
@@ -1678,7 +1678,7 @@ pub(crate) fn flow_marks_sync(state: State<'_, AppState>) -> Vec<MarkRow> {
             chat_title: m
                 .session_id
                 .and_then(|sid| view.sessions.iter().find(|s| s.id == sid))
-                .map(|s| s.title.clone())
+                .map(|s| crate::shown(&s.title))
                 .unwrap_or_default(),
             mark: m.clone(),
         })
@@ -1961,7 +1961,12 @@ pub(crate) struct HandoffCardView {
 fn handoff_views(flow: &FlowState) -> Vec<HandoffCardView> {
     flow.handoffs
         .iter()
-        .map(|card| HandoffCardView { reply_message_id: flow.handoff_reply(card), card: card.clone() })
+        .map(|card| {
+            let mut shown = card.clone();
+            shown.from_name = crate::shown(&card.from_name);
+            shown.to_name = crate::shown(&card.to_name);
+            HandoffCardView { reply_message_id: flow.handoff_reply(card), card: shown }
+        })
         .collect()
 }
 
@@ -1984,7 +1989,7 @@ fn agent_names(view: &WorkspaceView) -> HashMap<String, String> {
     out.insert(flow::PRIMARY.to_string(), "Ligus (primary)".to_string());
     for s in view.sessions.iter() {
         for a in &s.workspace_agents {
-            out.insert(flow::agent_key(Some(a.id)), a.name.clone());
+            out.insert(flow::agent_key(Some(a.id)), crate::shown(&a.name));
         }
     }
     out

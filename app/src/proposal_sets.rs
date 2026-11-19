@@ -102,7 +102,7 @@ pub(crate) fn set_dto(set: &ProposalSet, session: &ChatSession) -> ProposalSetDt
                 .filter(|a| a.proposal_id == *id)
                 .map(|a| ScoutAssessmentDto {
                     id: a.id.to_string(),
-                    scout_name: a.scout_name.clone(),
+                    scout_name: crate::shown(&a.scout_name),
                     scout_runtime: a.scout_runtime.clone(),
                     score: a.score,
                     current_support: set.current_support(a),
@@ -116,7 +116,7 @@ pub(crate) fn set_dto(set: &ProposalSet, session: &ChatSession) -> ProposalSetDt
             Some(SetAlternativeDto {
                 proposal_id: id.to_string(),
                 label: label(i),
-                title: p.title.clone(),
+                title: crate::shown(&p.title),
                 body: p.body.clone(),
                 kind: kind_str(p.kind).into(),
                 status: status_str(p.status).into(),
@@ -189,7 +189,7 @@ fn label_of(set: &ProposalSet, id: Uuid) -> String {
 }
 
 fn title_of(session: &ChatSession, id: Uuid) -> String {
-    session.proposals.iter().find(|p| p.id == id).map(|p| p.title.clone()).unwrap_or_default()
+    session.proposals.iter().find(|p| p.id == id).map(|p| crate::shown(&p.title)).unwrap_or_default()
 }
 
 /// Post the chat notes for a settled quorum: the front-runner, the frozen

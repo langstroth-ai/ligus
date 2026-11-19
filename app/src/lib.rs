@@ -2633,7 +2633,7 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
             let host = r.host_device_id.to_string();
             let mut d = ligus_proto::ApplyRequestDto {
                 id: r.id.to_string(),
-                host_label: hosts.iter().find(|h| h.id == host).map(|h| h.label.clone()),
+                host_label: hosts.iter().find(|h| h.id == host).map(|h| shown(&h.label)),
                 host_device_id: host,
                 state: "open".into(),
                 mine: s.authz.apply_requesters.get(&r.id).is_some_and(|a| *a == me),
@@ -2671,7 +2671,7 @@ fn session_dto(s: &ChatSession, viewer: Viewer, me: &str) -> ChatSessionDto {
 fn agent_dto(a: &WorkspaceAgent) -> WorkspaceAgentDto {
     WorkspaceAgentDto {
         id: a.id.to_string(),
-        name: a.name.clone(),
+        name: shown(&a.name),
         runtime_id: a.runtime_id.clone(),
         role: a.role.clone(),
         owner_actor_id: a.owner_actor_id.clone(),
@@ -4204,15 +4204,15 @@ pub(crate) fn list_queued_work_sync(state: State<AppState>) -> Result<Vec<Queued
             let (host_label, host_status) = if host_id.is_empty() {
                 (String::new(), "device")
             } else if let Some(h) = hosts.iter().find(|h| h.id == host_id) {
-                (h.label.clone(), if state.host_presence.is_online(h, &now) { "online" } else { "offline" })
+                (shown(&h.label), if state.host_presence.is_online(h, &now) { "online" } else { "offline" })
             } else {
                 (String::new(), "unknown")
             };
             out.push(QueuedWorkDto {
                 session_id: pm.session_id.to_string(),
-                chat_title: s.title.clone(),
+                chat_title: shown(&s.title),
                 agent_id: pm.agent_id.to_string(),
-                agent_name: pm.agent_name,
+                agent_name: shown(&pm.agent_name),
                 host_id,
                 host_label,
                 host_status: host_status.to_string(),
@@ -4243,12 +4243,12 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
                 ligus_core::HostKind::Worker => "worker",
             }
             .to_string(),
-            label: h.label.clone(),
+            label: shown(&h.label),
             online: state.host_presence.is_online(h, &now),
             last_seen: rfc3339(state.host_presence.last_seen(h)),
             model_gateways: h
                 .offered_gateways()
-                .map(|g| ligus_proto::HostModelGatewayDto { name: g.name.clone(), api: g.api.clone() })
+                .map(|g| ligus_proto::HostModelGatewayDto { name: shown(&g.name), api: g.api.clone() })
                 .collect(),
         })
         .collect())
@@ -4798,14 +4798,14 @@ pub(crate) fn inspect_device_code_sync(state: State<AppState>, code: String) -> 
     let revoked = entry.is_some_and(|d| d.revoked);
     Ok(DeviceCodeDto {
         device_id: req.device_id.to_string(),
-        label: req.label.clone(),
+        label: shown(&req.label),
         fingerprint: req.fingerprint(),
         known_workspace,
         already_mine: entry.is_some_and(|d| !d.revoked),
         revoked,
         replaces_member: device_own_members(&svc, ws, req.device_id)
             .first()
-            .map(|m| DeviceMemberDto { member_id: m.id.clone(), display_name: m.actor.display_name.clone() }),
+            .map(|m| DeviceMemberDto { member_id: m.id.clone(), display_name: shown(&m.actor.display_name) }),
     })
 }
 
@@ -4861,7 +4861,7 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
             let short = d.device_id.to_string()[..8].to_string();
             MyDeviceDto {
                 device_id: d.device_id.to_string(),
-                label: host.map(|h| h.label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or(if d.device_id == here {
+                label: host.map(|h| shown(&h.label)).filter(|l| !l.trim().is_empty()).unwrap_or(if d.device_id == here {
                     "This device".into()
                 } else {
                     format!("Device {short}")
@@ -4970,7 +4970,7 @@ async fn list_device_revocations(state: State<'_, AppState>) -> Result<Vec<Devic
     };
     let mut out = Vec::new();
     for (host_id, r) in reports {
-        let host_label = hosts.iter().find(|h| h.id == host_id).map(|h| h.label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
+        let host_label = hosts.iter().find(|h| h.id == host_id).map(|h| shown(&h.label)).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
         for d in r.devices {
             out.push(DeviceRevocationDto { host_id: host_id.clone(), host_label: host_label.clone(), reported_at: r.at, summary: d.summary(), complete: d.complete(), status: d });
         }
@@ -5129,7 +5129,7 @@ fn with_epoch_keys(state: &AppState, mut conn: WorkspaceConn) -> WorkspaceConn {
 fn skill_dto(s: &SkillProfile) -> SkillDto {
     SkillDto {
         id: s.id.to_string(),
-        name: s.name.clone(),
+        name: shown(&s.name),
         instructions: s.instructions.clone(),
         source_url: s.source_url.clone(),
         agent_ids: s.agent_ids.iter().map(|id| id.to_string()).collect(),
@@ -13186,7 +13186,7 @@ struct BoxRequestDto {
 #[tauri::command]
 fn inspect_box_request(request: String) -> Result<BoxRequestDto, String> {
     let r = ligus_runtime::box_admission::JoinRequest::decode(&request)?;
-    Ok(BoxRequestDto { fingerprint: r.fingerprint(), label: r.label.clone(), account_id: r.account_id.to_string() })
+    Ok(BoxRequestDto { fingerprint: r.fingerprint(), label: shown(&r.label), account_id: r.account_id.to_string() })
 }
 
 /// What admitting a box produced.
@@ -18124,5 +18124,47 @@ mod shown_name_tests {
         c.purpose = Some(evil.into());
         let d = channel_dto(&c);
         assert!(!hidden(&d.name) && !hidden(d.purpose.as_deref().unwrap()), "{:?}", d.name);
+    }
+}
+
+#[cfg(test)]
+mod residual_names_tests {
+    use super::*;
+
+    /// Apps residuals: agent names, workflow and stage names, task-state
+    /// writers and host labels reached the desktop UI raw.
+    #[test]
+    fn agent_workflow_and_task_names_reach_the_ui_cleaned() {
+        let evil = "rev\u{202E}gnp\u{200B}.exe\u{2028}x";
+        let hidden = |t: &str| t.chars().any(ligus_proto::names::is_hidden_name_char) || t.contains('\u{2028}');
+        let agent = WorkspaceAgent::new(evil, "gw");
+        assert_eq!(agent_dto(&agent).name, "revgnp.exe x");
+        let def = ligus_core::WorkflowDefinition {
+            id: Uuid::new_v4(),
+            name: evil.into(),
+            description: String::new(),
+            input_label: None,
+            nodes: vec![ligus_core::workflow::WorkflowNode {
+                id: "a".into(),
+                name: evil.into(),
+                depends_on: vec![],
+                kind: ligus_core::WorkflowNodeKind::Agent { agent_id: None, prompt_template: "go".into() },
+                x: None,
+                y: None,
+            }],
+            created_at: Default::default(),
+            disabled: false,
+        };
+        let d = workflows::definition_dto(&def);
+        assert!(!hidden(&d.name) && d.nodes.iter().all(|n| !hidden(&n.name)), "{:?}", d.name);
+        let r = workflows::run_dto(&ligus_core::workflow::new_run(&def, "in", "me"), false);
+        assert!(!hidden(&r.definition_name) && r.nodes.iter().all(|n| !hidden(&n.name)), "{:?}", r.definition_name);
+        let mut chat = ChatSession::new("t", Uuid::new_v4(), "gw");
+        let mut slot = ligus_core::memory::TaskSlot::default();
+        slot.update.agent_key = "someone".into();
+        slot.by.name = evil.into();
+        chat.flow.tasks.push(slot);
+        let t = memory_ui::task_dtos(&chat, &[agent], 0);
+        assert!(!hidden(&t[0].agent_name) && !hidden(&t[0].slot.by.name), "{:?}", t[0].agent_name);
     }
 }
