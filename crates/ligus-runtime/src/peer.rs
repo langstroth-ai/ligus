@@ -454,7 +454,7 @@ mod tests {
         assert!(!sync.apply_from(&mut store, &PeerId("stranger".into()), std::slice::from_ref(&friend), &data).unwrap());
         assert!(!store.has_event(env.event_id).unwrap(), "a stranger's message was applied");
         assert!(store.witness_ids(Uuid::nil()).unwrap().is_empty());
-        assert!(sync.apply_from(&mut store, &friend.peer_id, &[friend.clone()], &data).unwrap());
+        assert!(sync.apply_from(&mut store, &friend.peer_id, std::slice::from_ref(&friend), &data).unwrap());
         assert!(store.has_event(env.event_id).unwrap());
     }
 
