@@ -1127,6 +1127,14 @@ async fn an_agent_offers_files_only_as_proposals_and_only_when_allowed() {
     svc.vote_on_proposal(w.chat, w.wid, pid, true).unwrap();
     let owed = svc.approved_offers(w.wid).unwrap();
     assert_eq!(owed.len(), 1);
+    // Second review: once the head policy no longer lets agents offer files,
+    // the host owes nothing (it would upload, be refused and delete the blob
+    // again on every sync).
+    let on = hive_core::attachment::AttachmentPolicy { agents: true, ..hive_core::attachment::AttachmentPolicy::recommended() };
+    svc.set_attachment_policy(w.wid, hive_core::attachment::AttachmentPolicy { agents: false, ..on.clone() }).unwrap();
+    assert!(svc.approved_offers(w.wid).unwrap().is_empty(), "agents are off at the head");
+    svc.set_attachment_policy(w.wid, on).unwrap();
+    assert_eq!(svc.approved_offers(w.wid).unwrap().len(), 1);
     assert_eq!((owed[0].0, owed[0].1), (w.chat, pid));
     // Another file than the approved one is refused by the fold.
     let mut wrong = a.clone();

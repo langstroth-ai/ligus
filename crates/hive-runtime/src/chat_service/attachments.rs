@@ -137,6 +137,13 @@ impl ChatService {
     /// signs its share.
     pub fn approved_offers(&self, workspace_id: Uuid) -> Result<Vec<(Uuid, Uuid, AttachmentRef)>> {
         let mut out = Vec::new();
+        // Nothing is owed while the head policy would refuse the share (it
+        // would be uploaded, refused and deleted again on every sync).
+        let rules = self.attachment_rules(workspace_id)?;
+        let (kind, role) = self.attachment_standing(workspace_id)?;
+        if !rules.policy.agents || rules.policy.sharer_refusal(kind, role).is_some() {
+            return Ok(out);
+        }
         for session_id in self.store.sessions_of_workspace(workspace_id)? {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
