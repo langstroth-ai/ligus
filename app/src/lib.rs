@@ -29,7 +29,7 @@ use hive_proto::{
 use hive_runtime::provider::anthropic::AnthropicResponse;
 use hive_runtime::tool_loop::{self, MessagesApi, ToolExecutor};
 use hive_runtime::{
-    chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault, mentions::parse_mentions,
+    chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault,
     pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, AnthropicClient, ChatTurn,
     EventStore, IdentityStore, McpRegistry, McpServerSpec, ProviderError, ResolvedRuntime,
 };
@@ -629,140 +629,12 @@ fn room_workspace_id(room: &str) -> Uuid {
     hive_core::room_workspace_id(room)
 }
 
-/// A joined/created team workspace: a relay room plus the (optional) E2EE key
-/// to read it. Stored as a list so the rail can show several at once; switching
-/// to one points the live sync fields (relay/room/key) at it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct WorkspaceConn {
-    /// Friendly display name (defaults to the room name).
-    #[serde(default)]
-    name: String,
-    relay_url: String,
-    room: String,
-    /// E2EE passphrase (derives the workspace key); None = plaintext room.
-    #[serde(default)]
-    key: Option<String>,
-    /// Optional workspace icon as a `data:` URL, set by an owner/admin.
-    #[serde(default)]
-    icon: Option<String>,
-    /// When set, this workspace is a 1:1 direct message. In an invite it names
-    /// the account id the DM is addressed to; in this device's settings, the
-    /// other person's account id. Account ids are random UUIDs, never derived
-    /// from a public identifier (see `hive_runtime::dm`). DMs are kept out of
-    /// the workspace rail and surfaced under People instead.
-    #[serde(default)]
-    dm_account: Option<String>,
-    /// The account id that legitimately founded this workspace (for a DM, the
-    /// person who opened it) —
-    /// the out-of-band trust anchor for projection's base-seed selection (B2
-    /// residual fix). The founder embeds their own id when generating the
-    /// `hivews1:` invite (`workspace_invite`/`create_workspace`); a joiner records
-    /// it from the invite (`join_workspace`). Pinned onto the `ChatService` when
-    /// the workspace goes active so a forged low-lamport `SessionSnapshot` from
-    /// another keyholder can't displace the founder's seed. `None` on legacy
-    /// invites/settings written before this field ⇒ the in-band self-consistency
-    /// fallback (back-compat).
-    #[serde(default)]
-    founder_actor_id: Option<String>,
-    /// The founder's key fingerprint: hex of the first 16 bytes of SHA-256 of
-    /// the founder's account signing key (Phase 0, P0.4). A joiner pins it with
-    /// `founder_actor_id` (`workspace_pins` in hive.db), so a registration of
-    /// the founder's account under any other key is rejected by the trust
-    /// roster. Absent on invites from builds before it, and left out then.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fk: Option<String>,
-    /// The single-use invite an Admin issued with this code (a
-    /// `JoinApproved` of `invite:<id>` on the config log). A joiner redeems it
-    /// to enroll itself; key possession alone never admits anyone. Left out
-    /// when absent (and never stored in the founder's own settings).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    inv: Option<String>,
-    /// Every authorized epoch key the inviter held (Phase 0, B1): a newcomer
-    /// reads the history and seals at the head before any rotation names its
-    /// device. A bearer secret, like `key`. Left out when empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    ek: Vec<hive_runtime::keyring::DeliveredKey>,
-    /// The founder's device signature over the invite's fields
-    /// (`hive_runtime::invite_sig`, R1). Only an invite whose signature
-    /// verifies is shown as coming from its founder; anything else only says
-    /// it is. Invite-only: never kept in settings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    sig: Option<hive_runtime::invite_sig::InviteSignature>,
-}
-
-impl WorkspaceConn {
-    fn id(&self) -> Uuid {
-        room_workspace_id(&self.room)
-    }
-    /// The canonical bytes of the epoch keys a signature covers.
-    fn ek_json(&self) -> Vec<u8> {
-        if self.ek.is_empty() {
-            Vec::new()
-        } else {
-            serde_json::to_vec(&self.ek).unwrap_or_default()
-        }
-    }
-    /// What an invite signature covers (`hive_runtime::invite_sig`). `name`
-    /// is [`Self::display_name`], what a reader decodes the name to.
-    fn sig_claims<'a>(&'a self, name: &'a str, ek_json: &'a [u8]) -> hive_runtime::invite_sig::InviteClaims<'a> {
-        hive_runtime::invite_sig::InviteClaims {
-            name,
-            relay_url: &self.relay_url,
-            room: &self.room,
-            key: self.key.as_deref(),
-            dm_account: self.dm_account.as_deref(),
-            founder: self.founder_actor_id.as_deref(),
-            fk: self.fk.as_deref(),
-            inv: self.inv.as_deref(),
-            ek_json,
-        }
-    }
-    /// The founder account the invite's signature proves, if it verifies
-    /// (`revoked`: devices the reader's logs revoked).
-    fn signed_by(&self, revoked: &dyn Fn(Uuid) -> bool) -> Option<Uuid> {
-        let sig = self.sig.as_ref()?;
-        let (name, ek) = (self.display_name(), self.ek_json());
-        hive_runtime::invite_sig::verify(sig, &self.sig_claims(&name, &ek), revoked).ok()
-    }
-    fn display_name(&self) -> String {
-        if self.name.trim().is_empty() {
-            self.room.clone()
-        } else {
-            self.name.clone()
-        }
-    }
-}
-
-/// Shareable invite encoding for a workspace: `hivews1:<base64url(json)>`. It
-/// bundles everything a peer needs to join — relay, room, and the E2EE key —
-/// so joining is a single paste.
-fn encode_workspace_invite(conn: &WorkspaceConn) -> String {
-    use base64::Engine;
-    // Icons are local rail decoration; never embed a (potentially large) data
-    // URL in an invite code.
-    let conn = WorkspaceConn { icon: None, ..conn.clone() };
-    let json = serde_json::to_vec(&conn).unwrap_or_default();
-    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
-    format!("hivews1:{b64}")
-}
-
-fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
-    use base64::Engine;
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or_else(|| "not a Ligus workspace invite (expected hivews1:…)".to_string())?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .map_err(|e| format!("invalid invite encoding: {e}"))?;
-    let mut conn: WorkspaceConn =
-        serde_json::from_slice(&bytes).map_err(|e| format!("invalid invite payload: {e}"))?;
-    if conn.room.trim().is_empty() {
-        return Err("invite is missing a room".to_string());
-    }
-    conn.name = conn.display_name();
-    Ok(conn)
-}
+/// A joined/created team workspace (relay room + E2EE key) and its
+/// `hivews1:` invite codec live in `hive_runtime::workspace_invite`, shared
+/// with the `ligus` CLI and other clients. Stored as a list so the rail can
+/// show several at once; switching to one points the live sync fields
+/// (relay/room/key) at it.
+use hive_runtime::workspace_invite::{decode_workspace_invite, encode_workspace_invite, WorkspaceConn};
 
 #[cfg(test)]
 mod workspace_invite_tests {
@@ -7015,55 +6887,15 @@ fn owns_responder(local_actor_id: &str, responder: &Responder) -> bool {
     crate::workflows::stage_owner_runs_here(local_actor_id, &responder.owner_actor_id)
 }
 
-/// Whether *this* device runs a turn for a responder owned by `owner_actor_id`.
-///
-/// The cross-device ownership split only means anything when the workspace
-/// actually syncs to other devices — i.e. a relay is configured. Two cases make
-/// this device the sole possible responder, so it must always answer:
-///   - `local_only`: no relay configured. Nothing ever syncs off this device, so
-///     deferring to an "owner" would be permanent silence. This is also the only
-///     robust guard against identity churn: a churned self (author id changes on
-///     GitHub sign-in) is hoisted into the workspace roster as a *second* human
-///     member under a new account id, so `solo` (≤1 human) no longer holds and
-///     the primary would defer to a stale self-identity that no live device owns.
-///   - `solo`: a relay *is* configured but there's ≤1 human — a room you made
-///     that no one else has joined. Still no other device to defer to.
-///
-/// Only a real, synced, multi-human room falls back to the ownership check.
-///
-/// An agent sent to a host (`binding`) runs on that host only — the worker
-/// there answers every mention for it (`ligus worker` / `ligus serve`). Deciding
-/// on ownership alone answered it here too: a solo user's desktop always runs
-/// its own agents, so an agent sent to the home host was answered twice.
-fn turn_runs_here(local_only: bool, solo: bool, local: &str, owner: &str, binding: HostBinding) -> bool {
-    match binding {
-        _ if local_only => true,
-        HostBinding::ThisDevice => true,
-        HostBinding::Elsewhere => false,
-        HostBinding::Unbound => solo || crate::workflows::stage_owner_runs_here(local, owner),
-    }
-}
-
-/// Where a responder's host binding puts its turns, seen from this device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostBinding {
-    /// No host: the owner's device answers.
-    Unbound,
-    /// Sent to this device.
-    ThisDevice,
-    /// Sent to another host (a worker, the home host).
-    Elsewhere,
-}
-
-fn host_binding(host_id: &str, this_device: &str) -> HostBinding {
-    if host_id.is_empty() {
-        HostBinding::Unbound
-    } else if host_id == this_device {
-        HostBinding::ThisDevice
-    } else {
-        HostBinding::Elsewhere
-    }
-}
+/// The dispatch gates (`turn_runs_here`, `runs_here_linked`, host bindings,
+/// `dispatch_target`, the answered/deferred checks) live in
+/// `hive_runtime::turn_dispatch`, so the local-send gate (`send_message`), the
+/// relay-sync gate (`maybe_respond`) and every other client decide alike.
+#[allow(unused_imports)]
+use hive_runtime::turn_dispatch::{
+    deferred_turn_unanswered, dispatch_target, host_binding, human_member_count, runs_here_linked, synced_user_triggers,
+    turn_runs_here, user_turn_answered, DispatchTarget, HostBinding, DEFERRED_CLAIM_TIMEOUT,
+};
 
 /// Whether the host `host_id` beat recently on the relay's presence channel
 /// (or, on an older build, heartbeated durably) — as the Hosts list shows it.
@@ -7076,78 +6908,6 @@ fn host_online(state: &AppState, workspace_id: Uuid, host_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// How long a deferred turn waits for its owner's device to pick it up before
-/// this device answers it anyway.
-///
-/// The deferral above is right whenever the owner is a live peer, but nothing
-/// bounded it: an owner *no* device can satisfy — a chat created under a churned
-/// self-identity, an owner whose device is offline or retired — left the turn
-/// silently unanswered forever, with only a log line to show for it. Long enough
-/// that a healthy peer's `TurnClaimed` syncs first and this never fires; short
-/// enough that the user isn't left staring at a dead chat.
-const DEFERRED_CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
-
-/// Whether a turn we deferred is *still* unanswered once
-/// [`DEFERRED_CLAIM_TIMEOUT`] has elapsed, and this device should take it over.
-///
-/// Three independent guards, because the claim alone is not enough to prevent a
-/// duplicate answer. `claim_turn` resolves only once claims sync, so a peer's
-/// claim that hasn't reached us yet is indistinguishable from no claim at all —
-/// exactly the state a lagging or briefly-offline relay produces, and exactly
-/// when this fallback fires. The reply check closes that gap on a separate
-/// signal: `begin_assistant_message` stamps `reply_to_message_id` with the
-/// message being answered, so a peer's placeholder is evidence the turn is in
-/// hand even while it's still empty and streaming. This is the second-line guard
-/// `claim_turn`'s own docs point at.
-///
-/// Every guard is conservative in the same direction, which is the property that
-/// makes the fallback safe: a false "already handled" costs one unanswered turn
-/// (today's behaviour, no worse), while a false "unanswered" costs a duplicate
-/// answer in a live room.
-fn deferred_turn_unanswered(session: &ChatSession, trigger_id: Uuid) -> bool {
-    // 1. Someone claimed it — including us, on an earlier pass.
-    if session.turn_claims.contains_key(&trigger_id) {
-        return false;
-    }
-    let Some(at) = session.messages.iter().position(|m| m.id == trigger_id) else {
-        // Trigger vanished (message deleted mid-wait) — nothing to answer.
-        return false;
-    };
-    // 2. Someone is answering (or has answered) it, claim synced or not.
-    //
-    //    Positional rather than an exact match on `trigger_id`, because the two
-    //    ends of this handshake pick their id differently and don't always
-    //    agree: `maybe_respond` dispatches against the last *non-System* message
-    //    (the trigger we were handed), while the answering device stamps its
-    //    placeholder with the last *non-streaming* one (`run_prepared_turn`). A
-    //    System row trailing the user turn splits them — an exact match would
-    //    miss a live peer in precisely the unsynced-claim case guard 2 exists
-    //    for, and both devices would answer.
-    //
-    //    So: an assistant row after the trigger that replies to anything at or
-    //    after the trigger's own position. `/summarize` and `/compact` output
-    //    stays excluded (`reply_to_message_id: None` — they answer nothing), as
-    //    do replies to earlier turns, including a reply whose target has since
-    //    been deleted.
-    let answered = session.messages[at + 1..].iter().any(|m| {
-        m.role == MessageRole::Assistant
-            && m.reply_to_message_id
-                .is_some_and(|id| session.messages[at..].iter().any(|target| target.id == id))
-    });
-    if answered {
-        return false;
-    }
-    // 3. The user moved on: a later user turn supersedes this one, and its own
-    //    `send_message` arms a fresh fallback against the fuller history.
-    //
-    //    Deliberately keyed on a later *user* message rather than on the trigger
-    //    still being the trailing row. "Still trailing" would subsume guard 2 —
-    //    a reply always lands after the message it answers — while also being
-    //    far too broad: any assistant-role transcript row after the trigger (a
-    //    proposal record, a reply to some *other* trigger) would suppress the
-    //    fallback forever and reintroduce the silent no-response this fixes.
-    !session.messages[at + 1..].iter().any(|m| m.role == MessageRole::User)
-}
 
 /// Whether a provider authenticates with an API key we must supply. A hosted-API
 /// provider (Anthropic/OpenAI/OpenRouter/Azure/Custom) with no key would 401 on
@@ -7174,19 +6934,6 @@ fn provider_needs_key(provider: ModelProviderKind) -> bool {
     )
 }
 
-/// Who, if anyone, a message should be answered by.
-#[derive(Clone, Copy)]
-enum DispatchTarget {
-    Primary,
-    Agent(Uuid),
-}
-
-/// Distinct *people* among the chat's human members. A member's own devices (a
-/// `ligus serve` box linked to its owner, see [`hive_core::DeviceLinks`]) count
-/// once with them, so you plus your phone's home box is still a solo room.
-fn human_member_count(session: &ChatSession, links: &hive_core::DeviceLinks) -> usize {
-    links.human_count(session)
-}
 
 /// The workspace's device links, best effort: on a read error nothing is
 /// linked, which is today's behavior.
@@ -7194,50 +6941,7 @@ fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> hive_core::DeviceLi
     svc.device_links(workspace_id).unwrap_or_default()
 }
 
-/// [`turn_runs_here`] with device links applied: solo counts people, not
-/// member records, and a responder owned by a linked device (the chat a phone
-/// created through its owner's `ligus serve` box) is owned by that device's
-/// account — so the owner's desktop answers it. The single-answer claim still
-/// arbitrates between the owner's devices.
-fn runs_here_linked(
-    local_only: bool,
-    links: &hive_core::DeviceLinks,
-    session: &ChatSession,
-    local: &str,
-    owner: &str,
-    binding: HostBinding,
-) -> bool {
-    let solo = human_member_count(session, links) <= 1;
-    turn_runs_here(local_only, solo, local, links.person(owner), binding)
-}
 
-/// Decide whether a message triggers a runtime, and which one. An `@agent` or
-/// `@primary` mention is always answered. An *un-addressed* message defaults to
-/// the primary **only in an effectively-solo workspace** — multi-human rooms stay
-/// human-to-human until someone explicitly addresses an assistant.
-///
-/// `local_only` (no relay) means nothing ever syncs in from another device, so
-/// every roster member was necessarily created here and *is this user* — the
-/// workspace is solo by definition however many members the churned/hoisted
-/// roster shows. Without this, identity churn (an old self left in the roster
-/// under a stale account id) inflates the human count and an unaddressed "hi"
-/// stops auto-triggering Hive — you'd have to `@hive` every message. A
-/// relay-backed room still uses the real human count.
-fn dispatch_target(
-    body: &str,
-    session: &ChatSession,
-    local_only: bool,
-    links: &hive_core::DeviceLinks,
-) -> Option<DispatchTarget> {
-    let mentions = parse_mentions(body, session);
-    if let Some(id) = mentions.agents.first().copied() {
-        return Some(DispatchTarget::Agent(id));
-    }
-    if mentions.primary {
-        return Some(DispatchTarget::Primary);
-    }
-    (local_only || human_member_count(session, links) <= 1).then_some(DispatchTarget::Primary)
-}
 
 // `cascade_depth` now lives on `hive_core::ChatSession` (shared with the worker
 // so the cross-device bound is identical on every device).
@@ -9563,44 +9267,6 @@ async fn maybe_respond(
     respond_once(&app, &state, sid, None, false).await
 }
 
-/// Whether `trigger` (a user message) already has an answer: a later reply
-/// stamped with its id. A peer that predates exact trigger stamping stamped
-/// the last non-streaming row, which is a System row when one trails the
-/// user turn, so a reply to a System row directly after `trigger` counts too.
-/// Deliberately exact otherwise: a reply to a *later* user message (another
-/// agent answering the next post in the same sync batch) does not answer
-/// this one.
-fn user_turn_answered(session: &ChatSession, trigger: Uuid) -> bool {
-    let Some(at) = session.messages.iter().position(|m| m.id == trigger) else {
-        return true; // Gone (deleted): nothing to answer.
-    };
-    let keys: Vec<Uuid> = std::iter::once(trigger)
-        .chain(session.messages[at + 1..].iter().take_while(|m| m.role == MessageRole::System).map(|m| m.id))
-        .collect();
-    session.messages[at + 1..].iter().any(|m| {
-        matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
-            && m.reply_to_message_id.is_some_and(|id| keys.contains(&id))
-    })
-}
-
-/// The user messages among `arrived` (what one sync pull brought into this
-/// chat) that may still need an answer, in transcript order: unanswered, and
-/// not claimed by another device. Ownership, addressing and the claim are
-/// checked per trigger when it runs ([`respond_once`]).
-///
-/// Two posts a few ms apart ("@hive …" then "@coder …" through `ligus serve`)
-/// land in one pull. Looking only at the chat's last message answered the
-/// second and silently dropped the first.
-fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid], my_device: Uuid) -> Vec<Uuid> {
-    session
-        .messages
-        .iter()
-        .filter(|m| m.role == MessageRole::User && arrived.contains(&m.id))
-        .filter(|m| session.turn_claims.get(&m.id).is_none_or(|d| *d == my_device))
-        .filter(|m| !user_turn_answered(session, m.id))
-        .map(|m| m.id)
-        .collect()
-}
 
 /// What [`respond_once`] would run: the session's workspace, the responder,
 /// and the message it answers.
@@ -12997,14 +12663,7 @@ fn set_workspace_icon(
 
 /// Random hex token (CSPRNG via uuid v4) for a fresh room suffix / workspace
 /// key, so two "Team" workspaces don't collide and rooms aren't guessable.
-fn random_token(len: usize) -> String {
-    let mut s = String::new();
-    while s.len() < len {
-        s.push_str(&Uuid::new_v4().simple().to_string());
-    }
-    s.truncate(len);
-    s
-}
+use hive_runtime::workspace_invite::random_token;
 
 /// Create a new team workspace: generates a unique room + E2EE key, adds it to
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
@@ -13118,25 +12777,12 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Resul
 }
 
 /// The typed error `workspace_invite` returns for a workspace with no usable
-/// relay; the web UI matches this prefix and shows its own message with a
-/// link to Settings → Team sync.
-const NO_RELAY_ERR: &str = "workspace-no-relay";
-
-/// Why an invite for a workspace at `relay_url` couldn't be used, if it
-/// couldn't. Joining needs the relay: a box (`ligus enroll`) refuses an
-/// invite without one, and a desktop that joined one would never sync (direct
-/// P2P only carries a room that also has a relay, see `peer_sync_workspaces`).
-/// So no invite is issued, and none is joined, without an http(s) relay.
-fn invite_relay_problem(relay_url: &str) -> Option<String> {
-    let ok = reqwest::Url::parse(relay_url.trim())
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()));
-    (!ok).then(|| {
-        format!(
-            "{NO_RELAY_ERR}: This workspace has no relay, so an invite to it can't be used. \
-             Set one under Settings → Team sync (Relay URL), then copy a new invite."
-        )
-    })
-}
+/// relay (`NO_RELAY_ERR`), and why an invite for a workspace couldn't be used
+/// (`invite_relay_problem`): shared with every client in
+/// `hive_runtime::workspace_invite`.
+use hive_runtime::workspace_invite::invite_relay_problem;
+#[cfg(test)]
+use hive_runtime::workspace_invite::NO_RELAY_ERR;
 
 /// Settings → Team sync edits the live relay of the room being synced; keep
 /// that room's saved workspace in step, so its invites carry the relay and

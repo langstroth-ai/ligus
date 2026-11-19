@@ -1209,9 +1209,9 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
     let session = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
-    let signals = session
-        .guards
-        .lockdowns_of(sid)
+    let view = hive_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
+    let signals = view
+        .signals
         .iter()
         .map(|l| hive_proto::LockdownSignalDto {
             signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
@@ -1224,7 +1224,7 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
     Ok(hive_proto::ChatLockdownDto {
         active: !signals.is_empty(),
         signals,
-        can_clear: hive_core::guard::is_human_member(&session.members, &me),
+        can_clear: view.can_clear,
     })
 }
 

@@ -260,6 +260,7 @@ impl ChatService {
         let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(env)
     }
 
@@ -290,6 +291,7 @@ impl ChatService {
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(env)
     }
 

@@ -47,6 +47,8 @@ zeroize = "1"
 ssh-key = { version = "0.6", default-features = false, features = ["alloc", "std", "ecdsa", "ed25519", "p256"] }
 rsa = { version = "0.10.0", default-features = false, features = ["std", "pkcs1v15"] }
 iroh = { version = "1.4.1", optional = true }
+# The in-process mock relay for other clients' tests (`test-relay`).
+axum = { version = "0.8", optional = true }
 
 # B2: Ligus's own keychain file on macOS (already in the tree via rustls).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -79,6 +81,10 @@ p2p = ["dep:iroh"]
 # `ChatService::enable_test_presence`, a recovery key that confirms every
 # presence prompt. Never enabled by a normal or release build.
 test-presence = []
+# Tests only (other crates' dev-dependencies): exposes `test_relay`, the
+# in-process mock relay, so a client's integration tests sync two devices
+# without a relay binary. Never enabled by a normal or release build.
+test-relay = ["dep:axum"]
 
 [dev-dependencies]
 tempfile = "3"

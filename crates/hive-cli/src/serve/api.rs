@@ -1014,7 +1014,7 @@ fn my_standing(s: &Shared, me: &str) -> ApiResult<(WorkspaceRole, bool)> {
 /// The lockdown-clear rule: a human member at Contributor or above. A
 /// Viewer, an agent or an unknown identity never may.
 pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &str, role: WorkspaceRole) -> bool {
-    hive_core::guard::is_human_member(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
+    hive_runtime::lockdown_view::can_clear(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
 }
 
 /// `POST /v1/chats/:id/lockdown/clear`: gone (410). The phone clears a

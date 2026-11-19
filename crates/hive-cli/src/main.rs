@@ -101,9 +101,9 @@ fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.toml")
 }
 
-fn cli_secret(name: &str) -> hive_runtime::secret_store::SecretId {
-    hive_runtime::secret_store::SecretId::new("cli", name)
-}
+/// The secret-store scope of this CLI's connection secrets.
+const CLI_SCOPE: &str = "cli";
+use hive_runtime::connection_settings::ConnectionSecrets;
 
 impl FileConfig {
     /// `config.toml`, with its secrets from the store. Secrets still written
@@ -124,33 +124,16 @@ impl FileConfig {
             }
         }
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let get = |n: &str| store.get_string(&cli_secret(n)).ok().flatten().map(|z| z.to_string()).filter(|v| !v.is_empty());
-        f.token = get("token");
-        f.key = get("key");
-        f.ek = get("ek").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
-        if let Some(t) = &f.token {
-            hive_runtime::secret_redact::register(t);
-        }
-        if let Some(k) = &f.key {
-            hive_runtime::secret_redact::register(k);
-        }
+        let secrets = ConnectionSecrets::load(store.as_ref(), CLI_SCOPE, "");
+        (f.token, f.key, f.ek) = (secrets.token, secrets.key, secrets.ek);
         f
     }
 
     /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
     fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let put = |n: &str, v: Option<&str>| -> Result<()> {
-            match v.filter(|v| !v.is_empty()) {
-                Some(v) => store.put(&cli_secret(n), v.as_bytes())?,
-                None => store.delete(&cli_secret(n))?,
-            }
-            Ok(())
-        };
-        put("token", self.token.as_deref())?;
-        put("key", self.key.as_deref())?;
-        let ek = (!self.ek.is_empty()).then(|| serde_json::to_string(&self.ek)).transpose()?;
-        put("ek", ek.as_deref())?;
+        let secrets = ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() };
+        secrets.save(store.as_ref(), CLI_SCOPE, "")?;
         serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
@@ -181,53 +164,19 @@ fn config() -> Config {
 }
 
 /// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
-/// delivered epoch keys). Mirrors the app's encoder (base64url(json) of the
-/// connection; snake_case fields).
+/// delivered epoch keys, founder pin), with the codec every client shares
+/// (`hive_runtime::workspace_invite`).
 #[allow(clippy::type_complexity)]
 fn decode_hivews_invite_full(
     invite: &str,
 ) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
-    use base64::Engine;
-    #[derive(serde::Deserialize)]
-    struct Conn {
-        #[serde(default)]
-        relay_url: String,
-        #[serde(default)]
-        room: String,
-        #[serde(default)]
-        key: Option<String>,
-        /// The single-use invite an Admin issued with this code.
-        #[serde(default)]
-        inv: Option<String>,
-        /// Every authorized epoch key the inviter held (B1).
-        #[serde(default)]
-        ek: Vec<hive_runtime::keyring::DeliveredKey>,
-        /// The founder and their key fingerprint (the pin keys are decided on).
-        #[serde(default)]
-        founder_actor_id: Option<String>,
-        #[serde(default)]
-        fk: Option<String>,
-    }
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or_else(|| anyhow!("not a Ligus workspace invite (expected hivews1:…)"))?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .context("invalid invite encoding")?;
-    let c: Conn = serde_json::from_slice(&bytes).context("invalid invite payload")?;
-    if c.room.trim().is_empty() {
-        bail!("invite is missing a room");
-    }
-    let pin = c.founder_actor_id.zip(c.fk);
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
+    let c = hive_runtime::workspace_invite::decode_workspace_invite(invite).map_err(|e| anyhow!(e))?;
+    let (inv, pin) = (c.invite_id(), c.founder_pin());
+    Ok((c.relay_url, c.room, c.key, inv, c.ek, pin))
 }
 
 /// A relay URL a box can sync with: an http(s) address with a host.
-fn usable_relay_url(raw: &str) -> bool {
-    reqwest::Url::parse(raw.trim())
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
-}
+use hive_runtime::workspace_invite::usable_relay_url;
 
 /// Why this box can't sync, named before any HTTP is tried: no relay URL,
 /// or one that isn't an http(s) address (an invite from a relayless
@@ -500,12 +449,7 @@ fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
 
 /// One push + pull round: (pushed, pulled).
 async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(usize, usize)> {
-    let to_push = engine.take_unpushed(store)?;
-    let pushed = to_push.len();
-    engine.push_envelopes(&to_push).await?;
-    // One bounded round of relay pages; `engine.is_behind()` says another is due.
-    let pulled = engine.pull_round(store).await?;
-    Ok((pushed, pulled))
+    Ok(hive_runtime::sync_service::sync_round(engine, store).await?)
 }
 
 /// Resolve any `[Attached-blob: …]` references in agent turns to local files
@@ -2084,6 +2028,14 @@ mod cli_tests {
             assert!(err.contains("Settings → Team sync"), "{relay:?}: {err}");
             assert!(!cfg.data_dir.exists(), "{relay:?}: enroll wrote {:?}", cfg.data_dir);
         }
+        // An invite with no relay field at all gets the same answer, not a
+        // serde "missing field" error.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"room":"r","key":"k"}"#);
+        let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
+        assert!(err.contains("Settings → Team sync"), "{err}");
+        assert!(!cfg.data_dir.exists());
     }
 
     /// A box enrolled from a relayless invite (older clients wrote
