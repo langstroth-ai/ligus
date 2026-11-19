@@ -638,3 +638,30 @@ fn final_review_no_reading_another_processs_environment() {
     let _ = outside.kill();
     let _ = outside.wait();
 }
+
+/// Final review (area B): a pre-flight test runs a proposal's code. With no
+/// chat policy in scope it gets no network at all, not even this device's
+/// opt-in widenings (`LIGUS_SANDBOX_EGRESS_ALLOW`, presets), which a locked
+/// down or dearth-mode chat must not get; in a chat's scope it follows that
+/// chat's envelope.
+#[cfg(unix)]
+#[test]
+fn final_review_preflight_outside_a_turn_has_no_network() {
+    let Some(e) = super::tests::real_executor() else { return };
+    assert!(current_turn().is_none());
+    let d = DecoyHome::new();
+    let mut host = d.host();
+    host.extra_egress = vec![crate::egress::HostPort { host: "registry.example".into(), port: 443 }];
+    let plan_of = |host: &HostPaths| {
+        let spec = SpawnSpec::new(Purpose::Preflight, "/bin/sh", ["-c", "true"]).cwd(Some(&d.worktree));
+        let p = prepare_in(&*e, spec, &d.home, host.clone()).expect("prepare");
+        p.guard.plan().egress.clone()
+    };
+    assert!(matches!(plan_of(&host), EgressPlan::Closed), "pre-flight outside a turn: {:?}", plan_of(&host));
+    // An open chat's scope: the device's widening applies.
+    with_turn_sync(TurnPolicy::baseline(HostKind::Desktop), || assert!(matches!(plan_of(&host), EgressPlan::Proxy { .. })));
+    // A locked-down chat's scope: closed.
+    let mut locked = TurnPolicy::baseline(HostKind::Desktop);
+    locked.envelope.egress = ligus_core::sandbox::EgressPolicy::Closed;
+    with_turn_sync(locked, || assert!(matches!(plan_of(&host), EgressPlan::Closed)));
+}

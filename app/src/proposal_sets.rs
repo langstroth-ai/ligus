@@ -639,7 +639,7 @@ pub(crate) async fn preflight_proposal_set(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
-    let (wid, set, proposal, agent_host) = {
+    let (wid, set, proposal, agent_host, session) = {
         let svc = state.service.lock().unwrap();
         let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
         let set = session.proposal_sets.iter().find(|s| s.id == set_id).cloned().ok_or("unknown proposal set")?;
@@ -662,7 +662,15 @@ pub(crate) async fn preflight_proposal_set(
             .and_then(|a| session.workspace_agents.iter().find(|x| x.id == a))
             .filter(|a| !a.host_id.is_empty())
             .map(|a| a.host_id.clone());
-        (session.workspace_id, set, p, host)
+        (session.workspace_id, set, p, host, session)
+    };
+    // The test runs the proposal's code: under this chat's envelope (a
+    // locked-down or dearth-mode chat's test gets no network), never the
+    // open out-of-turn baseline. Built outside the service lock (it reads
+    // the settings).
+    let policy = {
+        let envelope = ligus_core::sandbox::envelope_for_session(&session);
+        crate::guards::turn_sandbox_policy_with(&state, &session, &envelope, &ligus_runtime::author_gate::GatePlan::Full, true, &[])
     };
     // A proposal for a workspace repo is checked against this device's
     // checkout of that repo (5.7), never the workspace's bound folder.
@@ -696,7 +704,7 @@ pub(crate) async fn preflight_proposal_set(
             test_timeout: None,
             hosts,
         };
-        ligus_runtime::proposal_preflight::run(&inputs, &format!("preflight-{}", Uuid::new_v4()))
+        ligus_runtime::executor::with_turn_sync(policy, || ligus_runtime::proposal_preflight::run(&inputs, &format!("preflight-{}", Uuid::new_v4())))
     })
     .await
     .map_err(map_err)?;

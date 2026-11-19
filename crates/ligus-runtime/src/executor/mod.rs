@@ -1885,8 +1885,16 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     // No turn in scope: an agent CLI runs read-only with only its model
     // (`TurnPolicy::outside_turn`); a command or pre-flight test, which a
     // person started, runs under the baseline.
+    // A pre-flight test runs a proposal's code (an agent's or a teammate's)
+    // and belongs to its chat's envelope: without one in scope it gets no
+    // network at all, never the open baseline.
     let policy = match spec.purpose {
         Purpose::Agent(_) => agent_policy(),
+        Purpose::Preflight => current_turn().unwrap_or_else(|| {
+            let mut p = TurnPolicy::baseline(HostKind::Desktop);
+            p.envelope.egress = ligus_core::sandbox::EgressPolicy::Closed;
+            Arc::new(p)
+        }),
         _ => current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop))),
     };
     let rt = current_runtime().unwrap_or_default();
