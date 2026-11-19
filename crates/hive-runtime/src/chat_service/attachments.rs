@@ -87,6 +87,7 @@ impl ChatService {
     /// carries the file's reference, no blob yet). Produced on this device:
     /// once a person approves it, this device uploads the staged file and
     /// signs the share ([`ChatService::approved_offers`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn file_attachment_offer(
         &mut self,
         session_id: Uuid,
