@@ -167,10 +167,11 @@ struct AppState {
     gate_runs: Mutex<HashMap<Uuid, Uuid>>,
     /// Runs asked to cancel; their drivers check between transitions.
     canceled_runs: Mutex<std::collections::HashSet<Uuid>>,
-    /// Per-session stop signal for an in-flight chat turn. The composer's Stop
-    /// button fires it; `send_message` races the turn against it and breaks,
-    /// dropping the turn future — which kills any CLI subprocess (kill_on_drop).
-    turn_stops: Mutex<HashMap<Uuid, Arc<tokio::sync::Notify>>>,
+    /// The turns (and dispatch waits) running on this device, per chat, each
+    /// with its own sticky stop signal. The composer's Stop button stops a
+    /// chat's turns (or one, by its reply); the engine sees a Stop pressed at
+    /// any point of the turn, and `send_message` breaks its cascade.
+    turn_stops: Arc<hive_runtime::turn_engine::TurnStops>,
     /// Per MCP server id: the tools it listed that run shell commands, as of
     /// the last time this device listed its tools (no entry: not yet). A
     /// server with one is offered only to turns that have the shell.
@@ -5838,9 +5839,8 @@ async fn run_revision_turn(
     match dispatch_here(state, sid, workspace_id, trigger.id, None, true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
             drop(_guard);
-            arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -8509,7 +8509,9 @@ async fn run_prepared_turn_inner(
     sandbox_policy.denials = child_policy.denials.clone();
     // Honor the Stop button on every dispatch path (send_message,
     // maybe_respond, workflow stages): the engine races the stop signal.
-    let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
+    // This turn's own signal, registered while it runs.
+    let stop_guard = state.turn_stops.register(session_id);
+    let stop = stop_guard.signal();
     let host = crate::turn_host::DesktopHost {
         app,
         state,
@@ -8567,23 +8569,26 @@ async fn run_prepared_turn_inner(
             ..Default::default()
         },
     };
-    match hive_runtime::turn_engine::run(&host, input).await {
+    let result = hive_runtime::turn_engine::run(&host, input).await;
+    drop(stop_guard);
+    match result {
         Ok(o) => Ok(TurnOutcome { message_id: o.message_id, body: o.body }),
         Err(e) => Err(e.message),
     }
 }
 
-/// Stop an in-flight turn for a session — the composer's Stop button. Fires the
-/// session's stop signal, which unblocks the `select!` in `send_message` (and
-/// any device running the turn via `maybe_respond`'s equivalent path), aborting
-/// generation. Whatever streamed so far is discarded; the chat is free to accept
-/// a new message immediately. No-op if nothing is generating.
+/// Stop in-flight turns for a session — the composer's Stop button. With
+/// `message_id` (a reply placeholder) only that turn stops; without, every
+/// turn and pending dispatch wait in the chat, and `send_message`'s cascade.
+/// The signal is sticky, so a Stop pressed while a turn is still setting up
+/// (listing MCP tools, the repo gate) is not lost. Whatever streamed so far is
+/// discarded; the chat is free to accept a new message immediately. No-op if
+/// nothing is generating.
 #[tauri::command]
-fn stop_turn(state: State<AppState>, session_id: String) -> Result<(), String> {
+fn stop_turn(state: State<AppState>, session_id: String, message_id: Option<String>) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
-    if let Some(signal) = state.turn_stops.lock().unwrap().get(&sid) {
-        signal.notify_waiters();
-    }
+    let mid = message_id.as_deref().map(Uuid::parse_str).transpose().map_err(map_err)?;
+    state.turn_stops.stop(sid, mid);
     Ok(())
 }
 
@@ -8598,9 +8603,7 @@ fn stop_turn(state: State<AppState>, session_id: String) -> Result<(), String> {
 fn reset_chat_dispatch(state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     // 1. Abort any turn still running for this chat.
-    if let Some(signal) = state.turn_stops.lock().unwrap().get(&sid) {
-        signal.notify_waiters();
-    }
+    state.turn_stops.stop(sid, None);
     // 2. Free the per-chat busy slot — the wedge itself: a stuck turn left this set,
     //    so every later message was rejected as "already responding".
     state.responding.lock().unwrap().remove(&sid);
@@ -8662,9 +8665,8 @@ fn arm_deferred_claim_fallback(
     session_id: Uuid,
     workspace_id: Uuid,
     trigger_id: Uuid,
-    stop: Arc<tokio::sync::Notify>,
 ) {
-    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO, stop);
+    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO);
 }
 
 /// Look at a turn again after `after` (the dispatcher said to wait, or this
@@ -8679,18 +8681,21 @@ fn arm_dispatch_watch(
     agent: Option<Uuid>,
     after: std::time::Duration,
     waited: std::time::Duration,
-    stop: Arc<tokio::sync::Notify>,
 ) {
     let app = app.clone();
+    // Registered before the wait, so the chat's Stop reaches it.
+    let guard = app.state::<AppState>().turn_stops.register(session_id);
     tauri::async_runtime::spawn(async move {
         // Stop cancels a pending fallback: the user asked for silence, not for a
         // late answer.
+        let stop = guard.signal();
         tokio::select! {
             biased;
-            _ = stop.notified() => return,
+            _ = stop.stopped() => return,
             _ = tokio::time::sleep(after) => {}
         }
-        if let Err(e) = run_dispatch_watch(&app, session_id, workspace_id, trigger_id, agent, waited + after, stop).await {
+        drop(guard);
+        if let Err(e) = run_dispatch_watch(&app, session_id, workspace_id, trigger_id, agent, waited + after).await {
             tracing::warn!(
                 target: "dispatch",
                 error = %e,
@@ -8709,7 +8714,6 @@ async fn run_dispatch_watch(
     trigger_id: Uuid,
     agent: Option<Uuid>,
     waited: std::time::Duration,
-    stop: Arc<tokio::sync::Notify>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let local_only = state.is_local_only_ws(workspace_id);
@@ -8759,7 +8763,7 @@ async fn run_dispatch_watch(
     let _guard = match crate::workflows::SessionBusyGuard::acquire(app, session_id) {
         Ok(g) => g,
         Err(_) => {
-            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, std::time::Duration::from_secs(5), waited, stop);
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, std::time::Duration::from_secs(5), waited);
             return Ok(());
         }
     };
@@ -8771,7 +8775,7 @@ async fn run_dispatch_watch(
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
             drop(_guard);
-            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited, stop);
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited);
             return Ok(());
         }
         _ => return Ok(()),
@@ -8796,9 +8800,10 @@ async fn send_message(
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let local_actor_id = state.local_actor_id();
-    // Stop signal for this session's turn(s): the Stop button fires it, breaking
-    // the cascade loop and aborting the in-flight generation below.
-    let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+    // The cascade's stop signal: the chat's Stop button fires it (with each
+    // turn's own), breaking the cascade loop below.
+    let cascade = state.turn_stops.register(sid);
+    let stop = cascade.signal();
 
     // Record the user turn, then decide who (if anyone) answers it.
     // An archived DM (two were opened at once; the other was kept) is
@@ -8907,8 +8912,8 @@ async fn send_message(
             // fallback, or a slow turn there would be answered twice.
             let host_live = binding == HostBinding::Elsewhere
                 && host_online(&state, workspace_id, &responder.host_id);
-            if depth == 0 && !host_live {
-                arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id, stop.clone());
+            if depth == 0 && !host_live && !stop.is_stopped() {
+                arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id);
             }
             break;
         }
@@ -8928,7 +8933,9 @@ async fn send_message(
                 }
                 hive_core::dispatch::Step::Wait(d) => {
                     tracing::info!(target: "dispatch", session = %sid, "send_message: another device holds the turn, or a covering host goes first; watching");
-                    arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO, stop.clone());
+                    if !stop.is_stopped() {
+                        arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO);
+                    }
                     break;
                 }
                 _ => break,
@@ -8940,8 +8947,13 @@ async fn send_message(
         // (via kill_on_drop) kills any CLI subprocess mid-flight.
         let reply = tokio::select! {
             biased;
-            _ = stop.notified() => break,
-            r = run_turn(&app, &state, sid, workspace_id, &responder) => r?,
+            _ = stop.stopped() => break,
+            r = run_turn(&app, &state, sid, workspace_id, &responder) => match r {
+                Ok(r) => r,
+                // That turn alone was stopped (by its reply): the cascade ends.
+                Err(e) if e == hive_runtime::turn_engine::STOPPED => break,
+                Err(e) => return Err(e),
+            },
         };
         let (reply_id, reply) = (reply.message_id, reply.body);
         if first_reply.is_none() {
@@ -9100,8 +9112,7 @@ async fn regenerate(
         match dispatch_here(&state, sid, workspace_id, t, None, true, std::time::Duration::ZERO)? {
             hive_core::dispatch::Step::Run => {}
             hive_core::dispatch::Step::Wait(d) => {
-                let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO, stop);
+                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO);
                 return Ok(());
             }
             _ => return Ok(()),
@@ -9266,8 +9277,7 @@ async fn respond_once(
     match dispatch_here(state, sid, workspace_id, trigger_id, receiver, true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-            arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -9318,8 +9328,7 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
     match dispatch_here(&state, sid, workspace_id, trigger, Some(agent_id), true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-            arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -11595,7 +11604,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         gate_runs: Mutex::new(HashMap::new()),
         canceled_runs: Mutex::new(std::collections::HashSet::new()),
         ollama_pulls: Mutex::new(HashMap::new()),
-        turn_stops: Mutex::new(HashMap::new()),
+        turn_stops: hive_runtime::turn_engine::TurnStops::new(),
         mcp_shell_tools: Mutex::new(HashMap::new()),
         mcp_probe_failed: Mutex::new(HashMap::new()),
         conn_health: Mutex::new(ConnHealth::default()),

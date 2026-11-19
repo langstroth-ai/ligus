@@ -1258,6 +1258,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
         presence: None,
+        stops: None,
     };
     // Registered, store open, interrupted turns recovered: ready for work.
     ready.store(true, std::sync::atomic::Ordering::Relaxed);

@@ -79,6 +79,10 @@ pub struct WorkerCtx<'a> {
     /// every holder counts as live (only a revoked or removed holder's turn
     /// is handed over).
     pub presence: Option<&'a hive_runtime::HostPresence>,
+    /// This host's running turns, each with its own stop signal (`ligus
+    /// serve` stops them when a shutdown's grace runs out). `None`: turns
+    /// can't be stopped.
+    pub stops: Option<std::sync::Arc<hive_runtime::turn_engine::TurnStops>>,
 }
 
 /// What the drain loop remembers between ticks.
@@ -408,6 +412,11 @@ pub async fn drain_tick(
         sink.status(pm.session_id, pm.agent_id, TurnState::Queued, None);
     }
     for pm in work {
+        // Shutting down: the rest waits for the next start.
+        if ctx.stops.as_ref().is_some_and(|s| s.is_closed()) {
+            sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("the host is shutting down"));
+            continue;
+        }
         if let Err(e) = run_turn(ctx, svc, &runtimes, &pm, sink).await {
             eprintln!("worker: @{} in {} failed: {e}", pm.agent_name, pm.session_id);
             failed.insert(pm.message_id);
@@ -695,6 +704,8 @@ async fn run_turn(
         },
         agent_name: agent.name.clone(),
     };
+    // This turn's own stop signal, registered while it runs.
+    let stop_guard = ctx.stops.as_ref().map(|t| t.register(s.id));
     let input = TurnInput {
         workspace_id: s.workspace_id,
         chat_id: s.id,
@@ -728,11 +739,13 @@ async fn run_turn(
         // Never run a writing agent in place: on the always-on box that
         // would be the bound checkout itself, or the service's home.
         require_isolation: true,
-        stop: None,
+        stop: stop_guard.as_ref().map(|g| g.signal()),
         timeout: turn_timeout(),
         options: EngineOptions { empty_reply_notice: true, warm_context_probe: true, ..Default::default() },
     };
-    match turn_engine::run(&host, input).await {
+    let result = turn_engine::run(&host, input).await;
+    drop(stop_guard);
+    match result {
         Ok(outcome) => {
             sink.changed();
             if outcome.empty {
@@ -743,6 +756,15 @@ async fn run_turn(
                 println!("   @{} done", agent.name);
             }
             Ok(())
+        }
+        Err(e) if e.stopped => {
+            // Only a shutdown stops a worker's turn: say so, so the asker
+            // knows to ask again.
+            if e.message_id.is_some() {
+                let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} stopped: the host is shutting down. Ask again to retry.", agent.name));
+            }
+            sink.changed();
+            Err(anyhow!("{}", e.message))
         }
         Err(e) => {
             sink.changed();

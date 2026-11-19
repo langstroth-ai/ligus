@@ -136,6 +136,8 @@ struct Host {
     phases: Mutex<Vec<Phase>>,
     /// Finalize fails (the error path's placeholder handling).
     fail_finalize: bool,
+    /// Runs inside the repo gate (a Stop pressed before the turn streams).
+    on_checkout: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl TurnHost for Host {
@@ -151,6 +153,9 @@ impl TurnHost for Host {
     }
     fn checkout(&self, _s: &ChatSession, _m: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
         let c = Checkout { repo_root: self.repo.clone(), ..Default::default() };
+        if let Some(f) = &self.on_checkout {
+            f();
+        }
         async move { Ok(c) }
     }
     fn delta(&self, _m: Uuid, text: &str) {
@@ -236,6 +241,7 @@ fn world(servers: Vec<McpServerSpec>) -> World {
         activity: Default::default(),
         phases: Default::default(),
         fail_finalize: false,
+        on_checkout: None,
     };
     World { host, ws, chat: chat.id, coder, reviewer, trigger, _dir: dir }
 }
@@ -399,29 +405,98 @@ async fn a_handoff_starts_the_receiver_through_the_host() {
 async fn the_stop_signal_cancels_a_running_turn() {
     let (endpoint, _model) = spawn_model(vec![vec![HANG.to_string()]]).await;
     let w = world(Vec::new());
-    let stop = Arc::new(tokio::sync::Notify::new());
+    let stop = StopSignal::new();
     let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop.clone());
-    // `notify_waiters` (as the app's Stop button uses) reaches only a turn
-    // already waiting on the signal, and a slow runner may still be setting
-    // the turn up at 500ms: keep pressing Stop until the turn ends.
     let s2 = stop.clone();
-    let presser = tokio::spawn(async move {
+    tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        loop {
-            s2.notify_waiters();
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        s2.stop();
     });
     let started = std::time::Instant::now();
     let err = run(&w.host, i).await.expect_err("stopped");
-    presser.abort();
     assert!(err.stopped, "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(30), "stopped promptly");
     let s = load(&w);
     let reply = s.messages.iter().find(|m| Some(m.id) == err.message_id).unwrap();
     assert!(!reply.is_streaming && reply.body.is_empty(), "{reply:?}");
     assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Completed]);
+}
+
+/// A Stop pressed before the turn waits on it (here: during the repo gate)
+/// is not lost: the turn never asks the model, and its placeholder is
+/// completed empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_pressed_before_the_turn_waits_is_honoured() {
+    let (endpoint, model) = spawn_model(vec![vec![HANG.to_string()]]).await;
+    let mut w = world(Vec::new());
+    let stop = StopSignal::new();
+    let s2 = stop.clone();
+    w.host.on_checkout = Some(Box::new(move || s2.stop()));
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    i.stop = Some(stop);
+    let started = std::time::Instant::now();
+    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i)).await.expect("the early Stop was seen").expect_err("stopped");
+    assert!(err.stopped, "{err:?}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(model.bodies.lock().unwrap().is_empty(), "the model was never asked");
+    let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).expect("the placeholder");
+    assert!(!reply.is_streaming && reply.body.is_empty(), "{reply:?}");
+    assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Completed]);
+}
+
+/// A Stop pressed before the turn even starts is honoured too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_pressed_before_the_turn_starts_is_honoured() {
+    let (endpoint, model) = spawn_model(vec![vec![HANG.to_string()]]).await;
+    let w = world(Vec::new());
+    let stop = StopSignal::new();
+    stop.stop();
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    i.stop = Some(stop);
+    let err = tokio::time::timeout(Duration::from_secs(20), run(&w.host, i)).await.expect("seen").expect_err("stopped");
+    assert!(err.stopped, "{err:?}");
+    assert!(model.bodies.lock().unwrap().is_empty());
+    assert!(!load(&w).messages.iter().any(|m| m.is_streaming), "no live placeholder");
+}
+
+/// Two turns in one chat: stopping one (by its reply) leaves the other
+/// running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_one_of_two_concurrent_turns_stops_only_that_one() {
+    let (endpoint, _model) = spawn_model(vec![vec![HANG.to_string()]]).await;
+    let w = Arc::new(world(Vec::new()));
+    let stops = TurnStops::new();
+    let (ga, gb) = (stops.register(w.chat), stops.register(w.chat));
+    let (sa, sb) = (ga.signal(), gb.signal());
+    let mut ia = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    ia.stop = Some(sa.clone());
+    // Each turn answers its own message (one trigger's second answer is fenced).
+    let second = w.host.inner.svc.lock().unwrap().post_user_message(w.chat, w.ws, "@coder another task").unwrap().id;
+    let mut ib = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    ib.reply_to = Some(second);
+    ib.stop = Some(sb.clone());
+    let (wa, wb) = (w.clone(), w.clone());
+    let ta = tokio::spawn(async move { run(&wa.host, ia).await });
+    let tb = tokio::spawn(async move { run(&wb.host, ib).await });
+    for _ in 0..400 {
+        if sa.message_id().is_some() && sb.message_id().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mb = sb.message_id().expect("turn B began its reply");
+    assert_eq!(stops.stop(w.chat, Some(mb)), 1);
+    let eb = tokio::time::timeout(Duration::from_secs(20), tb).await.expect("B stops").unwrap().expect_err("stopped");
+    assert!(eb.stopped && eb.message_id == Some(mb), "{eb:?}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!ta.is_finished(), "turn A still runs");
+    assert!(!sa.is_stopped());
+    stops.stop(w.chat, None);
+    let ea = tokio::time::timeout(Duration::from_secs(20), ta).await.expect("A stops").unwrap().expect_err("stopped");
+    assert!(ea.stopped, "{ea:?}");
+    drop((ga, gb));
+    assert_eq!(stops.running(w.chat), 0);
 }
 
 /// A writing CLI agent never runs in place: with no checkout to cut a
@@ -488,7 +563,7 @@ fn turn_worktrees(repo: &Path) -> Vec<String> {
 async fn a_stopped_turn_files_nothing_partial_and_drops_its_worktree() {
     let (endpoint, model) = spawn_model(vec![call("c1", "write_file", json!({"path": "half.txt", "content": "half\n"})), vec![HANG.to_string()]]).await;
     let w = world(Vec::new());
-    let stop = Arc::new(tokio::sync::Notify::new());
+    let stop = StopSignal::new();
     let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop.clone());
     let (s2, m2) = (stop.clone(), model.clone());
@@ -501,7 +576,7 @@ async fn a_stopped_turn_files_nothing_partial_and_drops_its_worktree() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
-        s2.notify_waiters();
+        s2.stop();
     });
     let err = run(&w.host, i).await.expect_err("stopped");
     assert!(err.stopped, "{err:?}");
