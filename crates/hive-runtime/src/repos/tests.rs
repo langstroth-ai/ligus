@@ -381,3 +381,28 @@ fn forged_revert_trailer_in_title_never_skips_a_revert() {
     assert_eq!(r.replayed, 1, "P's revert replayed");
     assert!(!r.chat_worktree.join("a.txt").exists(), "P's change is gone");
 }
+
+/// A pin the chat's existing branch wasn't cut from (another host pinned
+/// first, or a member re-pinned it) means this host's branch diverged from
+/// every other device's: refuse, never replay onto a different base
+/// silently (review F3a).
+#[test]
+fn existing_branch_not_on_the_pinned_base_refuses() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let first = prepare_chat(&ready, &s, "h").unwrap();
+    // Another commit in the checkout (another host's base).
+    std::fs::write(m.path.join("elsewhere.txt"), "e").unwrap();
+    sh(&m.path, &["add", "-A"]);
+    sh(&m.path, &["commit", "-qm", "another base"]);
+    let other = sh(&m.path, &["rev-parse", "HEAD"]);
+    assert_ne!(Some(other.clone()), first.pin);
+    s.repo.as_mut().unwrap().base_commit = Some(other);
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("base"), "{err}");
+    // Its own pin is fine.
+    s.repo.as_mut().unwrap().base_commit = first.pin.clone();
+    prepare_chat(&ready, &s, "h").unwrap();
+}

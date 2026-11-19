@@ -486,6 +486,20 @@ pub fn prepare_chat(ready: &ReadyCheckout, session: &ChatSession, host_label: &s
             }
         };
         crate::git_worktree::chat_worktree_at(&ready.path, &chat, &base).map_err(|e| e.to_string())?;
+    } else if let Some(c) = chat_repo.base_commit.as_deref() {
+        // The branch exists here: it must have been cut from the chat's
+        // pinned base. Another host pinning first (or a member re-pinning)
+        // leaves this host's branch on a different base than every other
+        // device's, and replaying the ledger onto it would diverge silently
+        // (review F3a): refuse instead.
+        let branch = format!("refs/heads/{}", crate::git_worktree::chat_branch_name(&chat));
+        if !git::has_commit(&ready.path, c) || git::git(&ready.path, &["merge-base", "--is-ancestor", c, &branch]).is_err() {
+            return Err(format!(
+                "This chat's branch on {host_label} wasn't cut from the chat's pinned base {}; it has diverged from the other devices. \
+                 Start a new chat, or remove this host's chat branch to cut it again from the pinned base.",
+                &c[..c.len().min(12)]
+            ));
+        }
     }
     let wt = crate::git_worktree::chat_worktree(&ready.path, &chat).map_err(|e| e.to_string())?;
     let entries = hive_core::workspace_repo::ledger(session, ready.repo.id);
