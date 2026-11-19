@@ -38,6 +38,10 @@ device detects from the file's bytes. A program renamed `invoice.pdf` is
 still a program, and it is refused when it is shared and again when it is
 received.
 
+A policy change also applies to files shared before it: once sharing is off,
+or a type is blocked, or the size cap is lowered, no device fetches, previews
+or saves a file the new policy refuses, and agents no longer get it.
+
 ### Blocked files
 
 **Settings → File attachments → Blocked files** lists files that are refused
@@ -65,9 +69,16 @@ sender. Nothing is downloaded, opened or previewed until you ask:
   real type from the content, flags a name that disagrees with it (a
   `photo.jpg` that is a program) or hides a second extension
   (`report.pdf.exe`), looks inside zip and gzip files without extracting
-  anything (checking each zip's directory against its contents, and the
-  types of the files inside against the workspace's blocked types), and runs
-  your scanner if you set one up.
+  anything, and runs your scanner if you set one up. A zip is unpacked into
+  a counter, never to disk, so the check judges what an extractor would
+  produce: its directory must match its contents, an entry may not unpack
+  to more than the directory says, every name an extractor might use counts
+  (including Unicode Path names), zips and gzips inside it are checked the
+  same way (at most three deep), and the types of all the files inside are
+  checked against the workspace's blocked types. Entries Ligus can't open
+  (encrypted, or compressed another way) and other archive formats (7z, RAR,
+  tar) are flagged, and saving them takes the second confirmation, but the
+  types inside them can't be checked.
 - **Save…** asks where to put the file, never replaces an existing file, never
   makes it executable, and marks it as downloaded (macOS
   `com.apple.quarantine`, Windows Mark-of-the-Web), so Gatekeeper,
@@ -87,12 +98,16 @@ Saving is refused outright when the file's type, or the type of a file inside
 an archive, is blocked in the workspace, when a zip's directory doesn't match
 its contents,
 when an archive looks like a decompression bomb (more than 10,000 entries,
-more than 1 GB unpacked, more than 100 times its packed size, or more than 16
-archives nested inside it), or when your scanner reports a threat.
+more than 1 GB unpacked, more than 100 times its packed size, more than 16
+archives inside it, archives nested more than three deep, or an entry that
+unpacks to more than its directory says), or when your scanner reports a
+threat.
 
 A card in someone else's message that points at your file, or at anyone's
 file but theirs, isn't shown. A file path from another member's device shows
-only as text; Ligus never opens a path someone else wrote.
+only as text; Ligus never opens a path someone else wrote, nor one in an
+agent's reply or in a message your device posted automatically for you (an
+automatic pickup).
 
 ## Scanning
 
@@ -102,7 +117,7 @@ Nothing is uploaded anywhere.
 
 | Environment variable | Effect |
 |---|---|
-| `LIGUS_ATTACHMENT_SCANNER=auto` | use ClamAV (`clamdscan`, else `clamscan`) from your `PATH` |
+| `LIGUS_ATTACHMENT_SCANNER=auto` | use ClamAV (`clamdscan`, else `clamscan`) from the absolute directories on your `PATH` |
 | `LIGUS_ATTACHMENT_SCANNER=/path/to/scanner` | run this program with the file's path as its last argument |
 | `LIGUS_ATTACHMENT_SCANNER_ARGS` | extra arguments, whitespace-separated, before the path |
 
@@ -117,7 +132,9 @@ The sharer or an Admin can **Delete** a file from its card. The deletion is a
 signed event: every member's device stops offering the file, and the deleting
 device removes its encrypted copy from the relay. When an Admin removes a
 member, Ligus asks whether to delete the files that member shared as well.
-The relay also deletes files on its own after its retention period (30 days by
+A relay that binds files to their uploader may refuse an Admin's delete of
+someone else's file; the file is still hidden on every device and the relay
+expires it at the end of its retention. The relay also deletes files on its own after its retention period (30 days by
 default); see [Operating the relay's file storage](../../operate/networking/self-host.md#file-attachments).
 
 ## Files from agents {#files-from-agents}
@@ -134,7 +151,10 @@ exactly the one that was approved. An offer always names, and is signed by,
 the host that holds the file, so nobody can make another member's device share
 something. A file is read only from inside the agent's worktree, and a file
 that holds a credential (a private key, an environment file, an access token,
-or one of the host's own secrets) is refused. A rejected or dismissed offer's
+or one of the host's own secrets) is refused, and so is a symlink or a file
+with another hard link (which could be a file outside the worktree). If the
+workspace stops letting agents offer files before the host shares an
+approved offer, the offer isn't shared. A rejected or dismissed offer's
 copy is deleted from the host.
 
 `ligus serve` and worker boxes can't keep offered files yet, so their agents'

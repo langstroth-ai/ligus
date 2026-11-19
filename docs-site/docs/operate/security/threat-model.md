@@ -241,7 +241,7 @@ members' devices ([Sharing files](../../ligus/features/attachments.md)).
 | The relay swaps, truncates, replays or withholds a file | The signed reference binds the file's SHA-256 and size; a download that doesn't open to exactly those bytes is refused and nothing is kept. Withholding can't be prevented: the card says the file isn't available. |
 | Filename tricks (right-to-left override, double extensions, traversal, reserved names) | Names are cleaned when shared and checked by the fold: one path component, no control, bidirectional or invisible characters, no leading dots, Windows device names prefixed, at most 200 bytes. A double extension (`report.pdf.exe`) is flagged. Saving never overwrites a file or follows a symlink and never sets an executable bit. |
 | A preview runs code | Previews exist only for PNG, JPEG, GIF, WebP, BMP and plain text, rendered in an empty-sandbox frame whose policy blocks every load. SVG, HTML and PDF are never previewed. |
-| A shared file carries a prompt injection | Agents get shared files only as delimited untrusted data (text content up to 64 KB, otherwise only a description), never as instructions and never as a path they could run. |
+| A shared file carries a prompt injection | Agents get shared files only as delimited untrusted data (text content up to 64 KB, otherwise only a description), never as instructions and never as a path they could run. An agent can't offer a file outside its worktree, through a symlink or through a hard link. |
 | A member uses the relay as free storage or a distribution point | The relay authenticates uploads, mints random non-enumerable ids, refuses past per-file, per-workspace, per-member, per-tenant and relay-wide quotas and an upload rate, and expires files (30 days by default). See [File attachments on the relay](../networking/self-host.md#file-attachments). |
 | A path in someone else's message opens something on your device | A device-local `[Attached: <path>]` marker becomes a clickable chip only in your own messages; in anyone else's it is text. |
 
@@ -253,13 +253,43 @@ Residual risks:
   (its name, size and hash); the content checks run on each receiving device.
   A member on a modified client can upload any bytes; receivers still refuse
   them by content.
-- **Relay deletion is best effort, and a capability.** A deleted or expired
-  file stops being offered on every device once the signed deletion folds,
-  but a relay that ignores deletes keeps its ciphertext (which it can't
-  read). The relay deletes a blob for anyone with write access to the
-  workspace who knows its id, so a member (or someone who kept an id after
-  leaving, on a relay without membership) can remove a file's ciphertext
-  early; the signed event says who may delete, and only clients enforce it.
+- **Relay deletion is best effort.** A deleted or expired file stops being
+  offered on every device once the signed deletion folds, but a relay that
+  ignores deletes keeps its ciphertext (which it can't read). A relay that
+  binds each blob to the token subject that uploaded it deletes it only for
+  that subject or a relay Admin; an upload with no token identity (an open
+  relay tagging by address) stays deletable by anyone with write access who
+  knows its id. When the relay refuses an Admin's delete of someone else's
+  file, the file is still hidden everywhere by the signed deletion and the
+  relay expires it at the end of its retention.
+- **A policy change applies to files already shared.** A share is judged at
+  the position its author stamped, and an author may name a position from
+  before a policy change, so the fold can't stop such a share. Every device
+  therefore also refuses to fetch, preview, save or give an agent a file the
+  policy in force refuses (attachments off, its type blocked, over the size
+  cap), whenever it was shared.
+- **Attachment ids are bound to the sharing device.** A share's id is derived
+  from the signing device and the relay blob (an agent offer's from its host
+  and the proposal), so no member can claim someone else's file id first and
+  suppress it.
+- **Forged copies.** Until the same-signer-only equivocation rule lands, a
+  member who copies a share's event id under their own signature makes both
+  copies drop out (the share disappears for everyone); this holds for every
+  event kind, not only shares.
+- **Archives.** Zip and gzip files are inflated into a counter (nothing is
+  written) to judge what an extractor would unpack, including names from
+  Unicode Path fields and zips or gzips nested up to three deep. Entries that
+  are encrypted or use another compression, and other archive formats (7z,
+  RAR, tar, xz, …), can't be looked inside: they are flagged and need the
+  second confirmation, but the types inside them aren't checked against the
+  policy.
+- **Saving** writes the verified bytes straight to the new file (marked
+  first); if Ligus is killed mid-write, a partial, marked file can remain.
+- **Local file markers.** A `[Attached: <path>]` marker resolves to a local
+  file only in a turn the person wrote themselves, never in an agent's reply
+  or a runtime effect signed under their identity. The chat view still shows
+  a chip for a path string the person used in one of their own messages
+  wherever that string appears.
 - **Deleting a message doesn't delete its files.** Delete the file from its
   card, or remove the member and their files.
 - **Quotas on an open relay** count per token subject, or per address when
