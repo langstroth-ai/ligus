@@ -620,7 +620,7 @@ async fn peer_names_reach_the_api_cleaned() {
         // author's name rides the entry unchecked.
         svc.set_author_display_name(format!("Ana{EVIL}"));
         svc.write_memory(ws, ligus_runtime::chat_service::MemoryDraft { title: "Notes".into(), body: "b".into(), ..Default::default() }).unwrap();
-        let (_, chat) = svc.create_channel(ws, &format!("chan{EVIL}"), Some(format!("purpose{EVIL}")), "gw").unwrap();
+        let (_, chat) = svc.create_channel(ws, format!("chan{EVIL}"), Some(format!("purpose{EVIL}")), "gw").unwrap();
         let def = ligus_core::WorkflowDefinition {
             id: Uuid::new_v4(),
             name: format!("Ship{EVIL}"),
@@ -4473,6 +4473,9 @@ async fn phones_certify_headless_then_me_on_loopback() {
     // test recovery key), as the 24 words a person keeps offline.
     let account = open_service(&h.desktop).unwrap().author().account_id.unwrap();
     std::fs::write(&words, ligus_core::testkit::test_recovery_key(account).words()).unwrap();
+    // Recovery words are read only from an owner-only file.
+    #[cfg(unix)]
+    std::fs::set_permissions(&words, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let phone = ligus_core::testkit::Phone::new();
     let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| ligus_core::crypto::sign_p256(&phone.key, m));
     let certs = || {

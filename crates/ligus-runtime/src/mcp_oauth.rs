@@ -579,7 +579,8 @@ mod tests {
     /// a multi-byte character after `%` panicked on a char boundary.
     #[test]
     fn pct_decode_takes_exactly_two_hex_digits() {
-        assert_eq!(pct_decode("%+1x"), "%+1x");
+        // `+` is a form-encoded space, never a hex sign.
+        assert_eq!(pct_decode("%+1x"), "% 1x");
         assert_eq!(pct_decode("%-1x"), "%-1x");
         assert_eq!(pct_decode("a%é"), "a%é");
         assert_eq!(pct_decode("a%1é"), "a%1é");
