@@ -505,7 +505,7 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
 fn synced_alias_unused_until_accepted() {
     let e = env();
     let moved = WorkspaceRepo { id: repo_id("github.com/neworg/wefit"), canonical: "github.com/neworg/wefit".into(), ..wefit() };
-    let mut r = roster(&[moved.clone()]);
+    let mut r = roster(std::slice::from_ref(&moved));
     r.repo_aliases.insert(moved.id, vec![WEFIT.into()]);
     let s = chat(e.ws, Some(moved.id));
     let al = aliases(&e.store, e.ws, Some(&r));
@@ -539,7 +539,7 @@ fn changed_alias_target_needs_new_acceptance_and_clone_url_never_from_alias() {
         root_commit: None,
     };
     sh(&e.checkout, &["remote", "set-url", "origin", "git@ssh.git.example.com:ops/infra.git"]);
-    let mut r = roster(&[infra.clone()]);
+    let mut r = roster(std::slice::from_ref(&infra));
     r.host_aliases.insert("ssh.git.example.com".into(), "git.example.com".into());
     assert!(checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none(), "not accepted yet");
     e.store.set_alias_accepted(e.ws, "host", "ssh.git.example.com", "git.example.com", true).unwrap();

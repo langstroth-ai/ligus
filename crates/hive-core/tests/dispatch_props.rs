@@ -66,6 +66,7 @@ fn base() -> &'static SignedWorld {
 /// would: its lamport one past the newest event it holds (or past `head`
 /// when given: a backdating author), its chain link its own last event
 /// there, its config frontier `frontier` (or the config head).
+#[allow(clippy::too_many_arguments)]
 fn draft(w: &SignedWorld, clock: &mut u64, by: &str, chat: Uuid, payload: SessionEvent, local: &[SessionEventEnvelope], frontier: Option<CfgFrontier>, head: Option<Option<CfgFrontier>>) -> SessionEventEnvelope {
     *clock += 1;
     let mut env = SessionEventEnvelope::new(chat, w.wid, 10_000 + *clock as i64, payload);
@@ -227,11 +228,11 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
             let me = devs[i].id;
             // A revoked device keeps writing: backdated claims and answers.
             if let Some((k, ref mut written)) = revoked {
-                if k == i && !crashed(&devs[i], tick) && rng.next() % 4 == 0 {
+                if k == i && !crashed(&devs[i], tick) && rng.next().is_multiple_of(4) {
                     let s = fold(&devs[i].log, &timeline);
                     let (epoch, holder) = s.turn_dispatch.get(&trigger).map(|x| (x.epoch, x.holder)).unwrap_or((0, None));
                     let early = hive_core::lamport::plausible_keys(&base_log).last().copied();
-                    let payload = if rng.next() % 2 == 0 {
+                    let payload = if rng.next().is_multiple_of(2) {
                         SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: epoch + 1, supersedes: holder, repo_id: Some(repo) }
                     } else {
                         let mut m = ChatMessage::new(MessageRole::Assistant, "hive", "forged");
@@ -518,7 +519,7 @@ fn a_removed_members_device_is_gone_and_its_later_claims_never_fold() {
     let mut clock = 0;
     let env = draft(&w, &mut clock, "d3", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d3, epoch: 0, supersedes: None, repo_id: None }, &local, before, None);
     w.push_env(Some(chat), env);
-    assert!(w.state(chat).turn_claims.get(&t).is_none());
+    assert!(!w.state(chat).turn_claims.contains_key(&t));
     // The turn is still free for a member's device.
     claim(&mut w, chat, "d2", t, 1, None, None);
     assert_eq!(w.state(chat).turn_claims[&t], w.people["d2"].device_id);

@@ -17858,7 +17858,6 @@ mod synced_dispatch_tests {
 
     #[test]
     fn only_the_pull_and_only_user_turns_are_considered() {
-        let me = Uuid::new_v4();
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
         let old = user("an old unanswered message");
         let new = user("@hive new");
