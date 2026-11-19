@@ -49,8 +49,8 @@ every device:
   Forgejo. On other hosts the case is kept: two spellings stay two entries
   rather than two different repositories merging into one.
 - Hosts must be ASCII (write an international host in punycode). Spaces,
-  `%`, `\`, `?`, `#`, `..` segments, IP-literal hosts and git transports such
-  as `ext::` are refused.
+  `%` in the path, `\`, `?` and `#` anywhere, `..` segments, IP-literal hosts
+  and git transports such as `ext::` are refused.
 - Remotes are read from the checkout's own config, without includes and
   without `insteadOf` rewrites: a rewrite changes where git connects, never
   what the repository is. A remote with more than one URL matches nothing.
@@ -134,10 +134,14 @@ was: a conflict changes nothing, and the chat says so. A proposal made on
 another base that merges cleanly is applied and noted as "applied on a
 different base".
 
-Every apply commit carries `Ligus-Proposal: <id>`. Before a turn, a host
-replays any applied proposal its chat branch lacks, in the order the chat
+Every apply commit carries `Ligus-Proposal: <id>` in its trailer block.
+Before a turn, a host replays any applied proposal its chat branch lacks (by
+that trailer, on commits since the chat's pinned base), in the order the chat
 applied them, and takes back out any that were reverted. If a replay
-conflicts, the turn doesn't run and the chat says the branch has diverged.
+conflicts, the turn doesn't run and the chat says the branch has diverged. A
+host whose chat branch wasn't cut from the chat's pinned base (another host
+pinned first) refuses the chat's turns the same way: start a new chat, or
+remove that host's chat branch so it is cut again from the pinned base.
 
 ## Privacy
 

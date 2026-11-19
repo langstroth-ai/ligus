@@ -34,7 +34,9 @@ from that list:
   host. The URL is rebuilt as `https://<canonical>` and never taken from the
   event; the host's address is checked again and pinned for git right before
   the clone, so a name that now resolves to a private address is refused
-  unless the connection is marked internal. The folder is
+  unless the connection is marked internal. git follows no redirect on a
+  clone by id (a moved repository fails; update its workspace entry). The
+  folder is
   `<name>-<first 8 hex of the repo id>` under the repos dir, `origin` is set
   to the repository's identity, and the clone becomes the workspace default
   when the box has none. While it runs, the box reports the repository as

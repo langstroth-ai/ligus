@@ -91,11 +91,14 @@ config events; checkouts and their paths never leave a device.
 - **A malicious Admin, or a compromised one**, can add a look-alike
   repository (`github.com/zazu1am/wefit`). Adding and removing need the
   Admin's passkey presence; Settings shows the full canonical name and flags a
-  repository whose claimed root commit equals another's. A repository entry
+  repository whose name reads the same as another's once common ASCII
+  confusables are folded (`1`/`l`, `rn`/`m`, `0`/`o`, dashes, case), or whose
+  claimed root commit equals another's. A repository entry
   makes no device fetch anything: a clone is a person's act on one host, from
   that host's own code-host connection, with the URL rebuilt as `https://`
   from the canonical (never a string from the event) and the address checked
-  again and pinned right before git runs. An entry can't create a connection
+  again and pinned right before git runs; git follows no redirect, so the
+  server at the pinned address can't send the clone to another host. An entry can't create a connection
   or mark one internal.
 - **A member or an agent** can't add, remove or rename a repository, and an
   agent (or a runtime effect) can't set a chat's repository or pin its base.
@@ -116,13 +119,21 @@ config events; checkouts and their paths never leave a device.
 - **Applying** builds the commit in a scratch index or worktree and moves the
   chat branch only by compare-and-swap, so a conflict or a moved branch
   applies nothing.
-- **Limits:** coverage is self-reported (a host can claim a repository and
-  then refuse its turns). Ledger replay skips a proposal whose
-  `Ligus-Proposal` trailer is already on the chat branch, so a commit forged
-  with that trailer inside the chat's own worktree makes that host's branch
-  diverge from the others (a liveness problem, flagged at the next conflict,
-  not a way to apply unapproved content). The repository list is visible to
-  every member, Viewers included.
+- **Ledger replay** reads `Ligus-Proposal` and `Ligus-Revert` only from a
+  commit's trailer block (never its subject, which carries the proposal's
+  agent-written title) and only on commits since the chat's pinned base. A
+  host whose chat branch wasn't cut from the pinned base refuses the chat's
+  turns instead of replaying onto a different base.
+- **A remote URL** with `#`, `?` or a backslash has no identity: git connects
+  to the host before them, so `https://evil.example#@github.com/o/n` never
+  reads as github.com's repository.
+- **Limits:** coverage is self-reported and only sealed with the workspace
+  key, so any member can forge any host's coverage (a beat claiming a future
+  sequence number is ignored, so a forgery can't pin it). A forged "missing"
+  drops that host's agents from routing and workflow pre-flight. A person who
+  writes a commit with a real `Ligus-Proposal` trailer in a chat's worktree
+  makes that host's replay skip that proposal there. The repository list is
+  visible to every member, Viewers included.
 
 ### A compromised serve or worker box {#compromised-box}
 
