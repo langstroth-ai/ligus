@@ -178,7 +178,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 | `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
-| `proposeMemory` | `chatId` (the chat the phone is in; recorded as the source), `op` (`{op: "create", entryId, title, body, tags?}`, `{op: "edit", entryId, base, title, body, tags?}` or `{op: "remove", entryId, base}`), `rationale?` (at most 500 characters) | `flowRecorded` / `memoryProposed`, as the person (no agent proposer) | the workspace config log | never |
+| `proposeMemory` | `chatId` (the chat the phone is in; recorded as the source), `op` (`{op: "create", entryId, title, body, tags?}` (the new note is named by the proposal: send any `entryId`, a nil UUID is fine), `{op: "edit", entryId, base, title, body, tags?}` or `{op: "remove", entryId, base}`), `rationale?` (at most 500 characters) | `flowRecorded` / `memoryProposed`, as the person (no agent proposer) | the workspace config log | never |
 
 The box decides `presenceRequired` by judging the draft; the fold decides in
 the end. Rebinding an agent, issuing a person's invite and DMs are not phone
@@ -228,8 +228,12 @@ word until the phone has read it; refuse to sign unless all of these hold:
       `expectedBaseCommit` and `repoId` as asked;
     - `withdrawApply`: `requestId` and `proposalId` as asked;
     - `proposeMemory`: a memory proposal whose `op` and `rationale` are
-      exactly as asked, `proposer` empty (the person's own), and `source`
-      exactly `{chatId}`; its `proposalId` is the event id (the box picks it, and every fold requires the two to match).
+      exactly as asked (except a create's `entryId`, which must equal the
+      `proposalId`), `proposer` empty (the person's own), and `source`
+      naming exactly `chatId` (no message or turn; the box may add the
+      chat's `egress`, which only narrows which agent turns read the note);
+      its `proposalId` is the event id (the box picks it, and every fold
+      requires the two to match).
 
 The box may choose only what grants nothing: the event id, sequence, the log
 head it counts from (and so the lamport, one past it), timestamps, its config

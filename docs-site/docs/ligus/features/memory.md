@@ -35,7 +35,9 @@ Open **Memory** in the [right rail](right-rail.md) (or the command palette).
   no key of its own. **Accept** applies it as your change (the note then
   shows "proposed by" the agent); **Reject** leaves memory as it was.
 
-A Viewer reads memory but doesn't change it.
+A Viewer reads memory but doesn't change it. One person can use at most
+2000 note ids over the life of the workspace (removed notes count), so no
+one member can use up the workspace's 10 000.
 
 ### When two people edit at once
 
@@ -52,10 +54,27 @@ conflicts. A title can't hold invisible or direction-changing characters.
 ### Removing a note
 
 Removing a note hides it from everyone, for good: its id can't be reused,
-and agents no longer find it. It is **not erased**. Every earlier version
+and agents no longer find it. If someone edited the note at the same time
+(from a version they saw before the removal), their edit isn't applied, but
+it isn't lost silently either: the pane lists the note under **Edited after
+removal** with who edited it and when. Their text stays in the workspace
+history; write a new note if it is still needed. It is **not erased**. Every earlier version
 stays in the workspace's history on every device that synced it. If a note
 held something that must not be kept (a secret pasted by mistake), remove
 it, then rotate the workspace key and treat the secret as leaked.
+
+### Restricted notes
+
+A note remembers the egress of the chat it was written from. Written from a
+chat whose egress is restricted (dearth mode's allow-list) or closed (a
+lockdown), it shows a **Restricted** badge, and only agent turns whose own
+egress is at least as strict read it: an agent on a chat with open egress
+doesn't find it in a search and can't read it by id, so it can't carry the
+note out of the quarantine. A lockdown raised on the source chat after the
+note was written counts too. A note keeps the strictest egress any of its
+versions was written under; editing it from an open chat doesn't loosen
+it. A note written outside a chat follows the workspace default, which
+every turn may read. People see every note in the pane.
 
 ## What agents do with memory
 
@@ -84,7 +103,9 @@ one. Other agents on the chat see the current cards in their context (on
 the desktop) or read them with `ligus_task_state` (on every host).
 
 A card stays current for two hours after its last update (an agent can ask
-for up to 24 hours), then it is hidden. Only the agent itself, or the host
+for up to 24 hours), then it is hidden. A card dated more than five minutes
+ahead of your clock is treated as stale, so a forward-dated card can't stay
+up for ever. Only the agent itself, or the host
 it runs on, can write its card, and each writer has its own card: one host
 can't overwrite another's, so an agent that moves to another host (or gets
 its own signing key) shows a fresh card while the old one expires.

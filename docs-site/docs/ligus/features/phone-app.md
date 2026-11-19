@@ -399,7 +399,8 @@ The app reads the [workspace memory](memory.md) (`GET /v1/memory`, search
 with `?q=`) and each chat's live task state
 (`GET /v1/chats/{id}/task-state`), and can propose a note, an edit or a
 removal with the `proposeMemory` action, signed by the phone's own key as
-you. A person accepts or rejects it on a desktop.
+you. A person accepts or rejects it on a desktop. A new note is named by its
+proposal, so the app's own `entryId` for a create isn't used.
 
 ## Appearance
 

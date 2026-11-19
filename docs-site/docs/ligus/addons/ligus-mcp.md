@@ -91,8 +91,13 @@ device's fold refuses a direct memory write from anything but a person.
 `content` text in which each note or card is wrapped in
 `<<<entry NONCE …>>> … <<<end NONCE>>>` (or `<<<task …>>>`) with a random
 nonce per call, after a header that says it is data, not instructions;
-content can't contain the markers, the nonce or `[[` directive openers.
-Each note read counts against the read budget. Tool-loop runtimes reach the
+content can't contain the markers, the nonce or `[[` directive openers,
+and invisible characters (including Unicode tag characters) are dropped.
+A turn sees only the notes its chat's egress allows: a note written from a
+chat with restricted or closed egress (a lockdown, dearth mode) is left out
+of searches and refused by id for a turn whose egress is more open (the
+same rule as reading another chat). Each note read counts against the read
+budget. Tool-loop runtimes reach the
 same through `ligus_read` (`what: memory | memoryEntry | taskState`),
 `ligus_propose` (`kind: memory`, with `op`) and `ligus_flow`
 (`op: taskUpdate`). See [Workspace memory and task state](../features/memory.md).
