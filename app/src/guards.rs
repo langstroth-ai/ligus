@@ -1452,50 +1452,6 @@ pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: Stri
 // Self-medication: chat lockdown
 // ---------------------------------------------------------------------------
 
-/// Prompt-injection markers seen in a turn's tool results. Cheap to clone
-/// (shared), so the executor and the turn see the same list.
-#[derive(Clone, Default)]
-pub(crate) struct InjectionHits(std::sync::Arc<Mutex<Vec<&'static str>>>);
-
-impl InjectionHits {
-    /// Scan an untrusted tool/MCP result.
-    pub(crate) fn scan(&self, text: &str) {
-        let found = hive_runtime::guard_scan::injection_markers(text);
-        if !found.is_empty() {
-            self.0.lock().unwrap().extend(found);
-        }
-    }
-    pub(crate) fn take(&self) -> Vec<&'static str> {
-        std::mem::take(&mut *self.0.lock().unwrap())
-    }
-}
-
-/// After a turn: lock its chat down for every infection signal it showed.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn self_medicate_after_turn(
-    state: &AppState,
-    workspace_id: Uuid,
-    session_id: Uuid,
-    message_id: Uuid,
-    tool_markers: &[&'static str],
-    diff: Option<&str>,
-    changed: &[String],
-    turns: &[hive_runtime::ChatTurn],
-) {
-    let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
-    let findings = hive_runtime::guard_scan::assess_turn(tool_markers, diff, changed, request);
-    if findings.is_empty() {
-        return;
-    }
-    let mut svc = state.service.lock().unwrap();
-    match svc.self_medicate(workspace_id, session_id, Some(message_id), &findings) {
-        Ok(n) => tracing::warn!(target: "guards", chat = %session_id, signals = n, "chat locked down by self-medication"),
-        Err(e) => tracing::error!(target: "guards", "couldn't lock chat {session_id} down: {e}"),
-    }
-    drop(svc);
-    let _ = tauri::Emitter::emit(&state.app_handle, "workspace://synced", 1);
-}
-
 /// A chat's lockdown as the chat header shows it.
 #[tauri::command]
 pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
@@ -1972,11 +1928,11 @@ mod tests {
     }
 
     /// Every child a desktop turn spawns runs under the turn's policy: the
-    /// shell probe, the MCP tool listing and the API tool loop (whose MCP
-    /// calls spawn their servers) before the stream, and the stream itself
-    /// (the CLI, stdio MCP servers, `run_command`). Outside a turn scope a
-    /// stdio MCP server would fall back to the baseline, not this turn's
-    /// envelope, shell and grants.
+    /// shell probe before the engine, and in the engine (which lists MCP
+    /// tools, runs the API tool loop and streams under `TurnInput::policy`,
+    /// `hive_runtime::turn_engine`) the policy built here with the shell gate,
+    /// the grants and the turn's own MCP catalog. Outside a turn scope a
+    /// stdio MCP server would fall back to the baseline.
     #[test]
     fn every_spawn_in_a_desktop_turn_is_in_the_turns_policy() {
         let src = include_str!("lib.rs");
@@ -1992,11 +1948,12 @@ mod tests {
                 seen += 1;
             }
         }
-        assert!(seen >= 4, "every spawning call was found ({seen})");
+        assert!(seen >= 1, "the shell probe was found ({seen})");
         // Both policies come from the one builder, so the shell gate and the
-        // grants are applied to each.
+        // grants are applied to each, and the engine runs under the second.
         assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
-        assert!(!body.contains("turn_sandbox_policy_with("), "a policy built without the shell gate");
+        assert!(!body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("), "a policy built without the shell gate");
+        assert!(body.contains("policy: sandbox_policy,"), "the engine runs under the turn's policy");
     }
 
     #[test]

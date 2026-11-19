@@ -1296,7 +1296,7 @@ pub fn turn_allowed_on(kind: ExecutorKind, provider: ModelProviderKind, local_to
 /// tools (a CLI agent brings its own): the hosts' pre-check, so a refused
 /// turn says why before anything starts.
 pub fn turn_allowed(provider: ModelProviderKind) -> Result<(), String> {
-    turn_allowed_on(default_executor().kind(), provider, false)
+    turn_allowed_on(turn_executor().kind(), provider, false)
 }
 
 /// Whether HTTP models may be offered local tools (Ligus's built-in file
@@ -1307,7 +1307,7 @@ pub fn local_tools_allowed_on(kind: ExecutorKind) -> bool {
 
 /// [`local_tools_allowed_on`] for this host.
 pub fn local_tools_allowed() -> bool {
-    local_tools_allowed_on(default_executor().kind())
+    local_tools_allowed_on(turn_executor().kind())
 }
 
 /// Whether CLI agents run inside Ligus's own OS sandbox. A CLI that would
@@ -1419,6 +1419,24 @@ pub struct RuntimeScope {
 tokio::task_local! {
     static TURN: Arc<TurnPolicy>;
     static RUNTIME: Arc<RuntimeScope>;
+    static EXECUTOR: Arc<dyn TurnExecutor>;
+}
+
+/// Run `fut` with `executor` confining every child spawned in it (the turn
+/// engine's input; [`default_executor`] outside such a scope).
+pub async fn with_executor<F: std::future::Future>(executor: Arc<dyn TurnExecutor>, fut: F) -> F::Output {
+    EXECUTOR.scope(executor, fut).await
+}
+
+/// Run `f` (synchronous) with `executor` as the turn's executor.
+pub fn with_executor_sync<R>(executor: Arc<dyn TurnExecutor>, f: impl FnOnce() -> R) -> R {
+    EXECUTOR.sync_scope(executor, f)
+}
+
+/// The executor children spawned here run under: the scoped one
+/// ([`with_executor`]), else this host's [`default_executor`].
+pub fn turn_executor() -> Arc<dyn TurnExecutor> {
+    EXECUTOR.try_with(Arc::clone).unwrap_or_else(|_| default_executor())
 }
 
 /// Run `fut` with `rt` as the runtime scope for CLI children spawned in it.
@@ -1834,7 +1852,7 @@ pub fn start_turn_dir_sweeper(max_turn: std::time::Duration) {
 /// Confine one child for the current turn: plan it, start its proxy, make
 /// its scratch dir, and wrap the command for this host's executor.
 pub fn prepare(spec: SpawnSpec<'_>) -> io::Result<Prepared> {
-    prepare_with(&*default_executor(), spec)
+    prepare_with(&*turn_executor(), spec)
 }
 
 /// [`prepare`] with an explicit executor (tests).

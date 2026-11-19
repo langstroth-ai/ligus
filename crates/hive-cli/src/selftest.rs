@@ -2,7 +2,7 @@
 //! what its sandbox lets it do.
 //!
 //! The turn is the same path `ligus worker` and `ligus serve` take for an
-//! HTTP model with local tools ([`crate::reply::generate_reply_streaming`]):
+//! HTTP model with local tools (the turn engine, `hive_runtime::turn_engine`):
 //! a Custom (OpenAI-wire) runtime, Ligus's built-in tools with `run_command`
 //! on, a per-turn git worktree, and every command spawned through this host's
 //! agent sandbox. The model is a stub served in process on loopback: its first
@@ -29,7 +29,6 @@ use hive_core::ModelProviderKind;
 use hive_runtime::{ChatTurn, ResolvedRuntime};
 use serde_json::{json, Value};
 
-use crate::reply::{self, ToolSettings, TurnFiles};
 
 const RAN: &str = "LIGUS_PROBE_RAN";
 const LEAK: &str = "LIGUS_PROBE_LEAK";
@@ -192,32 +191,40 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
             driver: Default::default(),
             gateway: None,
         };
-        let settings = ToolSettings { run_command: true, ..ToolSettings::default() };
-        let files = TurnFiles {
-            repo_root: Some(repo.clone()),
-            chat_id: uuid::Uuid::new_v4().to_string(),
-            turn_key: uuid::Uuid::new_v4().to_string(),
-        };
         // The device owner's own probe, with no other member's words in it:
-        // a turn whose shell is on (outside a turn there is none).
+        // a turn whose shell is on (outside a turn there is none). It runs
+        // through the turn engine, in a throwaway chat.
         let policy = hive_runtime::executor::TurnPolicy { shell_allowed: true, ..hive_runtime::executor::TurnPolicy::baseline(hive_runtime::executor::HostKind::Desktop) };
-        let reply = hive_runtime::executor::with_turn(
+        let (svc, ws, chat) = probe_chat()?;
+        let session = svc.lock().unwrap_or_else(|e| e.into_inner()).load(chat)?.ok_or_else(|| anyhow!("probe chat missing"))?;
+        let host = ProbeHost { svc, repo: repo.clone() };
+        let input = hive_runtime::turn_engine::TurnInput {
+            workspace_id: ws,
+            chat_id: chat,
+            session,
+            reply_to: None,
+            responder: hive_runtime::turn_engine::Responder {
+                author: "turn-test".into(),
+                effect_author: "turn-test".into(),
+                runtime_id: "turn-test".into(),
+                agent_id: None,
+                runtime: rt,
+            },
+            system: "You are the Ligus sandbox turn test.".into(),
+            turns: vec![ChatTurn::user("Run the probe.")],
+            gate: hive_runtime::author_gate::GatePlan::Full,
+            envelope: policy.envelope.clone(),
+            shell_allowed: true,
             policy,
-            reply::generate_reply_streaming(
-                &rt,
-                "You are the Ligus sandbox turn test.",
-                &[ChatTurn::user("Run the probe.")],
-                true,
-                None,
-                Some(&files),
-                &settings,
-                |_| {},
-            ),
-        )
-        .await?;
-        if let Some(wt) = reply.worktree {
-            let _ = wt.remove();
-        }
+            executor: hive_runtime::executor::default_executor(),
+            tools: hive_runtime::turn_engine::ToolOptions { builtin: true, run_command: true, ..Default::default() },
+            write_capable: false,
+            require_isolation: true,
+            stop: None,
+            timeout: hive_runtime::turn_engine::turn_timeout(),
+            options: Default::default(),
+        };
+        hive_runtime::turn_engine::run(&host, input).await.map_err(|e| anyhow!("{e}"))?;
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -243,6 +250,34 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
         lines.push(format!("tool output: {}", out.chars().take(600).collect::<String>()));
     }
     Ok(TurnReport { tier, lines, ran, leaks })
+}
+
+/// A throwaway chat service and chat for the probe turn.
+fn probe_chat() -> Result<(Mutex<hive_runtime::ChatService>, uuid::Uuid, uuid::Uuid)> {
+    let author = hive_core::ActorIdentity::new("turn-test".to_string(), "turn-test".to_string(), hive_core::ActorKind::Human);
+    let kp = hive_core::SigningKeypair::generate()?;
+    let account = hive_core::SigningKeypair::generate()?;
+    let mut svc = hive_runtime::ChatService::new(hive_runtime::EventStore::open_in_memory()?, kp, account, author);
+    let ws = uuid::Uuid::new_v4();
+    svc.ensure_workspace_config(ws)?;
+    let chat = svc.create_chat("turn test", ws, "")?.id;
+    Ok((Mutex::new(svc), ws, chat))
+}
+
+/// The probe's turn host: the throwaway chat, the probe repo.
+struct ProbeHost {
+    svc: Mutex<hive_runtime::ChatService>,
+    repo: PathBuf,
+}
+
+impl hive_runtime::turn_engine::TurnHost for ProbeHost {
+    fn service(&self) -> &Mutex<hive_runtime::ChatService> {
+        &self.svc
+    }
+    fn checkout(&self, _s: &hive_core::ChatSession, _m: uuid::Uuid) -> impl std::future::Future<Output = std::result::Result<hive_runtime::turn_engine::Checkout, String>> + Send {
+        let c = hive_runtime::turn_engine::Checkout { repo_root: Some(self.repo.clone()), ..Default::default() };
+        async move { Ok(c) }
+    }
 }
 
 #[cfg(test)]

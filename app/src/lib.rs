@@ -21,17 +21,15 @@ use hive_core::{
 use hive_core::{ActorIdentity, ActorKind, MountedVault, VaultSource, WorkspaceMember};
 use hive_proto::{
     ApprovalDto, AppInfo, AppSettingsDto, ChannelDto, ChatMessageDto, ChatSessionDto,
-    ChatActivityEvent, ChatStreamEvent, ChatSummaryDto, ContextTelemetryDto, FsEntryDto, GitFileDiffDto, LspServerDto, McpServerDto, ProposalDto,
+    ChatSummaryDto, ContextTelemetryDto, FsEntryDto, GitFileDiffDto, LspServerDto, McpServerDto, ProposalDto,
     MentionStateDto, QueuedWorkDto, ReactionDto,
     RuntimeSummaryDto, SkillDto, VaultSourceDto, WorkspaceAgentDto, WorkspaceHostDto,
     WorkspaceInfoDto, WorkspaceMemberDto,
 };
-use hive_runtime::provider::anthropic::AnthropicResponse;
-use hive_runtime::tool_loop::{self, MessagesApi, ToolExecutor};
 use hive_runtime::{
     chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault,
-    pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, AnthropicClient, ChatTurn,
-    EventStore, IdentityStore, McpRegistry, McpServerSpec, ProviderError, ResolvedRuntime,
+    pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, ChatTurn,
+    EventStore, IdentityStore, McpRegistry, McpServerSpec, ResolvedRuntime,
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -55,6 +53,7 @@ mod agent_iface;
 mod attachments;
 mod memory_ui;
 mod repos_ui;
+mod turn_host;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -7995,110 +7994,6 @@ where
 // --- MCP tool-call loop wiring (Anthropic) ---
 
 /// Adapter: one non-streaming Anthropic turn for the tool loop.
-struct AnthropicMessages {
-    client: AnthropicClient,
-    api_key: String,
-    model: String,
-    system: Option<String>,
-}
-
-impl MessagesApi for AnthropicMessages {
-    async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
-        self.client
-            .run_messages(&self.api_key, &self.model, self.system.as_deref(), messages, tools, 1024)
-            .await
-    }
-}
-
-/// Executes a tool call by routing the (sanitized) tool name back to its MCP
-/// server. Honors the registry's enable gate.
-struct McpToolExecutor {
-    /// Prompt-injection markers seen in this turn's MCP results (shared so the
-    /// turn can read them after the executor moved into a tool set).
-    injection_hits: crate::guards::InjectionHits,
-    registry: McpRegistry,
-    /// sanitized anthropic tool name → (server id, real tool name)
-    names: HashMap<String, (String, String)>,
-}
-
-impl ToolExecutor for McpToolExecutor {
-    async fn call(&self, name: &str, input: &Value) -> (String, bool) {
-        match self.names.get(name) {
-            Some((server, tool)) => match self.registry.call_tool(server, tool, input).await {
-                Ok(text) => {
-                    self.injection_hits.scan(&text);
-                    (text, false)
-                }
-                Err(e) => (format!("tool error: {e}"), true),
-            },
-            None => (format!("unknown tool {name}"), true),
-        }
-    }
-}
-
-/// Anthropic tool names must match `^[a-zA-Z0-9_-]{1,64}$`.
-fn sanitize_tool_name(s: &str) -> String {
-    let cleaned: String = s
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
-        .collect();
-    cleaned.chars().take(64).collect()
-}
-
-/// Convert provider turns into the Anthropic message array the tool loop seeds.
-fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
-    // `content_value` inlines `[Attached: <image>]` markers as vision blocks.
-    turns
-        .iter()
-        .map(|t| json!({ "role": t.role, "content": hive_runtime::provider::anthropic::content_value(&t.content) }))
-        .collect()
-}
-
-/// The enabled MCP tools as neutral provider definitions plus the executor
-/// that routes a call back to its server. `None` when no server is enabled or
-/// none of them lists a tool, so the caller streams a plain turn instead.
-/// Shared by the Anthropic loop and the HTTP-model loops (native Ollama and
-/// the OpenAI wire).
-async fn mcp_tool_set(
-    state: &State<'_, AppState>,
-    egress: &hive_core::sandbox::EgressPolicy,
-    servers: &[McpServerSpec],
-    shell: bool,
-) -> Option<(Vec<Value>, McpToolExecutor)> {
-    // Renew any near-expiry remote-server tokens before we build the registry.
-    state.ensure_fresh_mcp_tokens().await;
-    // Snapshot the registry so we don't hold locks across awaits. The turn's
-    // sandbox envelope decides which servers it may reach at all.
-    // The turn's own catalog (its chat's folder), never the viewed one's;
-    // tokens refreshed above are re-read from the settings.
-    let mut servers = servers.to_vec();
-    apply_mcp_auth(&mut servers, &state.settings.lock().unwrap());
-    let registry = McpRegistry::new(crate::guards::filter_mcp_servers(state, servers, egress));
-    registry.enabled().next()?;
-
-    let tagged = registry.list_all_tools().await;
-    crate::guards::record_mcp_tools(state, &tagged);
-    // A tool that runs shell commands is a shell: a turn without the shell
-    // (Phase C, the Owner's) doesn't get it.
-    let tagged: Vec<_> = tagged.into_iter().filter(|(_, t)| shell || !hive_runtime::is_shell_tool(&t.name)).collect();
-    if tagged.is_empty() {
-        return None;
-    }
-
-    let mut tool_defs = Vec::with_capacity(tagged.len());
-    let mut names = HashMap::new();
-    for (server, tool) in &tagged {
-        let tname = sanitize_tool_name(&format!("{server}__{}", tool.name));
-        tool_defs.push(json!({
-            "name": tname,
-            "description": tool.description,
-            "input_schema": tool.input_schema,
-        }));
-        names.insert(tname, (server.clone(), tool.name.clone()));
-    }
-    Some((tool_defs, McpToolExecutor { injection_hits: Default::default(), registry, names }))
-}
-
 /// Whether an HTTP model turn gets Hive's built-in file tools: the runtime
 /// opted into tools ("Supports tools") on a wire that may front a local
 /// server (native Ollama, Custom, HiveDaemon — never a hosted API) and the
@@ -8224,6 +8119,7 @@ fn turn_repo_root(bound: &str, workspace_root: &str) -> String {
 /// chat's `hive/chat/<id>` branch, whose diff comes back as a review-gated
 /// proposal: file-mutating subprocess agents, in a repo. HTTP turns with the
 /// built-in file tools isolate too, but lazily ([`isolates_on_write`]).
+#[cfg(test)]
 fn isolates_turn(git_subprocess: bool, write_capable: bool, in_repo: bool) -> bool {
     in_repo && git_subprocess && write_capable
 }
@@ -8232,113 +8128,9 @@ fn isolates_turn(git_subprocess: bool, write_capable: bool, in_repo: bool) -> bo
 /// carrying the built-in file tools, in a repo — so a local model's edits
 /// land in review, never straight in the tree, and a turn that only reads
 /// creates no worktree at all.
+#[cfg(test)]
 fn isolates_on_write(builtin_tools: bool, in_repo: bool) -> bool {
     in_repo && builtin_tools
-}
-
-/// Attempt the MCP tool loop. Returns `Ok(Some(text))` if it ran, `Ok(None)` if
-/// there were no enabled tools / no API key (caller falls back to streaming).
-#[allow(clippy::too_many_arguments)]
-async fn try_tool_loop(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    session_id: Uuid,
-    workspace_id: Uuid,
-    responder: &Responder,
-    system: &str,
-    turns: &[ChatTurn],
-    reply_to: Option<Uuid>,
-    egress: &hive_core::sandbox::EgressPolicy,
-    servers: &[McpServerSpec],
-    turn_dir: &str,
-    shell: bool,
-) -> Result<Option<TurnOutcome>, String> {
-    let Some(api_key) = responder.runtime.api_key.clone() else {
-        return Ok(None);
-    };
-    let mcp = mcp_tool_set(state, egress, servers, shell).await;
-    // The Ligus tools ride the same loop (D.3.3), with or without MCP servers.
-    let ligus_offered = hive_runtime::ligus_mcp::offered_for(&responder.runtime, !egress.is_open());
-    if mcp.is_none() && !ligus_offered {
-        return Ok(None);
-    }
-
-    let message_id = {
-        let mut svc = state.service.lock().unwrap();
-        let mid = svc
-            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?;
-        // The placeholder is the dispatcher's commit (design
-        // repos-and-checkouts 11.5): fenced means another device's answer
-        // committed first, so this run stops here.
-        if placeholder_fenced(&svc, session_id, mid) {
-            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
-            return Err(TURN_FENCED.into());
-        }
-        mid
-    };
-    let ligus = crate::agent_iface::begin(app, &responder.runtime, !egress.is_open(), true, workspace_id, session_id, responder.agent_id, &responder.author, message_id, None);
-    let (mut tool_defs, executor) = match mcp {
-        Some((d, e)) => (d, Some(e)),
-        None => (Vec::new(), None),
-    };
-    if ligus.offered() {
-        let mut defs = hive_runtime::ligus_mcp::tools::tool_loop_defs();
-        defs.extend(tool_defs);
-        tool_defs = defs;
-    }
-
-    let model = AnthropicMessages {
-        client: AnthropicClient::new(),
-        api_key,
-        model: responder.runtime.model.clone(),
-        system: Some(ligus.system(system.to_string())),
-    };
-    let initial = turns_to_messages(turns);
-
-    let routed = hive_runtime::ligus_mcp::WithLigus { turn: ligus.turn.as_deref(), inner: executor.as_ref() };
-    let result = tool_loop::run_with_messages(&model, &routed, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
-    // Self-medication: an injection marker in what the tools returned locks
-    // this chat down.
-    let hits = executor.as_ref().map(|e| e.injection_hits.take()).unwrap_or_default();
-    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &hits, None, &[], turns);
-
-    let (phase, text) = match result {
-        Ok(text) => {
-            // The turn's own chat directory (review F14), not the window's.
-            let root = turn_dir.to_string();
-            let mut svc = state.service.lock().unwrap();
-            let body = finalize_reply_with(
-                &mut svc, session_id, workspace_id, message_id, &responder.author, responder.agent_id, &root, &text, false,
-                ligus.effects().as_ref(),
-            );
-            drop(svc);
-            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
-            ("completed".to_string(), body?)
-        }
-        Err(e) => {
-            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
-            let msg = e.to_string();
-            let mut svc = state.service.lock().unwrap();
-            let _ = svc.complete_assistant_message(
-                session_id,
-                workspace_id,
-                message_id,
-                format!("[error] {msg}"),
-            );
-            ("error".to_string(), msg)
-        }
-    };
-    let _ = app.emit(
-        ChatStreamEvent::EVENT,
-        ChatStreamEvent {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            phase,
-            text: text.clone(),
-        },
-    );
-    Ok(Some(TurnOutcome { message_id, body: text }))
 }
 
 /// Finalize an assistant reply: strip `[[react:]]`/`[[vote:]]`/`[[workflow:]]`
@@ -8595,10 +8387,6 @@ async fn run_prepared_turn_inner(
         None => system,
     };
     let responder = rebound.as_ref().map(|(r, _, _)| r).unwrap_or(responder);
-    let system = match &scope.repo {
-        Some(r) => join_system(&system, &r.context),
-        None => system,
-    };
 
     // The workspace's sandbox envelope for this turn (isolation, egress,
     // redaction, human gate), enforced below for whatever runtime answers.
@@ -8684,321 +8472,22 @@ async fn run_prepared_turn_inner(
         hive_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
         crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, false)
     };
-    let tools_allowed = gate_plan.allows_tools();
-
-    // If MCP tools are enabled and the responder runs on Anthropic, take the
-    // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
-    // failure we fall through to streaming.
-    if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
-        if let Some(outcome) = hive_runtime::executor::with_turn(
-            child_policy.clone(),
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp, &scope.dir, shell_allowed),
-        )
-        .await?
-        {
-            return Ok(outcome);
-        }
-    }
-
-    // Any HTTP model runtime that may front a local server and opted in
-    // ("Supports tools") — native Ollama, or a Custom/HiveDaemon endpoint
-    // such as a llama.cpp gateway — gets the same MCP tools on the streaming
-    // path, plus Hive's built-in file tools (rooted at the turn's dir, below).
-    // Hosted APIs (OpenAI, OpenRouter, Azure) stay plain chat, as before this
-    // loop existed. Native Ollama is further gated on its capability probe in
-    // the dispatcher; an OpenAI-wire server that rejects tools falls back to
-    // plain chat there.
-    let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
-        hive_runtime::executor::with_turn(child_policy.clone(), mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp, shell_allowed)).await
-    } else {
-        None
-    };
-    // Injection markers seen in any tool result this turn (Ligus-run MCP tools
-    // and the runtime's own tools, via the activity stream).
-    let injection_hits = mcp_tools.as_ref().map(|(_, ex)| ex.injection_hits.clone()).unwrap_or_default();
-    let (builtin_on, builtin_write_in_place, builtin_run_command) = {
+    // The turn runs in the shared engine (`hive_runtime::turn_engine`), with
+    // this device's policy as its input: the gate, the shell rule, the
+    // envelope's flags and the base sandbox policy decided above.
+    let (builtin_on, builtin_write_in_place, builtin_run_command, claude_mode) = {
         let s = state.settings.lock().unwrap();
         // `run_command` is a shell: off whenever the envelope closes egress.
-        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command && shell_allowed)
+        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command && shell_allowed, s.claude_permission_mode.clone())
     };
-    // Built-in file tools (and run_command) need this host's OS sandbox:
-    // without one an HTTP model gets no local tools, only chat (stdio MCP
-    // servers are refused at spawn the same way).
-    let builtin_wanted =
-        tools_allowed && wants_builtin_tools(&responder.runtime, builtin_on) && hive_runtime::executor::local_tools_allowed();
-
-    // Git commit attribution: credit the human who drove this turn as the
-    // commit author (+ other thread participants as co-authors), so commits a
-    // subprocess agent makes on this host aren't credited to the host owner.
-    let git_subprocess = responder.runtime.provider.is_cli_agent();
-    let humans: Vec<hive_core::ActorIdentity> = if git_subprocess {
-        session
-            .messages
-            .iter()
-            .filter(|m| matches!(m.role, MessageRole::User))
-            .filter_map(|m| m.actor_identity.clone())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let git_env = humans
-        .last()
-        .map(hive_runtime::git_attribution::author_env)
-        .unwrap_or_default();
-    let system = match humans.last() {
-        Some(req) => {
-            let note = hive_runtime::git_attribution::commit_attribution_note(req, &humans);
-            if note.is_empty() { system } else { format!("{system}\n\n{note}") }
-        }
-        None => system,
-    };
-
-    let message_id = {
-        let mut svc = state.service.lock().unwrap();
-        let mid = svc
-            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?;
-        // The placeholder is the dispatcher's commit (design
-        // repos-and-checkouts 11.5): fenced means another device's answer
-        // committed first, so this run stops here.
-        if placeholder_fenced(&svc, session_id, mid) {
-            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
-            return Err(TURN_FENCED.into());
-        }
-        mid
-    };
-
-    let repo_turn = &scope.repo;
-    // The turn reads and runs in its own chat's directory (review F14).
-    let workspace_root = scope.dir.clone();
-
-    // Per-turn isolation (concurrency): a *file-mutating* subprocess agent runs
-    // in its own git worktree cut from HEAD, so parallel turns can't clobber each
-    // other's uncommitted work in the shared tree. Its diff is captured on
-    // completion and surfaced as a review-gated FileDiff proposal, then the
-    // worktree is removed. Read-only claude turns, API/MCP turns, and non-git
-    // roots run in place (no worktree). Isolating from HEAD means an isolated
-    // turn starts from the last commit, not the main tree's uncommitted WIP.
+    // A *file-mutating* subprocess agent runs in its own git worktree, so
+    // parallel turns can't clobber each other's uncommitted work.
     let write_capable = gate_plan.allows_writes()
         && match responder.runtime.provider {
             // Read-only at the default tier; any raised tier may write.
-            p if p.follows_permission_mode() => state.settings.lock().unwrap().claude_permission_mode != "default",
+            p if p.follows_permission_mode() => claude_mode != "default",
             p => hive_runtime::author_gate::always_writes(p),
         };
-    // Worktrees are cut from the chat's checkout (the repo's, or the
-    // workspace's bound folder), never from its chat worktree.
-    let repo_root = turn_repo_root(&scope.repo_root, &workspace_root);
-    let in_repo = !repo_root.trim().is_empty()
-        && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root));
-    // Unique per turn, so two turns in one chat never share (and remove)
-    // one worktree.
-    let turn_key = message_id.to_string();
-    let worktree = if isolates_turn(git_subprocess, write_capable, in_repo) {
-        // Phase 2a: cut the ephemeral turn worktree from the chat's persistent
-        // base branch `hive/chat/<sessionid>` (falling back to HEAD); if that
-        // also fails, run in place.
-        match flow::cut_turn_worktree(
-            state,
-            std::path::Path::new(&repo_root),
-            &session_id.to_string(),
-            &turn_key,
-        ) {
-            Ok(wt) => Some(wt),
-            Err(e) => {
-                tracing::warn!(target: "worktree", "isolation unavailable, running in place: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    // An HTTP turn with the built-in file tools isolates lazily: it reads the
-    // chat's dir, and its worktree is cut on the first write or command (see
-    // `LazyTurnWorktree`), so plain Q&A never creates one. Its diff is
-    // captured below exactly like an eagerly isolated turn's.
-    let lazy_worktree = isolates_on_write(builtin_wanted, in_repo).then(|| {
-        std::sync::Arc::new(
-            hive_runtime::git_worktree::LazyTurnWorktree::new(&repo_root, session_id.to_string(), turn_key.clone())
-                .with_reuse(flow::settings(state).reuse_worktrees),
-        )
-    });
-    // Until it writes, a lazily isolated turn reads its OWN chat's base
-    // worktree — the tree its worktree will be cut from — not the active
-    // chat's (or the main checkout's uncommitted work), so a scheduled,
-    // synced or workflow turn in another chat edits what it read.
-    let builtin_read_root = match &lazy_worktree {
-        Some(_) => match hive_runtime::git_worktree::chat_worktree(std::path::Path::new(&repo_root), &session_id.to_string()) {
-            Ok(dir) => dir.to_string_lossy().into_owned(),
-            Err(e) => {
-                tracing::warn!(target: "worktree", "chat base worktree unavailable, reading the workspace folder: {e}");
-                repo_root.clone()
-            }
-        },
-        None => String::new(),
-    };
-    // P2-5: a non-subprocess (API) turn with MCP tools enabled writes to the
-    // workspace root directly through its filesystem MCP server — it gets NO
-    // worktree isolation and NO review-gated diff (that path covers only subprocess
-    // agents, above). Surface it so these unguarded writes are at least observable.
-    // A full fix would isolate the turn AND redirect the MCP filesystem server's
-    // root to a per-turn worktree so its edits are captured as a proposal like a
-    // subprocess agent's — a larger change (the MCP server's root is workspace-level
-    // today), tracked as the remaining P2-5 work. Post-hoc diff capture can't gate:
-    // an in-place turn's edits are already applied.
-    if worktree.is_none()
-        && lazy_worktree.is_none()
-        && !responder.runtime.provider.is_cli_agent()
-        && scope.catalog.mcp.iter().any(|s| s.enabled)
-        && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&workspace_root))
-    {
-        tracing::warn!(
-            target: "dispatch",
-            provider = ?responder.runtime.provider,
-            "API turn has MCP tools enabled and runs in place — its file writes are NOT worktree-isolated or diff-gated (unlike subprocess agents). See P2-5."
-        );
-    }
-    // A tightened envelope never lets a write-capable agent run in place.
-    if envelope.isolate_writes && git_subprocess && write_capable && worktree.is_none() {
-        let mut svc = state.service.lock().unwrap();
-        let note = "This chat's sandbox requires an isolated git worktree for agents that edit files, and one couldn't be made here (no git repository bound, or the worktree failed).";
-        let _ = svc.complete_assistant_message(session_id, workspace_id, message_id, note);
-        return Err(note.into());
-    }
-    let effective_root = worktree
-        .as_ref()
-        .map(|w| w.path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| workspace_root.clone());
-    // Never pass an EMPTY working dir to a subprocess agent: `current_dir("")`
-    // fails the spawn (chdir to "" → ENOENT). When no workspace folder is set,
-    // run the agent in the app's own cwd (None) instead.
-    let working_dir = (!effective_root.trim().is_empty()).then_some(effective_root.as_str());
-    // Track D: the Ligus MCP server for this turn (agent-signed proposals,
-    // hand-offs, asks, reads), when the runtime can use it; else directives.
-    let ligus = crate::agent_iface::begin(
-        app,
-        &responder.runtime,
-        !envelope.egress.is_open(),
-        tools_allowed,
-        workspace_id,
-        session_id,
-        responder.agent_id,
-        &responder.author,
-        message_id,
-        worktree.as_ref().map(|w| w.path.clone()),
-    );
-    let system = ligus.system(system);
-    let ligus_loop = ligus.tool_loop.then(|| ligus.turn.clone()).flatten();
-    // Built-in file tools, confined to the turn's dir. In a repo their edits
-    // land in the lazily cut worktree (captured below as a proposal); outside
-    // one, in place only if the user allowed it. `run_command` needs its own
-    // opt-in on top.
-    let builtin_root = if lazy_worktree.is_some() { builtin_read_root.as_str() } else { effective_root.as_str() };
-    let builtin = if builtin_wanted && working_dir.is_some() {
-        let policy = hive_runtime::agent_tools::builtin_policy(
-            builtin_root,
-            lazy_worktree.is_some(),
-            builtin_write_in_place,
-            builtin_run_command,
-        )
-        .with_protected_dirs(&envelope.protected_dirs);
-        let made = match &lazy_worktree {
-            Some(lazy) => hive_runtime::BuiltinTools::lazy(policy, lazy.clone(), builtin_write_in_place),
-            None => hive_runtime::BuiltinTools::new(policy),
-        };
-        match made {
-            Ok(b) => Some(b),
-            Err(e) => {
-                tracing::warn!(target: "dispatch", dir = %builtin_root, "built-in tools unavailable: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    // `propose_workflow` rides along on a tool-using turn whose user asked for
-    // a workflow: it validates the definition in-turn against this chat (the
-    // `[[workflow:]]` directive only fails after the turn). It takes a slot
-    // from the cap rather than growing it.
-    let workflow_tool = {
-        let last_user = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
-        // The Ligus tools carry workflow proposals themselves.
-        let wanted = (builtin.is_some() || mcp_tools.is_some()) && ligus_loop.is_none() && hive_runtime::workflow_tool::wanted(last_user);
-        let session = if wanted { state.service.lock().unwrap().load(session_id).ok().flatten() } else { None };
-        session.map(|session| {
-            hive_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
-                workflows::definition_from_directive(json, &session).map(|d| d.name)
-            }))
-        })
-    };
-    let http_tools = (builtin.is_some() || mcp_tools.is_some() || ligus_loop.is_some()).then(|| {
-        // Tools the agent's prompt, skills or the user's message name are
-        // offered first when the cap trims. The folded Ligus tools hold their
-        // own places outside the cap's count.
-        let ligus_slots = if ligus_loop.is_some() { hive_runtime::ligus_mcp::tools::FOLDED.len() } else { 0 };
-        let tools = hive_runtime::agent_tools::CompositeTools::with_hints(
-            builtin,
-            mcp_tools,
-            hive_runtime::agent_tools::MAX_OFFERED_TOOLS - usize::from(workflow_tool.is_some()) - ligus_slots,
-            &hive_runtime::agent_tools::tool_hints(&system, &turns),
-        );
-        let tools = match workflow_tool {
-            Some(tool) => tools.with_workflow_tool(tool),
-            None => tools,
-        };
-        match ligus_loop.clone() {
-            Some(turn) => tools.with_ligus_tools(turn),
-            None => tools,
-        }
-    });
-    if let Some(tools) = &http_tools {
-        crate::guards::record_tools_selected(state, workspace_id, session_id, &tools.mcp_selection());
-    }
-    let tool_rounds = hive_runtime::agent_tools::tool_round_budget(
-        responder.runtime.provider,
-        responder.runtime.max_tool_rounds,
-    );
-    tracing::info!(
-        target: "dispatch",
-        provider = ?responder.runtime.provider,
-        model = %responder.runtime.model,
-        endpoint = %responder.runtime.endpoint,
-        dir = %effective_root,
-        isolated = worktree.is_some(),
-        isolates_on_write = lazy_worktree.is_some(),
-        tools = http_tools.as_ref().map_or(0, |t| t.defs().len()),
-        "dispatching turn"
-    );
-
-    // Stream deltas to the UI in-memory on every token, but persist to SQLite
-    // only as a throttled checkpoint (~1×/750ms) for crash-recovery — not per
-    // token (#1). The final body is written once by finalize_reply, so any
-    // un-flushed tail is harmless.
-    const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_millis(750);
-    let mut pending = String::new();
-    let mut last_flush = std::time::Instant::now();
-    // Total wall-clock BACKSTOP only — the real "wedged?" gate is the provider's
-    // per-line IDLE timeout (LIGUS_TURN_IDLE_TIMEOUT_SECS), which resets on any
-    // activity and so doesn't kill a long-but-working turn. This cap just stops a
-    // runaway that streams forever; it must sit well above a real turn's cost — a
-    // cold build + `cargo test` here can exceed ten minutes, so the old 600s
-    // default was below the floor for the repo's own turns and killed working
-    // agents (#100). One hour by default; override with LIGUS_TURN_TIMEOUT_SECS.
-    // Dropping the future on timeout kills any spawned CLI (kill_on_drop).
-    let turn_timeout = std::time::Duration::from_secs(
-        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&s| s > 0)
-            .unwrap_or(3600),
-    );
-    // Honor the Stop button on EVERY dispatch path — not just send_message's outer
-    // select. maybe_respond and the workflow driver call run_prepared_turn directly,
-    // so without this, Stop was a no-op for a synced-in or workflow turn (it ran to
-    // the timeout backstop). Racing the session's stop signal here aborts the stream
-    // (dropping it kills any CLI via kill_on_drop). send_message keeps its own biased
-    // outer select, which still wins there, so its clean break path is unchanged.
-    let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
-    let mut stopped = false;
     // The runtime with the envelope's own flags (no web tools, no foreign MCP,
     // network off) appended for subprocess agents.
     let enforced_runtime = {
@@ -9012,286 +8501,75 @@ async fn run_prepared_turn_inner(
         rt
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
-    // runs under this policy in the host's OS sandbox.
-    let mut sandbox_policy = crate::guards::turn_child_policy(
-        state,
-        session,
-        &envelope,
-        &gate_plan,
-        worktree.is_some() || lazy_worktree.is_some(),
-        &scope.catalog.mcp,
-        shell_allowed,
-        grants.paths_for(responder.agent_id),
-    );
-    // One list of refused endpoints for the whole turn.
+    // runs under this policy in the host's OS sandbox; the engine adds the
+    // worktree's isolation and the Ligus MCP socket. From the turn's own MCP
+    // catalog (review F14), with one list of refused endpoints for the turn.
+    let mut sandbox_policy =
+        crate::guards::turn_child_policy(state, session, &envelope, &gate_plan, false, &scope.catalog.mcp, shell_allowed, grants.paths_for(responder.agent_id));
     sandbox_policy.denials = child_policy.denials.clone();
-    // The turn's Ligus MCP socket: the one extra path the sandbox allows.
-    sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
-    let sandbox_denials = sandbox_policy.denials.clone();
-    let agent_scope = ligus.scope();
-    let turn_notes = agent_scope.notes.clone();
-    let stream_fut = hive_runtime::executor::with_turn(sandbox_policy, hive_runtime::agent_turn::with_agent_turn(agent_scope, dispatch::stream_with_tools(
-        &enforced_runtime,
-        Some(&system),
-        &turns,
-        working_dir,
-        &git_env,
-        1024,
-        http_tools
-            .as_ref()
-            .filter(|t| !t.is_empty())
-            .map(|t| dispatch::ToolSet { defs: t.defs(), executor: t, max_rounds: tool_rounds }),
-        |text| {
-            pending.push_str(&text);
-            let _ = app.emit(
-                ChatStreamEvent::EVENT,
-                ChatStreamEvent {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    phase: "delta".into(),
-                    text,
-                },
-            );
-            if last_flush.elapsed() >= FLUSH_EVERY {
-                let chunk = std::mem::take(&mut pending);
-                let mut svc = state.service.lock().unwrap();
-                let _ = svc.append_chunk(session_id, workspace_id, message_id, chunk);
-                last_flush = std::time::Instant::now();
-            }
-        },
-        // Live "background processing" for the UI: the tool calls the agent makes,
-        // their results, and thinking. Pushed as a separate Tauri event and shown
-        // under the generating bubble; ephemeral (never persisted to the log).
-        |act| {
-            crate::flow::observe_activity(message_id, &act);
-            let ev = match act {
-                dispatch::StreamActivity::Tool { id, name, input_json } => ChatActivityEvent {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    kind: "tool".into(),
-                    id,
-                    name,
-                    input_json,
-                    content: String::new(),
-                    is_error: false,
-                },
-                dispatch::StreamActivity::ToolResult { call_id, is_error, content } => ChatActivityEvent {
-                    content: {
-                        injection_hits.scan(&content);
-                        content
-                    },
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    kind: "result".into(),
-                    id: call_id,
-                    name: String::new(),
-                    input_json: String::new(),
-                    is_error,
-                },
-                // `content` carries a reasoning model's chain-of-thought fragment
-                // (empty for Claude Code's bare marker). Never persisted, never
-                // parsed for mentions/directives.
-                dispatch::StreamActivity::Thinking { text } => ChatActivityEvent {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    kind: "thinking".into(),
-                    id: String::new(),
-                    name: String::new(),
-                    input_json: String::new(),
-                    content: text,
-                    is_error: false,
-                },
-                // Plan-window telemetry: feeds the staggered throttles, not the UI stream.
-                dispatch::StreamActivity::RateLimit { window } => {
-                    crate::guards::record_plan_window(state, responder.runtime.provider, window);
-                    return;
-                }
-            };
-            let _ = app.emit(ChatActivityEvent::EVENT, ev);
-        },
-    )));
-    let result = tokio::select! {
-        biased;
-        _ = stop.notified() => {
-            stopped = true;
-            Err(ProviderError::Subprocess("stopped by user".into()))
-        }
-        r = tokio::time::timeout(turn_timeout, stream_fut) => match r {
-            Ok(r) => r,
-            Err(_) => Err(ProviderError::Subprocess(format!(
-                "runtime timed out after {}s with no completion — the agent may be waiting on login/auth, input, or a blocked tool. Verify it with Settings \u{2192} Models \u{2192} Test, or raise LIGUS_TURN_TIMEOUT_SECS.",
-                turn_timeout.as_secs()
-            ))),
+    // Honor the Stop button on every dispatch path (send_message,
+    // maybe_respond, workflow stages): the engine races the stop signal.
+    let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
+    let host = crate::turn_host::DesktopHost {
+        app,
+        state,
+        session_id,
+        workspace_id,
+        agent_id: responder.agent_id,
+        provider: responder.runtime.provider,
+        // The turn's own catalog and directory (review F14), resolved above
+        // with the repo gate: never the chat or folder the window shows.
+        mcp: scope.catalog.mcp.clone(),
+        checkout: hive_runtime::turn_engine::Checkout {
+            context: scope.repo.as_ref().map(|r| r.context.clone()).unwrap_or_default(),
+            workspace_root: Some(scope.dir.clone()),
+            // Worktrees are cut from the chat's checkout (the repo's, or the
+            // workspace's bound folder), never from its chat worktree.
+            repo_root: Some(turn_repo_root(&scope.repo_root, &scope.dir).into()),
+            base: scope.repo.as_ref().map(|r| (r.tip.clone(), r.base_branch.clone())),
         },
     };
-    crate::guards::record_sandbox_egress_denials(state, workspace_id, session_id, &sandbox_denials.lock().map(|d| d.clone()).unwrap_or_default());
-    // Patch-leaving: what the tool loop measurably achieved, as signals.
-    if let Some(tools) = &http_tools {
-        crate::guards::record_progress(state, workspace_id, session_id, tools.progress());
-    }
-    // The worktree a lazily isolating turn cut on its first write, if it
-    // wrote at all; from here on it is handled like an eager one.
-    let worktree = worktree.or_else(|| lazy_worktree.as_ref().and_then(|l| l.finish()));
-
-    match result {
-        Ok(full) => {
-            tracing::info!(target: "dispatch", chars = full.len(), "turn completed");
-            // Definitions `propose_workflow` accepted are filed exactly like a
-            // `[[workflow:]]` directive in the reply.
-            let accepted = http_tools.as_ref().map(|t| t.accepted_workflows()).unwrap_or_default();
-            let full = hive_runtime::workflow_tool::append_as_directives(&full, &accepted);
-            // The isolated worktree's changes, read before the reply is
-            // finalized so its directives know the edits are already in review.
-            let captured = worktree
-                .as_ref()
-                .and_then(|wt| wt.diff().ok())
-                .filter(|diff| !diff.trim().is_empty());
-            // Self-medication: an injection marker in a tool result, a
-            // credential in the diff, or an unrequested CI change locks the
-            // chat down before its proposal reaches anyone.
-            {
-                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
-                crate::guards::self_medicate_after_turn(
-                    state,
-                    workspace_id,
-                    session_id,
-                    message_id,
-                    &injection_hits.take(),
-                    captured.as_deref(),
-                    &changed,
-                    &turns,
-                );
-            }
-            let mcp_effects = ligus.effects();
-            let body = {
-                let root = workspace_root.clone();
-                let mut svc = state.service.lock().unwrap();
-                finalize_reply_with(
-                    &mut svc, session_id, workspace_id, message_id, &responder.author, responder.agent_id, &root, &full,
-                    captured.is_some(),
-                    mcp_effects.as_ref(),
-                )
-            };
-            // Capture the isolated worktree's changes as a review-gated proposal,
-            // then remove the worktree — the stored diff is the portable artifact
-            // (any reviewer sees it; Implement applies it to the workspace root).
-            // Done before `body?` so a finalize error never orphans the worktree.
-            if let Some(wt) = worktree {
-                if body.is_ok() {
-                    if let Some(diff) = captured {
-                        let files = wt.changed_files().unwrap_or_default();
-                        let n = files.len();
-                        let title = format!(
-                            "{} proposed changes to {} file{}",
-                            responder.author,
-                            n,
-                            if n == 1 { "" } else { "s" }
-                        );
-                        // Authorless: the human reviewing can approve it (the
-                        // self-approval guard excludes no one), so a solo user
-                        // can review + implement their agent's work.
-                        let mut prop = hive_core::ActionProposal::file_diff(title, "", diff, files);
-                        // Record which agent produced it so "Send to agent to
-                        // revise" re-dispatches the right one (None = primary @hive).
-                        prop.producing_agent_id = responder.agent_id;
-                        // What it was made on (the repo comes from the chat).
-                        if let Some(r) = &repo_turn {
-                            prop.base_commit = Some(r.tip.clone());
-                            prop.base_ref = r.base_branch.clone();
-                        }
-                        prop.produced_on = Some(state.service.lock().unwrap().device_id());
-                        // `ligus_propose_diff` named and described it.
-                        if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
-                            prop.title = t;
-                            prop.body = b;
-                            prop.task_class = tc;
-                        }
-                        flow::before_file_proposal(state, session_id, workspace_id, responder.agent_id, &mut prop);
-                        {
-                            let mut svc = state.service.lock().unwrap();
-                            let filed = prop.id;
-                            // Filed as the agent's own effect (A3 key, Agent tier).
-                            let ok = svc.as_agent(responder.agent_id, |svc| svc.upsert_proposal(session_id, workspace_id, prop)).is_ok();
-                            if ok {
-                                proposal_sets::group_same_trigger(&mut svc, session_id, workspace_id, filed);
-                            }
-                        }
-                        // Nudge the Review pane to refetch so the change surfaces.
-                        let _ = app.emit("workspace://synced", 1);
-                    }
-                }
-                flow::release_worktree(state, wt, session_id);
-            }
-            let notes = turn_notes.lock().map(|n| n.clone()).unwrap_or_default();
-            ligus.finish(state, session_id, workspace_id, &responder.author, &notes);
-            let body = body?;
-            let _ = app.emit(
-                ChatStreamEvent::EVENT,
-                ChatStreamEvent {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    phase: "completed".into(),
-                    text: body.clone(),
-                },
-            );
-            Ok(TurnOutcome { message_id, body })
-        }
-        Err(e) => {
-            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
-            crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &injection_hits.take(), None, &[], &turns);
-            // Discard the isolated worktree — a failed/aborted turn's partial
-            // edits are not surfaced (no proposal), and the worktree is pruned.
-            if let Some(wt) = worktree {
-                flow::release_worktree(state, wt, session_id);
-            }
-            let msg = e.to_string();
-            if stopped {
-                // User pressed Stop — this isn't a failure. Finalize the streaming
-                // placeholder cleanly (no "[error]" text) and retire the live bubble
-                // with a terminal "completed" phase instead of a red error banner.
-                tracing::info!(target: "dispatch", "turn stopped by user");
-                {
-                    let mut svc = state.service.lock().unwrap();
-                    let _ = svc.complete_assistant_message(
-                        session_id,
-                        workspace_id,
-                        message_id,
-                        String::new(),
-                    );
-                }
-                let _ = app.emit(
-                    ChatStreamEvent::EVENT,
-                    ChatStreamEvent {
-                        session_id: session_id.to_string(),
-                        message_id: message_id.to_string(),
-                        phase: "completed".into(),
-                        text: String::new(),
-                    },
-                );
-                return Err(msg);
-            }
-            tracing::error!(target: "dispatch", error = %msg, "turn failed");
-            crate::guards::record_usage_error(state, responder.runtime.provider, &msg);
-            {
-                let mut svc = state.service.lock().unwrap();
-                let _ = svc.complete_assistant_message(
-                    session_id,
-                    workspace_id,
-                    message_id,
-                    format!("[error] {msg}"),
-                );
-            }
-            let _ = app.emit(
-                ChatStreamEvent::EVENT,
-                ChatStreamEvent {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    phase: "error".into(),
-                    text: msg.clone(),
-                },
-            );
-            Err(msg)
-        }
+    let input = hive_runtime::turn_engine::TurnInput {
+        workspace_id,
+        chat_id: session_id,
+        session: session.clone(),
+        reply_to,
+        responder: hive_runtime::turn_engine::Responder {
+            author: responder.author.clone(),
+            effect_author: responder.author.clone(),
+            runtime_id: responder.runtime_id.clone(),
+            agent_id: responder.agent_id,
+            runtime: enforced_runtime,
+        },
+        system,
+        turns,
+        gate: gate_plan,
+        envelope: envelope.clone(),
+        shell_allowed,
+        policy: sandbox_policy,
+        executor: hive_runtime::executor::default_executor(),
+        tools: hive_runtime::turn_engine::ToolOptions {
+            builtin: builtin_on,
+            write_in_place: builtin_write_in_place,
+            run_command: builtin_run_command,
+            mcp_after_reads: false,
+            remote_file_tools: false,
+        },
+        write_capable,
+        // A tightened envelope never lets a write-capable agent run in place.
+        require_isolation: envelope.isolate_writes,
+        stop: Some(stop),
+        timeout: hive_runtime::turn_engine::turn_timeout(),
+        options: hive_runtime::turn_engine::EngineOptions {
+            git_attribution: true,
+            scan_injections: true,
+            detailed_report: true,
+            ..Default::default()
+        },
+    };
+    match hive_runtime::turn_engine::run(&host, input).await {
+        Ok(o) => Ok(TurnOutcome { message_id: o.message_id, body: o.body }),
+        Err(e) => Err(e.message),
     }
 }
 
@@ -9332,15 +8610,6 @@ fn reset_chat_dispatch(state: State<AppState>, session_id: String) -> Result<(),
         let _ = svc.clear_stale_streaming();
     }
     Ok(())
-}
-
-/// Why a turn stopped right after its placeholder: another device's answer
-/// to the same turn committed first.
-const TURN_FENCED: &str = "another device answered this turn first";
-
-/// Whether this device's placeholder `mid` was fenced by the dispatcher.
-fn placeholder_fenced(svc: &hive_runtime::ChatService, session_id: Uuid, mid: Uuid) -> bool {
-    svc.load(session_id).ok().flatten().is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
 }
 
 /// Ask the dispatcher what this desktop does about a turn (design
