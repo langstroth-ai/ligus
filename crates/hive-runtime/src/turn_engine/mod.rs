@@ -373,7 +373,10 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let hits = InjectionHits::default();
     let mcp_tools = if tools_allowed && (anthropic_loop || rt.runs_agent_tools()) {
         let servers = host.mcp_servers(&envelope.egress, shell_allowed).await;
-        mcp::tool_set(servers, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t)).await
+        // Listing starts stdio servers: under the turn's policy and executor,
+        // like every other child of the turn.
+        let listing = mcp::tool_set(servers, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t));
+        crate::executor::with_executor(executor.clone(), crate::executor::with_turn(policy.clone(), listing)).await
     } else {
         None
     };

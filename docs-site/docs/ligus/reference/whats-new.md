@@ -6,6 +6,15 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **One agent-turn engine on every host.** The desktop, `ligus worker` /
+  `ligus serve` and the `lt` terminal client run agent turns through the
+  same engine, so an agent in `lt` can use tools, edit in a per-turn
+  worktree, file proposals and hand off. Two rules now hold on every host:
+  an Anthropic turn with MCP or Ligus tools passes the chat's repository
+  gate like any other turn, and listing a turn's MCP tools runs under the
+  turn's sandbox policy. A box offers the Ligus tools to every runtime that
+  can call them. See
+  [One turn engine on every host](../concepts/agents.md#one-turn-engine-on-every-host).
 - **Workspace repositories.** A workspace names the repositories it works on;
   each device keeps its own checkouts of them, private to that device, and
   hosts report which ones they have (never where). An Admin adds a repository
