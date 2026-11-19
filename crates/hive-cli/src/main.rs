@@ -444,12 +444,7 @@ fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
 
 /// One push + pull round: (pushed, pulled).
 async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(usize, usize)> {
-    let to_push = engine.take_unpushed(store)?;
-    let pushed = to_push.len();
-    engine.push_envelopes(&to_push).await?;
-    // One bounded round of relay pages; `engine.is_behind()` says another is due.
-    let pulled = engine.pull_round(store).await?;
-    Ok((pushed, pulled))
+    Ok(hive_runtime::sync_service::sync_round(engine, store).await?)
 }
 
 /// Resolve any `[Attached-blob: …]` references in agent turns to local files
