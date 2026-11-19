@@ -8657,13 +8657,26 @@ async fn run_prepared_turn_inner(
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason);
     }
+    // The children this turn spawns before its stream (the shell probe, the
+    // MCP tool listing, the API tool loop's MCP calls) run under the turn's
+    // own policy, as the stream's do: never the out-of-turn baseline.
+    let child_policy = crate::guards::turn_child_policy(
+        state,
+        session,
+        &envelope,
+        &gate_plan,
+        false,
+        &scope.catalog.mcp,
+        shell_allowed,
+        grants.paths_for(responder.agent_id),
+    );
     // An MCP server that offers a shell (`bash`, `exec`, `run_command`, ...)
     // is a shell: a turn without the shell gets only servers this device has
     // seen list no such tool (it lists the others' tools first).
     let enforcement = if shell_allowed || !responder.runtime.provider.is_cli_agent() {
         enforcement
     } else {
-        crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress).await;
+        hive_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
         crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, false)
     };
     let tools_allowed = gate_plan.allows_tools();
@@ -8672,9 +8685,11 @@ async fn run_prepared_turn_inner(
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
     if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
-        if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp, &scope.dir, shell_allowed)
-                .await?
+        if let Some(outcome) = hive_runtime::executor::with_turn(
+            child_policy.clone(),
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp, &scope.dir, shell_allowed),
+        )
+        .await?
         {
             return Ok(outcome);
         }
@@ -8689,7 +8704,7 @@ async fn run_prepared_turn_inner(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp, shell_allowed).await
+        hive_runtime::executor::with_turn(child_policy.clone(), mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp, shell_allowed)).await
     } else {
         None
     };
@@ -8993,12 +9008,18 @@ async fn run_prepared_turn_inner(
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
-    let mut sandbox_policy = crate::guards::turn_sandbox_policy_with(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some(), &scope.catalog.mcp);
-    sandbox_policy.shell_allowed = shell_allowed;
-    if !shell_allowed {
-        sandbox_policy.mcp_ids.retain(|id| crate::guards::mcp_known_shell_free(state, id));
-    }
-    sandbox_policy.grants = grants.paths_for(responder.agent_id);
+    let mut sandbox_policy = crate::guards::turn_child_policy(
+        state,
+        session,
+        &envelope,
+        &gate_plan,
+        worktree.is_some() || lazy_worktree.is_some(),
+        &scope.catalog.mcp,
+        shell_allowed,
+        grants.paths_for(responder.agent_id),
+    );
+    // One list of refused endpoints for the whole turn.
+    sandbox_policy.denials = child_policy.denials.clone();
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
