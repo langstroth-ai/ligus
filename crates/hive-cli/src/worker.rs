@@ -73,6 +73,21 @@ pub struct WorkerCtx<'a> {
     /// This host's Ligus MCP server (Track D). `None`: agents use the reply
     /// directives only.
     pub ligus: Option<std::sync::Arc<LigusMcp>>,
+    /// Host liveness from the relay's presence channel (`ligus serve`), so
+    /// the dispatcher never hands over a turn a live device holds. `None`:
+    /// every holder counts as live (only a revoked or removed holder's turn
+    /// is handed over).
+    pub presence: Option<&'a hive_runtime::HostPresence>,
+}
+
+/// What the drain loop remembers between ticks.
+#[derive(Default)]
+pub struct DrainState {
+    /// Mentions whose turn hard-failed here (not retried).
+    pub failed: HashSet<Uuid>,
+    /// When this host first saw each turn it is eligible for but doesn't
+    /// hold (the dispatcher's wait clock).
+    pub seen: std::collections::HashMap<Uuid, std::time::Instant>,
 }
 
 /// Where a headless host's chat service lives, for its Ligus MCP server.
@@ -305,14 +320,18 @@ pub fn agent_workspace_runtime(
 pub async fn drain_tick(
     ctx: &WorkerCtx<'_>,
     svc: &Mutex<ChatService>,
-    failed: &mut HashSet<Uuid>,
+    drain: &mut DrainState,
     sink: &dyn TurnSink,
 ) -> Result<()> {
+    let failed = &mut drain.failed;
     // Bound the hard-failed set over a long uptime — past a generous cap,
     // drop it so transiently-failed mentions get another chance and memory
     // can't creep unbounded.
     if failed.len() >= 8192 {
         failed.clear();
+    }
+    if drain.seen.len() >= 8192 {
+        drain.seen.clear();
     }
     let (work, runtimes) = {
         let mut svc = lock(svc);
@@ -356,14 +375,39 @@ pub async fn drain_tick(
                     .filter(|pm| hosted.contains(&pm.agent_id) && !failed.contains(&pm.message_id)),
             );
         }
-        // Claim each turn so a worker and the agent-owner's desktop (or another
-        // worker) don't both answer the same mention. Back off if we lost.
+        // The device-keyed dispatcher (design repos-and-checkouts 11): this
+        // host is eligible for every mention of an agent it hosts. It claims
+        // with its signed coverage of the chat's repo (the repo gate's own
+        // check, read-only, before claiming: review F8), waits while a
+        // covering host goes first, and hands over a turn whose holder went
+        // silent. Back off when another device holds it.
+        let roster = svc.workspace_roster(ctx.ws).ok();
+        let online: HashSet<Uuid> = match ctx.presence {
+            Some(p) => {
+                let now = hive_core::Timestamp::now();
+                svc.list_hosts(ctx.ws).unwrap_or_default().iter().filter(|h| p.is_online(h, &now)).filter_map(|h| Uuid::parse_str(&h.id).ok()).collect()
+            }
+            None => HashSet::new(),
+        };
+        let live = |d: Uuid| ctx.presence.is_none() || online.contains(&d);
         let mut work = Vec::new();
         for pm in candidates {
-            let Some(ws) = svc.load(pm.session_id)?.map(|s| s.workspace_id) else { continue };
-            match svc.claim_turn(pm.session_id, ws, pm.message_id) {
-                Ok(true) => work.push(pm),
-                Ok(false) => {}
+            let Some(s) = svc.load(pm.session_id)? else { continue };
+            let coverage = match roster.as_ref() {
+                Some(r) => hive_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &hive_runtime::repos::cloning()),
+                None => hive_core::dispatch::Coverage::NoRepo,
+            };
+            let first = *drain.seen.entry(pm.message_id).or_insert_with(std::time::Instant::now);
+            let dctx = hive_runtime::DispatchCtx { eligible: true, coverage, waited: first.elapsed(), holder_live: &live };
+            match svc.dispatch_turn(pm.session_id, s.workspace_id, pm.message_id, None, dctx) {
+                Ok(hive_core::dispatch::Step::Run) => {
+                    drain.seen.remove(&pm.message_id);
+                    work.push(pm)
+                }
+                Ok(hive_core::dispatch::Step::StandDown) => {
+                    drain.seen.remove(&pm.message_id);
+                }
+                Ok(_) => {}
                 Err(e) => eprintln!("worker: claim {} failed: {e}", pm.message_id),
             }
         }

@@ -1557,14 +1557,15 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 host_label: &shared.opts.label,
                 settings: ToolSettings::from_env(),
                 ligus: Some(worker::ligus_server(shared.clone())),
+                presence: Some(&shared.presence),
             };
             let sink = ServeSink(shared.clone());
-            let mut failed: HashSet<Uuid> = HashSet::new();
+            let mut drain = worker::DrainState::default();
             while !shared.stopping() {
                 if !worker::apply_tick(&ctx, &shared.svc).is_empty() {
                     shared.after_write();
                 }
-                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut failed, &sink).await {
+                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut drain, &sink).await {
                     eprintln!("worker: tick failed (retrying): {e}");
                 }
                 tokio::select! {

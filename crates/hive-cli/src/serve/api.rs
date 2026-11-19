@@ -807,8 +807,10 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
         (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc), svc.author().clone())
     };
     let me = super::notify::Me::in_chat(&author, &chat, &links);
+    // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
     let list: Vec<Value> = slice
         .iter()
+        .filter(|m| !m.superseded)
         .map(|m| {
             let mut v = linked_message_dto(&chat, m, &links, viewer);
             add_requester(&mut v, &chat, m, &me);

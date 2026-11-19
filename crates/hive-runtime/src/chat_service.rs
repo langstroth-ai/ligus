@@ -1429,13 +1429,70 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id },
+            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id, epoch: 0, supersedes: None, repo_id: None },
         )?;
         Ok(self
             .load(session_id)?
             .and_then(|s| s.turn_claims.get(&trigger_id).copied())
             .map(|w| w == self.device_id)
             .unwrap_or(true))
+    }
+
+    /// The device-keyed dispatcher's one entry (design repos-and-checkouts
+    /// 11; `hive_core::dispatch`): decide what this device does about the
+    /// turn `trigger` (for `agent`, a hand-off receiver; `None` for the plain
+    /// trigger key), write the claim it calls for, re-fold, and say whether
+    /// to run, look again later, or stand down. Never returns
+    /// [`hive_core::dispatch::Step::Claim`].
+    ///
+    /// `ctx` carries what only the caller knows: eligibility from
+    /// `turn_runs_here` (both dispatch gates), this host's coverage of the
+    /// chat's repo, how long it has waited and whether the holder is live
+    /// on the presence channel. Whether the holder is gone (revoked, or no
+    /// longer a member's) is read from the current roster here.
+    pub fn dispatch_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<Uuid>, ctx: DispatchCtx) -> Result<hive_core::dispatch::Step> {
+        use hive_core::dispatch::{self as d, Step};
+        let key = hive_core::turn_claim_key(trigger, agent);
+        let Some(session) = self.load(session_id)? else { return Ok(Step::StandDown) };
+        let roster = self.workspace_roster(workspace_id).ok();
+        let me = self.device_id;
+        let view = |s: &ChatSession| {
+            let holder = s.turn_claims.get(&key).copied();
+            let age = s
+                .messages
+                .iter()
+                .find(|m| m.id == trigger)
+                .map(|m| {
+                    let secs = (hive_core::Timestamp::now().0 - m.created_at.0).whole_seconds();
+                    std::time::Duration::from_secs(secs.max(0) as u64)
+                })
+                .unwrap_or_default();
+            d::View {
+                me,
+                eligible: ctx.eligible,
+                coverage: ctx.coverage,
+                waited: ctx.waited,
+                age,
+                holder_live: holder.is_some_and(|h| (ctx.holder_live)(h)),
+                holder_gone: holder.is_some_and(|h| roster.as_ref().is_some_and(|r| d::holder_gone(r, h))),
+            }
+        };
+        let repo = session.repo.as_ref().and_then(|r| r.repo_id);
+        match d::decide(&session, key, repo, &view(&session)) {
+            Step::Claim(c) => {
+                self.append_signed(
+                    session_id,
+                    workspace_id,
+                    SessionEvent::TurnClaimed { trigger_id: key, device_id: self.device_id, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id },
+                )?;
+                let Some(after) = self.load(session_id)? else { return Ok(Step::StandDown) };
+                Ok(match d::decide(&after, key, repo, &view(&after)) {
+                    Step::Claim(_) => Step::Wait(std::time::Duration::from_secs(1)),
+                    other => other,
+                })
+            }
+            other => Ok(other),
+        }
     }
 
     /// [`Self::claim_turn`] for one receiver of `trigger`: a hand-off reply
@@ -3116,7 +3173,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
                 continue;
             };
             let answered = session.messages[i + 1..].iter().any(|later| {
-                if later.role != MessageRole::Assistant {
+                if later.role != MessageRole::Assistant || later.superseded {
                     return false;
                 }
                 match later.reply_to_message_id {
@@ -3168,6 +3225,26 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
 /// hand-off starts its receiver wherever that agent runs, exactly once: a
 /// duplicate delivery folds to the same card, and the receiver's reply
 /// (stamped as answering the handing reply) clears it.
+/// What only a dispatch site knows about a turn ([`ChatService::dispatch_turn`]).
+pub struct DispatchCtx<'a> {
+    /// `turn_runs_here` at this gate (a local-only or solo device always is).
+    pub eligible: bool,
+    /// This host's coverage of the chat's repo (`repos::dispatch_coverage`).
+    pub coverage: hive_core::dispatch::Coverage,
+    /// How long this device has watched the turn.
+    pub waited: std::time::Duration,
+    /// Whether a device beats on the presence channel now.
+    pub holder_live: &'a dyn Fn(Uuid) -> bool,
+}
+
+impl<'a> DispatchCtx<'a> {
+    /// An eligible device with no repo to cover, that hasn't waited, and
+    /// sees every holder as live (so it never hands a turn over).
+    pub fn plain(holder_live: &'a dyn Fn(Uuid) -> bool) -> Self {
+        Self { eligible: true, coverage: hive_core::dispatch::Coverage::NoRepo, waited: std::time::Duration::ZERO, holder_live }
+    }
+}
+
 pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
     let mut out = pending_mentions(session);
     if session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH {
@@ -3181,7 +3258,7 @@ pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
         // cascade of the same reply may have answered it first).
         let answered = session.messages[at + 1..]
             .iter()
-            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id));
+            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id) && !m.superseded);
         if !answered {
             out.retain(|p| p.agent_id != agent_id);
             out.push(PendingMention { session_id: session.id, message_id: trigger, agent_id, agent_name: agent.name.clone() });
@@ -3209,6 +3286,7 @@ pub fn empty_reply_notice(runtime_label: &str) -> String {
 /// every host's queue use this same rule, so exactly one responder runs.
 pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Option<&'a hive_core::WorkspaceAgent> {
     if !matches!(reply.role, MessageRole::Assistant | MessageRole::Agent)
+        || reply.superseded
         || session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH
     {
         return None;
@@ -3304,7 +3382,8 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
         Some(oid) => m.responder_id == Some(oid),
         None => m.responder_id.is_none() && !own_author.is_empty() && m.author == own_author,
     };
-    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming).collect();
+    // A superseded answer (the dispatcher fenced a duplicate) is never context.
+    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded).collect();
     let mut turns: Vec<ChatTurn> = kept
         .iter()
         .filter_map(|m| {
@@ -3449,6 +3528,49 @@ mod tests {
         (ChatService::new(store, device_id, kp, account_kp, author), public)
     }
 
+    /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
+    /// A holds is watched, not run; once A stays silent past the claim
+    /// timeout (and isn't live) this device hands it over and runs it; A's
+    /// late answer is then fenced.
+    #[test]
+    fn dispatch_turn_watches_then_hands_over_a_silent_holder() {
+        use hive_core::dispatch::{Coverage, Step, CLAIM_TIMEOUT};
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let trigger = svc.post_user_message(chat.id, wid, "@hive go").unwrap().id;
+        let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        fn live(_: Uuid) -> bool {
+            true
+        }
+        fn silent(_: Uuid) -> bool {
+            false
+        }
+        let ctx = |waited, holder_live: &'static dyn Fn(Uuid) -> bool| DispatchCtx { eligible: true, coverage: Coverage::NoRepo, waited, holder_live };
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(std::time::Duration::ZERO, &silent)).unwrap(), Step::Wait(_)));
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &live)).unwrap(), Step::Wait(_)), "a live holder keeps it");
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::Run);
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.turn_claims[&trigger], svc.device_id());
+        assert_eq!(s.turn_dispatch[&trigger].epoch, 2);
+        // A's late answer (signed by A) is fenced; ours commits.
+        let mut late = ChatMessage::new(MessageRole::Assistant, "hive", "late");
+        late.reply_to_message_id = Some(trigger);
+        late.origin_device_id = Some(device_a);
+        let late_id = late.id;
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::MessageAppended { message: late }).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        let ours = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, Some(trigger)).unwrap();
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.messages.iter().find(|m| m.id == late_id).unwrap().superseded);
+        assert_eq!(s.turn_dispatch[&trigger].answer, Some(ours));
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::StandDown);
+    }
+
     /// A hand-off reply that starts two receivers on two devices: device A
     /// claims the reply for the first receiver, and device B must still be
     /// able to claim it for the second one (claims keyed by trigger alone
@@ -3464,7 +3586,7 @@ mod tests {
         let device_a = Uuid::new_v4();
         // Device A's claim for the first receiver, signed by device A and
         // synced in (this device can't claim on A's behalf).
-        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a };
+        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a, epoch: 0, supersedes: None, repo_id: None };
         assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
         let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
         hive_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());

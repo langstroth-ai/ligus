@@ -144,6 +144,16 @@ pub(crate) fn runs_here(state: &AppState, svc: &hive_runtime::ChatService, sessi
     matches!(rr::turn_checkout(svc.store(), svc.device_id(), &host_label(), session, &roster, &rr::cloning()), TurnCheckout::Ready(_))
 }
 
+/// This device's coverage of `session`'s repo for the dispatcher (design
+/// repos-and-checkouts 11.4): read-only, what its own gate would say.
+pub(crate) fn dispatch_coverage(svc: &hive_runtime::ChatService, session: &ChatSession) -> hive_core::dispatch::Coverage {
+    if session.repo.as_ref().and_then(|r| r.repo_id).is_none() {
+        return hive_core::dispatch::Coverage::NoRepo;
+    }
+    let Ok(roster) = svc.workspace_roster(session.workspace_id) else { return hive_core::dispatch::Coverage::Missing };
+    rr::dispatch_coverage(svc.store(), svc.device_id(), session, &roster, &rr::cloning())
+}
+
 fn ws_of(state: &AppState) -> Uuid {
     state.active_workspace_id()
 }

@@ -408,6 +408,34 @@ pub fn turn_checkout(
     TurnCheckout::Ready(ReadyCheckout { repo: entry.repo.clone(), path, via_fork: via == MatchVia::Upstream })
 }
 
+/// This host's coverage of a chat's repo for the dispatcher (design 11.4),
+/// read-only: what [`turn_checkout`] would say, without claiming the
+/// checkout's marker. `Present` is what this device signs into its claim.
+pub fn dispatch_coverage(store: &EventStore, me: Uuid, session: &ChatSession, roster: &RosterState, cloning: &HashSet<Uuid>) -> hive_core::dispatch::Coverage {
+    use hive_core::dispatch::Coverage;
+    let Some(repo_id) = session.repo.as_ref().and_then(|r| r.repo_id) else { return Coverage::NoRepo };
+    let Some(entry) = roster.repos.get(&repo_id).filter(|e| !e.removed) else { return Coverage::Missing };
+    if cloning.contains(&repo_id) {
+        return Coverage::Cloning;
+    }
+    let path = match store.chat_checkout(session.id, repo_id).ok().flatten() {
+        Some(p) => Some(p),
+        None => store.primary_checkout(session.workspace_id, repo_id).ok().flatten().map(|m| m.path),
+    };
+    let Some(path) = path else { return Coverage::Missing };
+    if !crate::git_worktree::is_git_repo(&path) {
+        return Coverage::Missing;
+    }
+    let aliases = store.ssh_host_aliases().unwrap_or_default();
+    if checkout_matches(&path, &entry.repo, &aliases).is_none() {
+        return Coverage::Missing;
+    }
+    match marker::manager_of(&path, me) {
+        Some(marker::Manager::Other { .. }) => Coverage::Missing,
+        _ => Coverage::Present,
+    }
+}
+
 /// What a turn's system prompt says about the chat's repo on this host.
 pub fn turn_context(c: &TurnCheckout, chat_id: Uuid, base_branch: &str) -> String {
     match c {

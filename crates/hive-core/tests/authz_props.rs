@@ -1819,9 +1819,9 @@ fn a_turn_claim_counts_only_from_the_device_it_names() {
     let mut w = World::new();
     let (a, b) = (Uuid::from_u128(0xDA), Uuid::from_u128(0xDB));
     let trigger = Uuid::from_u128(0x77);
-    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a });
+    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a, epoch: 0, supersedes: None, repo_id: None });
     w.chat.iter_mut().find(|e| e.event_id == forged).unwrap().signer_device_id = Some(b);
-    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b });
+    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b, epoch: 0, supersedes: None, repo_id: None });
     w.chat.iter_mut().find(|e| e.event_id == honest).unwrap().signer_device_id = Some(b);
     let v = w.verdicts();
     assert_eq!(v[&forged], Verdict::Denied);

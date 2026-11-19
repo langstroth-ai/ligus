@@ -1052,7 +1052,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 })
                 .filter(|m| {
                     // Already answered (by another `ligus agent`, or the desktop).
-                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && r.reply_to_message_id == Some(m.id))
+                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && !r.superseded && r.reply_to_message_id == Some(m.id))
                 })
                 .cloned()
                 .collect();
@@ -1294,11 +1294,13 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         host_label: &host_label,
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
+        presence: None,
     };
     // Registered, store open, interrupted turns recovered: ready for work.
     ready.store(true, std::sync::atomic::Ordering::Relaxed);
-    // Mentions whose reply hard-failed, so we don't retry them every tick.
-    let mut failed: HashSet<Uuid> = HashSet::new();
+    // Mentions whose reply hard-failed (not retried every tick) and the
+    // dispatcher's wait clock.
+    let mut drain = worker::DrainState::default();
     // Exponential backoff on repeated relay-sync failures, so a relay outage
     // isn't hammered every 3s. Resets to the base cadence on the first success.
     let mut sync_fails: u32 = 0;
@@ -1325,7 +1327,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         // A transient store/DB error inside a tick must NOT kill the daemon —
         // log it and retry on the next tick (bare `?` here used to abort the loop).
         worker::apply_tick(&ctx, &svc);
-        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
+        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut drain, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
         if cfg.relay_url.is_some() {
