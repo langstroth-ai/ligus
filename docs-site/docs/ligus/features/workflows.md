@@ -16,14 +16,6 @@ hand-built editor: you describe the pipeline you want in the chat, an
 agent drafts the definition, and it arrives in the **Review** pane as a
 proposal. Approving it adds the workflow to the chat's **Workflows** pane.
 
-!!! info "Changed in 1.18"
-    Earlier versions had a visual DAG editor and two presets in the
-    Workflows pane, and an agent's workflow was saved without review. The
-    editor and presets are gone, and every agent-authored workflow (new or
-    revised) now goes through a proposal first. Workflows you already have
-    keep working unchanged: they stay listed, run, and can be paused,
-    deleted or revised by an agent.
-
 ## Getting a workflow
 
 Ask any agent in the chat, for example *"build me a workflow that triages
@@ -232,7 +224,3 @@ host can run on an idle device that has the agent's runtime. See
 - Definitions belong to the chat they're created in.
 - Parallel stages share the chat transcript, so siblings can see each
   other's prompts in context.
-- In a workspace with devices on older Ligus versions, an older desktop
-  shows a workflow proposal as a plain decision: approving it there
-  doesn't add the workflow until a device on 1.18 or later applies it
-  (its **Implement** button does).

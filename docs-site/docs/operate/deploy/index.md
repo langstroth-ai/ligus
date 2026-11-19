@@ -95,15 +95,16 @@ gate who may connect with tokens. Guide:
 ## 4. Kubernetes for one organisation
 
 !!! warning "Preview"
-    The Helm charts live under `deploy/helm` in this repository and in the
-    relay repository (v0.3.0), but aren't published to a chart registry, and
-    no images are published.
+    The `ligus` Helm chart lives under `deploy/helm` in this repository; it
+    and the `ligus` image aren't published. The relay and langstroth-auth
+    charts and images come from the relay repository (v0.3.0), whose
+    releases publish them to `ghcr.io/langstroth-ai`.
     Expect changes. See [Kubernetes (preview)](kubernetes.md).
 
 ```mermaid
 flowchart TB
   subgraph RelayNS["namespace: langstroth-relay (no workspace keys)"]
-    Sync["relay sync pods (1..N)"]
+    Sync["relay sync pod (exactly 1)"]
     Tun["relay tunnel pod (exactly 1)"]
     PG[("Postgres")]
     Sync --> PG

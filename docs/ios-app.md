@@ -74,7 +74,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | Method | Path | Response |
 |---|---|---|
 | GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate |
-| GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?}`. `workspace` (room name), `deviceLabel` and `identity` appear only when authorized. `identity = {mode: "owner"\|"member"\|"pending"\|"revoked", actorId, displayName, deviceFingerprint}`: who the phone acts as (see "Your own device" below) |
+| GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?}`. `workspace` (room name), `deviceLabel` and `identity` appear only when authorized. `identity = {mode: "member"\|"revoked", actorId, displayName, deviceFingerprint}`: the box's own service-member identity (`"owner"` is never reached: a box enrolled as a person's device refuses to start) |
 | GET | `/v1/chats` | `{chats: [{id, title, updatedAt, preview, unread: int, channelId, participants: [Participant]}]}`, newest first |
 | POST | `/v1/chats` `{title?}` | `{chat}` |
 | GET | `/v1/chats/{id}/messages?after=<messageId>&limit=<n>` | `{messages: [Message]}`, oldest first. Without `after`, the latest page (default limit 100, max 1000) |
@@ -219,15 +219,16 @@ Field notes:
   `inChat` is true for whoever spoke there (or an agent added to the chat).
   `defaultResponder = {kind: "primary"|"agent", name, via: "untagged"|"serveDefault", runtimeLabel?, model?, agentId?, hostLabel?, hostKind?}`
   is who answers an untagged message: the chat's `@ligus` on its runtime, or the
-  agent named by `ligus serve --default-agent`.
+  agent named by `LIGUS_SERVE_DEFAULT_AGENT`.
   For the primary it also carries `available?: bool`, `availableVia?: string`
   and `unavailableReason?: "desktopOffline"|"noDesktop"`.
-  Only a desktop runs `@ligus`: its owner's (the chat's creator; once this box
-  is enrolled as the owner's device, chats the phone creates are the owner's).
+  Only a desktop runs `@ligus`: its owner's (the chat's creator; chats the
+  phone creates are the box's own).
   `available: true` with `availableVia` = that desktop's name while it
   heartbeats its Device host; `false` with `desktopOffline` when it's closed
   (the turn waits and is answered once it opens), or `noDesktop` when the chat
-  is this box's own and no desktop will run it (enroll the box as your device);
+  is this box's own and no desktop will run it (mention an agent, or set
+  `LIGUS_SERVE_DEFAULT_AGENT`);
   absent when unknown (a desktop too old to heartbeat).
   `context = {estimated: true, windowTokens, usedTokens, historyTokens, skillTokens, messageCount, compacting, model?}`
   is a coarse estimate from the transcript, the loaded skills and the model's

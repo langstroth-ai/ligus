@@ -23,7 +23,7 @@ shows unanswered mentions and whether each agent's host is online.
 For a home box, a cron job is enough:
 
 ```sh
-*/5 * * * * curl -fsS -m 10 http://100.101.102.103:8787/v1/health >/dev/null || echo "ligus serve down" | mail -s ligus you@example.com
+*/5 * * * * curl -fsS -m 10 http://127.0.0.1:8787/v1/health >/dev/null || echo "ligus serve down" | mail -s ligus you@example.com
 ```
 
 ## Logs

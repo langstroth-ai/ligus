@@ -36,7 +36,7 @@ Skip this if you already have one. The simplest place is the home server
 itself, in Docker:
 
 ```sh
-docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git#v0.3.0
 docker run -d --name langstroth-relay --restart unless-stopped \
   -p 127.0.0.1:8443:8443 -v langstroth-relay:/data \
   -e LANGSTROTH_RELAY_DATA_DIR=/data \
@@ -54,7 +54,7 @@ reach. Two common options:
 - **A public name** with a reverse proxy (Caddy) in front; then also gate the
   relay with tokens. See [Self-hosting a relay](../networking/self-host.md).
 
-`LANGSTROTH_RELAY_TUNNEL=open` is only needed for the phone tunnel (step 6). On a
+`LANGSTROTH_RELAY_TUNNEL=open` is only needed for the phone tunnel (step 8). On a
 relay others can reach, prefer `allowlist` once you know the home server's
 host id.
 
@@ -134,7 +134,7 @@ The settings that matter here:
 
 ```sh
 LIGUS_DATA_DIR=/home/you/.ligus-serve
-LIGUS_SERVE_LISTEN=100.101.102.103:8787   # the server's Tailscale IP (tailscale ip -4), or 127.0.0.1:8787 for tunnel-only
+LIGUS_SERVE_LISTEN=192.0.2.10:8787   # the server's Tailscale IP (tailscale ip -4; 192.0.2.10 is a placeholder), or 127.0.0.1:8787 for tunnel-only
 LIGUS_SERVE_LABEL=home-server
 LIGUS_REPOS_DIR=/home/you/repos           # checkouts agents may work on
 ```
@@ -152,7 +152,7 @@ journalctl --user -u ligus-serve -n 20
 Expected log lines:
 
 ```text
-ligus serve: listening on http://100.101.102.103:8787 — workspace '…', host 63f2… ('home-server'). Ctrl-C to stop.
+ligus serve: listening on http://192.0.2.10:8787 — workspace '…', host 63f2… ('home-server'). Ctrl-C to stop.
 ```
 
 and, on its first start, `ligus: joined workspace '…' as its own service
@@ -168,7 +168,7 @@ approve changes that need a person on the laptop. Details:
 Check:
 
 ```sh
-curl -s http://100.101.102.103:8787/v1/health \
+curl -s http://192.0.2.10:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
 # {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.1.0",…}
 ```

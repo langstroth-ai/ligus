@@ -7,13 +7,6 @@ API shape, which of two fixes), Ligus can put the answers side by side as a
 independently by agents acting as **scouts**, with a person making the final
 call.
 
-The design follows how a honeybee swarm chooses a new nest. Scouts each
-inspect one site and report on it; their enthusiasm fades unless they go
-back and confirm it; the swarm commits once enough scouts are at one site at
-the same time (a *quorum*); scouts at the winning site signal the others to
-stop; and the move happens in two steps, warming up first and only then
-leaving.
-
 ## Opening a set
 
 - **Ask for options.** Write something like *"Explore options for caching
@@ -163,18 +156,16 @@ against the workspace's member list when a device replays the chat. A step
 signed by someone below Contributor, below the set's decision role, or by a
 device whose owner isn't a member is ignored on every device.
 
-## Older versions and the phone
+## On the phone
 
-Proposal sets are new in 0.1. Devices on an older version ignore the set
-and see the alternatives as ordinary proposals. The phone shows which set a proposal
+The phone shows which set a proposal
 belongs to, and approving never applies anything (there is no auto-apply;
 **Apply on ‹host›** isn't offered for an alternative in an open set): apply
 it from the desktop's set view.
 
-## Where the bee analogy stops
+## Limits
 
-- **Scores are agent claims.** Bees are honest because they are related;
-  agents can be wrong or manipulated. That is why agent quorum only nominates,
+- **Scores are agent claims.** Agents can be wrong or manipulated. That is why agent quorum only nominates,
   and the measured checks (tests, base, hosts) and a person's approval decide.
 - **A few scouts, not hundreds.** With two or three agents, a quorum is noisy,
   and agents on the same model agree for the same wrong reasons. Use diverse

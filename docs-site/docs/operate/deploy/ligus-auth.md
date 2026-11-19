@@ -10,7 +10,12 @@ provisions over SCIM can switch someone's access off the moment they leave.
 
 langstroth-auth is optional. It is a separate service (`langstroth-auth`, in the
 [relay repository](https://github.com/langstroth-ai/langstroth-relay)) that runs next to the
-relay, never inside it.
+relay, never inside it. It ships as the image
+`ghcr.io/langstroth-ai/langstroth-auth:<version>` and the Helm chart
+`deploy/helm/langstroth-auth` (published at
+`oci://ghcr.io/langstroth-ai/charts/langstroth-auth`), or build
+`./cmd/langstroth-auth` with Go. It reads `/etc/langstroth-auth/config.json`
+unless `--config` or `LANGSTROTH_AUTH_CONFIG` names another file.
 
 ## What it does, and what it never does
 
@@ -95,7 +100,7 @@ unused one expires after `refresh_idle_ttl` (7 days).
 ### 1. Create the issuer key
 
 ```sh
-langstroth-auth keygen --out /etc/ligus-auth/signing-key
+langstroth-auth keygen --out /etc/langstroth-auth/signing-key
 # public_key=3b6a27bc…   (the private key is only in the file, mode 0600)
 ```
 
@@ -132,15 +137,15 @@ should drive access.
 
 ### 4. Write the config
 
-`/etc/ligus-auth/config.json`:
+`/etc/langstroth-auth/config.json`:
 
 ```json
 {
   "listen": ":8090",
   "admin_listen": "127.0.0.1:8091",
   "public_url": "https://auth.example.com",
-  "signing_key_file": "/etc/ligus-auth/signing-key",
-  "store": {"driver": "file", "path": "/var/lib/ligus-auth/state.json"},
+  "signing_key_file": "/etc/langstroth-auth/signing-key",
+  "store": {"driver": "file", "path": "/var/lib/langstroth-auth/state.json"},
   "access_ttl": "15m",
   "refresh_idle_ttl": "168h",
   "session_max_age": "720h",
@@ -151,7 +156,7 @@ should drive access.
       "oidc": {
         "issuer": "https://id.example.com",
         "client_id": "langstroth-auth",
-        "client_secret_file": "/etc/ligus-auth/idp-client-secret",
+        "client_secret_file": "/etc/langstroth-auth/idp-client-secret",
         "scopes": ["openid", "email", "profile", "groups"]
       },
       "provisioning": "jit",
@@ -163,8 +168,8 @@ should drive access.
 }
 ```
 
-Then `langstroth-auth check-config --config /etc/ligus-auth/config.json` and
-`langstroth-auth serve --config /etc/ligus-auth/config.json`. Put it behind TLS
+Then `langstroth-auth check-config --config /etc/langstroth-auth/config.json` and
+`langstroth-auth serve --config /etc/langstroth-auth/config.json`. Put it behind TLS
 (the relay's reverse proxy works) and list that proxy in `trusted_proxies`.
 
 #### Config reference
@@ -172,10 +177,10 @@ Then `langstroth-auth check-config --config /etc/ligus-auth/config.json` and
 | Key | Default | Meaning |
 |---|---|---|
 | `listen` | `:8090` | public listener (sign-in pages, token endpoint, SCIM) |
-| `admin_listen` | off | operator API; needs `LIGUS_AUTH_ADMIN_TOKEN_FILE`. Keep it private |
+| `admin_listen` | off | operator API; needs `LANGSTROTH_AUTH_ADMIN_TOKEN_FILE`. Keep it private |
 | `public_url` | required | the address people and the IdP reach |
-| `signing_key_file` | | issuer seed file (or `LIGUS_AUTH_SIGNING_KEY_FILE`, a systemd credential, `LIGUS_AUTH_SIGNING_KEY`) |
-| `store` | file, memory only | `{"driver":"file","path":…}` for one instance, `{"driver":"postgres","dsn_env":"LIGUS_AUTH_DATABASE_URL"}` for more |
+| `signing_key_file` | | issuer seed file (or `LANGSTROTH_AUTH_SIGNING_KEY_FILE`, a systemd credential, `LANGSTROTH_AUTH_SIGNING_KEY`) |
+| `store` | file, memory only | `{"driver":"file","path":…}` for one instance, `{"driver":"postgres","dsn_env":"LANGSTROTH_AUTH_DATABASE_URL"}` for more |
 | `access_ttl` | `15m` | at most `1h` |
 | `refresh_idle_ttl` | `168h` | |
 | `session_max_age` | `720h` | how often people must sign in at the IdP again |
@@ -252,7 +257,7 @@ accepted and dropped.
 
 ## Operator API
 
-On `admin_listen`, with `Authorization: Bearer <LIGUS_AUTH_ADMIN_TOKEN_FILE contents>`:
+On `admin_listen`, with `Authorization: Bearer <LANGSTROTH_AUTH_ADMIN_TOKEN_FILE contents>`:
 
 | Route | Does |
 |---|---|
@@ -263,6 +268,7 @@ On `admin_listen`, with `Authorization: Bearer <LIGUS_AUTH_ADMIN_TOKEN_FILE cont
 | `GET /admin/v1/tenants/{t}/users` | users |
 | `POST /admin/v1/tenants/{t}/users/{id}/active` `{"active":false}` | switch someone off (revokes their sessions) |
 | `POST /admin/v1/tenants/{t}/users/{id}/revoke` | end someone's sessions |
+| `POST /admin/v1/tenants/{t}/devices/{device}/revoke` | end the sessions of one device |
 
 ## Several tenants
 
@@ -278,8 +284,10 @@ workspaces. langstroth-auth keeps them apart:
   tenant are rejected by another;
 - with `LANGSTROTH_RELAY_TENANTS`, the relay itself refuses other tenants' tokens.
 
-Tenant-aware relay authorization beyond this is a design; see
-[multi-tenant](multi-tenant.md).
+`LANGSTROTH_RELAY_TENANTS` only filters tokens. For tenants that don't
+trust each other, the relay's tenancy mode (`LANGSTROTH_RELAY_TENANCY`)
+also keeps each tenant's workspaces, quotas and admin scope apart; see
+[Multi-tenant](multi-tenant.md).
 
 ## Security notes
 
@@ -311,7 +319,8 @@ Tenant-aware relay authorization beyond this is a design; see
   again.
 - The file store is for one instance. With Postgres you can run more, but
   sign-in and device-code steps are held in memory, so give the load balancer
-  session affinity.
+  session affinity. The Helm chart (`langstroth-auth`) runs exactly one
+  replica.
 - Rotating the issuer key: start the relay with `LANGSTROTH_RELAY_TOKEN_PUBKEY_NEXT`
   set to the new key, switch langstroth-auth to it, and after an access TTL make it
   the only key.

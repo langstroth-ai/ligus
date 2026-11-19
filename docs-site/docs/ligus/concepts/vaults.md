@@ -72,7 +72,7 @@ for private sources are on the roadmap.
 
 Planned, not yet implemented:
 
-- **Private sources** — per-peer tokens (e.g. a `LIGUS_GH_TOKEN` env
+- **Private sources** — per-peer tokens (for example a GitHub token in an env
   var) so private repos work without sharing credentials.
 - **Local folders / Obsidian libraries** as per-peer vault kinds.
 - **On-disk caching + indexing** (semantic search over large vaults)
