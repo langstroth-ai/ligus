@@ -627,140 +627,12 @@ fn room_workspace_id(room: &str) -> Uuid {
     hive_core::room_workspace_id(room)
 }
 
-/// A joined/created team workspace: a relay room plus the (optional) E2EE key
-/// to read it. Stored as a list so the rail can show several at once; switching
-/// to one points the live sync fields (relay/room/key) at it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct WorkspaceConn {
-    /// Friendly display name (defaults to the room name).
-    #[serde(default)]
-    name: String,
-    relay_url: String,
-    room: String,
-    /// E2EE passphrase (derives the workspace key); None = plaintext room.
-    #[serde(default)]
-    key: Option<String>,
-    /// Optional workspace icon as a `data:` URL, set by an owner/admin.
-    #[serde(default)]
-    icon: Option<String>,
-    /// When set, this workspace is a 1:1 direct message. In an invite it names
-    /// the account id the DM is addressed to; in this device's settings, the
-    /// other person's account id. Account ids are random UUIDs, never derived
-    /// from a public identifier (see `hive_runtime::dm`). DMs are kept out of
-    /// the workspace rail and surfaced under People instead.
-    #[serde(default)]
-    dm_account: Option<String>,
-    /// The account id that legitimately founded this workspace (for a DM, the
-    /// person who opened it) —
-    /// the out-of-band trust anchor for projection's base-seed selection (B2
-    /// residual fix). The founder embeds their own id when generating the
-    /// `hivews1:` invite (`workspace_invite`/`create_workspace`); a joiner records
-    /// it from the invite (`join_workspace`). Pinned onto the `ChatService` when
-    /// the workspace goes active so a forged low-lamport `SessionSnapshot` from
-    /// another keyholder can't displace the founder's seed. `None` on legacy
-    /// invites/settings written before this field ⇒ the in-band self-consistency
-    /// fallback (back-compat).
-    #[serde(default)]
-    founder_actor_id: Option<String>,
-    /// The founder's key fingerprint: hex of the first 16 bytes of SHA-256 of
-    /// the founder's account signing key (Phase 0, P0.4). A joiner pins it with
-    /// `founder_actor_id` (`workspace_pins` in hive.db), so a registration of
-    /// the founder's account under any other key is rejected by the trust
-    /// roster. Absent on invites from builds before it, and left out then.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fk: Option<String>,
-    /// The single-use invite an Admin issued with this code (a
-    /// `JoinApproved` of `invite:<id>` on the config log). A joiner redeems it
-    /// to enroll itself; key possession alone never admits anyone. Left out
-    /// when absent (and never stored in the founder's own settings).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    inv: Option<String>,
-    /// Every authorized epoch key the inviter held (Phase 0, B1): a newcomer
-    /// reads the history and seals at the head before any rotation names its
-    /// device. A bearer secret, like `key`. Left out when empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    ek: Vec<hive_runtime::keyring::DeliveredKey>,
-    /// The founder's device signature over the invite's fields
-    /// (`hive_runtime::invite_sig`, R1). Only an invite whose signature
-    /// verifies is shown as coming from its founder; anything else only says
-    /// it is. Invite-only: never kept in settings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    sig: Option<hive_runtime::invite_sig::InviteSignature>,
-}
-
-impl WorkspaceConn {
-    fn id(&self) -> Uuid {
-        room_workspace_id(&self.room)
-    }
-    /// The canonical bytes of the epoch keys a signature covers.
-    fn ek_json(&self) -> Vec<u8> {
-        if self.ek.is_empty() {
-            Vec::new()
-        } else {
-            serde_json::to_vec(&self.ek).unwrap_or_default()
-        }
-    }
-    /// What an invite signature covers (`hive_runtime::invite_sig`). `name`
-    /// is [`Self::display_name`], what a reader decodes the name to.
-    fn sig_claims<'a>(&'a self, name: &'a str, ek_json: &'a [u8]) -> hive_runtime::invite_sig::InviteClaims<'a> {
-        hive_runtime::invite_sig::InviteClaims {
-            name,
-            relay_url: &self.relay_url,
-            room: &self.room,
-            key: self.key.as_deref(),
-            dm_account: self.dm_account.as_deref(),
-            founder: self.founder_actor_id.as_deref(),
-            fk: self.fk.as_deref(),
-            inv: self.inv.as_deref(),
-            ek_json,
-        }
-    }
-    /// The founder account the invite's signature proves, if it verifies
-    /// (`revoked`: devices the reader's logs revoked).
-    fn signed_by(&self, revoked: &dyn Fn(Uuid) -> bool) -> Option<Uuid> {
-        let sig = self.sig.as_ref()?;
-        let (name, ek) = (self.display_name(), self.ek_json());
-        hive_runtime::invite_sig::verify(sig, &self.sig_claims(&name, &ek), revoked).ok()
-    }
-    fn display_name(&self) -> String {
-        if self.name.trim().is_empty() {
-            self.room.clone()
-        } else {
-            self.name.clone()
-        }
-    }
-}
-
-/// Shareable invite encoding for a workspace: `hivews1:<base64url(json)>`. It
-/// bundles everything a peer needs to join — relay, room, and the E2EE key —
-/// so joining is a single paste.
-fn encode_workspace_invite(conn: &WorkspaceConn) -> String {
-    use base64::Engine;
-    // Icons are local rail decoration; never embed a (potentially large) data
-    // URL in an invite code.
-    let conn = WorkspaceConn { icon: None, ..conn.clone() };
-    let json = serde_json::to_vec(&conn).unwrap_or_default();
-    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
-    format!("hivews1:{b64}")
-}
-
-fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
-    use base64::Engine;
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or_else(|| "not a Ligus workspace invite (expected hivews1:…)".to_string())?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .map_err(|e| format!("invalid invite encoding: {e}"))?;
-    let mut conn: WorkspaceConn =
-        serde_json::from_slice(&bytes).map_err(|e| format!("invalid invite payload: {e}"))?;
-    if conn.room.trim().is_empty() {
-        return Err("invite is missing a room".to_string());
-    }
-    conn.name = conn.display_name();
-    Ok(conn)
-}
+/// A joined/created team workspace (relay room + E2EE key) and its
+/// `hivews1:` invite codec live in `hive_runtime::workspace_invite`, shared
+/// with the `ligus` CLI and other clients. Stored as a list so the rail can
+/// show several at once; switching to one points the live sync fields
+/// (relay/room/key) at it.
+use hive_runtime::workspace_invite::{decode_workspace_invite, encode_workspace_invite, WorkspaceConn};
 
 #[cfg(test)]
 mod workspace_invite_tests {
@@ -12972,14 +12844,7 @@ fn set_workspace_icon(
 
 /// Random hex token (CSPRNG via uuid v4) for a fresh room suffix / workspace
 /// key, so two "Team" workspaces don't collide and rooms aren't guessable.
-fn random_token(len: usize) -> String {
-    let mut s = String::new();
-    while s.len() < len {
-        s.push_str(&Uuid::new_v4().simple().to_string());
-    }
-    s.truncate(len);
-    s
-}
+use hive_runtime::workspace_invite::random_token;
 
 /// Create a new team workspace: generates a unique room + E2EE key, adds it to
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
@@ -13093,25 +12958,12 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Resul
 }
 
 /// The typed error `workspace_invite` returns for a workspace with no usable
-/// relay; the web UI matches this prefix and shows its own message with a
-/// link to Settings → Team sync.
-const NO_RELAY_ERR: &str = "workspace-no-relay";
-
-/// Why an invite for a workspace at `relay_url` couldn't be used, if it
-/// couldn't. Joining needs the relay: a box (`ligus enroll`) refuses an
-/// invite without one, and a desktop that joined one would never sync (direct
-/// P2P only carries a room that also has a relay, see `peer_sync_workspaces`).
-/// So no invite is issued, and none is joined, without an http(s) relay.
-fn invite_relay_problem(relay_url: &str) -> Option<String> {
-    let ok = reqwest::Url::parse(relay_url.trim())
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()));
-    (!ok).then(|| {
-        format!(
-            "{NO_RELAY_ERR}: This workspace has no relay, so an invite to it can't be used. \
-             Set one under Settings → Team sync (Relay URL), then copy a new invite."
-        )
-    })
-}
+/// relay (`NO_RELAY_ERR`), and why an invite for a workspace couldn't be used
+/// (`invite_relay_problem`): shared with every client in
+/// `hive_runtime::workspace_invite`.
+use hive_runtime::workspace_invite::invite_relay_problem;
+#[cfg(test)]
+use hive_runtime::workspace_invite::NO_RELAY_ERR;
 
 /// Settings → Team sync edits the live relay of the room being synced; keep
 /// that room's saved workspace in step, so its invites carry the relay and

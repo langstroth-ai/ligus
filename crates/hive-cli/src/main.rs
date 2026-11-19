@@ -181,53 +181,19 @@ fn config() -> Config {
 }
 
 /// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
-/// delivered epoch keys). Mirrors the app's encoder (base64url(json) of the
-/// connection; snake_case fields).
+/// delivered epoch keys, founder pin), with the codec every client shares
+/// (`hive_runtime::workspace_invite`).
 #[allow(clippy::type_complexity)]
 fn decode_hivews_invite_full(
     invite: &str,
 ) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
-    use base64::Engine;
-    #[derive(serde::Deserialize)]
-    struct Conn {
-        #[serde(default)]
-        relay_url: String,
-        #[serde(default)]
-        room: String,
-        #[serde(default)]
-        key: Option<String>,
-        /// The single-use invite an Admin issued with this code.
-        #[serde(default)]
-        inv: Option<String>,
-        /// Every authorized epoch key the inviter held (B1).
-        #[serde(default)]
-        ek: Vec<hive_runtime::keyring::DeliveredKey>,
-        /// The founder and their key fingerprint (the pin keys are decided on).
-        #[serde(default)]
-        founder_actor_id: Option<String>,
-        #[serde(default)]
-        fk: Option<String>,
-    }
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or_else(|| anyhow!("not a Ligus workspace invite (expected hivews1:…)"))?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .context("invalid invite encoding")?;
-    let c: Conn = serde_json::from_slice(&bytes).context("invalid invite payload")?;
-    if c.room.trim().is_empty() {
-        bail!("invite is missing a room");
-    }
-    let pin = c.founder_actor_id.zip(c.fk);
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
+    let c = hive_runtime::workspace_invite::decode_workspace_invite(invite).map_err(|e| anyhow!(e))?;
+    let (inv, pin) = (c.invite_id(), c.founder_pin());
+    Ok((c.relay_url, c.room, c.key, inv, c.ek, pin))
 }
 
 /// A relay URL a box can sync with: an http(s) address with a host.
-fn usable_relay_url(raw: &str) -> bool {
-    reqwest::Url::parse(raw.trim())
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
-}
+use hive_runtime::workspace_invite::usable_relay_url;
 
 /// Why this box can't sync, named before any HTTP is tried: no relay URL,
 /// or one that isn't an http(s) address (an invite from a relayless
