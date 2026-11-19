@@ -51,17 +51,23 @@ impl TurnReport {
 
 /// The shell script the stub model asks `run_command` to run. Each check
 /// prints a marker; `LEAK_*` markers mean the sandbox let something through.
-fn probe_script(parent_pid: u32, data_dir: &Path, secrets: &[PathBuf]) -> String {
+fn probe_script(parent_pid: u32, host_pid_ns: &str, data_dir: &Path, secrets: &[PathBuf]) -> String {
     let q = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
     let mut s = String::new();
     s.push_str(&format!("echo {RAN}\n"));
+    // A pid in the host's pid namespace: under bubblewrap's own namespace
+    // pid 1 is bubblewrap (whose environment is the turn's), and the host's
+    // pids name nothing, so a readable environ there is no leak.
+    s.push_str(&format!("hostns={}; myns=$(readlink /proc/self/ns/pid 2>/dev/null)\n", q(Path::new(host_pid_ns))));
     for pid in ["1".to_string(), parent_pid.to_string()] {
         s.push_str(&format!(
-            "n=$(cat /proc/{pid}/environ 2>/dev/null | wc -c); if [ \"$n\" -gt 0 ]; then echo {LEAK}_ENVIRON_{pid}; else echo DENIED_ENVIRON_{pid}; fi\n"
+            "n=$(cat /proc/{pid}/environ 2>/dev/null | wc -c); if [ \"$n\" -gt 0 ] && [ \"$myns\" = \"$hostns\" ]; then echo {LEAK}_ENVIRON_{pid}; else echo DENIED_ENVIRON_{pid}; fi\n"
         ));
     }
+    // Listing the data dir: an empty tmpfs mounted over it (bubblewrap) lists
+    // fine and shows nothing; any entry it shows is a leak.
     s.push_str(&format!(
-        "if ls {} >/dev/null 2>&1; then echo {LEAK}_DATA_DIR; else echo DENIED_DATA_DIR; fi\n",
+        "if [ -n \"$(ls -A {} 2>/dev/null)\" ]; then echo {LEAK}_DATA_DIR; else echo DENIED_DATA_DIR; fi\n",
         q(data_dir)
     ));
     for (i, f) in secrets.iter().enumerate() {
@@ -151,7 +157,8 @@ fn secret_files() -> Vec<PathBuf> {
 pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
     let tier = hive_runtime::executor::sandbox_status().tier();
     let secrets = secret_files();
-    let script = probe_script(std::process::id(), data_dir, &secrets);
+    let host_pid_ns = std::fs::read_link("/proc/self/ns/pid").map(|p| p.display().to_string()).unwrap_or_default();
+    let script = probe_script(std::process::id(), &host_pid_ns, data_dir, &secrets);
     let stub = Stub { script: Arc::new(script), bodies: Default::default() };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -244,10 +251,35 @@ mod tests {
 
     #[test]
     fn probe_script_quotes_paths_and_marks_each_check() {
-        let s = probe_script(42, Path::new("/var/lib/li'gus"), &[PathBuf::from("/etc/ligus/secrets/key")]);
+        let s = probe_script(42, "pid:[4026531836]", Path::new("/var/lib/li'gus"), &[PathBuf::from("/etc/ligus/secrets/key")]);
         assert!(s.contains("/proc/1/environ") && s.contains("/proc/42/environ"));
         assert!(s.contains("'/var/lib/li'\\''gus'"));
         assert!(s.contains("LIGUS_PROBE_LEAK_SECRET_0"));
+    }
+
+    /// Review: on the bubblewrap tier the probe reported leaks that weren't:
+    /// pid 1 in the turn's own pid namespace is bubblewrap (its environ is
+    /// the turn's), and `ls` of the data dir lists the empty tmpfs over it.
+    /// Run the script itself: a data dir with nothing in it and a different
+    /// pid namespace are no leak; entries, or the host's namespace with a
+    /// readable environ, are.
+    #[cfg(unix)]
+    #[test]
+    fn probe_script_reports_only_real_leaks() {
+        let run = |s: &str| String::from_utf8_lossy(&std::process::Command::new("/bin/sh").arg("-c").arg(s).output().unwrap().stdout).into_owned();
+        let empty = tempfile::tempdir().unwrap();
+        let out = run(&probe_script(1, "pid:[not-this-namespace]", empty.path(), &[]));
+        assert!(out.contains("LIGUS_PROBE_RAN") && !out.contains("LIGUS_PROBE_LEAK"), "{out}");
+        let full = tempfile::tempdir().unwrap();
+        std::fs::write(full.path().join("keys"), "x").unwrap();
+        let out = run(&probe_script(1, "pid:[not-this-namespace]", full.path(), &[]));
+        assert!(out.contains("LIGUS_PROBE_LEAK_DATA_DIR"), "{out}");
+        #[cfg(target_os = "linux")]
+        {
+            let ns = std::fs::read_link("/proc/self/ns/pid").unwrap().display().to_string();
+            let out = run(&probe_script(std::process::id(), &ns, empty.path(), &[]));
+            assert!(out.contains(&format!("LIGUS_PROBE_LEAK_ENVIRON_{}", std::process::id())), "{out}");
+        }
     }
 
     #[test]

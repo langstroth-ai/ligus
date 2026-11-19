@@ -105,8 +105,15 @@ function handle(cmd: string, args: Args): unknown {
         canEditPaths: true,
         canEditShell: true,
         local: false,
+        appliesHere: true,
+        appliesByDefault: true,
+        appliesSetting: null,
+        appliesWhy: "applied: this device is the workspace Owner's (the default)",
+        changed: false,
       };
     case "set_sandbox_grants":
+    case "set_sandbox_grants_here":
+    case "ack_sandbox_grants":
       return null;
     case "get_dearth_state":
       return fx.dearth(flags.dearth);

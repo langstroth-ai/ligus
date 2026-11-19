@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ackSandboxGrants,
   getSandboxPolicy,
   setSandboxGrants,
+  setSandboxGrantsHere,
   type AgentGrant,
   type EffectivePolicy,
   type SandboxGrants,
@@ -163,6 +165,16 @@ export function SandboxSection() {
     onError: (e) => toast.error(`Couldn't save the sandbox grants: ${errMsg(e)}`),
   });
 
+  const here = useMutation({
+    mutationFn: (apply: boolean | null) => setSandboxGrantsHere(apply),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sandbox-policy"] }),
+    onError: (e) => toast.error(`Couldn't change this device's setting: ${errMsg(e)}`),
+  });
+  const ack = useMutation({
+    mutationFn: ackSandboxGrants,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sandbox-policy"] }),
+  });
+
   if (q.isError) {
     return (
       <Section title="Sandbox">
@@ -227,10 +239,36 @@ export function SandboxSection() {
         }
       >
         <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
-          Grants are signed into the workspace and apply on every device that runs these agents. Changing paths needs an
-          Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns.
+          Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing
+          paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns.
           {!d.canEditPaths && " You can view them; an Admin changes them."}
         </p>
+        {d.changed && (
+          <div
+            role="status"
+            className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[12.5px]"
+            style={{ borderColor: "var(--hive-accent-ink)" }}
+          >
+            <span>These grants changed since you last looked.</span>
+            <Button onClick={() => ack.mutate()}>Got it</Button>
+          </div>
+        )}
+        <div className="space-y-1 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[12.5px] font-semibold">Apply workspace sandbox grants on this device</span>
+            <Switch
+              on={d.appliesHere}
+              onChange={(v) => here.mutate(v === d.appliesByDefault ? null : v)}
+              label="Apply workspace sandbox grants on this device"
+              disabled={here.isPending}
+            />
+          </div>
+          <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+            {d.appliesWhy}. By default the workspace Owner's own devices apply them and every other member's device
+            doesn't: a grant opens paths (and an agent's shell) on your computer, so it's your choice. The policy above
+            shows what applies here.
+          </p>
+        </div>
         <PathsField label="Every agent: read-only" value={wsRo} onChange={setWsRo} disabled={!d.canEditPaths} />
         <PathsField label="Every agent: read and write" value={wsRw} onChange={setWsRw} disabled={!d.canEditPaths} />
         {agent ? (

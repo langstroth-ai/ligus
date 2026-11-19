@@ -532,7 +532,9 @@ async fn run_turn(
     // Phase C: the shell is the Owner's (every person behind the turn a
     // workspace Owner), or an Owner granted it to this agent.
     let shell_role = lock(svc).trigger_shell_role(pm.session_id, pm.message_id).ok().flatten();
-    let grants = lock(svc).sandbox_grants(s.workspace_id);
+    // The signed grants, when this host applies them (`LIGUS_SANDBOX_GRANTS`;
+    // by default only on the workspace Owner's own hosts).
+    let grants = lock(svc).sandbox_grants_here(s.workspace_id, hive_runtime::sandbox::grants_setting_from_env()).0;
     let shell_allowed = hive_runtime::author_gate::shell_allowed(shell_role, grants.shell_granted(agent.id));
     let mut rt = rt;
     let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));

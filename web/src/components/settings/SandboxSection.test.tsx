@@ -6,9 +6,13 @@ import type { SandboxGrants, SandboxPolicyDto } from "@/lib/ipc";
 
 const state: { d: SandboxPolicyDto } = { d: null as unknown as SandboxPolicyDto };
 const setGrants = vi.fn(async (_g: SandboxGrants) => {});
+const setHere = vi.fn(async (_a: boolean | null) => {});
+const ack = vi.fn(async () => {});
 vi.mock("@/lib/ipc", () => ({
   getSandboxPolicy: vi.fn(async () => state.d),
   setSandboxGrants: (g: SandboxGrants) => setGrants(g),
+  setSandboxGrantsHere: (a: boolean | null) => setHere(a),
+  ackSandboxGrants: () => ack(),
 }));
 vi.mock("@/components/Toast", () => ({ toast: { success: vi.fn(), error: vi.fn() }, errMsg: (e: unknown) => String(e) }));
 
@@ -34,6 +38,11 @@ const base: SandboxPolicyDto = {
   canEditPaths: true,
   canEditShell: true,
   local: false,
+  appliesHere: true,
+  appliesByDefault: true,
+  appliesSetting: null,
+  appliesWhy: "applied: this device is the workspace Owner's (the default)",
+  changed: false,
 };
 
 function renderSection() {
@@ -49,6 +58,32 @@ describe("SandboxSection", () => {
   beforeEach(() => {
     state.d = { ...base };
     setGrants.mockClear();
+    setHere.mockClear();
+    ack.mockClear();
+  });
+
+  it("lets a member's device opt into the grants, and back to the default", async () => {
+    state.d = { ...base, appliesHere: false, appliesByDefault: false, appliesWhy: "not applied: this device isn't the workspace Owner's" };
+    renderSection();
+    const sw = await screen.findByRole("switch", { name: "Apply workspace sandbox grants on this device" });
+    expect(screen.getByText(/this device isn't the workspace Owner's/)).toBeTruthy();
+    await userEvent.click(sw);
+    await waitFor(() => expect(setHere).toHaveBeenCalledWith(true));
+  });
+
+  it("turning an opted-in device back to its default clears the setting", async () => {
+    state.d = { ...base, appliesHere: true, appliesByDefault: false, appliesSetting: true };
+    renderSection();
+    await userEvent.click(await screen.findByRole("switch", { name: "Apply workspace sandbox grants on this device" }));
+    await waitFor(() => expect(setHere).toHaveBeenCalledWith(null));
+  });
+
+  it("says when the grants changed until you've seen them", async () => {
+    state.d = { ...base, changed: true };
+    renderSection();
+    expect(await screen.findByText("These grants changed since you last looked.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Got it" }));
+    await waitFor(() => expect(ack).toHaveBeenCalled());
   });
 
   it("lists each path with its access and reason, and the shell rule", async () => {

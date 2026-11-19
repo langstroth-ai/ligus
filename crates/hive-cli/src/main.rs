@@ -1057,7 +1057,9 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 let allow_mcp = allow_mcp && enforcement.allow_run_command;
                 let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
                 sandbox.shell_allowed = shell_allowed;
-                sandbox.grants = svc.sandbox_grants(s.workspace_id).paths_for(None);
+                // The signed grants, when this host applies them
+                // (`LIGUS_SANDBOX_GRANTS`; by default only the Owner's).
+                sandbox.grants = svc.sandbox_grants_here(s.workspace_id, hive_runtime::sandbox::grants_setting_from_env()).0.paths_for(None);
                 // Who the turn answers (what the reply's `@you` means).
                 let system = match hive_runtime::prompt::requester_guidance(&s, Some(last.id)) {
                     g if g.is_empty() => system.clone(),
@@ -1448,11 +1450,10 @@ fn truncate(s: &str, n: usize) -> String {
 /// workspace. The same lines as Settings, Sandbox on the desktop.
 fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>) -> Result<()> {
     use hive_core::ModelProviderKind as K;
-    let grants = if cfg.room.is_empty() {
-        hive_core::sandbox::SandboxGrants::default()
-    } else {
-        open_service(cfg).map(|svc| svc.sandbox_grants(uuid_of_room(&cfg.room))).unwrap_or_default()
-    };
+    // The signed grants, and whether this host applies them.
+    let setting = hive_runtime::sandbox::grants_setting_from_env();
+    let (signed, here) = signed_grants_here(cfg, setting);
+    let grants = if here.apply { signed.clone() } else { hive_core::sandbox::SandboxGrants::default() };
     let agent_id = agent.and_then(|a| Uuid::parse_str(a.trim()).ok());
     let kinds: Vec<Option<K>> = match runtime.map(|r| r.trim().to_ascii_lowercase()) {
         Some(r) => vec![match r.as_str() {
@@ -1478,7 +1479,10 @@ fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
         }
         println!("  shell      {}", p.shell);
     }
-    println!("\nsigned grants in force for this workspace:");
+    println!("\nworkspace sandbox grants on this host: {}", here.why);
+    println!("  ({}=apply or {}=ignore sets it)", hive_runtime::sandbox::GRANTS_ENV, hive_runtime::sandbox::GRANTS_ENV);
+    println!("\nsigned grants for this workspace{}:", if here.apply { " (in force here)" } else { " (not applied here)" });
+    let grants = signed;
     if grants.is_empty() {
         println!("  none (Settings, Sandbox on a desktop: Admin with a passkey; the shell grant is the Owner's)");
     }
@@ -1502,6 +1506,21 @@ fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
     Ok(())
 }
 
+/// This host's workspace's signed sandbox grants and whether it applies
+/// them (`LIGUS_SANDBOX_GRANTS`, else only on the Owner's own hosts).
+fn signed_grants_here(cfg: &Config, setting: Option<bool>) -> (hive_core::sandbox::SandboxGrants, hive_runtime::sandbox::GrantsHere) {
+    if cfg.room.is_empty() {
+        return (Default::default(), hive_runtime::sandbox::grants_here(setting, None, false));
+    }
+    match open_service(cfg) {
+        Ok(svc) => {
+            let ws = uuid_of_room(&cfg.room);
+            (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1)
+        }
+        Err(_) => (Default::default(), hive_runtime::sandbox::grants_here(setting, None, false)),
+    }
+}
+
 fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bool, cfg: &Config) -> Result<i32> {
     let s = hive_runtime::executor::sandbox_status();
     println!("agent sandbox: {}", s.tier());
@@ -1520,6 +1539,11 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
     }
     if let Some(d) = hardening::dumpable() {
         println!("process dumpable: {}", if d { "yes" } else { "no" });
+    }
+    {
+        let (signed, here) = signed_grants_here(cfg, hive_runtime::sandbox::grants_setting_from_env());
+        let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
+        println!("workspace sandbox grants: {} ({n} signed; ligus doctor --sandbox lists them)", here.why);
     }
     if (require_confined || turn_test) && unconfined {
         eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");

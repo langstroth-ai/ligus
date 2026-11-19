@@ -783,7 +783,7 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
@@ -792,6 +792,7 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
     filter_mcp_servers(state, state.combined_mcp_servers(), egress)
         .into_iter()
         .filter(|s| s.enabled && s.auth.is_none())
+        .filter(|s| shell || mcp_known_shell_free(state, &s.id))
         .map(|s| {
             let v = match &s.transport {
                 hive_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
@@ -803,17 +804,69 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
 }
 
 /// How the turn's runtime honors the envelope (extra flags, or a refusal).
+/// `shell`: whether the turn has the shell; without it, MCP servers that
+/// offer one (or that this device hasn't seen list their tools) stay out.
 pub(crate) fn enforcement_for(
     state: &AppState,
     provider: hive_core::ModelProviderKind,
     envelope: &hive_core::sandbox::SandboxEnvelope,
+    shell: bool,
 ) -> hive_runtime::sandbox::Enforcement {
     let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
-        claude_mcp_entries(state, &envelope.egress)
+        claude_mcp_entries(state, &envelope.egress, shell)
     } else {
         Vec::new()
     };
     hive_runtime::sandbox::enforce(provider, envelope, &entries)
+}
+
+// ---------------------------------------------------------------------------
+// MCP servers that offer a shell
+// ---------------------------------------------------------------------------
+
+/// Remember which tools each server listed run shell commands
+/// (`hive_runtime::is_shell_tool`).
+pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, hive_runtime::McpTool)]) {
+    let mut by_server: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (server, tool) in tagged {
+        let e = by_server.entry(server.clone()).or_default();
+        if hive_runtime::is_shell_tool(&tool.name) {
+            e.push(tool.name.clone());
+        }
+    }
+    let mut m = state.mcp_shell_tools.lock().unwrap();
+    for (server, shells) in by_server {
+        m.insert(server, shells);
+    }
+}
+
+/// Whether this device has seen `id` list its tools, none of them a shell.
+/// A turn without the shell gets only such servers (fail closed: one that
+/// never listed is left out).
+pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
+    id == hive_runtime::executor::LIGUS_MCP_ID || state.mcp_shell_tools.lock().unwrap().get(id).is_some_and(|t| t.is_empty())
+}
+
+/// List the tools of the enabled servers this turn may reach that this
+/// device hasn't listed yet (each bounded), so `mcp_known_shell_free` can
+/// judge them.
+pub(crate) async fn probe_mcp_shells(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) {
+    state.ensure_fresh_mcp_tokens().await;
+    let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+        .into_iter()
+        .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
+        .collect();
+    for s in unknown {
+        let id = s.id.clone();
+        let registry = hive_runtime::McpRegistry::new(vec![s]);
+        if let Ok(Ok(tools)) = tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
+            let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
+            if tagged.is_empty() {
+                state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
+            }
+            record_mcp_tools(state, &tagged);
+        }
+    }
 }
 
 /// The OS-sandbox policy for one turn on this desktop: the envelope, the
@@ -1046,6 +1099,46 @@ pub(crate) struct SandboxPolicyDto {
     /// The workspace is the device-local one (its only person is the device
     /// owner, who always has the shell).
     pub local: bool,
+    /// Whether this device applies the grants (`policies` show what applies
+    /// here), its default, its own choice, and why.
+    pub applies_here: bool,
+    pub applies_by_default: bool,
+    pub applies_setting: Option<bool>,
+    pub applies_why: String,
+    /// The signed grants changed since this device's user last looked.
+    pub changed: bool,
+}
+
+/// This device's choice for `workspace_id`'s signed grants (`None`: the
+/// default, `hive_runtime::sandbox::grants_here`).
+pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<bool> {
+    state.settings.lock().unwrap().sandbox_grants_here.get(&workspace_id.to_string()).copied()
+}
+
+/// Apply (or not, or back to the default with `None`) the active
+/// workspace's signed sandbox grants on this device.
+#[tauri::command]
+pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool>) -> Result<(), String> {
+    let ws = state.active_workspace_id().to_string();
+    let mut s = state.settings.lock().unwrap();
+    match apply {
+        Some(v) => s.sandbox_grants_here.insert(ws, v),
+        None => s.sandbox_grants_here.remove(&ws),
+    };
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
+}
+
+/// The user has seen the active workspace's signed grants as they are now
+/// (the change notice goes away until they change again).
+#[tauri::command]
+pub(crate) fn ack_sandbox_grants(state: State<AppState>) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let fp = hive_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
+    let mut s = state.settings.lock().unwrap();
+    s.sandbox_grants_seen.insert(ws.to_string(), fp);
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
 }
 
 /// The effective sandbox policy and the signed grants for the active
@@ -1053,14 +1146,19 @@ pub(crate) struct SandboxPolicyDto {
 #[tauri::command]
 pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
     let ws = state.active_workspace_id();
-    let (grants, agents_cfg, my_role, local) = {
+    let setting = grants_setting(&state, ws);
+    let (grants, here, agents_cfg, my_role, local) = {
         let svc = state.service.lock().unwrap();
         let me = svc.author().id.clone();
         let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
         let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
         let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
-        (svc.sandbox_grants(ws), agents, my_role, svc.is_local_workspace(ws))
+        (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1, agents, my_role, svc.is_local_workspace(ws))
     };
+    let fp = hive_runtime::sandbox::grants_fingerprint(&grants);
+    let seen = state.settings.lock().unwrap().sandbox_grants_seen.get(&ws.to_string()).cloned().unwrap_or_default();
+    // The policies show what applies on this device.
+    let applied = if here.apply { grants.clone() } else { hive_core::sandbox::SandboxGrants::default() };
     let agents: Vec<SandboxAgentDto> = agents_cfg
         .iter()
         .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
@@ -1070,16 +1168,16 @@ pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String
     match chosen.and_then(|id| agents_cfg.iter().find(|a| a.id == id)) {
         Some(a) => {
             let kind = state.resolve_runtime(&a.runtime_id).provider;
-            policies.push(hive_runtime::executor::effective_policy(Some(kind), &grants.paths_for(Some(a.id)), grants.shell_granted(a.id)));
+            policies.push(hive_runtime::executor::effective_policy(Some(kind), &applied.paths_for(Some(a.id)), applied.shell_granted(a.id)));
         }
         None => {
             let mut kinds: Vec<hive_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
             kinds.sort_by_key(|k| format!("{k:?}"));
             kinds.dedup();
             for k in kinds {
-                policies.push(hive_runtime::executor::effective_policy(Some(k), &grants.paths_for(None), false));
+                policies.push(hive_runtime::executor::effective_policy(Some(k), &applied.paths_for(None), false));
             }
-            policies.push(hive_runtime::executor::effective_policy(None, &grants.paths_for(None), false));
+            policies.push(hive_runtime::executor::effective_policy(None, &applied.paths_for(None), false));
         }
     }
     Ok(SandboxPolicyDto {
@@ -1089,6 +1187,11 @@ pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String
         can_edit_paths: my_role.rank() >= hive_core::WorkspaceRole::Admin.rank(),
         can_edit_shell: my_role == hive_core::WorkspaceRole::Owner,
         local,
+        applies_here: here.apply,
+        applies_by_default: here.default,
+        applies_setting: here.setting,
+        applies_why: here.why,
+        changed: fp != seen,
     })
 }
 
@@ -1113,7 +1216,14 @@ pub(crate) fn set_sandbox_grants(app: AppHandle, state: State<AppState>, grants:
             g.agents.insert(id, a);
         }
     }
+    let fp = hive_runtime::sandbox::grants_fingerprint(&g);
     state.service.lock().unwrap().set_sandbox_grants(ws, g).map_err(map_err)?;
+    // Your own change needs no notice.
+    {
+        let mut s = state.settings.lock().unwrap();
+        s.sandbox_grants_seen.insert(ws.to_string(), fp);
+        crate::save_settings(&state.data_dir, &s);
+    }
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())
 }
