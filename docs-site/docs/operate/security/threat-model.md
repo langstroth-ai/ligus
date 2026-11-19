@@ -83,6 +83,47 @@ traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
 
+### Workspace repositories {#repositories}
+
+[Workspace repositories](../../ligus/features/repositories.md) are signed
+config events; checkouts and their paths never leave a device.
+
+- **A malicious Admin, or a compromised one**, can add a look-alike
+  repository (`github.com/zazu1am/wefit`). Adding and removing need the
+  Admin's passkey presence; Settings shows the full canonical name and flags a
+  repository whose claimed root commit equals another's. A repository entry
+  makes no device fetch anything: a clone is a person's act on one host, from
+  that host's own code-host connection, with the URL rebuilt as `https://`
+  from the canonical (never a string from the event) and the address checked
+  again and pinned right before git runs. An entry can't create a connection
+  or mark one internal.
+- **A member or an agent** can't add, remove or rename a repository, and an
+  agent (or a runtime effect) can't set a chat's repository or pin its base.
+  A proposal's repository comes from the chat when it is filed and never
+  changes; its base commit is in the vote, so re-basing it clears the votes.
+- **A host's coverage** rides its sealed presence beat and isn't signed, so
+  any member could forge one. It is advisory only: the host that runs a turn
+  checks its own confirmed checkout (by remote, without `insteadOf` or
+  includes) before every turn and refuses otherwise. A forged "present" can
+  at most send a turn to a host that then refuses it. Readers drop coverage
+  from a revoked device or a removed member's host.
+- **A hostile repository** found by a scan is never used until a person
+  confirms it on that device; its hooks, `core.fsmonitor`, submodules and
+  file-protocol URLs stay off (every git call runs with those overridden),
+  and its runtimes and MCP servers stay inert until trusted. A marker it ships
+  in its work tree means nothing: the managing-host marker lives in the git
+  directory.
+- **Applying** builds the commit in a scratch index or worktree and moves the
+  chat branch only by compare-and-swap, so a conflict or a moved branch
+  applies nothing.
+- **Limits:** coverage is self-reported (a host can claim a repository and
+  then refuse its turns). Ledger replay skips a proposal whose
+  `Ligus-Proposal` trailer is already on the chat branch, so a commit forged
+  with that trailer inside the chat's own worktree makes that host's branch
+  diverge from the others (a liveness problem, flagged at the next conflict,
+  not a way to apply unapproved content). The repository list is visible to
+  every member, Viewers included.
+
 ### A compromised serve or worker box {#compromised-box}
 
 A `ligus serve` or `ligus worker` box is its own **service member**, never a

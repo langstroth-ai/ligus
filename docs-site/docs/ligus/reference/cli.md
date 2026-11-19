@@ -165,7 +165,15 @@ it stops with a migration error. See
 | `ligus phones list` (or `ligus phones`) | phones paired over the relay |
 | `ligus phones revoke <pid\|name> [--keep-token] [--token-file PATH]` | revokes one phone; also rotates `serve.token` unless `--keep-token` |
 | `ligus bind-repo <name\|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]` | binds a checkout for agent file tools (workspace default, or one chat) |
-| `ligus repos` | shows the repos dir and the bindings |
+| `ligus repos [list]` | the workspace's repositories, this host's checkouts of them, the repos dir and the bindings |
+| `ligus repos add <remote\|canonical\|path> [--name N] [--kind K] [--branch B]` | adds a workspace repository (Admin, with presence); a path also binds it here |
+| `ligus repos remove <repo>` / `rename <repo> <name> [--branch B]` | removes (Admin, with presence) or renames a workspace repository |
+| `ligus repos bind <repo> <path>` / `confirm <repo> <path>` / `unbind <repo> [path]` | this host's checkout of a repository (never synced) |
+| `ligus repos scan` / `roots [add\|remove <path>]` | finds checkouts under the repos dir and the scan roots; found ones need `confirm` |
+| `ligus repos alias <ssh-host> <host> [--remove]` | an SSH host alias, for identity only |
+| `ligus repos chat <chat-id> <repo\|none> [--branch B]` | sets a chat's repository |
+| `ligus repos coverage on\|off\|default` | whether this host tells members which repositories it has checked out |
+| `ligus repos takeover <path>` | manages a checkout whose managing host is gone |
 | `ligus dashboard check [--file PATH]` | validates `dashboard.toml` and evaluates it once |
 | `ligus dashboard default` | prints the generated default dashboard as TOML |
 | `ligus dashboard metrics` | lists the built-in Ligus metrics panels can show |

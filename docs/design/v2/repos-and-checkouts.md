@@ -1,6 +1,13 @@
 # Ligus 2.0+: workspace repositories, per-device checkouts, and where turns run
 
-Status: **design, not implemented.** Written 2026-11-16 against
+Status: **implemented in Ligus 0.1.0 with the review's required changes**
+(see [the review](repos-and-checkouts.review.md); user docs:
+`docs-site/docs/ligus/features/repositories.md`). Where this design and the
+review differ, the review's required changes won: no digest v2 (the sticky
+repo and the digest parts already bind it), coverage on the presence beat
+rather than the log, workspace-synced aliases dropped (SSH host aliases are
+device-local), the host is the only turn gate. What is left is listed in the
+implementation notes at the end. Written 2026-11-16 against
 `release/v2.0.0` (Ligus is short for *ligustica*, the Italian honeybee).
 Citations are `file:line` or `file` + function name; line numbers drift, and
 when this document and the code disagree, the code wins.
@@ -807,3 +814,28 @@ warning when the box lacks the chat's repo.
 8. **Q8 Chat branches.** Ledger replay as the cross-device source of truth (this doc), or push `hive/chat/<id>` to the forge when the host has write access? Also: rename the `hive/` branch prefix to `ligus/` in 2.x, given the rebrand?
 9. **Q9 Driving another host.** Should the desktop be able to ask a box to clone (a workspace-addressed request carried over the log or the tunnel), or is that phone-only for now?
 10. **Q10 Unknown forges.** For a host with no connection and unknown kind, keep case-sensitive paths (safe, may split one repo into two entries) or lowercase everything (simple, may merge two repos on a case-sensitive server)?
+
+---
+
+## Implementation notes (0.1.0)
+
+Built: canonical identity (`hive_core::workspace_repo::canonical_repo`), the
+repo fold and its order rules, the chat ledger (`ChatSession::applied_order`,
+`workspace_repo::ledger`), device-local tables (`repo_checkouts`,
+`chat_checkouts`, scan roots, SSH host aliases), `hive_runtime::repos` (bind,
+detect, the managing-host marker, coverage, the turn gate, `prepare_chat` with
+pinned bases and ledger replay, scratch-tree compare-and-swap apply, clone by
+id), the box's turn gate, clone by id and `/v1/workspace-repos` API, the
+desktop's turn gate and repo-addressed Implement, Settings → Repositories, the
+chat repo chip, the add-this-repo prompt, `ligus repos …`, per-checkout
+hygiene and preflight, router and workflow coverage checks, look-alike flags.
+
+Not built yet: the phone UI (in the separate phone app repository; the box API
+it needs is here), the desktop's own "Clone into…" and "Clone there" (the
+review keeps driving another host phone-only), the composer warning naming a
+pinned agent's host, per-turn catalog and trust resolution for a chat whose
+repo differs from the viewed one (the turn's directory is per chat; MCP and
+runtime catalogs still follow the viewed folder), workspace-synced repo and
+host aliases (Phase 4, presence-gated, review R2), the device-keyed
+dispatcher the review sequences Phase 2 after (architecture-review 4.9), and
+renaming the `hive/` branch prefix.
