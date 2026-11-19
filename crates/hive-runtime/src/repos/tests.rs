@@ -406,3 +406,67 @@ fn existing_branch_not_on_the_pinned_base_refuses() {
     s.repo.as_mut().unwrap().base_commit = first.pin.clone();
     prepare_chat(&ready, &s, "h").unwrap();
 }
+
+/// `protocol.file.allow=user` (not `never`): a path Ligus names itself
+/// still clones, but a hostile `.gitmodules` pointing at a local path is
+/// never fetched, even when something runs a submodule update or a
+/// recursive clone through hardened git.
+#[test]
+fn hostile_gitmodules_file_url_is_never_followed() {
+    let t = tempfile::tempdir().unwrap();
+    let secret = t.path().join("secret");
+    repo_with_origin(&secret, None);
+    std::fs::write(secret.join("key.txt"), "s3cret\n").unwrap();
+    sh(&secret, &["add", "-A"]);
+    sh(&secret, &["commit", "-qm", "secret"]);
+    let evil = t.path().join("evil");
+    repo_with_origin(&evil, None);
+    let url = secret.to_string_lossy().replace('\\', "/");
+    std::fs::write(evil.join(".gitmodules"), format!("[submodule \"s\"]\n\tpath = s\n\turl = {url}\n")).unwrap();
+    let head = sh(&secret, &["rev-parse", "HEAD"]);
+    sh(&evil, &["update-index", "--add", "--cacheinfo", &format!("160000,{head},s")]);
+    sh(&evil, &["add", ".gitmodules"]);
+    sh(&evil, &["commit", "-qm", "submodule"]);
+    // A clone Ligus names itself (a local mirror) works…
+    let dest = t.path().join("dest");
+    super::clone::clone_local_reference(&evil.to_string_lossy(), &dest, None).unwrap();
+    assert!(!dest.join("s/key.txt").exists(), "no recursion on clone");
+    // …but the submodule's local URL is refused when git reaches it on its own.
+    let r = super::git::git(&dest, &["submodule", "update", "--init"]);
+    assert!(r.is_err(), "submodule update must fail: {r:?}");
+    assert!(!dest.join("s/key.txt").exists());
+    let rec = t.path().join("rec");
+    let r = super::git::git(t.path(), &["clone", "-q", "--recurse-submodules", &evil.to_string_lossy(), &rec.to_string_lossy()]);
+    assert!(!rec.join("s/key.txt").exists(), "recursive clone fetched a file:// submodule: {r:?}");
+}
+
+/// A hostile repo's own config never runs code while Ligus scans, matches,
+/// fingerprints or reports coverage on it (fsmonitor and hooks are
+/// overridden; nothing in those paths runs a filter, a pager or a fetch).
+#[test]
+fn hostile_repo_config_runs_nothing_during_scan_and_coverage() {
+    let e = env();
+    let pwn = e.checkout.parent().unwrap().join("pwned");
+    let cmd = format!("touch {}", pwn.to_string_lossy().replace('\\', "/"));
+    for (k, v) in [
+        ("core.fsmonitor", cmd.as_str()),
+        ("core.hooksPath", "hooks-in-tree"),
+        ("core.pager", cmd.as_str()),
+        ("diff.external", cmd.as_str()),
+        ("core.sshCommand", cmd.as_str()),
+        ("filter.x.smudge", cmd.as_str()),
+        ("filter.x.clean", cmd.as_str()),
+        ("filter.x.required", "true"),
+    ] {
+        sh(&e.checkout, &["config", k, v]);
+    }
+    std::fs::write(e.checkout.join(".gitattributes"), "*.md filter=x\n").unwrap();
+    e.store.add_scan_root(e.checkout.parent().unwrap()).unwrap();
+    let found = detect(&e.store, e.ws, &roster(&[wefit()]), &[]).unwrap();
+    assert_eq!(found.len(), 1);
+    let _ = git::root_commit(&e.checkout);
+    let _ = coverage(&e.store, e.ws, &[wefit()], &HashSet::new());
+    let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), id: repo_id(&format!("local:{}", "a".repeat(40))), ..wefit() };
+    let _ = checkout_matches(&e.checkout, &local, &BTreeMap::new());
+    assert!(!pwn.exists(), "repo config ran a command");
+}
