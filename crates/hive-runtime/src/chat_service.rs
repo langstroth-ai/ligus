@@ -25,6 +25,7 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod attachments;
 mod facts;
 mod guards;
 mod keys;

@@ -19,6 +19,7 @@ pub(crate) struct Host {
     pub svc: Mutex<ChatService>,
     pub started: Mutex<Vec<(Uuid, Uuid, Uuid)>>,
     pub forge: Mutex<Option<super::forge_tools::ForgeBinding>>,
+    pub staged: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl LigusHost for Host {
@@ -30,6 +31,10 @@ impl LigusHost for Host {
     }
     fn forge_for(&self, _chat: Uuid) -> Option<super::forge_tools::ForgeBinding> {
         self.forge.lock().unwrap().clone()
+    }
+    fn stage_attachment(&self, _proposal_id: Uuid, sha256: &str, bytes: &[u8]) -> Result<(), String> {
+        self.staged.lock().unwrap().push((sha256.to_string(), bytes.to_vec()));
+        Ok(())
     }
 }
 
@@ -69,7 +74,7 @@ pub(crate) fn world() -> World {
     svc.add_agent(chat.id, wid, rev).unwrap();
     svc.post_user_message(chat.id, wid, "please fix the bug").unwrap();
     let reply = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
-    let host = Arc::new(Host { svc: Mutex::new(svc), started: Mutex::new(Vec::new()), forge: Mutex::new(None) });
+    let host = Arc::new(Host { svc: Mutex::new(svc), started: Mutex::new(Vec::new()), forge: Mutex::new(None), staged: Mutex::new(Vec::new()) });
     let mcp = LigusMcp::new(host.clone());
     World { host, mcp, wid, chat: chat.id, agent: agent_id, reviewer, reply, _dir: dir }
 }
@@ -1063,4 +1068,80 @@ fn bridge_credits_initialize_after_a_probe() {
     assert!(init.contains("CRED"));
     let later = b.line(r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}"#);
     assert!(!later.contains("CRED"), "the credential goes out once");
+}
+
+/// Issue #118: an agent offers a file only when the workspace lets agents
+/// offer files, only from inside its worktree, never a blocked type or one of
+/// this device's secrets, and only as a proposal a person approves.
+#[tokio::test]
+async fn an_agent_offers_files_only_as_proposals_and_only_when_allowed() {
+    let w = world();
+    let wt = tempfile::tempdir().unwrap();
+    std::fs::write(wt.path().join("report.md"), b"# Findings\n").unwrap();
+    std::fs::write(wt.path().join("tool.exe"), b"MZ\x90\x00\x03").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), b"elsewhere").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.path().join("secret.txt"), wt.path().join("link.txt")).unwrap();
+    let mut s = spec(&w, Budgets::default());
+    s.worktree = Some(wt.path().to_path_buf());
+    let turn = w.mcp.begin_turn(s);
+    let offer = |path: &str| json!({"path": path, "title": "Here is the report"});
+    // Off by default.
+    let r = turn.call("ligus_offer_file", &offer("report.md")).await;
+    assert_eq!(r.outcome, Outcome::Denied, "{}", r.text);
+    // Attachments on, agents still off.
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        svc.enable_test_presence();
+        svc.set_attachment_policy(w.wid, hive_core::attachment::AttachmentPolicy::recommended()).unwrap();
+    }
+    assert_eq!(turn.call("ligus_offer_file", &offer("report.md")).await.outcome, Outcome::Denied);
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        let p = hive_core::attachment::AttachmentPolicy { agents: true, ..hive_core::attachment::AttachmentPolicy::recommended() };
+        svc.set_attachment_policy(w.wid, p).unwrap();
+    }
+    for bad in ["tool.exe", "../x", "link.txt", "nope.txt"] {
+        let r = turn.call("ligus_offer_file", &offer(bad)).await;
+        assert_ne!(r.outcome, Outcome::Ok, "{bad}: {}", r.text);
+    }
+    assert!(w.host.staged.lock().unwrap().is_empty(), "nothing refused was staged");
+    let r = turn.call("ligus_offer_file", &offer("report.md")).await;
+    assert_eq!(r.outcome, Outcome::Ok, "{}", r.text);
+    let pid = Uuid::parse_str(body(&r)["proposalId"].as_str().unwrap()).unwrap();
+    let svc = w.host.svc.lock().unwrap();
+    let session = svc.load(w.chat).unwrap().unwrap();
+    let p = session.proposals.iter().find(|p| p.id == pid).unwrap();
+    let a = p.attachment.as_deref().unwrap();
+    assert_eq!((a.name.as_str(), a.blob_id.as_str(), p.produced_on), ("report.md", "", Some(svc.device_id())));
+    assert_eq!(p.status, hive_core::ProposalStatus::Open, "nothing is shared until a person approves");
+    assert!(session.attachments.is_empty());
+    assert_eq!(w.host.staged.lock().unwrap()[0].0, a.sha256);
+    assert!(svc.approved_offers(w.wid).unwrap().is_empty());
+    let a = a.clone();
+    drop(svc);
+    // A person approves: the producing host (this device) now owes the share.
+    let mut svc = w.host.svc.lock().unwrap();
+    svc.vote_on_proposal(w.chat, w.wid, pid, true).unwrap();
+    let owed = svc.approved_offers(w.wid).unwrap();
+    assert_eq!(owed.len(), 1);
+    assert_eq!((owed[0].0, owed[0].1), (w.chat, pid));
+    // Another file than the approved one is refused by the fold.
+    let mut wrong = a.clone();
+    wrong.blob_id = "z".repeat(43);
+    wrong.proposal_id = Some(pid);
+    wrong.sha256 = "0".repeat(64);
+    assert!(svc.share_attachment(w.chat, w.wid, wrong).is_err());
+    let mut shared = a.clone();
+    shared.blob_id = "z".repeat(43);
+    shared.proposal_id = Some(pid);
+    svc.share_attachment(w.chat, w.wid, shared.clone()).unwrap();
+    assert!(svc.approved_offers(w.wid).unwrap().is_empty());
+    let atts = svc.chat_attachments(w.chat).unwrap();
+    assert_eq!(atts[&a.id].attachment, shared);
+    // The sharer deletes it; a tombstone stays and the id can't come back.
+    svc.delete_attachment(w.chat, w.wid, a.id).unwrap();
+    assert!(svc.chat_attachments(w.chat).unwrap()[&a.id].deleted);
+    assert!(svc.share_attachment(w.chat, w.wid, shared).is_err());
 }

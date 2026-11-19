@@ -37,6 +37,9 @@ aho-corasick = "1"
 # Egress proxy allow-list parsing (already in the tree via hive-core).
 url = "2"
 walkdir = "2"
+# Attachment archive-bomb checks: inflate a gzip stream into a counter,
+# bounded (issue #118; already in the tree via reqwest/zip).
+flate2 = "1"
 # Zeroized secret buffers (B2; already in the tree).
 zeroize = "1"
 # Identity links (IDENTITY-AND-FORGES §2.5): SSHSIG verification for
