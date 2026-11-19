@@ -70,8 +70,10 @@ fn env_opt(k: &str) -> Option<String> {
 }
 
 /// Create the data dir. Exits when it can't be created.
+/// Owner-only (0700) from the start: `ligus.db` holds the decrypted history,
+/// so it must not wait for a later private write to tighten the dir.
 fn create_data_dir_or_exit(data_dir: &std::path::Path) {
-    if let Err(e) = std::fs::create_dir_all(data_dir) {
+    if let Err(e) = ligus_runtime::private_file::ensure_private_dir(data_dir) {
         eprintln!("error: could not set up {}: {e}", data_dir.display());
         std::process::exit(1);
     }
@@ -1763,58 +1765,7 @@ fn run() -> Result<()> {
             .and_then(|i| rest.get(i + 1))
             .cloned()
     };
-    // Positional args exclude flags and any value immediately after a known
-    // value-flag (so `agent bot --runtime ws1` → positional = [bot]).
-    let value_flags = [
-        "--gateway",
-        "--model",
-        "--runtime",
-        "--endpoint",
-        "--secret-ref",
-        "--secret",
-        "--label",
-        "--host",
-        "--chat",
-        "--listen",
-        "--token-file",
-        "--ntfy-url",
-        "--ntfy-topic",
-        "--public-url",
-        "--name",
-        "--role",
-        "--relay",
-        "--reg-token",
-        "--remote-relay",
-        "--file",
-        "--repo",
-        "--since",
-        "--auth",
-        "--client-id",
-        "--expect-tier",
-        "--health-listen",
-        "--tag",
-        "--title",
-        "--body",
-        "--note",
-        "--base",
-        "--kind",
-        "--branch",
-    ];
-    let mut positional: Vec<&String> = Vec::new();
-    let mut skip = false;
-    for a in rest {
-        if skip {
-            skip = false;
-            continue;
-        }
-        if a.starts_with("--") {
-            if value_flags.contains(&a.as_str()) {
-                skip = true;
-            }
-            continue;
-        }
-        positional.push(a);
-    }
+    let positional = positional_args(rest);
 
     // A current-thread runtime is all the CLI needs — it only ever `block_on`s
     // (never spawns), and keeps the non-Send EventStore on one thread.
@@ -2101,8 +2052,141 @@ fn run() -> Result<()> {
     }
 }
 
+/// Flags that take a value: the value right after one is not a positional
+/// argument (so `agent bot --runtime ws1` gives positional `[bot]`). Every
+/// flag read with `flag_val` must be listed here, or its value is taken as a
+/// positional argument (a test checks this against the source).
+const VALUE_FLAGS: &[&str] = &[
+    "--gateway",
+    "--model",
+    "--runtime",
+    "--endpoint",
+    "--secret-ref",
+    "--secret",
+    "--label",
+    "--host",
+    "--chat",
+    "--listen",
+    "--token-file",
+    "--ntfy-url",
+    "--ntfy-topic",
+    "--public-url",
+    "--name",
+    "--role",
+    "--relay",
+    "--reg-token",
+    "--remote-relay",
+    "--file",
+    "--repo",
+    "--since",
+    "--auth",
+    "--client-id",
+    "--expect-tier",
+    "--health-listen",
+    "--tag",
+    "--title",
+    "--body",
+    "--note",
+    "--base",
+    "--kind",
+    "--branch",
+    "--agent",
+    "--code-file",
+    "--fingerprint",
+    "--out",
+    "--phone",
+    "--recovery-words-file",
+    "--token",
+];
+
+/// The positional arguments: everything that is not a flag or a flag's value.
+fn positional_args(rest: &[String]) -> Vec<&String> {
+    let mut positional: Vec<&String> = Vec::new();
+    let mut skip = false;
+    for a in rest {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if a.starts_with("--") {
+            if VALUE_FLAGS.contains(&a.as_str()) {
+                skip = true;
+            }
+            continue;
+        }
+        positional.push(a);
+    }
+    positional
+}
+
 #[cfg(test)]
 mod cli_tests {
+    /// A data dir the CLI creates (or finds group/world-open and owns) is
+    /// owner-only from the start, not only once a later write tightens it:
+    /// `ligus.db` holds the decrypted history.
+    #[cfg(unix)]
+    #[test]
+    fn the_data_dir_is_owner_only_from_the_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("data");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::create_data_dir_or_exit(&d);
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o077, 0);
+        let fresh = tmp.path().join("fresh").join("data");
+        super::create_data_dir_or_exit(&fresh);
+        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o077, 0);
+    }
+
+    /// `recovery-key create --out` never replaces an existing file: re-running
+    /// it at the old words' path overwrote them, then deleted the file when
+    /// the registration failed, so the registered key had no words anywhere.
+    #[test]
+    fn recovery_key_out_never_replaces_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let out = tmp.path().join("words.txt");
+        std::fs::write(&out, "old words").unwrap();
+        let create = "create".to_string();
+        let err = crate::admit::cmd_recovery_key(&cfg, &[&create], Some(out.to_string_lossy().into_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "old words");
+        assert!(!cfg.data_dir.exists(), "nothing else was set up");
+    }
+
+    /// Every flag read with `flag_val` is a value flag, so its value is never
+    /// taken as a positional argument (`phones certify --code-file c …` once
+    /// read `c` as the code and failed with a usage error).
+    #[test]
+    fn every_flag_val_flag_takes_a_value() {
+        let src = include_str!("main.rs");
+        let mut missing = Vec::new();
+        for part in src.split("flag_val(\"").skip(1) {
+            let flag = &part[..part.find('"').unwrap()];
+            if flag.starts_with("--") && !super::VALUE_FLAGS.contains(&flag) {
+                missing.push(flag.to_string());
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "value flags missing from VALUE_FLAGS: {missing:?}");
+    }
+
+    #[test]
+    fn phones_certify_flags_are_not_positional() {
+        let rest: Vec<String> = [
+            "certify", "--code-file", "c.txt", "--recovery-words-file", "w.txt", "--fingerprint", "F",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let pos: Vec<&str> = super::positional_args(&rest).iter().map(|s| s.as_str()).collect();
+        assert_eq!(pos, ["certify"]);
+    }
+
     use super::*;
 
     /// `ligus agent` honors a workspace runtime's model gateway like serve and

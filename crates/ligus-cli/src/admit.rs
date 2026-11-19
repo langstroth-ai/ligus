@@ -475,6 +475,11 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
         bail!("usage: ligus recovery-key create --out PATH");
     }
     let out = out.ok_or_else(|| anyhow!("usage: ligus recovery-key create --out PATH"))?;
+    // Never replace a file: it may hold the words of a key already
+    // registered, and a failed registration below removes `out`.
+    if std::fs::symlink_metadata(&out).is_ok() {
+        bail!("{out} already exists: choose a new path (it may hold the words of a recovery key you already registered)");
+    }
     if identity(cfg).load()?.is_some_and(|s| s.service) {
         bail!("this data dir is a box (a service member): it holds no passkey or recovery key");
     }
