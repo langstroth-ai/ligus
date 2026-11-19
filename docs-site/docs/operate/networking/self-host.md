@@ -26,6 +26,7 @@ named `LIGUS_RELAY_*`.
 |---|---|
 | Workspace event envelopes | ciphertext (ChaCha20-Poly1305, sealed on the device) plus a dedup key and timestamp |
 | Keyring, presence and candidate blobs | opaque blobs |
+| Shared files (v0.3, [blob channel](#file-attachments)) | ciphertext sealed on the device, its size, the uploader's token subject (or address) and the upload and expiry times |
 | Workspace members and invites (membership mode only) | account ids, roles, invite **code hashes** |
 | Contacts (v0.3) | random contact ids, the SHA-256 of each write key, records (opaque to the relay, verified by clients) and sealed drops |
 | Directory, accounts, devices, friends, inbox (GitHub routes, off by default from v0.3) | GitHub login and id, display name, device public keys, device labels, last seen; inbox bodies are opaque |
@@ -199,6 +200,55 @@ events.
 
 Postgres does **not** mean unbounded history: set
 `LIGUS_RELAY_MAX_ENVELOPES=0` if that's what you want.
+
+## File attachments {#file-attachments}
+
+Relays from v0.3 serve the blob channel that carries the files members share
+([Sharing files](../../ligus/features/attachments.md)). A file is sealed with
+the workspace key on the sender's device, so the relay stores ciphertext and
+can't see a file's contents, name or type, or scan it. The signed reference to
+a file travels in the encrypted workspace log, and every receiving device
+checks the downloaded bytes against it, so a relay that swaps, truncates or
+replays a file is caught there.
+
+The relay's job is to keep the channel from becoming free storage or a
+distribution point: every request is authenticated like the other workspace
+routes, blob ids are 32 random bytes the relay mints (there is no listing
+route), uploads go only to a workspace that already holds data, and these
+limits refuse what goes over them (nothing is evicted):
+
+| Setting | Default | Limits |
+|---|---|---|
+| `LANGSTROTH_RELAY_BLOBS` | `on` | `off` turns the channel off (`404`); members can then only attach device-local files |
+| `LANGSTROTH_RELAY_BLOB_MAX_BYTES` | 25 MiB | one file (`413 blob_too_large`) |
+| `LANGSTROTH_RELAY_BLOB_ROOM_MAX_BYTES` | 512 MiB | file bytes per workspace (`507 blob_room_bytes`) |
+| `LANGSTROTH_RELAY_BLOB_ROOM_MAX_COUNT` | `2000` | files per workspace (`507 blob_room_count`) |
+| `LANGSTROTH_RELAY_BLOB_WRITER_MAX_BYTES` / `…_WRITER_MAX_COUNT` | 128 MiB / `500` | per member (token subject) per workspace (`507 blob_writer_bytes` / `blob_writer_count`) |
+| `LANGSTROTH_RELAY_BLOB_TOTAL_MAX_BYTES` | off | file bytes across the relay (`507 blob_total_bytes`) |
+| `LANGSTROTH_RELAY_BLOB_RETENTION_DAYS` | `30` | a file expires this long after upload (`0` = kept until deleted) |
+| `LANGSTROTH_RELAY_BLOB_RATE` / `…_BURST` | 1/s, burst 20 | uploads per member per workspace (`429 blob_rate`) |
+
+With tenancy, a tenant's `limits` can set `blob_max_bytes` and
+`blob_max_count` (the tenant's total) and `blob_room_max_bytes` and
+`blob_room_max_count` (per workspace, replacing the relay-wide values). In the
+Helm chart these are the `blobs.*` values (`enabled`, `maxBytes`,
+`roomMaxBytes`, `roomMaxCount`, `writerMaxBytes`, `writerMaxCount`,
+`totalMaxBytes`, `retentionDays`, `rate`, `burst`); with
+`ingress.streamingDefaults` the chart raises the ingress body limit to
+`blobs.maxBytes`. A proxy in front of the relay must accept request bodies of
+that size.
+
+Files are removed when they expire, when a member's device deletes one after a
+signed deletion (the file's sharer or an Admin), when a member is removed
+through relay membership (their uploads), and with a room purge or idle-room
+expiry. A file the policy in a Ligus workspace allows can still be larger than
+the relay's cap: the relay's cap wins, and the sender sees the refusal.
+
+On the memory store files count toward `LANGSTROTH_RELAY_MAX_STORE_BYTES` and
+are saved in the snapshot; size the budget and the volume for them, or use
+Postgres (tables `relay_blobs` and `relay_blob_usage`, migrated under the
+relay's advisory lock). The relay's own guide, `docs/blobs.md` in the relay
+repository, has the full details.
 
 ## Access control
 

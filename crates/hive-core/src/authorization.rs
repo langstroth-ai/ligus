@@ -120,6 +120,9 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::AttachmentPolicySet { .. }
+            | SessionEvent::AttachmentHashBlocked { .. }
+            | SessionEvent::AttachmentHashUnblocked { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
@@ -321,6 +324,13 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Linked identities: an account's own (see `authz::links`); removing
         // someone else's is an Admin's.
         SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => WorkspaceRole::Viewer,
+        // The attachment policy and blocklist are an Admin's (issue #118).
+        SessionEvent::AttachmentPolicySet { .. }
+        | SessionEvent::AttachmentHashBlocked { .. }
+        | SessionEvent::AttachmentHashUnblocked { .. } => WorkspaceRole::Admin,
+        // Who may share is the policy's call (`authz::attachments`), and a
+        // deletion is its sharer's or an Admin's.
+        SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,

@@ -389,9 +389,9 @@ pub async fn drain_tick(
 /// person's `ProposalApplyRequested` names a host.
 pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, hive_runtime::apply_host::Outcome)> {
     let repo_for = |chat: Uuid| {
-        // Only a proposal without a repo applies in the legacy binding; one
-        // with a repo applies only in this box's checkout of that repo
-        // (apply_host::checkout_for, in the apply tick).
+        // Called only for a proposal without a repo: one with a repo applies
+        // only in this box's checkout of that repo (apply_host::checkout_for,
+        // in the apply tick).
         let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
         if let Some(r) = repo.as_deref() {
             crate::repos::ensure_chat_base(r);
@@ -521,7 +521,11 @@ async fn run_turn(
         }
     };
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
-    crate::materialize_turns(ctx.cfg, &mut turns).await;
+    let (head, me) = {
+        let g = lock(svc);
+        (g.attachment_rules(s.workspace_id).unwrap_or_default(), g.author().id.clone())
+    };
+    crate::materialize_turns(ctx.cfg, &s, &head, &me, &mut turns).await;
     let system = format!(
         "You are @{}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
         agent.name,

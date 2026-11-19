@@ -178,8 +178,9 @@ pub fn apply_tick(
         }
     };
     for job in jobs {
-        // A proposal with a repo applies only in this host's checkout of
-        // that repo; one without, in the legacy binding `repo_for` resolves.
+        // A proposal with a repo applies only in this host's checkout of that
+        // repo (apply_host::checkout_for); one without, in the legacy
+        // binding `repo_for` resolves.
         let legacy = if job.proposal.repo_id.is_none() { repo_for(job.chat_id) } else { None };
         let repo = crate::apply_host::checkout_for(&crate::apply_host::Pinned::new(svc, job.founder.as_deref()), &job, legacy);
         let outcome = crate::apply_host::fulfil(svc, &job, repo.as_deref()).map_err(|e| e.to_string());
