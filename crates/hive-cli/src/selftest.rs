@@ -276,9 +276,15 @@ mod tests {
         assert!(out.contains("LIGUS_PROBE_LEAK_DATA_DIR"), "{out}");
         #[cfg(target_os = "linux")]
         {
+            // A child of ours, not this process: another test in this binary
+            // (`hardening::not_dumpable_after_hardening`) may already have
+            // made this process not dumpable, which hides its environ.
+            let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
             let ns = std::fs::read_link("/proc/self/ns/pid").unwrap().display().to_string();
-            let out = run(&probe_script(std::process::id(), &ns, empty.path(), &[]));
-            assert!(out.contains(&format!("LIGUS_PROBE_LEAK_ENVIRON_{}", std::process::id())), "{out}");
+            let out = run(&probe_script(child.id(), &ns, empty.path(), &[]));
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(out.contains(&format!("LIGUS_PROBE_LEAK_ENVIRON_{}", child.id())), "{out}");
         }
     }
 
