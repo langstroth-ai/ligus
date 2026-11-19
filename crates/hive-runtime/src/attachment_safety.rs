@@ -30,10 +30,135 @@ pub fn archive_report(bytes: &[u8], a: &Assessment) -> Option<attachment::Archiv
     let limits = ArchiveLimits::default();
     match a.detected.ext {
         "zip" | "jar" | "apk" | "ipa" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "odt" | "ods" | "epub" => {
-            Some(attachment::inspect_zip(bytes, &limits))
+            let mut budget = inflate_cap(bytes.len(), &limits);
+            Some(zip_report(bytes, &limits, 0, &mut budget))
         }
         "gz" => Some(gzip_report(bytes, &limits)),
         _ => None,
+    }
+}
+
+/// Archives inside archives this inspection opens (deeper is a bomb).
+const MAX_ZIP_DEPTH: usize = 3;
+/// The largest inner archive kept in memory to look inside.
+const MAX_INNER_ARCHIVE: usize = 32 * 1024 * 1024;
+
+/// How many bytes an archive of `len` bytes may unpack to, in all.
+fn inflate_cap(len: usize, limits: &ArchiveLimits) -> u64 {
+    limits.max_total.min(len as u64 * limits.max_ratio).max(1024 * 1024)
+}
+
+/// A zip's directory ([`attachment::inspect_zip`]) checked against what an
+/// extractor would actually unpack (second review): every stored or deflated
+/// entry is inflated into a counter (nothing is written anywhere), bounded by
+/// `budget`; an entry that unpacks to more than its directory claims, or a
+/// zip that unpacks past the cap, is a bomb; a zip or gzip inside (whatever
+/// its name) is inspected the same way, at most [`MAX_ZIP_DEPTH`] deep, and
+/// what it holds counts for the policy.
+fn zip_report(bytes: &[u8], limits: &ArchiveLimits, depth: usize, budget: &mut u64) -> attachment::ArchiveReport {
+    let mut r = attachment::inspect_zip(bytes, limits);
+    if r.bomb.is_some() {
+        return r;
+    }
+    let Ok(listing) = attachment::zip_entries(bytes) else { return r };
+    for e in &listing.entries {
+        if e.name.ends_with('/') && e.uncompressed == 0 {
+            continue;
+        }
+        let Some(start) = attachment::zip_local_data(bytes, e) else {
+            r.bomb = Some("its directory doesn't match its contents".into());
+            return r;
+        };
+        if e.flags & 1 != 0 || !matches!(e.method, 0 | 8) {
+            r.opaque_entries += 1;
+            continue;
+        }
+        let data = &bytes[start..];
+        let mut src: Box<dyn Read> = if e.method == 0 {
+            let n = usize::try_from(e.compressed).unwrap_or(usize::MAX).min(data.len());
+            Box::new(&data[..n])
+        } else {
+            Box::new(flate2::read::DeflateDecoder::new(data))
+        };
+        let mut src = (&mut src).take(*budget + 1);
+        let mut buf = [0u8; 64 * 1024];
+        let mut got: u64 = 0;
+        let mut kept: Option<Vec<u8>> = None;
+        loop {
+            match src.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if got == 0 {
+                        let head = &buf[..n];
+                        if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") || head.starts_with(&[0x1F, 0x8B]) {
+                            kept = Some(Vec::new());
+                        }
+                    }
+                    if let Some(k) = kept.as_mut() {
+                        if k.len() + n > MAX_INNER_ARCHIVE {
+                            kept = None;
+                            r.opaque_entries += 1;
+                        } else {
+                            k.extend_from_slice(&buf[..n]);
+                        }
+                    }
+                    got += n as u64;
+                }
+                Err(_) => {
+                    r.bomb = Some("a corrupt compressed entry".into());
+                    return r;
+                }
+            }
+        }
+        if got > *budget {
+            r.bomb = Some(format!("it expands more than {}x", limits.max_ratio));
+            return r;
+        }
+        *budget -= got;
+        if got > e.uncompressed {
+            r.bomb = Some("an entry unpacks to more than its directory says".into());
+            return r;
+        }
+        let Some(inner) = kept else { continue };
+        if depth + 1 > MAX_ZIP_DEPTH {
+            r.bomb = Some(format!("archives nested more than {MAX_ZIP_DEPTH} deep"));
+            return r;
+        }
+        let child = if inner.starts_with(&[0x1F, 0x8B]) {
+            let g = gzip_report(&inner, limits);
+            *budget = budget.saturating_sub(g.total_uncompressed);
+            g
+        } else {
+            zip_report(&inner, limits, depth + 1, budget)
+        };
+        merge_inner(&mut r, &e.name, child);
+        if r.bomb.is_some() {
+            return r;
+        }
+    }
+    r
+}
+
+/// Fold an inner archive's findings into its container's.
+fn merge_inner(r: &mut attachment::ArchiveReport, name: &str, child: attachment::ArchiveReport) {
+    r.nested_archives += 1 + child.nested_archives;
+    r.risky_entries += child.risky_entries;
+    r.opaque_entries += child.opaque_entries;
+    r.hidden_entries |= child.hidden_entries;
+    r.total_uncompressed = r.total_uncompressed.saturating_add(child.total_uncompressed);
+    for t in child.entry_types {
+        if r.entry_types.len() < 256 && !r.entry_types.contains(&t) {
+            r.entry_types.push(t);
+        }
+    }
+    let base = attachment::sanitize_filename(name);
+    for u in child.unsafe_names {
+        if r.unsafe_names.len() < 20 {
+            r.unsafe_names.push(format!("{base}: {u}"));
+        }
+    }
+    if let Some(b) = child.bomb {
+        r.bomb = r.bomb.take().or(Some(format!("{b} (inside {base})")));
     }
 }
 
@@ -409,6 +534,131 @@ mod tests {
         bad.truncate(12);
         bad.extend_from_slice(&[0xff; 32]);
         assert!(archive_bomb(&bad, &attachment::assess("a.gz", &bad)).is_some());
+    }
+
+    /// One zip entry for [`build_zip`]: its name, its real bytes, whether
+    /// they are deflated, the uncompressed size the headers claim (`None` =
+    /// the truth), and an Info-ZIP Unicode Path name (extra field 0x7075).
+    struct Ent<'a> {
+        name: &'a str,
+        data: Vec<u8>,
+        deflate: bool,
+        claim: Option<u32>,
+        upath: Option<&'a str>,
+    }
+
+    fn ent(name: &str, data: Vec<u8>) -> Ent<'_> {
+        Ent { name, data, deflate: true, claim: None, upath: None }
+    }
+
+    /// A real zip (local headers with data, the central directory, the end
+    /// record), written by hand so a test can lie in it.
+    fn build_zip(entries: &[Ent]) -> Vec<u8> {
+        use std::io::Write;
+        let crc32 = |b: &[u8]| {
+            let mut c = flate2::Crc::new();
+            c.update(b);
+            c.sum()
+        };
+        let mut out = Vec::new();
+        let mut cd = Vec::new();
+        for e in entries {
+            let packed = if e.deflate {
+                let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+                z.write_all(&e.data).unwrap();
+                z.finish().unwrap()
+            } else {
+                e.data.clone()
+            };
+            let crc = crc32(&e.data);
+            let uncomp = e.claim.unwrap_or(e.data.len() as u32);
+            let extra = match e.upath {
+                Some(u) => {
+                    let mut x = Vec::new();
+                    x.extend_from_slice(&0x7075u16.to_le_bytes());
+                    x.extend_from_slice(&((5 + u.len()) as u16).to_le_bytes());
+                    x.push(1);
+                    x.extend_from_slice(&crc32(e.name.as_bytes()).to_le_bytes());
+                    x.extend_from_slice(u.as_bytes());
+                    x
+                }
+                None => Vec::new(),
+            };
+            let method: u16 = if e.deflate { 8 } else { 0 };
+            let off = out.len() as u32;
+            out.extend_from_slice(b"PK\x03\x04");
+            out.extend_from_slice(&20u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&method.to_le_bytes());
+            out.extend_from_slice(&[0; 4]);
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+            out.extend_from_slice(&uncomp.to_le_bytes());
+            out.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+            out.extend_from_slice(e.name.as_bytes());
+            out.extend_from_slice(&extra);
+            out.extend_from_slice(&packed);
+            cd.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            cd.extend_from_slice(&20u16.to_le_bytes());
+            cd.extend_from_slice(&20u16.to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes());
+            cd.extend_from_slice(&method.to_le_bytes());
+            cd.extend_from_slice(&[0; 4]);
+            cd.extend_from_slice(&crc.to_le_bytes());
+            cd.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+            cd.extend_from_slice(&uncomp.to_le_bytes());
+            cd.extend_from_slice(&(e.name.len() as u16).to_le_bytes());
+            cd.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+            cd.extend_from_slice(&[0; 10]);
+            cd.extend_from_slice(&off.to_le_bytes());
+            cd.extend_from_slice(e.name.as_bytes());
+            cd.extend_from_slice(&extra);
+        }
+        let cd_off = out.len() as u32;
+        out.extend_from_slice(&cd);
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(cd.len() as u32).to_le_bytes());
+        out.extend_from_slice(&cd_off.to_le_bytes());
+        out.extend_from_slice(&[0; 2]);
+        out
+    }
+
+    fn report(bytes: &[u8]) -> attachment::ArchiveReport {
+        archive_report(bytes, &attachment::assess("a.zip", bytes)).expect("a zip is inspected")
+    }
+
+    /// Second review: what an extractor would actually unpack is what the
+    /// inspection judges.
+    #[test]
+    fn zip_inspection_sees_what_an_extractor_would() {
+        // Honest: a small text file, nothing flagged.
+        let ok = report(&build_zip(&[ent("notes.txt", b"hello".repeat(100))]));
+        assert!(ok.bomb.is_none() && ok.risky_entries == 0, "{ok:?}");
+        // The Unicode Path field (0x7075) renames the entry for Info-ZIP,
+        // 7-Zip and libarchive: the policy must see that name too.
+        let renamed = report(&build_zip(&[Ent { upath: Some("evil.exe"), ..ent("notes.txt", b"MZ".to_vec()) }]));
+        assert!(renamed.entry_types.contains(&"@executable".to_string()) && renamed.risky_entries == 1, "{renamed:?}");
+        // A directory that understates what an entry unpacks to: 64 MiB of
+        // zeros claimed as 100 bytes.
+        let lying = report(&build_zip(&[Ent { claim: Some(100), ..ent("zeros.bin", vec![0u8; 64 * 1024 * 1024]) }]));
+        assert!(lying.bomb.is_some(), "{lying:?}");
+        // A program inside a zip inside the zip reaches the policy.
+        let inner = build_zip(&[ent("bin/tool.exe", b"MZ\x90\0".to_vec())]);
+        let nested = report(&build_zip(&[Ent { deflate: false, ..ent("inner.zip", inner.clone()) }]));
+        assert!(nested.entry_types.contains(&"@executable".to_string()), "{nested:?}");
+        // ... also when the inner zip is named like a document.
+        let disguised = report(&build_zip(&[ent("report.txt", inner)]));
+        assert!(disguised.entry_types.contains(&"@executable".to_string()), "{disguised:?}");
+        // Zips nested deeper than three levels are refused.
+        let mut z = build_zip(&[ent("x.exe", b"MZ".to_vec())]);
+        for i in 0..5 {
+            z = build_zip(&[Ent { deflate: false, ..ent(["a.zip", "b.zip", "c.zip", "d.zip", "e.zip"][i], z) }]);
+        }
+        assert!(report(&z).bomb.is_some(), "deep nesting");
     }
 
     #[test]
