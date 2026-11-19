@@ -682,9 +682,16 @@ impl SessionEventEnvelope {
         payload: SessionEvent,
     ) -> Self {
         let scope = payload.scope();
+        // A new memory entry and a memory proposal are known by the event
+        // that made them (`memory::bound_event_id`).
+        let event_id = match &payload {
+            SessionEvent::FlowRecorded { record } => crate::memory::bound_event_id(record),
+            _ => None,
+        }
+        .unwrap_or_else(Uuid::new_v4);
         Self {
             id: Uuid::new_v4(),
-            event_id: Uuid::new_v4(),
+            event_id,
             session_id,
             workspace_id,
             sequence,

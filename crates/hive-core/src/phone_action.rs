@@ -434,9 +434,15 @@ pub fn check_phone_action_preimage(
         }
         (
             PhoneAction::ProposeMemory { chat_id, op, rationale },
-            SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(p) },
+            SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(mp) },
         ) => {
             let source = crate::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None };
+            // The proposal is known by the event that files it
+            // (`memory::bound_event_id`); a draft that isn't would be denied.
+            if mp.proposal_id != p.event_id {
+                return Err(mismatch);
+            }
+            let p = mp;
             if p.op != *op || p.rationale != *rationale || !p.proposer.is_empty() || p.source != source {
                 return Err(mismatch);
             }

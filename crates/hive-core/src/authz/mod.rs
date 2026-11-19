@@ -276,11 +276,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             {
                 return Decision::deny("only a human answers an agent's question");
             }
-            // A daily outcome summary speaks for the device that signed it:
-            // the fold keys summaries by (agent, host, day), so another
-            // member's device must not replace or invent a host's numbers.
-            // Memory and task state (`crate::memory`): their log, then the
-            // fold's own rules (bounds, a known base, one writer per slot).
+            // Memory and task state (`crate::memory`): their log, the ids
+            // bound to their events, then the fold's own rules (bounds, a
+            // known base, one writer per slot).
             let on_config_log = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
             if crate::memory::is_memory(record) && !on_config_log {
                 return Decision::deny("workspace memory is kept on the workspace config log");
@@ -288,9 +286,15 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if matches!(record, crate::flow::FlowRecord::TaskState(_)) && on_config_log {
                 return Decision::deny("task state is kept on its chat's log");
             }
-            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, author, env.signer_device_id) {
+            if let Err(why) = crate::memory::id_binding_ok(record, env.event_id) {
                 return Decision::deny(why);
             }
+            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, env.signer_device_id) {
+                return Decision::deny(why);
+            }
+            // A daily outcome summary speaks for the device that signed it:
+            // the fold keys summaries by (agent, host, day), so another
+            // member's device must not replace or invent a host's numbers.
             if let crate::flow::FlowRecord::AgentOutcomeSummary(sum) = record {
                 if env.signer_device_id.map(|d| d.to_string()).as_deref() != Some(sum.host_id.as_str()) {
                     return Decision::deny("an outcome summary is signed by its own host");
@@ -878,6 +882,23 @@ fn memory_refusal(env: &SessionEventEnvelope, record: &crate::flow::FlowRecord, 
         // proposal comes from its key (the Agent tier) or a runtime effect.
         if !runtime && kind != Some(ActorKind::Agent) && !p.proposer.is_empty() {
             return Some("a memory proposal names an agent only when that agent files it");
+        }
+        // A runtime effect speaks for the chat's runtime or for an agent
+        // bound to the signing device (the A3 fallback), never for anyone
+        // else and never as the host person (an empty proposer would read
+        // as the person's own proposal).
+        if runtime && p.proposer != crate::flow::PRIMARY {
+            let roster = if env.session_id == crate::channel::workspace_config_session_id(env.workspace_id) {
+                Some(ctx.running)
+            } else {
+                ctx.workspace
+            };
+            let bound = crate::flow::agent_from_key(&p.proposer)
+                .zip(env.signer_device_id)
+                .is_some_and(|(a, d)| roster.is_some_and(|r| r.agent_bound_to(a, d)));
+            if !bound {
+                return Some("a runtime's memory proposal names the chat's runtime or an agent on the signing device");
+            }
         }
     }
     if let FlowRecord::TaskState(t) = record {
