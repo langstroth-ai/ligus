@@ -4,6 +4,7 @@
 // uses to reach the Rust backend.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { shownWorkspace } from "@/lib/shownWorkspace";
 import type { AppInfo } from "@/bindings/AppInfo";
 import type { ChatSummaryDto } from "@/bindings/ChatSummaryDto";
 import type { ChannelDto } from "@/bindings/ChannelDto";
@@ -515,11 +516,11 @@ export interface AttachmentRulesView {
 
 export const attachmentRules = () => invoke<AttachmentRulesView>("attachment_rules");
 export const setAttachmentPolicy = (policy: AttachmentPolicy) =>
-  invoke<void>("set_attachment_policy", { policy });
+  invoke<void>("set_attachment_policy", { workspaceId: shownWorkspace(), policy });
 export const blockAttachmentHash = (sha256: string) =>
-  invoke<void>("block_attachment_hash", { sha256 });
+  invoke<void>("block_attachment_hash", { workspaceId: shownWorkspace(), sha256 });
 export const unblockAttachmentHash = (sha256: string) =>
-  invoke<void>("unblock_attachment_hash", { sha256 });
+  invoke<void>("unblock_attachment_hash", { workspaceId: shownWorkspace(), sha256 });
 
 /// Read a local image attachment as a data: URL for inline preview. Rejects when
 /// the file isn't present on this device (e.g. an attachment synced from another
@@ -1743,10 +1744,10 @@ export const setDearthMode = (
   reason: string,
   broodPaths: string[],
   allowedMcpServers: string[],
-) => invoke<void>("set_dearth_mode", { enabled, reason, broodPaths, allowedMcpServers });
+) => invoke<void>("set_dearth_mode", { workspaceId: shownWorkspace(), enabled, reason, broodPaths, allowedMcpServers });
 
 /// Approve a member or device waiting on dearth mode's second approval.
-export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
+export const approveJoin = (subject: string) => invoke<void>("approve_join", { workspaceId: shownWorkspace(), subject });
 
 // ── Sandbox (Phase C): effective policy and signed grants ──
 
@@ -1785,14 +1786,14 @@ export const getSandboxPolicy = (agentId?: string | null) =>
 
 /// Replace the workspace's sandbox grants (signed; the desktop asks for a
 /// passkey). Admin to change paths; only the Owner changes a shell grant.
-export const setSandboxGrants = (grants: SandboxGrants) => invoke<void>("set_sandbox_grants", { grants });
+export const setSandboxGrants = (grants: SandboxGrants) => invoke<void>("set_sandbox_grants", { workspaceId: shownWorkspace(), grants });
 
 /// Apply the active workspace's signed grants on this device (`true`/`false`),
 /// or go back to the default (`null`: on for the Owner's own devices only).
-export const setSandboxGrantsHere = (apply: boolean | null) => invoke<void>("set_sandbox_grants_here", { apply });
+export const setSandboxGrantsHere = (apply: boolean | null) => invoke<void>("set_sandbox_grants_here", { workspaceId: shownWorkspace(), apply });
 
 /// You have seen the signed grants as they are now (the change notice goes).
-export const ackSandboxGrants = () => invoke<void>("ack_sandbox_grants");
+export const ackSandboxGrants = () => invoke<void>("ack_sandbox_grants", { workspaceId: shownWorkspace() });
 
 // ── Egress presets (device-local, off by default) ──
 export type { EgressPresetsDto } from "@/bindings/EgressPresetsDto";
@@ -1809,11 +1810,11 @@ export const getWorkspaceCliUserConfig = () => invoke<boolean>("get_workspace_cl
 
 /// Opt the active workspace's CLI agents into (or out of) the user's own
 /// CLI setup on this device. Off by default.
-export const setWorkspaceCliUserConfig = (enabled: boolean) => invoke<void>("set_workspace_cli_user_config", { enabled });
+export const setWorkspaceCliUserConfig = (enabled: boolean) => invoke<void>("set_workspace_cli_user_config", { workspaceId: shownWorkspace(), enabled });
 
 /// Turn presets on for the active workspace on this device (`[]` = off).
 export const setWorkspaceEgressPresets = (presets: string[]) =>
-  invoke<void>("set_workspace_egress_presets", { presets });
+  invoke<void>("set_workspace_egress_presets", { workspaceId: shownWorkspace(), presets });
 
 /// Override the workspace for one chat: `null` = follow the workspace,
 /// `[]` = off for this chat.
@@ -2087,12 +2088,12 @@ export type PresencePromptDto = {
 export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
 export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
-export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { credentialId });
-export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
+export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { workspaceId: shownWorkspace(), credentialId });
+export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { workspaceId: shownWorkspace(), version });
 /** Confirm this device on the active workspace with your passkey (rules v2). */
 export const deviceConfirm = () => invoke<boolean>("device_confirm");
 /** Let a member register a first passkey again (an Admin's re-grant, confirmed with your passkey). */
-export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
+export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { workspaceId: shownWorkspace(), memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
 /** Use the browser hand-off instead of the system passkey dialog. */
@@ -2249,18 +2250,18 @@ export const renameWorkspaceRepo = (repoId: string, name: string, branch?: strin
   invoke<void>("rename_workspace_repo", { repoId, name, branch: branch ?? null });
 export const removeWorkspaceRepo = (repoId: string) => invoke<void>("remove_workspace_repo", { repoId });
 /// Admin, with a passkey: replace a repo's synced aliases.
-export const setRepoAliases = (repoId: string, aliases: string[]) => invoke<string[]>("set_repo_aliases", { repoId, aliases });
+export const setRepoAliases = (repoId: string, aliases: string[]) => invoke<string[]>("set_repo_aliases", { workspaceId: shownWorkspace(), repoId, aliases });
 /// Admin, with a passkey: map a host alias to a repository host ("" clears it).
-export const setHostAlias = (alias: string, host: string) => invoke<void>("set_host_alias", { alias, host });
+export const setHostAlias = (alias: string, host: string) => invoke<void>("set_host_alias", { workspaceId: shownWorkspace(), alias, host });
 /// This device only: use a synced alias here (or stop using it).
 /// `target`: the repo id or host shown with the alias; the device refuses if
 /// the workspace has since pointed the alias elsewhere.
 export const acceptRepoAlias = (alias: string, accept: boolean, target?: string) =>
-  invoke<string>("accept_repo_alias", { alias, accept, target: target ?? null });
+  invoke<string>("accept_repo_alias", { workspaceId: shownWorkspace(), alias, accept, target: target ?? null });
 export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
 export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
 export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });
-export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("set_repo_coverage_reporting", { on });
+export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("set_repo_coverage_reporting", { workspaceId: shownWorkspace(), on });
 export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
 export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
   invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });

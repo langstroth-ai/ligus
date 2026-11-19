@@ -1076,8 +1076,8 @@ pub(crate) fn get_workspace_cli_user_config(state: State<AppState>) -> bool {
 /// CLI setup on this device. The tools that run work outside the turn stay
 /// off either way, and the opt-in is ignored while egress is restricted.
 #[tauri::command]
-pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, enabled: bool) -> Result<(), String> {
-    let ws = state.active_workspace_id().to_string();
+pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, workspace_id: String, enabled: bool) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if enabled {
         s.cli_user_config_workspaces.insert(ws);
@@ -1090,9 +1090,9 @@ pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, enabled: boo
 
 /// Turn presets on or off for the active workspace (device-local).
 #[tauri::command]
-pub(crate) fn set_workspace_egress_presets(state: State<AppState>, presets: Vec<String>) -> Result<(), String> {
+pub(crate) fn set_workspace_egress_presets(state: State<AppState>, workspace_id: String, presets: Vec<String>) -> Result<(), String> {
     let parsed = parse_preset_names(&presets)?;
-    let ws = state.active_workspace_id().to_string();
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if parsed.is_empty() {
         s.egress_presets_by_workspace.remove(&ws);
@@ -1211,8 +1211,8 @@ pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<boo
 /// Apply (or not, or back to the default with `None`) the active
 /// workspace's signed sandbox grants on this device.
 #[tauri::command]
-pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool>) -> Result<(), String> {
-    let ws = state.active_workspace_id().to_string();
+pub(crate) fn set_sandbox_grants_here(state: State<AppState>, workspace_id: String, apply: Option<bool>) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     match apply {
         Some(v) => s.sandbox_grants_here.insert(ws, v),
@@ -1225,12 +1225,12 @@ pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool
 /// The user has seen the active workspace's signed grants as they are now
 /// (the change notice goes away until they change again).
 #[tauri::command]
-pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
 }
 
-pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let fp = ligus_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
     let mut s = state.settings.lock().unwrap();
     s.sandbox_grants_seen.insert(ws.to_string(), fp);
@@ -1300,12 +1300,12 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
 /// the passkey sheet confirms it). Admin + presence; changing an agent's
 /// shell grant is the Owner's.
 #[tauri::command(async)]
-pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), grants)).await
+pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, grants)).await
 }
 
-pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
         let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
         v.sort();
@@ -1427,19 +1427,21 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
 
 /// Switch dearth mode on or off for the active workspace (Admin+).
 #[tauri::command(async)]
-pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), enabled, reason, brood_paths, allowed_mcp_servers)).await
+pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, workspace_id: String, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, enabled, reason, brood_paths, allowed_mcp_servers)).await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_dearth_mode_sync(
     app: AppHandle,
     state: State<AppState>,
+    workspace_id: String,
     enabled: bool,
     reason: String,
     brood_paths: Vec<String>,
     allowed_mcp_servers: Vec<String>,
 ) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
         v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
@@ -1459,12 +1461,12 @@ pub(crate) fn set_dearth_mode_sync(
 
 /// Approve a member or device waiting on dearth mode's second approval.
 #[tauri::command(async)]
-pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, subject: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), subject)).await
+pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, workspace_id: String, subject: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, subject)).await
 }
 
-pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, workspace_id: String, subject: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let mut svc = state.service.lock().unwrap();
     svc.approve_join(ws, subject.trim()).map_err(map_err)?;
     let _ = svc.record_signal(

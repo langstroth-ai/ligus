@@ -542,7 +542,11 @@ pub(crate) fn flow_roster_sync(state: State<'_, AppState>) -> RosterReport {
 /// Pin an agent's career stage (or `None` for automatic), and set its
 /// task-board threshold bias and opt-out.
 #[tauri::command]
-pub(crate) fn flow_set_agent_profile(
+pub(crate) async fn flow_set_agent_profile(ligus_app: tauri::AppHandle, agent_id: String, career: Option<flow::Career>, threshold_bias: f64, board_opt_out: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_set_agent_profile_sync(tauri::Manager::state::<AppState>(ligus_app), agent_id, career, threshold_bias, board_opt_out)).await
+}
+
+pub(crate) fn flow_set_agent_profile_sync(
     state: State<'_, AppState>,
     agent_id: String,
     career: Option<flow::Career>,
@@ -1728,7 +1732,11 @@ pub(crate) fn flow_add_mark_sync(
 }
 
 #[tauri::command]
-pub(crate) fn flow_clear_mark(state: State<'_, AppState>, mark_id: String) -> Result<(), String> {
+pub(crate) async fn flow_clear_mark(ligus_app: tauri::AppHandle, mark_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_clear_mark_sync(tauri::Manager::state::<AppState>(ligus_app), mark_id)).await
+}
+
+pub(crate) fn flow_clear_mark_sync(state: State<'_, AppState>, mark_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&mark_id).map_err(map_err)?;
     let wid = state.active_workspace_id();
     state
@@ -1751,9 +1759,26 @@ pub(crate) fn flow_zones_sync(state: State<'_, AppState>) -> Result<Vec<flow::Pa
 }
 
 /// Add a path zone (admins only — it sets the review bar).
-#[tauri::command(async)]
-pub(crate) fn flow_set_zone(
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn flow_set_zone(
+    ligus_app: tauri::AppHandle,
+    workspace_id: String,
+    pattern: String,
+    kind: flow::ZoneKind,
+    approval_floor: Option<ligus_core::WorkspaceRole>,
+    required_approvals: Option<u32>,
+    note: String,
+) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        flow_set_zone_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, pattern, kind, approval_floor, required_approvals, note)
+    })
+    .await
+}
+
+pub(crate) fn flow_set_zone_sync(
     state: State<'_, AppState>,
+    workspace_id: String,
     pattern: String,
     kind: flow::ZoneKind,
     approval_floor: Option<ligus_core::WorkspaceRole>,
@@ -1764,7 +1789,7 @@ pub(crate) fn flow_set_zone(
     if pattern.is_empty() || pattern.contains("..") {
         return Err("give a workspace-relative path or pattern".into());
     }
-    let wid = state.active_workspace_id();
+    let wid = crate::shown_workspace(&state, &workspace_id)?;
     let zone = flow::PathZone {
         id: Uuid::new_v4(),
         pattern,
@@ -1782,10 +1807,14 @@ pub(crate) fn flow_set_zone(
         .map_err(map_err)
 }
 
-#[tauri::command(async)]
-pub(crate) fn flow_remove_zone(state: State<'_, AppState>, zone_id: String) -> Result<(), String> {
+#[tauri::command]
+pub(crate) async fn flow_remove_zone(ligus_app: tauri::AppHandle, workspace_id: String, zone_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_remove_zone_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, zone_id)).await
+}
+
+pub(crate) fn flow_remove_zone_sync(state: State<'_, AppState>, workspace_id: String, zone_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&zone_id).map_err(map_err)?;
-    let wid = state.active_workspace_id();
+    let wid = crate::shown_workspace(&state, &workspace_id)?;
     state
         .service
         .lock()
