@@ -17,15 +17,16 @@
 
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use hive_core::{workspace_config_session_id, ChatSession, ModelProviderKind, WorkspaceAgent, WorkspaceRuntime};
-use hive_runtime::ligus_mcp::{Budgets, LigusHost, LigusMcp, TurnSpec};
+use hive_runtime::ligus_mcp::{LigusHost, LigusMcp};
 use hive_runtime::{pending_turns, resolve_workspace_credential, turns_for, ChatService, PendingMention, ResolvedRuntime};
 use uuid::Uuid;
 
-use crate::reply::{self, ToolSettings, TurnFiles};
+use crate::reply::{self, ToolSettings};
+use hive_runtime::turn_engine::{self, Checkout, EngineOptions, Responder, ToolOptions, TurnHost, TurnInput};
 use crate::repos::{repos_dir, RepoBindings};
 use crate::Config;
 
@@ -610,25 +611,14 @@ async fn run_turn(
     rt.args.extend(enforcement.extra_args);
     let mut tool_settings = ctx.settings.clone();
     tool_settings.run_command &= enforcement.allow_run_command && shell_allowed;
-    tool_settings.mcp_egress = envelope.egress.clone();
-    tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
-    // The checkout this chat runs in on this box (the gate above).
-    let repo_root = repo_turn.repo_root.clone();
-
-    let mid = lock(svc).begin_assistant_message(
-        s.id,
-        s.workspace_id,
-        agent.name.clone(),
-        rt_label.clone(),
-        Some(agent.id),
-        // Stamp the mention this reply answers, so pending_mentions correlates
-        // it precisely even when several tasks target the same agent.
-        Some(pm.message_id),
-    )?;
-    sink.changed();
-    sink.status(s.id, agent.id, TurnState::Running, None);
-    println!("↳ @{} replying in {} …", agent.name, s.id);
+    // The MCP servers this turn may reach (`LIGUS_MCP_CONFIG`, narrowed by
+    // the envelope); a broken config fails the turn, as before.
+    let mcp_servers: Vec<_> = if allow_tools {
+        crate::mcp_config::load_from_env()?.into_iter().filter(|s| envelope.egress.allows_mcp(&s.id)).collect()
+    } else {
+        Vec::new()
+    };
 
     // A file-mutating subprocess agent runs in an eagerly cut worktree (like
     // the desktop) so its edits return as a review-gated proposal. Only turns
@@ -639,196 +629,72 @@ async fn run_turn(
         ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
         _ => false,
     };
-    // Only a bound checkout is ever a turn's directory: never the service's
-    // own cwd (its home, or the data dir). A read-only turn with no worktree
-    // runs in a fresh per-turn scratch dir (`executor::prepare`).
-    let eager = match repo_root.as_deref() {
-        Some(root) if write_capable && hive_runtime::git_worktree::is_git_repo(root) => {
-            match hive_runtime::git_worktree::cut_turn_worktree(root, &s.id.to_string(), &mid.to_string()) {
-                Ok(wt) => Some(wt),
-                Err(e) => {
-                    eprintln!("worker: worktree unavailable: {e}");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
-    // Never run a writing agent in place: on the always-on box that would be
-    // the bound checkout itself, or the service's working directory (its home),
-    // with no review-gated proposal in between.
-    if write_capable && eager.is_none() {
-        let e = anyhow!(
-            "@{} can edit files, so it only runs in an isolated worktree of a repository bound on this host \
-             (`ligus bind-repo`), and none could be cut for this chat",
-            agent.name
-        );
-        let _ = lock(svc).complete_assistant_message(s.id, s.workspace_id, mid, format!("[error] {e}"));
-        sink.changed();
-        return Err(e);
-    }
-    let work_dir = eager.as_ref().map(|w| w.path.to_string_lossy().into_owned());
-    let files = TurnFiles { repo_root, chat_id: s.id.to_string(), turn_key: mid.to_string() };
-
-    // Deltas go to the sink on every fragment; the store gets a throttled
-    // checkpoint (~1×/750ms) for crash recovery, as in the app. The final body
-    // is written once on completion.
-    const FLUSH_EVERY: Duration = Duration::from_millis(750);
-    let mut pending = String::new();
-    let mut last_flush = Instant::now();
-    let on_delta = |text: String| {
-        sink.delta(s.id, mid, &text);
-        pending.push_str(&text);
-        if last_flush.elapsed() >= FLUSH_EVERY {
-            let chunk = std::mem::take(&mut pending);
-            let _ = lock(svc).append_chunk(s.id, s.workspace_id, mid, chunk);
-            last_flush = Instant::now();
-        }
-    };
-    // Track D: this turn's Ligus MCP server (agent-signed proposals,
-    // hand-offs, asks, reads), when the runtime can use it; else directives.
-    let restricted = !envelope.egress.is_open();
-    let ligus = ctx
-        .ligus
-        .as_ref()
-        .filter(|_| allow_tools && hive_runtime::ligus_mcp::offered_for(&rt, restricted))
-        .map(|mcp| {
-            std::sync::Arc::new(mcp.begin_turn(TurnSpec {
-                workspace_id: s.workspace_id,
-                chat_id: s.id,
-                agent_id: Some(agent.id),
-                author: format!("@{}", agent.name),
-                message_id: mid,
-                worktree: eager.as_ref().map(|w| w.path.clone()),
-                budgets: Budgets::from_env(),
-                ttl: turn_timeout() + Duration::from_secs(300),
-            }))
-        });
-    let cli = rt.provider.is_cli_agent();
-    let socket = match ligus.as_ref().filter(|_| cli).map(|t| t.listen()) {
-        Some(Ok(p)) => Some(p),
-        Some(Err(e)) => {
-            eprintln!("worker: Ligus MCP socket unavailable, using directives: {e}");
-            None
-        }
-        None => None,
-    };
-    let ligus = ligus.filter(|_| !cli || socket.is_some());
-    let system = match &ligus {
-        Some(_) => hive_runtime::prompt::with_ligus_tools(&system, !cli, &[]),
-        None => system,
-    };
-    let scope = match &ligus {
-        Some(t) => hive_runtime::agent_turn::AgentTurnScope { ligus: (!cli).then(|| t.clone()), ..t.agent_scope() },
-        // No Ligus tools this turn: the spend budget still holds.
-        None => hive_runtime::agent_turn::AgentTurnScope {
-            spend: Some(hive_runtime::agent_turn::SpendMeter::new(hive_runtime::ligus_mcp::Budgets::from_env().max_spend_usd)),
-            ..Default::default()
-        },
-    };
     // Every child of this turn runs in this host's OS sandbox under the
     // turn's envelope and gate.
-    let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
-    sandbox.worktree_is_isolated = eager.is_some();
-    sandbox.ligus_mcp_socket = socket;
-    sandbox.shell_allowed = shell_allowed;
-    sandbox.grants = grants.paths_for(Some(agent.id));
-    let fut = hive_runtime::executor::with_turn(sandbox, hive_runtime::agent_turn::with_agent_turn(scope, reply::generate_reply_streaming(
-        &rt,
-        &system,
-        &turns,
-        allow_tools,
-        work_dir.as_deref(),
-        Some(&files),
-        &tool_settings,
-        on_delta,
-    )));
-    let result = match tokio::time::timeout(turn_timeout(), fut).await {
-        Ok(r) => r,
-        Err(_) => Err(anyhow!("runtime timed out after {}s", turn_timeout().as_secs())),
-    };
+    let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
+    policy.shell_allowed = shell_allowed;
+    policy.grants = grants.paths_for(Some(agent.id));
 
-    match result {
-        Ok(reply) => {
-            let worktree = eager.or(reply.worktree);
-            let captured = worktree.as_ref().and_then(|wt| wt.diff().ok()).filter(|d| !d.trim().is_empty());
-            // Self-medication, as on the desktop: a credential in the diff or an
-            // unrequested CI change locks the chat down before review.
-            {
-                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
-                let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
-                let findings = hive_runtime::guard_scan::assess_turn(&[], captured.as_deref(), &changed, request);
-                if !findings.is_empty() {
-                    if let Err(e) = lock(svc).self_medicate(s.workspace_id, s.id, Some(mid), &findings) {
-                        eprintln!("worker: lockdown failed: {e}");
-                    }
-                }
-            }
-            // A model that produced nothing (and changed no files) never posts
-            // an empty reply: the chat gets a notice saying so, as on the desktop.
-            let mcp_effects = ligus.as_ref().map(|t| t.effects());
-            let empty = reply.text.trim().is_empty() && captured.is_none() && mcp_effects.as_ref().is_none_or(|m| m.is_empty());
-            {
-                let mut svc = lock(svc);
-                // The same finalize as the desktop (D.4.3): directives are
-                // stripped and applied here too, MCP effects win over
-                // duplicates.
-                let full = if empty { hive_runtime::empty_reply_notice(&format!("@{}", agent.name)) } else { reply.text };
-                let fin = hive_runtime::finalize::finalize_reply(
-                    &mut svc,
-                    hive_runtime::finalize::FinalizeInput {
-                        ctx: hive_runtime::effects::EffectCtx {
-                            session_id: s.id,
-                            workspace_id: s.workspace_id,
-                            author: format!("@{}", agent.name),
-                            agent_id: Some(agent.id),
-                            message_id: Some(mid),
-                            via: hive_runtime::effects::Via::Directive,
-                        },
-                        workspace_root: "",
-                        full: &full,
-                        edits_in_review: captured.is_some(),
-                        mcp: mcp_effects.as_ref(),
-                        base_commit: None,
-                        apply_flow: true,
-                    },
-                );
-                if let Err(e) = fin {
-                    eprintln!("worker: finalize failed: {e}");
-                    svc.complete_assistant_message(s.id, s.workspace_id, mid, full)?;
-                }
-                if let (Some(wt), Some(diff)) = (worktree.as_ref(), captured) {
-                    let files = wt.changed_files().unwrap_or_default();
-                    let n = files.len();
-                    let title =
-                        format!("@{} proposed changes to {} file{}", agent.name, n, if n == 1 { "" } else { "s" });
-                    // Authorless (like the desktop's): the human reviewing can
-                    // approve it — the self-approval guard excludes no one.
-                    let mut prop = hive_core::ActionProposal::file_diff(title, "", diff, files);
-                    prop.producing_agent_id = Some(agent.id);
-                    // What it was made on (the repo itself comes from the chat).
-                    if let Some((_, tip, base_ref)) = &repo_turn.base {
-                        prop.base_commit = Some(tip.clone());
-                        prop.base_ref = base_ref.clone();
-                    }
-                    prop.produced_on = Some(svc.device_id());
-                    if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
-                        prop.title = t;
-                        prop.body = b;
-                        prop.task_class = tc;
-                    }
-                    // Filed as the agent's own effect (A3 key, Agent tier).
-                    if let Err(e) = svc.as_agent(Some(agent.id), |svc| svc.upsert_proposal(s.id, s.workspace_id, prop)) {
-                        eprintln!("worker: proposal failed: {e}");
-                    }
-                }
-            }
-            finish_ligus(svc, ligus.as_deref(), &s, &format!("@{}", agent.name));
-            if let Some(wt) = worktree {
-                let _ = wt.remove();
-            }
+    sink.status(s.id, agent.id, TurnState::Running, None);
+    println!("↳ @{} replying in {} …", agent.name, s.id);
+    let host = WorkerHost {
+        svc,
+        sink,
+        chat: s.id,
+        ligus: ctx.ligus.clone(),
+        mcp_servers,
+        // Only a bound checkout is ever a turn's directory: never the
+        // service's own cwd. A read-only turn with no worktree runs in a
+        // fresh per-turn scratch dir (`executor::prepare`).
+        checkout: Checkout {
+            context: String::new(),
+            workspace_root: None,
+            repo_root: repo_turn.repo_root.clone(),
+            base: repo_turn.base.as_ref().map(|(_, tip, base)| (tip.clone(), base.clone())),
+        },
+        agent_name: agent.name.clone(),
+    };
+    let input = TurnInput {
+        workspace_id: s.workspace_id,
+        chat_id: s.id,
+        session: through_trigger(&s, pm.message_id),
+        // Stamp the mention this reply answers, so pending_mentions correlates
+        // it precisely even when several tasks target the same agent.
+        reply_to: Some(pm.message_id),
+        responder: Responder {
+            author: agent.name.clone(),
+            effect_author: format!("@{}", agent.name),
+            runtime_id: rt_label.clone(),
+            agent_id: Some(agent.id),
+            runtime: rt,
+        },
+        system,
+        turns,
+        gate: gate_plan,
+        envelope,
+        shell_allowed,
+        policy,
+        executor: hive_runtime::executor::default_executor(),
+        tools: ToolOptions {
+            builtin: tool_settings.builtin_tools,
+            // No in-place fallback on a headless host.
+            write_in_place: false,
+            run_command: tool_settings.run_command,
+            mcp_after_reads: tool_settings.mcp_after_reads,
+            remote_file_tools: tool_settings.allow_remote_file_tools,
+        },
+        write_capable,
+        // Never run a writing agent in place: on the always-on box that
+        // would be the bound checkout itself, or the service's home.
+        require_isolation: true,
+        stop: None,
+        timeout: turn_timeout(),
+        options: EngineOptions { empty_reply_notice: true, warm_context_probe: true, ..Default::default() },
+    };
+    match turn_engine::run(&host, input).await {
+        Ok(outcome) => {
             sink.changed();
-            if empty {
+            if outcome.empty {
                 sink.status(s.id, agent.id, TurnState::Error, Some("the model returned an empty reply"));
                 println!("   @{} returned an empty reply", agent.name);
             } else {
@@ -838,24 +704,57 @@ async fn run_turn(
             Ok(())
         }
         Err(e) => {
-            finish_ligus(svc, ligus.as_deref(), &s, &format!("@{}", agent.name));
-            if let Some(wt) = eager {
-                let _ = wt.remove();
-            }
-            let _ = lock(svc).complete_assistant_message(s.id, s.workspace_id, mid, format!("[error] {e}"));
             sink.changed();
-            Err(e)
+            Err(anyhow!("{}", e.message))
         }
     }
 }
 
-/// End a Ligus turn: revoke, record the tool summary, show the self-report.
-fn finish_ligus(svc: &Mutex<ChatService>, turn: Option<&hive_runtime::ligus_mcp::TurnHandle>, s: &ChatSession, author: &str) {
-    let Some(t) = turn else { return };
-    t.finish();
-    if let Some(r) = t.report() {
-        let files = if r.files_touched.is_empty() { String::new() } else { format!(" Files: {}.", r.files_touched.join(", ")) };
-        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("\u{1f4cb} {author} reported {}: {}.{files}", r.status, r.summary.trim_end_matches('.')));
+/// `ligus worker` / `ligus serve` as the turn engine's host.
+struct WorkerHost<'a> {
+    svc: &'a Mutex<ChatService>,
+    sink: &'a dyn TurnSink,
+    chat: Uuid,
+    ligus: Option<std::sync::Arc<LigusMcp>>,
+    mcp_servers: Vec<hive_runtime::McpServerSpec>,
+    checkout: Checkout,
+    agent_name: String,
+}
+
+impl TurnHost for WorkerHost<'_> {
+    fn service(&self) -> &Mutex<ChatService> {
+        self.svc
+    }
+    fn mcp_servers(&self, _egress: &hive_core::sandbox::EgressPolicy, _shell: bool) -> impl std::future::Future<Output = Vec<hive_runtime::McpServerSpec>> + Send {
+        let servers = self.mcp_servers.clone();
+        async move { servers }
+    }
+    fn ligus(&self) -> Option<std::sync::Arc<LigusMcp>> {
+        self.ligus.clone()
+    }
+    fn checkout(&self, _session: &ChatSession, _message_id: Uuid) -> impl std::future::Future<Output = std::result::Result<Checkout, String>> + Send {
+        // The box's repo gate ran before the turn was posted.
+        let c = self.checkout.clone();
+        async move { Ok(c) }
+    }
+    fn isolation_refusal(&self, _author: &str) -> String {
+        format!(
+            "[error] @{} can edit files, so it only runs in an isolated worktree of a repository bound on this host \
+             (`ligus bind-repo`), and none could be cut for this chat",
+            self.agent_name
+        )
+    }
+    fn delta(&self, message_id: Uuid, text: &str) {
+        self.sink.delta(self.chat, message_id, text);
+    }
+    fn changed(&self) {
+        self.sink.changed();
+    }
+    fn error_text(&self, error: &str) -> String {
+        format!("provider: {error}")
+    }
+    fn timeout_text(&self, secs: u64) -> String {
+        format!("runtime timed out after {secs}s")
     }
 }
 

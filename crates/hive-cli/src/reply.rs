@@ -1,32 +1,19 @@
-//! Generating an agent's reply — with MCP tools when configured.
+//! `ligus agent`'s reply, and the headless hosts' tool settings.
 //!
-//! Both `ligus agent` and `ligus worker` turn a chat transcript into one reply.
-//! When `LIGUS_MCP_CONFIG` names one or more enabled MCP servers *and* the
-//! runtime is Anthropic with a key, the reply is produced by the agentic tool
-//! loop (model ↔ tool_use ↔ tool_result), so the agent can reach external
-//! boards (Linear/GitHub) via MCP tools. Otherwise it falls back to a single
-//! streamed completion — identical to the pre-MCP behavior — so nothing
-//! regresses when no MCP config is present.
+//! `ligus agent` turns a chat transcript into one reply. When
+//! `LIGUS_MCP_CONFIG` names one or more enabled MCP servers *and* the runtime
+//! is Anthropic with a key, the reply is produced by the agentic tool loop
+//! (the turn engine's adapter and MCP executor); otherwise it falls back to a
+//! single streamed completion.
 //!
-//! `ligus worker` / `ligus serve` use [`generate_reply_streaming`], which adds the
-//! offline harness's loop for local model runtimes (OpenAI wire / Ollama):
-//! built-in file tools + MCP tools behind `CompositeTools`, under the same
-//! policy as the desktop (writes only in a per-turn worktree, `run_command`
-//! opt-in, private-endpoint gating, exfiltration guard).
-//!
-//! Mirrors the app's `try_tool_loop`: an Anthropic `MessagesApi` adapter + an
-//! `McpRegistry`-backed `ToolExecutor`, driven by `run_with_messages`. Runs
-//! entirely within the caller's task (the CLI's current-thread runtime), so the
-//! non-`Send` registry/executor never cross tasks.
-
-use std::collections::HashMap;
+//! `ligus worker` / `ligus serve` run their turns through
+//! `hive_runtime::turn_engine`, the same engine as the desktop; this module
+//! only reads their [`ToolSettings`] from the environment.
 
 use anyhow::{anyhow, Result};
 use hive_core::{ModelProviderKind, WorkspaceRole};
-use hive_runtime::provider::anthropic::{content_value, AnthropicResponse};
-use hive_runtime::tool_loop::{self, MessagesApi, ToolExecutor};
-use hive_runtime::{dispatch, AnthropicClient, ChatTurn, McpRegistry, ProviderError, ResolvedRuntime};
-use serde_json::{json, Value};
+use hive_runtime::tool_loop;
+use hive_runtime::{dispatch, AnthropicClient, ChatTurn, ResolvedRuntime};
 
 use crate::mcp_config;
 
@@ -135,211 +122,28 @@ pub fn worker_tools_enabled() -> bool {
     env_flag("LIGUS_WORKER_TOOLS", true)
 }
 
-/// Where a tool-using turn may read and write files.
-#[derive(Debug, Clone)]
-pub struct TurnFiles {
-    /// The bound checkout (see `repos.rs`); `None` = no file tools.
-    pub repo_root: Option<std::path::PathBuf>,
-    pub chat_id: String,
-    /// Unique per turn (the reply's message id) — names the worktree.
-    pub turn_key: String,
-}
-
-/// The endpoint a runtime actually talks to (native Ollama defaults local).
-fn effective_endpoint(rt: &ResolvedRuntime) -> String {
-    if rt.endpoint.trim().is_empty() && rt.provider == ModelProviderKind::Ollama {
-        "http://localhost:11434".into()
-    } else {
-        rt.endpoint.clone()
-    }
-}
-
 /// The app's `wants_builtin_tools`: the setting is on, the runtime runs the
 /// agent tool loop, and the endpoint is private (loopback, RFC 1918,
 /// Tailscale, …) unless the operator opted into remote file tools.
+#[cfg(test)]
 pub fn wants_builtin_tools(rt: &ResolvedRuntime, settings: &ToolSettings) -> bool {
-    settings.builtin_tools
-        && rt.runs_agent_tools()
-        && (settings.allow_remote_file_tools
-            || rt.allow_remote_file_tools
-            || hive_core::endpoint::endpoint_is_private(&effective_endpoint(rt)))
-}
-
-/// The result of one streamed, possibly tool-using turn.
-pub struct TurnReply {
-    pub text: String,
-    /// The per-turn worktree a file-writing turn cut (lazily, on its first
-    /// write). The caller captures its diff as a proposal and removes it.
-    pub worktree: Option<hive_runtime::git_worktree::Worktree>,
-}
-
-/// Produce one reply, streaming fragments to `on_delta`.
-///
-/// - Anthropic with tools allowed: the (non-streaming) Anthropic MCP tool
-///   loop; its whole answer is delivered as one fragment.
-/// - An HTTP runtime that runs the agent tool loop (Custom / HiveDaemon /
-///   Ollama with tools on): `dispatch::stream_with_tools` with Hive's built-in
-///   file tools (when a checkout is bound and the endpoint is private) plus the
-///   MCP tools, behind `CompositeTools` — the same pieces and the same policy
-///   as the desktop: reads at the chat's base worktree, writes only in a
-///   per-turn git worktree cut on the first write, `run_command` only when
-///   enabled, the exfiltration guard on.
-/// - Anything else: a plain streamed completion.
-///
-/// `allow_tools` is the H1 role gate (the triggering author's role): when
-/// false no tool of either kind is offered.
-#[allow(clippy::too_many_arguments)]
-pub async fn generate_reply_streaming(
-    rt: &ResolvedRuntime,
-    system: &str,
-    turns: &[ChatTurn],
-    allow_tools: bool,
-    working_dir: Option<&str>,
-    files: Option<&TurnFiles>,
-    settings: &ToolSettings,
-    mut on_delta: impl FnMut(String),
-) -> Result<TurnReply> {
-    if allow_tools && rt.provider == ModelProviderKind::Anthropic {
-        if let Some(text) = try_tool_loop(rt, system, turns, &settings.mcp_egress).await? {
-            on_delta(text.clone());
-            return Ok(TurnReply { text, worktree: None });
-        }
-    }
-    if allow_tools && rt.runs_agent_tools() && rt.is_openai_wire() {
-        return tool_loop_turn(rt, system, turns, files, settings, on_delta).await;
-    }
-    let text = dispatch::stream(rt, Some(system), turns, working_dir, &[], MAX_TOKENS, on_delta, |_| {})
-        .await
-        .map_err(|e| anyhow!("provider: {e}"))?;
-    Ok(TurnReply { text, worktree: None })
-}
-
-async fn tool_loop_turn(
-    rt: &ResolvedRuntime,
-    system: &str,
-    turns: &[ChatTurn],
-    files: Option<&TurnFiles>,
-    settings: &ToolSettings,
-    on_delta: impl FnMut(String),
-) -> Result<TurnReply> {
-    use hive_runtime::agent_tools::{builtin_policy, tool_hints, tool_round_budget, CompositeTools, MAX_OFFERED_TOOLS};
-    use hive_runtime::git_worktree::{chat_worktree, is_git_repo, LazyTurnWorktree};
-    use std::sync::Arc;
-
-    let mcp = mcp_tool_set(&settings.mcp_egress).await?;
-    let repo = files
-        .and_then(|f| f.repo_root.as_deref().map(|r| (f, r)))
-        .filter(|(_, r)| is_git_repo(r));
-    let mut lazy: Option<Arc<LazyTurnWorktree>> = None;
-    let builtin = match repo {
-        // Built-in file tools (and run_command) need this host's OS sandbox:
-        // without one an HTTP model gets no local tools (chat only).
-        Some((f, root)) if wants_builtin_tools(rt, settings) && hive_runtime::executor::local_tools_allowed() => {
-            let wt = Arc::new(LazyTurnWorktree::new(root, f.chat_id.clone(), f.turn_key.clone()));
-            // Read the chat's own base worktree (the tree its turn worktree is
-            // cut from), so the model edits what it read.
-            let read_root = chat_worktree(root, &f.chat_id).unwrap_or_else(|e| {
-                eprintln!("worker: chat base worktree unavailable, reading the checkout: {e}");
-                root.to_path_buf()
-            });
-            // isolated = true: writes go to the lazily cut turn worktree, never
-            // the checkout (no in-place fallback on a headless host).
-            // `run_command` is a shell: the Owner's, or granted (Phase C;
-            // the host set it on the turn's policy).
-            let shell = hive_runtime::executor::turn_shell_allowed();
-            let policy = builtin_policy(&read_root, true, false, settings.run_command && shell).with_protected_dirs(&settings.protected_dirs);
-            match hive_runtime::BuiltinTools::lazy(policy, wt.clone(), false) {
-                Ok(b) => {
-                    lazy = Some(wt);
-                    Some(b)
-                }
-                Err(e) => {
-                    eprintln!("worker: built-in tools unavailable: {e}");
-                    None
-                }
-            }
-        }
-        _ => None,
+    let tools = hive_runtime::turn_engine::ToolOptions {
+        builtin: settings.builtin_tools,
+        remote_file_tools: settings.allow_remote_file_tools,
+        ..Default::default()
     };
-    // The folded Ligus tools, when the host started a Ligus turn (D.3.3).
-    let ligus = hive_runtime::agent_turn::current().and_then(|s| s.ligus.clone());
-    let cap = MAX_OFFERED_TOOLS - if ligus.is_some() { hive_runtime::ligus_mcp::tools::FOLDED.len() } else { 0 };
-    let tools = CompositeTools::with_hints(builtin, mcp, cap, &tool_hints(system, turns)).allow_mcp_after_reads(settings.mcp_after_reads);
-    let tools = match ligus {
-        Some(l) => tools.with_ligus_tools(l),
-        None => tools,
-    };
-    dispatch::warm_context_probe(rt).await;
-    let rounds = tool_round_budget(rt.provider, rt.max_tool_rounds);
-    let set = (!tools.is_empty()).then(|| dispatch::ToolSet { defs: tools.defs(), executor: &tools, max_rounds: rounds });
-    let working_dir = repo.map(|(_, r)| r.to_string_lossy().into_owned());
-    let result = dispatch::stream_with_tools(
-        rt,
-        Some(system),
-        turns,
-        working_dir.as_deref(),
-        &[],
-        MAX_TOKENS,
-        set,
-        on_delta,
-        |_| {},
-    )
-    .await;
-    let worktree = lazy.as_ref().and_then(|l| l.finish());
-    match result {
-        Ok(text) => Ok(TurnReply { text, worktree }),
-        Err(e) => {
-            // A failed turn's partial edits are discarded, like the desktop.
-            if let Some(wt) = worktree {
-                let _ = wt.remove();
-            }
-            Err(anyhow!("provider: {e}"))
-        }
-    }
-}
-
-/// An MCP tool that runs shell commands (`bash`, `exec`, `run_command`, ...)
-/// is a shell: a turn without the shell (Phase C, the Owner's) doesn't get
-/// it. Called inside the turn's scope.
-fn without_shell_tools(tagged: Vec<(String, hive_runtime::McpTool)>) -> Vec<(String, hive_runtime::McpTool)> {
-    if hive_runtime::executor::turn_shell_allowed() {
-        return tagged;
-    }
-    tagged.into_iter().filter(|(_, t)| !hive_runtime::is_shell_tool(&t.name)).collect()
-}
-
-/// The enabled MCP servers' tools (from `LIGUS_MCP_CONFIG`), as neutral defs
-/// plus the executor that routes a call back to its server. `None` when no
-/// server is configured or none lists a tool.
-async fn mcp_tool_set(egress: &hive_core::sandbox::EgressPolicy) -> Result<Option<(Vec<Value>, McpToolExecutor)>> {
-    // The sandbox envelope decides which servers this turn may reach at all.
-    let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
-    let registry = McpRegistry::new(specs);
-    if registry.enabled().next().is_none() {
-        return Ok(None);
-    }
-    let tagged = without_shell_tools(registry.list_all_tools().await);
-    if tagged.is_empty() {
-        return Ok(None);
-    }
-    let mut defs = Vec::with_capacity(tagged.len());
-    let mut names = HashMap::new();
-    for (server, tool) in &tagged {
-        let tname = sanitize_tool_name(&format!("{server}__{}", tool.name));
-        defs.push(json!({ "name": tname, "description": tool.description, "input_schema": tool.input_schema }));
-        names.insert(tname, (server.clone(), tool.name.clone()));
-    }
-    Ok(Some((defs, McpToolExecutor { registry, names })))
+    hive_runtime::turn_engine::wants_builtin_tools(rt, &tools)
 }
 
 /// Attempt the MCP tool loop. `Ok(None)` = no tools / unsupported runtime →
-/// caller falls back to streaming. Mirrors the app's `try_tool_loop`.
+/// caller falls back to streaming. The turn engine's pieces, without a chat.
 async fn try_tool_loop(
     rt: &ResolvedRuntime,
     system: &str,
     turns: &[ChatTurn],
     egress: &hive_core::sandbox::EgressPolicy,
 ) -> Result<Option<String>> {
+    use hive_runtime::turn_engine::mcp;
     // The tool-loop adapter is Anthropic-only (as in the app), and needs a key.
     if rt.provider != ModelProviderKind::Anthropic {
         return Ok(None);
@@ -347,99 +151,25 @@ async fn try_tool_loop(
     let Some(api_key) = rt.api_key.clone() else {
         return Ok(None);
     };
-    // No config / no enabled servers → empty registry → fall back to streaming,
-    // unless the host started a Ligus turn (its tools ride this loop).
-    // Servers outside the envelope's egress policy are never offered.
-    let ligus = hive_runtime::agent_turn::current().and_then(|s| s.ligus.clone());
+    // No config / no enabled servers → fall back to streaming. Servers
+    // outside the envelope's egress policy are never offered, and without
+    // the shell no tool that runs shell commands is.
     let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
-    let registry = McpRegistry::new(specs);
-    let tagged = if registry.enabled().next().is_some() { without_shell_tools(registry.list_all_tools().await) } else { Vec::new() };
-    if tagged.is_empty() && ligus.is_none() {
+    let shell = hive_runtime::executor::turn_shell_allowed();
+    let Some((defs, executor)) = mcp::tool_set(specs, shell, None, |_| {}).await else {
         return Ok(None);
-    }
-
-    let mut tool_defs = Vec::with_capacity(tagged.len());
-    let mut names = HashMap::new();
-    for (server, tool) in &tagged {
-        let tname = sanitize_tool_name(&format!("{server}__{}", tool.name));
-        tool_defs.push(json!({
-            "name": tname,
-            "description": tool.description,
-            "input_schema": tool.input_schema,
-        }));
-        names.insert(tname, (server.clone(), tool.name.clone()));
-    }
-
-    let model = AnthropicMessages {
+    };
+    let model = mcp::AnthropicMessages {
         client: AnthropicClient::new(),
         api_key,
         model: rt.model.clone(),
         system: Some(system.to_string()),
+        max_tokens: MAX_TOKENS,
     };
-    let executor = McpToolExecutor { registry, names };
-    if ligus.is_some() {
-        let mut defs = hive_runtime::ligus_mcp::tools::tool_loop_defs();
-        defs.extend(tool_defs);
-        tool_defs = defs;
-    }
-    let routed = hive_runtime::ligus_mcp::WithLigus { turn: ligus.as_deref(), inner: Some(&executor) };
-    let initial = turns_to_messages(turns);
-    let text = tool_loop::run_with_messages(&model, &routed, initial, tool_defs, MAX_TOOL_ITERS)
+    let text = tool_loop::run_with_messages(&model, &executor, mcp::turns_to_messages(turns), defs, MAX_TOOL_ITERS)
         .await
         .map_err(|e| anyhow!("tool loop: {e}"))?;
     Ok(Some(text))
-}
-
-/// Adapter: one non-streaming Anthropic turn for the tool loop.
-struct AnthropicMessages {
-    client: AnthropicClient,
-    api_key: String,
-    model: String,
-    system: Option<String>,
-}
-
-impl MessagesApi for AnthropicMessages {
-    async fn run(&self, messages: &[Value], tools: &[Value]) -> Result<AnthropicResponse, ProviderError> {
-        self.client
-            .run_messages(&self.api_key, &self.model, self.system.as_deref(), messages, tools, MAX_TOKENS)
-            .await
-    }
-}
-
-/// Routes a (sanitized) tool name back to its MCP server, honoring the gate.
-struct McpToolExecutor {
-    registry: McpRegistry,
-    /// sanitized anthropic tool name → (server id, real tool name)
-    names: HashMap<String, (String, String)>,
-}
-
-impl ToolExecutor for McpToolExecutor {
-    async fn call(&self, name: &str, input: &Value) -> (String, bool) {
-        match self.names.get(name) {
-            Some((server, tool)) => match self.registry.call_tool(server, tool, input).await {
-                Ok(text) => (text, false),
-                Err(e) => (format!("tool error: {e}"), true),
-            },
-            None => (format!("unknown tool {name}"), true),
-        }
-    }
-}
-
-/// Anthropic tool names must match `^[a-zA-Z0-9_-]{1,64}$`.
-fn sanitize_tool_name(s: &str) -> String {
-    let cleaned: String = s
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
-        .collect();
-    cleaned.chars().take(64).collect()
-}
-
-/// Convert provider turns into the Anthropic message array the loop seeds.
-fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
-    turns
-        .iter()
-        .map(|t| json!({ "role": t.role, "content": content_value(&t.content) }))
-        .collect()
 }
 
 #[cfg(test)]
