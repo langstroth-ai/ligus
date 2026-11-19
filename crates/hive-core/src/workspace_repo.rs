@@ -420,20 +420,47 @@ pub fn split_canonical(canonical: &str) -> Option<(&str, &str)> {
     canonical.split_once('/')
 }
 
-/// Look-alike flags (repos-and-checkouts 7): each live repo whose claimed
-/// root commit equals an earlier-added live repo's, with a different
-/// canonical ("same history as WeFit, different owner"), mapped to that
-/// repo. A display warning: the claim is the Admin's, unverified until a
-/// device checks it.
+/// Look-alike flags (repos-and-checkouts 7): each live repo that resembles
+/// an earlier-added live repo with a different canonical, mapped to that
+/// repo. Two signs, either is enough: the same claimed root commit ("same
+/// history as WeFit, different owner"; the claim is the Admin's, unverified
+/// until a device checks it), or a name that reads the same once common
+/// ASCII confusables are folded (`zazu1am` / `zazulam`, `rn` / `m`, `we-fit`
+/// / `wefit`, case), which needs no claim at all, so leaving the root out
+/// doesn't evade it. A display warning, never a refusal.
 pub fn lookalikes(repos: &[WorkspaceRepo]) -> std::collections::BTreeMap<Uuid, Uuid> {
     let mut out = std::collections::BTreeMap::new();
+    let skeletons: Vec<String> = repos.iter().map(|r| confusable_skeleton(&r.canonical)).collect();
     for (i, r) in repos.iter().enumerate() {
-        let Some(root) = r.root_commit.as_deref() else { continue };
-        if let Some(first) = repos[..i].iter().find(|o| o.root_commit.as_deref() == Some(root) && o.canonical != r.canonical) {
-            out.insert(r.id, first.id);
+        let root = r.root_commit.as_deref();
+        if let Some(first) = repos[..i].iter().enumerate().find(|(j, o)| {
+            o.canonical != r.canonical && ((root.is_some() && o.root_commit.as_deref() == root) || skeletons[*j] == skeletons[i])
+        }) {
+            out.insert(r.id, first.1.id);
         }
     }
     out
+}
+
+/// A canonical with common ASCII confusables folded (case; `0`→o, `1`/`i`→l,
+/// `5`→s, `8`→b; `rn`→m, `vv`→w; `-`, `_`, `.` dropped; `/` kept).
+fn confusable_skeleton(canonical: &str) -> String {
+    if canonical.starts_with("local:") {
+        // A root commit id: hex, compared exactly.
+        return canonical.to_string();
+    }
+    let folded: String = canonical
+        .chars()
+        .filter_map(|c| match c.to_ascii_lowercase() {
+            '0' => Some('o'),
+            '1' | 'i' | '|' => Some('l'),
+            '5' => Some('s'),
+            '8' => Some('b'),
+            '-' | '_' | '.' => None,
+            c => Some(c),
+        })
+        .collect();
+    folded.replace("rn", "m").replace("vv", "w")
 }
 
 // ── The chat ledger (repos review F3) ────────────────────────────────────
@@ -556,6 +583,28 @@ mod tests {
             assert!(c.as_deref() != Ok("github.com/zazulam/wefit"), "{url} → {c:?}");
         }
         assert_eq!(canonical_repo("https://user@github.com/zazulam/wefit", "", &none).as_deref(), Ok("github.com/zazulam/wefit"));
+    }
+
+    /// A look-alike is flagged without any root-commit claim: the Admin who
+    /// adds `zazu1am/wefit` next to `zazulam/wefit` simply omits the root.
+    #[test]
+    fn lookalike_flagged_by_confusable_name_without_a_root_claim() {
+        let mk = |c: &str| WorkspaceRepo {
+            id: repo_id(c),
+            canonical: c.into(),
+            display_name: "WeFit".into(),
+            forge_kind: String::new(),
+            default_branch: String::new(),
+            root_commit: None,
+        };
+        let a = mk("github.com/zazulam/wefit");
+        for evil in ["github.com/zazu1am/wefit", "github.com/zazuiam/wefit", "github.com/zazularn/wefit", "github.com/zazulam/wef1t", "githu8.com/zazulam/wefit", "github.com/zazulam/we-fit"] {
+            let b = mk(evil);
+            let flags = lookalikes(&[a.clone(), b.clone()]);
+            assert_eq!(flags.get(&b.id), Some(&a.id), "{evil}");
+        }
+        let c = mk("github.com/zazulam/infra");
+        assert!(lookalikes(&[a.clone(), c]).is_empty(), "different names aren't look-alikes");
     }
 
     #[test]
