@@ -177,9 +177,9 @@ impl PhoneCode {
         })
     }
 
-    /// `XXXX-XXXX-XXXX` of the key (the first 6 bytes of SHA-256 of the 65
-    /// key bytes, upper-case hex): what the phone shows and the person
-    /// compares.
+    /// `XXXX-XXXX-XXXX-XXXX-XXXX` of the key (the first 10 bytes of
+    /// SHA-256 of the 65 key bytes, upper-case hex): what the phone shows and
+    /// the person compares.
     pub fn fingerprint(&self) -> String {
         crate::device_enroll::fingerprint(&self.public_key)
     }
@@ -216,6 +216,16 @@ mod tests {
         assert_eq!(d, c);
         assert_eq!(d.public_key, p.public_key());
         assert_eq!(d.fingerprint(), crate::device_enroll::fingerprint(&p.public_key()));
+    }
+
+    /// The golden fingerprint the iOS app's own computation must match
+    /// (docs/ios-app.md): SHA-256 of the 65-byte key 04 01 02 .. 40, first
+    /// 10 bytes, upper-case hex in five groups of four.
+    #[test]
+    fn the_fingerprint_is_80_bits_in_five_groups() {
+        let key: Vec<u8> = std::iter::once(4u8).chain(1..=64u8).collect();
+        let c = PhoneCode::new_signed(Uuid::nil(), key, "p", |_| [0u8; 64]);
+        assert_eq!(c.fingerprint(), "0ED3-A6AB-957F-F6F5-9A96");
     }
 
     #[test]

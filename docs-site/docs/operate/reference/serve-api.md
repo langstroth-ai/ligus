@@ -40,7 +40,7 @@ There are two ways in, and both reach the same router:
 $ curl -s http://127.0.0.1:8787/v1/health
 {"ok":true,"version":"0.1.0"}
 $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
-{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
+{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F-9A41-07CE","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
 ```
 
 ### Who am I {#me}
@@ -56,7 +56,7 @@ bind answers `403 {"error":"secure_channel_required"}`).
 
 ```console
 $ curl -s "http://127.0.0.1:8787/v1/me?deviceId=6f1c…" -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
-{"account":{"displayName":"Ana","id":"0b6e…","memberId":"0b6e…","role":"owner"},"configLogId":"9d2a…","device":{"fingerprint":"3F1A-9C0B-77D2","id":"6f1c…","tier":"phone"},"origins":["https://ligus.ai"],"room":"acme","rpId":"ligus.ai","workspaceId":"c41e…","workspaceName":""}
+{"account":{"displayName":"Ana","id":"0b6e…","memberId":"0b6e…","role":"owner"},"configLogId":"9d2a…","device":{"fingerprint":"3F1A-9C0B-77D2-E804-5B6A","id":"6f1c…","tier":"phone"},"origins":["https://ligus.ai"],"room":"acme","rpId":"ligus.ai","workspaceId":"c41e…","workspaceName":""}
 ```
 
 A pairing refused because the phone isn't certified yet closes with the

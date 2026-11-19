@@ -419,7 +419,10 @@ label       = trimmed, no control characters and none of U+00AD, U+061C, U+180E,
               (bidi overrides, isolates, marks, invisible format characters),
               ≤ 64 bytes (cut at a character boundary); a code whose label
               breaks this is refused
-fingerprint = upper-case hex of SHA-256(pubkey)[0..6], as XXXX-XXXX-XXXX
+fingerprint = upper-case hex of SHA-256(pubkey)[0..10] (80 bits), as
+              XXXX-XXXX-XXXX-XXXX-XXXX (five groups of four);
+              golden: pubkey 04 01 02 … 40 (0x04 then bytes 1..=64)
+              → 0ED3-A6AB-957F-F6F5-9A96
 b64u        = base64url without padding
 ```
 
@@ -430,8 +433,9 @@ lands, so derive it as specified then and keep it stable across reinstalls
 
 **2. The desktop certifies it.** The person pastes the code into **My
 devices > Add this phone** on their desktop (or runs `ligus phones certify
-<code> --recovery-words-file PATH [--fingerprint F]` on a CLI identity of
-theirs), compares the fingerprint with the phone's screen and confirms with
+<code> --recovery-words-file PATH --fingerprint F` on a CLI identity of
+theirs; without `--fingerprint` it asks at a terminal and refuses
+otherwise), compares the fingerprint with the phone's screen and confirms with
 their passkey. The desktop appends `DeviceCertificateAdded` with a P-256
 certificate (`alg: "p256"`): the phone tier, capped by the person's role.
 Refused: a code whose signature doesn't verify, a device id already certified

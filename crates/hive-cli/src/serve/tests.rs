@@ -4229,11 +4229,26 @@ async fn phones_certify_headless_then_me_on_loopback() {
             .count()
     };
     // No recovery key: refused. A wrong fingerprint: refused.
-    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, None).is_err());
-    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000".into())).is_err());
+    let fp = || Some(code.fingerprint());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, fp(), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000-0000-0000".into()), None).is_err());
+    // No fingerprint and nobody at a terminal to confirm it: refused, saying
+    // how to pass it.
+    let err = crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, None).unwrap_err();
+    assert!(err.to_string().contains("--fingerprint"), "{err}");
+    // A person at a terminal who doesn't confirm it (or answers anything but
+    // yes): refused; the prompt was shown this code.
+    let mut shown = Vec::new();
+    let mut say_no = |p: &hive_runtime::phone_enroll::PhoneCode| {
+        shown.push(p.fingerprint());
+        Ok(false)
+    };
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_no)).is_err());
+    assert_eq!(shown, vec![code.fingerprint()]);
+    assert_eq!(code.fingerprint().len(), 24, "five groups of four");
     // A box can't.
     let box_cfg = h.handle.shared.cfg.clone();
-    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), fp(), None).is_err());
     assert_eq!(certs(), 0);
 
     // Not certified yet: 403 device_not_certified.
@@ -4245,9 +4260,11 @@ async fn phones_certify_headless_then_me_on_loopback() {
     // The code from a file, the fingerprint checked: certified once.
     let f = h._tmp.path().join("phone.code");
     std::fs::write(&f, format!("{}\n", code.encode())).unwrap();
-    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()))
+    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()), None)
         .unwrap();
-    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None).unwrap();
+    // Confirmed at a terminal instead of --fingerprint.
+    let mut say_yes = |_: &hive_runtime::phone_enroll::PhoneCode| Ok(true);
+    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes)).unwrap();
     assert_eq!(certs(), 1, "certifying again writes nothing");
     sync_once(&h.desktop).await.unwrap();
     let mut v = Value::Null;
