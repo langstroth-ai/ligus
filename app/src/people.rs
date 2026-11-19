@@ -177,7 +177,7 @@ pub(crate) fn list_co_members_sync(state: State<AppState>) -> Vec<CoMemberDto> {
         list.iter().map(|c| (c.account_id, crate::links_ui::chips_for(&state, c.account_id))).collect();
     let mut chips = chips;
     let s = state.settings.lock().unwrap();
-    let name_of = |id: Uuid| s.workspaces.iter().find(|w| w.id() == id).map(|w| w.display_name()).unwrap_or_default();
+    let name_of = |id: Uuid| s.workspaces.iter().find(|w| w.id() == id).map(|w| crate::shown(&w.display_name())).unwrap_or_default();
     list.into_iter()
         .filter(|c| !c.workspaces.iter().all(|w| s.workspaces.iter().any(|x| x.id() == *w && x.dm_account.is_some())))
         .map(|c| CoMemberDto {
@@ -303,7 +303,7 @@ pub(crate) fn list_dms_sync(state: State<AppState>) -> Vec<DmDto> {
         let person = people.get(&peer);
         out.push(DmDto {
             workspace_id: w.id().to_string(),
-            name: person.map(|p| p.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| w.display_name()),
+            name: crate::shown(&person.map(|p| p.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| w.display_name())),
             avatar_url: person.and_then(|p| p.avatar_url.clone()),
             safety_code: person.and_then(|p| p.safety_code()),
             account: peer,

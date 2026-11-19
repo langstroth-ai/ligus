@@ -1244,6 +1244,12 @@ async fn repo_actions_need_the_box_owners_certified_phone() {
         ("POST", "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
         ("PATCH", format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
         ("POST", format!("/v1/workspace-repos/{}/confirm", Uuid::new_v4()), json!({ "checkout": "nowhere" })),
+        ("POST", format!("/v1/chats/{}/pr", Uuid::new_v4()), json!({ "title": "x" })),
+        ("POST", format!("/v1/chats/{}/repo/pull", Uuid::new_v4()), json!({})),
+        ("POST", "/v1/workspace-repos".to_string(), json!({ "input": "https://github.com/a/b" })),
+        ("DELETE", format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({})),
+        ("GET", "/v1/repos".to_string(), json!(null)),
+        ("GET", "/v1/repos/fork?repo=a/b".to_string(), json!(null)),
     ];
     for (m, u, b) in &gated {
         assert_eq!(call(m, u, b.clone()).await, 403, "{m} {u} from a phone that isn't the owner's");

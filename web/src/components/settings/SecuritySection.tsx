@@ -86,6 +86,12 @@ export function SecuritySection() {
           and iCloud Keychain, Windows Hello, Google Password Manager, a phone, or a security key. Register at least
           two.
         </p>
+        {status.isError && (
+          <p role="alert" className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
+            Couldn't read this workspace's passkeys: {errMsg(status.error)}
+          </p>
+        )}
+        {status.isPending && <p className="text-xs text-ink-soft">Loading…</p>}
         <ul className="space-y-1 text-sm" data-testid="passkey-list">
           {(st?.passkeys ?? []).map((p) => (
             <li key={p.credentialId} className="flex items-center justify-between gap-2">
@@ -103,7 +109,7 @@ export function SecuritySection() {
               </button>
             </li>
           ))}
-          {passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}
+          {st && passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}
         </ul>
         {passkeys.length === 1 && (
           <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>

@@ -65,7 +65,7 @@ carries the workspace's E2EE key.
 2. On the box:
 
    ```sh
-   ligus enroll 'hivews1:…'                  # add --token <hrt1…> if your relay needs an access token
+   ligus enroll -                            # paste the invite, then Ctrl-D; add --token <hrt1…> if your relay needs an access token
    ligus join <invite-code>                  # only on relays that enforce membership
    ligus sync                                # pull the workspace
    ligus whoami                              # this box's account/device ids

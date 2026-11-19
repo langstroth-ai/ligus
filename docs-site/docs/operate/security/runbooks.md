@@ -152,7 +152,7 @@ The complete way to cut someone's reading, including on headless devices.
 3. Invite the people who stay (from People if you share another workspace
    with them, or the invite link over a trusted channel).
 4. Re-enroll headless boxes with **new** data dirs:
-   `ligus enroll 'hivews1:…'`, then restart them.
+   `ligus enroll -` (paste the new invite, then Ctrl-D), then restart them.
 5. Archive the old workspace. Its history stays on the devices that had it.
 
 ## Rotate the workspace key {#rotate-workspace-key}

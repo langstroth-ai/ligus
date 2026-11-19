@@ -207,11 +207,12 @@ pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) 
             let class = attachment::class_of_extension(&attachment::extension(&a.name));
             AttachmentView {
                 id: a.id.to_string(),
-                name: a.name.clone(),
+                // Shown as is: `invoice\u{202E}fdp.exe` read as "invoiceexe.pdf".
+                name: crate::shown(&a.name),
                 size: a.size,
                 content_type: a.content_type.clone(),
                 sha256: a.sha256.clone(),
-                author: s.author.clone(),
+                author: crate::shown(&s.author),
                 sender: sender_of(s),
                 author_kind: s.author_kind,
                 deleted: s.deleted,

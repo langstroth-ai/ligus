@@ -117,8 +117,10 @@ pub struct AddReq {
     branch: String,
 }
 
-pub async fn add(State(s): S, Json(req): Json<AddReq>) -> ApiResult<Json<Value>> {
+pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<AddReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    // Publishes a repo workspace-wide and runs the (owner-gated) rescan.
+    owner_gate(&s, peer.as_deref())?;
     let kind = req.kind.unwrap_or_else(|| crate::repos_cmd::guess_kind(&req.input));
     let repo = s.lock().add_workspace_repo(s.ws, &req.input, &req.name, &kind, &req.branch, None)?;
     s.after_write();
@@ -148,8 +150,9 @@ pub async fn rename(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
     Ok(Json(json!({ "ok": true })))
 }
 
-pub async fn remove(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     s.lock().remove_workspace_repo(s.ws, id)?;
     s.after_write();

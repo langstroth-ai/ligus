@@ -134,6 +134,17 @@ fn platform_impl(_app: &tauri::AppHandle) -> Option<Arc<dyn NativeAuthenticator>
     None
 }
 
+/// Whether Windows Hello runs a ceremony natively for `policy`'s RP.
+/// webauthn.dll lets any app name any RP (there is no domain association, as
+/// macOS has with its entitlements), so a workspace Owner who set
+/// `rp_id = "google.com"` would get members' real Google passkeys offered
+/// and asserted. Natively only for Ligus's own RP; any other RP goes through
+/// the browser hand-off, where the RP's own origin must serve the page.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_serves(policy: &PresencePolicy) -> bool {
+    policy.rp_id == ligus_core::presence::RP_ID
+}
+
 /// The `webcredentials:` domains in an entitlements plist: the RPs the macOS
 /// app may run native ceremonies for.
 pub fn webcredential_domains(entitlements: &str) -> Vec<String> {
@@ -348,12 +359,26 @@ pub fn run_get(
     out
 }
 
+/// The WebAuthn user handle of an account's passkey in one workspace: the
+/// account id then the workspace id (32 bytes). Every workspace uses the same
+/// relying party by default (`ligus.ai`), and platform authenticators (iCloud
+/// Keychain, Windows Hello, Google Password Manager) replace a passkey with
+/// the same RP and user handle: with the account id alone, registering in
+/// workspace B deleted the passkey workspace A's roster names.
+pub fn user_handle(account: uuid::Uuid, workspace: uuid::Uuid) -> Vec<u8> {
+    let mut h = account.as_bytes().to_vec();
+    h.extend_from_slice(workspace.as_bytes());
+    h
+}
+
 /// A `create` for a new passkey: native when this OS's authenticator serves
 /// the workspace's RP, else (or on fallback) `hand_off`. The result is in
 /// the hand-off's form (the attestation object in `authenticator_data`).
+#[allow(clippy::too_many_arguments)]
 pub fn run_create(
     native: Option<Arc<dyn NativeAuthenticator>>,
     req: &PresenceRequest,
+    user_id: &[u8],
     user_name: &str,
     sig: &Signals,
     wait: Duration,
@@ -370,7 +395,7 @@ pub fn run_create(
         rp_id: req.policy.rp_id.clone(),
         origin,
         challenge: req.challenge,
-        user_id: req.account_id.as_bytes().to_vec(),
+        user_id: user_id.to_vec(),
         user_name: user_name.to_string(),
         exclude: req.credential_ids.iter().filter_map(|c| unb64url(c).ok()).collect(),
     };

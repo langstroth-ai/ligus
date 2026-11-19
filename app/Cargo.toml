@@ -19,6 +19,8 @@ ligus-proto.workspace = true
 # Inherits default-features = false from the workspace root, so this app's own
 # `p2p` feature is what enables ligus-runtime's iroh-backed P2P.
 ligus-runtime.workspace = true
+# Re-serializes URLs before the OS opens them (`browser_command`).
+url = "2"
 ligus-forge.workspace = true
 serde.workspace = true
 serde_json.workspace = true

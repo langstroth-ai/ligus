@@ -4606,8 +4606,18 @@ async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
         (reqwest::Method::PATCH, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
         (reqwest::Method::PUT, format!("/v1/chats/{chat}/workspace-repo"), json!({ "repoId": null })),
         (reqwest::Method::PUT, format!("/v1/chats/{chat}/repo"), json!({})),
+        // Final review: these spend the owner's forge access or change the
+        // workspace's repos too, and were open to every bearer holder.
+        (reqwest::Method::POST, format!("/v1/chats/{chat}/pr"), json!({ "title": "x" })),
+        (reqwest::Method::POST, format!("/v1/chats/{chat}/repo/pull"), json!({})),
+        (reqwest::Method::POST, "/v1/workspace-repos".to_string(), json!({ "input": "https://github.com/a/b" })),
+        (reqwest::Method::DELETE, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({})),
+        (reqwest::Method::POST, format!("/v1/workspace-repos/{}/confirm", Uuid::new_v4()), json!({ "checkout": "nowhere" })),
+        (reqwest::Method::GET, "/v1/repos".to_string(), Value::Null),
+        (reqwest::Method::GET, "/v1/repos/fork?repo=a/b".to_string(), Value::Null),
     ] {
-        let (c, v) = status_of(&h, m.clone(), &p, Some(b)).await;
+        let body = if b.is_null() { None } else { Some(b) };
+        let (c, v) = status_of(&h, m.clone(), &p, body).await;
         assert_eq!(c, 403, "{m} {p}: {v}");
         assert!(v.to_string().contains("owner_required"), "{v}");
     }

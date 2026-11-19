@@ -751,7 +751,9 @@ async fn forge_listing(st: &RepoState, h: &ForgeHandle, query: &RepoQuery, clone
     out
 }
 
-pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<Json<Value>> {
+pub async fn list_repos(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Query(lq): Query<ListQuery>) -> ApiResult<Json<Value>> {
+    // Lists with the owner's forge sign-in (private repos, any org).
+    owner_gate(&s, peer.as_deref())?;
     let q = lq.q.map(|q| q.trim().to_string()).filter(|q| !q.is_empty());
     if q.as_ref().is_some_and(|q| q.chars().count() > 100 || q.chars().any(char::is_control)) {
         return Err(ApiError::bad_request("search text is too long"));
@@ -905,7 +907,8 @@ pub struct ForkQuery {
 
 /// `GET /v1/repos/fork?repo=owner/name[&forge=id]`: whether the signed-in
 /// account has a fork of it (so the phone can offer "clone via my fork").
-pub async fn fork_of(State(s): S, Query(q): Query<ForkQuery>) -> ApiResult<Json<Value>> {
+pub async fn fork_of(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Query(q): Query<ForkQuery>) -> ApiResult<Json<Value>> {
+    owner_gate(&s, peer.as_deref())?;
     let (h, repo) = resolve_spec(&s, &q.repo, q.forge.as_deref())?;
     let st = forge_status(&s.repos, &h).await;
     let Some(login) = st.login.filter(|_| st.available) else {
@@ -1342,7 +1345,9 @@ fn bound_dir(s: &Shared, chat: Uuid) -> ApiResult<(PathBuf, String)> {
     Ok((dir, binding_name(raw).0))
 }
 
-pub async fn pull_chat_repo(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+pub async fn pull_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    // Fetches with the owner's forge auth and moves the box's checkout.
+    owner_gate(&s, peer.as_deref())?;
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
     let (dir, name) = bound_dir(&s, chat.id)?;
@@ -1413,7 +1418,9 @@ pub struct PrReq {
     draft: Option<bool>,
 }
 
-pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>) -> ApiResult<Json<Value>> {
+pub async fn open_pr(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>, Json(req): Json<PrReq>) -> ApiResult<Json<Value>> {
+    // Pushes and opens the PR as the owner, with their forge credentials.
+    owner_gate(&s, peer.as_deref())?;
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
     let title = req.title.trim().to_string();

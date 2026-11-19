@@ -70,8 +70,10 @@ fn env_opt(k: &str) -> Option<String> {
 }
 
 /// Create the data dir. Exits when it can't be created.
+/// Owner-only (0700) from the start: `ligus.db` holds the decrypted history,
+/// so it must not wait for a later private write to tighten the dir.
 fn create_data_dir_or_exit(data_dir: &std::path::Path) {
-    if let Err(e) = std::fs::create_dir_all(data_dir) {
+    if let Err(e) = ligus_runtime::private_file::ensure_private_dir(data_dir) {
         eprintln!("error: could not set up {}: {e}", data_dir.display());
         std::process::exit(1);
     }
@@ -1678,7 +1680,8 @@ fn usage() -> ! {
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in ligus metrics panels can show\n\n\
          Setup:\n  \
-         ligus enroll <hivews1:invite> [--token <hrt1>]   one-shot: save the workspace connection\n  \
+         ligus enroll - | --file PATH [--token <hrt1>]   one-shot: save the workspace connection (the invite\n                                       \
+         piped or in a file: it carries the workspace key)\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
          ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
          token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
@@ -1763,58 +1766,7 @@ fn run() -> Result<()> {
             .and_then(|i| rest.get(i + 1))
             .cloned()
     };
-    // Positional args exclude flags and any value immediately after a known
-    // value-flag (so `agent bot --runtime ws1` → positional = [bot]).
-    let value_flags = [
-        "--gateway",
-        "--model",
-        "--runtime",
-        "--endpoint",
-        "--secret-ref",
-        "--secret",
-        "--label",
-        "--host",
-        "--chat",
-        "--listen",
-        "--token-file",
-        "--ntfy-url",
-        "--ntfy-topic",
-        "--public-url",
-        "--name",
-        "--role",
-        "--relay",
-        "--reg-token",
-        "--remote-relay",
-        "--file",
-        "--repo",
-        "--since",
-        "--auth",
-        "--client-id",
-        "--expect-tier",
-        "--health-listen",
-        "--tag",
-        "--title",
-        "--body",
-        "--note",
-        "--base",
-        "--kind",
-        "--branch",
-    ];
-    let mut positional: Vec<&String> = Vec::new();
-    let mut skip = false;
-    for a in rest {
-        if skip {
-            skip = false;
-            continue;
-        }
-        if a.starts_with("--") {
-            if value_flags.contains(&a.as_str()) {
-                skip = true;
-            }
-            continue;
-        }
-        positional.push(a);
-    }
+    let positional = positional_args(rest);
 
     // A current-thread runtime is all the CLI needs — it only ever `block_on`s
     // (never spawns), and keeps the non-Send EventStore on one thread.
@@ -1897,10 +1849,18 @@ fn run() -> Result<()> {
             cmd_rm_runtime(&cfg, id)
         }
         "enroll" => {
-            let invite = positional
-                .first()
-                .ok_or_else(|| anyhow!("usage: ligus enroll <hivews1:invite> [--token <access-token>]"))?;
-            cmd_enroll(&cfg, invite, flag_val("--token"))
+            let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), || {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                Ok(s)
+            })?;
+            if on_argv {
+                eprintln!(
+                    "warning: an invite carries the workspace key, and the command line leaks it (ps, shell history): \
+                     next time pipe it to `ligus enroll -` or use `ligus enroll --file PATH`"
+                );
+            }
+            cmd_enroll(&cfg, &invite, flag_val("--token"))
         }
         "join" => {
             let code = positional
@@ -2101,8 +2061,167 @@ fn run() -> Result<()> {
     }
 }
 
+/// The invite `ligus enroll` uses: piped (`-`), from `--file PATH`, or (with a
+/// warning, since it carries the workspace key) on the command line. The bool
+/// is whether it came from the command line.
+fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce() -> std::io::Result<String>) -> Result<(String, bool)> {
+    match (arg, file) {
+        (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
+        (Some(c), None) => Ok((c.trim().to_string(), true)),
+        (None, Some(path)) => Ok((admit::read_code_file(std::path::Path::new(&path))?, false)),
+        _ => bail!("usage: ligus enroll <hivews1:invite> | - | --file <path> [--token <access-token>]"),
+    }
+}
+
+/// Flags that take a value: the value right after one is not a positional
+/// argument (so `agent bot --runtime ws1` gives positional `[bot]`). Every
+/// flag read with `flag_val` must be listed here, or its value is taken as a
+/// positional argument (a test checks this against the source).
+const VALUE_FLAGS: &[&str] = &[
+    "--gateway",
+    "--model",
+    "--runtime",
+    "--endpoint",
+    "--secret-ref",
+    "--secret",
+    "--label",
+    "--host",
+    "--chat",
+    "--listen",
+    "--token-file",
+    "--ntfy-url",
+    "--ntfy-topic",
+    "--public-url",
+    "--name",
+    "--role",
+    "--relay",
+    "--reg-token",
+    "--remote-relay",
+    "--file",
+    "--repo",
+    "--since",
+    "--auth",
+    "--client-id",
+    "--expect-tier",
+    "--health-listen",
+    "--tag",
+    "--title",
+    "--body",
+    "--note",
+    "--base",
+    "--kind",
+    "--branch",
+    "--agent",
+    "--code-file",
+    "--fingerprint",
+    "--out",
+    "--phone",
+    "--recovery-words-file",
+    "--token",
+];
+
+/// The positional arguments: everything that is not a flag or a flag's value.
+fn positional_args(rest: &[String]) -> Vec<&String> {
+    let mut positional: Vec<&String> = Vec::new();
+    let mut skip = false;
+    for a in rest {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if a.starts_with("--") {
+            if VALUE_FLAGS.contains(&a.as_str()) {
+                skip = true;
+            }
+            continue;
+        }
+        positional.push(a);
+    }
+    positional
+}
+
 #[cfg(test)]
 mod cli_tests {
+    /// The invite (which carries the workspace key) can be piped or read
+    /// from a file instead of sitting in argv.
+    #[test]
+    fn enroll_takes_the_invite_from_stdin_or_a_file() {
+        let no_stdin = || -> std::io::Result<String> { panic!("stdin not read") };
+        assert_eq!(super::enroll_invite(Some("-"), None, || Ok("hivews1:x\n".into())).unwrap(), ("hivews1:x".to_string(), false));
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("invite");
+        std::fs::write(&f, "hivews1:y\n").unwrap();
+        assert_eq!(super::enroll_invite(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), ("hivews1:y".to_string(), false));
+        assert_eq!(super::enroll_invite(Some("hivews1:z"), None, no_stdin).unwrap(), ("hivews1:z".to_string(), true));
+        assert!(super::enroll_invite(None, None, no_stdin).is_err());
+    }
+
+    /// A data dir the CLI creates (or finds group/world-open and owns) is
+    /// owner-only from the start, not only once a later write tightens it:
+    /// `ligus.db` holds the decrypted history.
+    #[cfg(unix)]
+    #[test]
+    fn the_data_dir_is_owner_only_from_the_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("data");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::create_data_dir_or_exit(&d);
+        assert_eq!(std::fs::metadata(&d).unwrap().permissions().mode() & 0o077, 0);
+        let fresh = tmp.path().join("fresh").join("data");
+        super::create_data_dir_or_exit(&fresh);
+        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o077, 0);
+    }
+
+    /// `recovery-key create --out` never replaces an existing file: re-running
+    /// it at the old words' path overwrote them, then deleted the file when
+    /// the registration failed, so the registered key had no words anywhere.
+    #[test]
+    fn recovery_key_out_never_replaces_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let out = tmp.path().join("words.txt");
+        std::fs::write(&out, "old words").unwrap();
+        let create = "create".to_string();
+        let err = crate::admit::cmd_recovery_key(&cfg, &[&create], Some(out.to_string_lossy().into_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "old words");
+        assert!(!cfg.data_dir.exists(), "nothing else was set up");
+    }
+
+    /// Every flag read with `flag_val` is a value flag, so its value is never
+    /// taken as a positional argument (`phones certify --code-file c …` once
+    /// read `c` as the code and failed with a usage error).
+    #[test]
+    fn every_flag_val_flag_takes_a_value() {
+        let src = include_str!("main.rs");
+        let mut missing = Vec::new();
+        for part in src.split("flag_val(\"").skip(1) {
+            let flag = &part[..part.find('"').unwrap()];
+            if flag.starts_with("--") && !super::VALUE_FLAGS.contains(&flag) {
+                missing.push(flag.to_string());
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "value flags missing from VALUE_FLAGS: {missing:?}");
+    }
+
+    #[test]
+    fn phones_certify_flags_are_not_positional() {
+        let rest: Vec<String> = [
+            "certify", "--code-file", "c.txt", "--recovery-words-file", "w.txt", "--fingerprint", "F",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let pos: Vec<&str> = super::positional_args(&rest).iter().map(|s| s.as_str()).collect();
+        assert_eq!(pos, ["certify"]);
+    }
+
     use super::*;
 
     /// `ligus agent` honors a workspace runtime's model gateway like serve and

@@ -290,8 +290,12 @@ pub fn quarantine_of(path: &Path) -> Option<String> {
 pub fn save_received(dir: &Path, name: &str, bytes: &[u8], sender: &str) -> std::io::Result<PathBuf> {
     use std::io::Write;
     let clean = attachment::sanitize_filename(name);
-    let ext = attachment::extension(&clean);
-    let stem = if ext.is_empty() { clean.clone() } else { clean[..clean.len() - ext.len() - 1].to_string() };
+    // Split on the name itself, keeping the extension's own case: the
+    // lowercase `extension()` can be a different length (`.\u{212A}` → `k`).
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((stem, ext)) if !attachment::extension(&clean).is_empty() => (stem.to_string(), ext.to_string()),
+        _ => (clean.clone(), String::new()),
+    };
     for n in 1..1000 {
         let candidate = if n == 1 { clean.clone() } else if ext.is_empty() { format!("{stem} ({n})") } else { format!("{stem} ({n}).{ext}") };
         let path = dir.join(&candidate);
@@ -736,6 +740,20 @@ fn find_in(bin: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name whose extension changes length when lowercased (the Kelvin
+    /// sign lowercases from 3 bytes to `k`) panicked on save: the stem was
+    /// cut at the lowercase extension's length, inside a character.
+    #[test]
+    fn a_name_whose_extension_lowercases_shorter_still_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        for raw in ["a.\u{212A}", "b.\u{130}x", "c.TXT"] {
+            let p1 = save_received(dir.path(), raw, b"d", "Mara").unwrap();
+            let p2 = save_received(dir.path(), raw, b"d", "Mara").unwrap();
+            assert_ne!(p1, p2, "{raw}");
+            assert!(p2.starts_with(dir.path()));
+        }
+    }
 
     #[test]
     fn a_gzip_bomb_is_caught_without_writing_anything() {

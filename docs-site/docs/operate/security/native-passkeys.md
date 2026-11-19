@@ -8,7 +8,7 @@ event digest, checked the same way by every device.
 | OS | Native ceremony | When the browser is used instead |
 |---|---|---|
 | macOS 13+ | AuthenticationServices: Touch ID, iCloud Keychain, an iPhone nearby | the workspace's relying party isn't one the app is associated with, the build isn't signed with the entitlement, or the dialog fails |
-| Windows 10 1903+ | `webauthn.dll`: Windows Hello, security keys, a phone | `webauthn.dll` is missing, or the dialog fails |
+| Windows 10 1903+ | `webauthn.dll`: Windows Hello, security keys, a phone | the workspace's relying party isn't `ligus.ai` (Windows lets any app name any relying party, so the app never runs a ceremony natively for another one), `webauthn.dll` is missing, or the dialog fails |
 | Linux | none (there is no platform API) | always |
 
 The confirmation sheet in the app shows what you are authorizing and the
@@ -33,7 +33,10 @@ ended are dropped, never applied to the next one.
   every device verifies the assertion in the fold with the same verifier.
 - **The options.** User verification required, attestation `none`, ES256
   or EdDSA, the account's registered credentials allowed (sign-in) or
-  excluded (a new passkey).
+  excluded (a new passkey). A new passkey's user handle is the account id
+  followed by the workspace id, so a passkey made for one workspace never
+  replaces the one another workspace's roster names (every workspace uses
+  the same relying party by default).
 - **The origin.** On macOS the system writes the `clientDataJSON` with origin
   `https://<relying party>`, so the native path is used only when the
   workspace's presence policy accepts that origin. On Windows the app writes

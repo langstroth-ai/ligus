@@ -4,6 +4,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { highlightCode } from "@/lib/highlight";
 import { remarkYouMention } from "@/lib/mentions";
+import { openExternal } from "@/lib/ipc";
 
 /// Pull the fence language ("language-ts" → "ts") off the inner <code> element
 /// that react-markdown puts inside <pre>, so the block can label + highlight it.
@@ -36,6 +37,13 @@ export function nodeText(node: ReactNode): string {
 /// so a future config change (adding rehype-raw or a custom urlTransform) can't
 /// turn a synced/agent-authored link into a code-execution or exfil vector.
 const SAFE_LINK = /^(https?:|mailto:)/i;
+
+/// Open a link that passed `safeHref` in the system browser (`window.open`
+/// never reaches it from the Tauri webview). Only http(s): the backend
+/// refuses anything else, so a mailto: link stays inert.
+function openLink(safe: string) {
+  if (/^https?:/i.test(safe)) void openExternal(safe).catch(() => {});
+}
 function safeHref(href: string | undefined): string | null {
   const h = href?.trim();
   // Require an explicit safe scheme. Anything else — javascript:/data:/vbscript:,
@@ -91,7 +99,7 @@ export const Markdown = memo(function Markdown({
                 // links that pass the scheme allowlist in a new window.
                 onClick={(e) => {
                   e.preventDefault();
-                  if (safe) window.open(safe, "_blank", "noopener,noreferrer");
+                  if (safe) openLink(safe);
                 }}
                 className="underline decoration-dotted underline-offset-2"
                 style={{ color: "var(--ligus-accent-ink)" }}
@@ -112,7 +120,7 @@ export const Markdown = memo(function Markdown({
                 href={safe}
                 onClick={(e) => {
                   e.preventDefault();
-                  window.open(safe, "_blank", "noopener,noreferrer");
+                  openLink(safe);
                 }}
                 className="underline decoration-dotted underline-offset-2"
                 style={{ color: "var(--ligus-accent-cool)" }}
