@@ -441,10 +441,9 @@ impl KeyBook {
     fn apply_new(&mut self, account: Uuid, ev: KeyEvent) -> KeyVerdict {
         let index = Arc::clone(&self.index);
         // A signer's two different copies under one id: neither counts.
-        if let KeyEvent::Register { env, .. } | KeyEvent::Rotate { env, .. } = &ev {
-            if index.is_equivocated(env) {
-                return KeyVerdict::Ignored;
-            }
+        let (KeyEvent::Register { env, .. } | KeyEvent::Rotate { env, .. }) = &ev;
+        if index.is_equivocated(env) {
+            return KeyVerdict::Ignored;
         }
         let pin = self.pin;
         let st = self.accounts.entry(account).or_default();

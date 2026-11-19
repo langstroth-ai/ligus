@@ -155,7 +155,7 @@ fn a_competing_founding_seed_never_anchors_the_founder_to_someone_else() {
         let mut d = device(&w, o, pinned);
         if attack_first {
             d.deliver(&attack);
-            d.deliver(&[as_owner.clone()]);
+            d.deliver(std::slice::from_ref(&as_owner));
             d.deliver(&w.cfg);
             d.deliver(&w.chats[&chat][..w.chats[&chat].len() - 1]);
         } else {
