@@ -331,8 +331,8 @@ pub fn save_received(dir: &Path, name: &str, bytes: &[u8], sender: &str) -> std:
 /// sandboxed agent racing symlinks: the file is opened without following a
 /// symlink as its last component, then the path of the very file that was
 /// opened (`F_GETPATH` on macOS, `/proc/self/fd` on Linux) must lie inside
-/// `root`, and the bytes are read from that open file. Returns the bytes and
-/// the file's name.
+/// `root`, it must have no other hard link, and the bytes are read from that
+/// open file. Returns the bytes and the file's name.
 pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, String), String> {
     let rel_path = Path::new(rel);
     if rel.is_empty() || rel_path.is_absolute() {
@@ -350,6 +350,16 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
     let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("you can only offer a regular file inside your worktree".into());
+    }
+    // A hard link has a path inside the worktree whatever file it is: one an
+    // agent linked in from outside (it may be able to link a file it can't
+    // read) must not leave through the host, which reads it unconfined.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() > 1 {
+            return Err("a file with more than one hard link can't be offered; copy it first".into());
+        }
     }
     let real = opened_path(&file).ok_or("this host can't confirm where the file is, so it can't be offered")?;
     if !real.starts_with(&root) {
@@ -707,6 +717,12 @@ mod tests {
             assert!(read_inside(wt.path(), bad, 100).is_err(), "{bad}");
         }
         assert!(read_inside(wt.path(), "report.md", 2).is_err(), "size cap");
+        // Second review: a hard link inside the worktree to a file outside it
+        // (made by an agent that can link but not read there) names a path
+        // inside the worktree; it is refused.
+        std::fs::write(outside.path().join("private.txt"), b"outside, linked").unwrap();
+        std::fs::hard_link(outside.path().join("private.txt"), wt.path().join("linked.txt")).unwrap();
+        assert!(read_inside(wt.path(), "linked.txt", 100).is_err(), "a hard link to a file outside");
         assert!(credential_in("id_ed25519", b"x").is_some());
         assert!(credential_in(".env.production", b"X=1").is_some());
         assert!(credential_in("notes.txt", b"-----BEGIN RSA PRIVATE KEY-----\nabc").is_some());
