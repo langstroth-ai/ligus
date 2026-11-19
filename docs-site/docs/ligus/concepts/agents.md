@@ -105,6 +105,32 @@ which code directory — the agent's turns touch, so routing code work to a
 specific tree is a matter of `@mention`-ing the agent on the right host.
 See [Headless agents](../../operate/concepts/headless-agents.md).
 
+### One turn engine on every host
+
+Whichever host runs a turn (the desktop, a `ligus worker` or `ligus serve`
+box, or the `lt` terminal client), the turn runs through the same engine in
+the Ligus runtime. The host decides the turn's policy first: the author
+gate (the role the trigger's author held when they posted), the shell rule
+(the shell is the workspace Owner's unless an Owner granted it to the
+agent), the chat's sandbox envelope and, for a chat with a repository, that
+this host has a checkout of it. The engine then runs the turn with that
+policy, the same way everywhere:
+
+- tools: Ligus's built-in file tools for a runtime that runs the tool loop
+  (on a local or private endpoint), the enabled MCP tools, and the Ligus
+  tools (propose, hand off, ask, read);
+- edits: a CLI agent that writes runs in a per-turn git worktree cut up
+  front; a model with the built-in tools gets one on its first write. The
+  checkout itself is never edited, and the turn's diff comes back as a
+  proposal;
+- every process the turn starts (the CLI, `run_command`, a stdio MCP
+  server, including while its tools are listed) runs in the host's agent
+  sandbox under the turn's policy.
+
+What the host keeps is how it shows the turn (the desktop's window, a
+phone's live events, `lt`'s tool activity under the reply) and its own
+settings and catalogs.
+
 ## Reviewing agent changes
 
 Ligus has no inline per-tool consent prompt of its own. Trust is enforced at

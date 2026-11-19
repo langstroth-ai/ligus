@@ -121,7 +121,14 @@ Nothing is uploaded anywhere.
 | `LIGUS_ATTACHMENT_SCANNER=/path/to/scanner` | run this program with the file's path as its last argument |
 | `LIGUS_ATTACHMENT_SCANNER_ARGS` | extra arguments, whitespace-separated, before the path |
 
-The scanner runs without a shell and with a two-minute limit. Exit status 0
+The scanner runs without a shell and with a two-minute limit, and because it
+reads a file someone else sent, it runs confined: a fresh scratch directory is
+its home, temporary and working directory, and on macOS and Linux it gets only
+`PATH` and your locale from Ligus's environment. Where Ligus's agent sandbox
+runs (macOS Seatbelt, Linux bubblewrap) the scanner also has no IP network
+and can write only its scratch directory. `clamd` still works over its local
+socket (and on macOS over its default loopback port, 3310; on Linux use its
+local socket). A scanner that needs anything more reports a failed scan. Exit status 0
 means clean and 1 means a threat was found (ClamAV's convention), which
 refuses the save. Any other result is shown as a failed scan and doesn't block
 the save. On macOS, XProtect also checks a quarantined file when you open it.

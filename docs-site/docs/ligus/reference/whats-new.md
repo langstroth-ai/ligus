@@ -15,6 +15,15 @@ Full release notes are on the
   refused and attributed to whoever signed it, so the member's events keep
   folding. See [held events](../../operate/security/threat-model.md#held-events)
   and [account keys](../../operate/security/threat-model.md#account-keys).
+- **One agent-turn engine on every host.** The desktop, `ligus worker` /
+  `ligus serve` and the `lt` terminal client run agent turns through the
+  same engine, so an agent in `lt` can use tools, edit in a per-turn
+  worktree, file proposals and hand off. Two rules now hold on every host:
+  an Anthropic turn with MCP or Ligus tools passes the chat's repository
+  gate like any other turn, and listing a turn's MCP tools runs under the
+  turn's sandbox policy. A box offers the Ligus tools to every runtime that
+  can call them. See
+  [One turn engine on every host](../concepts/agents.md#one-turn-engine-on-every-host).
 - **Your home dir is off limits to agents; the shell is the Owner's.**
   Every agent process (CLI agents, `run_command`, pre-flight tests, stdio
   MCP servers) now runs with a home of its own for the turn, and your real
