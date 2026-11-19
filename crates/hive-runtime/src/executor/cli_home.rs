@@ -94,6 +94,30 @@ fn real_path(kind: ModelProviderKind, real_home: &Path, rel: &str) -> PathBuf {
     real_home.join(rel)
 }
 
+/// Whether this is a test binary: this crate's unit tests, a run under
+/// nextest, or anything cargo built into a `deps` dir (every test harness;
+/// never a shipped binary).
+pub fn in_test_binary() -> bool {
+    cfg!(test)
+        || std::env::var_os("NEXTEST").is_some()
+        || std::env::current_exe().ok().is_some_and(|e| e.parent().and_then(Path::file_name).is_some_and(|n| n == "deps"))
+}
+
+/// Whether turn homes may carry the real user's sign-ins (a CLI's
+/// credential files, Claude Code's keychain item). Always in a real host; in
+/// a test run only with `LIGUS_TEST_KEYCHAIN=1`: tests spawn CLI turns
+/// against the real home, and must never read the login keychain or copy a
+/// real token into a temp dir unless asked to.
+pub fn real_sign_ins_allowed() -> bool {
+    !in_test_binary() || std::env::var("LIGUS_TEST_KEYCHAIN").is_ok_and(|v| v.trim() == "1")
+}
+
+/// Whether `dir` is this user's real home (the password database's, or
+/// `HOME` when that resolves to the same place).
+fn is_real_home(dir: &Path) -> bool {
+    super::passwd_home().is_some_and(|h| super::canonical(&h) == super::canonical(dir))
+}
+
 fn copy_file(from: &Path, to: &Path) {
     let Ok(meta) = std::fs::symlink_metadata(from) else { return };
     if !meta.is_file() || meta.len() > MAX_COPY_BYTES {
@@ -243,6 +267,31 @@ pub fn git_identity(real_home: &Path) -> Vec<(&'static str, String)> {
     out
 }
 
+/// Git's global `core.hooksPath` and `init.templateDir`, read by the host
+/// (`~` expanded): hooks there run as the user in every repository.
+pub fn git_exec_dirs(real_home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for key in ["core.hooksPath", "init.templateDir"] {
+        let o = hive_core::process_util::command("git")
+            .args(["config", "--global", "--path", "--get", key])
+            .env("HOME", real_home)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        if let Some(o) = o.ok().filter(|o| o.status.success()) {
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let p = match v.strip_prefix("~/") {
+                Some(rest) => real_home.join(rest),
+                None => PathBuf::from(&v),
+            };
+            if p.is_absolute() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 /// Write the git identity into a turn home's `.gitconfig`.
 fn write_git_identity(real_home: &Path, home: &Path) {
     type Identities = std::collections::HashMap<PathBuf, Vec<(&'static str, String)>>;
@@ -281,17 +330,27 @@ pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::
 pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, user_config: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     write_git_identity(real_home, home);
+    // A test run against the real home copies no sign-in (opt in with
+    // `LIGUS_TEST_KEYCHAIN=1`).
+    let no_sign_in = !real_sign_ins_allowed() && is_real_home(real_home);
+    let is_sign_in = |rel: &Path| no_sign_in && credential_files(kind).iter().any(|c| Path::new(c) == rel);
     for d in config_dirs(kind) {
         let src = real_path(kind, real_home, d);
         let dst = home.join(d);
         let _ = std::fs::create_dir_all(&dst);
         if let Ok(rd) = std::fs::read_dir(&src) {
             for e in rd.flatten() {
+                if is_sign_in(&Path::new(d).join(e.file_name())) {
+                    continue;
+                }
                 copy_file(&e.path(), &dst.join(e.file_name()));
             }
         }
     }
     for f in config_files(kind) {
+        if is_sign_in(Path::new(f)) {
+            continue;
+        }
         copy_file(&real_path(kind, real_home, f), &home.join(f));
     }
     // macOS: Claude Code keeps its sign-in in the login keychain. Bridge it
@@ -299,7 +358,7 @@ pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, use
     // the turn runs without the keychain (which would hand it every item
     // that trusts `/usr/bin/security`; `EnvelopeEnforcer::plan`).
     #[cfg(target_os = "macos")]
-    if kind == ModelProviderKind::ClaudeCode && is_user_home(real_home) {
+    if kind == ModelProviderKind::ClaudeCode && is_user_home(real_home) && real_sign_ins_allowed() {
         let dst = home.join(CLAUDE_CREDENTIALS);
         if !dst.exists() {
             if let Some((_, secret)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE).filter(|(_, s)| is_json_object(s)) {
@@ -507,6 +566,18 @@ pub fn same_sign_in(old: &serde_json::Value, new: &serde_json::Value) -> Result<
 /// After the turn: copy refreshed sign-in files back to their real place
 /// (only valid JSON objects, only the files in [`credential_files`]).
 pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
+    // A test run never writes the real user's sign-ins, nor reads the
+    // keychain to compare, unless it opted in (decoy homes still work).
+    let real = real_sign_ins_allowed();
+    if !real && is_real_home(real_home) {
+        return;
+    }
+    copy_back_files(kind, real_home, home, real);
+}
+
+fn copy_back_files(kind: ModelProviderKind, real_home: &Path, home: &Path, keychain_ok: bool) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = keychain_ok;
     for f in credential_files(kind) {
         let real = real_path(kind, real_home, f);
         let (Some(new), old) = (read_turn_file(home, f), std::fs::read(&real).ok()) else { continue };
@@ -519,7 +590,7 @@ pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
         // sign-in for another account into its turn home, and copying it
         // back would sign the user's CLI into that account.
         #[cfg(target_os = "macos")]
-        if old.is_none() && kind == ModelProviderKind::ClaudeCode && *f == CLAUDE_CREDENTIALS && is_user_home(real_home) {
+        if old.is_none() && kind == ModelProviderKind::ClaudeCode && *f == CLAUDE_CREDENTIALS && is_user_home(real_home) && keychain_ok {
             // Bridged in from the keychain (`populate_with`): a refresh of
             // that same sign-in goes back there.
             if let Some((acct, kc)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE) {

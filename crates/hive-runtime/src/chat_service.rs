@@ -2779,6 +2779,23 @@ impl ChatService {
         self.workspace_guards(workspace_id).map(|g| g.sandbox_grants).unwrap_or_default()
     }
 
+    /// This device's user's role in `workspace_id` (its config roster
+    /// today); `None` when the workspace has no config yet.
+    pub fn my_workspace_role(&self, workspace_id: Uuid) -> Option<WorkspaceRole> {
+        let cfg = self.load(hive_core::workspace_config_session_id(workspace_id)).ok().flatten()?;
+        Some(self.actor_role(&cfg))
+    }
+
+    /// The signed grants this device applies for `workspace_id`, and why
+    /// (`sandbox::grants_here`): none when this device doesn't apply them.
+    /// `setting` is this device's own choice (Settings, Sandbox on the
+    /// desktop; `LIGUS_SANDBOX_GRANTS` on a headless host).
+    pub fn sandbox_grants_here(&self, workspace_id: Uuid, setting: Option<bool>) -> (hive_core::sandbox::SandboxGrants, crate::sandbox::GrantsHere) {
+        let here = crate::sandbox::grants_here(setting, self.my_workspace_role(workspace_id), self.is_local_workspace(workspace_id));
+        let grants = if here.apply { self.sandbox_grants(workspace_id) } else { Default::default() };
+        (grants, here)
+    }
+
     fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;

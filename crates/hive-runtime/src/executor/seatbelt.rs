@@ -247,6 +247,16 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // Phase C: the home dir, default-deny (before the protected paths and the
     // hard denies, which win over what it lets back in).
     p.push_str(&home_rules(plan));
+    // Other turns' scratch dirs (their homes hold their CLIs' sign-ins):
+    // the dir that holds them is denied, this turn's own dir excepted
+    // (before the protected paths and the hard denies, which still win).
+    if let Some(root) = super::sibling_turns_root(&plan.tmp) {
+        p.push_str(&format!(
+            "(deny file-read* file-write* (subpath {root}))\n(allow file-read* file-write* (subpath {tmp}))\n(allow file-read-metadata (literal {root}))\n",
+            root = q(&root),
+            tmp = q(&plan.tmp)
+        ));
+    }
     if plan.worktree_writable && !plan.read_only.is_empty() {
         p.push_str(&format!("(deny file-write*{})\n", protected_filters(plan)));
     }

@@ -14,7 +14,7 @@ pub(crate) struct DecoyHome {
 }
 
 /// The desktop app's data dir under a home, on this OS.
-fn data_dir_rel() -> PathBuf {
+pub(crate) fn data_dir_rel() -> PathBuf {
     if cfg!(target_os = "macos") {
         Path::new("Library/Application Support").join(hive_core::compat::DESKTOP_APP_ID)
     } else {
@@ -188,7 +188,7 @@ fn sandbox_turn_home_has_only_the_git_identity() {
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-fn plan_for(home: &Path, host: &HostPaths, purpose: Purpose, grants: &PathGrants) -> EnforcementPlan {
+pub(crate) fn plan_for(home: &Path, host: &HostPaths, purpose: Purpose, grants: &PathGrants) -> EnforcementPlan {
     EnvelopeEnforcer::plan(&PlanInputs {
         host: HostKind::Desktop,
         envelope: &SandboxEnvelope::workspace_default(),
@@ -329,7 +329,7 @@ fn effective_policy_names_every_path_with_a_reason() {
 /// Run `program args` as `purpose` in the decoy's worktree, with `host`
 /// paths and `grants`.
 #[cfg(unix)]
-fn run_prog(e: &dyn TurnExecutor, d: &DecoyHome, host: HostPaths, purpose: Purpose, program: &Path, args: &[&str], grants: PathGrants) -> (bool, String) {
+pub(crate) fn run_prog(e: &dyn TurnExecutor, d: &DecoyHome, host: HostPaths, purpose: Purpose, program: &Path, args: &[&str], grants: PathGrants) -> (bool, String) {
     let policy = TurnPolicy { worktree_is_isolated: true, grants, ..TurnPolicy::baseline(HostKind::Desktop) };
     with_turn_sync(policy, || {
         let spec = SpawnSpec::new(purpose, program.as_os_str(), args.iter().copied()).cwd(Some(&d.worktree));
@@ -341,7 +341,7 @@ fn run_prog(e: &dyn TurnExecutor, d: &DecoyHome, host: HostPaths, purpose: Purpo
 }
 
 #[cfg(unix)]
-fn exe(path: &Path, body: &str) {
+pub(crate) fn exe(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, body).unwrap();
@@ -481,10 +481,11 @@ fn review_rw_grants_never_open_code_that_runs_outside_the_sandbox() {
     for r in rw {
         assert!(!p.write_extra.contains(&d.home.join(r)), "~/{r} granted read-write: {:?}", p.write_extra);
     }
-    // A grant beside them still works.
-    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/.cargo/registry".into()] };
+    // A grant beside them still works. (`~/.cargo/registry` is a code path
+    // too since the second review: a build compiles its sources.)
+    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/datasets".into()] };
     let p = plan_for(&d.home, &host, Purpose::Tool, &ok);
-    assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join(".cargo/registry")), "{:?}", p.write_extra);
+    assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join("datasets")), "{:?}", p.write_extra);
 }
 
 #[cfg(unix)]

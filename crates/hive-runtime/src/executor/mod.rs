@@ -187,6 +187,15 @@ pub struct HostPaths {
     /// Every absolute `PATH` entry of this host: a signed read-write grant
     /// never makes one writable (a planted `git` there runs as the user).
     pub path_dirs: Vec<PathBuf>,
+    /// Dirs outside the fixed list whose contents run as the user: git's
+    /// global `core.hooksPath` and `init.templateDir` (a hook planted there
+    /// runs on the user's next commit in any repository). A signed
+    /// read-write grant is read-only there too.
+    pub exec_dirs: Vec<PathBuf>,
+    /// The user's home from the password database when `HOME` names another
+    /// dir (or none): denied as a whole too, with its credential dirs, so a
+    /// wrong or unset `HOME` never leaves the real home open.
+    pub other_homes: Vec<PathBuf>,
     /// The binary that carries the Linux pre-exec helper (default: this
     /// executable).
     pub helper_exe: Option<PathBuf>,
@@ -241,6 +250,10 @@ impl HostPaths {
             h.toolchain_env = t.env;
         }
         h.path_dirs = std::env::var_os("PATH").map(|v| std::env::split_paths(&v).filter(|d| d.is_absolute()).collect()).unwrap_or_default();
+        h.other_homes = other_homes(home_dir().as_deref(), passwd_home().as_deref());
+        if let Some(home) = home_dir() {
+            h.exec_dirs = cli_home::git_exec_dirs(&home);
+        }
         h
     }
 }
@@ -380,10 +393,109 @@ pub fn home_exec_paths(home: &Path) -> Vec<PathBuf> {
         ".tmux.conf",
         ".local/share/applications",
         "Library/LaunchAgents",
+        // More shell startup: aliases, drop-in dirs, frameworks and prompts.
+        ".bash_aliases",
+        ".bashrc.d",
+        ".zsh",
+        ".config/zsh",
+        ".oh-my-zsh",
+        ".config/starship.toml",
+        ".config/tmux",
+        ".inputrc",
+        // Interpreters' startup and user site dirs (a `.pth` file runs on
+        // every Python start; `~/.local/lib` is the user site on Linux,
+        // `~/Library/Python` on macOS).
+        ".local/lib",
+        "Library/Python",
+        ".pythonrc",
+        ".pythonrc.py",
+        ".pdbrc",
+        ".ipython",
+        ".irbrc",
+        ".pryrc",
+        ".gemrc",
+        ".gem",
+        ".bundle",
+        ".node_modules",
+        ".node_libraries",
+        "perl5",
+        // User bin dirs that aren't on this process's `PATH` but are on the
+        // user's shell's.
+        "bin",
+        ".bin",
+        "Applications",
+        // Package managers' config, and caches a build compiles or installs
+        // from (`~/.cargo/registry/src/*/build.rs` runs on the next build).
+        ".cargo",
+        ".pip",
+        ".pydistutils.cfg",
+        ".config/npm",
+        ".config/pnpm",
+        ".config/yarn",
+        ".yarnrc",
+        ".yarnrc.yml",
+        ".m2",
+        ".gradle",
+        ".ivy2",
+        ".sbt",
+        "go/pkg",
+        ".deno",
+        ".bun",
+        // Tool plugins: docker CLI plugins, gh extensions, Terraform
+        // providers, version control hooks.
+        ".docker/cli-plugins",
+        ".local/share/gh",
+        ".terraform.d",
+        ".terraformrc",
+        ".hgrc",
+        ".config/hg",
+        // Editors and terminals that run commands from their config (VS Code
+        // and Cursor tasks and extensions, Zed tasks, terminal startup
+        // commands), and macOS automation.
+        ".vscode",
+        ".vscode-server",
+        ".cursor",
+        ".config/Code",
+        ".config/Cursor",
+        ".config/VSCodium",
+        "Library/Application Support/Code",
+        "Library/Application Support/Cursor",
+        "Library/Application Support/VSCodium",
+        ".config/zed",
+        "Library/Application Support/Zed",
+        ".config/kitty",
+        ".config/wezterm",
+        ".wezterm.lua",
+        ".config/alacritty",
+        ".config/ghostty",
+        "Library/Application Support/com.mitchellh.ghostty",
+        ".hammerspoon",
+        "Library/Services",
+        "Library/Scripts",
+        "Library/Application Scripts",
+        "Library/Preferences",
+        ".ssh",
     ]
     .iter()
     .map(|r| home.join(r))
     .collect()
+}
+
+/// Absolute install prefixes the user can often write (Homebrew, MacPorts,
+/// `/Applications` for an admin): a read-write grant of one, or of a dir in
+/// it, is read-only too.
+pub const EXEC_PREFIXES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/local", "/Applications"];
+
+/// Whether `p` is `base` or under it. On macOS and Windows, whose default
+/// file systems ignore case, the comparison does too (`~/.SSH` is `~/.ssh`,
+/// even before either exists).
+pub fn path_under(p: &Path, base: &Path) -> bool {
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
+        return p.starts_with(base);
+    }
+    let fold = |x: &Path| x.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect::<Vec<_>>();
+    let (p, b) = (fold(p), fold(base));
+    p.len() >= b.len() && p[..b.len()] == b[..]
 }
 
 /// The paths under the home a runtime reads on top of the toolchains, with
@@ -467,8 +579,59 @@ pub fn host_paths() -> HostPaths {
     host_slot().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// The home dir: `HOME` (`USERPROFILE` on Windows), else the user's entry
+/// in the password database.
 pub fn home_dir() -> Option<PathBuf> {
+    env_home().or_else(passwd_home)
+}
+
+fn env_home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+}
+
+/// This user's home from the password database (`getpwuid_r`), whatever
+/// `HOME` says.
+#[cfg(unix)]
+pub fn passwd_home() -> Option<PathBuf> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: `getpwuid_r` writes only into `pwd` and `buf`, both owned
+    // here and sized as passed; `result` points at `pwd` or is null, and the
+    // strings it holds live in `buf`, read before it goes out of scope.
+    unsafe {
+        let uid = libc::getuid();
+        let mut size = 4096usize;
+        loop {
+            let mut buf = vec![0 as libc::c_char; size];
+            let mut pwd: libc::passwd = std::mem::zeroed();
+            let mut result: *mut libc::passwd = std::ptr::null_mut();
+            let rc = libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result);
+            if rc == libc::ERANGE && size < 1 << 20 {
+                size *= 4;
+                continue;
+            }
+            if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+                return None;
+            }
+            let dir = CStr::from_ptr(pwd.pw_dir).to_bytes();
+            return (!dir.is_empty() && dir != b"/").then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn passwd_home() -> Option<PathBuf> {
+    None
+}
+
+/// The password database's home when it isn't `home` (what the plan
+/// denies as the home): denied on top.
+pub fn other_homes(home: Option<&Path>, passwd: Option<&Path>) -> Vec<PathBuf> {
+    match (home, passwd) {
+        (Some(h), Some(p)) if canonical(h) != canonical(p) => vec![p.to_path_buf()],
+        (None, Some(p)) => vec![p.to_path_buf()],
+        _ => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -595,8 +758,44 @@ pub fn runtime_state_dirs(kind: ModelProviderKind, home: &Path) -> Vec<PathBuf> 
 /// (checked with `security list-keychains` under the profile). Ligus's own
 /// keychain items are protected by their item ACLs, not by the profile.
 pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = [".ssh", ".gnupg", ".aws", ".config/gcloud", ".kube", ".docker/config.json", ".netrc", ".git-credentials"]
-        .iter()
+    let mut v: Vec<PathBuf> = [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".config/gcloud",
+        ".kube",
+        ".docker/config.json",
+        ".netrc",
+        ".git-credentials",
+        ".config/git/credentials",
+        // Package registry tokens, in files beside config a grant may name
+        // (a grant of `~/.cargo` or `~/.m2` never opens these).
+        ".cargo/credentials.toml",
+        ".cargo/credentials",
+        ".npmrc",
+        ".yarnrc.yml",
+        ".pypirc",
+        ".gem/credentials",
+        ".m2/settings.xml",
+        ".m2/settings-security.xml",
+        ".gradle/gradle.properties",
+        ".composer/auth.json",
+        ".config/composer/auth.json",
+        ".terraform.d/credentials.tfrc.json",
+        // Cloud CLIs, password stores and database logins.
+        ".azure",
+        ".oci",
+        ".config/doctl",
+        ".config/op",
+        ".password-store",
+        ".vault-token",
+        ".config/rclone",
+        ".s3cfg",
+        ".pgpass",
+        ".my.cnf",
+        ".config/sops",
+    ]
+    .iter()
         .map(|r| home.join(r))
         .collect();
     let keychain_login = matches!(
@@ -682,6 +881,12 @@ impl EnvelopeEnforcer {
         let mut deny_read: Vec<PathBuf> = host_paths.data_dirs.clone();
         deny_read.extend(host_paths.secret_files.iter().cloned());
         deny_read.extend(home_secret_dirs(i.home, i.purpose).into_iter().filter(|p| !host_paths.home_read_allow.contains(p)));
+        // `HOME` isn't the password database's home: that one is denied as a
+        // whole (a worktree inside it stays reachable, as inside a data dir).
+        for other in host_paths.other_homes.iter().filter(|o| o.as_path() != i.home) {
+            deny_read.push(other.clone());
+            deny_read.extend(home_secret_dirs(other, i.purpose));
+        }
         // macOS: a subscription CLI keeps the login keychain only while its
         // sign-in lives there. Anything that can run `/usr/bin/security`
         // reads every item that trusts it (the gh token, git's osxkeychain
@@ -717,17 +922,19 @@ impl EnvelopeEnforcer {
         // makes writable what runs as the user outside the sandbox
         // ([`home_exec_paths`], the toolchain and `PATH` dirs): it is
         // read-only there.
-        let in_denied = |p: &Path| deny_read.iter().any(|d| p.starts_with(d));
+        let in_denied = |p: &Path| deny_read.iter().any(|d| path_under(p, d));
         // Resolved through the file system only when the home is on this
-        // disk (a plan for another host's paths has nothing to resolve);
-        // a path that doesn't exist opens nothing on any tier.
+        // disk (a plan for another host's paths has nothing to resolve).
+        // What the plan lets in is the resolved path: the Linux executors
+        // drop an entry that resolves elsewhere by the time they bind it (a
+        // grant swapped for a symlink after the plan).
         let on_disk = i.home.is_dir();
-        let resolve = |p: &Path| if on_disk { std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()) } else { p.to_path_buf() };
+        let resolve = |p: &Path| if on_disk { canonical(p) } else { p.to_path_buf() };
         let real_home = resolve(i.home);
         let denied_real: Vec<PathBuf> = if on_disk { deny_read.iter().map(|d| resolve(d)).collect() } else { Vec::new() };
         let resolves_ok = |p: &Path| {
             let c = resolve(p);
-            !i.home.starts_with(p) && !real_home.starts_with(&c) && !denied_real.iter().any(|d| c.starts_with(d))
+            !path_under(i.home, p) && !path_under(&real_home, &c) && !denied_real.iter().any(|d| path_under(&c, d))
         };
         let mut home_read: Vec<PathBuf> = Vec::new();
         for (p, _) in runtime_home_read(i.purpose, i.home, i.user_config) {
@@ -736,14 +943,15 @@ impl EnvelopeEnforcer {
         home_read.extend(host_paths.toolchain_read.iter().cloned());
         home_read.extend(i.extra_home_read.iter().cloned());
         let granted = |l: &[String]| -> Vec<PathBuf> {
-            l.iter().filter_map(|g| expand_grant(g, i.home)).filter(|p| !in_denied(p) && p.as_path() != i.home).collect()
+            l.iter().filter_map(|g| expand_grant(g, i.home)).filter(|p| !in_denied(p) && !path_under(i.home, p)).collect()
         };
         home_read.extend(granted(&i.grants.read_only));
         let rw_granted = granted(&i.grants.read_write);
         let mut exec: Vec<PathBuf> = Vec::new();
         if !rw_granted.is_empty() {
             exec.extend(home_exec_paths(i.home));
-            exec.extend(host_paths.toolchain_read.iter().chain(host_paths.path_dirs.iter()).cloned());
+            exec.extend(EXEC_PREFIXES.iter().map(PathBuf::from));
+            exec.extend(host_paths.toolchain_read.iter().chain(host_paths.path_dirs.iter()).chain(host_paths.exec_dirs.iter()).cloned());
             if on_disk {
                 let real: Vec<PathBuf> = exec.iter().map(|x| resolve(x)).collect();
                 exec.extend(real);
@@ -751,18 +959,20 @@ impl EnvelopeEnforcer {
         }
         let runs_outside = |p: &Path| {
             let c = resolve(p);
-            exec.iter().any(|x| p.starts_with(x) || x.starts_with(p) || c.starts_with(x) || x.starts_with(&c))
+            exec.iter().any(|x| path_under(p, x) || path_under(x, p) || path_under(&c, x) || path_under(x, &c))
         };
         let (rw_code, rw_ok): (Vec<PathBuf>, Vec<PathBuf>) = rw_granted.into_iter().partition(|p| runs_outside(p));
         home_read.extend(rw_code);
         home_read.retain(|p| !in_denied(p) && resolves_ok(p));
         // The device-local list is the user's own: it may open a credential dir.
         home_read.extend(host_paths.home_read_allow.iter().cloned());
+        let mut home_read: Vec<PathBuf> = home_read.iter().map(|p| resolve(p)).collect();
         home_read.sort();
         home_read.dedup();
-        write_extra.extend(rw_ok.into_iter().filter(|p| resolves_ok(p)));
-        // Never write where reading is denied.
-        write_extra.retain(|w| !deny_read.iter().any(|d| w.starts_with(d)));
+        write_extra.extend(rw_ok.into_iter().filter(|p| resolves_ok(p)).map(|p| resolve(&p)));
+        // Never write where reading is denied; what is left, as resolved.
+        write_extra.retain(|w| !deny_read.iter().any(|d| path_under(w, d)));
+        let mut write_extra: Vec<PathBuf> = write_extra.iter().map(|w| resolve(w)).collect();
         write_extra.sort();
         write_extra.dedup();
 
@@ -1433,7 +1643,55 @@ impl Drop for TurnTmp {
 }
 
 fn make_turn_tmp() -> io::Result<TurnTmp> {
-    make_turn_tmp_in(&std::env::temp_dir())
+    make_turn_tmp_in(&turn_root()?)
+}
+
+/// Prefix of the dir that holds this user's turn dirs, under the system
+/// temp dir.
+pub const TURN_ROOT_PREFIX: &str = "ligus-turns-";
+
+/// The dir every turn's scratch dir is made in (`$TMPDIR/ligus-turns-<uid>`,
+/// 0700): one dir the executors deny as a whole, the turn's own scratch dir
+/// excepted, so a turn never reads another's (a concurrent turn's home holds
+/// its CLI's sign-in). Refused when it isn't a real dir this user owns
+/// (someone else made it first in a shared `/tmp`).
+pub fn turn_root() -> io::Result<PathBuf> {
+    #[cfg(unix)]
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
+    let root = canonical(&std::env::temp_dir()).join(format!("{TURN_ROOT_PREFIX}{uid}"));
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    match b.create(&root) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+            return Err(refuse(format!("{} isn't a private dir of this user: refusing to make turn dirs in it", root.display())));
+        }
+    }
+    #[cfg(not(unix))]
+    if !meta.is_dir() {
+        return Err(refuse(format!("{} isn't a dir", root.display())));
+    }
+    Ok(root)
+}
+
+/// The dir holding the turn dirs, when `tmp` is a turn dir in one: what the
+/// executors deny besides `tmp` itself.
+pub fn sibling_turns_root(tmp: &Path) -> Option<PathBuf> {
+    let parent = canonical(tmp).parent()?.to_path_buf();
+    parent.file_name().is_some_and(|n| n.to_string_lossy().starts_with(TURN_ROOT_PREFIX)).then_some(parent)
 }
 
 fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
@@ -1503,7 +1761,12 @@ fn pid_alive(pid: u32) -> bool {
 /// otherwise leave its scratch dir, with any CLI config copied into its
 /// per-turn home, behind. Returns how many were removed.
 pub fn sweep_stale_turn_dirs(older_than: std::time::Duration) -> usize {
-    sweep_stale_turn_dirs_in(&std::env::temp_dir(), older_than)
+    // The turn root, and the temp dir itself (turn dirs made before it).
+    let mut n = sweep_stale_turn_dirs_in(&std::env::temp_dir(), older_than);
+    if let Ok(root) = turn_root() {
+        n += sweep_stale_turn_dirs_in(&root, older_than);
+    }
+    n
 }
 
 /// [`sweep_stale_turn_dirs`] under `parent` (tests).
@@ -1686,6 +1949,7 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
         user_config,
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
+    protected_links_refusal(&plan).map_err(refuse)?;
     let kind = executor.kind();
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
@@ -1697,6 +1961,39 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
     let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref())?;
     let cli_home = cli_home_dir.map(|(k, h)| (k, home.clone(), h));
     Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(turn_tmp), kind, plan } })
+}
+
+/// Whether `p` still resolves to itself (the plan holds resolved paths;
+/// the Linux executors skip one swapped for a symlink since).
+pub fn unmoved(p: &Path) -> bool {
+    canonical(p) == p
+}
+
+/// A writable worktree whose protected path (`.git`, a protected dir,
+/// `ligus.config.toml`, `.envrc`) is a symbolic link can't be confined: the
+/// executors keep the path read-only by binding or naming what it resolves
+/// to, so a link out of the worktree (committed to the repo, or in a
+/// checkout an agent wrote before) would bring its target into the turn
+/// (bubblewrap bound `~/.ssh` back that way), and the link itself could be
+/// replaced. Such a turn is refused, saying which path to fix.
+pub fn protected_links_refusal(plan: &EnforcementPlan) -> Result<(), String> {
+    if !plan.worktree_writable {
+        return Ok(());
+    }
+    let links: Vec<String> = plan
+        .read_only
+        .iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+        .map(|p| p.display().to_string())
+        .collect();
+    if links.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing a turn that may write this checkout: its protected path {} is a symbolic link, which the sandbox can't keep \
+         read-only (it would follow the link). Replace the link with the file or directory itself.",
+        links.join(", ")
+    ))
 }
 
 /// Where `program` is installed, when that is under `home`: the directory
@@ -1956,3 +2253,5 @@ pub fn skip_without_sandbox(test: &str) -> bool {
 pub(crate) mod tests;
 #[cfg(test)]
 mod home_tests;
+#[cfg(test)]
+mod review2_tests;

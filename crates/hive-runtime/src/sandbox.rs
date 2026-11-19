@@ -19,6 +19,67 @@ use hive_core::sandbox::{EgressPolicy, SandboxEnvelope};
 use hive_core::ModelProviderKind;
 use serde_json::{json, Value};
 
+// ---------------------------------------------------------------------------
+// Signed grants on this device
+// ---------------------------------------------------------------------------
+
+/// Whether this device applies the workspace's signed sandbox grants (its
+/// paths and its agents' shell grants). A grant reaches the device of every
+/// member whose host runs that agent, so each device decides: on by default
+/// for the workspace Owner's own devices (and the device-local workspace),
+/// off for every other member's, who turns it on in Settings, Sandbox (a
+/// headless host: `LIGUS_SANDBOX_GRANTS=apply`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantsHere {
+    pub apply: bool,
+    /// What applies without a setting.
+    pub default: bool,
+    /// This device's own choice, when it made one.
+    pub setting: Option<bool>,
+    /// Why, in a sentence (doctor, Settings).
+    pub why: String,
+}
+
+/// The decision for a device whose user holds `my_role` in the workspace
+/// (`local`: the device-local workspace), with this device's `setting`.
+pub fn grants_here(setting: Option<bool>, my_role: Option<hive_core::WorkspaceRole>, local: bool) -> GrantsHere {
+    let owner = local || my_role == Some(hive_core::WorkspaceRole::Owner);
+    let default = owner;
+    let apply = setting.unwrap_or(default);
+    let why = match (setting, owner) {
+        (Some(true), _) => "applied: this device chose to apply the workspace's grants".to_string(),
+        (Some(false), _) => "not applied: this device chose not to apply the workspace's grants".to_string(),
+        (None, true) => "applied: this device is the workspace Owner's (the default)".to_string(),
+        (None, false) => "not applied: this device isn't the workspace Owner's, so grants apply only once it opts in (the default)".to_string(),
+    };
+    GrantsHere { apply, default, setting, why }
+}
+
+/// The env var a headless host (`ligus worker`, `serve`, `agent`) sets to
+/// `apply` or `ignore` the workspace's signed grants; unset, the default.
+pub const GRANTS_ENV: &str = "LIGUS_SANDBOX_GRANTS";
+
+/// [`GRANTS_ENV`] as a setting.
+pub fn grants_setting_from_env() -> Option<bool> {
+    let v = hive_core::compat::var(GRANTS_ENV).ok()?;
+    match v.trim().to_ascii_lowercase().as_str() {
+        "apply" | "on" | "1" | "true" | "yes" => Some(true),
+        "ignore" | "off" | "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// A short digest of a grant set (empty for none): what a device saw last,
+/// so it can say when the grants changed.
+pub fn grants_fingerprint(g: &hive_core::sandbox::SandboxGrants) -> String {
+    use sha2::{Digest, Sha256};
+    if g.is_empty() {
+        return String::new();
+    }
+    let bytes = serde_json::to_vec(g).unwrap_or_default();
+    Sha256::digest(&bytes).iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
 /// What a runtime needs to honor an envelope.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Enforcement {
@@ -170,5 +231,38 @@ mod tests {
             let e = enforce(p, &tight(EgressPolicy::Closed), &Vec::new());
             assert!(e.refuse.is_none() && !e.allow_run_command);
         }
+    }
+}
+
+#[cfg(test)]
+mod grants_here_tests {
+    use super::*;
+    use hive_core::WorkspaceRole::*;
+
+    /// Review: a grant applied on every member's host with no say. The
+    /// Owner's devices (and the local workspace) apply them by default;
+    /// every other member's device only once it opts in; a device's own
+    /// choice wins either way.
+    #[test]
+    fn grants_apply_by_default_only_on_the_owners_devices() {
+        assert!(grants_here(None, Some(Owner), false).apply);
+        assert!(grants_here(None, None, true).apply);
+        for r in [Admin, Contributor, Viewer] {
+            assert!(!grants_here(None, Some(r), false).apply, "{r:?}");
+            assert!(grants_here(Some(true), Some(r), false).apply, "{r:?}");
+        }
+        assert!(!grants_here(None, None, false).apply);
+        assert!(!grants_here(Some(false), Some(Owner), false).apply);
+        assert!(grants_here(None, Some(Admin), false).why.contains("opts in"));
+    }
+
+    #[test]
+    fn fingerprint_changes_with_the_grants() {
+        let mut g = hive_core::sandbox::SandboxGrants::default();
+        assert_eq!(grants_fingerprint(&g), "");
+        g.workspace.read_only.push("~/data".into());
+        let a = grants_fingerprint(&g);
+        g.workspace.read_write.push("~/scratch".into());
+        assert!(!a.is_empty() && a != grants_fingerprint(&g));
     }
 }

@@ -687,6 +687,13 @@ pub fn model_route(rt: &ResolvedRuntime) -> Result<Option<crate::model_gateway::
 /// `codex exec`, `agy --print`, `copilot -p`). The Ligus MCP server is
 /// attached where the CLI takes an MCP config file (Claude Code, Copilot);
 /// Codex and Antigravity on their legacy adapters use the reply directives.
+/// A CLI's args for a run outside any turn: without its shell where it has
+/// a switch for it (`author_gate::shell_free_args`); as given for one that
+/// always has one (confined read-only, with only its model).
+pub fn outside_turn_args(provider: ModelProviderKind, args: Vec<String>) -> Vec<String> {
+    crate::author_gate::shell_free_args(provider, &args).unwrap_or(args)
+}
+
 async fn legacy_cli(
     rt: &ResolvedRuntime,
     system: Option<&str>,
@@ -700,6 +707,14 @@ async fn legacy_cli(
     let mut args = rt.args.clone();
     if let Some(a) = attach.as_ref() {
         crate::ligus_mcp::attach::legacy_args(rt.provider, a, &mut args);
+    }
+    // Outside a turn (the chat summarizer and compaction, a chat title, a
+    // runtime's Test) no host applied the shell gate: the prompt carries
+    // other members' words and no Owner stands behind it, so no shell. A
+    // CLI that always has one (Codex, aider, Hermes) still runs read-only,
+    // with only its model, under `TurnPolicy::outside_turn`.
+    if crate::executor::current_turn().is_none() {
+        args = outside_turn_args(rt.provider, args);
     }
     let rt = &ResolvedRuntime { args, ..rt.clone() };
     #[allow(unreachable_patterns)]

@@ -133,11 +133,19 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     if let Some(h) = &plan.home {
         deny.push(canonical(h));
     }
+    // Other turns' scratch dirs (their homes hold their CLIs' sign-ins):
+    // the dir holding them is denied, this turn's own allowed below. Rules
+    // name inodes, so a turn dir made later is outside every rule.
+    if let Some(root) = super::sibling_turns_root(&plan.tmp) {
+        deny.push(root);
+    }
     let mut allow: Vec<PathBuf> = plan.allow_read.iter().map(|p| canonical(p)).collect();
     allow.push(canonical(&plan.worktree));
     allow.push(canonical(&plan.tmp));
-    allow.extend(plan.write_extra.iter().map(|p| canonical(p)));
-    allow.extend(plan.home_read.iter().map(|p| canonical(p)));
+    // The plan judged these where they resolved; one that resolves
+    // elsewhere now (swapped for a symlink since) opens nothing.
+    allow.extend(plan.write_extra.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)));
+    allow.extend(plan.home_read.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)));
     if let Some(h) = home.filter(|_| has_turn_home(plan)) {
         let turn_home = canonical(&plan.tmp);
         deny.extend(cli_config_paths(h).iter().map(|p| canonical(p)).filter(|p| !turn_home.starts_with(p) && !p.starts_with(&turn_home)));
@@ -155,7 +163,7 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
 
     let mut write = Vec::new();
     let wt = canonical(&plan.worktree);
-    let extra: Vec<PathBuf> = plan.write_extra.iter().map(|p| canonical(p)).collect();
+    let extra: Vec<PathBuf> = plan.write_extra.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)).collect();
     // Denies below a writable path are carved out of it; one above it (the
     // home, a data dir holding a worker's checkout) is the plan's to lift.
     let below = |root: &Path| -> Vec<PathBuf> { deny.iter().filter(|d| !root.starts_with(d)).cloned().collect() };

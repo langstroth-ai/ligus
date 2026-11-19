@@ -399,6 +399,14 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
         push(&["--unshare-net".as_ref()]);
     }
     push(&["--ro-bind".as_ref(), "/".as_ref(), "/".as_ref(), "--dev".as_ref(), "/dev".as_ref(), "--proc".as_ref(), "/proc".as_ref()]);
+    // Other turns' scratch dirs (their homes hold their CLIs' sign-ins) are
+    // an empty tmpfs, this turn's own bound back in below. A turn that starts
+    // later makes its dir on the host, which this mount doesn't show.
+    let turns_root = super::sibling_turns_root(&plan.tmp);
+    if let Some(root) = &turns_root {
+        let tmp = canonical(&plan.tmp);
+        push(&["--tmpfs".as_ref(), root.as_os_str(), "--bind".as_ref(), tmp.as_os_str(), tmp.as_os_str()]);
+    }
     let wt = canonical(&plan.worktree);
     let empty = placeholder_dir(plan);
     // The worktree: read-write with its protected paths read-only on top (a
@@ -428,7 +436,7 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
     let home = plan.home.as_ref().map(|h| canonical(h)).filter(|h| h.is_dir());
     if let Some(h) = &home {
         push(&["--tmpfs".as_ref(), h.as_os_str()]);
-        let mut ro: Vec<PathBuf> = plan.home_read.iter().map(|p| canonical(p)).filter(|p| p.starts_with(h) && p.exists()).collect();
+        let mut ro: Vec<PathBuf> = plan.home_read.iter().filter(|p| super::unmoved(p)).map(|p| canonical(p)).filter(|p| p.starts_with(h) && p.exists()).collect();
         ro.sort_by_key(|p| p.components().count());
         ro.dedup();
         for r in &ro {
@@ -437,7 +445,7 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
     }
     worktree(&mut a);
     let mut push = |xs: &[&OsStr]| a.extend(xs.iter().map(|x| x.to_os_string()));
-    for w in &plan.write_extra {
+    for w in plan.write_extra.iter().filter(|w| super::unmoved(w)) {
         let w = canonical(w);
         if w.exists() {
             push(&["--bind".as_ref(), w.as_os_str(), w.as_os_str()]);
@@ -940,9 +948,9 @@ fn apply_landlock_tier(r: &super::landlock_rules::LandlockRules) -> io::Result<(
         .map_err(err)?
         .create()
         .map_err(err)?
-        .add_rules(path_beneath_rules(&r.read, AccessFs::from_read(abi)))
+        .add_rules(verified_rules(&r.read, AccessFs::from_read(abi), abi))
         .map_err(err)?
-        .add_rules(path_beneath_rules(&r.write, AccessFs::from_all(abi)))
+        .add_rules(verified_rules(&r.write, AccessFs::from_all(abi), abi))
         .map_err(err)?
         .add_rules(path_beneath_rules(&r.dev, AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::Truncate | AccessFs::IoctlDev))
         .map_err(err)?;
@@ -956,6 +964,40 @@ fn apply_landlock_tier(r: &super::landlock_rules::LandlockRules) -> io::Result<(
         return Err(io::Error::other("Landlock could not be enforced"));
     }
     Ok(())
+}
+
+/// Landlock rules on exactly the paths the parent judged. Each is opened
+/// without following a final symlink and kept only when the descriptor
+/// still resolves to that path (`/proc/self/fd`): a path swapped for a link,
+/// or under a parent swapped for one, between the rules and here (a
+/// concurrent turn with write access beside it) opens nothing rather than
+/// the link's target. Without `/proc` the paths are opened as given.
+fn verified_rules(
+    paths: &[PathBuf],
+    access: landlock::BitFlags<landlock::AccessFs>,
+    abi: landlock::ABI,
+) -> Vec<Result<landlock::PathBeneath<std::os::fd::OwnedFd>, landlock::RulesetError>> {
+    use landlock::{AccessFs, PathBeneath};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let proc_ok = Path::new("/proc/self/fd").is_dir();
+    let file_access = access & AccessFs::from_file(abi);
+    paths
+        .iter()
+        .filter_map(|p| {
+            let flags = libc::O_PATH | libc::O_CLOEXEC | if proc_ok { libc::O_NOFOLLOW } else { 0 };
+            let f = std::fs::OpenOptions::new().read(true).custom_flags(flags).open(p).ok()?;
+            let meta = f.metadata().ok()?;
+            if meta.file_type().is_symlink() {
+                return None;
+            }
+            if proc_ok && std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok()? != *p {
+                return None;
+            }
+            let a = if meta.is_dir() { access } else { file_access };
+            Some(Ok(PathBeneath::new(std::os::fd::OwnedFd::from(f), a)))
+        })
+        .collect()
 }
 
 /// The Landlock tier: no bubblewrap around us. Apply Landlock and seccomp
