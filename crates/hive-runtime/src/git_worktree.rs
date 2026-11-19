@@ -82,7 +82,30 @@ pub fn is_git_repo(root: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Concurrent `git worktree` / `git branch` commands in one repository race:
+/// one `worktree add` can read another's half-written
+/// `.git/worktrees/<id>/` (`failed to read .../commondir`) and fail, and a
+/// turn whose cut fails files no diff. This device's worktree and branch
+/// commands therefore run one at a time.
+static WORKTREE_CMD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Concurrent [`chat_worktree`] calls for a fresh chat would each see no
+/// branch, and the loser's stale-registration cleanup would remove the
+/// winner's new checkout: creating a chat's base worktree is one step.
+static CHAT_WORKTREE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn worktree_cmd_lock() -> std::sync::MutexGuard<'static, ()> {
+    WORKTREE_CMD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `git worktree remove --force <path>` in `repo_root`, best effort.
+fn force_remove_worktree(repo_root: &Path, path: &Path) {
+    let _guard = worktree_cmd_lock();
+    let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "remove", "--force"]).arg(path).output();
+}
+
 fn git(dir: &Path, args: &[&str]) -> io::Result<String> {
+    let _guard = matches!(args.first(), Some(&"worktree") | Some(&"branch")).then(worktree_cmd_lock);
     let out = hive_core::process_util::git().arg("-C").arg(dir).args(args).output()?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
@@ -143,15 +166,16 @@ pub fn chat_worktree_at(repo_root: &Path, chat_id: &str, base: &str) -> io::Resu
     if base.starts_with('-') {
         return Err(io::Error::other("bad base"));
     }
+    let _chat = CHAT_WORKTREE.lock().unwrap_or_else(|e| e.into_inner());
     let branch = chat_branch(chat_id);
     if branch_exists(repo_root, &branch) {
-        return chat_worktree(repo_root, chat_id);
+        return chat_worktree_locked(repo_root, chat_id);
     }
     let path = chat_worktree_path(repo_root, chat_id)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "remove", "--force"]).arg(&path).output();
+    force_remove_worktree(repo_root, &path);
     git(repo_root, &["worktree", "add", "-b", &branch, &path.to_string_lossy(), base])?;
     Ok(path)
 }
@@ -174,6 +198,12 @@ fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
 /// first). A repo with no `HEAD` has nothing to branch from and returns `Err` —
 /// callers treat that as "run in the workspace root", exactly as for [`create`].
 pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
+    let _chat = CHAT_WORKTREE.lock().unwrap_or_else(|e| e.into_inner());
+    chat_worktree_locked(repo_root, chat_id)
+}
+
+/// [`chat_worktree`], with [`CHAT_WORKTREE`] held by the caller.
+fn chat_worktree_locked(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     let branch = chat_branch(chat_id);
     let path = chat_worktree_path(repo_root, chat_id)?;
     let path_str = path.to_string_lossy().into_owned();
@@ -189,12 +219,7 @@ pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     }
     // Clear any stale worktree registration at this path (e.g. the checkout dir
     // was deleted out from under git) so `worktree add` doesn't refuse.
-    let _ = hive_core::process_util::git()
-        .arg("-C")
-        .arg(repo_root)
-        .args(["worktree", "remove", "--force"])
-        .arg(&path)
-        .output();
+    force_remove_worktree(repo_root, &path);
     if existed {
         // Branch survives; re-attach a checkout for it without moving its tip.
         git(repo_root, &["worktree", "add", &path_str, &branch])?;
@@ -277,12 +302,7 @@ impl Worktree {
             let dirty = git(&path, &["status", "--porcelain"]).map(|s| !s.trim().is_empty()).unwrap_or(false);
             tracing::warn!(target: "worktree", path = %path.display(), dirty, "clearing a stale turn worktree");
         }
-        let _ = hive_core::process_util::git()
-            .arg("-C")
-            .arg(repo_root)
-            .args(["worktree", "remove", "--force"])
-            .arg(&path)
-            .output();
+        force_remove_worktree(repo_root, &path);
         let _ = git(repo_root, &["branch", "-D", &branch]);
 
         let path_str = path.to_string_lossy().into_owned();

@@ -402,13 +402,20 @@ async fn the_stop_signal_cancels_a_running_turn() {
     let stop = Arc::new(tokio::sync::Notify::new());
     let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
     i.stop = Some(stop.clone());
+    // `notify_waiters` (as the app's Stop button uses) reaches only a turn
+    // already waiting on the signal, and a slow runner may still be setting
+    // the turn up at 500ms: keep pressing Stop until the turn ends.
     let s2 = stop.clone();
-    tokio::spawn(async move {
+    let presser = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        s2.notify_waiters();
+        loop {
+            s2.notify_waiters();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     });
     let started = std::time::Instant::now();
     let err = run(&w.host, i).await.expect_err("stopped");
+    presser.abort();
     assert!(err.stopped, "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(30), "stopped promptly");
     let s = load(&w);
