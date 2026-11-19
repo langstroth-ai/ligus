@@ -51,6 +51,7 @@ pub mod identity_verifier;
 pub mod invite_sig;
 pub mod keyring;
 pub mod lease_presence;
+pub mod lockdown_view;
 pub mod ligus_auth;
 pub mod ligus_mcp;
 pub mod mcp;
