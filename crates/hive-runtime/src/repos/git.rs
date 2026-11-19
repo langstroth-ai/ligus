@@ -33,6 +33,9 @@ pub fn simplify(p: PathBuf) -> PathBuf {
 
 /// Run hardened git in `dir`; stdout trimmed on success.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    // Worktree and branch mutations (the apply's scratch tree, a chat
+    // branch's compare-and-swap) take the repo-wide lock.
+    let _lock = crate::git_worktree::lock_if_mutating(dir, args);
     let out = hive_core::process_util::git()
         .arg("-C")
         .arg(simplify(dir.to_path_buf()))

@@ -162,10 +162,17 @@ jobs:
             # Baked into the app: the keychain unlock item trusts only code
             # that satisfies Ligus's designated requirement for this team.
             if [ -n "$APPLE_TEAM_ID" ]; then echo "LIGUS_APPLE_TEAM_ID=$APPLE_TEAM_ID"; fi
+            echo "LIGUS_MACOS_SIGNED=1"
           } >> "$GITHUB_ENV"
           if [ -n "$APPLE_PROVISIONING_PROFILE" ]; then
             printf '%s' "$APPLE_PROVISIONING_PROFILE" | base64 --decode > app/embedded.provisionprofile
-            echo "LIGUS_TAURI_ARGS=--config app/tauri.passkeys.conf.json" >> "$GITHUB_ENV"
+            # A profile for another app id or team, without Associated
+            # Domains, or expired would ship an app killed at launch: fail.
+            scripts/check-macos-signing.sh profile app/embedded.provisionprofile
+            {
+              echo "LIGUS_TAURI_ARGS=--config app/tauri.passkeys.conf.json"
+              echo "LIGUS_MACOS_PASSKEYS=1"
+            } >> "$GITHUB_ENV"
             echo "Native passkeys: associated-domains entitlement + provisioning profile."
           fi
           echo "macOS signing + notarization configured."
@@ -209,6 +216,18 @@ jobs:
           releaseId: ${{ needs.release.outputs.id }}
           # Only used as the "notes" field of latest.json.
           releaseBody: "Installers attached below."
+
+      # The signed app must carry exactly the entitlements its build asked
+      # for: the native-passkeys set with the profile embedded, or no
+      # associated-domains entitlement without one. Fails the release (the
+      # updater check and the cask bump need this job to succeed).
+      - name: Check the signed app's entitlements
+        if: matrix.platform == 'macos-latest' && env.LIGUS_MACOS_SIGNED == '1'
+        run: |
+          app="$(find target -type d -name '*.app' -path '*/bundle/macos/*' -prune | head -n 1)"
+          [ -n "$app" ] || { echo "::error::no signed .app bundle under target/*/bundle/macos"; exit 1; }
+          if [ "${LIGUS_MACOS_PASSKEYS:-}" = 1 ]; then mode=--with-profile; else mode=--without-profile; fi
+          scripts/check-macos-signing.sh entitlements "$app" "$mode"
 
   # tauri-action merges latest.json per matrix job, so concurrent jobs can drop
   # each other's entry and a rerun changes asset ids. Fail loudly (rerun the

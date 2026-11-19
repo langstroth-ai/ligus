@@ -68,7 +68,10 @@ mod identity_tests;
 mod tests;
 
 /// How long `ligus serve` waits for a turn in flight on SIGTERM / Ctrl-C.
-const STOP_GRACE: Duration = Duration::from_secs(15);
+const STOP_GRACE: Duration = Duration::from_secs(12);
+/// How long a turn stopped at shutdown gets to wind down (complete its
+/// placeholder, drop its worktree).
+const STOPPED_TURN_GRACE: Duration = Duration::from_secs(3);
 
 /// Replies and proposals created this long before serve started don't push.
 const NOTIFY_HISTORY_MINUTES: i64 = 10;
@@ -227,6 +230,8 @@ pub struct Shared {
     read_marks: Mutex<HashMap<Uuid, Uuid>>,
     pub sync_kick: Notify,
     pub worker_kick: Notify,
+    /// The worker's running turns, each with its own stop signal.
+    pub turn_stops: Arc<hive_runtime::turn_engine::TurnStops>,
     stopping: AtomicBool,
     /// Tests only: treat a bearer request as confirmed by the owner's
     /// presence (the HTTP tests have no phone or passkey).
@@ -877,18 +882,27 @@ impl ServeHandle {
     }
 
     /// Stop, then give a turn in flight up to `grace` to finish (the worker
-    /// checks `stopping` between turns). Returns whether the worker stopped in
-    /// time; if not, the next start finishes the cut-off reply
-    /// ([`worker::recover_interrupted_turns`]).
+    /// checks `stopping` between turns). Past the grace the turn is stopped
+    /// (its own stop signal), and gets [`STOPPED_TURN_GRACE`] to wind down.
+    /// Returns whether the worker stopped in time; if not, the next start
+    /// finishes the cut-off reply ([`worker::recover_interrupted_turns`]).
     pub async fn stop(&self, grace: Duration) -> bool {
         self.shutdown();
         let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() else {
             return true;
         };
-        let deadline = tokio::time::Instant::now() + grace;
+        let mut deadline = tokio::time::Instant::now() + grace;
+        let mut stopped_turns = false;
         while !worker.is_finished() {
             if tokio::time::Instant::now() >= deadline {
-                return false;
+                if stopped_turns {
+                    return false;
+                }
+                stopped_turns = true;
+                if self.shared.turn_stops.close() > 0 {
+                    eprintln!("serve: stopping the turn in flight");
+                }
+                deadline = tokio::time::Instant::now() + STOPPED_TURN_GRACE;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1051,6 +1065,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         read_marks: Mutex::new(load_read_marks(&cfg)),
         sync_kick: Notify::new(),
         worker_kick: Notify::new(),
+        turn_stops: hive_runtime::turn_engine::TurnStops::new(),
         stopping: AtomicBool::new(false),
         #[cfg(test)]
         test_presence: AtomicBool::new(false),
@@ -1605,6 +1620,7 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 settings: ToolSettings::from_env(),
                 ligus: Some(worker::ligus_server(shared.clone())),
                 presence: Some(&shared.presence),
+                stops: Some(shared.turn_stops.clone()),
             };
             let sink = ServeSink(shared.clone());
             let mut drain = worker::DrainState::default();
@@ -1696,7 +1712,8 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
         crate::shutdown_signal().await;
         println!("ligus serve: stopping.");
         // Under the unit's TimeoutStopSec (20 s): let a turn in flight finish
-        // if it can; a longer one is finished as interrupted on the next start.
+        // if it can; a longer one is stopped, and one that won't stop is
+        // finished as interrupted on the next start.
         if !handle.stop(STOP_GRACE).await {
             eprintln!("ligus serve: a turn was still running; it will be marked interrupted on the next start.");
         }

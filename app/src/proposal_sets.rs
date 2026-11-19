@@ -449,7 +449,11 @@ pub(crate) async fn send_scouts(
 }
 
 #[tauri::command]
-pub(crate) fn list_proposal_sets(state: State<AppState>, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
+pub(crate) async fn list_proposal_sets(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_proposal_sets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_proposal_sets_sync(state: State<AppState>, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     let Some(mut session) = svc.load(sid).map_err(map_err)? else { return Ok(Vec::new()) };
@@ -482,7 +486,11 @@ fn one_set(svc: &ChatService, sid: Uuid, set_id: Uuid) -> Result<ProposalSetDto,
 
 /// The "fast ↔ careful" dial (`dial`), or explicit knobs.
 #[tauri::command]
-pub(crate) fn tune_proposal_set(
+pub(crate) async fn tune_proposal_set(ligus_app: tauri::AppHandle, session_id: String, set_id: String, dial: Option<String>, agent_quorum: Option<u32>, required_approvals: Option<u32>, quality_bar: Option<u32>) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| tune_proposal_set_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id, dial, agent_quorum, required_approvals, quality_bar)).await
+}
+
+pub(crate) fn tune_proposal_set_sync(
     state: State<AppState>,
     session_id: String,
     set_id: String,
@@ -520,7 +528,11 @@ pub(crate) fn tune_proposal_set(
 /// New evidence: advance the round (agent support decays) so scouts
 /// re-evaluate. Also called when a person comments on an alternative.
 #[tauri::command]
-pub(crate) fn advance_proposal_set_round(
+pub(crate) async fn advance_proposal_set_round(ligus_app: tauri::AppHandle, session_id: String, set_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| advance_proposal_set_round_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id)).await
+}
+
+pub(crate) fn advance_proposal_set_round_sync(
     state: State<AppState>,
     session_id: String,
     set_id: String,
@@ -567,7 +579,11 @@ pub(crate) fn guarded_by_open_set(session: &ChatSession, proposal_id: Uuid) -> b
 }
 
 #[tauri::command]
-pub(crate) fn withdraw_set_alternative(
+pub(crate) async fn withdraw_set_alternative(ligus_app: tauri::AppHandle, session_id: String, set_id: String, proposal_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| withdraw_set_alternative_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id, proposal_id)).await
+}
+
+pub(crate) fn withdraw_set_alternative_sync(
     state: State<AppState>,
     session_id: String,
     set_id: String,
@@ -584,7 +600,11 @@ pub(crate) fn withdraw_set_alternative(
 
 /// Close the set without choosing.
 #[tauri::command]
-pub(crate) fn close_proposal_set(
+pub(crate) async fn close_proposal_set(ligus_app: tauri::AppHandle, session_id: String, set_id: String) -> Result<ProposalSetDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| close_proposal_set_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, set_id)).await
+}
+
+pub(crate) fn close_proposal_set_sync(
     state: State<AppState>,
     session_id: String,
     set_id: String,

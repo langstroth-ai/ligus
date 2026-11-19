@@ -416,7 +416,7 @@ Service and NetworkPolicies).
 | What | Value |
 |---|---|
 | Relay sync | every 3 s while the relay's push stream is down, every 20 s as a safety poll while it's up |
-| Turn on shutdown | up to 15 s to finish; otherwise marked interrupted |
+| Turn on shutdown | up to 12 s to finish; then stopped (the asker is told to ask again), or marked interrupted on the next start if it won't stop |
 | Clone jobs | 2 at once; `LIGUS_REPOS_MAX_CLONE_MB` (2048) and `LIGUS_REPOS_CLONE_TIMEOUT_SECS` (900) |
 | Tunnel | 8 sessions (or the relay's `maxSessions`), 32 streams per session, 16 KiB frames; handshake 10 s, idle 90 s, session 24 h |
 | Push | see [Push notifications](../../ligus/features/phone-app.md#push-notifications) |

@@ -165,7 +165,11 @@ pub(crate) struct ChatAttachments {
 }
 
 #[tauri::command]
-pub(crate) fn list_attachments(state: State<AppState>, session_id: String) -> Result<ChatAttachments, String> {
+pub(crate) async fn list_attachments(ligus_app: tauri::AppHandle, session_id: String) -> Result<ChatAttachments, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_attachments_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) -> Result<ChatAttachments, String> {
     let session = session_of(&state, &session_id)?;
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
@@ -327,7 +331,11 @@ pub(crate) async fn check_attachment(state: State<'_, AppState>, session_id: Str
 /// executable, quarantine-marked. Risky files need `confirmed` (the UI's
 /// second confirmation, naming the sender). `Ok(None)` = cancelled.
 #[tauri::command]
-pub(crate) fn save_received_attachment(state: State<AppState>, session_id: String, attachment_id: String, confirmed: bool) -> Result<Option<String>, String> {
+pub(crate) async fn save_received_attachment(ligus_app: tauri::AppHandle, session_id: String, attachment_id: String, confirmed: bool) -> Result<Option<String>, String> {
+    crate::off_main(ligus_app, move |ligus_app| save_received_attachment_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, attachment_id, confirmed)).await
+}
+
+pub(crate) fn save_received_attachment_sync(state: State<AppState>, session_id: String, attachment_id: String, confirmed: bool) -> Result<Option<String>, String> {
     let session = session_of(&state, &session_id)?;
     let s = shared_in(&session, &attachment_id)?;
     let rules = state.service.lock().unwrap().attachment_rules(session.workspace_id).map_err(map_err)?;
@@ -367,7 +375,11 @@ pub(crate) struct AttachmentPreview {
 }
 
 #[tauri::command]
-pub(crate) fn preview_attachment(state: State<AppState>, session_id: String, attachment_id: String) -> Result<AttachmentPreview, String> {
+pub(crate) async fn preview_attachment(ligus_app: tauri::AppHandle, session_id: String, attachment_id: String) -> Result<AttachmentPreview, String> {
+    crate::off_main(ligus_app, move |ligus_app| preview_attachment_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, attachment_id)).await
+}
+
+pub(crate) fn preview_attachment_sync(state: State<AppState>, session_id: String, attachment_id: String) -> Result<AttachmentPreview, String> {
     let session = session_of(&state, &session_id)?;
     let s = shared_in(&session, &attachment_id)?;
     let rules = state.service.lock().unwrap().attachment_rules(session.workspace_id).map_err(map_err)?;
@@ -435,7 +447,11 @@ pub(crate) struct AttachmentRulesView {
 }
 
 #[tauri::command]
-pub(crate) fn attachment_rules(state: State<AppState>) -> Result<AttachmentRulesView, String> {
+pub(crate) async fn attachment_rules(ligus_app: tauri::AppHandle) -> Result<AttachmentRulesView, String> {
+    crate::off_main(ligus_app, move |ligus_app| attachment_rules_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn attachment_rules_sync(state: State<AppState>) -> Result<AttachmentRulesView, String> {
     let ws = state.active_workspace_id();
     let local_only = state.is_local_only_ws(ws);
     let svc = state.service.lock().unwrap();
@@ -456,7 +472,11 @@ pub(crate) fn attachment_rules(state: State<AppState>) -> Result<AttachmentRules
 
 /// Set the attachment policy (Admin; asks for a passkey confirmation).
 #[tauri::command(async)]
-pub(crate) fn set_attachment_policy(state: State<AppState>, policy: AttachmentPolicy) -> Result<(), String> {
+pub(crate) async fn set_attachment_policy(ligus_app: tauri::AppHandle, policy: AttachmentPolicy) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_attachment_policy_sync(tauri::Manager::state::<AppState>(ligus_app), policy)).await
+}
+
+pub(crate) fn set_attachment_policy_sync(state: State<AppState>, policy: AttachmentPolicy) -> Result<(), String> {
     let ws = state.active_workspace_id();
     if state.is_local_only_ws(ws) {
         return Err("files in your own workspace stay on this device".into());
@@ -466,14 +486,22 @@ pub(crate) fn set_attachment_policy(state: State<AppState>, policy: AttachmentPo
 
 /// Block a file by its SHA-256 (Admin).
 #[tauri::command(async)]
-pub(crate) fn block_attachment_hash(state: State<AppState>, sha256: String) -> Result<(), String> {
+pub(crate) async fn block_attachment_hash(ligus_app: tauri::AppHandle, sha256: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| block_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), sha256)).await
+}
+
+pub(crate) fn block_attachment_hash_sync(state: State<AppState>, sha256: String) -> Result<(), String> {
     let ws = state.active_workspace_id();
     state.service.lock().unwrap().block_attachment_hash(ws, &sha256).map_err(map_err)
 }
 
 /// Lift a block (Admin; asks for a passkey confirmation).
 #[tauri::command(async)]
-pub(crate) fn unblock_attachment_hash(state: State<AppState>, sha256: String) -> Result<(), String> {
+pub(crate) async fn unblock_attachment_hash(ligus_app: tauri::AppHandle, sha256: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| unblock_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), sha256)).await
+}
+
+pub(crate) fn unblock_attachment_hash_sync(state: State<AppState>, sha256: String) -> Result<(), String> {
     let ws = state.active_workspace_id();
     state.service.lock().unwrap().unblock_attachment_hash(ws, &sha256).map_err(map_err)
 }

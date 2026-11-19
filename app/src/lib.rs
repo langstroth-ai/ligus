@@ -167,10 +167,11 @@ struct AppState {
     gate_runs: Mutex<HashMap<Uuid, Uuid>>,
     /// Runs asked to cancel; their drivers check between transitions.
     canceled_runs: Mutex<std::collections::HashSet<Uuid>>,
-    /// Per-session stop signal for an in-flight chat turn. The composer's Stop
-    /// button fires it; `send_message` races the turn against it and breaks,
-    /// dropping the turn future — which kills any CLI subprocess (kill_on_drop).
-    turn_stops: Mutex<HashMap<Uuid, Arc<tokio::sync::Notify>>>,
+    /// The turns (and dispatch waits) running on this device, per chat, each
+    /// with its own sticky stop signal. The composer's Stop button stops a
+    /// chat's turns (or one, by its reply); the engine sees a Stop pressed at
+    /// any point of the turn, and `send_message` breaks its cascade.
+    turn_stops: Arc<hive_runtime::turn_engine::TurnStops>,
     /// Per MCP server id: the tools it listed that run shell commands, as of
     /// the last time this device listed its tools (no entry: not yet). A
     /// server with one is offered only to turns that have the shell.
@@ -3537,7 +3538,11 @@ fn get_app_info() -> AppInfo {
 }
 
 #[tauri::command]
-fn list_chats(state: State<AppState>) -> Result<Vec<ChatSummaryDto>, String> {
+async fn list_chats(ligus_app: tauri::AppHandle) -> Result<Vec<ChatSummaryDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_chats_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_chats_sync(state: State<AppState>) -> Result<Vec<ChatSummaryDto>, String> {
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
@@ -3618,7 +3623,11 @@ fn export_filename(title: &str) -> String {
 /// Export a chat transcript to a Markdown file chosen via a save dialog.
 /// Returns the written path, or `None` if the user cancels.
 #[tauri::command]
-fn export_chat(state: State<AppState>, session_id: String) -> Result<Option<String>, String> {
+async fn export_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<Option<String>, String> {
+    crate::off_main(ligus_app, move |ligus_app| export_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn export_chat_sync(state: State<AppState>, session_id: String) -> Result<Option<String>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let session = {
         let svc = state.service.lock().unwrap();
@@ -3758,7 +3767,11 @@ fn log_dir_path() -> Option<String> {
 }
 
 #[tauri::command]
-fn create_chat(state: State<AppState>, title: String) -> Result<ChatSessionDto, String> {
+async fn create_chat(ligus_app: tauri::AppHandle, title: String) -> Result<ChatSessionDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| create_chat_sync(tauri::Manager::state::<AppState>(ligus_app), title)).await
+}
+
+pub(crate) fn create_chat_sync(state: State<AppState>, title: String) -> Result<ChatSessionDto, String> {
     let title = if title.trim().is_empty() {
         "New chat".to_string()
     } else {
@@ -3784,7 +3797,11 @@ fn channel_dto(c: &hive_core::Channel) -> ChannelDto {
 
 /// The workspace's channels (spec §11), ordered by position.
 #[tauri::command]
-fn list_channels(state: State<AppState>) -> Result<Vec<ChannelDto>, String> {
+async fn list_channels(ligus_app: tauri::AppHandle) -> Result<Vec<ChannelDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_channels_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_channels_sync(state: State<AppState>) -> Result<Vec<ChannelDto>, String> {
     let svc = state.service.lock().unwrap();
     Ok(svc
         .list_channels(state.active_workspace_id())
@@ -3796,7 +3813,11 @@ fn list_channels(state: State<AppState>) -> Result<Vec<ChannelDto>, String> {
 
 /// Create a channel and its drop-in default chat, titled after the channel.
 #[tauri::command]
-fn create_channel(
+async fn create_channel(ligus_app: tauri::AppHandle, name: String, purpose: Option<String>) -> Result<ChannelDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| create_channel_sync(tauri::Manager::state::<AppState>(ligus_app), name, purpose)).await
+}
+
+pub(crate) fn create_channel_sync(
     state: State<AppState>,
     name: String,
     purpose: Option<String>,
@@ -3813,7 +3834,11 @@ fn create_channel(
 }
 
 #[tauri::command]
-fn rename_channel(
+async fn rename_channel(ligus_app: tauri::AppHandle, channel_id: String, name: String, purpose: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| rename_channel_sync(tauri::Manager::state::<AppState>(ligus_app), channel_id, name, purpose)).await
+}
+
+pub(crate) fn rename_channel_sync(
     state: State<AppState>,
     channel_id: String,
     name: String,
@@ -3825,7 +3850,11 @@ fn rename_channel(
 }
 
 #[tauri::command]
-fn reorder_channels(state: State<AppState>, channel_ids: Vec<String>) -> Result<(), String> {
+async fn reorder_channels(ligus_app: tauri::AppHandle, channel_ids: Vec<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| reorder_channels_sync(tauri::Manager::state::<AppState>(ligus_app), channel_ids)).await
+}
+
+pub(crate) fn reorder_channels_sync(state: State<AppState>, channel_ids: Vec<String>) -> Result<(), String> {
     let wid = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
     svc.reorder_channels(wid, channel_ids).map_err(map_err)
@@ -3833,7 +3862,11 @@ fn reorder_channels(state: State<AppState>, channel_ids: Vec<String>) -> Result<
 
 /// Archive (or restore) a channel and all its chats (spec §11 rule 7).
 #[tauri::command]
-fn archive_channel(state: State<AppState>, channel_id: String, archived: bool) -> Result<(), String> {
+async fn archive_channel(ligus_app: tauri::AppHandle, channel_id: String, archived: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| archive_channel_sync(tauri::Manager::state::<AppState>(ligus_app), channel_id, archived)).await
+}
+
+pub(crate) fn archive_channel_sync(state: State<AppState>, channel_id: String, archived: bool) -> Result<(), String> {
     let wid = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
     svc.archive_channel(wid, &channel_id, archived).map_err(map_err)?;
@@ -3851,7 +3884,11 @@ fn archive_channel(state: State<AppState>, channel_id: String, archived: bool) -
 
 /// Create a focused chat filed into a channel (from the channel header).
 #[tauri::command]
-fn create_chat_in_channel(
+async fn create_chat_in_channel(ligus_app: tauri::AppHandle, channel_id: String, title: String) -> Result<ChatSessionDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| create_chat_in_channel_sync(tauri::Manager::state::<AppState>(ligus_app), channel_id, title)).await
+}
+
+pub(crate) fn create_chat_in_channel_sync(
     state: State<AppState>,
     channel_id: String,
     title: String,
@@ -3868,7 +3905,11 @@ fn create_chat_in_channel(
 
 /// Move a (focused) chat into a different channel.
 #[tauri::command]
-fn move_chat(state: State<AppState>, chat_id: String, channel_id: String) -> Result<(), String> {
+async fn move_chat(ligus_app: tauri::AppHandle, chat_id: String, channel_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| move_chat_sync(tauri::Manager::state::<AppState>(ligus_app), chat_id, channel_id)).await
+}
+
+pub(crate) fn move_chat_sync(state: State<AppState>, chat_id: String, channel_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&chat_id).map_err(map_err)?;
     let wid = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
@@ -3876,7 +3917,11 @@ fn move_chat(state: State<AppState>, chat_id: String, channel_id: String) -> Res
 }
 
 #[tauri::command]
-fn get_chat(state: State<AppState>, session_id: String) -> Result<Option<ChatSessionDto>, String> {
+async fn get_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<Option<ChatSessionDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn get_chat_sync(state: State<AppState>, session_id: String) -> Result<Option<ChatSessionDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     let Some(mut session) = svc.load(id).map_err(map_err)? else { return Ok(None) };
@@ -3918,7 +3963,11 @@ fn attribute_linked_devices(session: &mut ChatSession, links: &hive_core::Device
 }
 
 #[tauri::command]
-fn get_context_telemetry(
+async fn get_context_telemetry(ligus_app: tauri::AppHandle, session_id: String) -> Result<Option<ContextTelemetryDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_context_telemetry_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn get_context_telemetry_sync(
     state: State<AppState>,
     session_id: String,
 ) -> Result<Option<ContextTelemetryDto>, String> {
@@ -3961,7 +4010,11 @@ fn get_context_telemetry(
 }
 
 #[tauri::command]
-fn archive_chat(state: State<AppState>, session_id: String, archived: bool) -> Result<(), String> {
+async fn archive_chat(ligus_app: tauri::AppHandle, session_id: String, archived: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| archive_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, archived)).await
+}
+
+pub(crate) fn archive_chat_sync(state: State<AppState>, session_id: String, archived: bool) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     svc.set_archived(id, state.active_workspace_id(), archived).map_err(map_err)
@@ -3969,7 +4022,11 @@ fn archive_chat(state: State<AppState>, session_id: String, archived: bool) -> R
 
 /// Rename a chat (the ✎ affordance in the chat header).
 #[tauri::command]
-fn rename_chat(state: State<AppState>, session_id: String, title: String) -> Result<(), String> {
+async fn rename_chat(ligus_app: tauri::AppHandle, session_id: String, title: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| rename_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, title)).await
+}
+
+pub(crate) fn rename_chat_sync(state: State<AppState>, session_id: String, title: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let title = title.trim().to_string();
     if title.is_empty() {
@@ -3980,7 +4037,11 @@ fn rename_chat(state: State<AppState>, session_id: String, title: String) -> Res
 }
 
 #[tauri::command]
-fn delete_chat(state: State<AppState>, session_id: String) -> Result<(), String> {
+async fn delete_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| delete_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn delete_chat_sync(state: State<AppState>, session_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     {
         let mut svc = state.service.lock().unwrap();
@@ -4004,7 +4065,11 @@ fn delete_chat(state: State<AppState>, session_id: String) -> Result<(), String>
 }
 
 #[tauri::command]
-fn list_agents(state: State<AppState>, session_id: String) -> Result<Vec<WorkspaceAgentDto>, String> {
+async fn list_agents(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkspaceAgentDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_agents_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_agents_sync(state: State<AppState>, session_id: String) -> Result<Vec<WorkspaceAgentDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc
@@ -4015,7 +4080,11 @@ fn list_agents(state: State<AppState>, session_id: String) -> Result<Vec<Workspa
 }
 
 #[tauri::command(async)]
-fn add_agent(
+async fn add_agent(ligus_app: tauri::AppHandle, session_id: String, name: String, runtime_id: String, role: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| add_agent_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, name, runtime_id, role)).await
+}
+
+pub(crate) fn add_agent_sync(
     state: State<AppState>,
     session_id: String,
     name: String,
@@ -4062,7 +4131,11 @@ fn add_agent(
 }
 
 #[tauri::command(async)]
-fn remove_agent(state: State<AppState>, session_id: String, agent_id: String) -> Result<(), String> {
+async fn remove_agent(ligus_app: tauri::AppHandle, session_id: String, agent_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_agent_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, agent_id)).await
+}
+
+pub(crate) fn remove_agent_sync(state: State<AppState>, session_id: String, agent_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let aid = Uuid::parse_str(&agent_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -4079,7 +4152,11 @@ fn remove_agent(state: State<AppState>, session_id: String, agent_id: String) ->
 /// workspace scan (skipping the config log), then overlays each session's
 /// `pending_mentions` onto the host roster.
 #[tauri::command]
-fn list_queued_work(state: State<AppState>) -> Result<Vec<QueuedWorkDto>, String> {
+async fn list_queued_work(ligus_app: tauri::AppHandle) -> Result<Vec<QueuedWorkDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_queued_work_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_queued_work_sync(state: State<AppState>) -> Result<Vec<QueuedWorkDto>, String> {
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
@@ -4130,7 +4207,11 @@ fn list_queued_work(state: State<AppState>) -> Result<Vec<QueuedWorkDto>, String
 
 /// The active workspace's registered hosts (for the "run on worker" menu).
 #[tauri::command]
-fn list_workspace_hosts(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>, String> {
+async fn list_workspace_hosts(ligus_app: tauri::AppHandle) -> Result<Vec<WorkspaceHostDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workspace_hosts_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>, String> {
     let active = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let now = hive_core::Timestamp::now();
@@ -4158,7 +4239,11 @@ fn list_workspace_hosts(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>,
 
 /// Bind an agent to a host (empty = owner's device); "run on worker instead".
 #[tauri::command(async)]
-fn set_agent_host(state: State<AppState>, agent_id: String, host_id: String) -> Result<(), String> {
+async fn set_agent_host(ligus_app: tauri::AppHandle, agent_id: String, host_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_agent_host_sync(tauri::Manager::state::<AppState>(ligus_app), agent_id, host_id)).await
+}
+
+pub(crate) fn set_agent_host_sync(state: State<AppState>, agent_id: String, host_id: String) -> Result<(), String> {
     let aid = Uuid::parse_str(&agent_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     svc.set_agent_host(state.active_workspace_id(), aid, &host_id).map_err(map_err)
@@ -4313,7 +4398,11 @@ mod at_you_desktop_tests {
 /// channels (and chats) that hold an unread mention. Read state is per-device,
 /// so it never leaves the client.
 #[tauri::command]
-fn list_mention_states(state: State<AppState>) -> Result<Vec<MentionStateDto>, String> {
+async fn list_mention_states(ligus_app: tauri::AppHandle) -> Result<Vec<MentionStateDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_mention_states_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_mention_states_sync(state: State<AppState>) -> Result<Vec<MentionStateDto>, String> {
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
@@ -4390,7 +4479,11 @@ fn workspace_of_session(
 /// workspaces' chats too — we just resolve each chat's owning workspace instead
 /// of filtering to the active one.
 #[tauri::command]
-fn list_all_mention_states(state: State<AppState>) -> Result<Vec<MentionStateDto>, String> {
+async fn list_all_mention_states(ligus_app: tauri::AppHandle) -> Result<Vec<MentionStateDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_all_mention_states_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_all_mention_states_sync(state: State<AppState>) -> Result<Vec<MentionStateDto>, String> {
     let local_id = state.local_workspace_id;
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
@@ -4428,7 +4521,11 @@ fn list_all_mention_states(state: State<AppState>) -> Result<Vec<MentionStateDto
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn list_members(state: State<AppState>, session_id: String) -> Result<Vec<WorkspaceMemberDto>, String> {
+async fn list_members(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkspaceMemberDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_members_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_members_sync(state: State<AppState>, session_id: String) -> Result<Vec<WorkspaceMemberDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     // A local (non-room) workspace never syncs anyone in, so every member was
     // created on THIS device and is you. Collapse identity-churn artifacts (a stale
@@ -4498,7 +4595,11 @@ struct MembershipAuditDto {
 /// tamper-evident config event log (each event carries its author + timestamp).
 /// Newest first. Answers "who joined this workspace and how".
 #[tauri::command]
-fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDto>, String> {
+async fn list_membership_audit(ligus_app: tauri::AppHandle) -> Result<Vec<MembershipAuditDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_membership_audit_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<MembershipAuditDto>, String> {
     let active = state.active_workspace_id();
     let config_id = hive_core::workspace_config_session_id(active);
     let svc = state.service.lock().unwrap();
@@ -4542,7 +4643,11 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
 }
 
 #[tauri::command(async)]
-fn add_member(
+async fn add_member(ligus_app: tauri::AppHandle, session_id: String, display_name: String, role: String, title: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| add_member_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, display_name, role, title)).await
+}
+
+pub(crate) fn add_member_sync(
     state: State<AppState>,
     session_id: String,
     display_name: String,
@@ -4569,7 +4674,11 @@ fn add_member(
 }
 
 #[tauri::command(async)]
-fn remove_member(state: State<AppState>, session_id: String, member_id: String) -> Result<(), String> {
+async fn remove_member(ligus_app: tauri::AppHandle, session_id: String, member_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_member_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, member_id)).await
+}
+
+pub(crate) fn remove_member_sync(state: State<AppState>, session_id: String, member_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     svc.remove_member(id, state.active_workspace_id(), member_id).map_err(map_err)
@@ -4658,7 +4767,11 @@ fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid) -> Vec<Workspac
 }
 
 #[tauri::command]
-fn inspect_device_code(state: State<AppState>, code: String) -> Result<DeviceCodeDto, String> {
+async fn inspect_device_code(ligus_app: tauri::AppHandle, code: String) -> Result<DeviceCodeDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_device_code_sync(tauri::Manager::state::<AppState>(ligus_app), code)).await
+}
+
+pub(crate) fn inspect_device_code_sync(state: State<AppState>, code: String) -> Result<DeviceCodeDto, String> {
     let req = decode_device_code(&code)?;
     let svc = state.service.lock().unwrap();
     let ws = req.workspace_id;
@@ -4683,7 +4796,11 @@ fn inspect_device_code(state: State<AppState>, code: String) -> Result<DeviceCod
 /// account key (only a device holding that key can), then — when asked —
 /// retire the box's own member so it stops counting as a separate person.
 #[tauri::command(async)]
-fn approve_device(state: State<AppState>, code: String, retire_member: bool) -> Result<ApproveDeviceDto, String> {
+async fn approve_device(ligus_app: tauri::AppHandle, code: String, retire_member: bool) -> Result<ApproveDeviceDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| approve_device_sync(tauri::Manager::state::<AppState>(ligus_app), code, retire_member)).await
+}
+
+pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_member: bool) -> Result<ApproveDeviceDto, String> {
     let req = decode_device_code(&code)?;
     let ws = req.workspace_id;
     let mut svc = state.service.lock().unwrap();
@@ -4709,7 +4826,11 @@ fn approve_device(state: State<AppState>, code: String, retire_member: bool) -> 
 }
 
 #[tauri::command]
-fn list_my_devices(state: State<AppState>) -> Result<Vec<MyDeviceDto>, String> {
+async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_my_devices_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDeviceDto>, String> {
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let here = svc.device_id();
@@ -4738,7 +4859,11 @@ fn list_my_devices(state: State<AppState>) -> Result<Vec<MyDeviceDto>, String> {
 }
 
 #[tauri::command]
-fn list_device_requests(state: State<AppState>) -> Result<Vec<DeviceRequestDto>, String> {
+async fn list_device_requests(ligus_app: tauri::AppHandle) -> Result<Vec<DeviceRequestDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_device_requests_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_device_requests_sync(state: State<AppState>) -> Result<Vec<DeviceRequestDto>, String> {
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
@@ -4762,7 +4887,11 @@ fn list_device_requests(state: State<AppState>) -> Result<Vec<DeviceRequestDto>,
 /// accepting its events. Self-service for a device your account certified, at
 /// any role (Phase 0, R5); only those are offered. Never this desktop itself.
 #[tauri::command(async)]
-fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), String> {
+async fn revoke_my_device(ligus_app: tauri::AppHandle, device_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| revoke_my_device_sync(tauri::Manager::state::<AppState>(ligus_app), device_id)).await
+}
+
+pub(crate) fn revoke_my_device_sync(state: State<AppState>, device_id: String) -> Result<(), String> {
     let device = Uuid::parse_str(&device_id).map_err(map_err)?;
     let ws = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
@@ -4850,7 +4979,11 @@ async fn retry_device_revocation(state: State<'_, AppState>, device_id: String) 
 }
 
 #[tauri::command(async)]
-fn set_member_role(
+async fn set_member_role(ligus_app: tauri::AppHandle, session_id: String, member_id: String, role: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_member_role_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, member_id, role)).await
+}
+
+pub(crate) fn set_member_role_sync(
     state: State<AppState>,
     session_id: String,
     member_id: String,
@@ -4990,7 +5123,11 @@ fn parse_agent_ids(ids: Option<Vec<String>>) -> Result<Vec<Uuid>, String> {
 }
 
 #[tauri::command]
-fn list_skills(state: State<AppState>, session_id: String) -> Result<Vec<SkillDto>, String> {
+async fn list_skills(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<SkillDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_skills_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_skills_sync(state: State<AppState>, session_id: String) -> Result<Vec<SkillDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc
@@ -5001,7 +5138,11 @@ fn list_skills(state: State<AppState>, session_id: String) -> Result<Vec<SkillDt
 }
 
 #[tauri::command]
-fn add_skill_inline(
+async fn add_skill_inline(ligus_app: tauri::AppHandle, session_id: String, name: String, instructions: String, agent_ids: Option<Vec<String>>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| add_skill_inline_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, name, instructions, agent_ids)).await
+}
+
+pub(crate) fn add_skill_inline_sync(
     state: State<AppState>,
     session_id: String,
     name: String,
@@ -5040,7 +5181,11 @@ async fn install_skill(
 }
 
 #[tauri::command]
-fn remove_skill(state: State<AppState>, session_id: String, skill_id: String) -> Result<(), String> {
+async fn remove_skill(ligus_app: tauri::AppHandle, session_id: String, skill_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_skill_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, skill_id)).await
+}
+
+pub(crate) fn remove_skill_sync(state: State<AppState>, session_id: String, skill_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let skid = Uuid::parse_str(&skill_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -5229,7 +5374,11 @@ fn get_workspace_trust(state: State<AppState>) -> Result<WorkspaceTrustDto, Stri
 
 /// Enable or disable one repo item (by digest) on this device.
 #[tauri::command]
-fn set_workspace_trust(state: State<AppState>, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
+async fn set_workspace_trust(ligus_app: tauri::AppHandle, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| set_workspace_trust_sync(tauri::Manager::state::<AppState>(ligus_app), digest, enabled)).await
+}
+
+pub(crate) fn set_workspace_trust_sync(state: State<AppState>, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
     use hive_runtime::workspace_trust as wt;
     let root = state.workspace_root.lock().unwrap().clone();
     let item = wt::repo_items(Path::new(&root)).into_iter().find(|i| i.digest == digest).ok_or("no such item in this workspace")?;
@@ -5247,7 +5396,11 @@ fn set_workspace_trust(state: State<AppState>, digest: String, enabled: bool) ->
 /// "Trust this workspace": enable every item the repo ships right now.
 /// Anything it changes or adds later needs a new decision.
 #[tauri::command]
-fn trust_workspace(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
+async fn trust_workspace(ligus_app: tauri::AppHandle) -> Result<WorkspaceTrustDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| trust_workspace_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn trust_workspace_sync(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
     use hive_runtime::workspace_trust as wt;
     let root = state.workspace_root.lock().unwrap().clone();
     let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
@@ -5574,7 +5727,11 @@ fn parse_vault_source(kind: &str, reference: &str) -> Result<VaultSource, String
 }
 
 #[tauri::command]
-fn list_vaults(state: State<AppState>, session_id: String) -> Result<Vec<VaultSourceDto>, String> {
+async fn list_vaults(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<VaultSourceDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_vaults_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_vaults_sync(state: State<AppState>, session_id: String) -> Result<Vec<VaultSourceDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc
@@ -5585,7 +5742,11 @@ fn list_vaults(state: State<AppState>, session_id: String) -> Result<Vec<VaultSo
 }
 
 #[tauri::command]
-fn add_vault(
+async fn add_vault(ligus_app: tauri::AppHandle, session_id: String, kind: String, reference: String, agent_ids: Option<Vec<String>>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| add_vault_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, kind, reference, agent_ids)).await
+}
+
+pub(crate) fn add_vault_sync(
     state: State<AppState>,
     session_id: String,
     kind: String,
@@ -5603,7 +5764,11 @@ fn add_vault(
 }
 
 #[tauri::command]
-fn remove_vault(state: State<AppState>, session_id: String, url: String) -> Result<(), String> {
+async fn remove_vault(ligus_app: tauri::AppHandle, session_id: String, url: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_vault_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, url)).await
+}
+
+pub(crate) fn remove_vault_sync(state: State<AppState>, session_id: String, url: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     svc.remove_vault_source(id, state.active_workspace_id(), &url).map_err(map_err)
@@ -5638,7 +5803,11 @@ fn local_actor(state: &AppState) -> hive_core::ActorIdentity {
 }
 
 #[tauri::command]
-fn list_proposals(state: State<AppState>, session_id: String) -> Result<Vec<ProposalDto>, String> {
+async fn list_proposals(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<ProposalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_proposals_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_proposals_sync(state: State<AppState>, session_id: String) -> Result<Vec<ProposalDto>, String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc
@@ -5649,7 +5818,11 @@ fn list_proposals(state: State<AppState>, session_id: String) -> Result<Vec<Prop
 }
 
 #[tauri::command]
-fn create_proposal(
+async fn create_proposal(ligus_app: tauri::AppHandle, session_id: String, title: String, body: String, kind: String, required_approvals: u32) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| create_proposal_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, title, body, kind, required_approvals)).await
+}
+
+pub(crate) fn create_proposal_sync(
     state: State<AppState>,
     session_id: String,
     title: String,
@@ -5672,7 +5845,11 @@ fn create_proposal(
 }
 
 #[tauri::command(async)]
-fn vote_proposal(
+async fn vote_proposal(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, approved: bool) -> Result<Option<ProposalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| vote_proposal_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_id, approved)).await
+}
+
+pub(crate) fn vote_proposal_sync(
     state: State<AppState>,
     session_id: String,
     proposal_id: String,
@@ -5706,7 +5883,11 @@ fn vote_proposal(
 /// role-qualified agent, since agents are roster actors too. Returns the updated
 /// proposal for immediate UI feedback.
 #[tauri::command]
-fn refine_proposal(
+async fn refine_proposal(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, text: String, request_changes: bool) -> Result<Option<ProposalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| refine_proposal_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_id, text, request_changes)).await
+}
+
+pub(crate) fn refine_proposal_sync(
     state: State<AppState>,
     session_id: String,
     proposal_id: String,
@@ -5838,9 +6019,8 @@ async fn run_revision_turn(
     match dispatch_here(state, sid, workspace_id, trigger.id, None, true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
             drop(_guard);
-            arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -6021,7 +6201,11 @@ async fn ask_agent_to_rebase(
 /// This hides; it does not delete. The proposal stays in the event log, so the
 /// paper trail survives and the dismiss replicates to the other devices.
 #[tauri::command]
-fn dismiss_proposals(
+async fn dismiss_proposals(ligus_app: tauri::AppHandle, session_id: String, proposal_ids: Vec<String>, dismissed: bool) -> Result<u32, String> {
+    crate::off_main(ligus_app, move |ligus_app| dismiss_proposals_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_ids, dismissed)).await
+}
+
+pub(crate) fn dismiss_proposals_sync(
     state: State<AppState>,
     session_id: String,
     proposal_ids: Vec<String>,
@@ -6144,7 +6328,11 @@ async fn implement_proposal_inner(
 /// The preview of what Implement will do (Track D4): built by the same
 /// `hive_runtime::review::implement_plan` the runner uses.
 #[tauri::command]
-fn get_implement_plan(
+async fn get_implement_plan(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, target_agent_id: Option<String>) -> Result<hive_proto::ImplementPreviewDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_implement_plan_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_id, target_agent_id)).await
+}
+
+pub(crate) fn get_implement_plan_sync(
     state: State<'_, AppState>,
     session_id: String,
     proposal_id: String,
@@ -6453,7 +6641,11 @@ async fn implement_proposal_targeted(
 /// That host, and only that host, applies it once and reports back; nobody
 /// applies it meanwhile. Returns the request id.
 #[tauri::command]
-fn request_apply_on_host(state: State<AppState>, session_id: String, proposal_id: String, host_device_id: String) -> Result<String, String> {
+async fn request_apply_on_host(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, host_device_id: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| request_apply_on_host_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_id, host_device_id)).await
+}
+
+pub(crate) fn request_apply_on_host_sync(state: State<AppState>, session_id: String, proposal_id: String, host_device_id: String) -> Result<String, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let host = Uuid::parse_str(&host_device_id).map_err(|_| "that host has no device id".to_string())?;
@@ -6464,7 +6656,11 @@ fn request_apply_on_host(state: State<AppState>, session_id: String, proposal_id
 
 /// Withdraw an open apply request (yours, or any as an Admin).
 #[tauri::command]
-fn withdraw_apply_request(state: State<AppState>, session_id: String, request_id: String) -> Result<(), String> {
+async fn withdraw_apply_request(ligus_app: tauri::AppHandle, session_id: String, request_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| withdraw_apply_request_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, request_id)).await
+}
+
+pub(crate) fn withdraw_apply_request_sync(state: State<AppState>, session_id: String, request_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let rid = Uuid::parse_str(&request_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -6502,7 +6698,11 @@ fn fulfil_apply_requests(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn toggle_reaction(
+async fn toggle_reaction(ligus_app: tauri::AppHandle, session_id: String, message_id: String, emoji: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| toggle_reaction_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, message_id, emoji)).await
+}
+
+pub(crate) fn toggle_reaction_sync(
     state: State<AppState>,
     session_id: String,
     message_id: String,
@@ -8509,7 +8709,9 @@ async fn run_prepared_turn_inner(
     sandbox_policy.denials = child_policy.denials.clone();
     // Honor the Stop button on every dispatch path (send_message,
     // maybe_respond, workflow stages): the engine races the stop signal.
-    let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
+    // This turn's own signal, registered while it runs.
+    let stop_guard = state.turn_stops.register(session_id);
+    let stop = stop_guard.signal();
     let host = crate::turn_host::DesktopHost {
         app,
         state,
@@ -8567,23 +8769,39 @@ async fn run_prepared_turn_inner(
             ..Default::default()
         },
     };
-    match hive_runtime::turn_engine::run(&host, input).await {
+    let result = hive_runtime::turn_engine::run(&host, input).await;
+    drop(stop_guard);
+    match result {
         Ok(o) => Ok(TurnOutcome { message_id: o.message_id, body: o.body }),
         Err(e) => Err(e.message),
     }
 }
 
-/// Stop an in-flight turn for a session — the composer's Stop button. Fires the
-/// session's stop signal, which unblocks the `select!` in `send_message` (and
-/// any device running the turn via `maybe_respond`'s equivalent path), aborting
-/// generation. Whatever streamed so far is discarded; the chat is free to accept
-/// a new message immediately. No-op if nothing is generating.
-#[tauri::command]
-fn stop_turn(state: State<AppState>, session_id: String) -> Result<(), String> {
-    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
-    if let Some(signal) = state.turn_stops.lock().unwrap().get(&sid) {
-        signal.notify_waiters();
+/// Run a command's body off the main thread. A sync Tauri command runs on
+/// the main thread, so one that waits on the `service` lock (held across a
+/// passkey ceremony, a long write) froze the window: the commands that can
+/// block on it are `async` and run their unchanged body here, on the
+/// blocking pool. A panic in the body propagates as before.
+pub(crate) async fn off_main<T: Send + 'static>(app: AppHandle, f: impl FnOnce(&AppHandle) -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(move || f(&app)).await {
+        Ok(v) => v,
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(e) => panic!("command task ended without a result: {e}"),
     }
+}
+
+/// Stop in-flight turns for a session — the composer's Stop button. With
+/// `message_id` (a reply placeholder) only that turn stops; without, every
+/// turn and pending dispatch wait in the chat, and `send_message`'s cascade.
+/// The signal is sticky, so a Stop pressed while a turn is still setting up
+/// (listing MCP tools, the repo gate) is not lost. Whatever streamed so far is
+/// discarded; the chat is free to accept a new message immediately. No-op if
+/// nothing is generating.
+#[tauri::command]
+fn stop_turn(state: State<AppState>, session_id: String, message_id: Option<String>) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let mid = message_id.as_deref().map(Uuid::parse_str).transpose().map_err(map_err)?;
+    state.turn_stops.stop(sid, mid);
     Ok(())
 }
 
@@ -8595,12 +8813,14 @@ fn stop_turn(state: State<AppState>, session_id: String) -> Result<(), String> {
 /// "generating" placeholder so no ghost bubble is left. Idempotent; safe to call
 /// when nothing is stuck.
 #[tauri::command]
-fn reset_chat_dispatch(state: State<AppState>, session_id: String) -> Result<(), String> {
+async fn reset_chat_dispatch(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| reset_chat_dispatch_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn reset_chat_dispatch_sync(state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     // 1. Abort any turn still running for this chat.
-    if let Some(signal) = state.turn_stops.lock().unwrap().get(&sid) {
-        signal.notify_waiters();
-    }
+    state.turn_stops.stop(sid, None);
     // 2. Free the per-chat busy slot — the wedge itself: a stuck turn left this set,
     //    so every later message was rejected as "already responding".
     state.responding.lock().unwrap().remove(&sid);
@@ -8662,9 +8882,8 @@ fn arm_deferred_claim_fallback(
     session_id: Uuid,
     workspace_id: Uuid,
     trigger_id: Uuid,
-    stop: Arc<tokio::sync::Notify>,
 ) {
-    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO, stop);
+    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO);
 }
 
 /// Look at a turn again after `after` (the dispatcher said to wait, or this
@@ -8679,18 +8898,21 @@ fn arm_dispatch_watch(
     agent: Option<Uuid>,
     after: std::time::Duration,
     waited: std::time::Duration,
-    stop: Arc<tokio::sync::Notify>,
 ) {
     let app = app.clone();
+    // Registered before the wait, so the chat's Stop reaches it.
+    let guard = app.state::<AppState>().turn_stops.register(session_id);
     tauri::async_runtime::spawn(async move {
         // Stop cancels a pending fallback: the user asked for silence, not for a
         // late answer.
+        let stop = guard.signal();
         tokio::select! {
             biased;
-            _ = stop.notified() => return,
+            _ = stop.stopped() => return,
             _ = tokio::time::sleep(after) => {}
         }
-        if let Err(e) = run_dispatch_watch(&app, session_id, workspace_id, trigger_id, agent, waited + after, stop).await {
+        drop(guard);
+        if let Err(e) = run_dispatch_watch(&app, session_id, workspace_id, trigger_id, agent, waited + after).await {
             tracing::warn!(
                 target: "dispatch",
                 error = %e,
@@ -8709,7 +8931,6 @@ async fn run_dispatch_watch(
     trigger_id: Uuid,
     agent: Option<Uuid>,
     waited: std::time::Duration,
-    stop: Arc<tokio::sync::Notify>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let local_only = state.is_local_only_ws(workspace_id);
@@ -8759,7 +8980,7 @@ async fn run_dispatch_watch(
     let _guard = match crate::workflows::SessionBusyGuard::acquire(app, session_id) {
         Ok(g) => g,
         Err(_) => {
-            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, std::time::Duration::from_secs(5), waited, stop);
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, std::time::Duration::from_secs(5), waited);
             return Ok(());
         }
     };
@@ -8771,7 +8992,7 @@ async fn run_dispatch_watch(
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
             drop(_guard);
-            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited, stop);
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited);
             return Ok(());
         }
         _ => return Ok(()),
@@ -8796,9 +9017,10 @@ async fn send_message(
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let local_actor_id = state.local_actor_id();
-    // Stop signal for this session's turn(s): the Stop button fires it, breaking
-    // the cascade loop and aborting the in-flight generation below.
-    let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+    // The cascade's stop signal: the chat's Stop button fires it (with each
+    // turn's own), breaking the cascade loop below.
+    let cascade = state.turn_stops.register(sid);
+    let stop = cascade.signal();
 
     // Record the user turn, then decide who (if anyone) answers it.
     // An archived DM (two were opened at once; the other was kept) is
@@ -8907,8 +9129,8 @@ async fn send_message(
             // fallback, or a slow turn there would be answered twice.
             let host_live = binding == HostBinding::Elsewhere
                 && host_online(&state, workspace_id, &responder.host_id);
-            if depth == 0 && !host_live {
-                arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id, stop.clone());
+            if depth == 0 && !host_live && !stop.is_stopped() {
+                arm_deferred_claim_fallback(&app, sid, workspace_id, trigger_id);
             }
             break;
         }
@@ -8928,7 +9150,9 @@ async fn send_message(
                 }
                 hive_core::dispatch::Step::Wait(d) => {
                     tracing::info!(target: "dispatch", session = %sid, "send_message: another device holds the turn, or a covering host goes first; watching");
-                    arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO, stop.clone());
+                    if !stop.is_stopped() {
+                        arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO);
+                    }
                     break;
                 }
                 _ => break,
@@ -8940,8 +9164,13 @@ async fn send_message(
         // (via kill_on_drop) kills any CLI subprocess mid-flight.
         let reply = tokio::select! {
             biased;
-            _ = stop.notified() => break,
-            r = run_turn(&app, &state, sid, workspace_id, &responder) => r?,
+            _ = stop.stopped() => break,
+            r = run_turn(&app, &state, sid, workspace_id, &responder) => match r {
+                Ok(r) => r,
+                // That turn alone was stopped (by its reply): the cascade ends.
+                Err(e) if e == hive_runtime::turn_engine::STOPPED => break,
+                Err(e) => return Err(e),
+            },
         };
         let (reply_id, reply) = (reply.message_id, reply.body);
         if first_reply.is_none() {
@@ -9100,8 +9329,7 @@ async fn regenerate(
         match dispatch_here(&state, sid, workspace_id, t, None, true, std::time::Duration::ZERO)? {
             hive_core::dispatch::Step::Run => {}
             hive_core::dispatch::Step::Wait(d) => {
-                let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO, stop);
+                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO);
                 return Ok(());
             }
             _ => return Ok(()),
@@ -9266,8 +9494,7 @@ async fn respond_once(
     match dispatch_here(state, sid, workspace_id, trigger_id, receiver, true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-            arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -9318,8 +9545,7 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
     match dispatch_here(&state, sid, workspace_id, trigger, Some(agent_id), true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
-            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
-            arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO, stop);
+            arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO);
             return Ok(());
         }
         _ => return Ok(()),
@@ -9376,7 +9602,11 @@ fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uu
 /// Add the local user to a chat's roster when they open it, so the People tab
 /// shows everyone present. No-op if already a member.
 #[tauri::command]
-fn ensure_self_member(state: State<AppState>, session_id: String) -> Result<(), String> {
+async fn ensure_self_member(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| ensure_self_member_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn ensure_self_member_sync(state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     svc.ensure_self_member(sid, state.active_workspace_id()).map_err(map_err)?;
@@ -9389,7 +9619,11 @@ fn ensure_self_member(state: State<AppState>, session_id: String) -> Result<(), 
 /// Humans `@`-mentioning humans never triggers a runtime; this is the ping.
 /// Called by the frontend on sync; deduped by message id.
 #[tauri::command]
-fn notify_mentions(
+async fn notify_mentions(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| notify_mentions_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn notify_mentions_sync(
     app: AppHandle,
     state: State<AppState>,
     session_id: String,
@@ -10621,7 +10855,11 @@ fn remove_runtime(state: State<AppState>, runtime_id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn set_chat_runtime(
+async fn set_chat_runtime(ligus_app: tauri::AppHandle, session_id: String, runtime_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_chat_runtime_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, runtime_id)).await
+}
+
+pub(crate) fn set_chat_runtime_sync(
     state: State<AppState>,
     session_id: String,
     runtime_id: String,
@@ -10731,7 +10969,11 @@ fn validate_avatar_data_url(url: &Option<String>) -> Result<(), String> {
 /// account and updates the live author so new messages stamp it — the avatar
 /// then rides the synced roster to every member.
 #[tauri::command]
-fn set_avatar(state: State<AppState>, avatar: Option<String>) -> Result<(), String> {
+async fn set_avatar(ligus_app: tauri::AppHandle, avatar: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_avatar_sync(tauri::Manager::state::<AppState>(ligus_app), avatar)).await
+}
+
+pub(crate) fn set_avatar_sync(state: State<AppState>, avatar: Option<String>) -> Result<(), String> {
     validate_avatar_data_url(&avatar)?;
     state.identity.update_avatar(avatar.clone()).map_err(map_err)?;
     state.service.lock().unwrap().set_author_avatar(avatar);
@@ -11595,7 +11837,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         gate_runs: Mutex::new(HashMap::new()),
         canceled_runs: Mutex::new(std::collections::HashSet::new()),
         ollama_pulls: Mutex::new(HashMap::new()),
-        turn_stops: Mutex::new(HashMap::new()),
+        turn_stops: hive_runtime::turn_engine::TurnStops::new(),
         mcp_shell_tools: Mutex::new(HashMap::new()),
         mcp_probe_failed: Mutex::new(HashMap::new()),
         conn_health: Mutex::new(ConnHealth::default()),
@@ -12416,7 +12658,11 @@ fn list_workspaces(state: State<AppState>) -> Vec<WorkspaceInfoDto> {
 /// Switch which workspace the chat list is scoped to. Unknown ids fall back to
 /// the local workspace.
 #[tauri::command]
-fn set_active_workspace(state: State<AppState>, workspace_id: String) -> Result<(), String> {
+async fn set_active_workspace(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_active_workspace_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
+}
+
+pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
     let default_rt = state.current_default_runtime_id();
     if id == state.local_workspace_id {
@@ -12497,7 +12743,11 @@ fn set_active_workspace(state: State<AppState>, workspace_id: String) -> Result<
 /// folder — the chat still works, just without per-chat isolation. Mirrors
 /// `apply_workspace_dir`'s side effects (both guard bad/empty roots).
 #[tauri::command]
-fn set_active_chat(state: State<AppState>, session_id: Option<String>) -> Result<(), String> {
+async fn set_active_chat(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_active_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn set_active_chat_sync(state: State<AppState>, session_id: Option<String>) -> Result<(), String> {
     let sid = match session_id {
         Some(ref s) if !s.trim().is_empty() => Some(Uuid::parse_str(s).map_err(map_err)?),
         _ => None,
@@ -12549,7 +12799,11 @@ use hive_runtime::workspace_invite::random_token;
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
 /// Returns the new workspace; use `workspace_invite` to share it.
 #[tauri::command]
-fn create_workspace(state: State<AppState>, name: String, relay_url: Option<String>) -> Result<WorkspaceInfoDto, String> {
+async fn create_workspace(ligus_app: tauri::AppHandle, name: String, relay_url: Option<String>) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| create_workspace_sync(tauri::Manager::state::<AppState>(ligus_app), name, relay_url)).await
+}
+
+pub(crate) fn create_workspace_sync(state: State<AppState>, name: String, relay_url: Option<String>) -> Result<WorkspaceInfoDto, String> {
     let display = name.trim();
     if display.is_empty() {
         return Err("workspace name can't be empty".to_string());
@@ -12599,7 +12853,7 @@ fn create_workspace(state: State<AppState>, name: String, relay_url: Option<Stri
         save_settings(&state.data_dir, &s);
         conn
     };
-    set_active_workspace(state.clone(), conn.id().to_string())?;
+    set_active_workspace_sync(state.clone(), conn.id().to_string())?;
     Ok(WorkspaceInfoDto {
         id: conn.id().to_string(),
         name: conn.display_name(),
@@ -12612,7 +12866,11 @@ fn create_workspace(state: State<AppState>, name: String, relay_url: Option<Stri
 /// Join a team workspace from an invite code (`hivews1:…`). Adds it to the rail
 /// and switches to it.
 #[tauri::command]
-fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
+async fn join_workspace(ligus_app: tauri::AppHandle, invite: String) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| join_workspace_sync(tauri::Manager::state::<AppState>(ligus_app), invite)).await
+}
+
+pub(crate) fn join_workspace_sync(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&invite)?;
     // A relayless invite would add a workspace that never syncs.
     if conn.dm_account.is_none() && invite_relay_problem(&conn.relay_url).is_some() {
@@ -12646,7 +12904,7 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Resul
         }
         save_settings(&state.data_dir, &s);
     }
-    set_active_workspace(state.clone(), conn.id().to_string())?;
+    set_active_workspace_sync(state.clone(), conn.id().to_string())?;
     Ok(WorkspaceInfoDto {
         id: conn.id().to_string(),
         name: conn.display_name(),
@@ -12678,7 +12936,11 @@ fn mirror_relay_into_synced_workspace(s: &mut LiveSettings) {
 
 /// Shareable invite code for a workspace (bundles relay + room + key).
 #[tauri::command]
-fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<String, String> {
+async fn workspace_invite(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| workspace_invite_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
+}
+
+pub(crate) fn workspace_invite_sync(state: State<AppState>, workspace_id: String) -> Result<String, String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
     let mut conn = {
         let s = state.settings.lock().unwrap();
@@ -12734,7 +12996,11 @@ struct BoxAdmissionDto {
 /// one (Kubernetes, another headless box) it is a bearer code to keep in a
 /// Secret.
 #[tauri::command]
-fn admit_box(state: State<AppState>, workspace_id: String, request: Option<String>, ttl_minutes: Option<i64>) -> Result<BoxAdmissionDto, String> {
+async fn admit_box(ligus_app: tauri::AppHandle, workspace_id: String, request: Option<String>, ttl_minutes: Option<i64>) -> Result<BoxAdmissionDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| admit_box_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, request, ttl_minutes)).await
+}
+
+pub(crate) fn admit_box_sync(state: State<AppState>, workspace_id: String, request: Option<String>, ttl_minutes: Option<i64>) -> Result<BoxAdmissionDto, String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
     let request = request
         .filter(|r| !r.trim().is_empty())
@@ -12776,7 +13042,11 @@ fn admit_box(state: State<AppState>, workspace_id: String, request: Option<Strin
 /// Leave a team workspace (removes it from the rail). If it was active, falls
 /// back to "My workspace".
 #[tauri::command]
-fn remove_workspace(state: State<AppState>, workspace_id: String) -> Result<(), String> {
+async fn remove_workspace(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_workspace_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
+}
+
+pub(crate) fn remove_workspace_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
     {
         let mut s = state.settings.lock().unwrap();
@@ -12802,7 +13072,7 @@ fn remove_workspace(state: State<AppState>, workspace_id: String) -> Result<(), 
         tracing::warn!(error = %e, "couldn't drop the founder pin of a left workspace");
     }
     if state.active_workspace_id() == id {
-        set_active_workspace(state.clone(), state.local_workspace_id.to_string())?;
+        set_active_workspace_sync(state.clone(), state.local_workspace_id.to_string())?;
     }
     Ok(())
 }
@@ -14102,7 +14372,7 @@ async fn workspace_share_code(
 ) -> Result<ShortCodeDto, String> {
     // Validate the workspace exists so the caller gets a sensible error, but
     // never publish the invite (which contains the E2EE key) to the relay.
-    let _ = workspace_invite(state.clone(), workspace_id)?;
+    let _ = workspace_invite_sync(state.clone(), workspace_id)?;
     Err("Relay-brokered workspace share codes are disabled: the short code would \
          route this workspace's end-to-end-encryption key through the relay in \
          cleartext. Use “Copy invite” to share the hivews1:… code over a trusted \
@@ -14127,7 +14397,7 @@ async fn redeem_short_code(
     let payload = payload.trim().to_string();
 
     if payload.starts_with("hivews1:") {
-        let ws = join_workspace(state.clone(), payload)?;
+        let ws = join_workspace_sync(state.clone(), payload)?;
         return Ok(RedeemResultDto { kind: "workspace".into(), label: ws.name });
     }
     // Otherwise treat it as a peer friend code.

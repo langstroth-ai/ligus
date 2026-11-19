@@ -395,7 +395,11 @@ pub struct SecurityStatusDto {
 /// Passkeys of this account on the active workspace, the rules version and
 /// the key version.
 #[tauri::command]
-pub fn security_status(state: State<'_, AppState>) -> Result<SecurityStatusDto, String> {
+pub async fn security_status(ligus_app: tauri::AppHandle) -> Result<SecurityStatusDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| security_status_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatusDto, String> {
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let account = svc.author().account_id;

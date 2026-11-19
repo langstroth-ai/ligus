@@ -76,7 +76,13 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
   remote file tools;
 - `write_capable`, `require_isolation`: whether the CLI's tier edits files,
   and whether such a turn may ever run in place;
-- `stop: Option<Arc<Notify>>` (cancellation) and the turn timeout;
+- `stop: Option<StopSignal>` (cancellation) and the turn timeout. The signal
+  is per turn and sticky (a watch channel): a Stop pressed before the engine
+  waits on it (while MCP servers are listed, during the repo gate) is seen
+  at the next await point. Hosts register each turn in a `TurnStops`
+  registry (per chat; the engine binds the turn's reply id to its signal),
+  so a Stop names one turn by its reply or every turn in a chat. The
+  desktop's Stop button and `ligus serve`'s shutdown use it; `lt` can;
 - small per-host switches that keep each host's behaviour as it was
   (git attribution for CLI agents, the empty-reply notice, the error prefix,
   injection scanning, the self-report's confidence and turn notes).

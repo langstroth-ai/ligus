@@ -43,18 +43,19 @@ ended are dropped, never applied to the next one.
 ## While a confirmation is pending {#pending}
 
 A confirmation runs inside the write that needs it, and the app's service
-lock is held until it ends (up to three minutes). About fifty of the app's
-window commands (listing chats, members, proposals and the like) run on
-the app's main thread and take that lock, so if the window refreshes during
-a confirmation the main thread waits for it to end. Meanwhile the window
-doesn't respond, the sheet's buttons included; the passkey dialog or the
-browser page still completes the confirmation.
+lock is held until it ends (up to three minutes). The window's commands
+that take that lock (listing chats, messages, members, proposals and the
+like) run off the main thread, so a refresh during a confirmation waits for
+it in the background: the window, the sheet's buttons included, keeps
+responding, and reads that don't need the lock (settings) answer at once.
+The passkey dialog or the browser page completes the confirmation.
 
 The macOS dialog needs the main thread to appear and to answer. The app
 gives it 3 seconds to appear and checks every second that the main thread
 still answers; after 5 seconds without an answer it cancels the dialog and
-opens the browser, which doesn't need the main thread. So on macOS a busy
-window sends you to the browser rather than freezing the dialog. Whichever
+opens the browser, which doesn't need the main thread. So on macOS a main
+thread that is busy for another reason sends you to the browser rather than
+freezing the dialog. Whichever
 path answers, the result of the other is dropped, and a ceremony's result is
 used only after its `clientDataJSON` names the requested digest; one
 approval confirms one event. On Windows the dialog runs on the
@@ -65,9 +66,9 @@ Releasing the lock during the ceremony would mean splitting every write
 that can need a passkey into a prepare step and a commit step, as
 `ligus serve` does for its two phone-confirmed actions. The desktop's writes
 return results computed after the append, and some append several events,
-so this is a per-command change, not done here. Running the window's
-commands off the main thread (Tauri `async` commands) would also keep the
-window responsive.
+so this is a per-command change, not done here; the window stays
+responsive because its commands that take the lock are Tauri `async`
+commands that run on the blocking pool.
 
 ## macOS: the association {#macos}
 
@@ -114,6 +115,15 @@ The release workflow does this when the `APPLE_PROVISIONING_PROFILE` secret
 Without it, releases build as before: no entitlement, and macOS passkeys use
 the browser. Local builds signed with an Apple Development identity (no
 profile) also use the browser.
+
+The release fails rather than ship an app macOS won't launch
+(`scripts/check-macos-signing.sh`). Before the build, the decoded profile
+(`security cms -D`, read with PlistBuddy) must be for
+`H5H3NNR456.ai.ligus.desktop`, team `H5H3NNR456`, carry the Associated
+Domains entitlement, and not be expired. After signing,
+`codesign -d --entitlements -` on the app must show that app id, team and
+`webcredentials:ligus.ai`, with the profile embedded; a build without the
+secret must show no associated-domains entitlement.
 
 Check a signed build:
 

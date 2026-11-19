@@ -88,8 +88,9 @@ export const sendMessage = (sessionId: string, body: string, runHere?: boolean) 
 
 /// Stop the in-flight turn for a session (the composer's Stop button). Aborts
 /// generation and kills any CLI subprocess; safe no-op if nothing is running.
-export const stopTurn = (sessionId: string) =>
-  invoke<void>("stop_turn", { sessionId });
+/** Stop the chat's turns, or only the one answering with `messageId`. */
+export const stopTurn = (sessionId: string, messageId?: string) =>
+  invoke<void>("stop_turn", { sessionId, messageId: messageId ?? null });
 
 /// Force a chat out of a wedged "responding" state: aborts any in-flight turn,
 /// frees the per-chat busy slot a stuck turn couldn't release, and clears a

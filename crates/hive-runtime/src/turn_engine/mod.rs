@@ -10,6 +10,7 @@
 
 pub mod ligus;
 pub mod mcp;
+pub mod stop;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +32,10 @@ use crate::provider::dispatch::{self, StreamActivity};
 use crate::{ChatService, ChatTurn, ProviderError, ResolvedRuntime};
 
 pub use mcp::InjectionHits;
+pub use stop::{StopSignal, TurnStopGuard, TurnStops};
+
+/// A stopped turn's error message.
+pub const STOPPED: &str = "stopped by user";
 
 /// Most tokens one reply may take (both hosts' value).
 pub const MAX_TOKENS: u32 = 1024;
@@ -112,8 +117,10 @@ pub struct TurnInput {
     pub write_capable: bool,
     /// A writing CLI agent never runs in place: refused without a worktree.
     pub require_isolation: bool,
-    /// Fired to cancel the turn (the Stop button, a closing client).
-    pub stop: Option<Arc<tokio::sync::Notify>>,
+    /// The turn's own stop signal (the Stop button, a closing client). It is
+    /// sticky: a Stop pressed before the engine waits on it still stops the
+    /// turn at its next await point.
+    pub stop: Option<StopSignal>,
     /// The streaming phase's wall-clock backstop.
     pub timeout: Duration,
     pub options: EngineOptions,
@@ -372,6 +379,11 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         timeout,
         options,
     } = input;
+    let stop = stop.unwrap_or_default();
+    // Stopped before it began: nothing to undo.
+    if stop.is_stopped() {
+        return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: None });
+    }
     let rt = &responder.runtime;
     let tools_allowed = gate.allows_tools();
     let restricted = !envelope.egress.is_open();
@@ -386,7 +398,12 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         // Listing starts stdio servers: under the turn's policy and executor,
         // like every other child of the turn.
         let listing = mcp::tool_set(servers, shell_allowed, options.scan_injections.then(|| hits.clone()), |t| host.mcp_listed(t));
-        crate::executor::with_executor(executor.clone(), crate::executor::with_turn(policy.clone(), listing)).await
+        let listing = crate::executor::with_executor(executor.clone(), crate::executor::with_turn(policy.clone(), listing));
+        tokio::select! {
+            biased;
+            _ = stop.stopped() => return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: None }),
+            l = listing => l,
+        }
     } else {
         None
     };
@@ -414,9 +431,18 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let mid = locked(host)
         .begin_assistant_message(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), responder.agent_id, reply_to)
         .map_err(|e| TurnError { message: e.to_string(), stopped: false, message_id: None })?;
+    stop.bind_message(mid);
     host.begun(mid);
     host.changed();
     let fail = |message: String| TurnError { message, stopped: false, message_id: Some(mid) };
+    // Stopped before the stream: the placeholder is completed empty.
+    let stopped_early = || {
+        tracing::info!(target: "dispatch", "turn stopped by user before it streamed");
+        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+        host.changed();
+        host.phase(mid, Phase::Completed, "");
+        TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) }
+    };
     // The placeholder is the dispatcher's commit (design repos-and-checkouts
     // 11.5): fenced means another device's answer to this turn committed
     // first, so this run stops here.
@@ -426,8 +452,19 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         return Err(fail(TURN_FENCED.into()));
     }
 
+    if stop.is_stopped() {
+        return Err(stopped_early());
+    }
     // The repo gate: a chat with a repo runs only in this host's checkout.
-    let checkout = match host.checkout(&session, mid).await {
+    let gated = tokio::select! {
+        biased;
+        _ = stop.stopped() => return Err(stopped_early()),
+        c = host.checkout(&session, mid) => c,
+    };
+    if stop.is_stopped() {
+        return Err(stopped_early());
+    }
+    let checkout = match gated {
         Ok(c) => c,
         Err(note) => {
             let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
@@ -584,7 +621,12 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     }
     let rounds = crate::agent_tools::tool_round_budget(rt.provider, rt.max_tool_rounds);
     if options.warm_context_probe && http_tools.as_ref().is_some_and(|t| !t.is_empty()) {
-        dispatch::warm_context_probe(rt).await;
+        // A Stop here falls through to the stream's select below.
+        tokio::select! {
+            biased;
+            _ = stop.stopped() => {}
+            _ = dispatch::warm_context_probe(rt) => {}
+        }
     }
     tracing::info!(
         target: "dispatch",
@@ -635,13 +677,11 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     };
     let fut = crate::executor::with_executor(executor, crate::executor::with_turn(policy, crate::agent_turn::with_agent_turn(scope, stream)));
     let mut stopped = false;
-    let never = Arc::new(tokio::sync::Notify::new());
-    let stop = stop.unwrap_or(never);
     let result = tokio::select! {
         biased;
-        _ = stop.notified() => {
+        _ = stop.stopped() => {
             stopped = true;
-            Err(ProviderError::Subprocess("stopped by user".into()))
+            Err(ProviderError::Subprocess(STOPPED.into()))
         }
         r = tokio::time::timeout(timeout, fut) => match r {
             Ok(r) => r,
@@ -765,7 +805,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
                 host.changed();
                 host.phase(mid, Phase::Completed, "");
-                return Err(TurnError { message: msg, stopped: true, message_id: Some(mid) });
+                return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: Some(mid) });
             }
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
             host.usage_error(rt.provider, &msg);
