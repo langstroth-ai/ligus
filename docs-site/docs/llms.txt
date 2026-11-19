@@ -114,6 +114,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 - [Security model](https://docs.langstroth.ai/operate/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 0.1 guards.
 - [Threat model](https://docs.langstroth.ai/operate/security/threat-model/): Attackers, what they can and can't do, and known limitations.
+- [Native passkeys](https://docs.langstroth.ai/operate/security/native-passkeys/): The macOS and Windows passkey dialogs on the desktop, the browser fallback, the AASA and signing requirements, and the real-device test.
 - [Runbooks](https://docs.langstroth.ai/operate/security/runbooks/): Device revocation, lost phone, compromised device, offboarding, key and token rotation.
 
 ## Operating Langstroth: Reference

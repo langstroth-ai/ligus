@@ -56,6 +56,40 @@ describe("PresenceSheet", () => {
     });
     expect(invoke).toHaveBeenCalledWith("presence_use_recovery", { words: "abandon ability able" });
   });
+  it("names the system dialog on the native path and switches to the browser", async () => {
+    render(<PresenceSheet />);
+    await act(async () => {
+      handlers["presence://requested"]({
+        payload: { kind: "memberRemoved", summary: "Remove member bea", digestShort: "1a2b", op: "get", via: "native" },
+      });
+    });
+    expect(screen.getByTestId("presence-native").textContent).toContain("system dialog");
+    expect(screen.queryByText(/Your browser opened/)).toBeNull();
+    await act(async () => {
+      screen.getByText("Use the browser instead").click();
+    });
+    expect(invoke).toHaveBeenCalledWith("presence_use_browser");
+    // The hand-off then takes over the same sheet.
+    await act(async () => {
+      handlers["presence://requested"]({
+        payload: { kind: "memberRemoved", summary: "Remove member bea", digestShort: "1a2b", op: "get", via: "browser" },
+      });
+    });
+    expect(screen.getByText(/Your browser opened/)).toBeTruthy();
+    expect(screen.queryByText("Use the browser instead")).toBeNull();
+  });
+  it("after the system dialog is closed, offers the browser, the recovery key and Cancel", async () => {
+    render(<PresenceSheet />);
+    await act(async () => {
+      handlers["presence://requested"]({
+        payload: { kind: "memberRemoved", summary: "Remove member bea", digestShort: "1a2b", op: "get", via: "dismissed" },
+      });
+    });
+    expect(screen.getByTestId("presence-native").textContent).toContain("closed the system passkey dialog");
+    expect(screen.getByText("Use the browser instead")).toBeTruthy();
+    expect(screen.getByText("Use recovery key")).toBeTruthy();
+    expect(screen.getByText("Cancel")).toBeTruthy();
+  });
   it("offers no recovery key while creating a passkey", async () => {
     render(<PresenceSheet />);
     await act(async () => {

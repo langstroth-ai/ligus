@@ -592,8 +592,10 @@ it. So the changes that decide who can do what in a workspace also need a
   dearth mode or clearing a lockdown, workflow definitions, changing an
   agent's host or runtime, and votes on proposals a person has to decide.
 - **Any passkey works:** Touch ID and iCloud Keychain, Windows Hello, Google
-  Password Manager, a phone over QR, a YubiKey. The desktop opens the
-  passkey prompt in your browser; the iPhone app asks directly.
+  Password Manager, a phone over QR, a YubiKey. The desktop asks through
+  the system passkey dialog on macOS and Windows and through your browser
+  otherwise ([Native passkeys](../../operate/security/native-passkeys.md));
+  the iPhone app asks directly.
 - **Agents never count as you.** An agent's output can't vote, approve or
   administer, whatever it says.
 

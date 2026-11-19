@@ -23,7 +23,8 @@ name: Release (desktop app)
 # unsigned — see task: "Auto-updater + code signing"):
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
 #            APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH  (notarization),
-#            APPLE_TEAM_ID (the keychain unlock item's designated requirement)
+#            APPLE_TEAM_ID (the keychain unlock item's designated requirement),
+#            APPLE_PROVISIONING_PROFILE (optional, base64: native passkeys)
 #   updater: TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #   Windows: Azure Trusted Signing via a signCommand (added later)
 
@@ -137,6 +138,12 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Optional: the Developer ID provisioning profile (base64) with
+          # Associated Domains for ai.ligus.desktop. With it, the build signs
+          # in app/Ligus.entitlements (webcredentials:ligus.ai) for native
+          # passkeys; without it, no entitlement (an entitlement without its
+          # profile would stop the app from launching).
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "No APPLE_CERTIFICATE secret — building unsigned."
@@ -156,6 +163,11 @@ jobs:
             # that satisfies Ligus's designated requirement for this team.
             if [ -n "$APPLE_TEAM_ID" ]; then echo "LIGUS_APPLE_TEAM_ID=$APPLE_TEAM_ID"; fi
           } >> "$GITHUB_ENV"
+          if [ -n "$APPLE_PROVISIONING_PROFILE" ]; then
+            printf '%s' "$APPLE_PROVISIONING_PROFILE" | base64 --decode > app/embedded.provisionprofile
+            echo "LIGUS_TAURI_ARGS=--config app/tauri.passkeys.conf.json" >> "$GITHUB_ENV"
+            echo "Native passkeys: associated-domains entitlement + provisioning profile."
+          fi
           echo "macOS signing + notarization configured."
 
       # The test-only passkey shortcut (hive-runtime `test-presence`) must
@@ -188,6 +200,8 @@ jobs:
         with:
           # The CLI discovers app/tauri.conf.json from the repo root.
           tauriScript: tauri
+          # macOS with a provisioning profile: the native-passkeys overlay.
+          args: ${{ env.LIGUS_TAURI_ARGS }}
           # Upload to the release the `release` job resolved. No tagName,
           # releaseName, releaseDraft or prerelease: with those, tauri-action
           # v1 looks the release up itself and rewrites a published release's

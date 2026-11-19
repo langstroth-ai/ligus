@@ -206,10 +206,23 @@ impl PresencePolicy {
         Ok(())
     }
 
+    /// The origin of this deployment's hand-off page: its first `https://`
+    /// origin (`https://<rp id>` when it lists none).
+    pub fn page_origin(&self) -> String {
+        self.origins.iter().find(|o| o.starts_with("https://")).cloned().unwrap_or_else(|| format!("https://{}", self.rp_id))
+    }
+
     /// The URL of this deployment's hand-off page (`<first https origin>/presence`).
     pub fn page_url(&self) -> String {
-        let origin = self.origins.iter().find(|o| o.starts_with("https://")).cloned().unwrap_or_else(|| format!("https://{}", self.rp_id));
-        format!("{origin}/presence")
+        format!("{}/presence", self.page_origin())
+    }
+
+    /// The origin an Apple platform authenticator writes into the
+    /// `clientDataJSON` of a native app's ceremony (`https://<rp id>`), when
+    /// this policy accepts it.
+    pub fn apple_native_origin(&self) -> Option<String> {
+        let o = format!("https://{}", self.rp_id);
+        self.origins.contains(&o).then_some(o)
     }
 
     /// Run `f` with the verifier [`Policy`] for this workspace.
@@ -252,6 +265,78 @@ pub fn challenge(env: &SessionEventEnvelope) -> [u8; 32] {
     h.update(&frontier);
     h.update(account.as_bytes());
     h.finalize().into()
+}
+
+// ---------------------------------------------------------------------------
+// Client data and native ceremonies (Phase D)
+// ---------------------------------------------------------------------------
+
+/// The `clientDataJSON` a client that builds it itself sends (Windows'
+/// `webauthn.dll` path on the desktop, and the software authenticator):
+/// `{"type":…,"challenge":<b64url>,"origin":…,"crossOrigin":false}`, the
+/// member order of WebAuthn's limited serialization.
+pub fn client_data_json(ty: &str, challenge: &[u8], origin: &str) -> String {
+    let q = |s: &str| serde_json::to_string(s).expect("serialize a string");
+    format!(r#"{{"type":{},"challenge":"{}","origin":{},"crossOrigin":false}}"#, q(ty), b64url(challenge), q(origin))
+}
+
+/// The challenge a returned `clientDataJSON` (base64url) names: what a
+/// desktop checks against its own before using a ceremony's result, on every
+/// path (the browser hand-off and the native authenticators).
+pub fn returned_challenge(client_data_b64: &str) -> Option<Vec<u8>> {
+    let raw = unb64url(client_data_b64).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    unb64url(v.get("challenge")?.as_str()?).ok()
+}
+
+/// What a native platform authenticator returns (macOS
+/// AuthenticationServices, Windows `webauthn.dll`), as raw bytes. It maps
+/// onto the very [`PresenceAssertion`] the browser hand-off produces, so
+/// [`verify_get`] and [`verify_create`] check it unchanged: the challenge
+/// (the [`challenge`] digest) and its binding are the same on every path.
+pub mod native {
+    use super::*;
+
+    /// A `webauthn.get` result.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RawAssertion {
+        pub credential_id: Vec<u8>,
+        pub authenticator_data: Vec<u8>,
+        pub client_data_json: Vec<u8>,
+        pub signature: Vec<u8>,
+    }
+
+    impl RawAssertion {
+        pub fn into_assertion(self) -> PresenceAssertion {
+            PresenceAssertion {
+                credential_id: b64url(&self.credential_id),
+                authenticator_data: b64url(&self.authenticator_data),
+                client_data_json: b64url(&self.client_data_json),
+                signature: b64url(&self.signature),
+            }
+        }
+    }
+
+    /// A `webauthn.create` result (`attestation: "none"`).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RawRegistration {
+        pub credential_id: Vec<u8>,
+        pub attestation_object: Vec<u8>,
+        pub client_data_json: Vec<u8>,
+    }
+
+    impl RawRegistration {
+        /// As the hand-off returns it: the attestation object rides in
+        /// `authenticator_data` ([`verify_create`]).
+        pub fn into_assertion(self) -> PresenceAssertion {
+            PresenceAssertion {
+                credential_id: b64url(&self.credential_id),
+                authenticator_data: b64url(&self.attestation_object),
+                client_data_json: b64url(&self.client_data_json),
+                signature: String::new(),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -733,12 +818,7 @@ pub mod soft {
             }
         }
         fn client_data(&self, ty: &str, challenge: &[u8]) -> Vec<u8> {
-            format!(
-                r#"{{"type":"{ty}","challenge":"{}","origin":"{}","crossOrigin":false}}"#,
-                b64url(challenge),
-                self.origin
-            )
-            .into_bytes()
+            client_data_json(ty, challenge, &self.origin).into_bytes()
         }
         fn sign(&self, msg: &[u8]) -> Vec<u8> {
             match &self.key {
@@ -831,6 +911,68 @@ mod tests {
             let (id, alg, pk) = verify_create(&a.create(&c), &c, &Policy::ligus()).unwrap();
             assert_eq!((id, alg, pk), (a.credential_id.clone(), a.alg(), a.public_key()));
             assert!(verify_get(&a.get(&[8u8; 32]), &key, &c, &Policy::ligus()).is_err(), "wrong challenge");
+        }
+    }
+
+    /// The client data a native Windows ceremony sends is pinned byte for
+    /// byte (its SHA-256 is what the authenticator signs).
+    #[test]
+    fn client_data_json_is_pinned() {
+        let c: Vec<u8> = (0u8..32).collect();
+        assert_eq!(
+            client_data_json("webauthn.get", &c, "https://ligus.ai"),
+            r#"{"type":"webauthn.get","challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","origin":"https://ligus.ai","crossOrigin":false}"#
+        );
+        assert_eq!(
+            hex(&Sha256::digest(client_data_json("webauthn.create", &c, "https://ligus.ai"))),
+            hex(&Sha256::digest(
+                br#"{"type":"webauthn.create","challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","origin":"https://ligus.ai","crossOrigin":false}"#
+            ))
+        );
+        // An origin can't break out of its string.
+        let odd = client_data_json("webauthn.get", &c, "https://x\",\"crossOrigin\":true,\"a\":\"");
+        let v: serde_json::Value = serde_json::from_str(&odd).unwrap();
+        assert_eq!(v["crossOrigin"], false);
+        assert_eq!(returned_challenge(&b64url(odd.as_bytes())).unwrap(), c);
+        assert_eq!(returned_challenge("not base64!"), None);
+        assert_eq!(returned_challenge(&b64url(b"{}")), None);
+    }
+
+    /// Which origin each native path uses, per workspace policy.
+    #[test]
+    fn native_origins() {
+        assert_eq!(PresencePolicy::ligus().apple_native_origin().as_deref(), Some("https://ligus.ai"));
+        assert_eq!(PresencePolicy::ligus().page_origin(), "https://ligus.ai");
+        let sub = PresencePolicy { rp_id: "example.com".into(), origins: vec!["https://auth.example.com".into()] };
+        assert_eq!(sub.apple_native_origin(), None, "Apple names https://<rp id>, which this policy doesn't accept");
+        assert_eq!(sub.page_origin(), "https://auth.example.com");
+        assert_eq!(sub.page_url(), "https://auth.example.com/presence");
+    }
+
+    /// A native ceremony's raw result maps onto the assertion the hand-off
+    /// returns, and the same verifiers accept it.
+    #[test]
+    fn native_results_verify_like_the_hand_off() {
+        for a in [soft::SoftAuthenticator::es256(), soft::SoftAuthenticator::ed25519()] {
+            let c = [9u8; 32];
+            let got = a.get(&c);
+            let raw = native::RawAssertion {
+                credential_id: unb64url(&got.credential_id).unwrap(),
+                authenticator_data: unb64url(&got.authenticator_data).unwrap(),
+                client_data_json: unb64url(&got.client_data_json).unwrap(),
+                signature: unb64url(&got.signature).unwrap(),
+            };
+            assert_eq!(raw.clone().into_assertion(), got);
+            let key = PasskeyKey::from(&a.credential(Uuid::nil(), "t"));
+            verify_get(&raw.into_assertion(), &key, &c, &Policy::ligus()).unwrap();
+            let made = a.create(&c);
+            let reg = native::RawRegistration {
+                credential_id: unb64url(&made.credential_id).unwrap(),
+                attestation_object: unb64url(&made.authenticator_data).unwrap(),
+                client_data_json: unb64url(&made.client_data_json).unwrap(),
+            };
+            assert_eq!(reg.clone().into_assertion(), made);
+            verify_create(&reg.into_assertion(), &c, &Policy::ligus()).unwrap();
         }
     }
 

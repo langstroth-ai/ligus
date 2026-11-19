@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import { Button, Modal } from "@/components/ui";
-import { onPresenceDone, onPresenceRequested, presenceCancel, presenceUseRecovery, type PresencePromptDto } from "@/lib/ipc";
+import {
+  onPresenceDone,
+  onPresenceRequested,
+  presenceCancel,
+  presenceUseBrowser,
+  presenceUseRecovery,
+  type PresencePromptDto,
+} from "@/lib/ipc";
 
-/// "Confirm with passkey": shown while the system browser runs the WebAuthn
-/// ceremony for one event. It names exactly what is being authorized (the
-/// event kind and a summary) and the first characters of the digest the
-/// passkey signs, so the person can match it with the browser page. A person
+/// "Confirm with passkey": shown while the WebAuthn ceremony for one event
+/// runs, in the system passkey dialog (macOS, Windows) or the system
+/// browser. It names exactly what is being authorized (the event kind and a
+/// summary) and the first characters of the digest the passkey signs, so the
+/// person can match it with the browser page. With the system dialog, the
+/// person can switch to the browser (a security key or device the dialog
+/// doesn't offer, or after closing it). A person
 /// who lost every passkey confirms with their recovery key's 24 words instead
 /// (signed on this device; the words are never stored).
 export function PresenceSheet() {
@@ -30,6 +40,10 @@ export function PresenceSheet() {
     setRecovery(null);
     setError(null);
   };
+  const useBrowser = () => {
+    void presenceUseBrowser().catch((e) => setError(String(e)));
+  };
+  const via = prompt.via ?? "browser";
   const useRecovery = () => {
     const words = (recovery ?? "").trim();
     setRecovery("");
@@ -50,10 +64,24 @@ export function PresenceSheet() {
             <code data-testid="presence-digest">{prompt.digestShort}</code>
           </dd>
         </dl>
-        <p className="text-xs text-ink-soft">
-          Your browser opened ligus.ai to ask for your passkey. Check the digest there matches, then use Touch ID,
-          Windows Hello, your phone or a security key.
-        </p>
+        {via === "browser" && (
+          <p className="text-xs text-ink-soft">
+            Your browser opened ligus.ai to ask for your passkey. Check the digest there matches, then use Touch ID,
+            Windows Hello, your phone or a security key.
+          </p>
+        )}
+        {via === "native" && (
+          <p className="text-xs text-ink-soft" data-testid="presence-native">
+            Confirm with your passkey in the system dialog: Touch ID, Windows Hello, your phone or a security key.
+          </p>
+        )}
+        {via === "dismissed" && (
+          <p className="text-xs text-ink-soft" data-testid="presence-native">
+            You closed the system passkey dialog. Continue in your browser
+            {prompt.op === "get" ? ", use your recovery key," : ""} or cancel.
+          </p>
+        )}
+        {via !== "browser" && <Button onClick={useBrowser}>Use the browser instead</Button>}
         {prompt.op === "get" && recovery !== null && (
           <div className="space-y-2">
             <textarea
