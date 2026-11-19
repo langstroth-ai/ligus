@@ -6,6 +6,7 @@
 #   ligus-local install-cli [--version vX.Y.Z] [--bin-dir DIR] [--from-source]
 #   ligus-local configure  --role serve|worker     write the env file (no secrets)
 #   ligus-local start      --role serve|worker     start in the background (or --systemd)
+#   ligus-local unit       --role serve|worker     print the systemd unit start --systemd installs
 #   ligus-local verify     --role serve|worker     process, health endpoint, sandbox
 #   ligus-local stop       --role serve|worker
 #   ligus-local uninstall  --role serve|worker [--delete-data]
@@ -26,7 +27,7 @@ AC_TOOL=ligus-local
 MARKER=.ligus-local
 
 usage() {
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'EOF'
 
 configure flags:
@@ -281,10 +282,87 @@ cmd_configure() {
     ac_next "ligus-local start $(inst)"
   else
     ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
-    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll - [--token <hrt1...>], paste the invite, then Ctrl-D (copy the invite from the desktop app: workspace > Copy invite; or save it to a 0600 file and use $BIN enroll --file PATH; it carries the workspace key, so keep it off the command line). Then: ligus-local start $(inst)"
+    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll - [--token @<0600 token file>], paste the invite, then Ctrl-D (copy the invite from the desktop app: workspace > Copy invite; or save it to a 0600 file and use $BIN enroll --file PATH; it carries the workspace key, so keep it off the command line). Then: ligus-local start $(inst)"
     ac_raise 4
   fi
   ac_finish "$AC_TOOL" configure "$(json_extra)"
+}
+
+# ------------------------------------------------------------ systemd unit
+# One ExecStart argument, double-quoted with systemd's escapes: \\ and \"
+# inside the quotes, %% for a literal % (a specifier otherwise) and $$ for a
+# literal $ (an environment expansion otherwise). A line break can't be
+# written: refused.
+sd_quote() {
+  local s=$1
+  case $s in *$'\n'*|*$'\r'*) return 1 ;; esac
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[%]/%%}; s=${s//[\$]/\$\$}
+  printf '"%s"' "$s"
+}
+# A path setting (EnvironmentFile=): only specifiers are special.
+sd_path() {
+  local s=$1
+  case $s in *$'\n'*|*$'\r'*) return 1 ;; esac
+  printf '%s' "${s//[%]/%%}"
+}
+
+# Whether the unit keeps NoNewPrivileges=yes. A setuid-root bwrap (distros
+# that disable unprivileged user namespaces ship one) can't gain root under
+# NoNewPrivileges, so the agent sandbox would lose its bubblewrap tier (and,
+# without Landlock ABI 4, every turn would be refused). Only then is it
+# relaxed: agent processes still run with no_new_privs (bwrap and Ligus's
+# sandbox helper set it for every child), so only ligus itself loses the flag.
+# LIGUS_LOCAL_BWRAP and LIGUS_LOCAL_USERNS (yes|no) override the probes (tests).
+# Sets NNP (yes|no) and NNP_WHY.
+NNP=yes NNP_WHY=""
+unit_nnp() {
+  local b userns
+  NNP=yes NNP_WHY=""
+  b=${LIGUS_LOCAL_BWRAP:-$(command -v bwrap 2>/dev/null || true)}
+  if [ -z "$b" ] || [ ! -u "$b" ]; then return 0; fi
+  userns=${LIGUS_LOCAL_USERNS:-}
+  if [ -z "$userns" ]; then
+    if ac_have unshare && unshare -U true 2>/dev/null; then userns=yes; else userns=no; fi
+  fi
+  if [ "$userns" = yes ]; then return 0; fi
+  NNP=no
+  NNP_WHY="$b is setuid root and unprivileged user namespaces are off, so under NoNewPrivileges=yes bwrap could not sandbox agents; agent processes still run with no_new_privs"
+}
+
+# The systemd user unit start --systemd installs, from the shipped one.
+# $1: yes|no for NoNewPrivileges.
+render_unit() {
+  local nnp=$1 exec envf line label
+  exec="ExecStart=$(sd_quote "$BIN")" || return 1
+  exec="$exec $ROLE"
+  if [ "$ROLE" = worker ]; then
+    label=$(env_get LIGUS_WORKER_LABEL)
+    exec="$exec --label $(sd_quote "$label")" || return 1
+  fi
+  envf="EnvironmentFile=$(sd_path "$ENVF")" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+      EnvironmentFile=*) printf '%s\n' "$envf" ;;
+      ExecStart=*) printf '%s\n' "$exec" ;;
+      Description=*) printf 'Description=Ligus %s (ligus-local)\n' "$ROLE" ;;
+      NoNewPrivileges=*)
+        if [ "$nnp" = no ]; then
+          printf '# Relaxed by ligus-local: %s.\nNoNewPrivileges=no\n' "$NNP_WHY"
+        else
+          printf '%s\n' "$line"
+        fi ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$ROOT/deploy/ligus-serve/ligus-serve.service"
+}
+
+# --------------------------------------------------------------------- unit
+# Print the unit start --systemd would install (nothing is written).
+cmd_unit() {
+  require_role; require_data
+  [ -n "$BIN" ] || { echo "ligus-local: ligus CLI not found (ligus-local install-cli)" >&2; exit 3; }
+  unit_nnp
+  render_unit "$NNP" || { echo "ligus-local: a path or the worker label has a line break" >&2; exit 2; }
 }
 
 # -------------------------------------------------------------------- start
@@ -299,8 +377,15 @@ cmd_start() {
     if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
     local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
     mkdir -p "$(dirname "$unit")"
-    sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$ENVF|" -e "s|^ExecStart=.*|ExecStart=$BIN $ROLE$( [ "$ROLE" = worker ] && printf ' --label "%s"' "$(env_get LIGUS_WORKER_LABEL)")|" \
-        -e "s|^Description=.*|Description=Ligus $ROLE (ligus-local)|" "$ROOT/deploy/ligus-serve/ligus-serve.service" >"$unit"
+    unit_nnp
+    if [ "$NNP" = no ]; then
+      ac_check systemd.nnp warn "NoNewPrivileges=no in the unit: $NNP_WHY" "to keep NoNewPrivileges=yes, enable unprivileged user namespaces (or install a non-setuid bwrap) and start again"
+    fi
+    if ! render_unit "$NNP" >"$unit.tmp"; then
+      rm -f "$unit.tmp"
+      ac_check systemd fail "a path or the worker label can't be written into a systemd unit (a line break)" "use a data dir, env file and label without line breaks"; ac_raise 2; ac_finish "$AC_TOOL" start "$(json_extra)"
+    fi
+    mv "$unit.tmp" "$unit"
     systemctl --user daemon-reload
     if systemctl --user enable --now "ligus-$ROLE" >/dev/null 2>&1; then
       ac_check start pass "systemd user unit ligus-$ROLE enabled and started"
@@ -411,8 +496,9 @@ case $CMD in
   install-cli) cmd_install_cli ;;
   configure) cmd_configure ;;
   start) cmd_start ;;
+  unit) cmd_unit ;;
   verify|status) cmd_verify ;;
   stop) cmd_stop ;;
   uninstall) cmd_uninstall ;;
-  *) ac_usage_error "unknown command: $CMD (preflight, install-cli, configure, start, verify, stop, uninstall)" ;;
+  *) ac_usage_error "unknown command: $CMD (preflight, install-cli, configure, start, unit, verify, stop, uninstall)" ;;
 esac

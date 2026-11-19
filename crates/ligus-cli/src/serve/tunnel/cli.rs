@@ -10,9 +10,9 @@ use super::{
     HostKeys, LiveStatus, PhoneHop, PushTestReport, PushTestRequest, Registry, RelaySettings, RevokeFile,
 };
 
-/// `ligus remote enable --relay <url> [--reg-token T] [--insecure-relay]`.
+/// `ligus remote enable --relay <url> [--reg-token - | @FILE] [--insecure-relay]`.
 pub fn remote_enable(data_dir: &Path, relay: Option<String>, reg_token: Option<String>, insecure: bool) -> Result<()> {
-    let Some(relay) = relay else { bail!("usage: ligus remote enable --relay <https://relay.example.com> [--reg-token T]") };
+    let Some(relay) = relay else { bail!("usage: ligus remote enable --relay <https://relay.example.com> [--reg-token - | @FILE]") };
     let settings = RelaySettings::new(&relay, reg_token, insecure)?;
     let dir = tunnel_dir(data_dir);
     ensure_private_dir(&dir)?;

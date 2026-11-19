@@ -66,7 +66,7 @@ the invite carries the workspace key, so never ask for it:
 
 ```sh
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
-ligus enroll 'hivews1:...'        # add --token <hrt1...> if the relay needs one
+ligus enroll -                    # paste the invite, Ctrl-D; add --token @FILE if the relay needs one
 ```
 
 For a quick test with nothing real at stake: `configure --throwaway-workspace
@@ -82,6 +82,7 @@ If you chose a non-default `--env-file`, pass it to every later command
 ```sh
 $L start --role serve --data-dir ~/.ligus-serve --json        # background process, log in the data dir
 $L start --role serve --data-dir ~/.ligus-serve --systemd --json   # Linux: a systemd user unit instead
+$L unit --role serve --data-dir ~/.ligus-serve      # print the systemd unit --systemd installs (NoNewPrivileges is relaxed only for a setuid bwrap without user namespaces)
 $L verify --role serve --data-dir ~/.ligus-serve --json        # process, GET /v1/health, sandbox required
 ```
 
