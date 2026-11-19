@@ -609,8 +609,9 @@ mod tests {
         let args: Vec<_> = c.get_args().collect();
         #[cfg(not(windows))]
         assert_eq!(args, vec![dir.as_os_str()]);
+        // One raw argument: the path, quoted, so explorer never splits it.
         #[cfg(windows)]
-        assert!(args.is_empty(), "the path rides one quoted raw argument");
+        assert_eq!(args, vec![std::ffi::OsString::from(format!("\"{}\"", rr::git::simplify(dir.clone()).to_string_lossy())).as_os_str()]);
         let program = c.get_program().to_string_lossy().into_owned();
         assert!(["open", "explorer", "xdg-open"].contains(&program.as_str()), "{program}");
         assert!(!["sh", "bash", "cmd", "zsh"].contains(&program.as_str()));
