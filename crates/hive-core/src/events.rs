@@ -1869,6 +1869,14 @@ fn fold_pass(
         }
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
+    // The account-key rules (`crate::account_keys`) read the whole log's
+    // certificates and registrations, never a position.
+    if ordered
+        .iter()
+        .any(|e| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. }))
+    {
+        tracker.set_key_index(std::sync::Arc::new(crate::account_keys::KeyIndex::of(ordered.iter().copied())), ordered[base]);
+    }
     // Whom each device vouched for anywhere on this log: who holds a device
     // never depends on a position (see `authz::DeviceState::holders`).
     if ordered.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
@@ -2225,6 +2233,9 @@ fn fold_pass(
         if let Some(t) = timeline.as_deref_mut() {
             t.push(env.canonical_key(), &tracker.state, changed);
         }
+    }
+    if let Some(t) = timeline.as_deref_mut() {
+        t.set_anchors(tracker.key_anchors());
     }
     session.authz.rules = match workspace {
         WorkspaceAuthz::Timeline(t) => t.current().rules,

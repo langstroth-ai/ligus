@@ -240,10 +240,11 @@ impl PeerSync {
     /// trust roster from what we already hold plus this envelope's own trust
     /// events, then classify it. A **provably bad** envelope (bad signature,
     /// revoked device, impersonation) is rejected outright: it is *not* ingested,
-    /// and `apply` returns `Ok(false)`. Merely-unverifiable envelopes (unsigned,
-    /// or from a device whose cert we haven't seen yet) are accepted and
-    /// re-checked as the roster grows — never dropped. This keeps the peer path
-    /// at least as strict as the relay path.
+    /// and `apply` returns `Ok(false)`. An envelope that can't be judged yet (a
+    /// device whose certificate for the account it claims hasn't arrived, a
+    /// disputed account key) is held in the device's held table and judged
+    /// again as the roster grows, never dropped. This keeps the peer path at
+    /// least as strict as the relay path.
     pub fn apply(&mut self, store: &mut EventStore, data: &[u8]) -> Result<bool, PeerError> {
         let env: SessionEventEnvelope = serde_json::from_slice(data)?;
         if !self.workspaces.contains(&env.workspace_id) {
@@ -258,17 +259,54 @@ impl PeerSync {
             .map_err(|e| PeerError::Store(e.to_string()))?
             .remove(&env.workspace_id)
             .unwrap_or_default();
-        // Run the SAME gate as the relay path (not just verdict_for): so the
-        // Option-C GitHub-identity check applies on P2P too, instead of silently
-        // accepting anything not provably-bad. Mirrors sync_engine::apply_fetched.
-        let base = verdict_for(&roster, &env);
+        let workspace = env.workspace_id;
+        let roster_relevant = crate::envelope_verifier::is_trust_kind(&env.payload)
+            || env.session_id == hive_core::workspace_config_session_id(env.workspace_id);
+        match self.gate(&roster, &env) {
+            IngestAction::Accept => {
+                let new = store.ingest(&env).map_err(|e| PeerError::Store(e.to_string()))?;
+                // It may be what a held event waits for (a certificate, an
+                // admission): judge those again now.
+                if roster_relevant {
+                    self.release_held(store, workspace)?;
+                }
+                Ok(new)
+            }
+            IngestAction::Quarantine(reason) => {
+                tracing::warn!(?reason, event_id = %env.event_id, "rejected a quarantined peer event");
+                // A lamport witness, as on the relay path (`SyncEngine::apply_fetched`).
+                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
+                Ok(false)
+            }
+            IngestAction::Hold(reason) => {
+                // Can't judge yet (a certificate or admission not here yet, a
+                // disputed account key): held aside in the device's held
+                // table, never ingested now, and judged again when a peer
+                // event (or the workspace's sync engine) changes the roster.
+                tracing::debug!(reason, event_id = %env.event_id, "holding a peer event until the roster can judge it");
+                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+                store
+                    .hold_events(env.workspace_id, &[crate::event_store::HoldItem { env: &env, reason }], now_ms)
+                    .map_err(|e| PeerError::Store(e.to_string()))?;
+                // A lamport witness meanwhile (as on the relay path).
+                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// The ingest gate, the same as the relay path's (not just
+    /// `verdict_for`): so the Option-C GitHub-identity check applies on P2P
+    /// too, instead of silently accepting anything not provably-bad.
+    fn gate(&self, roster: &crate::envelope_verifier::WorkspaceRoster, env: &SessionEventEnvelope) -> IngestAction {
+        let base = verdict_for(roster, env);
         let signer_account = env
             .actor_stamp
             .as_ref()
             .and_then(|s| s.actor.account_id)
             .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
         let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
-        match gate_ingest(
+        gate_ingest(
             {
                 #[cfg(test)]
                 let mode = self.identity_mode;
@@ -280,23 +318,40 @@ impl PeerSync {
             signer_account,
             account_key,
             &self.identity_cache,
-        ) {
-            IngestAction::Accept => {
-                store.ingest(&env).map_err(|e| PeerError::Store(e.to_string()))
+        )
+    }
+
+    /// Judge `workspace`'s held events again (a roster change arrived over
+    /// P2P), a bounded number of passes while something is released.
+    fn release_held(&mut self, store: &mut EventStore, workspace: Uuid) -> Result<(), PeerError> {
+        let err = |e: crate::event_store::EventStoreError| PeerError::Store(e.to_string());
+        for _ in 0..8 {
+            let held = store.held_events(workspace).map_err(err)?;
+            if held.is_empty() {
+                break;
             }
-            IngestAction::Quarantine(reason) => {
-                tracing::warn!(?reason, event_id = %env.event_id, "rejected a quarantined peer event");
-                // A lamport witness, as on the relay path (`SyncEngine::apply_fetched`).
-                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
-                Ok(false)
+            let refs: Vec<&SessionEventEnvelope> = held.iter().map(|h| &h.env).collect();
+            let roster = crate::envelope_verifier::rosters_for_batch(store, &refs).map_err(err)?.remove(&workspace).unwrap_or_default();
+            let mut release = Vec::new();
+            for h in &held {
+                match self.gate(&roster, &h.env) {
+                    IngestAction::Accept => {
+                        store.ingest(&h.env).map_err(err)?;
+                        release.push(h.digest.clone());
+                    }
+                    IngestAction::Quarantine(_) => {
+                        store.note_lamport_witness(&h.env).map_err(err)?;
+                        release.push(h.digest.clone());
+                    }
+                    IngestAction::Hold(_) => {}
+                }
             }
-            IngestAction::Hold(reason) => {
-                // Can't verify yet (Option C: identity pending/unreachable). Don't
-                // ingest; a re-send re-checks once the roster/identity is known.
-                tracing::debug!(reason, event_id = %env.event_id, "holding a peer event for identity re-verification");
-                Ok(false)
+            store.release_held(workspace, &release).map_err(err)?;
+            if release.is_empty() {
+                break;
             }
         }
+        Ok(())
     }
 }
 
@@ -406,6 +461,55 @@ mod tests {
         assert!(!store_b.has_event(private.event_id).unwrap());
     }
 
+    /// A peer event signed by a device whose certificate hasn't arrived waits
+    /// in the held table (it isn't applied on its stamp), and is applied when
+    /// the certificate arrives over the same link.
+    #[test]
+    fn a_peer_event_held_before_its_certificate_is_released_when_it_arrives() {
+        use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+        use hive_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
+        use hive_core::Timestamp;
+        let account = SigningKeypair::generate().unwrap();
+        let account_id = Uuid::new_v4();
+        let device = SigningKeypair::generate().unwrap();
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let mut actor = ActorIdentity::new(account_id.to_string(), "A", ActorKind::Human);
+        actor.account_id = Some(account_id);
+        actor.device_id = Some(device_id);
+        let own = |l: i64, payload: SessionEvent| {
+            let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), l, payload);
+            e.actor_stamp = Some(ActorStamp {
+                actor: actor.clone(),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
+            hive_core::sign_envelope(&mut e, device_id, &device);
+            e
+        };
+        let member = WorkspaceMember { id: account_id.to_string(), actor: actor.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 1, joined_at: Timestamp::epoch() };
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        let content = own(10, SessionEvent::SessionTitleChanged { title: "t".into() });
+        let mut store = EventStore::open_in_memory().unwrap();
+        let mut sync = PeerSync::new([Uuid::nil()]);
+        let bytes = |e: &SessionEventEnvelope| serde_json::to_vec(e).unwrap();
+        assert!(!sync.apply(&mut store, &bytes(&content)).unwrap(), "held, not applied on its stamp");
+        assert_eq!(store.held_events(Uuid::nil()).unwrap().len(), 1);
+        for e in [
+            own(1, SessionEvent::MemberAdded { member, invite: None, proof: None }),
+            own(2, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: account.public_key_bytes().to_vec() }),
+            own(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
+        ] {
+            sync.apply(&mut store, &bytes(&e)).unwrap();
+        }
+        assert!(store.has_event(content.event_id).unwrap(), "released once the certificate arrived");
+        assert!(store.held_events(Uuid::nil()).unwrap().is_empty());
+    }
+
     /// Every copy a device holds goes out, not only the first to arrive:
     /// another signer's copy under an honest event's id that reached this
     /// device first must not keep the honest one from its peers.
@@ -466,17 +570,33 @@ mod tests {
         let plain = |lamport: i64, payload: SessionEvent| {
             SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), lamport, payload)
         };
+        // Published by the device itself, stamped as its account (as
+        // `publish_identity` does).
+        let own = |mut e: SessionEventEnvelope| {
+            e.actor_stamp = Some(ActorStamp {
+                actor: member.actor.clone(),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
+            hive_core::sign_envelope(&mut e, device_id, &device);
+            e
+        };
         let mut store = EventStore::open_in_memory().unwrap();
         for e in [
-            plain(1, SessionEvent::MemberAdded { member, invite: None, proof: None }),
-            plain(
+            plain(1, SessionEvent::MemberAdded { member: member.clone(), invite: None, proof: None }),
+            own(plain(
                 2,
                 SessionEvent::AccountKeyRegistered {
                     account_id,
                     signing_public_key: account.public_key_bytes().to_vec(),
                 },
-            ),
-            plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
+            )),
+            own(plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert })),
         ] {
             store.append_envelope(&e).unwrap();
         }

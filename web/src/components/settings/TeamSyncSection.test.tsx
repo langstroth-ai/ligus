@@ -84,3 +84,53 @@ describe("Team sync limited state", () => {
     expect(screen.queryByText("Sync error")).toBeNull();
   });
 });
+
+describe("Team sync held events", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("says how many events wait for a certificate or admission, and how many were dropped", async () => {
+    vi.mocked(ipc.syncStatus).mockResolvedValue({
+      relayConfigured: true,
+      relayUrl: "https://relay.example",
+      room: "acme",
+      encrypted: true,
+      connectionState: "live",
+      lastError: null,
+      heldEvents: 3,
+      heldSigners: 2,
+      heldDropped: 1,
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TeamSyncSection />
+      </QueryClientProvider>,
+    );
+    const line = await screen.findByTestId("held-events");
+    expect(line.textContent).toMatch(/3 events wait for a device\s+certificate or an admission \(2 devices\)/);
+    expect(line.textContent).toMatch(/don't hold up sync/);
+    expect(line.textContent).toMatch(/1 dropped/);
+  });
+
+  it("shows nothing when nothing waits", async () => {
+    vi.mocked(ipc.syncStatus).mockResolvedValue({
+      relayConfigured: true,
+      relayUrl: "https://relay.example",
+      room: "acme",
+      encrypted: true,
+      connectionState: "live",
+      lastError: null,
+      heldEvents: 0,
+      heldSigners: 0,
+      heldDropped: 0,
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TeamSyncSection />
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/Live/);
+    expect(screen.queryByTestId("held-events")).toBeNull();
+  });
+});

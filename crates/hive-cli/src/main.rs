@@ -1550,6 +1550,19 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
         let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
         println!("workspace sandbox grants: {} ({n} signed; ligus doctor --sandbox lists them)", here.why);
     }
+    // Events held aside until this device can judge them (a certificate or
+    // admission not here yet, a disputed account key): they never stop sync.
+    if let Ok(svc) = open_service(cfg) {
+        if let Ok(h) = svc.store().held_stats(uuid_of_room(&cfg.room)) {
+            println!(
+                "held events: {} from {} device(s), {} dropped, {} expired (they apply on their own once what they wait for arrives)",
+                h.held, h.signers, h.dropped, h.expired
+            );
+            for (reason, n) in &h.reasons {
+                println!("  - {n}: {reason}");
+            }
+        }
+    }
     if (require_confined || turn_test) && unconfined {
         eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");
         return Ok(hardening::EXIT_UNCONFINED);

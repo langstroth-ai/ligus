@@ -13021,11 +13021,25 @@ struct SyncStatus {
     connection_state: String,
     /// Last actionable sync error (unauthorized, unreachable, decrypt), if any.
     last_error: Option<String>,
+    /// Events of the active workspace this device holds aside because it
+    /// can't judge them yet (a certificate or admission not here yet, a
+    /// disputed account key). They never stop sync, and apply on their own
+    /// once what they wait for arrives.
+    held_events: i64,
+    /// Signing devices among them.
+    held_signers: i64,
+    /// Held events this device dropped (a cap or the 30-day limit).
+    held_dropped: i64,
 }
 
 #[tauri::command]
 fn sync_status(state: State<AppState>) -> SyncStatus {
     let health = state.conn_health.lock().unwrap().clone();
+    let held = {
+        let ws = state.active_workspace_id();
+        let svc = state.service.lock().unwrap();
+        svc.store().held_stats(ws).unwrap_or_default()
+    };
     let s = state.settings.lock().unwrap();
     SyncStatus {
         relay_configured: s.relay_url.as_ref().map(|u| !u.is_empty()).unwrap_or(false),
@@ -13034,6 +13048,9 @@ fn sync_status(state: State<AppState>) -> SyncStatus {
         encrypted: s.workspace_key().is_some(),
         connection_state: health.state,
         last_error: health.last_error,
+        held_events: held.held,
+        held_signers: held.signers,
+        held_dropped: held.dropped + held.expired,
     }
 }
 
