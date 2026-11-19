@@ -114,7 +114,8 @@ pub(crate) async fn share_attachment(state: State<'_, AppState>, session_id: Str
     let prepared = tauri::async_runtime::spawn_blocking(move || blob::prepare(&name, bytes, &rules, kind, role))
         .await
         .map_err(map_err)??;
-    let att = blob::upload(&client, &room, &ring, &prepared).await.map_err(|e| format!("upload attachment: {e}"))?;
+    let device = state.service.lock().unwrap().device_id();
+    let att = blob::upload(&client, &room, &ring, &prepared, device).await.map_err(|e| format!("upload attachment: {e}"))?;
     let signed = state.service.lock().unwrap().share_attachment(sid, workspace_id, att.clone());
     if let Err(e) = signed {
         // Nothing references the blob: take it back off the relay.

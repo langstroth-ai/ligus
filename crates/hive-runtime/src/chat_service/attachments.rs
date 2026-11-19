@@ -103,6 +103,10 @@ impl ChatService {
         p.body = body.to_string();
         p.producing_agent_id = agent_id;
         p.produced_on = Some(self.device_id);
+        // The file's id is bound to this host and the proposal: only this
+        // host can share it, and no one can claim it first.
+        let mut offer = offer;
+        offer.id = hive_core::attachment::offer_id(self.device_id, proposal_id);
         p.attachment = Some(Box::new(offer));
         let id = p.id;
         self.upsert_proposal(session_id, workspace_id, p)?;

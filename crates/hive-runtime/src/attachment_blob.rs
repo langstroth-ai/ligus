@@ -143,13 +143,16 @@ pub fn check_file(raw_name: &str, bytes: Vec<u8>, rules: &AttachmentRules) -> Re
 }
 
 /// Seal a prepared file, upload it to the workspace's relay blob channel, and
-/// return the reference to sign (a fresh attachment id, the relay's blob id).
-pub async fn upload(client: &RelayClient, workspace: &str, ring: &KeyringEngine, p: &Prepared) -> Result<AttachmentRef, RelayError> {
-    upload_as(client, workspace, ring, p, Uuid::new_v4()).await
+/// return the reference `device` signs: the relay's blob id, and the
+/// attachment id bound to that device and blob ([`attachment::share_id`]).
+pub async fn upload(client: &RelayClient, workspace: &str, ring: &KeyringEngine, p: &Prepared, device: Uuid) -> Result<AttachmentRef, RelayError> {
+    let mut a = upload_as(client, workspace, ring, p, Uuid::nil()).await?;
+    a.id = attachment::share_id(device, &a.blob_id);
+    Ok(a)
 }
 
 /// [`upload`] under a chosen attachment id (an approved agent offer keeps
-/// the id the proposal named).
+/// the id the proposal named, [`attachment::offer_id`]).
 pub async fn upload_as(client: &RelayClient, workspace: &str, ring: &KeyringEngine, p: &Prepared, id: Uuid) -> Result<AttachmentRef, RelayError> {
     let framed = seal_with_ring(ring, &p.plaintext)?;
     let sent = framed.len() as u64;
