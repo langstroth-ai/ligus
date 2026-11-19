@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn user_codex_config_only_with_opt_in_and_open_egress() {
         use super::super::claude_code::Confine;
-        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false };
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
         assert_eq!(confine_args(c), vec!["--ignore-user-config"]);
         assert!(confine_args(Confine { user_config: true, ..c }).is_empty());
         assert_eq!(confine_args(Confine { user_config: true, egress_open: false, ..c }), vec!["--ignore-user-config"]);

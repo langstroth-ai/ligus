@@ -23,4 +23,11 @@ oauthConnected: boolean,
  * a different URL origin, so it is withheld from this server. Set the
  * token again or reconnect to use it here.
  */
-secretForOtherUrl: boolean, };
+secretForOtherUrl: boolean, 
+/**
+ * The tools this server listed that run shell commands (`bash`, `exec`,
+ * `run_command`, ...), from the last time this device listed its tools;
+ * `None` until it has. Such a server is offered only to turns that have
+ * the shell (the workspace Owner's, or an agent the Owner granted it).
+ */
+shellTools: Array<string> | null, };

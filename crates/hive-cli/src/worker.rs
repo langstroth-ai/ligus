@@ -582,6 +582,13 @@ async fn run_turn(
     // hand-off, an @mention cascade) has none of its own and resolves to the
     // lowest of the humans behind its chain (the rule every host shares).
     let author_role = lock(svc).trigger_author_role(pm.session_id, pm.message_id).ok().flatten();
+    // Phase C: the shell is the Owner's (every person behind the turn a
+    // workspace Owner), or an Owner granted it to this agent.
+    let shell_role = lock(svc).trigger_shell_role(pm.session_id, pm.message_id).ok().flatten();
+    // The signed grants, when this host applies them (`LIGUS_SANDBOX_GRANTS`;
+    // by default only on the workspace Owner's own hosts).
+    let grants = lock(svc).sandbox_grants_here(s.workspace_id, hive_runtime::sandbox::grants_setting_from_env()).0;
+    let shell_allowed = hive_runtime::author_gate::shell_allowed(shell_role, grants.shell_granted(agent.id));
     let mut rt = rt;
     let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     let gate_plan = hive_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
@@ -631,9 +638,16 @@ async fn run_turn(
         sink.changed();
         return Err(anyhow!("refused: no agent sandbox on this host"));
     }
+    // Without the shell the CLI runs without its shell tool; one that can't
+    // drop it is refused.
+    if let Err(reason) = hive_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+        sink.changed();
+        return Err(anyhow!("refused: no shell for this turn"));
+    }
     rt.args.extend(enforcement.extra_args);
     let mut tool_settings = ctx.settings.clone();
-    tool_settings.run_command &= enforcement.allow_run_command;
+    tool_settings.run_command &= enforcement.allow_run_command && shell_allowed;
     tool_settings.mcp_egress = envelope.egress.clone();
     tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
@@ -755,6 +769,8 @@ async fn run_turn(
     let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
     sandbox.worktree_is_isolated = eager.is_some();
     sandbox.ligus_mcp_socket = socket;
+    sandbox.shell_allowed = shell_allowed;
+    sandbox.grants = grants.paths_for(Some(agent.id));
     let fut = hive_runtime::executor::with_turn(sandbox, hive_runtime::agent_turn::with_agent_turn(scope, reply::generate_reply_streaming(
         &rt,
         &system,

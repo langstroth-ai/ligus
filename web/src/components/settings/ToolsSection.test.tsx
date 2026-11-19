@@ -17,6 +17,7 @@ vi.mock("@/lib/ipc", () => ({
       hasBearerToken: true,
       oauthConnected: false,
       secretForOtherUrl: false,
+      shellTools: ["run_command"],
     },
     {
       id: "linear",
@@ -27,6 +28,7 @@ vi.mock("@/lib/ipc", () => ({
       hasBearerToken: false,
       oauthConnected: true,
       secretForOtherUrl: false,
+      shellTools: null,
     },
 
     {
@@ -38,6 +40,7 @@ vi.mock("@/lib/ipc", () => ({
       hasBearerToken: false,
       oauthConnected: false,
       secretForOtherUrl: false,
+      shellTools: null,
     },
   ]),
   installMcpServer: vi.fn(async () => {}),
@@ -47,6 +50,7 @@ vi.mock("@/lib/ipc", () => ({
   removeMcpServer: vi.fn(async () => {}),
   setMcpEnabled: vi.fn(async () => {}),
   setMcpBearerToken: vi.fn(async (_id: string, token: string) => token !== ""),
+  inspectMcpServer: vi.fn(async () => []),
 }));
 
 vi.mock("@/components/Toast", () => ({
@@ -91,6 +95,7 @@ describe("ToolsSection bearer tokens", () => {
         hasBearerToken: true,
         oauthConnected: false,
         secretForOtherUrl: true,
+        shellTools: [],
       },
     ]);
     renderSection();
@@ -140,5 +145,18 @@ describe("ToolsSection bearer tokens", () => {
     );
     await user.click(screen.getByRole("button", { name: "Clear token" }));
     await waitFor(() => expect(ipc.setMcpBearerToken).toHaveBeenCalledWith("docs", ""));
+  });
+
+  it("flags a server that offers a shell, and checks an unchecked one's tools", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.listMcpServers).mockResolvedValueOnce([
+      { id: "box", transport: "stdio", detail: "box-mcp", enabled: true, isManaged: true, hasBearerToken: false, oauthConnected: false, secretForOtherUrl: false, shellTools: ["bash", "exec"] },
+      { id: "new", transport: "stdio", detail: "new-mcp", enabled: true, isManaged: true, hasBearerToken: false, oauthConnected: false, secretForOtherUrl: false, shellTools: null },
+    ]);
+    renderSection();
+    expect(await screen.findByText("· offers a shell (bash, exec): Owner turns only")).toBeTruthy();
+    expect(screen.getByText("· tools not checked yet")).toBeTruthy();
+    await user.click(screen.getAllByRole("button", { name: "Check tools" })[1]);
+    await waitFor(() => expect(ipc.inspectMcpServer).toHaveBeenCalledWith("new"));
   });
 });
