@@ -11,6 +11,10 @@
 //! (version 1)(allow default)
 //! (deny file-write*)
 //! (allow file-write* (subpath "<worktree>") (subpath "<turn tmp>") <state dirs> <ttys, /dev/null>)
+//! (deny file-read* file-write* (subpath "<home>"))   ; Phase C: the home is default-deny
+//! (allow file-read* <worktree, turn dirs, write extras, home_read under the home>)
+//! (allow file-write* <worktree and write extras under the home>)
+//! (allow file-read-metadata (literal "<home>") <their ancestors>)  ; stat/realpath, no listing
 //! (deny file-write* (subpath "<worktree>/.git") <protected dirs and files>
 //!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
@@ -148,9 +152,84 @@ const MACH_ALLOW: &[&str] = &[
 const MACH_ALLOW_KEYCHAIN: &[&str] = &["com.apple.SecurityServer", "com.apple.securityd.xpc"];
 
 /// Whether `plan` leaves the login keychain readable (a subscription CLI
-/// whose sign-in lives there).
+/// whose sign-in lives there). With the home denied (Phase C), only when the
+/// runtime's allow-list names it and no deny takes it back.
 fn keychain_reachable(plan: &EnforcementPlan) -> bool {
-    !plan.deny_read.iter().any(|d| d.ends_with("Library/Keychains"))
+    let denied = plan.deny_read.iter().any(|d| d.ends_with("Library/Keychains"));
+    match plan.home {
+        None => !denied,
+        Some(_) => !denied && plan.home_read.iter().any(|d| d.ends_with("Library/Keychains")),
+    }
+}
+
+/// The directories strictly between `home` and `p` (and `home` itself):
+/// their metadata stays readable so `realpath`, `getcwd` and `stat` along
+/// the way to an allowed path work, without listing or reading them.
+fn ancestors_within(home: &Path, p: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    if !p.starts_with(home) {
+        return v;
+    }
+    let mut cur = p.parent();
+    while let Some(c) = cur {
+        if !c.starts_with(home) {
+            break;
+        }
+        v.push(c.to_path_buf());
+        if c == home {
+            break;
+        }
+        cur = c.parent();
+    }
+    v
+}
+
+/// The home-deny rules (Phase C): nothing under the home is readable but the
+/// worktree, the turn's dirs, the writable extras and `home_read`; their
+/// ancestors keep their metadata.
+fn home_rules(plan: &EnforcementPlan) -> String {
+    let Some(home) = plan.home.as_ref().map(|h| canonical(h)) else { return String::new() };
+    let mut p = format!("(deny file-read* file-write* (subpath {}))\n", q(&home));
+    let mut open: Vec<std::path::PathBuf> = vec![canonical(&plan.worktree), canonical(&plan.tmp)];
+    open.extend(plan.write_extra.iter().map(|w| canonical(w)));
+    open.extend(plan.allow_read.iter().map(|a| canonical(a)));
+    open.extend(plan.home_read.iter().map(|r| canonical(r)));
+    if let Some(s) = &plan.ligus_mcp_socket {
+        open.push(canonical(s));
+    }
+    let under: Vec<&std::path::PathBuf> = open.iter().filter(|o| o.starts_with(&home)).collect();
+    if !under.is_empty() {
+        p.push_str("(allow file-read*");
+        for o in &under {
+            p.push_str(&format!(" (subpath {})", q(o)));
+        }
+        p.push_str(")\n");
+    }
+    // Writes the plan grants under the home (the worktree, its extras) come
+    // back; reads above are read-only otherwise.
+    let mut writes: Vec<std::path::PathBuf> = plan.write_extra.iter().map(|w| canonical(w)).filter(|w| w.starts_with(&home)).collect();
+    if plan.worktree_writable && canonical(&plan.worktree).starts_with(&home) {
+        writes.push(canonical(&plan.worktree));
+    }
+    if !writes.is_empty() {
+        p.push_str("(allow file-write*");
+        for w in &writes {
+            p.push_str(&format!(" (subpath {})", q(w)));
+        }
+        p.push_str(")\n");
+    }
+    let mut meta: Vec<std::path::PathBuf> = vec![home.clone()];
+    for o in &under {
+        meta.extend(ancestors_within(&home, o));
+    }
+    meta.sort();
+    meta.dedup();
+    p.push_str("(allow file-read-metadata");
+    for m in &meta {
+        p.push_str(&format!(" (literal {})", q(m)));
+    }
+    p.push_str(")\n");
+    p
 }
 
 /// The SBPL profile for `plan` (`proxy_port`: the egress proxy's port).
@@ -165,6 +244,19 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
         p.push_str(&format!(" (subpath {})", q(w)));
     }
     p.push_str(" (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ptmx\") (regex #\"^/dev/ttys\"))\n");
+    // Phase C: the home dir, default-deny (before the protected paths and the
+    // hard denies, which win over what it lets back in).
+    p.push_str(&home_rules(plan));
+    // Other turns' scratch dirs (their homes hold their CLIs' sign-ins):
+    // the dir that holds them is denied, this turn's own dir excepted
+    // (before the protected paths and the hard denies, which still win).
+    if let Some(root) = super::sibling_turns_root(&plan.tmp) {
+        p.push_str(&format!(
+            "(deny file-read* file-write* (subpath {root}))\n(allow file-read* file-write* (subpath {tmp}))\n(allow file-read-metadata (literal {root}))\n",
+            root = q(&root),
+            tmp = q(&plan.tmp)
+        ));
+    }
     if plan.worktree_writable && !plan.read_only.is_empty() {
         p.push_str(&format!("(deny file-write*{})\n", protected_filters(plan)));
     }

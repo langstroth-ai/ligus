@@ -346,6 +346,14 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         redeemed: Option<Uuid>,
     },
+    /// The sandbox grants in force (config log; the whole set, replacing the
+    /// previous one): extra paths agents may read or write on the host that
+    /// runs them, for every agent or per agent, and per agent the shell for
+    /// turns a member other than the Owner starts. Admin + presence; turning
+    /// an agent's shell grant on or off is the Owner's. Agents never set it
+    /// (they hold no presence). Additive (Phase C): an older build decodes it
+    /// as `Unknown`, and its agents run without the grants (narrower).
+    WorkspaceSandboxSet { grants: crate::sandbox::SandboxGrants },
     /// An infection signal locked a chat down (self-medication): its envelope
     /// closes egress and every proposal needs a human approval until a member
     /// clears it. Config log (so the workspace roster authorizes the clear);
@@ -571,6 +579,7 @@ impl SessionEvent {
             SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
             SessionEvent::JoinApproved { .. } => "joinApproved",
             SessionEvent::AdmissionClosed { .. } => "admissionClosed",
+            SessionEvent::WorkspaceSandboxSet { .. } => "workspaceSandboxSet",
             SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
@@ -625,6 +634,7 @@ impl SessionEvent {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::AdmissionClosed { .. }
+            | SessionEvent::WorkspaceSandboxSet { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
@@ -1101,6 +1111,9 @@ impl ChatSession {
             SessionEvent::AdmissionClosed { invite, redeemed } => {
                 self.guards.used_invites.insert(*invite);
                 self.guards.closed_admissions.entry(*invite).or_default().push(*redeemed);
+            }
+            SessionEvent::WorkspaceSandboxSet { grants } => {
+                self.guards.sandbox_grants = grants.clone();
             }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();

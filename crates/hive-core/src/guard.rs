@@ -125,6 +125,9 @@ pub struct GuardState {
     /// `AdmissionClosed` named (none: nobody). Config log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub closed_admissions: BTreeMap<Uuid, Vec<Option<Uuid>>>,
+    /// The sandbox grants in force (`WorkspaceSandboxSet`). Config log.
+    #[serde(default, skip_serializing_if = "crate::sandbox::SandboxGrants::is_empty")]
+    pub sandbox_grants: crate::sandbox::SandboxGrants,
     /// Approvals cast through a vote whose stated voter is the event's signed
     /// author (proposal id → voter ids). Approvals carried inside a proposal
     /// snapshot are not here, so they can't satisfy a human gate.

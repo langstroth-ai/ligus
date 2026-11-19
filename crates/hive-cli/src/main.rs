@@ -1024,8 +1024,15 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // frontier); an agent's message resolves through its chain to
                 // the lowest of the humans behind it (the shared rule).
                 let author_role = svc.trigger_author_role(s.id, last.id).ok().flatten();
+                // Phase C: the shell is the Owner's (`ligus agent` has no
+                // agent id to hold a grant).
+                let shell_allowed = hive_runtime::author_gate::shell_allowed(svc.trigger_shell_role(s.id, last.id).ok().flatten(), false);
                 let mut turn_rt = rt.clone();
                 let plan = hive_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
+                if let Err(reason) = hive_runtime::author_gate::gate_shell(turn_rt.provider, &mut turn_rt.args, shell_allowed) {
+                    println!("refused: {reason}");
+                    continue;
+                }
                 let allow_mcp = plan.allows_tools();
                 if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &plan {
                     println!("refused: {reason}");
@@ -1050,7 +1057,11 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 }
                 turn_rt.args.extend(enforcement.extra_args);
                 let allow_mcp = allow_mcp && enforcement.allow_run_command;
-                let sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
+                let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
+                sandbox.shell_allowed = shell_allowed;
+                // The signed grants, when this host applies them
+                // (`LIGUS_SANDBOX_GRANTS`; by default only the Owner's).
+                sandbox.grants = svc.sandbox_grants_here(s.workspace_id, hive_runtime::sandbox::grants_setting_from_env()).0.paths_for(None);
                 // Who the turn answers (what the reply's `@you` means).
                 let system = match hive_runtime::prompt::requester_guidance(&s, Some(last.id)) {
                     g if g.is_empty() => system.clone(),
@@ -1435,6 +1446,83 @@ fn truncate(s: &str, n: usize) -> String {
 /// `--turn-test` (exit 5 on failure) runs one real headless agent turn
 /// against an in-process stub model whose `run_command` probes the sandbox
 /// (see selftest.rs).
+/// `ligus doctor --sandbox [--runtime <name>] [--agent <id>]`: what an agent
+/// turn may reach on this host (Phase C: the home is default-deny), each path
+/// with why, the shell rule, and the signed grants in force for this
+/// workspace. The same lines as Settings, Sandbox on the desktop.
+fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>) -> Result<()> {
+    use hive_core::ModelProviderKind as K;
+    // The signed grants, and whether this host applies them.
+    let setting = hive_runtime::sandbox::grants_setting_from_env();
+    let (signed, here) = signed_grants_here(cfg, setting);
+    let grants = if here.apply { signed.clone() } else { hive_core::sandbox::SandboxGrants::default() };
+    let agent_id = agent.and_then(|a| Uuid::parse_str(a.trim()).ok());
+    let kinds: Vec<Option<K>> = match runtime.map(|r| r.trim().to_ascii_lowercase()) {
+        Some(r) => vec![match r.as_str() {
+            "claude" | "claude-code" | "claudecode" => Some(K::ClaudeCode),
+            "codex" => Some(K::Codex),
+            "copilot" => Some(K::Copilot),
+            "agy" | "antigravity" => Some(K::Antigravity),
+            "aider" => Some(K::Aider),
+            "pi" => Some(K::Pi),
+            "hermes" => Some(K::Hermes),
+            "commands" | "command" | "tool" => None,
+            other => anyhow::bail!("unknown runtime {other:?} (claude, codex, copilot, agy, aider, pi, hermes, commands)"),
+        }],
+        None => vec![Some(K::ClaudeCode), Some(K::Codex), Some(K::Copilot), Some(K::Antigravity), Some(K::Aider), Some(K::Pi), Some(K::Hermes), None],
+    };
+    let paths = grants.paths_for(agent_id);
+    let shell = agent_id.is_some_and(|id| grants.shell_granted(id));
+    for k in kinds {
+        let p = hive_runtime::executor::effective_policy(k, &paths, shell);
+        println!("\n{} (tier {}):", p.runtime, p.tier);
+        for e in &p.entries {
+            println!("  {:<10} {}  ({})", e.access, e.path, e.why);
+        }
+        println!("  shell      {}", p.shell);
+    }
+    println!("\nworkspace sandbox grants on this host: {}", here.why);
+    println!("  ({}=apply or {}=ignore sets it)", hive_runtime::sandbox::GRANTS_ENV, hive_runtime::sandbox::GRANTS_ENV);
+    println!("\nsigned grants for this workspace{}:", if here.apply { " (in force here)" } else { " (not applied here)" });
+    let grants = signed;
+    if grants.is_empty() {
+        println!("  none (Settings, Sandbox on a desktop: Admin with a passkey; the shell grant is the Owner's)");
+    }
+    for p in &grants.workspace.read_only {
+        println!("  every agent  read        {p}");
+    }
+    for p in &grants.workspace.read_write {
+        println!("  every agent  read-write  {p}");
+    }
+    for (id, a) in &grants.agents {
+        for p in &a.read_only {
+            println!("  agent {id}  read        {p}");
+        }
+        for p in &a.read_write {
+            println!("  agent {id}  read-write  {p}");
+        }
+        if a.shell {
+            println!("  agent {id}  shell for every member's turns (an Owner's grant)");
+        }
+    }
+    Ok(())
+}
+
+/// This host's workspace's signed sandbox grants and whether it applies
+/// them (`LIGUS_SANDBOX_GRANTS`, else only on the Owner's own hosts).
+fn signed_grants_here(cfg: &Config, setting: Option<bool>) -> (hive_core::sandbox::SandboxGrants, hive_runtime::sandbox::GrantsHere) {
+    if cfg.room.is_empty() {
+        return (Default::default(), hive_runtime::sandbox::grants_here(setting, None, false));
+    }
+    match open_service(cfg) {
+        Ok(svc) => {
+            let ws = uuid_of_room(&cfg.room);
+            (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1)
+        }
+        Err(_) => (Default::default(), hive_runtime::sandbox::grants_here(setting, None, false)),
+    }
+}
+
 fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bool, cfg: &Config) -> Result<i32> {
     let s = hive_runtime::executor::sandbox_status();
     println!("agent sandbox: {}", s.tier());
@@ -1453,6 +1541,11 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
     }
     if let Some(d) = hardening::dumpable() {
         println!("process dumpable: {}", if d { "yes" } else { "no" });
+    }
+    {
+        let (signed, here) = signed_grants_here(cfg, hive_runtime::sandbox::grants_setting_from_env());
+        let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
+        println!("workspace sandbox grants: {} ({n} signed; ligus doctor --sandbox lists them)", here.why);
     }
     if (require_confined || turn_test) && unconfined {
         eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");
@@ -1495,6 +1588,7 @@ fn usage() -> ! {
          ligus whoami\n  \
          ligus gateway-check [--gateway <name>] [--model <id>]\n                                       prove this host's model gateways: a hosted-API turn and a\n                                       sandboxed CLI child through the egress proxy's route\n  \
          ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]\n                                       this device's agent sandbox tier and what it leaves open;\n                                       the flags make it a preflight (non-zero exit on failure)\n  \
+         ligus doctor --sandbox [--runtime <name>] [--agent <id>]\n                                       what an agent turn may read and write on this host (the\n                                       home is denied by default), why, the shell rule, and the\n                                       signed grants in force\n  \
          ligus chats\n  \
          ligus new [title]\n  \
          ligus tail <chat-id> [--watch]\n  \
@@ -1694,6 +1788,9 @@ fn run() -> Result<()> {
         "whoami" => cmd_whoami(&cfg),
         "doctor" => {
             let code = cmd_doctor(has("--require-confined"), flag_val("--expect-tier"), has("--turn-test"), &cfg)?;
+            if code == 0 && has("--sandbox") {
+                print_sandbox_policy(&cfg, flag_val("--runtime").as_deref(), flag_val("--agent").as_deref())?;
+            }
             if code != 0 {
                 std::process::exit(code);
             }
