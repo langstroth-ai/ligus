@@ -101,9 +101,9 @@ fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.toml")
 }
 
-fn cli_secret(name: &str) -> hive_runtime::secret_store::SecretId {
-    hive_runtime::secret_store::SecretId::new("cli", name)
-}
+/// The secret-store scope of this CLI's connection secrets.
+const CLI_SCOPE: &str = "cli";
+use hive_runtime::connection_settings::ConnectionSecrets;
 
 impl FileConfig {
     /// `config.toml`, with its secrets from the store. Secrets still written
@@ -124,33 +124,16 @@ impl FileConfig {
             }
         }
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let get = |n: &str| store.get_string(&cli_secret(n)).ok().flatten().map(|z| z.to_string()).filter(|v| !v.is_empty());
-        f.token = get("token");
-        f.key = get("key");
-        f.ek = get("ek").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
-        if let Some(t) = &f.token {
-            hive_runtime::secret_redact::register(t);
-        }
-        if let Some(k) = &f.key {
-            hive_runtime::secret_redact::register(k);
-        }
+        let secrets = ConnectionSecrets::load(store.as_ref(), CLI_SCOPE, "");
+        (f.token, f.key, f.ek) = (secrets.token, secrets.key, secrets.ek);
         f
     }
 
     /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
     fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let put = |n: &str, v: Option<&str>| -> Result<()> {
-            match v.filter(|v| !v.is_empty()) {
-                Some(v) => store.put(&cli_secret(n), v.as_bytes())?,
-                None => store.delete(&cli_secret(n))?,
-            }
-            Ok(())
-        };
-        put("token", self.token.as_deref())?;
-        put("key", self.key.as_deref())?;
-        let ek = (!self.ek.is_empty()).then(|| serde_json::to_string(&self.ek)).transpose()?;
-        put("ek", ek.as_deref())?;
+        let secrets = ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() };
+        secrets.save(store.as_ref(), CLI_SCOPE, "")?;
         serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }

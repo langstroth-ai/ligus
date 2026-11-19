@@ -21,6 +21,7 @@ pub mod box_admission;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;
+pub mod connection_settings;
 pub mod context;
 pub mod device_enroll;
 pub mod directory_trust;
