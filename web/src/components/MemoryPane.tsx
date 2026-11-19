@@ -11,10 +11,13 @@ import {
   draftProblem,
   memoryView,
   parseTags,
+  proposedBy,
+  proposeMemory,
   provenance,
   removeMemory,
   writeMemory,
   type MemoryEntry,
+  type MemoryOp,
   type MemoryProposalState,
   type MemoryRevision,
   type MemoryView,
@@ -60,6 +63,14 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
               .then(done)
               .catch(fail(accepted ? "accept the proposal" : "reject the proposal"))
           }
+          onPropose={(op) =>
+            proposeMemory(op)
+              .then(() => {
+                toast.success("Proposed. Its author or an Admin decides it.");
+                done();
+              })
+              .catch(fail("propose the change"))
+          }
         />
       )}
     </RailFrame>
@@ -82,6 +93,7 @@ export function MemoryPaneView({
   onSave,
   onRemove,
   onDecide,
+  onPropose,
 }: {
   view: MemoryView;
   query: string;
@@ -89,13 +101,14 @@ export function MemoryPaneView({
   onSave: (d: Draft) => void;
   onRemove: (e: MemoryEntry) => void;
   onDecide: (p: MemoryProposalState, accepted: boolean) => void;
+  onPropose: (op: MemoryOp) => void;
 }) {
   const [creating, setCreating] = useState(false);
   const open = view.proposals.filter((p) => !p.decision);
   return (
     <div className="space-y-4" data-testid="memory-pane">
       {open.length > 0 && (
-        <Section title={`Proposed by agents (${open.length})`}>
+        <Section title={`Proposals (${open.length})`}>
           <ul className="space-y-2">
             {open.map((p) => (
               <ProposalCard key={p.proposal.proposalId} p={p} view={view} onDecide={onDecide} />
@@ -131,7 +144,7 @@ export function MemoryPaneView({
         ) : (
           <ul className="space-y-2">
             {view.entries.map((e) => (
-              <EntryCard key={e.id} e={e} view={view} onSave={onSave} onRemove={onRemove} />
+              <EntryCard key={e.id} e={e} view={view} onSave={onSave} onRemove={onRemove} onPropose={onPropose} />
             ))}
           </ul>
         )}
@@ -145,13 +158,18 @@ function EntryCard({
   view,
   onSave,
   onRemove,
+  onPropose,
 }: {
   e: MemoryEntry;
   view: MemoryView;
   onSave: (d: Draft) => void;
   onRemove: (e: MemoryEntry) => void;
+  onPropose: (op: MemoryOp) => void;
 }) {
   const [editing, setEditing] = useState<null | Draft>(null);
+  // Someone else's note: a member suggests an edit, which its author or an
+  // Admin decides (the `memory_propose` command).
+  const [suggesting, setSuggesting] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const mine = canChange(e, view.me, view.moderator);
   const conflicts = e.conflicts ?? [];
@@ -167,11 +185,21 @@ function EntryCard({
             setEditing(null);
           }}
         />
+      ) : suggesting ? (
+        <EntryEditor
+          initial={{ title: e.current.title, body: e.current.body, tags: e.current.tags ?? [] }}
+          saveLabel="Propose"
+          onCancel={() => setSuggesting(false)}
+          onSave={(d) => {
+            onPropose({ op: "edit", entryId: e.id, base: e.current.rev, title: d.title, body: d.body, tags: d.tags });
+            setSuggesting(false);
+          }}
+        />
       ) : (
         <>
           <div className="flex items-start justify-between gap-2">
             <button className="min-w-0 text-left font-semibold" onClick={() => setExpanded((x) => !x)} aria-expanded={expanded}>
-              {e.current.title}
+              <bdi>{e.current.title}</bdi>
             </button>
             {conflicts.length > 0 && <Badge tone="warn">{conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`}</Badge>}
           </div>
@@ -203,6 +231,13 @@ function EntryCard({
               }
             />
           ))}
+          {!mine && (
+            <div className="mt-1.5 flex gap-1.5">
+              <Button size="sm" onClick={() => setSuggesting(true)}>
+                Suggest an edit
+              </Button>
+            </div>
+          )}
           {mine && (
             <div className="mt-1.5 flex gap-1.5">
               <Button
@@ -262,12 +297,19 @@ function ProposalCard({ p, view, onDecide }: { p: MemoryProposalState; view: Mem
     <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-proposal">
       <div className="flex items-center gap-2">
         <Badge tone="info">{verb}</Badge>
-        <span className="min-w-0 truncate font-semibold">{op.op === "remove" ? target?.current.title ?? "a note" : op.title}</span>
+        <span className="min-w-0 truncate font-semibold">
+          <bdi>{op.op === "remove" ? target?.current.title ?? "a note" : op.title}</bdi>
+        </span>
       </div>
+      {op.op === "edit" && (
+        <div className="mt-0.5 text-xs" style={{ color: "var(--hive-ink-soft)" }}>
+          Changes “<bdi>{target?.current.title ?? "a note no longer in the list"}</bdi>”
+        </div>
+      )}
       {op.op !== "remove" && <p className="mt-1 whitespace-pre-wrap break-words text-xs">{op.body}</p>}
       {p.proposal.rationale && <p className="mt-1 text-xs italic">Why: {p.proposal.rationale}</p>}
       <div className="mt-1 text-xs" style={{ color: "var(--hive-ink-soft)" }}>
-        by {p.by.name || p.by.id}
+        by {proposedBy(p, view.agentNames)}
         {src && view.chatTitles[src] && ` in “${view.chatTitles[src]}”`} · {when(p.atMs)}
       </div>
       <div className="mt-1.5 flex gap-1.5">
@@ -282,7 +324,17 @@ function ProposalCard({ p, view, onDecide }: { p: MemoryProposalState; view: Mem
   );
 }
 
-function EntryEditor({ initial, onSave, onCancel }: { initial?: Draft; onSave: (d: Draft) => void; onCancel: () => void }) {
+function EntryEditor({
+  initial,
+  onSave,
+  onCancel,
+  saveLabel = "Save",
+}: {
+  initial?: Draft;
+  onSave: (d: Draft) => void;
+  onCancel: () => void;
+  saveLabel?: string;
+}) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
   const [tags, setTags] = useState((initial?.tags ?? []).join(", "));
@@ -303,7 +355,7 @@ function EntryEditor({ initial, onSave, onCancel }: { initial?: Draft; onSave: (
       {problem && (title || body) && <div className="text-xs" style={{ color: "var(--hive-ink-soft)" }}>{problem}</div>}
       <div className="flex gap-1.5">
         <Button size="sm" variant="primary" disabled={!!problem} onClick={() => onSave({ ...initial, title: title.trim(), body, tags: parseTags(tags) })}>
-          Save
+          {saveLabel}
         </Button>
         <Button size="sm" onClick={onCancel}>
           Cancel

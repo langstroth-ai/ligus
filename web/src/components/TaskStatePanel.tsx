@@ -30,9 +30,11 @@ export function TaskStateView({ slots }: { slots: TaskSlotDto[] }) {
   return (
     <div className="mb-2 flex flex-col gap-1.5" data-testid="task-state" aria-label="Task state" role="status" aria-live="polite">
       {shown.map((s) => (
-        <div key={`${s.update.taskId}/${s.update.agentKey}`} className="rounded-xl border px-3 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)", opacity: s.active ? 1 : 0.7 }}>
+        <div key={`${s.writer}/${s.update.taskId}/${s.update.agentKey}`} className="rounded-xl border px-3 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)", opacity: s.active ? 1 : 0.7 }}>
           <div className="flex items-center gap-2">
-            <span className="font-semibold">{s.agentName}</span>
+            <span className="font-semibold">
+              <bdi>{s.agentName}</bdi>
+            </span>
             <Badge tone={TONE[s.update.status] ?? "neutral"}>{TASK_STATUS_LABEL[s.update.status]}</Badge>
             {s.update.progress != null && (
               <span className="flex items-center gap-1" aria-label={`${s.update.progress}% done`}>
@@ -46,7 +48,9 @@ export function TaskStateView({ slots }: { slots: TaskSlotDto[] }) {
               {new Date(s.atMs).toLocaleTimeString()}
             </span>
           </div>
-          <p className="mt-0.5 break-words">{s.update.summary}</p>
+          <p className="mt-0.5 break-words" dir="auto">
+            {s.update.summary}
+          </p>
           {(s.update.openQuestions ?? []).length > 0 && (
             <div className="mt-0.5">
               <span className="font-semibold">Open questions</span>
