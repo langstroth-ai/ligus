@@ -34,7 +34,8 @@ at a new, empty dir.
 ## Sync is stuck or peers don't see each other
 
 **Start with the sync pill.** It shows **live**, **error** (with the
-reason) or **offline**. Then, on every device:
+reason), **offline**, or an amber **limited** state (see
+[The relay refuses writes](#relay-refusals)). Then, on every device:
 
 1. **Same relay URL and room** (Settings → Team sync). Workspaces created
    with **Add workspace → Create** have random room ids; join them with the
@@ -64,6 +65,26 @@ Notes:
 - On a CLI box, `ligus sync` prints `pushed N, pulled M`; errors print
   `sync: <reason> — retrying in Ns` in the worker's log (backing off up to
   120 s).
+
+## The relay refuses writes (workspace full, quotas, rate limits) {#relay-refusals}
+
+A relay answers a limit with `429` or `507`, a code and `Retry-After`. Ligus
+acts on the code and never loops against it:
+
+| Pill / message | Codes | What Ligus does | What you do |
+|---|---|---|---|
+| **Workspace full** | `507` `room_bytes`, `room_envelopes`, `keyring` | stops writing to that workspace only; it stays readable and other workspaces keep syncing. New events wait on this device and one push is tried again after `Retry-After` (an hour) | ask the relay operator for more room, or move the workspace to another relay |
+| **Organisation quota reached** | `507` `tenant_bytes`, `tenant_rooms` | as above | ask your organisation's admin |
+| **Relay full** | `507` `store_bytes`, `total_bytes`, `total_rooms`, `contacts_full` | backs off until `Retry-After` (ten minutes), then retries | nothing, unless it lasts: tell the relay operator |
+| **Sync slowed by the relay** | `429` `ip_rate`, `room_rate`, `write_rate`, `read_rate`, `room_writer_rate`, `tenant_rate`, `contact_*_rate`, `rate_limited` | waits `Retry-After` and sends the same request again (same bytes, same idempotency key, so nothing is stored twice) | nothing |
+| (no pill) | `429` `sse_streams` | closes back to polling until `Retry-After` | close other Ligus windows or devices using the same token |
+| "too many wrong pairing codes" | `429` `pair_lockout` | sends no pairing-code lookup to that relay until it ends | wait, then type the code again |
+| "Not retried automatically" | `429` `client_rooms`, `too_many_pending` | stops; never retries by itself | delete a workspace you no longer use (or clear pending requests), then restart Ligus (or `ligus serve`) |
+| **Room expired or truncated** | a new device's first envelope isn't the workspace's first | syncs what is there and says so: the device can't rebuild the workspace from its founding | ask a member whose device still holds it to re-invite you, or move the workspace to a relay that keeps the whole log |
+
+An unknown code is handled by its status: an unknown `429` like a rate
+limit, an unknown `507` like a full relay. On a CLI box the same messages
+appear as `sync: <message>` in the log and in the dashboard's sync state.
 
 ## Relay 401s
 
@@ -106,6 +127,8 @@ curl -s http://<listen>/v1/health
 | `ligus pair` says the link would point the phone at itself | it read the default loopback address | load the server's env, or `--listen` / `--public-url`, or turn on the relay tunnel |
 | `ligus pair` says there's no serve token | wrong data dir, or serve never ran | set `LIGUS_DATA_DIR` / `--token-file`, or start `ligus serve` |
 | phone: link expired or already used | pairing secrets are one-time, 10 minutes, and need serve running | `ligus pair` again |
+| phone: "add this phone first" (close `4040 device_not_certified`) | the box doesn't know the phone's device key as yours yet | on the desktop, **My devices > Add this phone** with the app's code; let the box sync; `ligus pair` again |
+| phone: device revoked (close `4041 device_revoked`) | that phone was revoked | reset the phone's device key in the app and add it again |
 | direct path times out | phone not on the same LAN or tailnet; firewall | check Tailscale on both; `curl` the URL from another device |
 | `serve: not connected` | relay tunnel off (`/v1/tunnel/info` 404), wrong or `http` URL, missing `--reg-token`, two serve processes on one data dir | see the `last error` |
 | `serve: unknown … is it running?` | `ligus serve` stopped | `systemctl --user status ligus-serve` |
