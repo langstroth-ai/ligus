@@ -211,11 +211,14 @@ jobs:
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
+      # prop_ledger_replay_converges spawns thousands of git processes, which
+      # takes over ten minutes on Windows at 256 cases. Its logic isn't
+      # platform-specific, and Linux and macOS run it in full.
       - name: Tests (nextest, full)
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           PROPTEST_CASES: "256"
-        run: cargo nextest run --locked --workspace --profile ci
+        run: cargo nextest run --locked --workspace --profile ci -E "not test(=repos::tests::prop_ledger_replay_converges)"
 
       # PRs and merge-queue runs; the push after the merge runs the full suite.
       - name: Tests (nextest, PR subset)

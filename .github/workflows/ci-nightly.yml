@@ -66,8 +66,10 @@ jobs:
       - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      # prop_ledger_replay_converges is git-process heavy and runs past the
+      # ten-minute limit on Windows; Linux runs it at 4096 cases above.
       - name: Tests (nextest, full)
-        run: cargo nextest run --locked --workspace --profile ci
+        run: cargo nextest run --locked --workspace --profile ci -E "not test(=repos::tests::prop_ledger_replay_converges)"
       - name: Doctests
         run: cargo test --locked --workspace --doc
 
