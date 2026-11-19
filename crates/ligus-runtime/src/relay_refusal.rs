@@ -9,10 +9,10 @@
 //!
 //! | Class | Codes | What the client does |
 //! |---|---|---|
-//! | [`RefusalClass::RateLimited`] | `ip_rate`, `room_rate`, `tenant_rate`, `write_rate`, `read_rate`, `room_writer_rate`, `contact_*_rate`, `rate_limited`, any other `429` | wait `Retry-After`, retry the same request (same body, same idempotency key); the outbox is kept |
+//! | [`RefusalClass::RateLimited`] | `ip_rate`, `room_rate`, `tenant_rate`, `write_rate`, `read_rate`, `room_writer_rate`, `contact_*_rate`, `client_inflight`, `blob_inflight`, `rate_limited`, any other `429` | wait `Retry-After`, retry the same request (same body, same idempotency key); the outbox is kept |
 //! | [`RefusalClass::StreamLimit`] | `sse_streams` | back the event stream off until `Retry-After` (polling meanwhile) |
 //! | [`RefusalClass::PairLockout`] | `pair_lockout` | send no pairing-code lookup to that relay until `Retry-After` |
-//! | [`RefusalClass::ClientQuota`] | `client_rooms`, `too_many_pending` | no retry right away: tell the user; a write pause rechecks once per [`CLIENT_QUOTA_RECHECK`] (at least), so it can't last until a restart |
+//! | [`RefusalClass::ClientQuota`] | `client_rooms`, `too_many_pending`, `pair_codes` | no retry right away: tell the user; a write pause rechecks once per [`CLIENT_QUOTA_RECHECK`] (at least), so it can't last until a restart |
 //! | [`RefusalClass::RoomFull`] | `507` `room_bytes`, `room_envelopes`, `keyring` | pause writes to that room only ("workspace full"); reads go on; one try per `Retry-After` |
 //! | [`RefusalClass::OrgQuota`] | `507` `tenant_bytes`, `tenant_rooms` | as `RoomFull`, worded "organisation quota reached" |
 //! | [`RefusalClass::RelayFull`] | `507` `store_bytes`, `total_bytes`, `total_rooms`, `contacts_full`, any other `507` | back off until `Retry-After` |
@@ -140,7 +140,7 @@ impl RelayRefusal {
         match (self.status, self.code.as_str()) {
             (429, "sse_streams") => RefusalClass::StreamLimit,
             (429, "pair_lockout") => RefusalClass::PairLockout,
-            (429, "client_rooms" | "too_many_pending") => RefusalClass::ClientQuota,
+            (429, "client_rooms" | "too_many_pending" | "pair_codes") => RefusalClass::ClientQuota,
             (429, _) => RefusalClass::RateLimited,
             (507, "room_bytes" | "room_envelopes" | "keyring") => RefusalClass::RoomFull,
             (507, "tenant_bytes" | "tenant_rooms") => RefusalClass::OrgQuota,
@@ -165,6 +165,9 @@ impl RelayRefusal {
             RefusalClass::RateLimited => format!("the relay is rate limiting this device ({code}); retrying in {wait}"),
             RefusalClass::StreamLimit => format!("the relay has too many live streams open from this device ({code}); polling instead, retrying in {wait}"),
             RefusalClass::PairLockout => format!("too many wrong pairing codes were tried on this relay ({code}); try again in {wait}"),
+            RefusalClass::ClientQuota if self.code == "pair_codes" => format!(
+                "this device holds as many live pairing codes as the relay allows ({code}). Use or let one expire, or try again in {wait}"
+            ),
             RefusalClass::ClientQuota if self.code == "too_many_pending" => {
                 format!("the relay refused: too many pending requests from this account ({code}). Not retried right away; clear some first")
             }

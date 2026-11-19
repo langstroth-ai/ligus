@@ -26,6 +26,10 @@ use crate::relay_refusal::{human_duration, RefusalClass, RelayRefusal};
 /// with more history than this catches up over several rounds
 /// ([`SyncEngine::is_behind`] says another round is due), so one round never
 /// holds the store or memory for an unbounded download.
+/// The relay's request-body cap (`LANGSTROTH_RELAY_MAX_BODY_BYTES`, 4 MiB by
+/// default): a sealed envelope past it is never accepted.
+pub const MAX_PUSH_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 pub const PULL_PAGES_PER_ROUND: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
@@ -824,10 +828,25 @@ impl SyncEngine {
                     return Err(e);
                 }
             };
+            // One the relay can never take (past its request-body cap; this
+            // device refuses to write one, but an older build or a peer may
+            // have) is set aside instead of holding the outbox: every event
+            // after it would wait for good.
+            let size = serde_json::to_vec(&body).map(|b| b.len()).unwrap_or(usize::MAX);
+            if size > MAX_PUSH_BODY_BYTES {
+                self.set_aside(env, &format!("{size} bytes sealed, past the relay's {MAX_PUSH_BODY_BYTES}-byte cap"));
+                continue;
+            }
             // The key makes a re-push (after a refusal or a lost answer) the
             // same write to the relay, not a second copy.
             let key = self.push_key(env.event_id);
             if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
+                // `413`: this relay's cap is lower than this envelope; it never
+                // will take it. Set aside, as above, and go on.
+                if matches!(&e, RelayError::Status(413)) || e.refusal().is_some_and(|r| r.status == 413) {
+                    self.set_aside(env, "the relay refused it as too large (413)");
+                    continue;
+                }
                 for unsent in &envelopes[i..] {
                     self.seen.remove(&unsent.event_id);
                 }
@@ -855,6 +874,14 @@ impl SyncEngine {
             self.write_pause = None;
         }
         Ok(())
+    }
+
+    /// Never push `env` (the relay can't take it): it is recorded as done,
+    /// so neither this round nor a restart retries it, and the outbox moves
+    /// on. It stays in this device's store.
+    fn set_aside(&mut self, env: &SessionEventEnvelope, why: &str) {
+        tracing::error!(target: "sync", room = %self.workspace, event_id = %env.event_id, "an event too large for the relay is not sent: {why}");
+        self.pending.push(env.event_id);
     }
 
     /// Whether relay pushes will be sealed (a key is configured). `false` means
@@ -1167,14 +1194,21 @@ impl SyncEngine {
             let outcome = match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    // Kept as a lamport witness, whatever the reason: whether
-                    // an event is refused depends on what this device's roster
-                    // holds when it arrives (a revocation, a removal, a rebound
-                    // agent key, a certificate not here yet), so another device
-                    // may have accepted it and counted from it. The witness is
-                    // structural (id, lamport, log head, chain link), inert, and
-                    // never pushed (`ligus_core::lamport`).
-                    store.note_lamport_witness(env)?;
+                    // Kept as a lamport witness when the refusal depends on
+                    // what this device's roster holds when it arrives (a
+                    // revocation, a removal, a rebound agent key, a certificate
+                    // not here yet): another device may have accepted it and
+                    // counted from it. The witness is structural (id, lamport,
+                    // log head, chain link), inert, and never pushed
+                    // (`ligus_core::lamport`). An unsigned event, or one whose
+                    // signature fails under the one key its device id derives
+                    // from, is refused by every device whatever it holds: no
+                    // one counted from it, and a witness of it would let anyone
+                    // with the room's key lengthen a log's lamport chain with
+                    // junk no one can attribute.
+                    if !matches!(reason, crate::envelope_verifier::QuarantineReason::Unsigned | crate::envelope_verifier::QuarantineReason::BadSignature) {
+                        store.note_lamport_witness(env)?;
+                    }
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     Judgement::Refused
                 }
@@ -1626,6 +1660,50 @@ mod tests {
         assert_eq!(sync_c.pull(&mut store_c).await.unwrap(), 0);
     }
 
+    /// An envelope the relay can never take (larger than its request-body
+    /// cap: refused with a plain `413`, or too large to send at all) never
+    /// blocks the room's outbox: it is set aside and the events after it go
+    /// out. Every round after that is quiet.
+    #[tokio::test]
+    async fn an_envelope_the_relay_cant_take_never_blocks_the_outbox() {
+        let base = spawn_relay().await; // the mock's body cap is 2 MiB
+        let key = ligus_core::derive_workspace_key("big room");
+        let mut store = EventStore::open_in_memory().unwrap();
+        let (sid, wid) = seed_chat(&mut store);
+        let msg = |seq: i64, body: String| {
+            SessionEventEnvelope::new(sid, wid, seq, SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) })
+        };
+        // Sent and refused (413), then never sent (past the real relay's cap).
+        store.ingest_next(&msg(2, "x".repeat(2_500_000))).unwrap();
+        store.ingest_next(&msg(3, "y".repeat(5_000_000))).unwrap();
+        store.ingest_next(&msg(4, "after the big ones".into())).unwrap();
+        let room = Uuid::new_v4().to_string();
+        let mut eng = SyncEngine::unscoped(RelayClient::new(&base), &room).with_key(key);
+        for _ in 0..3 {
+            let _ = eng.push_new(&store).await;
+        }
+        let raw = RelayClient::new(&base).fetch_values(&room, 0).await.unwrap();
+        let bodies: Vec<String> = raw
+            .iter()
+            .map(|(_, b)| {
+                let sealed: SealedEnvelope = serde_json::from_value(b.clone()).unwrap();
+                String::from_utf8(open_symmetric(&key, &sealed).unwrap()).unwrap()
+            })
+            .collect();
+        assert!(bodies.iter().any(|b| b.contains("after the big ones")), "the outbox is blocked behind an envelope the relay refuses");
+        assert_eq!(eng.push_new(&store).await.unwrap(), 0, "nothing is retried forever");
+    }
+
+    /// The local cap leaves room for sealing: an envelope at it seals to a
+    /// body the relay's request cap takes.
+    #[test]
+    fn an_envelope_at_the_local_cap_seals_within_the_relays() {
+        let key = ligus_core::derive_workspace_key("cap");
+        let plain = vec![b'a'; crate::event_store::MAX_ENVELOPE_BYTES];
+        let sealed = ligus_core::e2ee::seal_symmetric_kid(&key, u32::MAX, &"k".repeat(64), &plain).unwrap();
+        assert!(serde_json::to_vec(&sealed).unwrap().len() <= MAX_PUSH_BODY_BYTES);
+    }
+
     #[tokio::test]
     async fn failed_push_rolls_back_so_events_retry() {
         // Relay pointed at a closed port → every push errors mid-batch.
@@ -2039,6 +2117,21 @@ mod tests {
         assert!(store.has_event(good.event_id).unwrap(), "valid signed event ingested");
         assert!(!store.has_event(tampered.event_id).unwrap(), "tampered event rejected");
         assert!(!store.has_event(spoof.event_id).unwrap(), "impersonating event rejected");
+        // A refusal no roster can change (a signature that doesn't verify
+        // under the one key its device id derives from, or none at all) is
+        // no lamport witness: no device ever accepted it or counted from it,
+        // and a witness would let anyone holding the room's key extend a
+        // log's lamport chain with junk nobody can attribute. The
+        // impersonation (roster-dependent: another device may hold the
+        // certificate that makes it valid) stays one.
+        let witnesses = store.witness_ids(Uuid::nil()).unwrap();
+        assert!(!witnesses.contains(&tampered.event_id), "a bad signature became a lamport witness");
+        assert!(witnesses.contains(&spoof.event_id), "a roster-dependent refusal stays a witness");
+        let mut unsigned = content(103, account_id);
+        unsigned.signature = None;
+        unsigned.signer_device_id = None;
+        eng.apply_fetched(&mut store, &[(100, serde_json::to_value(&unsigned).unwrap())]).unwrap();
+        assert!(!store.witness_ids(Uuid::nil()).unwrap().contains(&unsigned.event_id), "an unsigned event became a lamport witness");
     }
 
     #[tokio::test]

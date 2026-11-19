@@ -75,8 +75,46 @@ fn jitter(d: Duration) -> Duration {
     d.mul_f64(0.8 + 0.4 * r)
 }
 
+/// What the control loop does after the relay closed the connection with a
+/// close code (§12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum After {
+    /// Stop remote access, with the operator-facing reason.
+    Stop(String),
+    /// Reconnect after this long.
+    Wait(Duration),
+}
+
+/// How long a host the relay doesn't serve (4006 `not_entitled`: pending
+/// approval by its operator; 4003 `revoked`) waits between tries: either can
+/// change on the relay's side, but not within seconds.
+const NOT_ENTITLED_WAIT: Duration = Duration::from_secs(10 * 60);
+
+/// The relay's close codes, classified. Retrying a code that can't change
+/// by itself only hammers the relay: credentials it rejects (4001) and a
+/// protocol version it doesn't speak (4026) stop remote access; a host it
+/// doesn't serve (4006, and 4003 should a relay send it here) tries again
+/// rarely;
+/// another process on this host's key (4009) waits at least a minute;
+/// anything else backs off.
+fn after_close(code: u16, why: &str, backoff: Duration) -> After {
+    match code {
+        4001 => After::Stop(format!(
+            "the relay rejected this host's credentials (4001 {why}); remote access is stopped. \
+             Check `ligus remote status`, or run `ligus remote reset` if the host key changed."
+        )),
+        4026 => After::Stop(format!(
+            "the relay doesn't speak this version of the remote-access protocol (4026 {why}); remote access is stopped. Update Ligus, or point it at a newer relay."
+        )),
+        4003 | 4006 => After::Wait(jitter(NOT_ENTITLED_WAIT).max(NOT_ENTITLED_WAIT)),
+        4009 => After::Wait(jitter(MAX_BACKOFF).max(MAX_BACKOFF)),
+        _ => After::Wait(jitter(backoff)),
+    }
+}
+
 /// Keep the control connection up until `stop`. Reconnects with backoff
-/// 1 … 60 s (±20 %); waits ≥ 60 s after 4009; stops on 4001 (§12).
+/// 1 … 60 s (±20 %); waits ≥ 60 s after 4009 and ≥ 10 min after 4003 or
+/// 4006; stops on 4001 and 4026 (§12, [`after_close`]).
 pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receiver<bool>, t: Timeouts) {
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -90,26 +128,29 @@ pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receive
         }
         let wait = match &end {
             End::Stopped => return,
-            End::Code(4001, why) => {
-                eprintln!(
-                    "remote: the relay rejected this host's credentials (4001 {why}); remote access is stopped. \
-                     Check `ligus remote status`, or run `ligus remote reset` if the host key changed."
-                );
-                host.update_status(|s| s.last_error = Some(format!("4001 {why}")));
-                return;
-            }
-            End::Code(4009, _) => {
-                eprintln!(
-                    "remote: SUPERSEDED (4009): another process connected to the relay with this host's key. \
-                     Two `ligus serve`s share one data dir? Waiting 60 s."
-                );
-                host.update_status(|s| s.last_error = Some("4009 superseded".into()));
-                jitter(MAX_BACKOFF).max(MAX_BACKOFF)
-            }
             End::Code(code, why) => {
-                eprintln!("remote: relay closed the control connection ({code} {why}); retrying in {}s", backoff.as_secs());
                 host.update_status(|s| s.last_error = Some(format!("{code} {why}")));
-                jitter(backoff)
+                match after_close(*code, why, backoff) {
+                    After::Stop(msg) => {
+                        eprintln!("remote: {msg}");
+                        return;
+                    }
+                    After::Wait(wait) => {
+                        match code {
+                            4009 => eprintln!(
+                                "remote: SUPERSEDED (4009): another process connected to the relay with this host's key. \
+                                 Two `ligus serve`s share one data dir? Waiting {}s.",
+                                wait.as_secs()
+                            ),
+                            4003 | 4006 => eprintln!(
+                                "remote: the relay doesn't serve this host ({code} {why}: ask its operator); trying again in {} min",
+                                wait.as_secs() / 60
+                            ),
+                            _ => eprintln!("remote: relay closed the control connection ({code} {why}); retrying in {}s", wait.as_secs()),
+                        }
+                        wait
+                    }
+                }
             }
             End::Other(e) => {
                 eprintln!("remote: {e:#}; retrying in {}s", backoff.as_secs());
@@ -315,3 +356,23 @@ mod tls_tests {
     }
 }
 
+
+#[cfg(test)]
+mod close_code_tests {
+    use super::*;
+
+    /// A close code that can't change by itself stops remote access instead
+    /// of being retried forever; a pending host tries again rarely.
+    #[test]
+    fn close_codes_stop_or_back_off_by_what_they_mean() {
+        let b = Duration::from_secs(2);
+        for code in [4001, 4026] {
+            assert!(matches!(after_close(code, "x", b), After::Stop(_)), "{code} is retried");
+        }
+        for code in [4003, 4006] {
+            assert!(matches!(after_close(code, "x", b), After::Wait(w) if w >= NOT_ENTITLED_WAIT), "{code} retried at the reconnect pace");
+        }
+        assert!(matches!(after_close(4009, "superseded", b), After::Wait(w) if w >= MAX_BACKOFF));
+        assert!(matches!(after_close(4011, "shutting_down", b), After::Wait(w) if w <= b * 2));
+    }
+}
