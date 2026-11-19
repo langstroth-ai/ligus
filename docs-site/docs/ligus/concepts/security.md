@@ -457,9 +457,13 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   revoked at the stamped position; anything else gets no role. Ingest
   enforces the same binding first: an event whose stamp names a known
   account (by its account field or by its actor id) that the signing device
-  doesn't sign for is quarantined as impersonation on every device, so a
-  Contributor can't post as the Owner or promote themselves with a
-  `MemberRoleChanged` stamped with the Owner's id.
+  isn't certified for is held and never applied, so a Contributor can't
+  post as the Owner or promote themselves with a `MemberRoleChanged`
+  stamped with the Owner's id. It is held rather than refused for good
+  because a device can be certified for more than one account, and that
+  account may certify it later (or another device may already hold the
+  certificate): a verdict that refused it for good would depend on which
+  events arrived first.
 - **One workspace per chain.** Every event on the chain is judged against
   the chat's own workspace. An event in the chat's log stamped with another
   workspace (even one where its author is Owner and this device also holds

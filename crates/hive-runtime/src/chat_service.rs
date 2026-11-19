@@ -4654,12 +4654,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             verdict_for(&build_roster(&all), env),
-            Verdict::Quarantine(QuarantineReason::Impersonation),
-            "ingest refuses a stamp naming a known account its signer doesn't sign for"
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+            "ingest holds (never applies) a stamp naming a known account its signer doesn't sign for"
         );
         assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
-        // The same stamp on a governance event (self-promotion) is refused
-        // at ingest too.
+        // The same stamp on a governance event (self-promotion) is held at
+        // ingest too.
         // (Authoring refuses it for lack of presence; a peer that skips the
         // check publishes it anyway.)
         assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
@@ -4668,7 +4668,7 @@ mod tests {
         con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
-        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
+        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
         // The same stamp on an agent's reply caps nothing upward either.
         let r = agent_reply(&mut con, chat, wid, Some(Uuid::new_v4()), Some(honest), "@coder go");
         assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
