@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryPaneView, type Draft } from "./MemoryPane";
 import { TaskStateView } from "./TaskStatePanel";
-import { draftProblem, parseTags, provenance, type MemoryEntry, type MemoryView, type TaskSlotDto } from "@/lib/memory";
+import { draftProblem, parseTags, provenance, type MemoryEntry, type MemoryOp, type MemoryView, type TaskSlotDto } from "@/lib/memory";
 
 const ana = { id: "ana", name: "Ana", kind: "human" as const };
 const entry: MemoryEntry = {
@@ -26,6 +26,7 @@ function view(over: Partial<MemoryView> = {}): MemoryView {
       },
     ],
     chatTitles: { c1: "Standup" },
+    agentNames: { a1: "coder", primary: "Ligus" },
     me: "ana",
     moderator: false,
     ...over,
@@ -36,6 +37,7 @@ function setup(v: MemoryView) {
   const saved: Draft[] = [];
   const decided: [string, boolean][] = [];
   const removed: string[] = [];
+  const proposed: MemoryOp[] = [];
   render(
     <MemoryPaneView
       view={v}
@@ -44,9 +46,10 @@ function setup(v: MemoryView) {
       onSave={(d) => saved.push(d)}
       onRemove={(e) => removed.push(e.id)}
       onDecide={(p, a) => decided.push([p.proposal.proposalId, a])}
+      onPropose={(op) => proposed.push(op)}
     />,
   );
-  return { saved, decided, removed };
+  return { saved, decided, removed, proposed };
 }
 
 describe("memory pane", () => {
@@ -62,8 +65,8 @@ describe("memory pane", () => {
 
   it("lists agent proposals and decides them", () => {
     const { decided } = setup(view());
-    expect(screen.getByText("Proposed by agents (1)")).toBeInTheDocument();
-    expect(screen.getByText(/by coder in “Standup”/)).toBeInTheDocument();
+    expect(screen.getByText("Proposals (1)")).toBeInTheDocument();
+    expect(screen.getByText(/by coder \(an agent\) in “Standup”/)).toBeInTheDocument();
     expect(screen.getByText("Why: said in standup")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Reject"));
     fireEvent.click(screen.getByText("Accept"));
@@ -71,6 +74,34 @@ describe("memory pane", () => {
       ["p1", false],
       ["p1", true],
     ]);
+  });
+
+  it("names the agent behind a host-signed proposal, not only the host's person", () => {
+    const v = view();
+    v.proposals[0] = { ...v.proposals[0], by: ana };
+    setup(v);
+    expect(screen.getByText(/by coder \(an agent\), on Ana's device/)).toBeInTheDocument();
+  });
+
+  it("says which note an edit proposal changes", () => {
+    const v = view();
+    v.proposals[0] = { ...v.proposals[0], proposal: { ...v.proposals[0].proposal, op: { op: "edit", entryId: "e1", base: "r2", title: "Ports", body: "8443 only" } } };
+    setup(v);
+    expect(screen.getByText(/^Changes/).textContent).toBe("Changes “Relay ports”");
+  });
+
+  it("lets a member suggest an edit to someone else's note", () => {
+    const { proposed, saved } = setup(view({ me: "bo" }));
+    fireEvent.click(screen.getByText("Suggest an edit"));
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "8443, or 443 behind the proxy" } });
+    fireEvent.click(screen.getByText("Propose"));
+    expect(saved).toEqual([]);
+    expect(proposed).toEqual([{ op: "edit", entryId: "e1", base: "r2", title: "Relay ports", body: "8443, or 443 behind the proxy", tags: ["infra"] }]);
+  });
+
+  it("isolates titles so direction characters can't reorder the text around them", () => {
+    setup(view());
+    expect(screen.getByText("Relay ports").closest("bdi")).not.toBeNull();
   });
 
   it("hides edit and remove from someone else's entry unless moderating", () => {
@@ -126,6 +157,11 @@ describe("task state", () => {
     expect(screen.getByText("Drafted the migration")).toBeInTheDocument();
     expect(screen.getByLabelText("40% done")).toBeInTheDocument();
     expect(screen.queryByText("gone")).toBeNull();
+  });
+  it("shows one card per writer, even for one agent's task", () => {
+    render(<TaskStateView slots={[slot({}), slot({ writer: "d2", update: { ...slot({}).update, summary: "from its own key" } })]} />);
+    expect(screen.getByText("Need the schema decision")).toBeInTheDocument();
+    expect(screen.getByText("from its own key")).toBeInTheDocument();
   });
   it("renders nothing without slots", () => {
     const { container } = render(<TaskStateView slots={[]} />);

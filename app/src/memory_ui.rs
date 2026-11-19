@@ -35,6 +35,9 @@ pub(crate) struct MemoryView {
     pub proposals: Vec<ProposalState>,
     /// Titles of the chats entries and proposals came from.
     pub chat_titles: BTreeMap<String, String>,
+    /// Agent keys (an agent id, or `primary` for a chat's runtime) → names,
+    /// so a proposal shows the agent behind it, not only the device's person.
+    pub agent_names: BTreeMap<String, String>,
     /// This device's person (their entries are theirs to change).
     pub me: String,
     /// Whether this device's person is an Admin or Owner (moderation).
@@ -55,8 +58,11 @@ pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]
     }
     let me = svc.author().id.clone();
     let config = svc.load(hive_core::workspace_config_session_id(wid)).ok().flatten();
+    let mut agent_names: BTreeMap<String, String> =
+        config.iter().flat_map(|c| c.workspace_agents.iter()).map(|a| (a.id.to_string(), a.name.clone())).collect();
+    agent_names.insert(hive_core::flow::PRIMARY.to_string(), "Ligus".into());
     let moderator = config.is_some_and(|c| c.role_of(&me).rank() >= hive_core::WorkspaceRole::Admin.rank());
-    Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, me, moderator })
+    Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, agent_names, me, moderator })
 }
 
 /// The Memory pane: entries matching `query` and `tags`, and the proposals.

@@ -59,6 +59,8 @@ export interface MemoryView {
   total: number;
   proposals: MemoryProposalState[];
   chatTitles: Record<string, string>;
+  /// Agent keys (an agent id, or "primary" for the chat's runtime) → names.
+  agentNames: Record<string, string>;
   me: string;
   moderator: boolean;
 }
@@ -121,6 +123,19 @@ export const removeMemory = (entryId: string, base: string, resolves: string[] =
 export const decideMemoryProposal = (proposalId: string, accepted: boolean, note = "") =>
   invoke<void>("memory_decide", { proposalId, accepted, note });
 
+/// Propose a change as this device's person (for a note they can't change
+/// directly: someone else's). A person with the right decides it.
+export const proposeMemory = (op: MemoryOp, rationale = "") =>
+  invoke<string>("memory_propose", {
+    op: op.op,
+    entryId: op.op === "create" ? null : op.entryId,
+    base: op.op === "create" ? null : op.base,
+    title: op.op === "remove" ? null : op.title,
+    body: op.op === "remove" ? null : op.body,
+    tags: op.op === "remove" ? null : (op.tags ?? []),
+    rationale,
+  });
+
 export const taskState = (sessionId: string) => invoke<TaskSlotDto[]>("task_state", { sessionId });
 
 /// Split a comma or space separated tag field into normalised tags.
@@ -154,6 +169,17 @@ export function provenance(r: MemoryRevision, agentName?: (key: string) => strin
     return `${who}, proposed by ${agent}`;
   }
   return who;
+}
+
+/// Who filed a proposal, in words. A proposal naming an agent is that agent's,
+/// whether its own key signed it or its host did ("coder (an agent), on
+/// Ana's device"); never shown as only the host's person.
+export function proposedBy(p: MemoryProposalState, agentNames: Record<string, string> = {}): string {
+  const proposer = p.proposal.proposer;
+  const signer = p.by.name || p.by.id;
+  if (!proposer) return signer;
+  const agent = agentNames[proposer] ?? (proposer === "primary" ? "Ligus" : "an agent");
+  return p.by.kind === "human" ? `${agent} (an agent), on ${signer}'s device` : `${agent} (an agent)`;
 }
 
 /// Whether this person may change `e` directly: its creator or a moderator.
