@@ -246,7 +246,7 @@ async fn tool_loop_turn(
             // the checkout (no in-place fallback on a headless host).
             // `run_command` is a shell: the Owner's, or granted (Phase C;
             // the host set it on the turn's policy).
-            let shell = hive_runtime::executor::current_turn().is_none_or(|p| p.shell_allowed);
+            let shell = hive_runtime::executor::turn_shell_allowed();
             let policy = builtin_policy(&read_root, true, false, settings.run_command && shell).with_protected_dirs(&settings.protected_dirs);
             match hive_runtime::BuiltinTools::lazy(policy, wt.clone(), false) {
                 Ok(b) => {

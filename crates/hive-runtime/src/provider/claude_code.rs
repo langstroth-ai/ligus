@@ -300,7 +300,7 @@ impl Confine {
                 let c = crate::egress::EgressPreset::ClaudeConnectors;
                 p.as_ref().is_some_and(|p| p.egress_presets.contains(&c)) || crate::executor::host_paths().egress_presets.contains(&c)
             },
-            shell: p.as_ref().is_none_or(|p| p.shell_allowed),
+            shell: p.as_ref().is_some_and(|p| p.shell_allowed),
         }
     }
 }
@@ -626,7 +626,8 @@ mod tests {
         if crate::executor::skip_without_sandbox("default_turn_is_confined_to_the_turn") {
             return;
         }
-        let (argv, env) = launched_argv(crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop), &[]).await;
+        let owner = crate::executor::TurnPolicy { shell_allowed: true, ..crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop) };
+        let (argv, env) = launched_argv(owner, &[]).await;
         assert!(argv.contains(&"--strict-mcp-config".to_string()), "{argv:?}");
         assert!(argv.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{argv:?}");
         let i = argv.iter().rposition(|a| a == "--settings").expect("--settings");

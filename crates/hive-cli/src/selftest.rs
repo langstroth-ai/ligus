@@ -191,15 +191,21 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
             chat_id: uuid::Uuid::new_v4().to_string(),
             turn_key: uuid::Uuid::new_v4().to_string(),
         };
-        let reply = reply::generate_reply_streaming(
-            &rt,
-            "You are the Ligus sandbox turn test.",
-            &[ChatTurn::user("Run the probe.")],
-            true,
-            None,
-            Some(&files),
-            &settings,
-            |_| {},
+        // The device owner's own probe, with no other member's words in it:
+        // a turn whose shell is on (outside a turn there is none).
+        let policy = hive_runtime::executor::TurnPolicy { shell_allowed: true, ..hive_runtime::executor::TurnPolicy::baseline(hive_runtime::executor::HostKind::Desktop) };
+        let reply = hive_runtime::executor::with_turn(
+            policy,
+            reply::generate_reply_streaming(
+                &rt,
+                "You are the Ligus sandbox turn test.",
+                &[ChatTurn::user("Run the probe.")],
+                true,
+                None,
+                Some(&files),
+                &settings,
+                |_| {},
+            ),
         )
         .await?;
         if let Some(wt) = reply.worktree {

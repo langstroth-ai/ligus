@@ -1082,10 +1082,12 @@ impl TurnPolicy {
             denials: Default::default(),
             cli_user_config: false,
             grants: Default::default(),
-            // A spawn with no turn in scope is the user's own (an approved
-            // proposal's command, a pre-flight test): the shell gate is
-            // decided per turn by the host, never here.
-            shell_allowed: true,
+            // No turn in scope, no shell: an agent CLI spawned outside a turn
+            // (the chat summarizer, a title, a runtime ping) reads prompts
+            // other members wrote. A command or pre-flight test doesn't read
+            // this; the host sets it per turn, and the person's own approved
+            // command sets it itself.
+            shell_allowed: false,
         }
     }
 }
@@ -1136,9 +1138,10 @@ pub fn current_turn() -> Option<Arc<TurnPolicy>> {
     TURN.try_with(Arc::clone).ok()
 }
 
-/// Whether the turn in scope may use a shell.
+/// Whether the turn in scope may use a shell; none in scope, none (fail
+/// closed: an agent spawned outside a turn has no Owner behind it).
 pub fn turn_shell_allowed() -> bool {
-    current_turn().is_none_or(|p| p.shell_allowed)
+    current_turn().is_some_and(|p| p.shell_allowed)
 }
 
 /// What a spawn site asks for.

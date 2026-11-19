@@ -825,7 +825,7 @@ pub async fn stream_reply(
         mode,
         writes_allowed: gate_writes,
         egress_open,
-        shell_allowed: crate::executor::current_turn().is_none_or(|p| p.shell_allowed),
+        shell_allowed: crate::executor::turn_shell_allowed(),
         last_cost: 0.0,
         stopped: None,
         session_id: None,
