@@ -93,15 +93,23 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
 /// The checkout on this host that `job` applies in: for a proposal with a
 /// repo, this device's confirmed checkout of **that** repo (never the
 /// legacy per-workspace binding, review F1); for one without, `legacy`.
+///
+/// The repo checkout passes the same gate as a turn
+/// ([`crate::repos::turn_checkout`]): the chat still works in that repo,
+/// and this device's confirmed checkout of it still is that repo by its
+/// remote and is managed by this host. Anything else applies nowhere (the
+/// request then fails with "no checkout"), never into another repository
+/// or another host's chat branch.
 pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
-    match job.proposal.repo_id {
-        Some(repo) => svc
-            .store()
-            .chat_checkout(job.chat_id, repo)
-            .ok()
-            .flatten()
-            .or_else(|| svc.store().primary_checkout(job.workspace_id, repo).ok().flatten().map(|m| m.path)),
-        None => legacy,
+    let Some(repo) = job.proposal.repo_id else { return legacy };
+    let session = svc.load(job.chat_id).ok().flatten()?;
+    if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
+        return None;
+    }
+    let roster = svc.workspace_roster(job.workspace_id).ok()?;
+    match crate::repos::turn_checkout(svc.store(), svc.device_id(), "this host", &session, &roster, &crate::repos::cloning()) {
+        crate::repos::TurnCheckout::Ready(r) if r.repo.id == repo => Some(r.path),
+        _ => None,
     }
 }
 
@@ -361,6 +369,38 @@ mod tests {
 
     fn outcome(svc: &Mutex<ChatService>, chat: Uuid, job: &ApplyJob) -> Option<ApplyOutcome> {
         lock(svc).load(chat).unwrap().unwrap().apply_outcomes.get(&job.request.id).cloned()
+    }
+
+    /// The host applying a person's request for a repo proposal passes the
+    /// same gate as a turn (adversarial review): a mapped checkout whose
+    /// `origin` no longer is the repo, or that another host on this machine
+    /// manages, is never written to.
+    #[test]
+    fn repo_apply_checkout_passes_the_turn_gate() {
+        let (svc, chat, wid, mut job, tmp) = setup();
+        let path = tmp.path().join("wefit");
+        std::fs::create_dir_all(&path).unwrap();
+        sh(&path, &["init", "-q", "-b", "main"]);
+        sh(&path, &["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        sh(&path, &["remote", "add", "origin", "https://github.com/zazulam/wefit.git"]);
+        let repo = {
+            let mut s = lock(&svc);
+            let repo = s.add_workspace_repo(wid, "github.com/zazulam/wefit", "WeFit", "github", "main", None).unwrap();
+            s.set_chat_repo(chat, wid, Some(repo.id), "").unwrap();
+            let me = s.device_id();
+            crate::repos::bind(s.store(), me, "h", wid, &repo, &path, crate::event_store::CheckoutSource::Bound).unwrap();
+            repo
+        };
+        job.proposal.repo_id = Some(repo.id);
+        let canon = crate::repos::git::canonical(&path);
+        assert_eq!(checkout_for(&lock(&svc), &job, None), Some(canon.clone()));
+        // origin re-pointed: no longer WeFit.
+        sh(&path, &["remote", "set-url", "origin", "https://github.com/evil/other.git"]);
+        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "remote_mismatch");
+        sh(&path, &["remote", "set-url", "origin", "https://github.com/zazulam/wefit.git"]);
+        // Another host on this machine took the checkout over.
+        crate::repos::marker::take_over(&path, Uuid::new_v4(), "box").unwrap();
+        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "managed elsewhere");
     }
 
     #[test]
