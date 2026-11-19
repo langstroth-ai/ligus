@@ -129,6 +129,10 @@ struct AppState {
     /// and since the commands moved off the main thread two switches could
     /// interleave (active A, synced room B, B's founder trusted for A).
     switching: Mutex<()>,
+    /// The newest chat-view request (`set_active_chat`): an older one that
+    /// finishes last (its checkout lookup was slower) must not point the
+    /// window's root and watcher back at the chat the person left.
+    chat_view_gen: std::sync::atomic::AtomicU64,
     workspace_root: Mutex<String>,
     /// Per-session, per-runtime compaction state: the fixed boundary plus the
     /// incremental summary of everything before it (see [`SummaryCacheEntry`]
@@ -7159,18 +7163,18 @@ impl AppState {
         )
     }
 
-    /// Point `workspace_root` at a chat's persistent base worktree (Phase 2a),
-    /// so the effective code dir follows the active chat. When `session_id` is
-    /// `None` — or the workspace root isn't a git repo, or ensuring the chat
-    /// worktree fails — fall back to the active workspace's bound folder (the
-    /// chat still works, just not isolated). Mirrors `apply_workspace_dir`'s
-    /// side effects (catalogs + fs watcher, which already guard bad roots).
-    fn apply_chat_dir(&self, session_id: Option<Uuid>) {
+    /// The folder the window shows for a chat: its persistent base worktree
+    /// (Phase 2a), so the effective code dir follows the active chat. When
+    /// `session_id` is `None` (or the workspace root isn't a git repo, or the
+    /// chat has no worktree) it is the active workspace's bound folder (the
+    /// chat still works, just not isolated). [`Self::show_dir`] applies it,
+    /// with `apply_workspace_dir`'s side effects (catalogs and fs watcher).
+    fn chat_dir(&self, session_id: Option<Uuid>) -> String {
         // A chat with a workspace repo shows that repo's checkout on this
         // device (its chat worktree once a turn has cut its branch from the
         // pinned base; viewing never cuts one), whatever folder the
         // workspace has. Any other chat: its worktree in the bound folder.
-        let dir = match session_id {
+        match session_id {
             Some(sid) => match crate::repos_ui::chat_checkout(self, sid) {
                 Some(checkout) => crate::repos_ui::view_dir(&checkout, sid),
                 // Never cutting a chat worktree in a folder another host
@@ -7181,12 +7185,15 @@ impl AppState {
                 },
             },
             None => self.workspace_repo_root(),
-        };
-        // The window's root, catalogs and watcher only: a turn resolves its
-        // own from its chat (`turn_scope`, review F14).
-        *self.workspace_root.lock().unwrap() = dir.clone();
-        self.reload_workspace_catalogs(&dir);
-        self.arm_fs_watcher(&dir);
+        }
+    }
+
+    /// Point the window's root, catalogs and watcher at `dir` (a turn
+    /// resolves its own from its chat: `turn_scope`, review F14).
+    fn show_dir(&self, dir: &str) {
+        *self.workspace_root.lock().unwrap() = dir.to_string();
+        self.reload_workspace_catalogs(dir);
+        self.arm_fs_watcher(dir);
     }
 
     /// No relay configured → a purely local install: nothing ever syncs to another
@@ -11903,6 +11910,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         local_workspace_id,
         active_workspace: Mutex::new(local_workspace_id),
         switching: Mutex::new(()),
+        chat_view_gen: std::sync::atomic::AtomicU64::new(0),
         workspace_root: Mutex::new(workspace_root),
         summary_cache: Mutex::new(HashMap::new()),
         summary_backoff: Mutex::new(HashMap::new()),
@@ -12847,15 +12855,28 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
 /// `apply_workspace_dir`'s side effects (both guard bad/empty roots).
 #[tauri::command]
 async fn set_active_chat(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_active_chat_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+    // Numbered in click order, before the work leaves the main thread.
+    let gen = tauri::Manager::state::<AppState>(&ligus_app).chat_view_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    crate::off_main(ligus_app, move |ligus_app| set_active_chat_numbered(tauri::Manager::state::<AppState>(ligus_app), session_id, gen)).await
 }
 
+#[cfg(feature = "e2e")]
 pub(crate) fn set_active_chat_sync(state: State<AppState>, session_id: Option<String>) -> Result<(), String> {
+    let gen = state.chat_view_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    set_active_chat_numbered(state, session_id, gen)
+}
+
+fn set_active_chat_numbered(state: State<AppState>, session_id: Option<String>, gen: u64) -> Result<(), String> {
     let sid = match session_id {
         Some(ref s) if !s.trim().is_empty() => Some(Uuid::parse_str(s).map_err(map_err)?),
         _ => None,
     };
-    state.apply_chat_dir(sid);
+    let dir = state.chat_dir(sid);
+    // Applied under the switch lock, and only while still the newest request.
+    let _switching = state.switching.lock().unwrap_or_else(|p| p.into_inner());
+    if state.chat_view_gen.load(std::sync::atomic::Ordering::SeqCst) == gen {
+        state.show_dir(&dir);
+    }
     Ok(())
 }
 

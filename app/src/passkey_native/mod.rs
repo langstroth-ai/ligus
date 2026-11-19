@@ -374,6 +374,7 @@ pub fn user_handle(account: uuid::Uuid, workspace: uuid::Uuid) -> Vec<u8> {
 /// A `create` for a new passkey: native when this OS's authenticator serves
 /// the workspace's RP, else (or on fallback) `hand_off`. The result is in
 /// the hand-off's form (the attestation object in `authenticator_data`).
+#[allow(clippy::too_many_arguments)]
 pub fn run_create(
     native: Option<Arc<dyn NativeAuthenticator>>,
     req: &PresenceRequest,
