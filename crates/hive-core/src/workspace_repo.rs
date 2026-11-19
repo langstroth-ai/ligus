@@ -354,12 +354,6 @@ pub fn canonical_repo(
     if url.contains("::") {
         return Err(CanonError::Refused("a git remote-helper transport is never an identity"));
     }
-    // Anywhere, not only in the path: git (curl) ends the host at `#` or
-    // `?`, so in `https://evil.example#@github.com/o/n` it connects to
-    // evil.example while the text after `@` reads as github.com.
-    if url.contains(['#', '?', '\\']) {
-        return Err(CanonError::Refused("an encoded or reserved character in a remote"));
-    }
     let (authority, path, scp) = if let Some((scheme, rest)) = url.split_once("://") {
         match scheme.to_ascii_lowercase().as_str() {
             "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git" => {}
@@ -373,6 +367,12 @@ pub fn canonical_repo(
     } else {
         return Err(CanonError::NoRemote);
     };
+    // In the authority too, not only the path: git (curl) ends the host at
+    // `#` or `?`, so in `https://evil.example#@github.com/o/n` it connects
+    // to evil.example while the text after `@` reads as github.com.
+    if authority.contains(['#', '?', '\\']) {
+        return Err(CanonError::Refused("a reserved character before the host"));
+    }
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
     if host_port.starts_with('[') {
         return Err(CanonError::Refused("an IP literal host"));
