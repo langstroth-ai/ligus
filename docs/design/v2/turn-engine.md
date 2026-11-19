@@ -1,6 +1,6 @@
 # The agent-turn engine in hive-runtime
 
-Status: in progress on `feat/turn-engine` (Ligus 0.1.0). Ligus is short for
+Status: implemented on `feat/turn-engine` (Ligus 0.1.0). Ligus is short for
 ligustica.
 
 ## Why
@@ -83,7 +83,9 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
 
 `TurnHost` (what differs per host), all but `service` with defaults:
 
-- `service()`: the `Mutex<ChatService>`, locked only for short store calls;
+- `service()`: the `Mutex<ChatService>`, locked only for short store calls,
+  and `pin()`, called on every lock (a client with several workspaces pins
+  the service to the turn's founder);
 - catalogs: `mcp_tools(egress, shell)` builds the turn's MCP tool set (the
   desktop's managed and workspace catalogs with trust and OAuth, the CLI's
   `LIGUS_MCP_CONFIG`, none for lt);
@@ -94,8 +96,9 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
 - `workflow_tool(session)`: in-turn workflow validation (desktop);
 - finalize and proposals: `finalize` (the shared one by default),
   `before_file_proposal`, `proposal_filed`;
-- the event sink: `delta`, `activity` (tool calls and results, thinking),
-  `phase` (completed / error), `changed`;
+- the event sink: `begun` (the placeholder is posted), `delta`, `activity`
+  (tool calls and results, thinking), `phase` (completed / error),
+  `changed`, `locked_down`;
 - telemetry hooks (content-free): tools selected, progress, egress denials,
   usage errors, plan windows.
 
@@ -108,6 +111,12 @@ Presence: a turn does not read presence. The dispatch gates (which consult
 presence and host bindings) run before the engine; a hand-off the Ligus
 tools start goes back through the host's `LigusHost::start_turn`, which runs
 its own gate.
+
+Shared helpers for a host without rules of its own (`lt`):
+`decide_gate` / `decide_gate_with` (the author gate, the shell rule and
+grants, the envelope, the OS sandbox, as the desktop and the worker decide
+them; `Gated::policy` builds the base `TurnPolicy`) and `repo_checkout` (the
+repos v2 gate with a legacy bound checkout).
 
 ## What moves, what stays
 
