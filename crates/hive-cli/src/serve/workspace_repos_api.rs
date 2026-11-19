@@ -29,7 +29,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::api::{load_chat, ApiError, ApiResult};
-use super::repos_api::ensure_can_write;
+use super::repos_api::{ensure_can_write, owner_gate};
+use super::tunnel::TunnelPeer;
+use axum::Extension;
 use super::Shared;
 
 type S = State<Arc<Shared>>;
@@ -133,8 +135,9 @@ pub struct RenameReq {
     branch: Option<String>,
 }
 
-pub async fn rename(State(s): S, Path(id): Path<String>, Json(req): Json<RenameReq>) -> ApiResult<Json<Value>> {
+pub async fn rename(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<RenameReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     let branch = match req.branch {
         Some(b) => b,
@@ -159,8 +162,9 @@ pub struct ConfirmReq {
 }
 
 /// "Found WeFit on this host as WeFit. Use it?": confirm by folder name.
-pub async fn confirm(State(s): S, Path(id): Path<String>, Json(req): Json<ConfirmReq>) -> ApiResult<Json<Value>> {
+pub async fn confirm(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<ConfirmReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     let sh = s.clone();
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
@@ -181,7 +185,8 @@ pub async fn confirm(State(s): S, Path(id): Path<String>, Json(req): Json<Confir
     Ok(Json(listing(&s)?))
 }
 
-pub async fn rescan(State(s): S) -> ApiResult<Json<Value>> {
+pub async fn rescan(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+    owner_gate(&s, peer.as_deref())?;
     let sh = s.clone();
     let _ = tokio::task::spawn_blocking(move || super::repos_refresh(&sh)).await;
     Ok(Json(listing(&s)?))
@@ -196,9 +201,10 @@ pub struct SetChatRepo {
     base_branch: String,
 }
 
-pub async fn set_chat_repo(State(s): S, Path(id): Path<String>, Json(req): Json<SetChatRepo>) -> ApiResult<Json<Value>> {
+pub async fn set_chat_repo(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<SetChatRepo>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
+    owner_gate(&s, peer.as_deref())?;
     s.lock().set_chat_repo(chat.id, chat.workspace_id, req.repo_id, &req.base_branch)?;
     s.after_write();
     Ok(Json(chat_repo(&s, chat.id)?))
