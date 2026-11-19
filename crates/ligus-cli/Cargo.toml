@@ -27,6 +27,11 @@ base64 = "0.23"
 # reqwest, futures-util and getrandom are shared with ligus-runtime (deps /
 # dev-deps); qrcodegen is a dependency-free QR encoder for the pairing code.
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "query"] }
+# The API's own accept loop (serve/listener.rs): hyper's HTTP/1 server with
+# a header-read timeout and an idle timeout, which axum::serve doesn't set.
+# Both already come in through axum.
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["server", "http1", "service", "tokio"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider", "query"] }
 futures-util = "0.3"
 getrandom = "0.4"

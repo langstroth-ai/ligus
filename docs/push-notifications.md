@@ -10,7 +10,10 @@ setup.
 
 Push needs remote access through a relay ([`ios-app.md`](ios-app.md#remote-access-through-a-relay-optional-off-by-default)).
 Without it, `ligus serve` can still notify through a self-hosted ntfy server
-(`--ntfy-url` / `--ntfy-topic`), which sends no message content at all.
+(`--ntfy-url` / `--ntfy-topic`), which sends no message content at all:
+only generic text ("A reply is ready") unless the operator sets
+`LIGUS_NTFY_TITLES=1`. The URL must be `https://` unless
+`LIGUS_NTFY_ALLOW_HTTP=1`.
 
 ## How it works
 

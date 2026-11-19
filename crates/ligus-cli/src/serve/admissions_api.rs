@@ -21,9 +21,7 @@
 //! The admitting person must be an Admin; the phone tier allows a box
 //! admission and nothing else about membership.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -37,10 +35,17 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::api::{ApiError, ApiResult};
+
+/// The calling credential's key ([`super::api::Caller::key`]).
+fn caller() -> String {
+    super::api::caller().key()
+}
 use super::tunnel::TunnelPeer;
 use super::Shared;
 
 const TTL: Duration = Duration::from_secs(300);
+/// Drafts one credential keeps (its oldest goes past this).
+const PER_CALLER: usize = 4;
 const MAX_PENDING: usize = 16;
 
 struct Pending {
@@ -50,34 +55,14 @@ struct Pending {
     seed: [u8; 32],
     request: Option<JoinRequest>,
     presence: bool,
-    at: Instant,
 }
 
-/// Drafts waiting for the phone (single use, in memory).
-#[derive(Default)]
-pub struct Drafts(Mutex<HashMap<String, Pending>>);
+/// Drafts waiting for the phone (single use, in memory), per credential.
+pub struct Drafts(super::drafts::OwnedDrafts<Pending>);
 
-impl Drafts {
-    fn put(&self, p: Pending) -> ApiResult<String> {
-        let mut raw = [0u8; 16];
-        getrandom::fill(&mut raw).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
-        let id = b64url(&raw);
-        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        m.retain(|_, p| p.at.elapsed() < TTL);
-        if m.len() >= MAX_PENDING {
-            if let Some(oldest) = m.iter().min_by_key(|(_, p)| p.at).map(|(k, _)| k.clone()) {
-                m.remove(&oldest);
-            }
-        }
-        m.insert(id.clone(), p);
-        Ok(id)
-    }
-    fn take(&self, id: &str) -> Option<Pending> {
-        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        m.remove(id).filter(|p| p.at.elapsed() < TTL)
-    }
-    fn put_back(&self, id: String, p: Pending) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(id, p);
+impl Default for Drafts {
+    fn default() -> Self {
+        Self(super::drafts::OwnedDrafts::new(TTL, PER_CALLER, MAX_PENDING))
     }
 }
 
@@ -102,6 +87,8 @@ pub struct PrepareReq {
 /// `POST /v1/admissions/prepare` → `{prepareId, challenge, preview}`.
 pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<PrepareReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
+    // Through the tunnel, only for the phone this pairing proved it holds.
+    super::phone_actions_api::bound_device(&s, peer.as_deref(), req.device_id)?;
     let request = req.request.filter(|r| !r.trim().is_empty()).map(|r| JoinRequest::decode(&r)).transpose().map_err(ApiError::bad_request)?;
     let default = if request.is_some() {
         ligus_runtime::box_admission::DEFAULT_TTL_MS
@@ -126,7 +113,7 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         "sealed": request.is_some(),
     });
     let challenge = b64url(&r.challenge);
-    let id = s.admission_drafts.put(Pending { draft, invite, seed, request, presence: false, at: Instant::now() })?;
+    let id = s.admission_drafts.0.put(&caller(), Pending { draft, invite, seed, request, presence: false }).map_err(super::api::draft_refused)?;
     Ok(Json(json!({ "prepareId": id, "challenge": challenge, "preview": preview })))
 }
 
@@ -151,7 +138,7 @@ pub struct PresenceReq {
 /// to sign.
 pub async fn presence(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<PresenceReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
-    let mut p = s.admission_drafts.take(&req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let (mut p, at) = s.admission_drafts.0.take_aged(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if p.presence {
         return Err(ApiError::new(StatusCode::CONFLICT, "already confirmed"));
     }
@@ -163,7 +150,7 @@ pub async fn presence(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exte
     };
     let preimage = ligus_runtime::ChatService::phone_preimage(&mut p.draft, a);
     p.presence = true;
-    s.admission_drafts.put_back(req.prepare_id, p);
+    s.admission_drafts.0.put_back(&caller(), req.prepare_id, p, at);
     Ok(Json(json!({ "preimage": b64url(&preimage) })))
 }
 
@@ -179,7 +166,7 @@ pub struct CommitReq {
 /// expiresInMinutes}`.
 pub async fn commit(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
     super::identity_api::require_secret_channel(&s, peer.as_deref())?;
-    let p = s.admission_drafts.take(&req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let p = s.admission_drafts.0.take(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if !p.presence {
         return Err(ApiError::new(StatusCode::CONFLICT, "confirm with a passkey first (admissions/presence)"));
     }

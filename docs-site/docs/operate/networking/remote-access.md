@@ -62,8 +62,17 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).
 
-On its first run, `ligus serve` creates the direct-path bearer token in
-`<LIGUS_DATA_DIR>/serve.token` (mode 0600).
+On its first run, `ligus serve` creates two bearer tokens (mode 0600):
+
+- `<LIGUS_DATA_DIR>/serve.token`, the direct-path token for phones. The
+  pairing link carries it, and tunnel phones fetch it.
+- `<LIGUS_DATA_DIR>/serve.operator.token`, the operator's, for curl and
+  scripts on the box. No phone ever gets it. Only this token, on a loopback
+  listener, can use the box owner's routes (cloning and picking
+  repositories) and the routes that carry secrets (invites, admission codes,
+  code-host tokens). If you put a TLS reverse proxy on the same host in front
+  of a loopback listener, phones arrive on loopback too, but with
+  `serve.token`, which never counts as the operator.
 
 ## 2. Turn on the relay tunnel
 

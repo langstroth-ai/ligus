@@ -170,9 +170,10 @@ config events; checkouts and their paths never leave a device.
   rename, picking a chat's repository, rescan, confirming a found checkout)
   spends the box's own code-host access, so only the box owner can: a phone
   certified to the account of the Admin who admitted the box, over its own
-  pairing, or the `serve.token` bearer when the box listens on loopback (on
-  a network listener the bearer is refused: every paired phone can fetch
-  it). Anyone else gets `owner_required`. A request carried on the log never
+  pairing, or the operator's `serve.operator.token` when the box listens on
+  loopback. The phones' `serve.token` is refused everywhere: every paired
+  phone can fetch it, and a reverse proxy on the same host puts phones on
+  loopback too. Off loopback the operator token is refused as well. Anyone else gets `owner_required`. A request carried on the log never
   starts a clone.
 - **A hostile repository** found by a scan is never used until a person
   confirms it on that device; its hooks, `core.fsmonitor`, submodules and
@@ -672,8 +673,8 @@ it.
     example) or a restart to change an allowlist.
 18. **The direct phone path is plain HTTP.** Use the relay tunnel or a
     tailnet, or a LAN you trust. Invite codes, code-host tokens and device
-    sign-in codes are refused on it (tunnel or loopback only), but chat
-    content and the bearer token still cross it.
+    sign-in codes are refused on it (tunnel, or the operator token on
+    loopback, only), but chat content and the bearer token still cross it.
 19. **One `serve.token` for every direct-path client.** Revoking one direct
     phone means rotating it for all. Tunnel phones are revoked one by one.
 20. **Revoking a device doesn't rotate the key.** A revoked device's new

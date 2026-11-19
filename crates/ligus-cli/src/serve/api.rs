@@ -562,6 +562,126 @@ pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
 #[derive(Clone, Copy)]
 struct Authorized(bool);
 
+/// Who a request comes from, as [`auth`] proved it (D5).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Caller {
+    /// A paired phone through the relay tunnel (its pairing id).
+    Tunnel(String),
+    /// The operator on the box: `serve.operator.token`. Never in a pairing
+    /// link or a tunnel answer, so no phone holds it.
+    Operator,
+    /// The direct-path bearer, `serve.token`: every direct-path phone.
+    Bearer,
+    /// No credential (only `GET /v1/health` answers it).
+    Anonymous,
+}
+
+impl Caller {
+    /// A key per credential: what one caller's drafts and event streams are
+    /// counted and kept under.
+    pub fn key(&self) -> String {
+        match self {
+            Caller::Tunnel(pid) => format!("tunnel:{pid}"),
+            Caller::Operator => "operator".into(),
+            Caller::Bearer => "bearer".into(),
+            Caller::Anonymous => "anonymous".into(),
+        }
+    }
+}
+
+tokio::task_local! {
+    /// The request's [`Caller`], for the handler [`auth`] runs.
+    static CALLER: Caller;
+}
+
+/// The [`Caller`] of the request being handled. Outside a request (or off
+/// its task: a blocking closure) it is [`Caller::Anonymous`], which no gate
+/// accepts.
+pub(super) fn caller() -> Caller {
+    CALLER.try_with(Clone::clone).unwrap_or(Caller::Anonymous)
+}
+
+/// Whether the request being handled carries the operator credential.
+pub(super) fn is_operator() -> bool {
+    caller() == Caller::Operator
+}
+
+/// Event streams one credential may hold at once.
+pub const SSE_PER_CREDENTIAL: usize = 8;
+/// Event streams the box holds at once, all credentials together.
+pub const SSE_TOTAL: usize = 64;
+
+/// Open event streams, by credential ([`Caller::key`]).
+#[derive(Default)]
+pub struct SseSlots(std::sync::Mutex<std::collections::HashMap<String, usize>>);
+
+/// One open stream's slot; dropping it frees the slot.
+pub struct SseSlot {
+    slots: Arc<SseSlots>,
+    key: String,
+}
+
+impl SseSlots {
+    /// A slot for `key`, or `None` when that credential or the box is full.
+    pub fn take(self: &Arc<Self>, key: &str, per_credential: usize, total: usize) -> Option<SseSlot> {
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let all: usize = m.values().sum();
+        let mine = m.get(key).copied().unwrap_or(0);
+        if mine >= per_credential || all >= total {
+            return None;
+        }
+        m.insert(key.to_string(), mine + 1);
+        Some(SseSlot { slots: self.clone(), key: key.to_string() })
+    }
+}
+
+impl Drop for SseSlot {
+    fn drop(&mut self) {
+        let mut m = self.slots.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = m.get_mut(&self.key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// A draft that couldn't be kept: 503 while the box is full of other
+/// callers' drafts, 500 without OS randomness.
+pub(super) fn draft_refused(e: super::drafts::PutError) -> ApiError {
+    match e {
+        super::drafts::PutError::Full => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "too many drafts waiting on this box; try again in a few minutes"),
+        super::drafts::PutError::Randomness => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "no OS randomness for a draft id"),
+    }
+}
+
+/// The body every 500 answers with: what went wrong is in the box's log,
+/// never in the answer (paths, store errors, a peer's text).
+pub const INTERNAL_ERROR: &str = "internal error: see the box's log";
+
+#[cfg(test)]
+pub(super) async fn generic_500_for_test(resp: Response) -> Response {
+    generic_500(resp).await
+}
+
+/// Replace a 500's body with [`INTERNAL_ERROR`], logging what it said.
+async fn generic_500(resp: Response) -> Response {
+    if resp.status() != StatusCode::INTERNAL_SERVER_ERROR {
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let detail = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+    eprintln!("serve: 500: {}", String::from_utf8_lossy(&detail));
+    let mut out = (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": INTERNAL_ERROR }))).into_response();
+    for (k, v) in parts.headers.iter() {
+        if k != axum::http::header::CONTENT_TYPE && k != axum::http::header::CONTENT_LENGTH {
+            out.headers_mut().insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let v = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = v.split_once(' ')?;
@@ -575,15 +695,23 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
         if !s.tunnel.as_ref().is_some_and(|t| t.registry.is_active(&peer.pid)) {
             return ApiError(StatusCode::UNAUTHORIZED, "this phone's pairing was revoked".into()).into_response();
         }
+        let caller = Caller::Tunnel(peer.pid.clone());
         req.extensions_mut().insert(Authorized(true));
-        return next.run(req).await;
+        return generic_500(CALLER.scope(caller, next.run(req)).await).await;
     }
-    let ok = bearer(req.headers()).is_some_and(|t| pair::token_matches(&s.token(), t));
+    // D5: the operator's token first, then the phones' (both compared in
+    // constant time; they never match each other).
+    let caller = match bearer(req.headers()) {
+        Some(t) if pair::token_matches(&s.operator_token(), t) => Caller::Operator,
+        Some(t) if pair::token_matches(&s.token(), t) => Caller::Bearer,
+        _ => Caller::Anonymous,
+    };
+    let ok = caller != Caller::Anonymous;
     if !ok && req.uri().path() != "/v1/health" {
         return ApiError(StatusCode::UNAUTHORIZED, "missing or invalid bearer token".into()).into_response();
     }
     req.extensions_mut().insert(Authorized(ok));
-    next.run(req).await
+    generic_500(CALLER.scope(caller, next.run(req)).await).await
 }
 
 pub fn router(shared: Arc<Shared>) -> Router {
@@ -1435,7 +1563,26 @@ fn to_event(ev: super::hub::SseEvent) -> Event {
     Event::default().id(ev.id.to_string()).event(ev.name).data(ev.data.to_string())
 }
 
-async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: HeaderMap) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: HeaderMap) -> Response {
+    // Serve hardening: a few streams per credential and a cap for the box,
+    // so one client can't hold every connection open.
+    let Some(slot) = s.sse_slots.take(&caller().key(), SSE_PER_CREDENTIAL, SSE_TOTAL) else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "5")],
+            Json(json!({ "error": "too_many_streams", "message": "too many open event streams for this credential or this box; close one and retry" })),
+        )
+            .into_response();
+    };
+    event_stream(s, peer, headers, slot).into_response()
+}
+
+fn event_stream(
+    s: Arc<Shared>,
+    peer: Option<Extension<TunnelPeer>>,
+    headers: HeaderMap,
+    slot: SseSlot,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let last = headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
     let (backlog, rx) = s.hub.subscribe(last);
     // Through the tunnel, an open events stream means the app is in the
@@ -1455,7 +1602,7 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     // without this a quiet stream looked "connecting" until the 15 s heartbeat.
     let hello = stream::once(async { Ok(Event::default().comment("connected")) });
     let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(e)))));
-    let live = stream::unfold((rx, foreground, token_gen), |(mut rx, foreground, mut token_gen)| async move {
+    let live = stream::unfold((rx, (foreground, slot), token_gen), |(mut rx, foreground, mut token_gen)| async move {
         loop {
             let next = match token_gen.as_mut() {
                 Some(g) => tokio::select! {
@@ -1474,6 +1621,27 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
         }
     });
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
+}
+
+#[cfg(test)]
+mod sse_slot_tests {
+    use super::SseSlots;
+    use std::sync::Arc;
+
+    /// Serve hardening: per-credential and box-wide caps; a dropped slot is
+    /// free again.
+    #[test]
+    fn event_stream_slots_cap_each_credential_and_the_box() {
+        let slots = Arc::new(SseSlots::default());
+        let a: Vec<_> = (0..2).map(|_| slots.take("tunnel:a", 2, 3).expect("a's first two")).collect();
+        assert!(slots.take("tunnel:a", 2, 3).is_none(), "a is at its cap");
+        let b = slots.take("bearer", 2, 3).expect("b has its own");
+        assert!(slots.take("operator", 2, 3).is_none(), "the box is full");
+        drop(b);
+        assert!(slots.take("operator", 2, 3).is_some(), "a dropped slot frees room");
+        drop(a);
+        assert!(slots.0.lock().unwrap().get("tunnel:a").is_none());
+    }
 }
 
 #[cfg(test)]

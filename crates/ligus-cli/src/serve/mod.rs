@@ -40,6 +40,7 @@ pub mod contacts_api;
 pub mod dashboard;
 pub mod dashboard_ligus;
 pub mod dms;
+pub mod drafts;
 pub mod flow_api;
 pub mod forges_api;
 pub mod hub;
@@ -47,6 +48,7 @@ pub mod identity_api;
 pub mod invite_code;
 pub use invite_code::admission_code;
 pub mod lab;
+pub mod listener;
 pub mod me_api;
 pub mod memory_api;
 pub mod notify;
@@ -76,6 +78,24 @@ const STOPPED_TURN_GRACE: Duration = Duration::from_secs(3);
 /// Replies and proposals created this long before serve started don't push.
 const NOTIFY_HISTORY_MINUTES: i64 = 10;
 
+/// The operator's token file in the data dir (D5): the credential for the
+/// box owner's routes and for secrets on a loopback listener. Separate from
+/// `serve.token`, which every direct-path phone holds.
+pub const OPERATOR_TOKEN_FILE: &str = "serve.operator.token";
+
+/// Where `serve.operator.token` lives for a data dir.
+pub fn operator_token_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join(OPERATOR_TOKEN_FILE)
+}
+
+/// How long a client may take to send a request's headers (also the
+/// longest an idle keep-alive connection waits for its next request).
+pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a connection may go without a byte either way before it is
+/// closed. Above the event stream's 15 s heartbeat and the longest git or
+/// forge call a handler waits on.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Default listen address: loopback only. On the home host the systemd unit
 /// passes the box's Tailscale IP.
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
@@ -85,6 +105,10 @@ pub const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
 pub struct ServeOptions {
     pub listen: SocketAddr,
     pub token_file: PathBuf,
+    /// [`HEADER_READ_TIMEOUT`] (tests shorten it).
+    pub header_read_timeout: Duration,
+    /// [`IDLE_TIMEOUT`] (tests shorten it).
+    pub idle_timeout: Duration,
     pub ntfy: Option<ntfy::Ntfy>,
     /// The URL the phone uses (pairing link); default `http://<listen>`.
     pub public_url: Option<String>,
@@ -143,17 +167,21 @@ impl ServeOptions {
                  (set LIGUS_SERVE_ALLOW_ANY_BIND=1 to override)"
             );
         }
-        let ntfy = match (ntfy_url.or_else(|| env_opt("LIGUS_NTFY_URL")), ntfy_topic.or_else(|| env_opt("LIGUS_NTFY_TOPIC"))) {
-            (Some(url), Some(topic)) => Some(ntfy::Ntfy { url, topic, token: env_opt("LIGUS_NTFY_TOKEN") }),
-            (Some(_), None) | (None, Some(_)) => bail!("ntfy needs both a URL and a topic (--ntfy-url / --ntfy-topic)"),
-            (None, None) => None,
-        };
+        let ntfy = ntfy::settings(
+            ntfy_url.or_else(|| env_opt("LIGUS_NTFY_URL")),
+            ntfy_topic.or_else(|| env_opt("LIGUS_NTFY_TOPIC")),
+            env_opt("LIGUS_NTFY_TOKEN"),
+            env_flag("LIGUS_NTFY_ALLOW_HTTP", false),
+            env_flag("LIGUS_NTFY_TITLES", false),
+        )?;
         Ok(Self {
             listen,
             token_file: token_file
                 .or_else(|| env_opt("LIGUS_SERVE_TOKEN_FILE"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| cfg.data_dir.join("serve.token")),
+            header_read_timeout: HEADER_READ_TIMEOUT,
+            idle_timeout: IDLE_TIMEOUT,
             ntfy,
             public_url: public_url.or_else(|| env_opt("LIGUS_SERVE_PUBLIC_URL")),
             label: label
@@ -204,6 +232,11 @@ pub struct Shared {
     pub opts: ServeOptions,
     pub ws: Uuid,
     token: RwLock<String>,
+    /// The operator's token (`serve.operator.token`, D5): the box owner's
+    /// routes and secrets on a loopback listener. No phone ever gets it.
+    operator_token: RwLock<String>,
+    /// Open event streams per credential (`api::events`).
+    pub sse_slots: Arc<api::SseSlots>,
     /// Bumped whenever the bearer token changes: direct-path streams opened
     /// with the old token end.
     pub token_gen: watch::Sender<u64>,
@@ -444,11 +477,28 @@ impl Shared {
         self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// The operator's token (`serve.operator.token`).
+    pub fn operator_token(&self) -> String {
+        self.operator_token.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Re-read the operator token file (the operator replaced it).
+    fn reload_operator_token(&self) {
+        let Ok(t) = std::fs::read_to_string(operator_token_path(&self.cfg.data_dir)) else { return };
+        let t = t.trim();
+        if t.len() >= 32 && t != self.token() && *self.operator_token.read().unwrap_or_else(|e| e.into_inner()) != t {
+            ligus_runtime::secret_redact::register(t);
+            *self.operator_token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
+            println!("ligus serve: the operator token changed on disk; using the new one.");
+        }
+    }
+
     /// Re-read the token file; a rotated token takes effect at once.
     fn reload_token(&self) {
         let Ok(t) = std::fs::read_to_string(&self.opts.token_file) else { return };
         let t = t.trim();
-        if t.len() >= 32 && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
+        // Never the operator's: the phones would get it from the tunnel.
+        if t.len() >= 32 && t != self.operator_token() && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
             *self.token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
             self.token_gen.send_modify(|g| *g += 1);
             println!("ligus serve: the bearer token changed on disk; using the new one.");
@@ -970,8 +1020,22 @@ fn load_read_marks(cfg: &Config) -> HashMap<Uuid, Uuid> {
 /// once the API is listening.
 pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // Agents on this box never read the serve token, wherever it lives.
-    ligus_runtime::executor::configure_host(&cfg.data_dir, std::slice::from_ref(&opts.token_file), &[crate::repos::repos_dir(&cfg.data_dir)]);
+    let operator_file = operator_token_path(&cfg.data_dir);
+    ligus_runtime::executor::configure_host(
+        &cfg.data_dir,
+        &[opts.token_file.clone(), operator_file.clone()],
+        &[crate::repos::repos_dir(&cfg.data_dir)],
+    );
     let token = pair::load_or_create_token(&opts.token_file)?;
+    let operator_token = pair::load_or_create_token(&operator_file)?;
+    if pair::token_matches(&token, &operator_token) {
+        bail!(
+            "{} and {} hold the same token: the operator's must be its own (delete {} and start again)",
+            opts.token_file.display(),
+            operator_file.display(),
+            operator_file.display()
+        );
+    }
     if let Err(e) = crate::purge_foreign_workspaces(&cfg) {
         eprintln!("serve: foreign-workspace cleanup skipped: {e}");
     }
@@ -1052,6 +1116,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let shared = Arc::new(Shared {
         ws,
         token: RwLock::new(token),
+        operator_token: RwLock::new(operator_token),
+        sse_slots: Default::default(),
         token_gen: watch::Sender::new(0),
         revocation_checks: Default::default(),
         roster_kick: Notify::new(),
@@ -1114,15 +1180,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         .with_context(|| format!("binding {}", shared.opts.listen))?;
     let addr = listener.local_addr()?;
     let app = api::router(shared.clone());
-    let mut rx_api = rx.clone();
-    let mut tasks = vec![tokio::spawn(async move {
-        let graceful = async move {
-            let _ = rx_api.wait_for(|stop| *stop).await;
-        };
-        if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(graceful).await {
-            eprintln!("serve: API stopped: {e}");
-        }
-    })];
+    let (header_read, idle) = (shared.opts.header_read_timeout, shared.opts.idle_timeout);
+    let mut tasks = vec![tokio::spawn(listener::serve(listener, app, header_read, idle, rx.clone()))];
     if shared.cfg.relay_url.is_some() {
         tasks.push(tokio::spawn(sync_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
@@ -1167,7 +1226,10 @@ async fn contact_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 async fn token_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(tunnel::PENDING_POLL) => shared.reload_token(),
+            _ = tokio::time::sleep(tunnel::PENDING_POLL) => {
+                shared.reload_operator_token();
+                shared.reload_token();
+            }
             _ = stop.wait_for(|s| *s) => return,
         }
     }
