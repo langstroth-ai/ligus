@@ -1303,9 +1303,10 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if known_repos.as_ref() != Some(&live) {
             known_repos = Some(live);
             let sh = shared.clone();
-            let _ = tokio::task::spawn_blocking(move || repos_refresh(&sh)).await;
+            // In the background: the beat never waits on a scan.
+            drop(tokio::task::spawn_blocking(move || repos_refresh(&sh)));
         }
-        let coverage = repo_coverage(&shared);
+        let coverage = if live_empty(&known_repos) { Vec::new() } else { repo_coverage(&shared) };
         // A box that can't write (revoked, awaiting approval) isn't serving work.
         let writable = shared.lock().write_block().is_none();
         // The one keyring (B1): beats seal at the authorized head.
@@ -1330,6 +1331,10 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+fn live_empty(known: &Option<Vec<uuid::Uuid>>) -> bool {
+    known.as_ref().is_none_or(|v| v.is_empty())
 }
 
 /// Map legacy bindings and scan the repos dir (and the box's scan roots)
