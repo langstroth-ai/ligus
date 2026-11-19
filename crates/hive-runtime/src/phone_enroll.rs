@@ -63,15 +63,32 @@ pub struct PhoneCode {
     pub signature: [u8; 64],
 }
 
+/// Characters a label never carries: controls, and the bidi overrides,
+/// isolates and marks and invisible format characters that can reorder or
+/// hide what a person reads next to the fingerprint (on the desktop's sheet,
+/// in a terminal).
+fn hidden_or_reordering(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        )
+}
+
 fn clamp_label(label: &str) -> String {
+    // Drop what a label never carries first, then trim, so what is left is
+    // already trimmed (a dropped character can't leave a space at an end);
+    // trim again after the cut. Idempotent: a code's label is refused unless
+    // it is its own clamp.
+    let kept: String = label.chars().filter(|c| !hidden_or_reordering(*c)).collect();
     let mut out = String::new();
-    for c in label.trim().chars().filter(|c| !c.is_control()) {
+    for c in kept.trim().chars() {
         if out.len() + c.len_utf8() > MAX_LABEL {
             break;
         }
         out.push(c);
     }
-    out
+    out.trim_end().to_string()
 }
 
 /// What the phone signs: `"ligus-phone-code-v1\0" ‖ device_id(16) ‖ key(65)
@@ -245,6 +262,33 @@ mod tests {
         assert!(matches!(PhoneCode::decode_checked(&code, strict), Err(PhoneCodeError::DeviceIdMismatch(_))));
         let derived = PhoneCode::new(derive(&p.public_key()), &p, "phone").encode();
         assert!(PhoneCode::decode_checked(&derived, strict).is_ok());
+    }
+
+    /// A label can't carry bidi overrides, isolates or invisible format
+    /// characters: on the confirmation sheet (and in a terminal) they can
+    /// reorder or hide what the person reads next to the fingerprint.
+    #[test]
+    fn a_label_carries_no_bidi_or_invisible_characters() {
+        let p = hive_core::testkit::Phone::new();
+        for bad in ["\u{202E}", "\u{2066}", "\u{2069}", "\u{200B}", "\u{200F}", "\u{FEFF}", "\u{061C}", "\u{2060}"] {
+            let c = PhoneCode::new(p.device_id, &p, &format!("Ana{bad}enohp"));
+            assert_eq!(c.label, "Anaenohp", "{bad:?} dropped when signing");
+            // A phone that signs one anyway: refused, not shown.
+            let label = format!("Ana{bad}enohp");
+            let raw = PhoneCode {
+                device_id: p.device_id,
+                public_key: p.public_key(),
+                signature: hive_core::crypto::sign_p256(&p.key, &preimage(p.device_id, &p.public_key(), &label)),
+                label,
+            };
+            assert_eq!(PhoneCode::decode(&raw.encode()), Err(PhoneCodeError::Malformed), "{bad:?}");
+        }
+        // Whatever a phone is named, the code it signs decodes.
+        let long = format!("{} tail", "x".repeat(MAX_LABEL - 1));
+        for name in ["\u{200B} Ana", "\u{7} Ana", "Ana \u{202E}", "Ana\u{7} ", long.as_str(), "\u{2066}\u{2069}"] {
+            let c = PhoneCode::new(p.device_id, &p, name);
+            assert_eq!(PhoneCode::decode(&c.encode()).map(|d| d.label), Ok(c.label.clone()), "{name:?}");
+        }
     }
 
     #[test]

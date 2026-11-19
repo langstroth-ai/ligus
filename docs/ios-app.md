@@ -414,7 +414,11 @@ pubkey      = the key's x963Representation (65 bytes, 0x04 ‖ X ‖ Y)
 sig         = ECDSA P-256 / SHA-256 over
               "ligus-phone-code-v1\0" ‖ device_id(16, RFC 4122 bytes) ‖ pubkey(65) ‖ label
               as r ‖ s (64 bytes, low S: s := n − s when s > n/2)
-label       = trimmed, no control characters, ≤ 64 bytes (cut at a character boundary)
+label       = trimmed, no control characters and none of U+00AD, U+061C, U+180E,
+              U+200B–U+200F, U+202A–U+202E, U+2060–U+206F, U+FEFF, U+FFF9–U+FFFB
+              (bidi overrides, isolates, marks, invisible format characters),
+              ≤ 64 bytes (cut at a character boundary); a code whose label
+              breaks this is refused
 fingerprint = upper-case hex of SHA-256(pubkey)[0..6], as XXXX-XXXX-XXXX
 b64u        = base64url without padding
 ```
