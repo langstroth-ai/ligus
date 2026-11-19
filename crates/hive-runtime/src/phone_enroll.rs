@@ -403,6 +403,32 @@ mod tests {
         assert_eq!(certs(&svc, wid).len(), 1, "nothing appended without presence");
     }
 
+    /// The passkey sheet names the key being certified, by the fingerprint
+    /// the person compared with the phone's screen: what the passkey
+    /// confirms reads as that phone, not just an id.
+    #[test]
+    fn the_passkey_sheet_names_the_fingerprint() {
+        struct Rec(hive_core::presence::RecoveryKey, std::sync::Mutex<Vec<String>>);
+        impl PresenceProvider for Rec {
+            fn assert(&self, req: &PresenceRequest) -> std::result::Result<hive_core::presence::PresenceAssertion, String> {
+                self.1.lock().unwrap().push(req.summary.clone());
+                Ok(self.0.assert(&req.challenge))
+            }
+        }
+        let (mut svc, wid) = desktop();
+        let first = hive_core::testkit::Phone::new();
+        svc.certify_phone_code(wid, &PhoneCode::new(first.device_id, &first, "p")).unwrap();
+        let account = svc.author().account_id.unwrap();
+        let rec = std::sync::Arc::new(Rec(hive_core::testkit::test_recovery_key(account), Default::default()));
+        svc.set_presence_provider(Some(rec.clone()));
+        let phone = hive_core::testkit::Phone::new();
+        let code = PhoneCode::new(phone.device_id, &phone, "p");
+        svc.certify_phone_code(wid, &code).unwrap();
+        let asked = rec.1.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].contains(&code.fingerprint()), "{}", asked[0]);
+    }
+
     #[test]
     fn a_box_never_certifies_a_phone() {
         let store = crate::EventStore::open_in_memory().unwrap();
