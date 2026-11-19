@@ -81,14 +81,25 @@ impl RelayError {
     }
 }
 
-/// The `Idempotency-Key` for pushing the envelope `event_id`: stable across
-/// re-pushes (a re-sealed body differs, the key doesn't), and derived so the
-/// relay learns no event id. The relay scopes it to the writer.
-pub fn idempotency_key(event_id: uuid::Uuid) -> String {
+/// The `Idempotency-Key` for pushing the envelope `event_id` from the client
+/// holding `secret`: stable across that client's re-pushes (a re-sealed body
+/// differs, the key doesn't), and derived so the relay learns no event id.
+///
+/// The relay dedups by this key across the whole room, for every writer, so
+/// the key must not be computable from the event id alone: a co-member who
+/// learned an id before this device pushed it (a P2P peer, a box relaying a
+/// phone's event) could otherwise push junk under the key first and make the
+/// relay answer this device's push with the junk's seq, swallowing the event.
+/// `secret` is this client's ([`crate::SyncEngine`] draws one per engine). A
+/// re-push from another client (or after a restart) is a separate write: at
+/// worst a second copy of the same signed envelope, which every fold treats
+/// as that envelope.
+pub fn idempotency_key(secret: &[u8; 32], event_id: uuid::Uuid) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    // FROZEN context: a re-push must present the same key after an upgrade.
+    // FROZEN context.
     h.update(b"ligus-push-idempotency-v1\0");
+    h.update(secret);
     h.update(event_id.as_bytes());
     h.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -332,8 +343,8 @@ impl RelayClient {
     }
 
     /// [`Self::push_value`] with an `Idempotency-Key` ([`idempotency_key`]),
-    /// so a re-push of the same event (after a refusal, a lost answer or a
-    /// restart) gets its original seq instead of a second copy. A rate limit
+    /// so this client's re-push of the same event (after a refusal or a lost
+    /// answer) gets its original seq instead of a second copy. A rate limit
     /// is retried in place with the same body and key.
     pub async fn push_value_keyed(
         &self,

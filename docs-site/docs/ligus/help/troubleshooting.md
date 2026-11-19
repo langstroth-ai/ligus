@@ -79,7 +79,7 @@ acts on the code and never loops against it:
 | **Sync slowed by the relay** | `429` `ip_rate`, `room_rate`, `write_rate`, `read_rate`, `room_writer_rate`, `tenant_rate`, `contact_*_rate`, `rate_limited` | waits `Retry-After` and sends the same request again (same bytes, same idempotency key, so nothing is stored twice) | nothing |
 | (no pill) | `429` `sse_streams` | closes back to polling until `Retry-After` | close other Ligus windows or devices using the same token |
 | "too many wrong pairing codes" | `429` `pair_lockout` | sends no pairing-code lookup to that relay until it ends | wait, then type the code again |
-| "Not retried automatically" | `429` `client_rooms`, `too_many_pending` | stops; never retries by itself | delete a workspace you no longer use (or clear pending requests), then restart Ligus (or `ligus serve`) |
+| "Not retried right away" | `429` `client_rooms`, `too_many_pending` | pauses this workspace's writes; tries one push again after an hour (or the relay's longer `Retry-After`) | delete a workspace you no longer use (or clear pending requests); restart Ligus (or `ligus serve`) to retry at once |
 | **Room expired or truncated** | a new device's first envelope isn't the workspace's first | syncs what is there and says so: the device can't rebuild the workspace from its founding | ask a member whose device still holds it to re-invite you, or move the workspace to a relay that keeps the whole log |
 
 An unknown code is handled by its status: an unknown `429` like a rate

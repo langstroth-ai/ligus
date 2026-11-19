@@ -12,7 +12,7 @@
 //! | [`RefusalClass::RateLimited`] | `ip_rate`, `room_rate`, `tenant_rate`, `write_rate`, `read_rate`, `room_writer_rate`, `contact_*_rate`, `rate_limited`, any other `429` | wait `Retry-After`, retry the same request (same body, same idempotency key); the outbox is kept |
 //! | [`RefusalClass::StreamLimit`] | `sse_streams` | back the event stream off until `Retry-After` (polling meanwhile) |
 //! | [`RefusalClass::PairLockout`] | `pair_lockout` | send no pairing-code lookup to that relay until `Retry-After` |
-//! | [`RefusalClass::ClientQuota`] | `client_rooms`, `too_many_pending` | no automatic retry: tell the user |
+//! | [`RefusalClass::ClientQuota`] | `client_rooms`, `too_many_pending` | no retry right away: tell the user; a write pause rechecks once per [`CLIENT_QUOTA_RECHECK`] (at least), so it can't last until a restart |
 //! | [`RefusalClass::RoomFull`] | `507` `room_bytes`, `room_envelopes`, `keyring` | pause writes to that room only ("workspace full"); reads go on; one try per `Retry-After` |
 //! | [`RefusalClass::OrgQuota`] | `507` `tenant_bytes`, `tenant_rooms` | as `RoomFull`, worded "organisation quota reached" |
 //! | [`RefusalClass::RelayFull`] | `507` `store_bytes`, `total_bytes`, `total_rooms`, `contacts_full`, any other `507` | back off until `Retry-After` |
@@ -30,6 +30,9 @@ pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(24 * 3600);
 /// limit. A longer `Retry-After` ends the request with the refusal, and the
 /// caller (the sync loop) waits it out between rounds instead.
 pub const MAX_INLINE_WAIT: Duration = Duration::from_secs(30);
+/// The least a write pause for a client quota lasts before one quiet
+/// recheck.
+pub const CLIENT_QUOTA_RECHECK: Duration = Duration::from_secs(3600);
 /// How many times one request is retried in place after a rate limit.
 pub const MAX_INLINE_RETRIES: u32 = 3;
 
@@ -49,6 +52,18 @@ impl RefusalClass {
     /// A refusal the client may retry by itself once `Retry-After` passed.
     pub fn auto_retry(self) -> bool {
         !matches!(self, RefusalClass::ClientQuota)
+    }
+
+    /// How long a write pause for this refusal lasts: its `Retry-After`,
+    /// and for a refusal that isn't retried by itself at least
+    /// [`CLIENT_QUOTA_RECHECK`]. Every pause ends: a single refusal (from a
+    /// hostile or confused relay) never stops a room's writes until restart.
+    pub fn write_pause(self, retry_after: Duration) -> Duration {
+        if self.auto_retry() {
+            retry_after
+        } else {
+            retry_after.max(CLIENT_QUOTA_RECHECK).min(MAX_RETRY_AFTER)
+        }
     }
 
     /// A refusal of writes that pauses writing (to this room, this tenant,
@@ -151,10 +166,10 @@ impl RelayRefusal {
             RefusalClass::StreamLimit => format!("the relay has too many live streams open from this device ({code}); polling instead, retrying in {wait}"),
             RefusalClass::PairLockout => format!("too many wrong pairing codes were tried on this relay ({code}); try again in {wait}"),
             RefusalClass::ClientQuota if self.code == "too_many_pending" => {
-                format!("the relay refused: too many pending requests from this account ({code}). Not retried automatically; clear some first")
+                format!("the relay refused: too many pending requests from this account ({code}). Not retried right away; clear some first")
             }
             RefusalClass::ClientQuota => format!(
-                "the relay refused: this device created as many workspaces as the relay allows ({code}). Not retried automatically; it clears when one of them expires or is deleted"
+                "the relay refused: this device created as many workspaces as the relay allows ({code}). Not retried right away; it clears when one of them expires or is deleted"
             ),
             RefusalClass::RoomFull => format!(
                 "workspace full: the relay is not taking new writes for this workspace ({code}). It stays readable; this device's new events wait here and are sent once there is room (next try in {wait})"
@@ -282,7 +297,7 @@ mod tests {
     fn user_messages_name_the_situation() {
         assert!(r(507, "room_bytes").user_message().starts_with("workspace full"));
         assert!(r(507, "tenant_rooms").user_message().starts_with("organisation quota reached"));
-        assert!(r(429, "client_rooms").user_message().contains("Not retried automatically"));
+        assert!(r(429, "client_rooms").user_message().contains("Not retried right away"));
         assert!(RelayRefusal::parse(507, None, b"").unwrap().user_message().contains("HTTP 507"));
     }
 

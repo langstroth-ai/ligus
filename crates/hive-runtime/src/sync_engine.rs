@@ -69,8 +69,8 @@ pub enum SyncAttention {
     /// The relay refused this device's writes to the room (it's full, the
     /// organisation's quota is reached, the relay is full or rate limiting,
     /// or this client's quota is used up). New events wait in the local
-    /// store; one push is tried again at `until` (never, for a refusal that
-    /// isn't retried automatically).
+    /// store; one push is tried again at `until` (for a client quota, an
+    /// hour at least).
     WritesPaused { refusal: RelayRefusal, until: Option<std::time::Instant> },
     /// A fresh fold (cursor 0) whose first envelope isn't seq 1: the relay
     /// expired the room or trimmed its front, so this device can't rebuild
@@ -88,8 +88,10 @@ impl SyncAttention {
                     r.retry_after = u.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_secs(1));
                 }
                 let msg = r.user_message();
-                if until.is_none() || r.class() == RefusalClass::ClientQuota {
+                if until.is_none() {
                     msg
+                } else if r.class() == RefusalClass::ClientQuota {
+                    format!("{msg} (checked again in {})", human_duration(r.retry_after))
                 } else {
                     format!("{msg} (sync paused for writes, {} left)", human_duration(r.retry_after))
                 }
@@ -198,6 +200,10 @@ pub struct SyncEngine {
     /// A read was refused with a `Retry-After` longer than a request waits
     /// in place: no round before this.
     round_hold: Option<std::time::Instant>,
+    /// This engine's secret in its pushes' `Idempotency-Key`s
+    /// ([`crate::relay_client::idempotency_key`]): no other writer to the
+    /// room can compute them.
+    push_secret: [u8; 32],
 }
 
 /// Outcome of decoding one fetched relay body. Separating the two failure
@@ -249,6 +255,11 @@ impl SyncEngine {
             write_pause: None,
             truncated_at: None,
             round_hold: None,
+            push_secret: {
+                let mut b = [0u8; 32];
+                getrandom::fill(&mut b).expect("os rng");
+                b
+            },
         }
     }
 
@@ -271,6 +282,11 @@ impl SyncEngine {
             return Some(SyncAttention::WritesPaused { refusal: refusal.clone(), until: *until });
         }
         self.truncated_at.map(|first_seq| SyncAttention::RoomTruncated { first_seq })
+    }
+
+    /// The `Idempotency-Key` this engine pushes `event_id` under.
+    pub fn push_key(&self, event_id: Uuid) -> String {
+        crate::relay_client::idempotency_key(&self.push_secret, event_id)
     }
 
     /// Lift a write pause now (the person freed space, or asked to retry):
@@ -687,7 +703,7 @@ impl SyncEngine {
             };
             // The key makes a re-push (after a refusal or a lost answer) the
             // same write to the relay, not a second copy.
-            let key = crate::relay_client::idempotency_key(env.event_id);
+            let key = self.push_key(env.event_id);
             if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
                 for unsent in &envelopes[i..] {
                     self.seen.remove(&unsent.event_id);
@@ -698,7 +714,10 @@ impl SyncEngine {
                 // go on and nothing loops against a full room.
                 if let RelayError::Refused(r) = &e {
                     if r.class().pauses_writes() {
-                        let until = r.class().auto_retry().then(|| std::time::Instant::now() + r.retry_after);
+                        // Every pause ends (a client quota rechecks after an
+                        // hour at least), so one refusal can't stop this
+                        // room's writes until a restart.
+                        let until = Some(std::time::Instant::now() + r.class().write_pause(r.retry_after));
                         tracing::warn!(target: "sync", room = %self.workspace, code = %r.code, "relay refused writes: {}", r.user_message());
                         self.write_pause = Some((r.clone(), until));
                         return Ok(());

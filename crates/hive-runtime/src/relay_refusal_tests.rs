@@ -44,6 +44,11 @@ struct Script {
     rows: Vec<Value>,
     seen: Vec<Seen>,
     next_seq: u64,
+    /// Like the relay: an `Idempotency-Key` already stored in this room
+    /// returns its seq and stores nothing, whoever pushes it.
+    dedup: std::collections::HashMap<String, u64>,
+    /// Bodies the relay stored (unscripted pushes).
+    stored: Vec<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -85,8 +90,19 @@ async fn spawn(script: Script) -> (String, Fake) {
             let (status, retry, body) = match scripted {
                 Some(a) => a,
                 None if envelopes && method == Method::POST => {
-                    s.next_seq += 1;
-                    (200, None, json!({ "seq": s.next_seq }))
+                    let key = headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned);
+                    match key.as_ref().and_then(|k| s.dedup.get(k).copied()) {
+                        Some(seq) => (200, None, json!({ "seq": seq })),
+                        None => {
+                            s.next_seq += 1;
+                            let seq = s.next_seq;
+                            if let Some(k) = key {
+                                s.dedup.insert(k, seq);
+                            }
+                            s.stored.push(body.to_vec());
+                            (200, None, json!({ "seq": seq }))
+                        }
+                    }
                 }
                 None if envelopes && uri.query().unwrap_or_default().contains("after=0") => (200, None, Value::Array(s.rows.clone())),
                 None => (200, None, json!([])),
@@ -152,14 +168,16 @@ async fn a_rate_limited_push_is_retried_in_place_with_the_same_body_and_key() {
     assert!(eng.take_unpushed(&store).unwrap().is_empty(), "the outbox drained");
 }
 
-/// The key is derived from the event id (stable across re-seals and
-/// restarts) and doesn't reveal it.
+/// The key is derived from the event id and this client's secret (stable
+/// across re-seals) and doesn't reveal the id.
 #[test]
 fn the_idempotency_key_is_stable_and_reveals_no_event_id() {
     let id = Uuid::new_v4();
-    let k = crate::relay_client::idempotency_key(id);
-    assert_eq!(k, crate::relay_client::idempotency_key(id));
-    assert_ne!(k, crate::relay_client::idempotency_key(Uuid::new_v4()));
+    let secret = [7u8; 32];
+    let k = crate::relay_client::idempotency_key(&secret, id);
+    assert_eq!(k, crate::relay_client::idempotency_key(&secret, id));
+    assert_ne!(k, crate::relay_client::idempotency_key(&secret, Uuid::new_v4()));
+    assert_ne!(k, crate::relay_client::idempotency_key(&[8u8; 32], id), "another client's key differs");
     assert_eq!(k.len(), 32);
     assert!(!k.contains(&id.simple().to_string()) && !k.contains(&id.to_string()));
 }
@@ -268,23 +286,56 @@ async fn a_full_relay_backs_off() {
     }
 }
 
-/// `client_rooms` and `too_many_pending` are never retried by themselves:
-/// one request, a pause with no end, and a message that says so.
+/// The relay dedups pushes by `Idempotency-Key` across the whole room, for
+/// every writer. A co-member who learned an event id before this device
+/// pushed it (a P2P peer, a box relaying a phone's event) must not be able to
+/// claim that key with junk and make the relay swallow the real event.
 #[tokio::test]
-async fn a_client_quota_is_surfaced_and_never_retried() {
+async fn a_co_writer_who_knows_an_event_id_cant_make_the_relay_swallow_it() {
+    let (base, fake) = spawn(Script::default()).await;
+    let (store, _, _) = store_with_chat();
+    let mut honest = engine(&base);
+    let batch = honest.take_unpushed(&store).unwrap();
+    assert_eq!(batch.len(), 2);
+    // Mallory's client, on the same room, knows both event ids and pushes
+    // junk under the key her client derives for each.
+    let mallory = engine(&base);
+    for env in &batch {
+        let key = mallory.push_key(env.event_id);
+        RelayClient::new(&base).push_value_keyed("room", &json!({ "junk": true }), Some(&key)).await.unwrap();
+    }
+    honest.push_envelopes(&batch).await.unwrap();
+    let stored = fake.0.lock().unwrap().stored.clone();
+    assert_eq!(stored.len(), 4, "both real envelopes stored next to the junk, none swallowed");
+    // The honest device's own re-push of an event is still one write.
+    let again = honest.push_key(batch[0].event_id);
+    assert_eq!(again, honest.push_key(batch[0].event_id));
+    assert_ne!(again, mallory.push_key(batch[0].event_id));
+}
+
+/// `client_rooms` and `too_many_pending` aren't retried right away, but a
+/// pause always ends: one quiet recheck after at least an hour, so a single
+/// refusal (a hostile or confused relay) can't stop this room's writes
+/// until the app restarts.
+#[tokio::test]
+async fn a_client_quota_pause_is_surfaced_and_has_an_end() {
     for code in ["client_rooms", "too_many_pending"] {
         let (base, fake) = spawn(Script { push: [refusal(429, code, "1")].into(), ..Default::default() }).await;
         let (mut store, _, _) = store_with_chat();
         let mut eng = engine(&base);
         round(&mut eng, &mut store).await.unwrap();
         match eng.attention() {
-            Some(SyncAttention::WritesPaused { refusal, until: None }) => assert_eq!(refusal.class(), RefusalClass::ClientQuota),
+            Some(SyncAttention::WritesPaused { refusal, until: Some(u) }) => {
+                assert_eq!(refusal.class(), RefusalClass::ClientQuota);
+                let left = u.saturating_duration_since(std::time::Instant::now());
+                assert!(left > Duration::from_secs(3500) && left <= crate::relay_refusal::CLIENT_QUOTA_RECHECK, "{code}: {left:?}");
+            }
             other => panic!("{code}: {other:?}"),
         }
-        assert!(eng.attention().unwrap().message().contains("Not retried automatically"));
+        assert!(eng.attention().unwrap().message().contains("Not retried right away"), "{}", eng.attention().unwrap().message());
         tokio::time::sleep(Duration::from_millis(1100)).await;
         round(&mut eng, &mut store).await.unwrap();
-        assert_eq!(fake.seen("POST", "/envelopes").len(), 1, "{code}: not retried");
+        assert_eq!(fake.seen("POST", "/envelopes").len(), 1, "{code}: not retried within the hour");
     }
 }
 
