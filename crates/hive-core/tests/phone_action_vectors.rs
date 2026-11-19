@@ -145,6 +145,15 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
             },
         },
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id },
+        PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
+            record: FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                proposal_id: u(0x12),
+                op: op.clone(),
+                proposer: String::new(),
+                source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None },
+                rationale: rationale.clone(),
+            }),
+        },
     }
 }
 
@@ -308,4 +317,80 @@ fn with_extra_payload_field(preimage: &[u8]) -> Vec<u8> {
         out.extend_from_slice(&json);
     }
     out
+}
+
+/// The `proposeMemory` lines (workspace memory, `docs/design/v2/workspace-memory.md`).
+/// Run with `LIGUS_GOLDEN_OUT=<path> --ignored phone_memory_goldens`, then
+/// append the lines (the earlier lines stay frozen).
+#[test]
+#[ignore]
+fn phone_memory_goldens() {
+    use hive_core::memory::MemoryOp;
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let i = ids();
+    let key = p256::ecdsa::SigningKey::from_slice(&[0x11; 32]).unwrap();
+    let pk = hex(&hive_core::crypto::p256_public_key(&key));
+    let asked = PhoneAction::ProposeMemory {
+        chat_id: i.chat,
+        op: MemoryOp::Create { entry_id: u(0x13), title: "Deploy day".into(), body: "We ship on Thursdays.".into(), tags: vec!["process".into()] },
+        rationale: "Said in standup".into(),
+    };
+    let mut out = String::new();
+    // (label, tweak): 0 as drafted; 1 the box changes the body; 2 the box
+    // files it under an agent's name; 3 on the chat's log.
+    for (n, (label, tweak)) in [("proposeMemory", 0u8), ("refuse/proposeMemory-other-body", 1), ("refuse/proposeMemory-as-agent", 2), ("refuse/proposeMemory-on-chat-log", 3)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut ev = payload(&i, &asked);
+        if let SessionEvent::FlowRecorded { record: FlowRecord::MemoryProposed(p) } = &mut ev {
+            match tweak {
+                1 => {
+                    if let MemoryOp::Create { body, .. } = &mut p.op {
+                        *body = "We ship on Fridays.".into();
+                    }
+                }
+                2 => p.proposer = u(0x14).to_string(),
+                _ => {}
+            }
+        }
+        let mut env = draft(&i, &asked, 40 + n as u128, ev);
+        if tweak == 3 {
+            env.session_id = i.chat;
+        }
+        let preimage = envelope_preimage(&env);
+        let expect = match check_phone_action_preimage(&preimage, None, i.ws, i.phone, i.account, &asked) {
+            Ok(_) => "ok".to_string(),
+            Err(why) => why.to_string(),
+        };
+        assert_eq!(expect == "ok", tweak == 0, "{label}: {expect}");
+        let mut line = serde_json::json!({
+            "label": label,
+            "workspaceId": i.ws,
+            "phoneDeviceId": i.phone,
+            "accountId": i.account,
+            "action": asked,
+            "preimage": b64url(&preimage),
+            "publicKey": pk,
+            "expect": expect,
+        });
+        if tweak == 0 {
+            line["signature"] = serde_json::json!(b64url(&sign_p256(&key, &preimage)));
+        }
+        out.push_str(&serde_json::to_string(&line).unwrap());
+        out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn propose_memory_vectors_are_present() {
+    let labels: Vec<String> = GOLDEN
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
+        .collect();
+    for want in ["proposeMemory", "refuse/proposeMemory-other-body", "refuse/proposeMemory-as-agent", "refuse/proposeMemory-on-chat-log"] {
+        assert!(labels.iter().any(|l| l == want), "missing {want}");
+    }
 }

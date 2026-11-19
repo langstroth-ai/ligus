@@ -189,6 +189,15 @@ impl ChatService {
             PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
                 SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
             }
+            PhoneAction::ProposeMemory { chat_id, op, rationale } => SessionEvent::FlowRecorded {
+                record: hive_core::flow::FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                    proposal_id: Uuid::new_v4(),
+                    op: op.clone(),
+                    proposer: String::new(),
+                    source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None },
+                    rationale: rationale.clone(),
+                }),
+            },
         };
         let session_id = action.session_id(workspace_id);
         let draft = self.draft_for_phone_on(session_id, workspace_id, phone, payload)?;
