@@ -77,6 +77,7 @@ pub mod secret_store;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;
+pub mod turn_dispatch;
 pub mod vault_fetcher;
 pub mod workflow_directive;
 pub mod workflow_tool;

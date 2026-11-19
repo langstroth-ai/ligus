@@ -29,7 +29,7 @@ use hive_proto::{
 use hive_runtime::provider::anthropic::AnthropicResponse;
 use hive_runtime::tool_loop::{self, MessagesApi, ToolExecutor};
 use hive_runtime::{
-    chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault, mentions::parse_mentions,
+    chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault,
     pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, AnthropicClient, ChatTurn,
     EventStore, IdentityStore, McpRegistry, McpServerSpec, ProviderError, ResolvedRuntime,
 };
@@ -6885,55 +6885,15 @@ fn owns_responder(local_actor_id: &str, responder: &Responder) -> bool {
     crate::workflows::stage_owner_runs_here(local_actor_id, &responder.owner_actor_id)
 }
 
-/// Whether *this* device runs a turn for a responder owned by `owner_actor_id`.
-///
-/// The cross-device ownership split only means anything when the workspace
-/// actually syncs to other devices — i.e. a relay is configured. Two cases make
-/// this device the sole possible responder, so it must always answer:
-///   - `local_only`: no relay configured. Nothing ever syncs off this device, so
-///     deferring to an "owner" would be permanent silence. This is also the only
-///     robust guard against identity churn: a churned self (author id changes on
-///     GitHub sign-in) is hoisted into the workspace roster as a *second* human
-///     member under a new account id, so `solo` (≤1 human) no longer holds and
-///     the primary would defer to a stale self-identity that no live device owns.
-///   - `solo`: a relay *is* configured but there's ≤1 human — a room you made
-///     that no one else has joined. Still no other device to defer to.
-///
-/// Only a real, synced, multi-human room falls back to the ownership check.
-///
-/// An agent sent to a host (`binding`) runs on that host only — the worker
-/// there answers every mention for it (`ligus worker` / `ligus serve`). Deciding
-/// on ownership alone answered it here too: a solo user's desktop always runs
-/// its own agents, so an agent sent to the home host was answered twice.
-fn turn_runs_here(local_only: bool, solo: bool, local: &str, owner: &str, binding: HostBinding) -> bool {
-    match binding {
-        _ if local_only => true,
-        HostBinding::ThisDevice => true,
-        HostBinding::Elsewhere => false,
-        HostBinding::Unbound => solo || crate::workflows::stage_owner_runs_here(local, owner),
-    }
-}
-
-/// Where a responder's host binding puts its turns, seen from this device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostBinding {
-    /// No host: the owner's device answers.
-    Unbound,
-    /// Sent to this device.
-    ThisDevice,
-    /// Sent to another host (a worker, the home host).
-    Elsewhere,
-}
-
-fn host_binding(host_id: &str, this_device: &str) -> HostBinding {
-    if host_id.is_empty() {
-        HostBinding::Unbound
-    } else if host_id == this_device {
-        HostBinding::ThisDevice
-    } else {
-        HostBinding::Elsewhere
-    }
-}
+/// The dispatch gates (`turn_runs_here`, `runs_here_linked`, host bindings,
+/// `dispatch_target`, the answered/deferred checks) live in
+/// `hive_runtime::turn_dispatch`, so the local-send gate (`send_message`), the
+/// relay-sync gate (`maybe_respond`) and every other client decide alike.
+#[allow(unused_imports)]
+use hive_runtime::turn_dispatch::{
+    deferred_turn_unanswered, dispatch_target, host_binding, human_member_count, runs_here_linked, synced_user_triggers,
+    turn_runs_here, user_turn_answered, DispatchTarget, HostBinding, DEFERRED_CLAIM_TIMEOUT,
+};
 
 /// Whether the host `host_id` beat recently on the relay's presence channel
 /// (or, on an older build, heartbeated durably) — as the Hosts list shows it.
@@ -6946,78 +6906,6 @@ fn host_online(state: &AppState, workspace_id: Uuid, host_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// How long a deferred turn waits for its owner's device to pick it up before
-/// this device answers it anyway.
-///
-/// The deferral above is right whenever the owner is a live peer, but nothing
-/// bounded it: an owner *no* device can satisfy — a chat created under a churned
-/// self-identity, an owner whose device is offline or retired — left the turn
-/// silently unanswered forever, with only a log line to show for it. Long enough
-/// that a healthy peer's `TurnClaimed` syncs first and this never fires; short
-/// enough that the user isn't left staring at a dead chat.
-const DEFERRED_CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
-
-/// Whether a turn we deferred is *still* unanswered once
-/// [`DEFERRED_CLAIM_TIMEOUT`] has elapsed, and this device should take it over.
-///
-/// Three independent guards, because the claim alone is not enough to prevent a
-/// duplicate answer. `claim_turn` resolves only once claims sync, so a peer's
-/// claim that hasn't reached us yet is indistinguishable from no claim at all —
-/// exactly the state a lagging or briefly-offline relay produces, and exactly
-/// when this fallback fires. The reply check closes that gap on a separate
-/// signal: `begin_assistant_message` stamps `reply_to_message_id` with the
-/// message being answered, so a peer's placeholder is evidence the turn is in
-/// hand even while it's still empty and streaming. This is the second-line guard
-/// `claim_turn`'s own docs point at.
-///
-/// Every guard is conservative in the same direction, which is the property that
-/// makes the fallback safe: a false "already handled" costs one unanswered turn
-/// (today's behaviour, no worse), while a false "unanswered" costs a duplicate
-/// answer in a live room.
-fn deferred_turn_unanswered(session: &ChatSession, trigger_id: Uuid) -> bool {
-    // 1. Someone claimed it — including us, on an earlier pass.
-    if session.turn_claims.contains_key(&trigger_id) {
-        return false;
-    }
-    let Some(at) = session.messages.iter().position(|m| m.id == trigger_id) else {
-        // Trigger vanished (message deleted mid-wait) — nothing to answer.
-        return false;
-    };
-    // 2. Someone is answering (or has answered) it, claim synced or not.
-    //
-    //    Positional rather than an exact match on `trigger_id`, because the two
-    //    ends of this handshake pick their id differently and don't always
-    //    agree: `maybe_respond` dispatches against the last *non-System* message
-    //    (the trigger we were handed), while the answering device stamps its
-    //    placeholder with the last *non-streaming* one (`run_prepared_turn`). A
-    //    System row trailing the user turn splits them — an exact match would
-    //    miss a live peer in precisely the unsynced-claim case guard 2 exists
-    //    for, and both devices would answer.
-    //
-    //    So: an assistant row after the trigger that replies to anything at or
-    //    after the trigger's own position. `/summarize` and `/compact` output
-    //    stays excluded (`reply_to_message_id: None` — they answer nothing), as
-    //    do replies to earlier turns, including a reply whose target has since
-    //    been deleted.
-    let answered = session.messages[at + 1..].iter().any(|m| {
-        m.role == MessageRole::Assistant
-            && m.reply_to_message_id
-                .is_some_and(|id| session.messages[at..].iter().any(|target| target.id == id))
-    });
-    if answered {
-        return false;
-    }
-    // 3. The user moved on: a later user turn supersedes this one, and its own
-    //    `send_message` arms a fresh fallback against the fuller history.
-    //
-    //    Deliberately keyed on a later *user* message rather than on the trigger
-    //    still being the trailing row. "Still trailing" would subsume guard 2 —
-    //    a reply always lands after the message it answers — while also being
-    //    far too broad: any assistant-role transcript row after the trigger (a
-    //    proposal record, a reply to some *other* trigger) would suppress the
-    //    fallback forever and reintroduce the silent no-response this fixes.
-    !session.messages[at + 1..].iter().any(|m| m.role == MessageRole::User)
-}
 
 /// Whether a provider authenticates with an API key we must supply. A hosted-API
 /// provider (Anthropic/OpenAI/OpenRouter/Azure/Custom) with no key would 401 on
@@ -7044,19 +6932,6 @@ fn provider_needs_key(provider: ModelProviderKind) -> bool {
     )
 }
 
-/// Who, if anyone, a message should be answered by.
-#[derive(Clone, Copy)]
-enum DispatchTarget {
-    Primary,
-    Agent(Uuid),
-}
-
-/// Distinct *people* among the chat's human members. A member's own devices (a
-/// `ligus serve` box linked to its owner, see [`hive_core::DeviceLinks`]) count
-/// once with them, so you plus your phone's home box is still a solo room.
-fn human_member_count(session: &ChatSession, links: &hive_core::DeviceLinks) -> usize {
-    links.human_count(session)
-}
 
 /// The workspace's device links, best effort: on a read error nothing is
 /// linked, which is today's behavior.
@@ -7064,50 +6939,7 @@ fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> hive_core::DeviceLi
     svc.device_links(workspace_id).unwrap_or_default()
 }
 
-/// [`turn_runs_here`] with device links applied: solo counts people, not
-/// member records, and a responder owned by a linked device (the chat a phone
-/// created through its owner's `ligus serve` box) is owned by that device's
-/// account — so the owner's desktop answers it. The single-answer claim still
-/// arbitrates between the owner's devices.
-fn runs_here_linked(
-    local_only: bool,
-    links: &hive_core::DeviceLinks,
-    session: &ChatSession,
-    local: &str,
-    owner: &str,
-    binding: HostBinding,
-) -> bool {
-    let solo = human_member_count(session, links) <= 1;
-    turn_runs_here(local_only, solo, local, links.person(owner), binding)
-}
 
-/// Decide whether a message triggers a runtime, and which one. An `@agent` or
-/// `@primary` mention is always answered. An *un-addressed* message defaults to
-/// the primary **only in an effectively-solo workspace** — multi-human rooms stay
-/// human-to-human until someone explicitly addresses an assistant.
-///
-/// `local_only` (no relay) means nothing ever syncs in from another device, so
-/// every roster member was necessarily created here and *is this user* — the
-/// workspace is solo by definition however many members the churned/hoisted
-/// roster shows. Without this, identity churn (an old self left in the roster
-/// under a stale account id) inflates the human count and an unaddressed "hi"
-/// stops auto-triggering Hive — you'd have to `@hive` every message. A
-/// relay-backed room still uses the real human count.
-fn dispatch_target(
-    body: &str,
-    session: &ChatSession,
-    local_only: bool,
-    links: &hive_core::DeviceLinks,
-) -> Option<DispatchTarget> {
-    let mentions = parse_mentions(body, session);
-    if let Some(id) = mentions.agents.first().copied() {
-        return Some(DispatchTarget::Agent(id));
-    }
-    if mentions.primary {
-        return Some(DispatchTarget::Primary);
-    }
-    (local_only || human_member_count(session, links) <= 1).then_some(DispatchTarget::Primary)
-}
 
 // `cascade_depth` now lives on `hive_core::ChatSession` (shared with the worker
 // so the cross-device bound is identical on every device).
@@ -9433,44 +9265,6 @@ async fn maybe_respond(
     respond_once(&app, &state, sid, None, false).await
 }
 
-/// Whether `trigger` (a user message) already has an answer: a later reply
-/// stamped with its id. A peer that predates exact trigger stamping stamped
-/// the last non-streaming row, which is a System row when one trails the
-/// user turn, so a reply to a System row directly after `trigger` counts too.
-/// Deliberately exact otherwise: a reply to a *later* user message (another
-/// agent answering the next post in the same sync batch) does not answer
-/// this one.
-fn user_turn_answered(session: &ChatSession, trigger: Uuid) -> bool {
-    let Some(at) = session.messages.iter().position(|m| m.id == trigger) else {
-        return true; // Gone (deleted): nothing to answer.
-    };
-    let keys: Vec<Uuid> = std::iter::once(trigger)
-        .chain(session.messages[at + 1..].iter().take_while(|m| m.role == MessageRole::System).map(|m| m.id))
-        .collect();
-    session.messages[at + 1..].iter().any(|m| {
-        matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
-            && m.reply_to_message_id.is_some_and(|id| keys.contains(&id))
-    })
-}
-
-/// The user messages among `arrived` (what one sync pull brought into this
-/// chat) that may still need an answer, in transcript order: unanswered, and
-/// not claimed by another device. Ownership, addressing and the claim are
-/// checked per trigger when it runs ([`respond_once`]).
-///
-/// Two posts a few ms apart ("@hive …" then "@coder …" through `ligus serve`)
-/// land in one pull. Looking only at the chat's last message answered the
-/// second and silently dropped the first.
-fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid], my_device: Uuid) -> Vec<Uuid> {
-    session
-        .messages
-        .iter()
-        .filter(|m| m.role == MessageRole::User && arrived.contains(&m.id))
-        .filter(|m| session.turn_claims.get(&m.id).is_none_or(|d| *d == my_device))
-        .filter(|m| !user_turn_answered(session, m.id))
-        .map(|m| m.id)
-        .collect()
-}
 
 /// What [`respond_once`] would run: the session's workspace, the responder,
 /// and the message it answers.
