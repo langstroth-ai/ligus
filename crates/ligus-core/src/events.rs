@@ -1219,7 +1219,17 @@ impl ChatSession {
             }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();
-                if !list.iter().any(|l| l.id == lockdown.id) {
+                // A lockdown is known by the event that raised it, never by
+                // the id its raiser picked: a raise reusing another's id
+                // (backdated before it, say) is a lockdown of its own, so it
+                // can't hide that raise or have a clear that names only
+                // itself lift it. Two signers' copies under one raise id
+                // (`crate::copies`) are both shown.
+                let same = |l: &crate::guard::ChatLockdown| match lockdown.raise_event_id {
+                    Some(_) => l == lockdown,
+                    None => l.raise_event_id.is_none() && l.id == lockdown.id,
+                };
+                if !list.iter().any(same) {
                     list.push(lockdown.clone());
                 }
             }
@@ -1881,23 +1891,59 @@ fn fold_pass(
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
     // The account-key rules (`crate::account_keys`) read the whole log's
-    // certificates and registrations, never a position.
-    if ordered
+    // certificates and registrations, never a position. A registration an
+    // allowed cut denies (a revoked device's or a removed member's, not
+    // covered by the cut's watermark) still stands as it would after the
+    // cut, except one of another key for an account that has a key without
+    // it: a stolen device's key would otherwise register a key of the
+    // thief's, backdated before its account's own, dispute the account,
+    // un-certify the device that revoked it and so undo the revocation that
+    // denies it.
+    let is_registration = |e: &SessionEventEnvelope| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. });
+    let cut_registrations: Vec<&SessionEventEnvelope> =
+        ordered.iter().copied().filter(|e| is_registration(e) && cut_denied.contains(&copies.kept(e))).collect();
+    let dropped_registrations: std::collections::BTreeSet<crate::copies::CopyRef> = if cut_registrations.is_empty() {
+        Default::default()
+    } else {
+        let others = crate::account_keys::KeyIndex::of(
+            ordered.iter().copied().filter(|e| !(is_registration(e) && cut_denied.contains(&copies.kept(e)))),
+        )
+        .registered_keys();
+        cut_registrations
+            .iter()
+            .filter(|e| match &e.payload {
+                SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
+                    others.get(account_id).is_some_and(|ks| !ks.contains(signing_public_key))
+                }
+                _ => false,
+            })
+            .map(|e| copies.kept(e))
+            .collect()
+    };
+    let keyed: Vec<&SessionEventEnvelope> = if dropped_registrations.is_empty() {
+        ordered.clone()
+    } else {
+        ordered.iter().copied().filter(|e| !dropped_registrations.contains(&copies.kept(e))).collect()
+    };
+    if keyed
         .iter()
         .any(|e| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. }))
     {
-        tracker.set_key_index(std::sync::Arc::new(crate::account_keys::KeyIndex::of(ordered.iter().copied())), ordered[base]);
+        tracker.set_key_index(std::sync::Arc::new(crate::account_keys::KeyIndex::of(keyed.iter().copied())), ordered[base]);
         // Registrations sorting before the base (backdated to the log's
         // start) count as they do at ingest: the rules read them wherever
         // they sort. Plausible ones only, as everywhere.
-        for e in ordered[..base].iter().filter(|e| bounds.of_env(e) == crate::lamport::Plausibility::Plausible) {
+        for e in ordered[..base]
+            .iter()
+            .filter(|e| bounds.of_env(e) == crate::lamport::Plausibility::Plausible && !dropped_registrations.contains(&copies.kept(e)))
+        {
             tracker.register_key_before_base(e);
         }
     }
     // Whom each device vouched for anywhere on this log: who holds a device
     // never depends on a position (see `authz::DeviceState::holders`).
-    if ordered.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
-        tracker.set_vouched(authz::RosterTracker::vouched(&ordered));
+    if keyed.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
+        tracker.set_vouched(authz::RosterTracker::vouched(&keyed));
     }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
@@ -2099,7 +2145,7 @@ fn fold_pass(
                 other => other,
             };
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
-                session.authz.lockdown_raisers.insert(lockdown.id, author.to_string());
+                session.authz.lockdown_raisers.entry(lockdown.raise_event_id.unwrap_or(lockdown.id)).or_insert_with(|| author.to_string());
             }
             if checked && !trusted {
                 if let SessionEvent::MessageAppended { message } = payload {
@@ -2246,7 +2292,10 @@ fn fold_pass(
             };
             d.insert(copy, v);
         }
-        let changed = tracker.observe(env, allowed, &session);
+        // A registration left out of the account-key rules (see `keyed`
+        // above) doesn't count here either; every other one is judged by
+        // them wherever it sorts, whatever its verdict.
+        let changed = !dropped_registrations.contains(&copy) && tracker.observe(env, allowed, &session);
         if let Some(t) = timeline.as_deref_mut() {
             t.push(env.canonical_key(), &tracker.state, changed);
         }

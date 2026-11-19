@@ -145,7 +145,8 @@ pub struct AuthzState {
     pub held: Vec<HeldEvent>,
     /// The workspace rules version in force at the head (0 = not known here).
     pub rules: u32,
-    /// Signed raiser of each active lockdown (S5 accounting).
+    /// Signed raiser of each lockdown, by the event that raised it (S5
+    /// accounting; the first copy's, when signers' copies share the id).
     pub lockdown_raisers: BTreeMap<Uuid, String>,
     /// The config frontier each proposal's current content was filed at. A
     /// vote or apply naming an older frontier is refused, so a stale role
@@ -269,7 +270,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if lockdown.raise_event_id.is_some() {
                 return Decision::deny("a lockdown is known by the event that raised it, never by its own claim");
             }
-            if !bounds::lockdown_within_bounds(fold, *chat_id, lockdown.id, author) {
+            if !bounds::lockdown_within_bounds(fold, *chat_id, author) {
                 return Decision::deny("too many active lockdowns");
             }
         }
@@ -371,6 +372,28 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
     let roster_here = if ctx.checked { ctx.workspace } else if on_config { Some(ctx.running) } else { None };
+    // Authorship (defense in depth over ingest, which quarantines both): a
+    // device certified here signs only for an account it is certified for,
+    // and a stamp names its author's own member account. Otherwise one
+    // member's device could sign a message, a clear or a memory write
+    // stamped as another member, and any store that took it in would fold
+    // it as theirs. Identity publications and self-enrollments are judged by
+    // their own rules.
+    if let (Some(roster), Some(stamp)) = (roster_here, env.actor_stamp.as_ref()) {
+        let own_rules = is_trust_publication(&env.payload)
+            || matches!(env.payload, SessionEvent::MemberAdded { .. } | SessionEvent::PasskeyRegistered { .. });
+        if stamp.actor.kind != ActorKind::Agent && !own_rules {
+            if let Some(account) = stamp.actor.account_id {
+                if roster.members.get(author).and_then(|m| m.account_id).is_some_and(|a| a != account) {
+                    return Decision::deny("stamped with an account that isn't its author's");
+                }
+                let device = env.signer_device_id.and_then(|d| roster.devices.get(&d));
+                if device.is_some_and(|d| !d.accounts.is_empty() && !d.accounts.contains(&account)) {
+                    return Decision::deny("signed by a device that doesn't act for its author");
+                }
+            }
+        }
+    }
     if let Some(roster) = roster_here {
         if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {
             return authorize_agent(env, ctx, roster);
