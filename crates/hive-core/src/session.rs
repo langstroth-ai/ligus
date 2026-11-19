@@ -122,6 +122,12 @@ pub struct ChatSession {
     /// rules version). Never serialized: snapshots don't carry it.
     #[serde(skip)]
     pub authz: crate::authz::AuthzState,
+    /// The files shared in this chat (`AttachmentShared`) by attachment id,
+    /// with their signed author; a deleted one stays as a tombstone. Folded
+    /// only from signed events and never serialized, so a snapshot can't
+    /// plant one.
+    #[serde(skip)]
+    pub attachments: BTreeMap<Uuid, crate::attachment::SharedAttachment>,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -204,6 +210,7 @@ impl ChatSession {
             created_at: now,
             updated_at: now,
             authz: Default::default(),
+            attachments: BTreeMap::new(),
         }
     }
 

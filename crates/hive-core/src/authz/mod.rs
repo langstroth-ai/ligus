@@ -35,6 +35,7 @@
 //! role checks, as before.
 
 pub mod agent;
+pub mod attachments;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
@@ -197,6 +198,8 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
                 | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
+                | SessionEvent::AttachmentShared { .. }
+                | SessionEvent::AttachmentDeleted { .. }
         )
 }
 
@@ -300,6 +303,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // accepted only if `e` is at least the authorized epoch at its author's
     // frontier (an author who had seen a rotation must have used it).
     if let Some(why) = stale_epoch(env, ctx, on_config) {
+        return Decision::deny(why);
+    }
+    // File attachments (issue #118): what holds on every log and tier.
+    if let Some(why) = attachments::payload_refusal(env, on_config, ctx.checked && !on_config, if ctx.checked { ctx.workspace } else { None }, ctx.running) {
         return Decision::deny(why);
     }
     // Agent-signed events (A3): judged by the Agent tier, capped by the
@@ -806,6 +813,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 }
                 if base_branch.len() > 255 || base_branch.chars().any(char::is_control) {
                     return Decision::deny("bad base branch");
+                }
+            }
+            SessionEvent::AttachmentShared { attachment } => {
+                if let Err(why) = attachments::share_ok(env, attachment, fold, at, author, role) {
+                    return Decision::deny(why);
+                }
+            }
+            SessionEvent::AttachmentDeleted { attachment_id } => {
+                if let Err(why) = attachments::delete_ok(env, *attachment_id, fold, at, author, role) {
+                    return Decision::deny(why);
                 }
             }
             SessionEvent::ChatBasePinned { repo_id, commit } => {

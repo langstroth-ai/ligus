@@ -3,6 +3,7 @@
 //! session projector. No IO — orchestration lives in `hive-runtime`.
 
 pub mod admission;
+pub mod attachment;
 pub mod agent;
 pub mod authorization;
 pub mod authz;
