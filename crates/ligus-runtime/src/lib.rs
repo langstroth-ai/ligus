@@ -26,6 +26,7 @@ pub mod connection_settings;
 pub mod context;
 pub mod device_enroll;
 pub mod directory_trust;
+pub mod display;
 pub mod dm;
 pub mod dm_delivery;
 pub mod contacts;

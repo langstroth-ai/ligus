@@ -96,6 +96,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_SERVE_LISTEN` | `127.0.0.1:8787` | API bind address. Loopback, private, link-local, CGNAT (Tailscale) or IPv6 ULA only |
 | `LIGUS_SERVE_ALLOW_ANY_BIND` | off | allow any address, including `0.0.0.0`. Only behind something else that controls access |
 | `LIGUS_SERVE_TOKEN_FILE` | `<data dir>/serve.token` | the direct-path bearer token file (also used by `ligus pair` and `ligus phones revoke`) |
+| (no variable) | `<data dir>/serve.operator.token` | the operator's bearer token, created at first start; the only credential for the box owner's routes and secrets on a loopback listener. Never in a pairing link |
 | `LIGUS_SERVE_PUBLIC_URL` | `http://<listen>` | URL put in the pairing link |
 | `LIGUS_SERVE_LABEL` | `$HOSTNAME`, else `home host` | the host's label |
 | `LIGUS_SERVE_NAME` | unset | display name of the box (its own service member) |
@@ -113,7 +114,9 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_REMOTE_RELAY` | from `tunnel/relay.json` | relay for the phone tunnel; `off` disables it for this run |
 | `LIGUS_REMOTE_REG_TOKEN` | from `relay.json` | registration token for a gated relay |
 | `LIGUS_REMOTE_INSECURE_RELAY` | off | allow an `http://` relay (tests, loopback) |
-| `LIGUS_NTFY_URL` / `LIGUS_NTFY_TOPIC` / `LIGUS_NTFY_TOKEN` | unset | notifications through a self-hosted ntfy (URL and topic both, or neither) |
+| `LIGUS_NTFY_URL` / `LIGUS_NTFY_TOPIC` / `LIGUS_NTFY_TOKEN` | unset | notifications through a self-hosted ntfy (URL and topic both, or neither). The URL must be `https://` |
+| `LIGUS_NTFY_ALLOW_HTTP` | `0` | `1` accepts a plain `http://` ntfy URL (a server on this host or your tailnet); otherwise serve refuses to start with one |
+| `LIGUS_NTFY_TITLES` | `0` | `1` sends who did what and the chat's title to ntfy (never message text); otherwise only generic text such as "A reply is ready" |
 | `LIGUS_DASHBOARD_FILE` | `<data dir>/dashboard.toml` | dashboard config |
 | `LIGUS_PROMETHEUS_URL` | `http://127.0.0.1:9090` | Prometheus for dashboard panels; when set and no `dashboard.toml` exists, a lab section is generated |
 | `LIGUS_LAB_TEMPS` | unset | temperature queries for the generated lab section |

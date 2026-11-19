@@ -4,6 +4,7 @@ import { Badge, Button, EmptyHint, ErrorState, LoadingState, Section } from "@/c
 import { RailFrame } from "@/components/RightRail";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
+import { cleanDisplayName } from "@/lib/names";
 import { onWorkspaceSynced } from "@/lib/ipc";
 import {
   canChange,
@@ -270,7 +271,7 @@ function EntryCard({
                 size="sm"
                 onClick={() =>
                   confirmThen(
-                    `Remove “${e.current.title}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
+                    `Remove “${cleanDisplayName(e.current.title)}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
                     () => onRemove(e),
                   )
                 }

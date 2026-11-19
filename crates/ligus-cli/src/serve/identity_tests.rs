@@ -142,6 +142,8 @@ fn opts(dir: &std::path::Path, name: &str) -> ServeOptions {
     ServeOptions {
         listen: "127.0.0.1:0".parse().unwrap(),
         token_file: dir.join("serve.token"),
+        header_read_timeout: super::HEADER_READ_TIMEOUT,
+        idle_timeout: super::IDLE_TIMEOUT,
         ntfy: None,
         public_url: None,
         label: format!("{name}-box"),
@@ -163,7 +165,9 @@ impl Box_ {
     async fn start(cfg: Config, name: &str) -> Self {
         let handle = start(cfg.clone(), opts(&cfg.data_dir, name)).await.unwrap();
         let base = format!("http://{}", handle.addr);
-        let token = handle.shared.token();
+        // The person at the box: the operator's token (invites and admission
+        // codes travel only to the operator on loopback, or the tunnel).
+        let token = handle.shared.operator_token();
         Self { handle, base, token, client: ligus_forge::new_http_client() }
     }
 
@@ -261,7 +265,7 @@ async fn two_boxes_on(
     b_opts(&mut o);
     let handle = start(b_cfg, o).await.unwrap();
     let base = format!("http://127.0.0.1:{}", handle.addr.port());
-    let token = handle.shared.token();
+    let token = handle.shared.operator_token();
     let b = Box_ { handle, base, token, client: ligus_forge::new_http_client() };
     (a, b, contacts, tmp)
 }
@@ -696,7 +700,7 @@ async fn dm_messages_never_push() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let ntfy = ntfy::Ntfy { url: format!("http://{addr}"), topic: "bea".into(), token: None };
+    let ntfy = ntfy::Ntfy { url: format!("http://{addr}"), topic: "bea".into(), token: None, titles: true };
     let (a, b, _contacts, _tmp) = two_boxes_with(Some(ntfy)).await;
     know_each_other(&a, &b).await;
     // The invite goes to B's drop box, so A must have seen B's contact id

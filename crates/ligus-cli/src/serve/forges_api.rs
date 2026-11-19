@@ -51,16 +51,19 @@ pub const PLAINTEXT_REFUSED: &str = "code-host tokens and sign-ins go only throu
      (pair the phone with remote access) or on the box itself (ligus forge token); this API is plain HTTP on the network";
 
 /// Whether this request reached the box over a channel a token may travel
-/// on: the tunnel (end-to-end encrypted to this box), or a loopback bind.
+/// on: the tunnel (end-to-end encrypted to this box), or the operator's own
+/// token (`serve.operator.token`) on a loopback bind. The phones' `serve.token`
+/// on loopback doesn't count (D5): behind a reverse proxy on this host every
+/// direct-path phone arrives on loopback.
 pub fn secure_channel(s: &Shared, peer: Option<&TunnelPeer>) -> bool {
-    token_channel_ok(s.opts.listen, peer.is_some())
+    token_channel_ok(s.opts.listen, peer.is_some(), super::api::is_operator())
 }
 
-/// The rule behind [`secure_channel`]: through the tunnel, or a listener
-/// bound to loopback only. A LAN, tailnet or wildcard bind is plain HTTP on
-/// a network.
-pub fn token_channel_ok(listen: std::net::SocketAddr, via_tunnel: bool) -> bool {
-    via_tunnel || listen.ip().is_loopback()
+/// The rule behind [`secure_channel`]: through the tunnel, or the operator
+/// on a listener bound to loopback only. A LAN, tailnet or wildcard bind is
+/// plain HTTP on a network, whoever calls.
+pub fn token_channel_ok(listen: std::net::SocketAddr, via_tunnel: bool, operator: bool) -> bool {
+    via_tunnel || (operator && listen.ip().is_loopback())
 }
 
 
@@ -413,11 +416,14 @@ mod tests {
         let tailnet: std::net::SocketAddr = "100.101.102.103:8787".parse().unwrap();
         let wildcard: std::net::SocketAddr = "0.0.0.0:8787".parse().unwrap();
         for a in [lan, tailnet, wildcard] {
-            assert!(!super::token_channel_ok(a, false), "{a}: plain HTTP on a network");
-            assert!(super::token_channel_ok(a, true), "{a}: through the tunnel");
+            assert!(!super::token_channel_ok(a, false, false), "{a}: plain HTTP on a network");
+            assert!(!super::token_channel_ok(a, false, true), "{a}: plain HTTP on a network, even for the operator");
+            assert!(super::token_channel_ok(a, true, false), "{a}: through the tunnel");
         }
-        assert!(super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false));
-        assert!(super::token_channel_ok("[::1]:8787".parse().unwrap(), false));
+        assert!(super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false, true));
+        assert!(super::token_channel_ok("[::1]:8787".parse().unwrap(), false, true));
+        // D5: the phones' token on loopback (a reverse proxy on this host).
+        assert!(!super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false, false));
     }
 
     /// 5.7: presence applies to the forges API on every box (every

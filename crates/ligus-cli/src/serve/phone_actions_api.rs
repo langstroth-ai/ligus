@@ -26,9 +26,8 @@
 //! Drafts are single use, in memory, for five minutes. Through the tunnel,
 //! `deviceId` must be the device the pairing proved it holds.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use ligus_runtime::display::shown;
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -46,6 +45,8 @@ use super::tunnel::TunnelPeer;
 use super::Shared;
 
 const TTL: Duration = Duration::from_secs(300);
+/// Drafts one credential keeps (its oldest goes past this).
+const PER_CALLER: usize = 8;
 const MAX_PENDING: usize = 32;
 
 struct Pending {
@@ -53,35 +54,20 @@ struct Pending {
     action: PhoneAction,
     presence_required: bool,
     presence: bool,
-    at: Instant,
 }
 
-/// Drafts waiting for the phone (single use, in memory).
-#[derive(Default)]
-pub struct Drafts(Mutex<HashMap<String, Pending>>);
+/// Drafts waiting for the phone (single use, in memory), per credential.
+pub struct Drafts(super::drafts::OwnedDrafts<Pending>);
 
-impl Drafts {
-    fn put(&self, p: Pending) -> ApiResult<String> {
-        let mut raw = [0u8; 16];
-        getrandom::fill(&mut raw).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
-        let id = b64url(&raw);
-        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        m.retain(|_, p| p.at.elapsed() < TTL);
-        if m.len() >= MAX_PENDING {
-            if let Some(oldest) = m.iter().min_by_key(|(_, p)| p.at).map(|(k, _)| k.clone()) {
-                m.remove(&oldest);
-            }
-        }
-        m.insert(id.clone(), p);
-        Ok(id)
+impl Default for Drafts {
+    fn default() -> Self {
+        Self(super::drafts::OwnedDrafts::new(TTL, PER_CALLER, MAX_PENDING))
     }
-    fn take(&self, id: &str) -> Option<Pending> {
-        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        m.remove(id).filter(|p| p.at.elapsed() < TTL)
-    }
-    fn put_back(&self, id: String, p: Pending) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(id, p);
-    }
+}
+
+/// The calling credential's key ([`super::api::Caller::key`]).
+fn caller() -> String {
+    super::api::caller().key()
 }
 
 fn unb64(s: &str, what: &str) -> ApiResult<Vec<u8>> {
@@ -92,7 +78,7 @@ fn unb64(s: &str, what: &str) -> ApiResult<Vec<u8>> {
 
 /// Through the tunnel, the device the pairing proved it holds must be the
 /// one the request names (a pairing never drafts for another phone).
-fn bound_device(s: &Shared, peer: Option<&TunnelPeer>, device: Uuid) -> ApiResult<()> {
+pub(super) fn bound_device(s: &Shared, peer: Option<&TunnelPeer>, device: Uuid) -> ApiResult<()> {
     let Some(p) = peer else { return Ok(()) };
     let bound = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).and_then(|r| r.device_id);
     if bound != Some(device) {
@@ -121,14 +107,14 @@ pub struct PrepareReq {
 /// what it parsed from the preimage, not this).
 fn preview(s: &Shared, action: &PhoneAction) -> Value {
     let chat = s.lock().load(action.chat_id()).ok().flatten();
-    let title = chat.as_ref().map(|c| c.title.clone()).unwrap_or_default();
+    let title = chat.as_ref().map(|c| shown(&c.title)).unwrap_or_default();
     let mut v = json!({ "chatTitle": title });
     match action {
         PhoneAction::Post { .. } => v["summary"] = json!("Post a message"),
         PhoneAction::Vote { proposal_id, approved, .. } => {
             let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!(if *approved { "Approve a proposal" } else { "Reject a proposal" });
-            v["proposalTitle"] = json!(p.map(|p| p.title.clone()).unwrap_or_default());
+            v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
         }
         PhoneAction::Answer { ask_id, .. } => {
             v["summary"] = json!("Answer an agent's question");
@@ -149,9 +135,9 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
         PhoneAction::RequestApply { proposal_id, host_device_id, .. } => {
             let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!("Apply an approved proposal on a host");
-            v["proposalTitle"] = json!(p.map(|p| p.title.clone()).unwrap_or_default());
+            v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
             let hosts = s.lock().list_hosts(s.ws).unwrap_or_default();
-            let label = hosts.iter().find(|h| h.id == host_device_id.to_string()).map(|h| h.label.clone());
+            let label = hosts.iter().find(|h| h.id == host_device_id.to_string()).map(|h| shown(&h.label));
             v["hostLabel"] = json!(label.unwrap_or_else(|| host_device_id.to_string()));
         }
         PhoneAction::WithdrawApply { .. } => v["summary"] = json!("Withdraw an apply request"),
@@ -159,9 +145,9 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             use ligus_core::memory::MemoryOp;
             let m = s.lock().memory(s.ws).unwrap_or_default();
             let (summary, title) = match op {
-                MemoryOp::Create { title, .. } => ("Propose a new memory note", title.clone()),
-                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
-                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| e.current.title.clone()).unwrap_or_default()),
+                MemoryOp::Create { title, .. } => ("Propose a new memory note", shown(title)),
+                MemoryOp::Edit { entry_id, .. } => ("Propose an edit to a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
+                MemoryOp::Remove { entry_id, .. } => ("Propose removing a memory note", m.entries.get(entry_id).map(|e| shown(&e.current.title)).unwrap_or_default()),
             };
             v["summary"] = json!(summary);
             v["noteTitle"] = json!(title);
@@ -202,7 +188,11 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         out["preimage"] = json!(b64url(&ligus_runtime::ChatService::phone_unconfirmed_preimage(&mut draft)));
     }
     out["preview"] = preview;
-    let id = s.phone_action_drafts.put(Pending { draft, action: req.action, presence_required, presence: false, at: Instant::now() })?;
+    let id = s
+        .phone_action_drafts
+        .0
+        .put(&caller(), Pending { draft, action: req.action, presence_required, presence: false })
+        .map_err(super::api::draft_refused)?;
     out["prepareId"] = json!(id);
     Ok(Json(out))
 }
@@ -226,13 +216,17 @@ pub struct PresenceReq {
 
 /// `POST /v1/phone-actions/presence` → `{preimage}` (base64url).
 pub async fn presence(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<PresenceReq>) -> ApiResult<Json<Value>> {
-    let mut p = s.phone_action_drafts.take(&req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let (mut p, at) = s
+        .phone_action_drafts
+        .0
+        .take_aged(&caller(), &req.prepare_id)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if !p.presence_required {
-        s.phone_action_drafts.put_back(req.prepare_id, p);
+        s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
         return Err(ApiError::new(StatusCode::CONFLICT, "this action needs no passkey: sign the preimage from prepare"));
     }
     if p.presence {
-        s.phone_action_drafts.put_back(req.prepare_id, p);
+        s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
         return Err(ApiError::new(StatusCode::CONFLICT, "already confirmed"));
     }
     let a = PresenceAssertion {
@@ -243,7 +237,7 @@ pub async fn presence(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<P
     };
     let preimage = ligus_runtime::ChatService::phone_preimage(&mut p.draft, a);
     p.presence = true;
-    s.phone_action_drafts.put_back(req.prepare_id, p);
+    s.phone_action_drafts.0.put_back(&caller(), req.prepare_id, p, at);
     Ok(Json(json!({ "preimage": b64url(&preimage) })))
 }
 
@@ -258,7 +252,7 @@ pub struct CommitReq {
 /// `POST /v1/phone-actions/commit` → `{committed, eventId, kind, messageId?,
 /// requestId?, proposalId?}`.
 pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
-    let p = s.phone_action_drafts.take(&req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    let p = s.phone_action_drafts.0.take(&caller(), &req.prepare_id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     if p.presence_required && !p.presence {
         return Err(ApiError::new(StatusCode::CONFLICT, "confirm with a passkey first (phone-actions/presence)"));
     }

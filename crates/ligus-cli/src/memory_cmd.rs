@@ -4,6 +4,7 @@
 //! judged by the fold like any device's: a person's identity writes and
 //! decides; a box (a service member) can only read and propose.
 
+use ligus_runtime::display;
 use std::io::Read;
 
 use anyhow::{anyhow, bail, Result};
@@ -39,6 +40,7 @@ fn stdin_body() -> Result<String> {
 
 /// One entry as a list line.
 pub fn entry_line(e: &MemoryEntry) -> String {
+    let e = &display::memory_entry(e);
     let tags = if e.current.tags.is_empty() { String::new() } else { format!(" [{}]", e.current.tags.join(", ")) };
     let conflicts = if e.conflicts.is_empty() { String::new() } else { format!(" ({} conflict{})", e.conflicts.len(), if e.conflicts.len() == 1 { "" } else { "s" }) };
     format!("{}  {}{tags}{conflicts}  by {}", e.id, e.current.title, e.current.author.name)
@@ -46,6 +48,7 @@ pub fn entry_line(e: &MemoryEntry) -> String {
 
 /// One entry in full.
 pub fn entry_text(e: &MemoryEntry) -> String {
+    let e = &display::memory_entry(e);
     let c = &e.current;
     let mut out = format!("{}\nid {}  rev {}  versions {}\nby {} ({:?})", c.title, e.id, c.rev, e.revision_count, c.author.name, c.author.kind);
     if !c.proposer.is_empty() {
@@ -70,6 +73,7 @@ pub fn entry_text(e: &MemoryEntry) -> String {
 
 /// One proposal as a list line.
 pub fn proposal_line(p: &ProposalState) -> String {
+    let p = &display::memory_proposal(p);
     let state = match &p.decision {
         None => "open".to_string(),
         Some(d) if d.accepted => format!("accepted by {}", d.by.name),
@@ -120,7 +124,7 @@ pub fn run(cfg: &Config, positional: &[&String], f: Flags) -> Result<()> {
             let m = svc.memory(ws)?;
             let hits = memory::search(&m, &words.join(" "), &f.tags, memory::MAX_LIVE_ENTRIES);
             if f.json {
-                print_json(serde_json::json!({ "total": m.live_count(), "entries": hits.iter().map(|h| h.entry).collect::<Vec<_>>() }));
+                print_json(serde_json::json!({ "total": m.live_count(), "entries": hits.iter().map(|h| display::memory_entry(h.entry)).collect::<Vec<_>>() }));
             } else if hits.is_empty() {
                 println!("(no notes{})", if words.is_empty() { "" } else { " match every word" });
             } else {
@@ -133,7 +137,7 @@ pub fn run(cfg: &Config, positional: &[&String], f: Flags) -> Result<()> {
             let m = svc.memory(ws)?;
             let e = find(&m, arg(1).ok_or_else(|| anyhow!("usage: ligus memory show <id>"))?)?;
             if f.json {
-                print_json(serde_json::to_value(e)?);
+                print_json(serde_json::to_value(display::memory_entry(e))?);
             } else {
                 print!("{}", entry_text(e));
             }
@@ -177,7 +181,7 @@ pub fn run(cfg: &Config, positional: &[&String], f: Flags) -> Result<()> {
             let mut ps: Vec<&ProposalState> = m.proposals.values().collect();
             ps.sort_by(|a, b| a.decision.is_some().cmp(&b.decision.is_some()).then(b.at_ms.cmp(&a.at_ms)));
             if f.json {
-                print_json(serde_json::to_value(&ps)?);
+                print_json(serde_json::to_value(ps.iter().map(|p| display::memory_proposal(p)).collect::<Vec<_>>())?);
             } else if ps.is_empty() {
                 println!("(no memory proposals)");
             } else {
@@ -202,7 +206,7 @@ pub fn task_state(cfg: &Config, chat: Option<&str>, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let slots = svc.task_state(chat)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&slots)?);
+        println!("{}", serde_json::to_string_pretty(&slots.iter().map(display::task_slot).collect::<Vec<_>>())?);
         return Ok(());
     }
     if slots.is_empty() {
@@ -235,5 +239,32 @@ mod tests {
         };
         assert_eq!(slot_text(&s, 1), "coder  blocked 30%  need a call\n    ? v1?");
         assert!(slot_text(&s, i64::MAX).contains("(stale)"));
+    }
+
+    /// Apps residuals: a peer's memory title or name reached the terminal
+    /// raw, so an RLO reordered the line.
+    #[test]
+    fn titles_and_names_print_cleaned() {
+        let evil = "Ana\u{202E}gnp.exe\u{2028}x\u{200B}";
+        let who = MemoryAuthor { id: "ana".into(), name: evil.into(), kind: ligus_core::ActorKind::Human };
+        let rev = MemoryRevision { title: evil.into(), body: "b".into(), author: who.clone(), ..Default::default() };
+        let e = MemoryEntry { current: rev.clone(), created_by: who.clone(), conflicts: vec![rev], ..Default::default() };
+        let p = ProposalState {
+            proposal: ligus_core::memory::MemoryProposal {
+                proposal_id: Uuid::nil(),
+                op: MemoryOp::Create { entry_id: Uuid::nil(), title: evil.into(), body: String::new(), tags: vec![] },
+                proposer: String::new(),
+                source: MemorySource::default(),
+                rationale: String::new(),
+            },
+            by: who,
+            signer: None,
+            at_ms: 0,
+            decision: None,
+        };
+        for out in [entry_line(&e), entry_text(&e), proposal_line(&p)] {
+            assert!(!out.contains('\u{202E}') && !out.contains('\u{200B}') && !out.contains('\u{2028}'), "{out:?}");
+        }
+        assert!(entry_line(&e).contains("Anagnp.exe x"));
     }
 }

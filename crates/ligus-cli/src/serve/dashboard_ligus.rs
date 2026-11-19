@@ -7,6 +7,7 @@
 //! `metric = "…"` lookup. Everything here is counted from what the workspace
 //! records; Ligus doesn't record token usage, so there is no cost metric.
 
+use ligus_runtime::display::shown;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
@@ -250,10 +251,10 @@ impl LigusSnapshot {
                 } else if a.host_id == i.this_host_id {
                     (i.this_host_label.to_string(), Some(true))
                 } else {
-                    let label = i.hosts.iter().find(|(h, _)| h.id == a.host_id).map(|(h, _)| h.label.clone());
+                    let label = i.hosts.iter().find(|(h, _)| h.id == a.host_id).map(|(h, _)| shown(&h.label));
                     (label.unwrap_or_else(|| "Unknown host".into()), Some(online_host(&a.host_id).unwrap_or(false)))
                 };
-                AgentInfo { name: a.name.clone(), host_label, online, busy: busy.contains(&a.id) }
+                AgentInfo { name: shown(&a.name), host_label, online, busy: busy.contains(&a.id) }
             })
             .collect();
 
@@ -280,8 +281,8 @@ impl LigusSnapshot {
                 }
                 let yes = p.approvals.iter().filter(|a| a.approved).count();
                 let approvals = if p.required_approvals > 0 { format!("{yes}/{}", p.required_approvals) } else { yes.to_string() };
-                let chat = if c.title.trim().is_empty() { "Untitled chat".to_string() } else { c.title.clone() };
-                proposals.push(ProposalInfo { title: p.title.clone(), chat, approvals, created: p.created_at.inner() });
+                let chat = match shown(&c.title) { t if t.is_empty() => "Untitled chat".to_string(), t => t };
+                proposals.push(ProposalInfo { title: shown(&p.title), chat, approvals, created: p.created_at.inner() });
             }
         }
         proposals.sort_by(|a, b| b.created.cmp(&a.created));
@@ -292,7 +293,7 @@ impl LigusSnapshot {
             has_workflows |= !c.workflow_definitions.is_empty() || !c.workflow_runs.is_empty();
             for r in &c.workflow_runs {
                 runs.push(RunInfo {
-                    workflow: r.definition.name.clone(),
+                    workflow: shown(&r.definition.name),
                     status: r.status,
                     started: r.started_at.inner(),
                     updated: r.updated_at.inner(),
@@ -314,7 +315,7 @@ impl LigusSnapshot {
                 let at = msg.created_at.inner();
                 if at >= week_ago && at <= now {
                     turns_7d += 1;
-                    *turns_by_agent_7d.entry(msg.author.clone()).or_insert(0) += 1;
+                    *turns_by_agent_7d.entry(shown(&msg.author)).or_insert(0) += 1;
                 }
                 if at >= today && at <= now {
                     turns_today += 1;
@@ -326,7 +327,7 @@ impl LigusSnapshot {
             now,
             today,
             agents,
-            hosts: i.hosts.iter().map(|(h, on)| (h.label.clone(), *on || h.id == i.this_host_id)).collect(),
+            hosts: i.hosts.iter().map(|(h, on)| (shown(&h.label), *on || h.id == i.this_host_id)).collect(),
             proposals,
             awaiting_me,
             runs,
@@ -756,6 +757,32 @@ pub(crate) mod tests {
             assert_eq!(shape, m.shape, "{}", m.name);
         }
         assert!(s.metric("tokens.today").unwrap_err().to_string().contains("unknown ligus metric"));
+    }
+
+    /// Apps residuals: agent names, host labels, proposal and chat titles
+    /// and workflow names reached the dashboard (phone and lt) raw.
+    #[test]
+    fn peer_names_reach_the_dashboard_cleaned() {
+        const EVIL: &str = "\u{202E}gnp.exe\u{200B}\u{2028}";
+        let mut f = fixture();
+        f.config.workspace_agents.iter_mut().for_each(|a| a.name = format!("{}{EVIL}", a.name));
+        f.hosts.iter_mut().for_each(|(h, _)| h.label = format!("{}{EVIL}", h.label));
+        for c in &mut f.chats {
+            c.title = format!("{}{EVIL}", c.title);
+            c.proposals.iter_mut().for_each(|p| p.title = format!("{}{EVIL}", p.title));
+            c.workflow_runs.iter_mut().for_each(|r| r.definition.name = format!("{}{EVIL}", r.definition.name));
+            c.messages.iter_mut().for_each(|m| m.author = format!("{}{EVIL}", m.author));
+        }
+        let s = snapshot_of(&f, HostState::default());
+        let mut all: Vec<&str> = Vec::new();
+        all.extend(s.agents.iter().flat_map(|a| [a.name.as_str(), a.host_label.as_str()]));
+        all.extend(s.hosts.iter().map(|h| h.0.as_str()));
+        all.extend(s.proposals.iter().flat_map(|p| [p.title.as_str(), p.chat.as_str()]));
+        all.extend(s.runs.iter().map(|r| r.workflow.as_str()));
+        all.extend(s.turns_by_agent_7d.keys().map(String::as_str));
+        let all = all.join("|");
+        assert!(!all.contains('\u{202E}') && !all.contains('\u{200B}') && !all.contains('\u{2028}'), "{all}");
+        assert!(rows(&s, "agents").iter().any(|r| r.label.starts_with("tester") && r.label.ends_with("gnp.exe")));
     }
 
     #[test]

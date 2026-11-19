@@ -268,6 +268,19 @@ key** on any desktop that held it (it lives in the OS secret store, not in
 Write a new one (see [Lost phone](#lost-phone)); the server switches within 2
 seconds; re-pair direct-path phones. Tunnel phones are unaffected.
 
+## `serve.operator.token` leaked {#operator-token}
+
+No phone holds it, so nothing needs re-pairing. Replace it on the box:
+
+```sh
+openssl rand -hex 32 > "$LIGUS_DATA_DIR/serve.operator.token"
+chmod 600 "$LIGUS_DATA_DIR/serve.operator.token"
+```
+
+The server switches within 2 seconds. Whoever held it could use the box
+owner's routes on loopback, so check the box's repositories and code-host
+connections.
+
 ## Box host keys leaked {#host-keys}
 
 `ligus remote reset` makes new host keys and a new host id; every tunnel

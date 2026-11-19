@@ -383,6 +383,33 @@ fn forged_revert_trailer_in_title_never_skips_a_revert() {
     assert!(!r.chat_worktree.join("a.txt").exists(), "P's change is gone");
 }
 
+/// Runtime review: the desktop's revert committed the reverse patch with no
+/// `Ligus-Revert` trailer, so once the ledger said "reverted" the next
+/// turn's replay took it out a second time, failed, and stopped the chat's
+/// turns. A revert on the chat branch carries the trailer and the replay
+/// leaves it alone; a title can't add a trailer of its own.
+#[test]
+fn a_desktop_revert_is_seen_by_ledger_replay() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let first = prepare_chat(&ready, &s, "h").unwrap();
+    s.repo.as_mut().unwrap().base_commit = first.pin.clone();
+    let chat_id = s.id.to_string();
+    let p = applied_proposal(&mut s, DIFF_A);
+    apply_direct(&m.path, &chat_id, "p", p, DIFF_A);
+    let other = Uuid::new_v4();
+    revert_on_chat_branch(&m.path, &chat_id, DIFF_A, &format!("p\n\nLigus-Revert: {other}"), p).unwrap();
+    assert!(branch_has_trailer(&m.path, &chat_id, ligus_core::workspace_repo::REVERT_TRAILER, p));
+    assert!(!branch_has_trailer(&m.path, &chat_id, ligus_core::workspace_repo::REVERT_TRAILER, other), "a title forges no trailer");
+    assert!(revert_on_chat_branch(&m.path, &chat_id, DIFF_A, "p", p).is_err(), "never reverted twice");
+    s.proposals.iter_mut().find(|x| x.id == p).unwrap().reverted = true;
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert_eq!(r.replayed, 0, "the replay sees the revert");
+    assert!(!r.chat_worktree.join("a.txt").exists());
+}
+
 /// A pin the chat's existing branch wasn't cut from (another host pinned
 /// first, or a member re-pinned it) means this host's branch diverged from
 /// every other device's: refuse, never replay onto a different base

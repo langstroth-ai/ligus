@@ -48,20 +48,34 @@ data dir: /home/you/.ligus
 room    : default
 ```
 
+## Secrets on the command line
+
+A value on the command line leaks to `ps`, `/proc` and shell history. The
+flags that carry a secret (`--secret`, `--reg-token`, `--token`) take `-`
+(read the value from stdin) or `@FILE` (read it from a file), and print a
+warning when the value itself is on the command line. Only one value per
+command can come from stdin.
+
+A secret file (`@FILE`, and `--recovery-words-file`) must be a regular file
+that only its owner can read (`chmod 600`); anything else (a file others can
+read, a directory, a FIFO) is refused before it is read. A link is followed:
+the file it points to is the one checked. Recovery words and seeds are wiped
+from memory once used.
+
 ## Joining a workspace
 
 | Command | What it does |
 |---|---|
-| `ligus enroll <hivews1:…> [--token <hrt1-token>]` | decodes a workspace invite (relay URL, room, E2EE key) and saves it, plus the optional relay access token, to `<data dir>/config.toml` |
+| `ligus enroll - \| --file PATH [--token - \| @FILE]` | decodes a workspace invite (relay URL, room, E2EE key), piped (`-`) or from a file, and saves it, plus the optional relay access token, to `<data dir>/config.toml`. An invite on the command line still works, with a warning |
 | `ligus join <invite-code>` | redeems a **relay** invite code, enrolling this box's identity in the workspace at the invite's role. Needs a relay configured first |
 | `ligus sync [--watch]` | one push + pull round with the relay (paging until caught up); `--watch` repeats every 3 s. Prints `pushed N, pulled M` |
 
 ```console
-$ ligus enroll "hivews1:eyJy…"
+$ ligus enroll --file ./invite
 Enrolled workspace 'acme' at https://relay.example.com.
 Saved to /home/you/.ligus/config.toml.
 No access token set — for a membership-enforcing relay, add one:
-  ligus enroll <invite> --token <hrt1-token>   (or export LIGUS_RELAY_ACCESS_TOKEN)
+  ligus enroll --file <invite-file> --token @<token-file>   (or export LIGUS_RELAY_ACCESS_TOKEN)
 Next: `ligus sync` then `ligus worker` to bring the agent online.
 ```
 
@@ -121,8 +135,9 @@ Credentials for `add-runtime`:
 
 - `--secret-ref <name>`: the key stays off the shared log; each host that runs
   the agent sets `LIGUS_WS_SECRET_<name>`.
-- `--secret <value>`: the key travels **E2EE on the workspace config log**, so
-  every member's device holds it. Prefer `--secret-ref`.
+- `--secret - | @FILE`: the key (read from stdin, or from an owner-only
+  file) travels **E2EE on the workspace config log**, so every member's
+  device holds it. Prefer `--secret-ref`.
 - neither: keyless (local models, subscription CLIs).
 
 ## The worker daemon
@@ -151,15 +166,15 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 
 | Command | What it does |
 |---|---|
-| `ligus serve [--listen ADDR] [--token-file PATH] [--label NAME] [--name NAME] [--public-url URL] [--ntfy-url URL] [--ntfy-topic T] [--pair] [--remote-relay URL] [--reg-token T] [--insecure-relay]` | sync + worker + the phone's HTTP/SSE API. `--pair` prints the pairing code at start. The other flags override the `LIGUS_SERVE_*`, `LIGUS_NTFY_*` and `LIGUS_REMOTE_*` variables |
+| `ligus serve [--listen ADDR] [--token-file PATH] [--label NAME] [--name NAME] [--public-url URL] [--ntfy-url URL] [--ntfy-topic T] [--pair] [--remote-relay URL] [--reg-token - \| @FILE] [--insecure-relay]` | sync + worker + the phone's HTTP/SSE API. `--pair` prints the pairing code at start. The other flags override the `LIGUS_SERVE_*`, `LIGUS_NTFY_*` and `LIGUS_REMOTE_*` variables |
 | `ligus admit request [--label NAME]` | prints this box's join request (`ligusjoin1:…`) and fingerprint for an Admin to approve (desktop: workspace menu, **Admit a box…**) |
 | `ligus admit close` | as an Admin's CLI identity, closes this workspace's settled box admissions (redeemed, or lapsed unredeemed) so no later or backdated redemption admits anyone; the desktop does it after every sync. Run `ligus sync` before and after |
 | `ligus admit redeem <ligusadmit1:…>` / `ligus admit redeem -` / `ligus admit redeem --file PATH` | keeps a box admission (`ligusadmit1:…` sealed to this box, or a bearer `hivews1:…`, which is read only from a file or standard input, never the command line); the next `ligus serve` or `ligus worker` joins as this box's own service member. `LIGUS_ADMISSION_FILE` does the same at start-up |
 | `ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:…] [--out PATH]` | the headless Admin path: issues a box admission from your own CLI identity, confirmed with your recovery key; sealed to the box when `--request` is given. `--out` writes the code owner-only (0600) into an existing directory, which it leaves as it is |
 | `ligus recovery-key create --out PATH` | registers a recovery key for this CLI identity (a CLI founder's first credential) and writes its 24 words to `PATH` (owner-only, 0600; the directory must exist and is left as it is) before registering the key. Never on a box |
 
-| `ligus pair [--listen ADDR] [--token-file PATH] [--public-url URL] [--relay-only] [--remote-relay URL] [--reg-token T] [--insecure-relay]` | prints the phone pairing QR code and link. Reads the server's token; never creates one |
-| `ligus remote enable --relay URL [--reg-token T] [--insecure-relay]` | turns on phone access through a relay tunnel (creates host keys, writes `tunnel/relay.json`) |
+| `ligus pair [--listen ADDR] [--token-file PATH] [--public-url URL] [--relay-only] [--remote-relay URL] [--reg-token - \| @FILE] [--insecure-relay]` | prints the phone pairing QR code and link. Reads the server's token; never creates one |
+| `ligus remote enable --relay URL [--reg-token - \| @FILE] [--insecure-relay]` | turns on phone access through a relay tunnel (creates host keys, writes `tunnel/relay.json`) |
 | `ligus remote status` (or `ligus remote`) | relay, host id, the running server's link state, phone counts |
 | `ligus remote disable` | stops using the relay; keys and phones are kept |
 | `ligus remote push-test [--phone <pid\|name>]` | sends a test notification to paired phones (or one) and shows each hop |

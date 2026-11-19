@@ -21,6 +21,7 @@
 //! id, never by display name (two people can share a name). Their own messages
 //! never notify.
 
+use ligus_runtime::display::shown;
 use std::collections::HashSet;
 
 use ligus_core::{
@@ -126,7 +127,7 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
     // A name in a notification is shown like anywhere else (S3).
     let author = ligus_proto::names::clean_display_name(&m.author);
     if !failed && me.mentioned_in(m, s) {
-        let notice = ntfy::mention_notice(&author, &s.title, s.id);
+        let notice = ntfy::mention_notice(&author, &shown(&s.title), s.id);
         let mut push = base("mention", s, notice.title.clone());
         push.sender = Some(author.clone());
         push.preview = Some(m.body.clone());
@@ -137,7 +138,7 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
     if !reply || !me.asked_for(m, s) {
         return None;
     }
-    let notice = ntfy::reply_notice(&author, &s.title, s.id, failed);
+    let notice = ntfy::reply_notice(&author, &shown(&s.title), s.id, failed);
     let mut push = base("message.done", s, notice.title.clone());
     push.sender = Some(author);
     push.preview = Some(m.body.clone());
@@ -157,10 +158,10 @@ pub fn for_proposal(s: &ChatSession, p: &ActionProposal) -> Option<(Notice, Push
     if is_gate_proposal(s, p) {
         return None;
     }
-    let notice = ntfy::proposal_notice(&p.title, &s.title, s.id);
+    let notice = ntfy::proposal_notice(&shown(&p.title), &shown(&s.title), s.id);
     let mut push = base("proposal.created", s, notice.title.clone());
     push.proposal_id = Some(p.id.to_string());
-    push.preview = Some(p.title.clone());
+    push.preview = Some(shown(&p.title));
     Some((notice, push))
 }
 
@@ -171,9 +172,9 @@ pub fn for_ask(s: &ChatSession, a: &ligus_core::flow::HumanAsk) -> Option<(Notic
     }
     let agent = ligus_core::flow::agent_from_key(&a.agent_key)
         .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
-        .map(|x| format!("@{}", x.name))
+        .map(|x| format!("@{}", shown(&x.name)))
         .unwrap_or_else(|| "An agent".into());
-    let notice = ntfy::ask_notice(&agent, &s.title, s.id);
+    let notice = ntfy::ask_notice(&agent, &shown(&s.title), s.id);
     let mut push = base("ask.pending", s, notice.title.clone());
     push.sender = Some(agent);
     push.preview = Some(a.question.clone());
@@ -183,13 +184,13 @@ pub fn for_ask(s: &ChatSession, a: &ligus_core::flow::HumanAsk) -> Option<(Notic
 /// A workflow run's gate `node` waiting for approval.
 pub fn for_workflow_gate(s: &ChatSession, run: &WorkflowRun, node: &str) -> Option<(Notice, PushContent)> {
     let state = run.node_state(node)?;
-    let stage = run.definition.nodes.iter().find(|n| n.id == node).map_or(node, |n| n.name.as_str());
-    let notice = ntfy::workflow_notice(&run.definition.name, stage, &s.title, s.id);
+    let stage = shown(run.definition.nodes.iter().find(|n| n.id == node).map_or(node, |n| n.name.as_str()));
+    let notice = ntfy::workflow_notice(&shown(&run.definition.name), &stage, &shown(&s.title), s.id);
     let mut push = base("workflow.approval", s, notice.title.clone());
     push.proposal_id = state.proposal_id.map(|p| p.to_string());
     push.workflow_run_id = Some(run.id.to_string());
     push.workflow_id = Some(run.definition_id.to_string());
-    push.preview = Some(stage.to_string());
+    push.preview = Some(stage);
     Some((notice, push))
 }
 
@@ -219,14 +220,14 @@ pub fn for_recruit(sessions: &[ChatSession], s: &ChatSession, r: &ligus_core::fl
     }
     let target = waiting_for(sessions, s.id, me);
     let (chat, title) = match target.and_then(|(c, _)| sessions.iter().find(|x| x.id == c)) {
-        Some(c) => (c, c.title.clone()),
-        None => (s, s.title.clone()),
+        Some(c) => (c, shown(&c.title)),
+        None => (s, shown(&s.title)),
     };
     let notice = ntfy::recruit_notice(r.queue_len, &title, chat.id);
     let mut push = base("review.recruit", chat, notice.title.clone());
     if let Some((_, pid)) = target {
         push.proposal_id = Some(pid.to_string());
-        push.preview = chat.proposals.iter().find(|p| p.id == pid).map(|p| p.title.clone());
+        push.preview = chat.proposals.iter().find(|p| p.id == pid).map(|p| shown(&p.title));
     } else {
         push.fixed_body = notice.body.clone();
     }

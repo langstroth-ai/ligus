@@ -62,8 +62,17 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).
 
-On its first run, `ligus serve` creates the direct-path bearer token in
-`<LIGUS_DATA_DIR>/serve.token` (mode 0600).
+On its first run, `ligus serve` creates two bearer tokens (mode 0600):
+
+- `<LIGUS_DATA_DIR>/serve.token`, the direct-path token for phones. The
+  pairing link carries it, and tunnel phones fetch it.
+- `<LIGUS_DATA_DIR>/serve.operator.token`, the operator's, for curl and
+  scripts on the box. No phone ever gets it. Only this token, on a loopback
+  listener, can use the box owner's routes (cloning and picking
+  repositories) and the routes that carry secrets (invites, admission codes,
+  code-host tokens). If you put a TLS reverse proxy on the same host in front
+  of a loopback listener, phones arrive on loopback too, but with
+  `serve.token`, which never counts as the operator.
 
 ## 2. Turn on the relay tunnel
 
@@ -77,7 +86,7 @@ This creates the box's host keys and saves the relay in
 
 | Option | Use |
 |---|---|
-| `--reg-token <token>` / `LIGUS_REMOTE_REG_TOKEN` | a relay that only admits hosts with an access token |
+| `--reg-token - \| @FILE` / `LIGUS_REMOTE_REG_TOKEN` (or `LIGUS_REMOTE_REG_TOKEN_FILE`) | a relay that only admits hosts with an access token. `-` reads it from stdin, `@FILE` from an owner-only file; a token on the command line works, with a warning |
 | `ligus serve --remote-relay <url>` / `LIGUS_REMOTE_RELAY` | use a relay for this run only, without `relay.json` |
 | `LIGUS_REMOTE_RELAY=off` | turn remote access off for this run even when `relay.json` enables it |
 | `--insecure-relay` / `LIGUS_REMOTE_INSECURE_RELAY=1` | allow an `http` relay URL. For tests and a relay on loopback only |

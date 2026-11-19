@@ -596,7 +596,7 @@ Give the relay an `https://` URL (the base origin, without `/v1`), then:
   own relay** and enter the URL; or set **Settings → Team sync → Relay URL**
   on every device that should sync (and **Relay access token** for a gated
   relay). Check it with `curl -s https://relay.example.com/v1/health`.
-- **CLI, `ligus serve`, `ligus worker`:** `ligus enroll '<invite>' [--token <token>]`
+- **CLI, `ligus serve`, `ligus worker`:** `ligus enroll --file <invite-file> [--token @<token-file>]`
   saves the relay URL from the invite; `LIGUS_RELAY_URL` and
   `LIGUS_RELAY_ACCESS_TOKEN` override it.
 - **Everyone else** gets the relay URL inside the workspace invite: only

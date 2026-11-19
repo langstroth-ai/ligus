@@ -3389,6 +3389,8 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac 0.13.0",
+ "hyper",
+ "hyper-util",
  "libc",
  "ligus-core",
  "ligus-forge",
@@ -3409,6 +3411,7 @@ dependencies = [
  "tracing",
  "uuid",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -3433,6 +3436,7 @@ dependencies = [
  "url",
  "uuid",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

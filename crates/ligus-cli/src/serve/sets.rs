@@ -14,6 +14,7 @@
 //! `reject` like any proposal. Tuning the dial, pre-flight, apply and deciding
 //! a set stay on the desktop: there is no route here that writes a set.
 
+use ligus_runtime::display::shown;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use ligus_core::proposal_sets::{
@@ -92,7 +93,7 @@ pub fn set_dto(set: &ProposalSet, chat: &ChatSession, me: &str) -> Value {
                 .map(|a| {
                     json!({
                         "id": a.id,
-                        "scoutName": a.scout_name,
+                        "scoutName": shown(&a.scout_name),
                         "scoutRuntime": a.scout_runtime,
                         "score": a.score,
                         "currentSupport": set.current_support(a),
@@ -108,7 +109,7 @@ pub fn set_dto(set: &ProposalSet, chat: &ChatSession, me: &str) -> Value {
             let mut v = json!({
                 "proposalId": id,
                 "label": label(i),
-                "title": p.title,
+                "title": shown(&p.title),
                 "body": p.body,
                 "kind": api::kind_str(p.kind),
                 "status": api::status_str(p.status),
@@ -150,7 +151,7 @@ pub fn set_dto(set: &ProposalSet, chat: &ChatSession, me: &str) -> Value {
     let author = if set.author_actor_id.trim().is_empty() {
         set.producing_agent_id
             .and_then(|id| chat.workspace_agents.iter().find(|a| a.id == id))
-            .map(|a| format!("@{}", a.name))
+            .map(|a| format!("@{}", shown(&a.name)))
             .unwrap_or_default()
     } else {
         api::actor_name(chat, &set.author_actor_id)
@@ -158,7 +159,7 @@ pub fn set_dto(set: &ProposalSet, chat: &ChatSession, me: &str) -> Value {
     json!({
         "id": set.id,
         "chatId": chat.id,
-        "chatTitle": if chat.title.trim().is_empty() { "Untitled" } else { chat.title.as_str() },
+        "chatTitle": match shown(&chat.title) { t if t.is_empty() => "Untitled".to_string(), t => t },
         "question": set.question,
         "body": set.body,
         "author": author,

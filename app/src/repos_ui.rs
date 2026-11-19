@@ -219,7 +219,7 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
         .iter()
         .map(|e| {
             let r = &e.repo;
-            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| x.display_name.clone());
+            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| crate::shown(&x.display_name));
             let here = mine.iter().find(|c| c.repo_id == r.id);
             let confirmed = maps.iter().find(|m| m.repo_id == r.id && m.confirmed);
             let path = confirmed.map(|m| m.path.to_string_lossy().into_owned());
@@ -243,11 +243,11 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
                         Some(None) => ("missing".to_string(), false),
                         Some(Some(x)) => (x.state.clone(), x.via_fork),
                     };
-                    json!({ "hostId": h.host_id, "label": h.label, "kind": h.kind, "online": h.online, "state": st, "viaFork": fork })
+                    json!({ "hostId": h.host_id, "label": crate::shown(&h.label), "kind": h.kind, "online": h.online, "state": st, "viaFork": fork })
                 })
                 .collect();
             json!({
-                "id": r.id, "name": r.display_name, "canonical": r.canonical, "forgeKind": r.forge_kind,
+                "id": r.id, "name": crate::shown(&r.display_name), "canonical": r.canonical, "forgeKind": r.forge_kind,
                 "defaultBranch": r.default_branch, "removed": e.removed,
                 "here": {
                     "state": here.map(|c| c.state.as_str()).unwrap_or(if e.removed { "removed" } else { "missing" }),
@@ -312,7 +312,7 @@ pub fn add_workspace_repo_sync(state: State<AppState>, input: String, name: Opti
         let svc = state.service.lock().unwrap();
         rr::bind(svc.store(), svc.device_id(), &host_label(), ws, &repo, &d, CheckoutSource::Bound).map_err(map_err)?;
     }
-    Ok(json!({ "id": repo.id, "canonical": repo.canonical, "name": repo.display_name }))
+    Ok(json!({ "id": repo.id, "canonical": repo.canonical, "name": crate::shown(&repo.display_name) }))
 }
 
 fn guess_kind(input: &str) -> String {
@@ -360,35 +360,35 @@ pub fn remove_workspace_repo_sync(state: State<AppState>, repo_id: String) -> Re
 /// passkey prompt comes from the service): other spellings of the same
 /// repo, names only.
 #[tauri::command]
-pub async fn set_repo_aliases(ligus_app: tauri::AppHandle, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
-    crate::off_main(ligus_app, move |ligus_app| set_repo_aliases_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, aliases)).await
+pub async fn set_repo_aliases(ligus_app: tauri::AppHandle, workspace_id: String, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_aliases_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, repo_id, aliases)).await
 }
 
-pub fn set_repo_aliases_sync(state: State<AppState>, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
-    let ws = ws_of(&state);
+pub fn set_repo_aliases_sync(state: State<AppState>, workspace_id: String, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().set_repo_aliases(ws, parse(&repo_id)?, &aliases).map_err(map_err)
 }
 
 /// Map a host alias to a repository host for the workspace, or clear it
 /// with an empty `host` (Admin, with presence).
 #[tauri::command]
-pub async fn set_host_alias(ligus_app: tauri::AppHandle, alias: String, host: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_host_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, host)).await
+pub async fn set_host_alias(ligus_app: tauri::AppHandle, workspace_id: String, alias: String, host: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_host_alias_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, alias, host)).await
 }
 
-pub fn set_host_alias_sync(state: State<AppState>, alias: String, host: String) -> Result<(), String> {
-    let ws = ws_of(&state);
+pub fn set_host_alias_sync(state: State<AppState>, workspace_id: String, alias: String, host: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().set_host_alias(ws, &alias, &host).map_err(map_err)
 }
 
 /// Accept a synced alias on this device (or stop using it). Device-local.
 #[tauri::command]
-pub async fn accept_repo_alias(ligus_app: tauri::AppHandle, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| accept_repo_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, accept, target)).await
+pub async fn accept_repo_alias(ligus_app: tauri::AppHandle, workspace_id: String, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| accept_repo_alias_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, alias, accept, target)).await
 }
 
-pub fn accept_repo_alias_sync(state: State<AppState>, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
-    let ws = ws_of(&state);
+pub fn accept_repo_alias_sync(state: State<AppState>, workspace_id: String, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().accept_alias_for(ws, &alias, target.as_deref(), accept).map_err(map_err)
 }
 
@@ -443,12 +443,12 @@ pub fn rescan_repos_sync(state: State<AppState>, root: Option<String>) -> Result
 }
 
 #[tauri::command]
-pub async fn set_repo_coverage_reporting(ligus_app: tauri::AppHandle, on: Option<bool>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_repo_coverage_reporting_sync(tauri::Manager::state::<AppState>(ligus_app), on)).await
+pub async fn set_repo_coverage_reporting(ligus_app: tauri::AppHandle, workspace_id: String, on: Option<bool>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_coverage_reporting_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, on)).await
 }
 
-pub fn set_repo_coverage_reporting_sync(state: State<AppState>, on: Option<bool>) -> Result<(), String> {
-    let ws = ws_of(&state);
+pub fn set_repo_coverage_reporting_sync(state: State<AppState>, workspace_id: String, on: Option<bool>) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let svc = state.service.lock().unwrap();
     rr::set_coverage_reporting(svc.store(), ws, on).map_err(map_err)
 }
@@ -484,7 +484,7 @@ pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> R
     let pinned = pinned_elsewhere(&state, &s, id, &me, &my_actor, here_ok);
     Ok(json!({
         "id": id,
-        "name": entry.map(|e| e.repo.display_name.clone()),
+        "name": entry.map(|e| crate::shown(&e.repo.display_name)),
         "canonical": entry.map(|e| e.repo.canonical.clone()),
         "removed": entry.is_some_and(|e| e.removed),
         "baseBranch": cr.base_branch,
@@ -507,9 +507,9 @@ fn pinned_elsewhere(state: &AppState, session: &ChatSession, repo: Uuid, me: &st
         .iter()
         .filter(|a| !a.host_id.is_empty() && a.host_id != me && host_lacks_repo(state, &a.host_id, repo))
         .map(|a| {
-            let label = session.workspace_hosts.iter().find(|h| h.id == a.host_id).map(|h| h.label.clone()).unwrap_or_else(|| a.host_id.chars().take(8).collect());
+            let label = session.workspace_hosts.iter().find(|h| h.id == a.host_id).map(|h| crate::shown(&h.label)).unwrap_or_else(|| a.host_id.chars().take(8).collect());
             let can_run_here = here_ok && a.owner_actor_id == my_actor && crate::flow::can_run_here(state, a);
-            json!({ "agentId": a.id, "agentName": a.name, "hostId": a.host_id, "hostLabel": label, "canRunHere": can_run_here })
+            json!({ "agentId": a.id, "agentName": crate::shown(&a.name), "hostId": a.host_id, "hostLabel": label, "canRunHere": can_run_here })
         })
         .collect()
 }

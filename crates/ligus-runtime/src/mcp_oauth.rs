@@ -112,9 +112,11 @@ fn pct_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                    out.push(v);
+            b'%' => {
+                // Exactly two hex digits (no sign, no char-boundary slicing).
+                let hex = |b: Option<&u8>| b.and_then(|b| (*b as char).to_digit(16));
+                if let (Some(h), Some(l)) = (hex(bytes.get(i + 1)), hex(bytes.get(i + 2))) {
+                    out.push((h * 16 + l) as u8);
                     i += 3;
                     continue;
                 }
@@ -571,6 +573,19 @@ mod tests {
         assert_eq!(pct_decode("a%2Fb%3Ac"), "a/b:c");
         assert_eq!(pct_decode("hello+world"), "hello world");
         assert_eq!(pct_decode("plain"), "plain");
+    }
+
+    /// Apps residuals: a sign passed for a hex digit (`%+1` became 0x01) and
+    /// a multi-byte character after `%` panicked on a char boundary.
+    #[test]
+    fn pct_decode_takes_exactly_two_hex_digits() {
+        // `+` is a form-encoded space, never a hex sign.
+        assert_eq!(pct_decode("%+1x"), "% 1x");
+        assert_eq!(pct_decode("%-1x"), "%-1x");
+        assert_eq!(pct_decode("a%é"), "a%é");
+        assert_eq!(pct_decode("a%1é"), "a%1é");
+        assert_eq!(pct_decode("x%41"), "xA");
+        assert_eq!(pct_decode("x%4"), "x%4");
     }
 
     #[test]

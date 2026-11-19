@@ -92,8 +92,14 @@ serve:
   # Above serve's 15 s turn grace.
   terminationGracePeriodSeconds: 30
   ntfy:
+    # https only, unless allowHttp (LIGUS_NTFY_ALLOW_HTTP): ntfy sees the
+    # topic and the push text in the clear over http.
     url: ""
     topic: ""
+    allowHttp: false
+    # Send chat and proposal titles in the push text (LIGUS_NTFY_TITLES);
+    # off sends generic text only.
+    titles: false
     tokenSecret:
       name: ""
       key: token

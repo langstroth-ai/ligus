@@ -182,7 +182,7 @@ pub(crate) fn list_co_members_sync(state: State<AppState>) -> Vec<CoMemberDto> {
         .filter(|c| !c.workspaces.iter().all(|w| s.workspaces.iter().any(|x| x.id() == *w && x.dm_account.is_some())))
         .map(|c| CoMemberDto {
             account_id: c.account_id.to_string(),
-            display_name: c.display_name.clone(),
+            display_name: crate::shown(&c.display_name),
             avatar_url: c.avatar_url.clone(),
             safety_code: c.safety_code(),
             key_conflict: c.key_conflict,
@@ -456,7 +456,7 @@ pub(crate) fn inspect_invite_sync(state: State<AppState>, code: String) -> Resul
         is_dm: conn.dm_account.is_some(),
         addressed_to_me: me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
         founder_account: founder.map(|f| f.to_string()),
-        founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
+        founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| crate::shown(&p.display_name)),
         safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
         trust: trust_str(trust).into(),
         already_joined,
@@ -565,7 +565,7 @@ pub(crate) async fn co_member_invite(
     let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
     Ok(CoMemberInviteDto {
         invite,
-        name: person.display_name.clone(),
+        name: crate::shown(&person.display_name),
         safety_code: person.safety_code(),
         devices: plan.recipients.len() as u32,
         delivered,
@@ -948,7 +948,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
                 is_dm,
                 workspace_name: if is_dm { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
                 founder_account: founder.map(|f| f.to_string()),
-                founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
+                founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| crate::shown(&p.display_name)),
                 safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
                 trust: trust_str(trust).into(),
                 code,

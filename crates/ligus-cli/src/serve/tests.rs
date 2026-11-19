@@ -112,6 +112,8 @@ fn box_opts(label: &str) -> ServeOptions {
     ServeOptions {
         listen: "127.0.0.1:0".parse().unwrap(),
         token_file: PathBuf::new(),
+        header_read_timeout: HEADER_READ_TIMEOUT,
+        idle_timeout: IDLE_TIMEOUT,
         ntfy: None,
         public_url: None,
         label: label.into(),
@@ -169,6 +171,9 @@ struct Harness {
     client: reqwest::Client,
     agent_id: Uuid,
     ntfy: Pushes,
+    /// Call as the operator on the box (`serve.operator.token`) instead of a
+    /// phone (`serve.token`): the box owner's routes and secrets (D5).
+    as_operator: bool,
     _tmp: tempfile::TempDir,
 }
 
@@ -220,7 +225,9 @@ async fn harness_with(
     let opts = ServeOptions {
         listen: "127.0.0.1:0".parse().unwrap(),
         token_file: serve_dir.join("serve.token"),
-        ntfy: Some(ntfy::Ntfy { url: ntfy_url, topic: "ligus-test".into(), token: None }),
+        header_read_timeout: HEADER_READ_TIMEOUT,
+        idle_timeout: IDLE_TIMEOUT,
+        ntfy: Some(ntfy::Ntfy { url: ntfy_url, topic: "ligus-test".into(), token: None, titles: true }),
         public_url: None,
         label: "sff".into(),
         name: Some("Phone".into()),
@@ -249,19 +256,28 @@ async fn harness_with(
     let handle = start(serve_cfg, opts).await.unwrap();
     let base = format!("http://{}", handle.addr);
     let token = handle.shared.token();
-    Harness { _tmp: tmp, desktop, handle, base, token, client: ligus_forge::new_http_client(), agent_id, ntfy }
+    Harness { _tmp: tmp, desktop, handle, base, token, client: ligus_forge::new_http_client(), agent_id, ntfy, as_operator: false }
 }
 
 impl Harness {
+    /// The bearer token this harness calls with (see [`Harness::as_operator`]).
+    fn bearer(&self) -> String {
+        if self.as_operator {
+            self.handle.shared.operator_token()
+        } else {
+            // The live token: a phone revocation rotates it.
+            self.handle.shared.token()
+        }
+    }
+
     async fn get(&self, path: &str) -> Value {
-        let r = self.client.get(format!("{}{path}", self.base)).bearer_auth(&self.token).timeout(REQ).send().await.unwrap_or_else(|e| panic!("GET {path}: {e}"));
+        let r = self.client.get(format!("{}{path}", self.base)).bearer_auth(self.bearer()).timeout(REQ).send().await.unwrap_or_else(|e| panic!("GET {path}: {e}"));
         assert!(r.status().is_success(), "GET {path}: {}", r.status());
         r.json().await.unwrap()
     }
 
     async fn send(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
-        // The live token: a phone revocation rotates it.
-        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.handle.shared.token()).timeout(REQ);
+        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.bearer()).timeout(REQ);
         if let Some(b) = body {
             req = req.json(&b);
         }
@@ -579,6 +595,83 @@ async fn a_box_starts_from_a_read_only_mounted_secret() {
     assert_eq!(mode(&dir.join("config.toml")), 0o600);
     let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
     assert!(!toml.contains(desktop.key.as_deref().unwrap()), "no secret in config.toml");
+}
+
+/// Apps residuals: memory titles, workflow and stage names, agent names,
+/// channel names and chat titles reached the phone and lt raw, so an RLO or
+/// a zero-width character in one reordered or hid text in a list row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn peer_names_reach_the_api_cleaned() {
+    const EVIL: &str = "\u{202E}gnp\u{200B}.exe\u{2028}x";
+    let hidden = |v: &Value| {
+        let t = v.to_string();
+        t.contains('\u{202E}') || t.contains('\u{200B}') || t.contains('\u{2028}')
+    };
+    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "gpt-4o", &[("README.md", "# demo\n")]).await;
+    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
+    let (evil_agent, chat_id) = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let mut agent = WorkspaceAgent::new(format!("rev{EVIL}"), "gw");
+        agent.owner_actor_id = svc.author().id.clone();
+        let evil_agent = agent.id;
+        svc.add_agent(ws, ws, agent).unwrap();
+        // The fold refuses a memory title with these characters; the
+        // author's name rides the entry unchecked.
+        svc.set_author_display_name(format!("Ana{EVIL}"));
+        svc.write_memory(ws, ligus_runtime::chat_service::MemoryDraft { title: "Notes".into(), body: "b".into(), ..Default::default() }).unwrap();
+        let (_, chat) = svc.create_channel(ws, format!("chan{EVIL}"), Some(format!("purpose{EVIL}")), "gw").unwrap();
+        let def = ligus_core::WorkflowDefinition {
+            id: Uuid::new_v4(),
+            name: format!("Ship{EVIL}"),
+            description: String::new(),
+            input_label: None,
+            nodes: vec![ligus_core::workflow::WorkflowNode {
+                id: "draft".into(),
+                name: format!("Draft{EVIL}"),
+                depends_on: vec![],
+                kind: ligus_core::WorkflowNodeKind::Agent { agent_id: None, prompt_template: "go".into() },
+                x: None,
+                y: None,
+            }],
+            created_at: ligus_core::Timestamp::now(),
+            disabled: false,
+        };
+        let me = svc.author().id.clone();
+        svc.upsert_workflow_run(chat.id, ws, ligus_core::workflow::new_run(&def, "now", me)).unwrap();
+        (evil_agent, chat.id)
+    };
+    sync_once(&h.desktop).await.unwrap();
+    let mut agents = Value::Null;
+    for _ in 0..50 {
+        agents = h.get("/v1/agents").await;
+        let memory = h.get("/v1/memory").await;
+        if agents["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["id"] == json!(evil_agent)))
+            && memory["total"].as_u64() == Some(1)
+            && h.get("/v1/chats").await["chats"].as_array().is_some_and(|c| c.iter().any(|c| c["id"] == json!(chat_id)))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let a = agents["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(evil_agent)).expect("agent synced").clone();
+    assert_eq!(a["name"], "revgnp.exe x");
+    assert!(!hidden(&agents), "{agents}");
+    let memory = h.get("/v1/memory").await;
+    assert_eq!(memory["entries"][0]["entry"]["current"]["author"]["name"], "Anagnp.exe x");
+    assert!(!hidden(&memory), "{memory}");
+    let id = memory["entries"][0]["entry"]["id"].as_str().unwrap().to_string();
+    let one = h.get(&format!("/v1/memory/{id}")).await;
+    assert!(!hidden(&one), "{one}");
+    let channels = h.get("/v1/channels").await;
+    assert!(!hidden(&channels), "{channels}");
+    let details = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    assert_eq!(details["workflowRuns"][0]["name"], "Shipgnp.exe x");
+    assert!(!hidden(&details), "{details}");
+    let chats = h.get("/v1/chats").await;
+    assert!(!hidden(&chats), "{chats}");
+    let flow = h.get("/v1/flow").await;
+    assert!(!hidden(&flow), "{flow}");
 }
 
 /// People, channels and chat details: avatars and host kinds ride the roster,
@@ -1156,7 +1249,7 @@ async fn assert_gone(h: &Harness, path: &str, body: Option<Value>, kind: &str) {
 }
 
 async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
-    let mut req = h.client.request(method.clone(), format!("{}{path}", h.base)).bearer_auth(&h.token).timeout(REQ);
+    let mut req = h.client.request(method.clone(), format!("{}{path}", h.base)).bearer_auth(h.bearer()).timeout(REQ);
     if let Some(b) = body {
         req = req.json(&b);
     }
@@ -1742,11 +1835,16 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
         )
     };
     assert!(opts("0.0.0.0:8787", None, None).is_err());
-    assert!(opts("100.101.102.104:8787", Some("http://n"), None).is_err());
-    let ok = opts("100.101.102.104:8787", Some("http://n:8095"), Some("t")).unwrap();
+    assert!(opts("100.101.102.104:8787", Some("https://n"), None).is_err());
+    // Plain-http ntfy needs LIGUS_NTFY_ALLOW_HTTP=1 (unset in tests).
+    assert!(opts("100.101.102.104:8787", Some("http://n:8095"), Some("t")).is_err());
+    let ok = opts("100.101.102.104:8787", Some("https://n:8095"), Some("t")).unwrap();
     assert_eq!(ok.server_url(), "http://100.101.102.104:8787");
     assert_eq!(ok.token_file, PathBuf::from("/tmp/x/serve.token"));
-    assert_eq!(ok.ntfy.unwrap().endpoint(), "http://n:8095/t");
+    let n = ok.ntfy.unwrap();
+    assert_eq!(n.endpoint(), "https://n:8095/t");
+    assert!(!n.titles, "generic text unless LIGUS_NTFY_TITLES=1");
+    assert_eq!((ok.header_read_timeout, ok.idle_timeout), (HEADER_READ_TIMEOUT, IDLE_TIMEOUT));
 }
 
 /// Live: one agent turn end to end against the lab gateway with a built-in
@@ -2046,7 +2144,9 @@ async fn wait_job(h: &Harness, id: &str) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn non_fork_push_target_must_equal_origin_fetch_repo() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     fake_remote(&remotes, "acme", "widget");
@@ -2088,7 +2188,9 @@ async fn non_fork_push_target_must_equal_origin_fetch_repo() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn repos_clone_switch_pull_and_pr() {
     let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     let work = fake_remote(&remotes, "acme", "widget");
@@ -2248,7 +2350,9 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     // Upstream project, and the owner's fork of it (a copy that then falls behind).
@@ -2385,7 +2489,9 @@ async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fetching_a_fork_checkout_adds_upstream() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     fake_remote(&remotes, "kubeflow", "pipelines");
@@ -3325,7 +3431,9 @@ fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forge_tokens_stay_in_the_boxs_secret_store() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     // Forge changes need the owner's presence on every box (5.7).
     h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     let v = h.get("/v1/forges").await;
@@ -3415,7 +3523,9 @@ async fn forge_endpoints_need_the_bearer_and_a_box_that_can_write() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn clone_specs_pick_the_connection_by_host() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     use_fake(&h, Arc::new(FakeGitHub::new(&remotes, true)));
@@ -3495,7 +3605,9 @@ async fn device_poll_after_remove_stores_nothing() {
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
 
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     // Forge changes need the owner's presence on every box (5.7).
     h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -3534,7 +3646,9 @@ async fn forge_test_is_gated_internal_marked_and_status_only() {
     let base = format!("http://{}", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     // Forge changes need the owner's presence on every box (5.7).
     h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -3895,7 +4009,9 @@ async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
     use base64::Engine;
     let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap();
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let ws = h.handle.shared.ws;
     let phone = ligus_core::testkit::Phone::new();
     let account = {
@@ -4347,7 +4463,9 @@ async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
 async fn phones_certify_headless_then_me_on_loopback() {
     use ligus_runtime::phone_enroll::PhoneCode;
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let ws = h.handle.shared.ws;
     let words = h._tmp.path().join("rk");
     let w = words.to_string_lossy().into_owned();
@@ -4355,6 +4473,9 @@ async fn phones_certify_headless_then_me_on_loopback() {
     // test recovery key), as the 24 words a person keeps offline.
     let account = open_service(&h.desktop).unwrap().author().account_id.unwrap();
     std::fs::write(&words, ligus_core::testkit::test_recovery_key(account).words()).unwrap();
+    // Recovery words are read only from an owner-only file.
+    #[cfg(unix)]
+    std::fs::set_permissions(&words, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let phone = ligus_core::testkit::Phone::new();
     let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| ligus_core::crypto::sign_p256(&phone.key, m));
     let certs = || {
@@ -4503,7 +4624,9 @@ async fn the_phone_reads_memory_and_task_state_and_proposes_a_note() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_repo_clone_by_id_and_the_turn_gate() {
     let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // The operator on the box: its repos, code hosts and secrets (D5).
+    h.as_operator = true;
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     fake_remote(&remotes, "acme", "widget");
@@ -4627,9 +4750,190 @@ async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
         assert_eq!(c, 403, "{m} {p}: {v}");
         assert!(v.to_string().contains("owner_required"), "{v}");
     }
-    // The same box on loopback: the operator.
+    // The same box on loopback: the operator (its own token, D5).
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let mut h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 403, "the phones' token is never the operator: {v}");
+    h.as_operator = true;
     let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
     assert_eq!(c, 200, "{v}");
+}
+
+// ── The operator credential (final apps review D5) ─────────────────────────
+
+/// `serve.operator.token`, read from disk (the operator's copy).
+fn operator_token(h: &Harness) -> String {
+    std::fs::read_to_string(h.handle.shared.cfg.data_dir.join("serve.operator.token")).map(|s| s.trim().to_string()).unwrap_or_default()
+}
+
+/// A request with a given bearer token: (status, JSON body).
+async fn status_with(h: &Harness, token: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
+    let mut req = h.client.request(method.clone(), format!("{}{path}", h.base)).bearer_auth(token).timeout(REQ);
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let r = req.send().await.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
+    let code = r.status().as_u16();
+    (code, r.json().await.unwrap_or(Value::Null))
+}
+
+/// D5: behind a reverse proxy on the same host every request reaches the
+/// loopback listener, phones included. The phones' `serve.token` keeps the
+/// phone routes but is never the operator: the box-owner routes and the
+/// secret-carrying routes (invites, admission codes, code-host tokens,
+/// `GET /v1/me` on loopback) need `serve.operator.token`, which no pairing
+/// link or tunnel answer carries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn loopback_owner_and_secret_routes_need_the_operator_token() {
+    use reqwest::Method as M;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let op = operator_token(&h);
+    assert_eq!(op.len(), 64, "serve.operator.token is created at start");
+    assert_ne!(op, h.token, "a credential of its own");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(h.handle.shared.cfg.data_dir.join("serve.operator.token")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    // The phones' token: the phone routes, nothing of the operator's.
+    assert_eq!(status_with(&h, &h.token, M::GET, "/v1/chats", None).await.0, 200);
+    let (c, v) = status_with(&h, &h.token, M::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 403, "{v}");
+    assert!(v.to_string().contains("owner_required"), "{v}");
+    let (c, v) = status_with(&h, &h.token, M::GET, "/v1/forges", None).await;
+    assert_eq!((c, v["tokenEntry"].clone()), (200, json!(false)), "{v}");
+    let (c, v) = status_with(&h, &h.token, M::GET, &format!("/v1/me?deviceId={}", Uuid::new_v4()), None).await;
+    assert_eq!((c, v["error"].clone()), (403, json!("secure_channel_required")), "{v}");
+    let (c, v) = status_with(&h, &h.token, M::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": Uuid::new_v4() }))).await;
+    assert_eq!(c, 403, "{v}");
+    assert!(v.to_string().contains("secure connection"), "{v}");
+    // The operator.
+    let (c, v) = status_with(&h, &op, M::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 200, "{v}");
+    let (c, v) = status_with(&h, &op, M::GET, "/v1/forges", None).await;
+    assert_eq!((c, v["tokenEntry"].clone()), (200, json!(true)), "{v}");
+    let (c, v) = status_with(&h, &op, M::GET, &format!("/v1/me?deviceId={}", Uuid::new_v4()), None).await;
+    assert_eq!((c, v["error"].clone()), (403, json!("device_not_certified")), "past the channel check: {v}");
+    assert_eq!(status_with(&h, &op, M::GET, "/v1/chats", None).await.0, 200);
+    // Neither token is the other, and a wrong one is still refused.
+    assert_eq!(status_with(&h, &format!("{op}x"), M::GET, "/v1/chats", None).await.0, 401);
+    let (_, health) = status_with(&h, &h.token, M::GET, "/v1/health", None).await;
+    assert!(!health.to_string().contains(&op), "{health}");
+    h.handle.shutdown();
+}
+
+/// D5, off loopback: the operator token is a plain bearer there. It is
+/// never the box owner, and secrets don't travel over the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn off_loopback_the_operator_token_is_not_the_owner() {
+    use reqwest::Method as M;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let op = operator_token(&h);
+    assert_eq!(op.len(), 64);
+    let (c, v) = status_with(&h, &op, M::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 403, "{v}");
+    assert!(v.to_string().contains("owner_required"), "{v}");
+    let (_, v) = status_with(&h, &op, M::GET, "/v1/forges", None).await;
+    assert_eq!(v["tokenEntry"], false, "{v}");
+    h.handle.shutdown();
+}
+
+/// Serve hardening: each credential may hold a few event streams at once
+/// (a direct-path token, the operator, each tunnel pairing); one more is
+/// refused with 429 instead of piling up, and a closed stream frees its slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn event_streams_are_capped_per_credential() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let open = |token: String| {
+        let req = h.client.get(format!("{}/v1/events", h.base)).bearer_auth(token);
+        async move { tokio::time::timeout(REQ, req.send()).await.expect("headers in time").unwrap() }
+    };
+    let mut held = Vec::new();
+    for _ in 0..8 {
+        let r = open(h.token.clone()).await;
+        assert_eq!(r.status(), 200);
+        held.push(r);
+    }
+    assert_eq!(open(h.token.clone()).await.status(), 429, "a ninth stream on one credential");
+    let op = operator_token(&h);
+    assert_eq!(open(op).await.status(), 200, "another credential has its own slots");
+    held.pop();
+    let mut freed = false;
+    for _ in 0..100 {
+        let r = open(h.token.clone()).await;
+        if r.status() == 200 {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(freed, "a closed stream frees its slot");
+    drop(held);
+    h.handle.shutdown();
+}
+
+/// Serve hardening: a client that never finishes its headers, or keeps a
+/// connection open without sending anything, is cut off instead of holding
+/// a connection (and a task) forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slow_headers_and_idle_connections_are_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| {
+        o.header_read_timeout = Duration::from_secs(1);
+        o.idle_timeout = Duration::from_secs(2);
+    })
+    .await;
+    let closed_within = |mut s: tokio::net::TcpStream, secs: u64| async move {
+        let mut buf = vec![0u8; 4096];
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+        loop {
+            match tokio::time::timeout_at(deadline, s.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) => return true,
+                Ok(Ok(_)) => continue,
+                Err(_) => return false,
+            }
+        }
+    };
+    // Headers that never end.
+    let mut s = tokio::net::TcpStream::connect(h.handle.addr).await.unwrap();
+    s.write_all(b"GET /v1/health HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+    assert!(closed_within(s, 10).await, "a slow header is cut off");
+    // A connection that says nothing at all.
+    let s = tokio::net::TcpStream::connect(h.handle.addr).await.unwrap();
+    assert!(closed_within(s, 10).await, "a silent connection is cut off");
+    // A keep-alive connection that went quiet after one request.
+    let mut s = tokio::net::TcpStream::connect(h.handle.addr).await.unwrap();
+    s.write_all(b"GET /v1/health HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = tokio::time::timeout(REQ, s.read(&mut buf)).await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).starts_with("HTTP/1.1 200"), "{}", String::from_utf8_lossy(&buf[..n]));
+    assert!(closed_within(s, 10).await, "an idle keep-alive connection is closed");
+    // The server still answers.
+    assert_eq!(status_with(&h, &h.token, reqwest::Method::GET, "/v1/chats", None).await.0, 200);
+    h.handle.shutdown();
+}
+
+/// Serve hardening: a 500 says only that something went wrong; the detail
+/// (a path, a store error, text a peer chose) goes to the box's log.
+#[tokio::test]
+async fn internal_errors_answer_a_generic_message() {
+    let r = axum::response::IntoResponse::into_response(super::api::ApiError::from(anyhow::anyhow!("open /home/ana/.ligus-serve/ligus.db: disk I/O error")));
+    let r = super::api::generic_500_for_test(r).await;
+    assert_eq!(r.status(), 500);
+    let body = axum::body::to_bytes(r.into_body(), 1 << 16).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains("/home/ana") && !text.contains("disk I/O"), "{text}");
+    assert!(text.contains(super::api::INTERNAL_ERROR), "{text}");
+    // Other statuses keep their message.
+    let r = axum::response::IntoResponse::into_response(super::api::ApiError::bad_request("deviceId isn't a uuid"));
+    let r = super::api::generic_500_for_test(r).await;
+    let body = axum::body::to_bytes(r.into_body(), 1 << 16).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("deviceId isn't a uuid"));
 }

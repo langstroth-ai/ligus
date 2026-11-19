@@ -19,6 +19,7 @@
 //!
 //! Clone one here with `POST /v1/repos/clone {repoId}`.
 
+use ligus_runtime::display::shown;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -59,7 +60,7 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
         .iter()
         .map(|e| {
             let r = &e.repo;
-            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| x.display_name.clone());
+            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| shown(&x.display_name));
             let here = mine.iter().find(|c| c.repo_id == r.id);
             let checkout = maps.iter().find(|m| m.repo_id == r.id && m.confirmed).map(|m| folder_name(&m.path));
             let found: Vec<String> = maps.iter().filter(|m| m.repo_id == r.id && !m.confirmed).map(|m| folder_name(&m.path)).collect();
@@ -73,12 +74,12 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                         Some(None) => ("missing".to_string(), false),
                         Some(Some(x)) => (x.state.clone(), x.via_fork),
                     };
-                    json!({ "hostId": h.host_id, "label": h.label, "kind": h.kind, "online": h.online, "state": state, "viaFork": via_fork })
+                    json!({ "hostId": h.host_id, "label": shown(&h.label), "kind": h.kind, "online": h.online, "state": state, "viaFork": via_fork })
                 })
                 .collect();
             json!({
                 "id": r.id,
-                "name": r.display_name,
+                "name": shown(&r.display_name),
                 "canonical": r.canonical,
                 "forgeKind": r.forge_kind,
                 "defaultBranch": r.default_branch,
@@ -93,11 +94,11 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                 "hosts": hosts,
                 "lookalikeOf": lookalike_of,
                 // Synced aliases (design 12): names only.
-                "aliases": roster.repo_aliases.get(&r.id).cloned().unwrap_or_default(),
+                "aliases": roster.repo_aliases.get(&r.id).map(|v| v.iter().map(|a| shown(a)).collect::<Vec<_>>()).unwrap_or_default(),
             })
         })
         .collect();
-    let host_aliases: Vec<Value> = roster.host_aliases.iter().map(|(a, h)| json!({ "alias": a, "host": h })).collect();
+    let host_aliases: Vec<Value> = roster.host_aliases.iter().map(|(a, h)| json!({ "alias": shown(a), "host": h })).collect();
     Ok(json!({ "repos": repos, "hostAliases": host_aliases, "hostId": s.host_id, "label": s.opts.label }))
 }
 
@@ -126,7 +127,7 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
     s.after_write();
     let sh = s.clone();
     let _ = tokio::task::spawn_blocking(move || super::repos_refresh(&sh)).await;
-    Ok(Json(json!({ "id": repo.id, "canonical": repo.canonical, "name": repo.display_name })))
+    Ok(Json(json!({ "id": repo.id, "canonical": repo.canonical, "name": shown(&repo.display_name) })))
 }
 
 #[derive(Deserialize)]
@@ -230,7 +231,7 @@ pub fn chat_repo(s: &Shared, chat: Uuid) -> ApiResult<Value> {
     };
     Ok(json!({
         "id": id,
-        "name": entry.map(|e| e.repo.display_name.clone()),
+        "name": entry.map(|e| shown(&e.repo.display_name)),
         "canonical": entry.map(|e| e.repo.canonical.clone()),
         "removed": entry.is_some_and(|e| e.removed),
         "baseBranch": cr.base_branch,

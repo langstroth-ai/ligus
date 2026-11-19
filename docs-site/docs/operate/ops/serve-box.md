@@ -53,6 +53,12 @@ admit it again.
 - **Don't put `--pair` in the service.** `ligus serve --pair` prints the
   pairing link, `serve.token` included on the direct path, and under systemd
   that goes to journald and stays there. Run `ligus pair` from a terminal.
+- **The operator token stays on the box.** `serve.operator.token` (0600, in
+  the data dir) is the only credential that counts as the box owner, or as a
+  secure channel for invite and admission codes and code-host tokens, on a
+  loopback listener; `serve.token`, which every direct-path phone holds,
+  never does, even through a reverse proxy on the same host. Don't copy the
+  operator token to a phone or into a proxy's configuration.
 - **Revoking a direct-path phone means rotating `serve.token`.** Every phone
   on the direct path shares it, so all of them pair again; tunnel phones are
   revoked one by one. See [Lost phone](../security/runbooks.md#lost-phone).
@@ -65,7 +71,7 @@ admit it again.
   and no provider key unless that runtime was given one in Ligus), and run
   in the [OS sandbox](../../ligus/concepts/security.md#os-sandbox): bubblewrap,
   Landlock and seccomp on Linux. The data dir, `serve.token` (also a
-  `--token-file` elsewhere), `~/.ssh` and the other credential dirs are
+  `--token-file` elsewhere), `serve.operator.token`, `~/.ssh` and the other credential dirs are
   unreadable; writes land only in the turn's worktree; the network is a
   fresh namespace whose only exit is the turn's egress proxy. So an agent
   can't read the token, and can't reach the serve API on loopback either.

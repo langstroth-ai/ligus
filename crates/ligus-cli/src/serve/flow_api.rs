@@ -8,6 +8,7 @@
 //! Nothing here writes: picking up board work, leaving or clearing marks,
 //! zones, careers and route stops stay on the desktop.
 
+use ligus_runtime::display::shown;
 use std::collections::HashMap;
 
 use axum::extract::{Path, State};
@@ -34,7 +35,7 @@ fn agent_names(chats: &[ChatSession], config: &ChatSession) -> HashMap<String, S
     let mut out = HashMap::new();
     out.insert(flow::PRIMARY.to_string(), "Ligus (primary)".to_string());
     for a in chats.iter().flat_map(|c| c.workspace_agents.iter()).chain(config.workspace_agents.iter()) {
-        out.insert(flow::agent_key(Some(a.id)), a.name.clone());
+        out.insert(flow::agent_key(Some(a.id)), shown(&a.name));
     }
     out
 }
@@ -44,7 +45,7 @@ fn name_of(names: &HashMap<String, String>, key: &str) -> String {
 }
 
 fn chat_title(chats: &[ChatSession], id: uuid::Uuid) -> String {
-    chats.iter().find(|c| c.id == id).map(|c| c.title.clone()).unwrap_or_default()
+    chats.iter().find(|c| c.id == id).map(|c| shown(&c.title)).unwrap_or_default()
 }
 
 fn kind_str<T: serde::Serialize>(v: &T) -> Value {
@@ -82,7 +83,7 @@ pub fn board(chats: &[ChatSession], config: &FlowState, now: i64) -> Vec<Value> 
                 "id": i.id,
                 "kind": kind_str(&i.kind),
                 "kindLabel": i.kind.as_str(),
-                "title": i.title,
+                "title": shown(&i.title),
                 "sinceMs": i.since_ms,
                 "stimulus": (i.stimulus * 100.0).round() / 100.0,
                 "claimedBy": i.claimed_by,
@@ -279,7 +280,7 @@ pub async fn flow_view(State(s): S) -> ApiResult<Json<Value>> {
 }
 
 pub fn handoff_dto(h: &flow::HandoffCard, names: &HashMap<String, String>) -> Value {
-    let pick = |name: &str, key: &str| if name.trim().is_empty() { name_of(names, key) } else { name.to_string() };
+    let pick = |name: &str, key: &str| if name.trim().is_empty() { name_of(names, key) } else { shown(name) };
     let mut v = json!({
         "id": h.id,
         "from": h.from,

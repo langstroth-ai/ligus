@@ -350,7 +350,7 @@ pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession,
         .workspace_hosts
         .iter()
         .find(|h| h.id == lease.current.holder.to_string())
-        .map(|h| h.label.clone())
+        .map(|h| crate::shown(&h.label))
         .unwrap_or_default();
     Some(RunLeaseDto {
         holder: lease.current.holder.to_string(),
@@ -569,13 +569,58 @@ const HYGIENE_FIRST_AFTER: Duration = Duration::from_secs(180);
 // Hygienic removal
 // ---------------------------------------------------------------------------
 
+/// An open diff proposal the sweep checks: (chat, proposal, title, diff, repo).
+type OpenDiff = (Uuid, Uuid, String, String, Option<Uuid>);
+
+/// What the hygiene sweep knows about chats: every chat this device holds,
+/// in any workspace, with whether it is live (keyed by branch slug), every
+/// streaming turn, and the open diff proposals of `ws` (the workspace being
+/// swept). A checkout can be bound by several workspaces on one device, and
+/// their chat worktrees share its `.ligus/worktrees`: only the swept
+/// workspace's archived or gone chats are its to remove; another workspace's
+/// chats count as live here and are left to that workspace's own sweep.
+pub(crate) fn sweep_inputs(
+    svc: &ligus_runtime::ChatService,
+    ws: Uuid,
+) -> (std::collections::HashMap<String, ligus_runtime::hygiene::ChatStatus>, std::collections::HashSet<String>, Vec<OpenDiff>) {
+    use ligus_runtime::hygiene::{self, ChatStatus};
+    let mut chats = std::collections::HashMap::new();
+    let mut live_turns = std::collections::HashSet::new();
+    let mut open_diffs: Vec<OpenDiff> = Vec::new();
+    for id in svc.store().list_session_ids().unwrap_or_default() {
+        let Ok(Some(s)) = svc.load(id) else { continue };
+        if id == ligus_core::workspace_config_session_id(s.workspace_id) {
+            continue;
+        }
+        for m in s.messages.iter().filter(|m| m.is_streaming) {
+            live_turns.insert(hygiene::slug(&m.id.to_string()));
+        }
+        if s.workspace_id != ws {
+            chats.insert(hygiene::slug(&id.to_string()), ChatStatus::Live);
+            continue;
+        }
+        chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
+        if s.archived {
+            continue;
+        }
+        for p in &s.proposals {
+            if p.status == ligus_core::ProposalStatus::Open && !p.dismissed && p.superseded_by.is_none() && !s.guards.stale_proposals.contains(&p.id) {
+                if let Some(d) = &p.diff {
+                    open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
+                }
+            }
+        }
+    }
+    (chats, live_turns, open_diffs)
+}
+
 /// Sweep the active workspace's bound repository: remove crash-leftover turn
 /// worktrees (saving their edits), remove checkouts of gone or archived chats
 /// (keeping their branches), and mark open proposals whose diff no longer
 /// applies as stale (taking them out of the inbox).
 pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportDto {
     use ligus_core::signal::{HygieneKind, WorktreeState};
-    use ligus_runtime::hygiene::{self, ChatStatus, SweepAction};
+    use ligus_runtime::hygiene::{self, SweepAction};
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
     let mut report = ligus_proto::HygieneReportDto { ran_at: crate::rfc3339(ligus_core::Timestamp::now()), ..Default::default() };
@@ -612,41 +657,12 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
         return report;
     }
     report.repo_bound = true;
-    // The workspace's chats, their streaming turns and open diff proposals.
-    let mut chats = std::collections::HashMap::new();
-    let mut live_turns = std::collections::HashSet::new();
-    let mut open_diffs: Vec<(Uuid, Uuid, String, String, Option<Uuid>)> = Vec::new();
-    let device = {
+    // Every chat on this device, their streaming turns, and the active
+    // workspace's open diff proposals.
+    let (chats, live_turns, open_diffs, device) = {
         let svc = state.service.lock().unwrap();
-        let config_id = ligus_core::workspace_config_session_id(ws);
-        for id in svc.store().list_session_ids().unwrap_or_default() {
-            if id == config_id {
-                continue;
-            }
-            let Ok(Some(s)) = svc.load(id) else { continue };
-            if s.workspace_id != ws {
-                continue;
-            }
-            chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
-            for m in s.messages.iter().filter(|m| m.is_streaming) {
-                live_turns.insert(hygiene::slug(&m.id.to_string()));
-            }
-            if s.archived {
-                continue;
-            }
-            for p in &s.proposals {
-                if p.status == ligus_core::ProposalStatus::Open
-                    && !p.dismissed
-                    && p.superseded_by.is_none()
-                    && !s.guards.stale_proposals.contains(&p.id)
-                {
-                    if let Some(d) = &p.diff {
-                        open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
-                    }
-                }
-            }
-        }
-        svc.device_id()
+        let (chats, live_turns, open_diffs) = sweep_inputs(&svc, ws);
+        (chats, live_turns, open_diffs, svc.device_id())
     };
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
@@ -1076,8 +1092,8 @@ pub(crate) fn get_workspace_cli_user_config(state: State<AppState>) -> bool {
 /// CLI setup on this device. The tools that run work outside the turn stay
 /// off either way, and the opt-in is ignored while egress is restricted.
 #[tauri::command]
-pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, enabled: bool) -> Result<(), String> {
-    let ws = state.active_workspace_id().to_string();
+pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, workspace_id: String, enabled: bool) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if enabled {
         s.cli_user_config_workspaces.insert(ws);
@@ -1090,9 +1106,9 @@ pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, enabled: boo
 
 /// Turn presets on or off for the active workspace (device-local).
 #[tauri::command]
-pub(crate) fn set_workspace_egress_presets(state: State<AppState>, presets: Vec<String>) -> Result<(), String> {
+pub(crate) fn set_workspace_egress_presets(state: State<AppState>, workspace_id: String, presets: Vec<String>) -> Result<(), String> {
     let parsed = parse_preset_names(&presets)?;
-    let ws = state.active_workspace_id().to_string();
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     if parsed.is_empty() {
         s.egress_presets_by_workspace.remove(&ws);
@@ -1211,8 +1227,8 @@ pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<boo
 /// Apply (or not, or back to the default with `None`) the active
 /// workspace's signed sandbox grants on this device.
 #[tauri::command]
-pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool>) -> Result<(), String> {
-    let ws = state.active_workspace_id().to_string();
+pub(crate) fn set_sandbox_grants_here(state: State<AppState>, workspace_id: String, apply: Option<bool>) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?.to_string();
     let mut s = state.settings.lock().unwrap();
     match apply {
         Some(v) => s.sandbox_grants_here.insert(ws, v),
@@ -1225,12 +1241,12 @@ pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool
 /// The user has seen the active workspace's signed grants as they are now
 /// (the change notice goes away until they change again).
 #[tauri::command]
-pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id)).await
 }
 
-pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let fp = ligus_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
     let mut s = state.settings.lock().unwrap();
     s.sandbox_grants_seen.insert(ws.to_string(), fp);
@@ -1262,7 +1278,7 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
     let applied = if here.apply { grants.clone() } else { ligus_core::sandbox::SandboxGrants::default() };
     let agents: Vec<SandboxAgentDto> = agents_cfg
         .iter()
-        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
+        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: crate::shown(&a.name), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
         .collect();
     let chosen = agent_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
     let mut policies = Vec::new();
@@ -1300,12 +1316,12 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
 /// the passkey sheet confirms it). Admin + presence; changing an agent's
 /// shell grant is the Owner's.
 #[tauri::command(async)]
-pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), grants)).await
+pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, grants)).await
 }
 
-pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, workspace_id: String, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
         let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
         v.sort();
@@ -1427,19 +1443,21 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
 
 /// Switch dearth mode on or off for the active workspace (Admin+).
 #[tauri::command(async)]
-pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), enabled, reason, brood_paths, allowed_mcp_servers)).await
+pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, workspace_id: String, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, enabled, reason, brood_paths, allowed_mcp_servers)).await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_dearth_mode_sync(
     app: AppHandle,
     state: State<AppState>,
+    workspace_id: String,
     enabled: bool,
     reason: String,
     brood_paths: Vec<String>,
     allowed_mcp_servers: Vec<String>,
 ) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let clean = |v: Vec<String>| -> Vec<String> {
         v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
@@ -1459,12 +1477,12 @@ pub(crate) fn set_dearth_mode_sync(
 
 /// Approve a member or device waiting on dearth mode's second approval.
 #[tauri::command(async)]
-pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, subject: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), subject)).await
+pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, workspace_id: String, subject: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), workspace_id, subject)).await
 }
 
-pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, workspace_id: String, subject: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let mut svc = state.service.lock().unwrap();
     svc.approve_join(ws, subject.trim()).map_err(map_err)?;
     let _ = svc.record_signal(
@@ -2005,6 +2023,48 @@ mod tests {
         assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
         assert!(!body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("), "a policy built without the shell gate");
         assert!(body.contains("policy: sandbox_policy,"), "the engine runs under the turn's policy");
+    }
+
+    /// Runtime review: a checkout bound by two workspaces holds both
+    /// workspaces' chat worktrees under one `.ligus/worktrees`. The sweep of
+    /// one workspace only knew its own chats, so it force-removed the other
+    /// workspace's live chat checkouts as "gone".
+    #[test]
+    fn hygiene_never_sweeps_another_workspaces_chat_checkouts() {
+        use ligus_runtime::hygiene::{plan_sweep, slug, SweepAction, WorktreeEntry};
+        let store = ligus_runtime::EventStore::open_in_memory().unwrap();
+        let author = ligus_core::ActorIdentity::new("u1", "Mara", ligus_core::ActorKind::Human);
+        let mut svc = ligus_runtime::ChatService::new(
+            store,
+            ligus_core::crypto::SigningKeypair::generate().unwrap(),
+            ligus_core::crypto::SigningKeypair::generate().unwrap(),
+            author,
+        );
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        svc.ensure_workspace_config(a).unwrap();
+        svc.ensure_workspace_config(b).unwrap();
+        let mine = svc.create_chat("mine", a, "rt").unwrap().id;
+        let archived = svc.create_chat("old", a, "rt").unwrap().id;
+        svc.set_archived(archived, a, true).unwrap();
+        let theirs = svc.create_chat("theirs", b, "rt").unwrap().id;
+        let theirs_archived = svc.create_chat("theirs old", b, "rt").unwrap().id;
+        svc.set_archived(theirs_archived, b, true).unwrap();
+        let (chats, _, _) = sweep_inputs(&svc, a);
+        let owned = std::path::PathBuf::from("/repo/.ligus/worktrees");
+        let entry = |id: Uuid| WorktreeEntry {
+            path: owned.join(format!("chat-{id}")),
+            branch: Some(format!("ligus/chat/{}", slug(&id.to_string()))),
+        };
+        let entries = [entry(mine), entry(archived), entry(theirs), entry(theirs_archived)];
+        let plan = plan_sweep(&owned, &entries, &Default::default(), &chats, &|_| false);
+        let removed: Vec<String> = plan
+            .iter()
+            .filter_map(|p| match p {
+                SweepAction::RemoveChatCheckout { chat_slug, .. } => Some(chat_slug.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, vec![slug(&archived.to_string())], "only the swept workspace's archived chat");
     }
 
     #[test]

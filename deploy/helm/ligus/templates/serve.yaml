@@ -122,6 +122,14 @@ spec:
               value: {{ $v.ntfy.url | quote }}
             - name: LIGUS_NTFY_TOPIC
               value: {{ $v.ntfy.topic | quote }}
+            {{- if $v.ntfy.allowHttp }}
+            - name: LIGUS_NTFY_ALLOW_HTTP
+              value: "1"
+            {{- end }}
+            {{- if $v.ntfy.titles }}
+            - name: LIGUS_NTFY_TITLES
+              value: "1"
+            {{- end }}
             {{- end }}
             {{- if .Values.remote.enabled }}
             - name: LIGUS_REMOTE_RELAY

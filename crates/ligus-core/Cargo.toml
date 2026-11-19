@@ -25,6 +25,8 @@ url = "2"
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 base64 = "0.23"
 bip39 = { version = "3", default-features = false, features = ["std"] }
+# Wipes the recovery key's seed when it is dropped.
+zeroize = "1"
 
 [dev-dependencies]
 # Property tests (Phase 0): default 256 cases; nightly sets PROPTEST_CASES=4096.

@@ -1,8 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import * as dialog from "@/components/Dialog";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryPaneView, type Draft } from "./MemoryPane";
 import { TaskStateView } from "./TaskStatePanel";
 import { draftProblem, parseTags, provenance, type MemoryEntry, type MemoryOp, type MemoryView, type TaskSlotDto } from "@/lib/memory";
+
+vi.mock("@/components/Dialog", () => ({ confirmDialog: vi.fn(async () => false) }));
 
 const ana = { id: "ana", name: "Ana", kind: "human" as const };
 const entry: MemoryEntry = {
@@ -53,6 +56,15 @@ function setup(v: MemoryView) {
 }
 
 describe("memory pane", () => {
+  it("the remove confirm quotes the title cleaned", async () => {
+    const evil = { ...entry, conflicts: [], current: { ...entry.current, title: "Notes\u202Etxt.exe\u200B\u2028x" } };
+    setup(view({ entries: [evil] }));
+    fireEvent.click(screen.getByText("Remove"));
+    const msg = String(vi.mocked(dialog.confirmDialog).mock.calls.at(-1)?.[0]);
+    expect(msg).toContain("“Notestxt.exe x”");
+    expect(msg).not.toMatch(/[\u202E\u200B\u2028]/);
+  });
+
   it("shows an entry with provenance and its conflict, and resolves it", () => {
     const { saved } = setup(view());
     expect(screen.getByText("Relay ports")).toBeInTheDocument();
