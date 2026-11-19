@@ -194,6 +194,16 @@ pub fn branch_has_trailer(checkout: &Path, chat_id: &str, trailer: &str, id: Uui
     branch_trailer_values(checkout, chat_id, trailer, None).contains(&id.to_string())
 }
 
+/// The message of an apply commit for a proposal without a repo (the
+/// desktop's legacy path into the workspace folder's chat branch): its
+/// title's first line only. A title is its producing agent's text, and a
+/// multi-line one could otherwise end in a trailer block that a later
+/// replay of that branch (once the chat gets a repo) reads as
+/// `Ligus-Proposal: <another proposal>`.
+pub fn legacy_apply_message(title: &str) -> String {
+    format!("Apply proposal: {}", title.lines().next().unwrap_or(""))
+}
+
 /// The message of an apply commit for proposal `id` (with extra trailers).
 pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String {
     let mut m = format!("Apply proposal: {}\n\n{PROPOSAL_TRAILER}: {id}\n", title.lines().next().unwrap_or(""));

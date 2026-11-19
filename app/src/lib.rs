@@ -6311,7 +6311,7 @@ async fn implement_proposal_targeted(
                     Ok(wt_path) => {
                         let wt = wt_path.to_string_lossy().into_owned();
                         apply_patch(&wt, &diff)?;
-                        commit_worktree(&wt, &format!("Apply proposal: {}", proposal.title))?;
+                        commit_worktree(&wt, &hive_runtime::repos::apply::legacy_apply_message(&proposal.title))?;
                         true
                     }
                     Err(e) => {

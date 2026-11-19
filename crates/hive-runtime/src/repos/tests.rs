@@ -470,3 +470,28 @@ fn hostile_repo_config_runs_nothing_during_scan_and_coverage() {
     let _ = checkout_matches(&e.checkout, &local, &BTreeMap::new());
     assert!(!pwn.exists(), "repo config ran a command");
 }
+
+/// A multi-line agent title on the desktop's legacy apply (a chat without a
+/// repo yet, into the workspace folder's chat branch) would end in a real
+/// trailer block; once the chat gets that folder's repo, the replay reads
+/// that branch with no pinned base to bound it. The legacy message keeps
+/// the title's first line only.
+#[test]
+fn legacy_apply_title_never_carries_a_trailer_block() {
+    let e = env();
+    let chat_id = Uuid::new_v4().to_string();
+    let wt = crate::git_worktree::chat_worktree(&e.checkout, &chat_id).unwrap();
+    let victim = Uuid::new_v4();
+    let title = format!("tidy up\n\n{}: {victim}", hive_core::workspace_repo::PROPOSAL_TRAILER);
+    let commit = |msg: &str, file: &str| {
+        std::fs::write(wt.join(file), "x").unwrap();
+        sh(&wt, &["add", "-A"]);
+        sh(&wt, &["commit", "-q", "-m", msg]);
+    };
+    // What the legacy path wrote before: the whole title.
+    commit(&format!("Apply proposal: {title}"), "one.txt");
+    assert!(branch_has_trailer(&e.checkout, &chat_id, hive_core::workspace_repo::PROPOSAL_TRAILER, victim), "the old message forges a trailer");
+    sh(&wt, &["reset", "-q", "--hard", "HEAD~1"]);
+    commit(&legacy_apply_message(&title), "two.txt");
+    assert!(!branch_has_trailer(&e.checkout, &chat_id, hive_core::workspace_repo::PROPOSAL_TRAILER, victim));
+}
