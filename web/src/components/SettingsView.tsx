@@ -29,6 +29,7 @@ import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { GuardsSection } from "@/components/guards/GuardsSection";
 import { FlowSection } from "@/components/settings/FlowSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
+import { SandboxSection } from "@/components/settings/SandboxSection";
 import { IconComb } from "@/components/flow/icon";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ export type SettingsTab =
   | "models"
   | "tools"
   | "permissions"
+  | "sandbox"
   | "flow"
   | "updates"
   | "diagnostics"
@@ -82,7 +84,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "models", label: "Models & runtimes", icon: <IconHexagon size={16} />, keywords: ["api key", "provider", "anthropic", "openai", "openrouter", "ollama", "claude", "model", "runtime", "endpoint", "agent", "prompt"] },
       { id: "tools", label: "Tools & MCP", icon: <IconWrench size={16} />, keywords: ["mcp", "server", "linear", "github", "tool", "integration"] },
-      { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety", "sandbox"] },
+      { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety"] },
+      { id: "sandbox", label: "Sandbox", icon: <IconLock size={16} />, keywords: ["sandbox", "home", "folder", "read", "write", "grant", "allow", "path", "shell", "owner", "toolchain", "seatbelt", "landlock", "bubblewrap"] },
       { id: "flow", label: "Flow", icon: <IconComb size={16} />, keywords: ["routing", "route", "shadow", "hand-off", "handoff", "queue", "review queue", "task board", "marks", "worktree"] },
     ],
   },
@@ -141,6 +144,9 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
       return "tools";
     case "permissions":
       return "permissions";
+    case "sandbox":
+    case "grants":
+      return "sandbox";
     case "flow":
     case "routing":
       return "flow";
@@ -287,6 +293,7 @@ export function SettingsView({
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}
           {tab === "permissions" && <PermissionsSection />}
+          {tab === "sandbox" && <SandboxSection />}
           {tab === "flow" && <FlowSection />}
           {tab === "updates" && <UpdatesSection />}
           {tab === "diagnostics" && <DiagnosticsSection />}

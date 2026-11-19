@@ -50,8 +50,9 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_SANDBOX_UNIX_SOCKETS` | unset | desktop and CLI (Linux) | `allow` lets sandboxed agents create unix sockets again (known host sockets stay masked) |
 | `LIGUS_SANDBOX_EGRESS_ALLOW` | unset | desktop, CLI | comma-separated `host[:port]` agents may also reach through the egress proxy under the normal envelope (not under dearth mode or a lockdown); `run_command` and pre-flight get only these |
 | `LIGUS_SANDBOX_EGRESS_PRESETS` | unset (off) | desktop, CLI | comma-separated [egress presets](../../ligus/concepts/security.md#egress-presets) on for every turn on this host: `package-registries` (npm, crates.io, PyPI, GitHub) and `claude-connectors` (`mcp-proxy.anthropic.com`, Claude Code turns only; lets the agent reach the services you connected to claude.ai). Ignored under dearth mode or a lockdown. On the desktop you can also switch presets per workspace and per chat in **Settings → Guards → Network presets** |
-| `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. `~/.cargo/registry`) |
-| `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | credential dirs under `~` an agent process may read after all (e.g. `~/.aws`) |
+| `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. a shared scratch dir such as `~/scratch/agents`; caches such as `~/.cargo/registry` are the turn's own under its per-turn home) |
+| `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | paths under `~` an agent process may read after all, credential dirs included (e.g. `~/.aws`); device-local, unlike the signed grants in Settings → Sandbox |
+| `LIGUS_SANDBOX_GRANTS` | the default | CLI (`worker`, `serve`, `agent`, `doctor`) | `apply` or `ignore`: whether this host applies the workspace's [signed sandbox grants](../../ligus/concepts/security.md#grants-on-this-device) (paths and agents' shell grants). Unset: only a host whose user is the workspace Owner applies them. The desktop sets this per workspace in Settings → Sandbox |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
 | `LIGUS_AGENT_MAX_LINE_BYTES` | `8388608` | desktop and CLI | longest stdout line an agent CLI or ACP adapter may write; a longer one ends the turn |
 | `LIGUS_AGENT_MAX_OUTPUT_BYTES` | `268435456` | desktop and CLI | most stdout one agent turn may produce |
@@ -134,4 +135,4 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_RELEASE_TAG` | baked into release builds for the update check (`dev` otherwise) |
 | `LIGUS_GITHUB_APP_CLIENT_ID` / `LIGUS_GITLAB_CLIENT_ID` | also read at build time, as the default client ids for code-host device sign-in (see Runtime above); no secret |
 | `LIGUS_APPLE_TEAM_ID` | the Apple team id of a signed macOS release (from the `APPLE_TEAM_ID` release secret): the app trusts the keychain's unlock item only to code that satisfies Ligus's designated requirement for that team |
-| `LIGUS_TEST_KEYCHAIN` | `1` runs the macOS keychain tests (`cargo test`), against throwaway keychain files only; never the login keychain |
+| `LIGUS_TEST_KEYCHAIN` | `1` runs the macOS keychain tests (`cargo test`), against throwaway keychain files only; never the login keychain. Without it, a test run never copies the real user's CLI sign-ins into a turn home nor bridges Claude Code's keychain item (`cli_home::real_sign_ins_allowed`) |

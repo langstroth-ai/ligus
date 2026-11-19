@@ -111,7 +111,7 @@ pub use chat_service::{
 };
 pub use context::{Compactor, CompactionResult, Summarizer};
 pub use mcp::{
-    normalize_bearer_token, resolve_bearer, McpRegistry, McpServerSpec, McpTool, McpTransport,
+    is_shell_tool, normalize_bearer_token, resolve_bearer, shell_tool_names, McpRegistry, McpServerSpec, McpTool, McpTransport,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{

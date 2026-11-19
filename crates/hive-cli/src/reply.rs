@@ -244,7 +244,10 @@ async fn tool_loop_turn(
             });
             // isolated = true: writes go to the lazily cut turn worktree, never
             // the checkout (no in-place fallback on a headless host).
-            let policy = builtin_policy(&read_root, true, false, settings.run_command).with_protected_dirs(&settings.protected_dirs);
+            // `run_command` is a shell: the Owner's, or granted (Phase C;
+            // the host set it on the turn's policy).
+            let shell = hive_runtime::executor::turn_shell_allowed();
+            let policy = builtin_policy(&read_root, true, false, settings.run_command && shell).with_protected_dirs(&settings.protected_dirs);
             match hive_runtime::BuiltinTools::lazy(policy, wt.clone(), false) {
                 Ok(b) => {
                     lazy = Some(wt);
@@ -295,6 +298,16 @@ async fn tool_loop_turn(
     }
 }
 
+/// An MCP tool that runs shell commands (`bash`, `exec`, `run_command`, ...)
+/// is a shell: a turn without the shell (Phase C, the Owner's) doesn't get
+/// it. Called inside the turn's scope.
+fn without_shell_tools(tagged: Vec<(String, hive_runtime::McpTool)>) -> Vec<(String, hive_runtime::McpTool)> {
+    if hive_runtime::executor::turn_shell_allowed() {
+        return tagged;
+    }
+    tagged.into_iter().filter(|(_, t)| !hive_runtime::is_shell_tool(&t.name)).collect()
+}
+
 /// The enabled MCP servers' tools (from `LIGUS_MCP_CONFIG`), as neutral defs
 /// plus the executor that routes a call back to its server. `None` when no
 /// server is configured or none lists a tool.
@@ -305,7 +318,7 @@ async fn mcp_tool_set(egress: &hive_core::sandbox::EgressPolicy) -> Result<Optio
     if registry.enabled().next().is_none() {
         return Ok(None);
     }
-    let tagged = registry.list_all_tools().await;
+    let tagged = without_shell_tools(registry.list_all_tools().await);
     if tagged.is_empty() {
         return Ok(None);
     }
@@ -340,7 +353,7 @@ async fn try_tool_loop(
     let ligus = hive_runtime::agent_turn::current().and_then(|s| s.ligus.clone());
     let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
     let registry = McpRegistry::new(specs);
-    let tagged = if registry.enabled().next().is_some() { registry.list_all_tools().await } else { Vec::new() };
+    let tagged = if registry.enabled().next().is_some() { without_shell_tools(registry.list_all_tools().await) } else { Vec::new() };
     if tagged.is_empty() && ligus.is_none() {
         return Ok(None);
     }

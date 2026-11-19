@@ -104,6 +104,10 @@ fn prop_enforcement_plan_host_independent() {
                 egress_presets: &presets,
                 cli_home: None,
                 gateway: None,
+                turn_home: None,
+                grants: &Default::default(),
+                extra_home_read: &[],
+                user_config: false,
             })
         };
         let desktop = plan_for(HostKind::Desktop);
@@ -167,6 +171,10 @@ fn prop_every_envelope_field_consumed() {
             egress_presets: &[],
                 cli_home: None,
                 gateway: None,
+                turn_home: None,
+                grants: &Default::default(),
+                extra_home_read: &[],
+                user_config: false,
         })
     };
     let base = SandboxEnvelope::workspace_default();
@@ -222,6 +230,10 @@ fn provider_key_only_when_configured_in_ligus() {
             egress_presets: &[],
                 cli_home: None,
                 gateway: None,
+                turn_home: None,
+                grants: &Default::default(),
+                extra_home_read: &[],
+                user_config: false,
         })
     };
     let p = env_for(Some("sk-configured"), ModelProviderKind::Aider, Some("anthropic"));
@@ -896,7 +908,7 @@ fn sandbox_denies_login_keychain_search() {
     // Opt-in only: the probe opens the real login keychain, and the bridging
     // check copies a signed-in Claude Code credential into a temp turn home.
     // Run it deliberately, on a machine where that's acceptable.
-    if std::env::var_os("LIGUS_TEST_KEYCHAIN").is_none() {
+    if !super::cli_home::test_keychain_opt_in() {
         eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to probe the real login keychain");
         return;
     }
@@ -974,6 +986,10 @@ fn sandbox_denies_unix_sockets_under_open_egress() {
         egress_presets: &[],
         cli_home: None,
         gateway: None,
+        turn_home: None,
+        grants: &Default::default(),
+        extra_home_read: &[],
+        user_config: false,
     });
     assert_eq!(plan.egress, EgressPlan::Open, "the probe needs an open-egress child");
     let (_, out) = run_purpose(&*e, &f, Purpose::McpServer, &probe, None);
@@ -1157,6 +1173,10 @@ fn sandbox_denies_apple_events_and_pasteboard() {
         egress_presets: &[],
         cli_home: None,
         gateway: None,
+        turn_home: None,
+        grants: &Default::default(),
+        extra_home_read: &[],
+        user_config: false,
     }), None);
     assert!(prof.contains("(deny appleevent-send)") && prof.contains("com.apple.pasteboard"));
 }
@@ -1192,6 +1212,10 @@ fn ligus_server_present_under_closed_egress() {
             egress_presets: &[],
             cli_home: None,
             gateway: None,
+            turn_home: None,
+            grants: &Default::default(),
+            extra_home_read: &[],
+            user_config: false,
         });
         assert_eq!(plan.mcp.first().map(String::as_str), Some(LIGUS_MCP_ID), "{egress:?}");
         assert_eq!(plan.ligus_mcp_socket.as_deref(), Some(sock));
@@ -1217,7 +1241,7 @@ fn ligus_secrets_unreachable_by_subscription_cli_agent() {
         assert!(!ok && !out.contains("SECRET") && !out.contains("KEYCHAIN-FILE"), "read {target}: {out}");
     }
     #[cfg(target_os = "macos")]
-    if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() == Some("1") {
+    if super::cli_home::test_keychain_opt_in() {
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = f.data.join("secrets/ligus-sandbox-test.keychain-db");
         let kc = crate::secret_store::MacKeychain::open_with(path.clone(), &service).unwrap();
@@ -1262,6 +1286,10 @@ fn agent_env_has_no_session_bus() {
         egress_presets: &[],
         cli_home: None,
         gateway: None,
+        turn_home: None,
+        grants: &Default::default(),
+        extra_home_read: &[],
+        user_config: false,
     });
     assert!(plan.env.iter().all(|(k, _)| !k.to_string_lossy().starts_with("DBUS")), "{:?}", plan.env);
 }
@@ -1293,6 +1321,10 @@ fn preset_plan(envelope: &SandboxEnvelope, purpose: Purpose, host: &HostPaths, p
         egress_presets: presets,
         cli_home: None,
         gateway: None,
+        turn_home: None,
+        grants: &Default::default(),
+        extra_home_read: &[],
+        user_config: false,
     })
 }
 
@@ -1504,6 +1536,10 @@ fn claude_code_tmpdir_is_the_turn_scratch_dir() {
         egress_presets: &[],
         cli_home: Some(Path::new("/tmp/ligus-turn-cc/home")),
         gateway: None,
+        turn_home: None,
+        grants: &Default::default(),
+        extra_home_read: &[],
+        user_config: false,
     });
     assert_eq!(get(&with_home), Some(PathBuf::from("/tmp/ligus-turn-cc")));
     assert_eq!(with_home.env.iter().filter(|(k, _)| k == "CLAUDE_CODE_TMPDIR").count(), 1);
@@ -1625,6 +1661,10 @@ fn sandbox_default_agents_cannot_commit() {
                 egress_presets: &[],
                 cli_home: None,
                 gateway: None,
+                turn_home: None,
+                grants: &Default::default(),
+                extra_home_read: &[],
+                user_config: false,
             });
             assert!(plan.read_only.contains(&PathBuf::from("/repo/.git")), "{kind:?} {gate:?}");
         }
@@ -1793,6 +1833,10 @@ fn gateway_plan_has_no_vendor_endpoints_or_keys() {
                 egress_presets: &[],
                 cli_home: None,
                 gateway,
+    turn_home: None,
+    grants: &Default::default(),
+    extra_home_read: &[],
+    user_config: false,
             })
         };
         let direct = mk(None);

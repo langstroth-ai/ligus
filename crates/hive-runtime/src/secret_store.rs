@@ -1457,7 +1457,7 @@ esac"#,
 
     #[cfg(target_os = "macos")]
     fn keychain_opt_in() -> bool {
-        if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() != Some("1") {
+        if !crate::executor::cli_home::test_keychain_opt_in() {
             eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to exercise the real keychain (throwaway keychains only)");
             return false;
         }
