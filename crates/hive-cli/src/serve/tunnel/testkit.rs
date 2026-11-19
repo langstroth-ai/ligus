@@ -728,18 +728,37 @@ async fn splice(a: WebSocketStream<TcpStream>, b: WebSocketStream<TcpStream>, mu
             }
             m = a_rx.next() => match m {
                 Some(Ok(Message::Binary(x))) => { if b_tx.send(Message::Binary(x)).await.is_err() { break; } }
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(Message::Close(f))) => { pass_close(&mut b_tx, f).await; return; }
+                None | Some(Err(_)) => break,
                 _ => {}
             },
             m = b_rx.next() => match m {
                 Some(Ok(Message::Binary(x))) => { if a_tx.send(Message::Binary(x)).await.is_err() { break; } }
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(Message::Close(f))) => { pass_close(&mut a_tx, f).await; return; }
+                None | Some(Err(_)) => break,
                 _ => {}
             },
         }
     }
     let _ = a_tx.send(Message::Close(None)).await;
     let _ = b_tx.send(Message::Close(None)).await;
+}
+
+/// Spec §6.5: a close on one side closes the other with the same code (a
+/// 3000–4999 code keeps its reason; 1000 and 1001 pass as 1000).
+async fn pass_close<T>(to: &mut T, f: Option<CloseFrame>)
+where
+    T: futures_util::Sink<Message> + Unpin,
+{
+    let frame = f.map(|f| {
+        let c: u16 = f.code.into();
+        if (3000..=4999).contains(&c) {
+            f
+        } else {
+            CloseFrame { code: CloseCode::Normal, reason: "".into() }
+        }
+    });
+    let _ = to.send(Message::Close(frame)).await;
 }
 
 /// Decrypt a sealed push (§14) with the spec's AD and parse the plaintext.
