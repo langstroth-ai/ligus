@@ -560,3 +560,61 @@ fn review_agent_outside_a_turn_is_read_only_live() {
         assert!(!out.contains("WROTE") && !d.worktree.join("planted.txt").exists(), "{kind:?} wrote the checkout outside a turn: {out}");
     }
 }
+
+/// Final review (area B): a checkout that holds a denied dir (a dotfiles
+/// repo at `~/.config` holds `gh/hosts.yml`; a folder bound above the data
+/// dir holds `settings.json`) never brings it back. The worktree's read
+/// rule comes after the hard denies so a worktree *inside* a denied dir
+/// works, but it must not re-open a denied dir *inside* the worktree.
+#[cfg(unix)]
+#[test]
+fn final_review_denied_dirs_inside_the_worktree_stay_denied() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let gh = d.home.join(".config/gh/hosts.yml");
+    std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
+    std::fs::write(&gh, "DECOY-GH-TOKEN").unwrap();
+    std::fs::write(d.home.join(".config/app.toml"), "dotfile-ok").unwrap();
+    // The data dir's parent (`~/Library/Application Support`, `~/.local/share`).
+    let data_parent = d.home.join(data_dir_rel()).parent().unwrap().to_path_buf();
+    std::fs::write(data_parent.join("other-app.txt"), "sibling-ok").unwrap();
+    for (wt, secret, ok_file) in [
+        (d.home.join(".config"), gh.clone(), "app.toml"),
+        (data_parent.clone(), d.home.join(data_dir_rel()).join("settings.json"), "other-app.txt"),
+    ] {
+        let wt = canonical(&wt);
+        for purpose in PURPOSES {
+            let policy = TurnPolicy { worktree_is_isolated: true, ..TurnPolicy::baseline(HostKind::Desktop) };
+            let (ok, out) = with_turn_sync(policy, || {
+                let script = format!("cat '{ok_file}'; cat '{}'", secret.display());
+                let spec = SpawnSpec::new(*purpose, "/bin/sh", ["-c", script.as_str(), "sh", "--permission-mode", "acceptEdits"]).cwd(Some(&wt));
+                let mut p = prepare_in(&*e, spec, &d.home, d.host()).expect("prepare");
+                let out = p.command.output().expect("spawn");
+                drop(p.guard);
+                (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+            });
+            assert!(out.contains("-ok"), "{purpose:?} in {}: the worktree itself must read: {out}", wt.display());
+            assert!(!ok && !out.contains("DECOY"), "{purpose:?} in {} read {}: {out}", wt.display(), secret.display());
+        }
+    }
+}
+
+/// Final review (area B): a cwd above the home (`/Users`, `/home`) would
+/// make the whole home readable as "the worktree": refused like the home.
+#[cfg(unix)]
+#[test]
+fn final_review_cwd_above_the_home_is_refused() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let above = d.home.parent().unwrap().to_path_buf();
+    for purpose in PURPOSES {
+        let spec = SpawnSpec::new(*purpose, "/bin/sh", ["-c", "cat home/Documents/taxes.txt"]).cwd(Some(&above));
+        match prepare_in(&*e, spec, &d.home, d.host()) {
+            Err(err) => assert!(err.to_string().contains("home directory"), "{purpose:?}: {err}"),
+            Ok(mut p) => {
+                let out = p.command.output().expect("spawn");
+                panic!("{purpose:?}: a cwd above the home ran: {}", String::from_utf8_lossy(&out.stdout));
+            }
+        }
+    }
+}
