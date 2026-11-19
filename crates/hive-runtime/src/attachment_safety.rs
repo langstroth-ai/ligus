@@ -707,6 +707,43 @@ mod tests {
         }
     }
 
+    /// Second review: names Windows treats specially (device names, alternate
+    /// data streams, UNC paths, trailing dots and spaces) save as ordinary
+    /// files inside the chosen folder, each with the OS marking (run for real
+    /// on Windows, where it checks Mark-of-the-Web).
+    #[test]
+    fn tricky_names_save_as_plain_marked_files_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            ("CON", "_CON"),
+            ("con.txt", "_con.txt"),
+            ("AUX .log", "_AUX .log"),
+            ("COM\u{b9}.txt", "_COM\u{b9}.txt"),
+            ("nul.tar.gz", "_nul.tar.gz"),
+            ("CONIN$", "_CONIN$"),
+            ("report.pdf. . .", "report.pdf"),
+            ("evil.txt:Zone.Identifier", "evil.txt_Zone.Identifier"),
+            ("\\\\server\\share\\x.txt", "x.txt"),
+            ("C:\\Windows\\win.ini", "win.ini"),
+            ("..\\..\\up.txt", "up.txt"),
+            ("photo\u{202E}gnp.exe", "photognp.exe"),
+        ];
+        for (raw, want) in cases {
+            let p = save_received(dir.path(), raw, b"data", "Mara").unwrap();
+            assert_eq!(p.parent(), Some(dir.path()), "{raw:?}");
+            assert_eq!(p.file_name().unwrap().to_str().unwrap(), want, "{raw:?}");
+            assert_eq!(std::fs::read(&p).unwrap(), b"data", "{raw:?}");
+            #[cfg(windows)]
+            {
+                let z = quarantine_of(&p).unwrap_or_else(|| panic!("Mark-of-the-Web on {raw:?}"));
+                assert!(z.contains("ZoneId=3"), "{z}");
+            }
+            #[cfg(target_os = "macos")]
+            assert!(quarantine_of(&p).is_some_and(|q| q.starts_with("0083;")), "{raw:?}");
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), cases.len(), "one plain file per save, nothing else");
+    }
+
     #[cfg(unix)]
     #[test]
     fn offered_files_stay_inside_the_worktree_and_hold_no_credentials() {
