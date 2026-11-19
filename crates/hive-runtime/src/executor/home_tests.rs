@@ -316,3 +316,218 @@ fn effective_policy_names_every_path_with_a_reason() {
     let granted = effective_policy_in(Some(ModelProviderKind::Codex), &PathGrants::default(), true, &d.home, &host, None, &|_| None);
     assert!(granted.shell.starts_with("on"));
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial review: escapes from the allow-list and the grants
+// ---------------------------------------------------------------------------
+
+/// Run `program args` as `purpose` in the decoy's worktree, with `host`
+/// paths and `grants`.
+fn run_prog(e: &dyn TurnExecutor, d: &DecoyHome, host: HostPaths, purpose: Purpose, program: &Path, args: &[&str], grants: PathGrants) -> (bool, String) {
+    let policy = TurnPolicy { worktree_is_isolated: true, grants, ..TurnPolicy::baseline(HostKind::Desktop) };
+    with_turn_sync(policy, || {
+        let spec = SpawnSpec::new(purpose, program.as_os_str(), args.iter().copied()).cwd(Some(&d.worktree));
+        let mut p = prepare_in(e, spec, &d.home, host).expect("prepare");
+        let out = p.command.output().expect("spawn");
+        drop(p.guard);
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    })
+}
+
+#[cfg(unix)]
+fn exe(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// The program's own prefix is never a tool's home: `cargo` lives in
+/// `~/.cargo/bin`, and `~/.cargo` holds `credentials.toml` (the crates.io
+/// token); a real launcher in `~/.local/bin` (uv's installer, pip --user)
+/// would open all of `~/.local`.
+#[cfg(unix)]
+#[test]
+fn review_program_prefix_never_opens_a_tool_home() {
+    let root = canonical(&tempfile::tempdir().unwrap().keep());
+    let home = root.join("home");
+    exe(&home.join(".cargo/bin/cargo"), "#!/bin/sh\n");
+    std::fs::write(home.join(".cargo/credentials.toml"), "DECOY").unwrap();
+    exe(&home.join(".local/bin/uv"), "#!/bin/sh\n");
+    exe(&home.join("go/bin/gopls"), "#!/bin/sh\n");
+    for (prog, never) in [(".cargo/bin/cargo", ".cargo"), (".local/bin/uv", ".local"), ("go/bin/gopls", "go")] {
+        let got = program_install_dir(home.join(prog).as_os_str(), &home);
+        assert_ne!(got, Some(home.join(never)), "{prog} opened ~/{never}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn review_program_prefix_never_opens_a_tool_home_live() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let cat = d.home.join(".cargo/bin/decoy-cat");
+    exe(&cat, "#!/bin/sh\ncat \"$1\"\n");
+    let creds = d.home.join(".cargo/credentials.toml");
+    for purpose in [Purpose::Tool, Purpose::McpServer, Purpose::Agent(ModelProviderKind::Aider)] {
+        let (_, out) = run_prog(&*e, &d, d.host(), purpose, &cat, &[creds.to_str().unwrap()], PathGrants::default());
+        assert!(!out.contains("DECOY-CARGO-TOKEN"), "{purpose:?} read ~/.cargo/credentials.toml through the program's prefix: {out}");
+    }
+}
+
+/// An allow-listed dir that is a symlink is judged by where it resolves:
+/// `~/.local/bin` pointing at the home (or a grant pointing into `~/.ssh`)
+/// opens nothing.
+#[cfg(unix)]
+fn symlinked_decoy() -> (DecoyHome, HostPaths, PathGrants) {
+    let d = DecoyHome::new();
+    std::fs::create_dir_all(d.home.join(".local")).unwrap();
+    std::os::unix::fs::symlink(&d.home, d.home.join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(d.home.join(".ssh"), d.home.join("granted/ssh-link")).unwrap();
+    let path = std::env::join_paths([d.home.join(".local/bin")]).unwrap();
+    let t = toolchain_allow(&d.home, Some(&path), &|_| None, &|p| p.exists());
+    let host = HostPaths { toolchain_read: t.read.into_iter().map(|(p, _)| p).collect(), ..d.host() };
+    let grants = PathGrants { read_only: vec!["~/granted/ssh-link".into()], read_write: vec![] };
+    (d, host, grants)
+}
+
+#[cfg(unix)]
+#[test]
+fn review_symlinked_allow_entries_resolve_before_they_open() {
+    let (d, host, grants) = symlinked_decoy();
+    // The plan: nothing it opens resolves to the home, or into a denied path.
+    let p = plan_for(&d.home, &host, Purpose::Tool, &grants);
+    let real_home = canonical(&d.home);
+    for r in p.home_read.iter().chain(p.write_extra.iter()) {
+        let c = canonical(r);
+        assert!(!real_home.starts_with(&c), "{} resolves to the home or above it", r.display());
+        assert!(!p.deny_read.iter().any(|x| c.starts_with(canonical(x))), "{} resolves into a denied path", r.display());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn review_symlinked_allow_entries_resolve_before_they_open_live() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let (d, host, grants) = symlinked_decoy();
+    for purpose in PURPOSES {
+        for target in [d.home.join("Documents/taxes.txt"), d.home.join(".ssh/id_ed25519"), d.home.join("granted/ssh-link/id_ed25519")] {
+            let (_, out) = run_prog(&*e, &d, host.clone(), *purpose, Path::new("/bin/cat"), &[target.to_str().unwrap()], grants.clone());
+            assert!(!out.contains("DECOY"), "{purpose:?} read {} through a symlinked allow entry: {out}", target.display());
+        }
+    }
+}
+
+/// A grant of the home's parent (`/home`, `/Users`) never brings the home
+/// back, read-only or read-write.
+#[cfg(unix)]
+#[test]
+fn review_a_grant_above_the_home_opens_nothing_in_it() {
+    let d = DecoyHome::new();
+    let parent = d.home.parent().unwrap().display().to_string();
+    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()] };
+    let p = plan_for(&d.home, &d.host(), Purpose::Tool, &grants);
+    let real_home = canonical(&d.home);
+    for r in p.home_read.iter().chain(p.write_extra.iter()) {
+        assert!(!real_home.starts_with(canonical(r)), "{} is the home or above it", r.display());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn review_a_grant_above_the_home_opens_nothing_in_it_live() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let parent = d.home.parent().unwrap().display().to_string();
+    let grants = PathGrants { read_only: vec![parent.clone()], read_write: vec![parent.clone()] };
+    let h = d.home.display().to_string();
+    for purpose in PURPOSES {
+        let (_, out) = run_in(&*e, &d, *purpose, &format!("cat '{h}/Documents/taxes.txt'; echo x > '{h}/new-file'; test -e '{h}/new-file' && echo MADE"), grants.clone());
+        assert!(!out.contains("DECOY") && !out.contains("MADE"), "{purpose:?}: a grant above the home opened it: {out}");
+        assert!(!d.home.join("new-file").exists());
+    }
+}
+
+/// A signed read-write grant never makes a path that runs code outside the
+/// sandbox writable: a dir on `PATH` or in the toolchain allow-list (a planted
+/// `git` runs as the user), a shell rc file, a login item. Those would hand
+/// an Admin (and every member whose turns that agent answers) the shell the
+/// gate keeps for the Owner, unconfined.
+#[cfg(unix)]
+fn code_path_decoy() -> (DecoyHome, HostPaths, Vec<&'static str>, PathGrants) {
+    let d = DecoyHome::new();
+    for dir in ["Library/LaunchAgents", ".config/autostart", ".config/systemd/user", ".local/bin"] {
+        std::fs::create_dir_all(d.home.join(dir)).unwrap();
+    }
+    let path = std::env::join_paths([d.home.join(".local/bin")]).unwrap();
+    let t = toolchain_allow(&d.home, Some(&path), &|_| None, &|p| p.exists());
+    let host = HostPaths { toolchain_read: t.read.into_iter().map(|(p, _)| p).collect(), ..d.host() };
+    let rw = [".cargo/bin", ".local/bin", ".zshrc", "Library/LaunchAgents", ".config/autostart", ".config/systemd/user", ".config", ".cargo"];
+    let grants = PathGrants { read_only: vec![], read_write: rw.iter().map(|r| format!("~/{r}")).collect() };
+    (d, host, rw.to_vec(), grants)
+}
+
+#[cfg(unix)]
+#[test]
+fn review_rw_grants_never_open_code_that_runs_outside_the_sandbox() {
+    let (d, host, rw, grants) = code_path_decoy();
+    let p = plan_for(&d.home, &host, Purpose::Tool, &grants);
+    for r in rw {
+        assert!(!p.write_extra.contains(&d.home.join(r)), "~/{r} granted read-write: {:?}", p.write_extra);
+    }
+    // A grant beside them still works.
+    let ok = PathGrants { read_only: vec![], read_write: vec!["~/granted/rw".into(), "~/.cargo/registry".into()] };
+    let p = plan_for(&d.home, &host, Purpose::Tool, &ok);
+    assert!(p.write_extra.contains(&d.home.join("granted/rw")) && p.write_extra.contains(&d.home.join(".cargo/registry")), "{:?}", p.write_extra);
+}
+
+#[cfg(unix)]
+#[test]
+fn review_rw_grants_never_open_code_that_runs_outside_the_sandbox_live() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let (d, host, _, grants) = code_path_decoy();
+    let h = d.home.display().to_string();
+    let script = format!(
+        "echo pwned >> '{h}/.zshrc'; printf '#!/bin/sh\\n' > '{h}/.cargo/bin/git' && echo PLANTED-CARGO; printf x > '{h}/.local/bin/git' && echo PLANTED-LOCAL; printf x > '{h}/Library/LaunchAgents/evil.plist' && echo PLANTED-AGENT; printf x > '{h}/.config/autostart/evil.desktop' && echo PLANTED-AUTOSTART"
+    );
+    let (_, out) = run_prog(&*e, &d, host.clone(), Purpose::Tool, Path::new("/bin/sh"), &["-c", &script], grants.clone());
+    assert!(!out.contains("PLANTED"), "{out}");
+    assert_eq!(std::fs::read_to_string(d.home.join(".zshrc")).unwrap(), "DECOY-ZSHRC");
+}
+
+/// Case and spelling never get a grant past the hard denies (APFS is case
+/// insensitive): `~/.SSH`, `~/.LIGUS`.
+#[cfg(target_os = "macos")]
+#[test]
+fn review_grant_case_variants_open_no_denied_path() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let grants = PathGrants { read_only: vec!["~/.SSH".into(), "~/.LIGUS/keys".into()], read_write: vec!["~/.Ssh".into()] };
+    for target in [".ssh/id_ed25519", ".SSH/id_ed25519", ".LIGUS/keys/device.seed", ".ligus/keys/device.seed"] {
+        let (_, out) = run_in(&*e, &d, Purpose::Tool, &format!("cat '{}'", d.home.join(target).display()), grants.clone());
+        assert!(!out.contains("DECOY"), "{target}: {out}");
+    }
+}
+
+/// Risk 9: `ligus doctor --sandbox` and Settings, Sandbox show the login
+/// keychain as readable for a CLI signed in by file, whose turns lose it.
+#[cfg(target_os = "macos")]
+#[test]
+fn review_effective_policy_shows_the_keychain_denied_for_file_sign_in() {
+    let d = DecoyHome::new();
+    let host = d.host();
+    let kc = d.home.join("Library/Keychains").display().to_string();
+    let reads_kc = |p: &EffectivePolicy| p.entries.iter().any(|e| e.path == kc && e.access == "read");
+    // Signed in by keychain: shown readable.
+    let copilot = effective_policy_in(Some(ModelProviderKind::Copilot), &PathGrants::default(), false, &d.home, &host, None, &|_| None);
+    assert!(reads_kc(&copilot), "{copilot:?}");
+    // Signed in by file: shown denied, as the turn runs.
+    for (kind, file) in [(ModelProviderKind::ClaudeCode, ".claude/.credentials.json"), (ModelProviderKind::Codex, ".codex/auth.json")] {
+        let f = d.home.join(file);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, "{}").unwrap();
+        let p = effective_policy_in(Some(kind), &PathGrants::default(), false, &d.home, &host, None, &|_| None);
+        assert!(!reads_kc(&p), "{kind:?} signed in by file shows the keychain readable: {p:?}");
+        assert!(p.entries.iter().any(|e| e.path == kc && e.access == "denied"), "{kind:?}: {p:?}");
+    }
+}

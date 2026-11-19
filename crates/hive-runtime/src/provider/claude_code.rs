@@ -697,6 +697,21 @@ mod tests {
         assert!(a.contains(&"--strict-mcp-config".to_string()));
     }
 
+    /// Review: a `claude` spawned with no turn in scope (the chat summarizer
+    /// and compaction, a chat title, a runtime ping) reads prompts other
+    /// members wrote, so it gets no shell: the shell is decided per turn, and
+    /// with no turn there is no Owner behind it.
+    #[test]
+    fn no_turn_in_scope_means_no_shell() {
+        assert!(crate::executor::current_turn().is_none());
+        assert!(!Confine::current().shell, "a claude outside any turn keeps Bash");
+        assert!(!crate::executor::turn_shell_allowed());
+        assert!(!crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop).shell_allowed);
+        let (a, _) = confine(&[], Confine::current());
+        assert!(!values_after(&a, "--tools").iter().any(|t| t == "Bash"), "{a:?}");
+        assert!(values_after(&a, "--disallowedTools").contains(&"Bash".to_string()), "{a:?}");
+    }
+
     /// Phase C: without the shell (a turn the Owner didn't start, no grant)
     /// Bash is off the tool list and denied, under open egress too.
     #[test]

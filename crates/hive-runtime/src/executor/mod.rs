@@ -1136,6 +1136,11 @@ pub fn current_turn() -> Option<Arc<TurnPolicy>> {
     TURN.try_with(Arc::clone).ok()
 }
 
+/// Whether the turn in scope may use a shell.
+pub fn turn_shell_allowed() -> bool {
+    current_turn().is_none_or(|p| p.shell_allowed)
+}
+
 /// What a spawn site asks for.
 #[derive(Debug, Clone)]
 pub struct SpawnSpec<'a> {
