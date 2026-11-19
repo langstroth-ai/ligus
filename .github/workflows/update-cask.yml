@@ -47,12 +47,12 @@ jobs:
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
           cd tap
           # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
-          # the tap's cask_renames.json maps hive to ligus-app.
+          # the tap keeps it, disabled, pointing hive users at Ligus.
           test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; exit 1; }
           sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
           sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
-          git config user.name "ligus-release-bot"
-          git config user.email "release@ligus.ai"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git commit -am "ligus-app ${VERSION}"; then
             git push origin HEAD
             echo "Cask bumped to ${VERSION}."

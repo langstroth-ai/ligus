@@ -22,10 +22,9 @@ works, and applying approved changes. For reaching the box from the phone, see
 
 The box's keys never leave it. Your account key never leaves your desktop.
 
-!!! warning "`ligus serve enroll` and `LIGUS_SERVE_OWNER` were removed"
-    Earlier previews could make the box one of your own devices, so it signed
-    as you. Since 0.1 both stop with a migration error that points to
-    [Admitting a box](admitting-a-box.md). For what only a person may do from
+!!! warning "A box is never one of your devices"
+    A box never signs as you: `ligus serve enroll` and `LIGUS_SERVE_OWNER`
+    stop with an error that points to [Admitting a box](admitting-a-box.md). For what only a person may do from
     the phone, the phone signs with its own device key (and your passkey
     where the rules need it), and the box only drafts and relays it: box
     admissions and the [phone actions](../reference/serve-api.md#phone-actions)

@@ -2,11 +2,8 @@
 
 Flow is how work moves through a workspace: who picks up a task nobody
 assigned, how an agent hands work to another, where work waits, and what
-agents leave in the workspace for each other. Ligus is short for
-*ligustica*, the Italian honeybee, and several of these mechanisms follow how
-a colony allocates labour without a manager. The bee story is only the
-inspiration; each feature below is ordinary engineering you can turn on,
-off, or watch in shadow mode.
+agents leave in the workspace for each other. Each feature below can be
+turned on, off, or watched in shadow mode.
 
 Everything lives in the **Flow** pane of the [right rail](right-rail.md)
 (Board, Queue, Marks, Routing, Roster, Zones, Home) and in

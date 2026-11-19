@@ -6,7 +6,7 @@ passwords to leak. It suits a home lab or a family relay. This page sets up
 Pocket ID, [langstroth-auth](ligus-auth.md) and the relay together.
 
 Pocket ID's passkeys and the passkeys Ligus will use for presence on admin
-actions (Phase 0, Track B; not in 0.1.0) can be the same physical
+actions (planned; not in 0.1.0) can be the same physical
 authenticator, but nothing in the code ties them together: Pocket ID gates
 the relay, while Ligus presence will gate admin events in a workspace.
 
@@ -16,16 +16,16 @@ the relay, while Ligus presence will gate admin events in a workspace.
   `auth.example.com` and `relay.example.com`;
 - Docker with Compose;
 - the files in the relay repository under
-  `deploy/compose/ligus-auth-pocket-id/` (`docker-compose.yml`, `Caddyfile`,
-  `ligus-auth.json`).
+  `deploy/compose/langstroth-auth-pocket-id/` (`docker-compose.yml`, `Caddyfile`,
+  `langstroth-auth.json`).
 
 ## 1. Keys
 
 ```sh
-cd deploy/compose/ligus-auth-pocket-id
+cd deploy/compose/langstroth-auth-pocket-id
 mkdir -p secrets && chmod 700 secrets
 docker run --rm -v "$PWD/secrets:/out" --user "$(id -u)" \
-  ghcr.io/langstroth-ai/langstroth-auth:0.2.0 keygen --out /out/signing-key
+  ghcr.io/langstroth-ai/langstroth-auth:0.3.0 keygen --out /out/signing-key
 # public_key=3b6a27bc…
 echo "LANGSTROTH_RELAY_TOKEN_PUBKEY=3b6a27bc…" > .env
 ```
@@ -33,7 +33,7 @@ echo "LANGSTROTH_RELAY_TOKEN_PUBKEY=3b6a27bc…" > .env
 ## 2. Start Pocket ID and create the client
 
 Replace `example.com` in `Caddyfile`, `docker-compose.yml` and
-`ligus-auth.json`, then start Caddy and Pocket ID first:
+`langstroth-auth.json`, then start Caddy and Pocket ID first:
 
 ```sh
 docker compose up -d caddy pocket-id
@@ -49,7 +49,7 @@ passkey, then in **OIDC Clients** add a client:
 | Public client | off (keep the secret) |
 | PKCE | on |
 
-Copy the client id into `ligus-auth.json` (`oidc.client_id`) and save the
+Copy the client id into `langstroth-auth.json` (`oidc.client_id`) and save the
 secret:
 
 ```sh
@@ -104,7 +104,7 @@ curl -sS -H "Authorization: Bearer $(cat admin-token)" -X POST \
 ```
 
 (The admin API is off unless you set `admin_listen` and
-`LIGUS_AUTH_ADMIN_TOKEN_FILE`; keep it on loopback.) Then remove them from
+`LANGSTROTH_AUTH_ADMIN_TOKEN_FILE`; keep it on loopback.) Then remove them from
 the workspaces they joined and rotate the workspace key: langstroth-auth gates the
 relay, not membership.
 

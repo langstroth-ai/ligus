@@ -21,7 +21,7 @@ drop them into this folder, and the docs render.
 | `first-chat-empty.png` | Empty new chat, composer focused |
 | `collaborators.png` | **Friends** view (rail ☺): add-by-username, request, presence |
 
-## Optional / gallery + new 1.0 surfaces
+## Optional / gallery + new 0.1 surfaces
 
 | File | What to capture |
 |------|------------------|

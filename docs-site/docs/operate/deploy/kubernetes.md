@@ -1,12 +1,15 @@
 # Kubernetes for one organisation (preview)
 
-!!! warning "Preview: charts and images not published"
+!!! warning "Preview: the `ligus` chart and image are not published"
     Three Helm charts implement this: `ligus` in this repository
     ([`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus)),
     and `langstroth-relay` and `langstroth-auth` in the relay repository at v0.3.0
-    (`deploy/helm/`). None is published to a chart registry and no container
-    images are published: build them yourself. Values and behaviour may
-    change. The design they implement is
+    (`deploy/helm/`). The `ligus` chart and the `ligus` container image are
+    not published: build them yourself. Relay releases publish the relay and
+    langstroth-auth images (`ghcr.io/langstroth-ai/langstroth-relay:<version>`,
+    `ghcr.io/langstroth-ai/langstroth-auth:<version>`) and charts
+    (`oci://ghcr.io/langstroth-ai/charts/<name>`); you can also build them
+    from a relay checkout, as below. Values and behaviour may change. The design they implement is
     [`docs/design/kubernetes.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/design/kubernetes.md).
 
 This shape runs the always-on parts of the Langstroth platform for **one trusted
@@ -186,7 +189,9 @@ enter it.
 
 ## Install
 
-Build the images yourself:
+Build the `ligus` image yourself. The relay image can come from the relay
+release (`ghcr.io/langstroth-ai/langstroth-relay:0.3.0`) or be built the
+same way:
 
 ```sh
 # in a relay checkout at v0.3.0
@@ -210,14 +215,13 @@ kubectl -n langstroth-relay create secret generic relay-metrics --from-literal=t
 kubectl -n langstroth-relay create secret tls relay-tls --cert=relay.crt --key=relay.key   # or cert-manager
 helm install langstroth-relay <relay-checkout>/deploy/helm/langstroth-relay -n langstroth-relay \
   --set image.repository=registry.example.com/langstroth-relay --set image.tag=0.3.0 \
-  --set externalDatabase.existingSecret=relay-db \
+  --set database.mode=external --set database.external.existingSecret=relay-db \
+  --set 'database.external.cidrs[0]=<database address>/32' \
   --set config.existingSecret=relay-env \
   --set metrics.token.existingSecret=relay-metrics \
   --set ingress.enabled=true --set ingress.className=nginx \
   --set ingress.host=relay.example.com --set ingress.tls.secretName=relay-tls \
-  --set 'clientIP.trustedProxies[0]=<your ingress controller address>/32' \
-  --set 'networkPolicy.extraEgress[0].to[0].ipBlock.cidr=<database address>/32' \
-  --set 'networkPolicy.extraEgress[0].ports[0].port=5432'
+  --set 'clientIP.trustedProxies[0]=<your ingress controller address>/32'
 helm test langstroth-relay -n langstroth-relay
 ```
 
@@ -228,15 +232,23 @@ for the phone app add `--set tunnel.mode=allowlist --set
 `ligus remote status` on serve), or `open` behind a token gate
 (`LANGSTROTH_RELAY_TOKEN_PUBKEY` or `LANGSTROTH_RELAY_ACCESS_TOKENS` in `relay-env`).
 
-`postgres.enabled=true` runs a development Postgres pod (no backups, no TLS,
-`sslmode=disable`): CI and trials only, and it needs a Secret you create
-(`postgres.existingSecret`, keys `password` and `DATABASE_URL`; the chart
-prints the command when it's missing).
+`database.mode` picks the relay's Postgres: `external` (above: a managed
+or separately run Postgres, the DSN from a Secret, `sslmode=verify-full`),
+`cnpg` (a CloudNativePG cluster in the release namespace; the operator must
+be installed; 1 or 3+ instances, WAL archiving and scheduled backups) or
+`bundled` (one hardened Postgres pod with TLS, a non-superuser role and a
+nightly `pg_dump` CronJob; no HA). With the in-memory store
+(`database.mode=none`) the chart runs one pod serving every route. The
+older `externalDatabase.*` and `postgres.enabled` keys are deprecated; the
+latter renders a development pod without TLS or backups. The chart's
+[README](https://github.com/langstroth-ai/langstroth-relay/tree/main/deploy/helm/langstroth-relay)
+has every value.
 
 Settings to get right on the relay:
 
-- **Egress.** `networkPolicy.restrictEgress` is on, so list in
-  `networkPolicy.extraEgress` what the relay must reach: the database, and
+- **Egress.** `networkPolicy.restrictEgress` is on: the chart opens DNS and
+  the database (`database.external.cidrs` for an external one); list in
+  `networkPolicy.extraEgress` anything else the relay must reach, such as
   APNs (`api.push.apple.com:443`) on the tunnel pod if push is on, as
   `ipBlock` rules (NetworkPolicy can't match host names).
 - **APNs** keys go only in `tunnel.apns.existingSecret`, a Secret of their
@@ -245,8 +257,11 @@ Settings to get right on the relay:
 - **Workspace scope.** Issue tokens with `--workspace <id>` and set
   `LANGSTROTH_RELAY_WORKSPACE_SCOPE=claims` (or `strict`); see
   [Self-hosting a relay](../networking/self-host.md#per-workspace-token-scope).
-- **Retention.** Postgres keeps the newest `LANGSTROTH_RELAY_MAX_ENVELOPES` per
-  workspace (default 50000, pruned hourly; `0` = unbounded).
+- **Storage bounds.** The relay never trims a workspace's envelopes (a
+  device that joins later rebuilds the workspace from its first event).
+  Bound storage with the refusing quotas under the chart's `limits.*`
+  (room bytes and envelope counts, rooms per client, idle-room retention);
+  see [Self-hosting a relay](../networking/self-host.md#retention).
 - A malformed `LANGSTROTH_RELAY_TOKEN_PUBKEY` keeps the relay from starting.
 
 ### One workspace
@@ -300,8 +315,8 @@ kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only 
     `worker.instances[].admission.existingSecret`. The box syncs first,
     refuses to start without a copy of the workspace (it never founds one),
     and redeems the code, which binds it to the box's key. Delete the Secret
-    once the box has joined. `ligus serve enroll` and `serve.owner` were
-    removed in 0.1. See [Admitting a box](../ops/admitting-a-box.md).
+    once the box has joined. `ligus serve enroll` stops with an error that
+    points to admission, and the chart has no `serve.owner` value. See [Admitting a box](../ops/admitting-a-box.md).
 
 Useful values of the `ligus` chart: `remote.enabled` / `remote.relayUrl`
 (phone tunnel), `serve.defaultAgent`,
@@ -395,7 +410,9 @@ Rotating the workspace key or revoking a device follows the normal
 - [Keys off the cluster](keys-off-cluster.md) (a design only).
 - gVisor for serve and worker pods.
 - A public Ingress or `LoadBalancer` for `ligus serve`.
-- The relay chart's in-chart Postgres for anything but development.
+- The relay chart's deprecated `postgres.enabled` development pod for
+  anything but development (`database.mode=bundled` is the small self-host
+  option).
 - OpenTelemetry export from Ligus.
 
 ## Known limits and residual risks {#residual-risks}
