@@ -496,6 +496,39 @@ pub(super) fn ensure_can_write(s: &Shared, chat: Option<&ChatSession>) -> ApiRes
     Ok(())
 }
 
+/// The refusal code of [`owner_gate`].
+pub const OWNER_REQUIRED: &str = "owner_required";
+
+/// Repos review F12 and residual 2: what spends this box's own forge access
+/// or steers its checkouts (a clone by spec or by id, renaming a repo,
+/// setting a chat's repo, a rescan, confirming a found checkout) is the box
+/// owner's: a phone certified to the account of the person who admitted the
+/// box (`ChatService::box_owner_accounts`), through its own pairing, or the
+/// `serve.token` bearer on a loopback listener (the operator on the box).
+/// Any other paired phone, and the bearer over the network (every phone can
+/// fetch it), is refused with [`OWNER_REQUIRED`]. Never a request carried on
+/// the log.
+pub(super) fn owner_gate(s: &Shared, peer: Option<&super::tunnel::TunnelPeer>) -> ApiResult<()> {
+    let ok = match peer {
+        None => s.opts.listen.ip().is_loopback(),
+        Some(p) => {
+            let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).filter(|r| r.is_active()).and_then(|r| r.device_id);
+            device.is_some_and(|d| {
+                let svc = s.lock();
+                svc.box_owner_accounts(s.ws).is_ok_and(|owners| svc.phone_of_accounts(s.ws, d, &owners))
+            })
+        }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(err(
+            StatusCode::FORBIDDEN,
+            format!("{OWNER_REQUIRED}: only the phone of the person who admitted this box (certified to their account), or the operator on the box itself, can do this"),
+        ))
+    }
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> ApiResult<T> {
     tokio::task::spawn_blocking(f).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
@@ -790,7 +823,12 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloneReq {
+    #[serde(default)]
     repo: String,
+    /// Clone a workspace repo by its id (repos-and-checkouts 4.3): the URL
+    /// is rebuilt from the repo's canonical, for a host connected here.
+    #[serde(default)]
+    repo_id: Option<Uuid>,
     /// Clone the signed-in account's fork of `repo` instead, with `repo` as
     /// its `upstream`. Never creates a fork: no fork → 404.
     #[serde(default)]
@@ -909,9 +947,39 @@ fn dir_size(p: &FsPath) -> u64 {
     total
 }
 
-pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
+/// A live workspace repo and the connection on this box for its host
+/// (never a URL from the event: host and path re-validated, review F12).
+fn resolve_by_id(s: &Shared, id: Uuid) -> ApiResult<(hive_core::workspace_repo::WorkspaceRepo, ForgeHandle, RepoRef)> {
+    let roster = s.lock().workspace_roster(s.ws).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let wr = roster.repos.get(&id).filter(|e| !e.removed).map(|e| e.repo.clone()).ok_or_else(|| ApiError::not_found("workspace repository"))?;
+    let (host, rref) = hive_runtime::repos::clone::clone_target(&wr).map_err(ApiError::bad_request)?;
+    let h = s
+        .repos
+        .forges(&s.cfg.data_dir)
+        .into_iter()
+        .find(|h| hive_forge::spec::same_host(&h.conn.host(), &host))
+        .ok_or_else(|| ApiError::bad_request(format!("{host} isn't a code host connected to this box: add it under Code hosts first")))?;
+    Ok((wr, h, rref))
+}
+
+pub async fn clone_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    let (h, mut repo) = resolve_spec(&s, &req.repo, req.forge.as_deref())?;
+    owner_gate(&s, peer.as_deref())?;
+    let by_id = match req.repo_id {
+        Some(id) => Some(resolve_by_id(&s, id)?),
+        None => None,
+    };
+    let workspace_repo = by_id.as_ref().map(|(w, _, _)| w.clone());
+    let (h, mut repo) = match by_id {
+        Some((_, h, r)) => (h, r),
+        None => resolve_spec(&s, &req.repo, req.forge.as_deref())?,
+    };
+    // Re-check the host's address and pin it for git (a name rebound to
+    // internal space since the connection was added is refused).
+    let pin = match &workspace_repo {
+        Some(_) => hive_forge::conn::git_resolve_pin(&h.conn).await.map_err(|e| ApiError::bad_request(e.to_string()))?,
+        None => None,
+    };
     // "Clone the parent via my fork": swap in the account's fork, or report
     // that there isn't one (this host never creates forks).
     if req.via_fork {
@@ -929,7 +997,10 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
         repo = f.repo;
     }
     let full = repo.full_name();
-    let checkout = checkout_for(&h, &repo);
+    let checkout = match &workspace_repo {
+        Some(w) => hive_runtime::repos::clone_dir_name(w),
+        None => checkout_for(&h, &repo),
+    };
     let repos_dir = repos::repos_dir(&s.cfg.data_dir);
     let dest = repos_dir.join(&checkout);
 
@@ -995,10 +1066,18 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
     let url = h.forge.clone_url(&repo, Transport::Https);
     let rt = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
+        let _cloning = workspace_repo.as_ref().map(|w| hive_runtime::repos::start_cloning(w.id));
         let plan = rt.block_on(fork_plan(&shared.repos, &h, &repo));
-        let auth = h.forge.git_auth_args();
+        let mut auth = h.forge.git_auth_args();
+        if workspace_repo.is_some() {
+            auth.splice(0..0, hive_runtime::repos::clone::by_id_transport_args(pin.as_deref()));
+        }
         let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, auth.clone())
-            .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &auth));
+            .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &auth))
+            .and_then(|()| match &workspace_repo {
+                Some(w) => bind_clone(&shared, w, &dest, &checkout),
+                None => Ok(()),
+            });
         shared.repos.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard_name);
         let finished = shared.repos.update_job(id, |j| {
             j.finished_at = Some(Timestamp::now());
@@ -1019,6 +1098,25 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
         }
     });
     Ok(Json(json!({ "job": job.dto() })))
+}
+
+/// After a clone by repo id: map it (confirmed, this host manages it),
+/// check the repo's claimed root commit, and make it the box's workspace
+/// default when there is none (review F18).
+fn bind_clone(s: &Shared, w: &hive_core::workspace_repo::WorkspaceRepo, dest: &FsPath, checkout: &str) -> Result<(), String> {
+    // The clone's origin names the repo's identity; when the connection
+    // cloned from a different URL (a mirror, an internal address), git keeps
+    // using that one for transport (a local insteadOf).
+    if hive_runtime::repos::clone::finish_clone(dest, w)? == Some(false) {
+        eprintln!("repos: {} doesn't contain the root commit the workspace entry claims", w.display_name);
+    }
+    {
+        let svc = s.lock();
+        hive_runtime::repos::bind(svc.store(), svc.device_id(), &s.opts.label, s.ws, w, dest, hive_runtime::event_store::CheckoutSource::Cloned)
+            .map_err(|e| e.to_string())?;
+    }
+    crate::repos_cmd::bind_default_if_empty(&s.cfg.data_dir, checkout).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn run_clone_job(
@@ -1165,7 +1263,8 @@ pub struct SetRepo {
     repo: Option<String>,
 }
 
-pub async fn put_chat_repo(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+pub async fn put_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+    owner_gate(&s, peer.as_deref())?;
     let req: SetRepo = if body.iter().all(u8::is_ascii_whitespace) {
         SetRepo::default()
     } else {

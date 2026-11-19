@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use hive_core::proposals::ProposalRefinement;
@@ -294,7 +294,7 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// When a chat last changed: its own stamp or its newest message.
 fn updated_at(s: &ChatSession) -> Timestamp {
-    s.messages.iter().map(|m| m.created_at).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
+    s.messages.iter().filter(|m| !m.superseded).map(|m| m.created_at).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
 }
 
 pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
@@ -302,7 +302,7 @@ pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
         .messages
         .iter()
         .rev()
-        .find(|m| m.role != MessageRole::System && !m.body.trim().is_empty())
+        .find(|m| m.role != MessageRole::System && !m.body.trim().is_empty() && !m.superseded)
         .map(|m| truncate(&m.body.replace('\n', " "), 140))
         .unwrap_or_default();
     json!({
@@ -633,6 +633,11 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/repos/fork", get(super::repos_api::fork_of))
         .route("/v1/repos/clone", post(super::repos_api::clone_repo))
         .route("/v1/repos/clone/{job}", get(super::repos_api::clone_job))
+        .route("/v1/workspace-repos", get(super::workspace_repos_api::list).post(super::workspace_repos_api::add))
+        .route("/v1/workspace-repos/rescan", post(super::workspace_repos_api::rescan))
+        .route("/v1/workspace-repos/{id}", patch(super::workspace_repos_api::rename).delete(super::workspace_repos_api::remove))
+        .route("/v1/workspace-repos/{id}/confirm", post(super::workspace_repos_api::confirm))
+        .route("/v1/chats/{id}/workspace-repo", put(super::workspace_repos_api::set_chat_repo))
         .route("/v1/chats/{id}/repo", get(super::repos_api::get_chat_repo).put(super::repos_api::put_chat_repo))
         .route("/v1/chats/{id}/repo/pull", post(super::repos_api::pull_chat_repo))
         .route("/v1/chats/{id}/pr", post(super::repos_api::open_pr))
@@ -807,8 +812,10 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
         (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc), svc.author().clone())
     };
     let me = super::notify::Me::in_chat(&author, &chat, &links);
+    // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
     let list: Vec<Value> = slice
         .iter()
+        .filter(|m| !m.superseded)
         .map(|m| {
             let mut v = linked_message_dto(&chat, m, &links, viewer);
             add_requester(&mut v, &chat, m, &me);

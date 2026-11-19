@@ -60,6 +60,7 @@ pub mod repos_api;
 pub mod sets;
 pub mod tunnel;
 pub mod typing_api;
+pub mod workspace_repos_api;
 
 #[cfg(test)]
 mod identity_tests;
@@ -645,7 +646,7 @@ impl Shared {
         };
         s.messages[start.min(s.messages.len())..]
             .iter()
-            .filter(|m| m.role != MessageRole::System)
+            .filter(|m| m.role != MessageRole::System && !m.superseded)
             .filter(|m| !(m.role == MessageRole::User && m.actor_identity.as_ref().is_some_and(|a| a.id == me)))
             .count()
     }
@@ -698,7 +699,7 @@ impl Shared {
                             continue;
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         if let Some(text) = m.body.get(from..) {
                             self.hub.emit("message.delta", json!({ "chatId": chat, "messageId": message, "text": text }));
                         }
@@ -709,7 +710,7 @@ impl Shared {
                             self.local_streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&message);
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         let name = if done { "message.done" } else { "message.created" };
                         let me = notify::Me::in_chat(&author, s, &links);
                         let mut dto = api::message_dto(chat, m, viewer);
@@ -1319,7 +1320,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 /// read everyone else's, every [`HOST_BEAT_EVERY_SECS`](hive_runtime::host_presence::HOST_BEAT_EVERY_SECS).
 /// Replaces the durable heartbeat (a signed host upsert a minute, forever).
 async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    use hive_runtime::host_presence::{fetch_host_beats, publish_host_beat, HOST_BEAT_EVERY_SECS};
+    use hive_runtime::host_presence::{fetch_beats, publish_beat, HOST_BEAT_EVERY_SECS};
     let (Ok(relay), Some(pass)) = (crate::relay_client(&shared.cfg), shared.cfg.key.clone()) else {
         return;
     };
@@ -1327,8 +1328,20 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let room = shared.cfg.room.clone();
     let mut coordinator = WorkspaceLease::default();
     let mut retry_seen = Timestamp::now().inner().unix_timestamp();
+    let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
+        // When the workspace's repos change (and at start): map the legacy
+        // bindings and look for checkouts in the repos dir (found ones stay
+        // unconfirmed until someone says "use it").
+        let live: Vec<uuid::Uuid> = shared.lock().workspace_roster(shared.ws).map(|r| hive_runtime::repos::live_repos(&r).iter().map(|x| x.id).collect()).unwrap_or_default();
+        if known_repos.as_ref() != Some(&live) {
+            known_repos = Some(live);
+            let sh = shared.clone();
+            // In the background: the beat never waits on a scan.
+            drop(tokio::task::spawn_blocking(move || repos_refresh(&sh)));
+        }
+        let coverage = if live_empty(&known_repos) { Vec::new() } else { repo_coverage(&shared) };
         // A box that can't write (revoked, awaiting approval) isn't serving work.
         let writable = shared.lock().write_block().is_none();
         // The one keyring (B1): beats seal at the authorized head.
@@ -1337,13 +1350,15 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(_) => hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
-            if let Err(e) = publish_host_beat(&relay, &room, &ring, &shared.host_id).await {
+            let beat = shared.lock().signed_beat(shared.ws, coverage);
+            if let Err(e) = publish_beat(&relay, &room, &ring, &beat).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
             coordinator.tick(&shared, &relay, &room, &ring).await;
         }
-        if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
-            shared.presence.merge(beats);
+        if let Ok(beats) = fetch_beats(&relay, &room, &ring).await {
+            let verified = shared.lock().beat_verifier(shared.ws);
+            shared.presence.merge_beats(beats, verified);
         }
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
@@ -1353,6 +1368,59 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+fn live_empty(known: &Option<Vec<uuid::Uuid>>) -> bool {
+    known.as_ref().is_none_or(|v| v.is_empty())
+}
+
+/// Map legacy bindings and scan the repos dir (and the box's scan roots)
+/// for the workspace's repos. Device-local only: nothing is published.
+pub(crate) fn repos_refresh(shared: &Shared) {
+    // Git runs without the service lock (the revocation watch and the API
+    // keep it); only reads and writes of the store take it.
+    let Ok((roster, roots, aliases)) = ({
+        let svc = shared.lock();
+        svc.workspace_roster(shared.ws).map_err(|e| e.to_string()).and_then(|r| {
+            let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
+            let aliases = hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&r));
+            Ok((r, roots, aliases))
+        })
+    }) else {
+        return;
+    };
+    let repos = hive_runtime::repos::live_repos(&roster);
+    if repos.is_empty() {
+        return;
+    }
+    let mut all_roots = roots;
+    all_roots.push(crate::repos::repos_dir(&shared.cfg.data_dir));
+    let found = hive_runtime::repos::scan::scan(&all_roots, &repos, &aliases);
+    let svc = shared.lock();
+    if let Err(e) = hive_runtime::repos::record_found(svc.store(), shared.ws, &found) {
+        eprintln!("repos: recording found checkouts failed: {e}");
+    }
+    if let Err(e) = crate::repos_cmd::migrate_bindings(&shared.cfg.data_dir, &svc, shared.ws, &shared.opts.label) {
+        eprintln!("repos: migrating bindings failed: {e}");
+    }
+}
+
+/// This box's coverage of the workspace's repos for its beat (on by
+/// default for a box; `ligus repos coverage off` turns it off).
+pub(crate) fn repo_coverage(shared: &Shared) -> Vec<hive_core::workspace_repo::CoverageEntry> {
+    let (maps, aliases, repos) = {
+        let svc = shared.lock();
+        if !hive_runtime::repos::coverage_reporting(svc.store(), shared.ws, true) {
+            return Vec::new();
+        }
+        let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
+        (
+            svc.store().repo_mappings(shared.ws).unwrap_or_default(),
+            hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&roster)),
+            hive_runtime::repos::live_repos(&roster),
+        )
+    };
+    hive_runtime::repos::coverage_from(&maps, &aliases, &repos, &hive_runtime::repos::cloning())
 }
 
 /// Publish this box's phone-revocation status for the desktops, and take the
@@ -1530,14 +1598,15 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 host_label: &shared.opts.label,
                 settings: ToolSettings::from_env(),
                 ligus: Some(worker::ligus_server(shared.clone())),
+                presence: Some(&shared.presence),
             };
             let sink = ServeSink(shared.clone());
-            let mut failed: HashSet<Uuid> = HashSet::new();
+            let mut drain = worker::DrainState::default();
             while !shared.stopping() {
                 if !worker::apply_tick(&ctx, &shared.svc).is_empty() {
                     shared.after_write();
                 }
-                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut failed, &sink).await {
+                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut drain, &sink).await {
                     eprintln!("worker: tick failed (retrying): {e}");
                 }
                 tokio::select! {

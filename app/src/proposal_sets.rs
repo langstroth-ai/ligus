@@ -439,7 +439,7 @@ pub(crate) async fn send_scouts(
     tauri::async_runtime::spawn(async move {
         for body in prompts {
             let state = app2.state::<AppState>();
-            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body).await {
+            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body, None).await {
                 tracing::warn!(target: "proposal_sets", "scout turn failed: {e}");
             }
             let _ = app2.emit("workspace://synced", 1);
@@ -644,7 +644,15 @@ pub(crate) async fn preflight_proposal_set(
             .map(|a| a.host_id.clone());
         (session.workspace_id, set, p, host)
     };
-    let repo = state.workspace_repo_root();
+    // A proposal for a workspace repo is checked against this device's
+    // checkout of that repo (5.7), never the workspace's bound folder.
+    let repo = match proposal.repo_id {
+        Some(r) => {
+            let svc = state.service.lock().unwrap();
+            svc.store().chat_checkout(sid, r).ok().flatten().or_else(|| svc.store().primary_checkout(wid, r).ok().flatten().map(|m| m.path)).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+        }
+        None => state.workspace_repo_root(),
+    };
     let repo_ok = !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo));
     let mut hosts = Vec::new();
     if proposal.diff.is_some() {

@@ -1,0 +1,29 @@
+{
+  "description": "Offer a file from your worktree to the people in this chat. Only when the workspace lets agents offer files. It is filed as a proposal: nothing is shared until a person approves it, then Ligus uploads it encrypted. Programs, scripts and other blocked types are refused.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "body": {
+        "description": "Why the file is useful, and what it contains",
+        "maxLength": 4000,
+        "type": "string"
+      },
+      "path": {
+        "description": "The file's path, relative to your worktree",
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "title": {
+        "description": "A short title for the offer",
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "title"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_offer_file"
+}

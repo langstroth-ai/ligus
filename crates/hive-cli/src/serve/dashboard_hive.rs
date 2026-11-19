@@ -305,7 +305,10 @@ impl HiveSnapshot {
         let mut turns_by_agent_7d = BTreeMap::new();
         for c in i.chats {
             for msg in &c.messages {
-                if !matches!(msg.role, MessageRole::Assistant | MessageRole::Agent) || msg.kind != TranscriptEventKind::Message {
+                if !matches!(msg.role, MessageRole::Assistant | MessageRole::Agent)
+                    || msg.kind != TranscriptEventKind::Message
+                    || msg.superseded
+                {
                     continue;
                 }
                 let at = msg.created_at.inner();

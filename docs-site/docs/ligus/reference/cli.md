@@ -166,7 +166,19 @@ it stops with a migration error. See
 | `ligus phones revoke <pid\|name> [--keep-token] [--token-file PATH]` | revokes one phone; also rotates `serve.token` unless `--keep-token` |
 | `ligus phones certify <ligusphone1:code> \| --code-file PATH --recovery-words-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX` | "Add this phone" without a desktop: certifies the phone's key (the code its app shows) as one of this identity's devices, at the phone tier, confirmed with the recovery key. The fingerprint (on the phone, Settings > This phone) is required: a code whose key doesn't match is refused. Without `--fingerprint`, at a terminal it shows the fingerprint and asks you to confirm it; anywhere else it refuses. Never from a box; sync to publish |
 | `ligus bind-repo <name\|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]` | binds a checkout for agent file tools (workspace default, or one chat) |
-| `ligus repos` | shows the repos dir and the bindings |
+| `ligus repos [list]` | the workspace's repositories, this host's checkouts of them, the repos dir and the bindings |
+| `ligus repos add <remote\|canonical\|path> [--name N] [--kind K] [--branch B]` | adds a workspace repository (Admin, with presence); a path also binds it here |
+| `ligus repos remove <repo>` / `rename <repo> <name> [--branch B]` | removes (Admin, with presence) or renames a workspace repository |
+| `ligus repos bind <repo> <path>` / `confirm <repo> <path>` / `unbind <repo> [path]` | this host's checkout of a repository (never synced) |
+| `ligus repos scan` / `roots [add\|remove <path>]` | finds checkouts under the repos dir and the scan roots; found ones need `confirm` |
+| `ligus repos alias <ssh-host> <host> [--remove]` | this host's own SSH host alias, for identity only (never synced) |
+| `ligus repos aliases` | the workspace's synced repository and host aliases, and which this host accepted |
+| `ligus repos repo-alias <repo> [name…]` | replaces a repository's synced aliases; no names clears them (Admin, with presence) |
+| `ligus repos host-alias <alias-host> <repository-host>` / `host-alias <alias-host> --remove` | a synced host alias (Admin, with presence) |
+| `ligus repos accept <alias> [--revoke]` | uses a synced alias for identity on this host (device-local) |
+| `ligus repos chat <chat-id> <repo\|none> [--branch B]` | sets a chat's repository |
+| `ligus repos coverage on\|off\|default` | whether this host tells members which repositories it has checked out |
+| `ligus repos takeover <path>` | manages a checkout whose managing host is gone |
 | `ligus dashboard check [--file PATH]` | validates `dashboard.toml` and evaluates it once |
 | `ligus dashboard default` | prints the generated default dashboard as TOML |
 | `ligus dashboard metrics` | lists the built-in Ligus metrics panels can show |

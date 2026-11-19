@@ -96,8 +96,16 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
         E::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
         E::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+        E::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+        E::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
         E::ChatRepoSet { .. } => "chatRepoSet",
         E::ChatBasePinned { .. } => "chatBasePinned",
+        E::ChatBaseRepinned { .. } => "chatBaseRepinned",
+        E::AttachmentPolicySet { .. } => "attachmentPolicySet",
+        E::AttachmentHashBlocked { .. } => "attachmentHashBlocked",
+        E::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
+        E::AttachmentShared { .. } => "attachmentShared",
+        E::AttachmentDeleted { .. } => "attachmentDeleted",
         E::Unknown => "unknown",
     }
 }
@@ -120,7 +128,8 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "proposalApplyWithdrawn", "workspaceSandboxSet",
+    "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
+    "attachmentDeleted",
 ];
 
 #[test]
@@ -451,6 +460,149 @@ fn lamport_bounds_goldens() {
             log_head: None,
         });
         hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 41, event_id: u(0x5003) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the repos v2 lines (design repos-and-checkouts 11 and 12): a
+/// dispatcher hand-over claim (`epoch`, `supersedes`, `repoId`) and the two
+/// workspace-synced alias kinds. Run with `LIGUS_GOLDEN_OUT=<path>
+/// --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn repos_v2_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let wefit = repo_id("github.com/zazulam/wefit");
+    let cases = [
+        ("turnClaimed/dispatch", 0u64, chat, SessionEvent::TurnClaimed { trigger_id: u(0x6001), device_id: u(1), epoch: 2, supersedes: Some(u(0x6002)), repo_id: Some(wefit) }),
+        ("workspaceRepoAliasesSet", 1, cfg, SessionEvent::WorkspaceRepoAliasesSet { repo_id: wefit, aliases: vec!["github.com/old-org/wefit".into()] }),
+        ("workspaceHostAliasSet", 2, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: "git.example.com".into() }),
+        ("workspaceHostAliasSet/clear", 3, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: String::new() }),
+    ];
+    let mut out = String::new();
+    for (label, i, sid, payload) in cases {
+        let mut e = SessionEventEnvelope::new(sid, ws, 601 + i as i64, payload);
+        e.id = u(0x6010 + 2 * i as u128);
+        e.event_id = u(0x6011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6003) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x6004)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the re-pin line (review residual 3): `chatBaseRepinned`, a
+/// chat's pinned base moved from the pin in force to another commit. Run
+/// with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn repin_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let payload = SessionEvent::ChatBaseRepinned {
+        repo_id: repo_id("github.com/zazulam/wefit"),
+        commit: "89abcdef0123456789abcdef0123456789abcdef".into(),
+        previous: "0123456789abcdef0123456789abcdef01234567".into(),
+    };
+    let mut e = SessionEventEnvelope::new(chat, ws, 501, payload);
+    e.id = u(0x6010);
+    e.event_id = u(0x6011);
+    e.lamport = 901;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x6002)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+}
+
+/// Writes the file-attachment lines (issue #118): the policy, the blocklist,
+/// a share, an agent's approved offer carried out, and a deletion. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn attachment_goldens() {
+    use hive_core::attachment::{AttachmentPolicy, AttachmentRef};
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let file = AttachmentRef {
+        id: u(0x6001),
+        blob_id: "q2Xk7d0Rk1n3V6t1yq0gq8Bv8m8i2C0u4K0z0sVQ5aE".into(),
+        sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+        size: 4,
+        content_type: "text/plain".into(),
+        name: "notes v2.txt".into(),
+        message_id: Some(u(0x6002)),
+        proposal_id: None,
+    };
+    let offered = AttachmentRef { id: u(0x6003), proposal_id: Some(u(0x6004)), message_id: None, name: "report.pdf".into(), content_type: "application/pdf".into(), ..file.clone() };
+    let cases = [
+        ("attachmentPolicySet", 0u64, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy { agents: true, ..AttachmentPolicy::recommended() } }),
+        ("attachmentPolicySet/off", 1, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy::default() }),
+        ("attachmentHashBlocked", 2, cfg, SessionEvent::AttachmentHashBlocked { sha256: "ab".repeat(32) }),
+        ("attachmentHashUnblocked", 3, cfg, SessionEvent::AttachmentHashUnblocked { sha256: "ab".repeat(32) }),
+        ("attachmentShared", 4, chat, SessionEvent::AttachmentShared { attachment: file }),
+        ("attachmentShared/proposal", 5, chat, SessionEvent::AttachmentShared { attachment: offered }),
+        ("attachmentDeleted", 6, chat, SessionEvent::AttachmentDeleted { attachment_id: u(0x6001) }),
+    ];
+    let mut out = String::new();
+    for (label, i, sid, payload) in cases {
+        let mut e = SessionEventEnvelope::new(sid, ws, 501 + i as i64, payload);
+        e.id = u(0x6010 + 2 * i as u128);
+        e.event_id = u(0x6011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6000) }),
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 50 + i, event_id: u(0x6005) }));
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }

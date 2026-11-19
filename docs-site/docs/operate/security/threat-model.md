@@ -83,6 +83,91 @@ traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
 
+### Workspace repositories {#repositories}
+
+[Workspace repositories](../../ligus/features/repositories.md) are signed
+config events; checkouts and their paths never leave a device.
+
+- **A malicious Admin, or a compromised one**, can add a look-alike
+  repository (`github.com/zazu1am/wefit`). Adding and removing need the
+  Admin's passkey presence; Settings shows the full canonical name and flags a
+  repository whose name reads the same as another's once common ASCII
+  confusables are folded (`1`/`l`, `rn`/`m`, `0`/`o`, dashes, case), or whose
+  claimed root commit equals another's. A repository entry
+  makes no device fetch anything: a clone is a person's act on one host, from
+  that host's own code-host connection, with the URL rebuilt as `https://`
+  from the canonical (never a string from the event) and the address checked
+  again and pinned right before git runs; git follows no redirect, so the
+  server at the pinned address can't send the clone to another host. An entry can't create a connection
+  or mark one internal.
+- **A member or an agent** can't add, remove or rename a repository, and an
+  agent (or a runtime effect) can't set a chat's repository or pin its base.
+  A proposal's repository comes from the chat when it is filed and never
+  changes; its base commit is in the vote, so re-basing it clears the votes.
+- **A host's coverage** rides its sealed presence beat, and the host signs
+  the report with its own device key. A reader uses a report only when the
+  signature verifies against that device as the workspace roster has it
+  (certified, not revoked, not a phone, acting for a current member), so a
+  member who holds the workspace key can't report another host's coverage:
+  a beat it seals for that host keeps its liveness and loses the coverage.
+  Coverage stays advisory: the host that runs a turn checks its own
+  confirmed checkout (by remote, without `insteadOf` or includes) before
+  every turn and refuses otherwise.
+- **Driving the box's repositories from a phone** (clone by name or by id,
+  rename, picking a chat's repository, rescan, confirming a found checkout)
+  spends the box's own code-host access, so only the box owner can: a phone
+  certified to the account of the Admin who admitted the box, over its own
+  pairing, or the `serve.token` bearer when the box listens on loopback (on
+  a network listener the bearer is refused: every paired phone can fetch
+  it). Anyone else gets `owner_required`. A request carried on the log never
+  starts a clone.
+- **A hostile repository** found by a scan is never used until a person
+  confirms it on that device; its hooks, `core.fsmonitor`, submodules and
+  file-protocol URLs stay off (every git call runs with those overridden),
+  and its runtimes and MCP servers stay inert until trusted. A marker it ships
+  in its work tree means nothing: the managing-host marker lives in the git
+  directory.
+- **Applying** builds the commit in a scratch index or worktree and moves the
+  chat branch only by compare-and-swap, so a conflict or a moved branch
+  applies nothing.
+- **Ledger replay** reads `Ligus-Proposal` and `Ligus-Revert` only from a
+  commit's trailer block (never its subject, which carries the proposal's
+  agent-written title) and only on commits since the chat's pinned base. A
+  host whose chat branch wasn't cut from the pinned base refuses the chat's
+  turns instead of replaying onto a different base. An applied proposal's
+  content can't change afterwards (a re-upsert that would is refused), so a
+  replay only ever applies the approved bytes. A host fulfilling a person's
+  "Apply on" request uses the same checkout check as a turn.
+- **A chat's pinned base** can't be moved by any member: the first pin wins
+  (switching the chat's repository away and back keeps it), and moving it
+  takes an explicit re-pin by an Admin or the chat's creator, from their own
+  device, with presence under rules v2, naming the pin it replaces. A host
+  follows a re-pin only by rebuilding the chat branch from the ledger, and
+  refuses rather than drop a commit that isn't an applied proposal.
+- **One managing host per checkout** also binds work that doesn't claim one:
+  hygiene never sweeps, and a chat without a repository never runs or
+  applies in, a checkout another host on the machine manages.
+- **Desktop actions on repository text.** "Ask the agent to rebase" quotes
+  git's conflict output as data in a fence it can't close and keeps the
+  agent's title on one line, so a patch's file names can't pose as your
+  message. "Open in editor" hands the OS opener one absolute path to a real
+  folder inside the checkout (never a link a repository planted, never a
+  macOS package it would launch; on Windows one quoted argument, so
+  `explorer` can't read a comma as a switch). "Clone into…" never follows a
+  redirect and names the folder from `[a-z0-9-]` only.
+- **A remote URL** with `#`, `?` or a backslash has no identity: git connects
+  to the host before them, so `https://evil.example#@github.com/o/n` never
+  reads as github.com's repository.
+- **Limits:** coverage is self-reported: a host can sign "present" and
+  then refuse its turns. Liveness on the beat isn't signed, so a member can
+  make a dead host look online for a while; the dispatcher still hands a
+  turn whose holder hasn't answered over after two minutes. A replayed old
+  signed report counts on a reader that restarted until the host's next
+  beat. A person who
+  writes a commit with a real `Ligus-Proposal` trailer in a chat's worktree
+  makes that host's replay skip that proposal there. The repository list is
+  visible to every member, Viewers included.
+
 ### A compromised serve or worker box {#compromised-box}
 
 A `ligus serve` or `ligus worker` box is its own **service member**, never a
@@ -224,6 +309,83 @@ These reduce risk; they don't make an agent safe to run with broad
 permissions on an untrusted repository. Runtimes Ligus can't confine from
 outside (aider, pi, Hermes, Antigravity, Copilot) are refused whenever
 egress is restricted, but run with their own permissions otherwise.
+
+### Shared files {#shared-files}
+
+Shared files are one of the easiest ways for an intruder, or a compromised
+member device, to spread malware to a whole workspace. Files are end-to-end
+encrypted, so the relay can't scan them: every content check runs on
+members' devices ([Sharing files](../../ligus/features/attachments.md)).
+
+| Threat | Defence |
+|---|---|
+| A member shares a program, script, macro document, disguised type or archive bomb | Sharing is off until an Admin sets the attachment policy (Admin and passkey presence; the recommended policy blocks programs, installers, disk images and scripts). Every device detects the type from the content, not the name, and refuses a blocked type on receipt too. Nothing opens or previews automatically; risky types need a second confirmation naming the sender; saved files carry the OS quarantine marking (Gatekeeper, SmartScreen). Archives are inspected without extracting anything, and a likely bomb isn't saved. An optional local scanner can refuse the save. |
+| A known-bad file keeps circulating | An Admin blocks its SHA-256 (no presence needed: it only narrows). Every device refuses to share, fetch or save it, including copies shared before the block. |
+| A stolen or revoked device, or a removed member, keeps posting files | A share is a signed chat event judged by the workspace fold at its author's position: a revoked device's later events never fold, and a removed member's are judged as of the removal (not a member). Removing a member can also delete everything they shared. |
+| An agent shares a file, or is tricked into it | Agents never sign a share. With the policy's agent switch on, an agent's file is filed as a proposal; it is shared only after a person approves it, by the host that produced it, and every device checks the shared file is the approved one (same hash, size, name and type). |
+| The relay swaps, truncates, replays or withholds a file | The signed reference binds the file's SHA-256 and size; a download that doesn't open to exactly those bytes is refused and nothing is kept. Withholding can't be prevented: the card says the file isn't available. |
+| Filename tricks (right-to-left override, double extensions, traversal, reserved names) | Names are cleaned when shared and checked by the fold: one path component, no control, bidirectional or invisible characters, no leading dots, Windows device names prefixed, at most 200 bytes. A double extension (`report.pdf.exe`) is flagged. Saving never overwrites a file or follows a symlink and never sets an executable bit. |
+| A preview runs code | Previews exist only for PNG, JPEG, GIF, WebP, BMP and plain text, rendered in an empty-sandbox frame whose policy blocks every load. SVG, HTML and PDF are never previewed. |
+| A shared file carries a prompt injection | Agents get shared files only as delimited untrusted data (text content up to 64 KB, otherwise only a description), never as instructions and never as a path they could run. An agent can't offer a file outside its worktree, through a symlink or through a hard link. |
+| A member uses the relay as free storage or a distribution point | The relay authenticates uploads, mints random non-enumerable ids, refuses past per-file, per-workspace, per-member, per-tenant and relay-wide quotas and an upload rate, and expires files (30 days by default). See [File attachments on the relay](../networking/self-host.md#file-attachments). |
+| A path in someone else's message opens something on your device | A device-local `[Attached: <path>]` marker becomes a clickable chip only in your own messages; in anyone else's it is text. |
+
+Residual risks:
+
+- **Metadata.** The relay sees each file's size, when it was uploaded and
+  fetched, and by which token or address.
+- **Policy before content.** The fold can only judge what a share declares
+  (its name, size and hash); the content checks run on each receiving device.
+  A member on a modified client can upload any bytes; receivers still refuse
+  them by content.
+- **Relay deletion is best effort.** A deleted or expired file stops being
+  offered on every device once the signed deletion folds, but a relay that
+  ignores deletes keeps its ciphertext (which it can't read). A relay that
+  binds each blob to the token subject that uploaded it deletes it only for
+  that subject or a relay Admin; an upload with no token identity (an open
+  relay tagging by address) stays deletable by anyone with write access who
+  knows its id. When the relay refuses an Admin's delete of someone else's
+  file, the file is still hidden everywhere by the signed deletion and the
+  relay expires it at the end of its retention.
+- **A policy change applies to files already shared.** A share is judged at
+  the position its author stamped, and an author may name a position from
+  before a policy change, so the fold can't stop such a share. Every device
+  therefore also refuses to fetch, preview, save or give an agent a file the
+  policy in force refuses (attachments off, its type blocked, over the size
+  cap), whenever it was shared.
+- **Attachment ids are bound to the sharing device.** A share's id is derived
+  from the signing device and the relay blob (an agent offer's from its host
+  and the proposal), so no member can claim someone else's file id first and
+  suppress it.
+- **Forged copies.** Until the same-signer-only equivocation rule lands, a
+  member who copies a share's event id under their own signature makes both
+  copies drop out (the share disappears for everyone); this holds for every
+  event kind, not only shares.
+- **Archives.** Zip and gzip files are inflated into a counter (nothing is
+  written) to judge what an extractor would unpack, including names from
+  Unicode Path fields and zips or gzips nested up to three deep. Entries that
+  are encrypted or use another compression, and other archive formats (7z,
+  RAR, tar, xz, …), can't be looked inside: they are flagged and need the
+  second confirmation, but the types inside them aren't checked against the
+  policy.
+- **Saving** writes the verified bytes straight to the new file (marked
+  first); if Ligus is killed mid-write, a partial, marked file can remain.
+- **Local file markers.** A `[Attached: <path>]` marker resolves to a local
+  file only in a turn the person wrote themselves, never in an agent's reply
+  or a runtime effect signed under their identity. The chat view still shows
+  a chip for a path string the person used in one of their own messages
+  wherever that string appears.
+- **Deleting a message doesn't delete its files.** Delete the file from its
+  card, or remove the member and their files.
+- **Quotas on an open relay** count per token subject, or per address when
+  there is no token. Per-member quotas are on by default (128 MiB and 500
+  files per workspace).
+- **Linux** has no quarantine marking to set.
+- **Scanning is optional** and depends on the scanner the person installed.
+- **The phone app doesn't show shared files yet**, and `ligus serve` and
+  worker boxes can't keep agents' file offers.
+- **Older builds** without attachment support show the marker as text and
+  don't fetch anything.
 
 ### Endpoint redirection (model gateways) {#endpoint-redirection}
 

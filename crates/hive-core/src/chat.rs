@@ -124,6 +124,12 @@ pub struct ChatMessage {
     /// user's tier. Self-asserted by the poster, so it can only lower a role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_run_id: Option<Uuid>,
+    /// Fold state, never an author's word: a second answer to a turn the
+    /// dispatcher already committed (or one from a device that didn't hold
+    /// the turn), hidden from the transcript, the answered checks, cascades
+    /// and the next turn's context (`crate::dispatch`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub superseded: bool,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
@@ -155,6 +161,7 @@ impl ChatMessage {
             reply_to_message_id: None,
             origin_device_id: None,
             workflow_run_id: None,
+            superseded: false,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             reactions: Vec::new(),

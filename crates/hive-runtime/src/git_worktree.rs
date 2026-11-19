@@ -121,6 +121,41 @@ fn chat_branch(chat_id: &str) -> String {
     format!("hive/chat/{}", slug(chat_id))
 }
 
+/// The chat branch's name (`hive/chat/<id>`).
+pub fn chat_branch_name(chat_id: &str) -> String {
+    chat_branch(chat_id)
+}
+
+/// Where a chat's persistent worktree lives in `repo_root` (whether or not
+/// it exists).
+pub fn chat_worktree_path_of(repo_root: &Path, chat_id: &str) -> Option<PathBuf> {
+    chat_worktree_path(repo_root, chat_id).ok()
+}
+
+/// Whether the chat's branch exists in `repo_root`.
+pub fn chat_branch_exists(repo_root: &Path, chat_id: &str) -> bool {
+    branch_exists(repo_root, &chat_branch(chat_id))
+}
+
+/// Like [`chat_worktree`], but a fresh chat branch starts at `base` (a
+/// commit: the chat's pinned base). An existing branch is reused as is.
+pub fn chat_worktree_at(repo_root: &Path, chat_id: &str, base: &str) -> io::Result<PathBuf> {
+    if base.starts_with('-') {
+        return Err(io::Error::other("bad base"));
+    }
+    let branch = chat_branch(chat_id);
+    if branch_exists(repo_root, &branch) {
+        return chat_worktree(repo_root, chat_id);
+    }
+    let path = chat_worktree_path(repo_root, chat_id)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "remove", "--force"]).arg(&path).output();
+    git(repo_root, &["worktree", "add", "-b", &branch, &path.to_string_lossy(), base])?;
+    Ok(path)
+}
+
 /// The checkout path of a chat's persistent worktree.
 fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     // Always under `.ligus/`; a Hive 1.x `.hive/worktrees/` is never used.

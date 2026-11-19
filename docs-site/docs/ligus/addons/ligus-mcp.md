@@ -47,6 +47,7 @@ changes workspace settings.
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
+| `ligus_offer_file` | `path`, `title`, `body?` | Offers a file from your worktree as a proposal, only when the workspace lets agents offer files. Nothing is shared until a person approves it; blocked types and files holding a host credential are refused. See [Sharing files](../features/attachments.md#files-from-agents). The in-process tool loops (API and local runtimes) don't have it |
 | `ligus_memory_search` | `query`, `tags? ≤ 8`, `limit ≤ 20` | Keyword search over the [workspace memory](../features/memory.md): every word must match |
 | `ligus_memory_read` | `entryId` | One note, its current version (`rev`) and any unsettled conflicts |
 | `ligus_memory_propose` | `op: create\|edit\|remove`, `entryId?`, `base?`, `title?`, `body?`, `tags?`, `rationale?` | Proposes a memory change for a person to accept or reject. An edit or removal names the `rev` it was made from. Memory doesn't change until a person accepts |

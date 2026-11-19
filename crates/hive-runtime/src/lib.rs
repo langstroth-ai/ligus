@@ -16,6 +16,7 @@ pub mod agent_tools;
 pub mod agent_turn;
 pub mod apply_host;
 pub mod attachment_blob;
+pub mod attachment_safety;
 pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;
@@ -65,6 +66,7 @@ pub mod phone_enroll;
 pub mod peer_iroh;
 pub mod private_file;
 pub mod prompt;
+pub mod repos;
 pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;
@@ -105,8 +107,8 @@ mod relay_refusal_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
-    cascade_target, empty_reply_notice, pending_mentions, pending_turns, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
-    ChatService, PendingMention, SUMMARY_TURN_HEADER,
+    cascade_target, claim_receiver, empty_reply_notice, pending_mentions, pending_turns, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
+    ChatService, DispatchCtx, PendingMention, SUMMARY_TURN_HEADER,
 };
 pub use context::{Compactor, CompactionResult, Summarizer};
 pub use mcp::{

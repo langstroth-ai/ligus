@@ -207,6 +207,7 @@ nav:
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
+          - Sharing files: ligus/features/attachments.md
           - Flow (routing, hand-offs, task board): ligus/features/flow.md
           - Workspace memory and task state: ligus/features/memory.md
           - Ligus on your phone: ligus/features/phone-app.md
@@ -214,6 +215,7 @@ nav:
           - Scheduled agents: ligus/features/scheduling.md
           - Managing context: ligus/features/voice-and-slash.md
           - Git integration: ligus/features/git.md
+          - Workspace repositories: ligus/features/repositories.md
           - Invites & joining: ligus/features/invites.md
           - People, contacts & DMs: ligus/features/collaborators.md
           - Linked accounts: ligus/features/linked-identities.md

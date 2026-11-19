@@ -49,6 +49,7 @@ mod memory_cmd;
 mod selftest;
 mod reply;
 mod repos;
+mod repos_cmd;
 mod serve;
 mod worker;
 
@@ -453,29 +454,29 @@ async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(
     Ok(hive_runtime::sync_service::sync_round(engine, store).await?)
 }
 
-/// Resolve any `[Attached-blob: …]` references in agent turns to local files
-/// (downloading + decrypting from the relay's blob channel and caching them), so
-/// a headless agent can read attachments other members shared. No-op when no
-/// relay/workspace key is configured or no turn carries a blob marker.
-async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
-    let (Some(relay_url), Some(_)) = (cfg.relay_url.clone(), cfg.key.as_ref()) else {
-        return;
-    };
-    if !turns.iter().any(|t| t.content.contains("[Attached-blob:")) {
+/// Files shared over the relay reach a headless agent only as delimited
+/// untrusted data (issue #118): a text file's verified content, anything else
+/// its description, never a path. No-op when no turn carries a marker.
+async fn materialize_turns(cfg: &Config, session: &hive_core::ChatSession, head: &hive_core::attachment::AttachmentRules, me: &str, turns: &mut [ChatTurn]) {
+    // A local path resolves only from this box's own author's messages.
+    let own = hive_runtime::attachment_blob::own_path_markers(session, me);
+    for t in turns.iter_mut() {
+        t.content = hive_runtime::attachment_blob::defuse_foreign_path_markers(&t.content, &own);
+    }
+    if !turns.iter().any(|t| t.content.contains("[Attachment: ")) {
         return;
     }
-    let relay = RelayClient::new(&relay_url)
-        .with_auth(cfg.token.clone())
-        .with_auth_cell(auth::cell());
+    let placed = hive_runtime::attachment_blob::placed_attachments(session);
+    let relay = match (cfg.relay_url.clone(), cfg.key.as_ref()) {
+        (Some(url), Some(_)) => Some(RelayClient::new(&url).with_auth(cfg.token.clone()).with_auth_cell(auth::cell())),
+        _ => None,
+    };
     // The one keyring (B1): blobs sealed at any epoch this box holds open.
-    let Some(ring) = box_ring(cfg) else { return };
-    let cache = cfg.data_dir.join("attachments").join("blobs");
+    let ring = box_ring(cfg).unwrap_or_default();
+    let cache = hive_runtime::attachment_blob::verified_cache_dir(&cfg.data_dir);
     for t in turns.iter_mut() {
-        if t.content.contains("[Attached-blob:") {
-            t.content = hive_runtime::attachment_blob::materialize_body(
-                &t.content, &relay, &cfg.room, &ring, &cache,
-            )
-            .await;
+        if t.content.contains("[Attachment: ") {
+            t.content = hive_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, head, relay.as_ref(), &cfg.room, &ring, &cache).await;
         }
     }
 }
@@ -507,7 +508,7 @@ fn cmd_chats(cfg: &Config) -> Result<()> {
             }
             any = true;
             let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
-            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.len(), ch);
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
         }
     }
     if !any {
@@ -565,7 +566,7 @@ fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usi
     let Some(s) = svc.load(chat_id)? else {
         bail!("unknown chat {chat_id}");
     };
-    for m in s.messages.iter().skip(from) {
+    for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
     }
     Ok(s.messages.len())
@@ -1001,7 +1002,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 })
                 .filter(|m| {
                     // Already answered (by another `ligus agent`, or the desktop).
-                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && r.reply_to_message_id == Some(m.id))
+                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && !r.superseded && r.reply_to_message_id == Some(m.id))
                 })
                 .cloned()
                 .collect();
@@ -1010,7 +1011,9 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // Non-Send store is held across .await — cmd_agent runs on a
                 // current-thread runtime (see run()), so this is allowed.
                 let mut turns = turns_for(&worker::through_trigger(&s, last.id), None, &name);
-                materialize_turns(cfg, &mut turns).await;
+                let head = svc.attachment_rules(s.workspace_id).unwrap_or_default();
+                let me = svc.author().id.clone();
+                materialize_turns(cfg, &s, &head, &me, &mut turns).await;
                 print!("↳ @{name} replying in {} … ", s.id);
                 // H1 gate, the same as the worker's: at or above this host's
                 // floor (Admin when the runtime can write, Contributor when
@@ -1254,11 +1257,13 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         host_label: &host_label,
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
+        presence: None,
     };
     // Registered, store open, interrupted turns recovered: ready for work.
     ready.store(true, std::sync::atomic::Ordering::Relaxed);
-    // Mentions whose reply hard-failed, so we don't retry them every tick.
-    let mut failed: HashSet<Uuid> = HashSet::new();
+    // Mentions whose reply hard-failed (not retried every tick) and the
+    // dispatcher's wait clock.
+    let mut drain = worker::DrainState::default();
     // Exponential backoff on repeated relay-sync failures, so a relay outage
     // isn't hammered every 3s. Resets to the base cadence on the first success.
     let mut sync_fails: u32 = 0;
@@ -1285,7 +1290,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         // A transient store/DB error inside a tick must NOT kill the daemon —
         // log it and retry on the next tick (bare `?` here used to abort the loop).
         worker::apply_tick(&ctx, &svc);
-        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
+        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut drain, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
         if cfg.relay_url.is_some() {
@@ -1614,7 +1619,15 @@ fn usage() -> ! {
          ligus recovery-key create --out PATH   register a recovery key for this CLI identity (never a box)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
          ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
-         ligus repos                     show the repos dir and bindings\n  \
+         ligus repos [list]              the workspace's repositories, this host's checkouts, the repos dir\n  \
+         ligus repos add <remote|canonical|path> [--name N] [--kind K] [--branch B]   add a workspace repository (Admin)\n  \
+         ligus repos remove|rename <repo> …   remove (Admin) or rename a workspace repository\n  \
+         ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>\n                                       this host's checkout of a repository (device-local)\n  \
+         ligus repos scan | roots [add|remove <path>] | alias <ssh-host> <host> [--remove]\n                                       find checkouts under scan roots; SSH host aliases for identity\n  \
+         ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default\n  \
+         ligus repos aliases | repo-alias <repo> [names…] | host-alias <alias> <host>|--remove\n                                       \
+         workspace-synced aliases, names only (Admin, passkey)\n  \
+         ligus repos accept <alias> [--revoke]   use a synced alias for identity on this host\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
@@ -1750,6 +1763,8 @@ fn run() -> Result<()> {
         "--body",
         "--note",
         "--base",
+        "--kind",
+        "--branch",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -2032,7 +2047,13 @@ fn run() -> Result<()> {
             flag_val("--chat").as_deref(),
             has("--clear"),
         ),
-        "repos" => repos::cmd_repos(&cfg.data_dir),
+        "repos" => {
+            let mut svc = open_service(&cfg)?;
+            let ws = uuid_of_room(&cfg.room);
+            let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
+            let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
+            repos_cmd::cmd(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
+        }
         "forge" => {
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
             forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"), has("--internal"))

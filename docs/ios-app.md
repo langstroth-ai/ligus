@@ -270,7 +270,10 @@ These act on the box's own device-local state: the checkouts under
 access is the box's own `gh` login (`gh auth login` on the host). Hive never
 stores or sends a token. Writes need the bearer token (or the tunnel), a box
 that can write (not revoked or pending), and a roster role of at least
-Contributor, and answer 403 otherwise. No path on the box is ever returned:
+Contributor, and answer 403 otherwise. Cloning and `PUT /v1/chats/{id}/repo`
+also need the box owner (a phone certified to the account of the Admin who
+admitted the box, or the bearer on a loopback listener), else 403
+`owner_required`. No path on the box is ever returned:
 checkouts are named, and an absolute binding shows only its last component.
 
 | Method | Path | Response |

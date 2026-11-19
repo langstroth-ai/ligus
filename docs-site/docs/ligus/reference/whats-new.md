@@ -30,6 +30,43 @@ Full release notes are on the
   See [Your home dir is default-deny](../concepts/security.md#home-default-deny),
   [Grants on this device](../concepts/security.md#grants-on-this-device)
   and [The shell is the Owner's](../concepts/security.md#owner-only-shell).
+- **Workspace repositories.** A workspace names the repositories it works on;
+  each device keeps its own checkouts of them, private to that device, and
+  hosts report which ones they have (never where). An Admin adds a repository
+  from a bound folder ("Add WeFit to the workspace?"), Settings →
+  Repositories or `ligus repos add`; the phone, a box and the desktop
+  (**Clone into…**) clone one by id. A chat picks its repository from the chip
+  at its top; a turn runs only on a host with a confirmed checkout of it and
+  otherwise says why, and takes its runtimes, MCP servers and trust from its
+  own chat's folder, never the one on screen. The composer warns when an
+  agent's host lacks the chat's repository and can run that turn here once
+  instead. Chat branches start from a pinned base (the first pin wins; an
+  Admin or the chat's creator can move it, and every host rebuilds its chat
+  branch there or says why it can't), applied proposals replay on every host,
+  and an apply never half-applies; a conflict offers **Ask the agent to
+  rebase** and **Open in editor**. See
+  [Workspace repositories](../features/repositories.md) and
+  [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
+- **One answer per turn, from a device that has the code.** When several
+  devices could answer a turn, they agree through signed claims: a host with
+  a checkout of the chat's repository claims first and takes the turn from
+  one without it, a duplicate answer from a network split is hidden on every
+  device, a holder that goes quiet is replaced after about 25 seconds, and a
+  revoked device loses its turns at once. A member's device can't take over
+  a turn that was answered promptly. See
+  [Which device answers](../features/repositories.md#which-device-answers).
+- **Signed coverage, owner-only repository actions on the box.** Each host
+  signs its own report of which repositories it has, so no one can report
+  another host's. On a box, cloning, renaming, picking a chat's repository
+  and rescanning are the box owner's (their certified phone, or the operator
+  on loopback). See
+  [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
+- **Shared repository and host aliases.** An Admin can name a repository's
+  other spellings (an old owner, a case split) and a forge's SSH host once for
+  the whole workspace, with a passkey. They are names only, never where git
+  connects, refuse look-alikes, and count on a device only after someone
+  there accepts them. See
+  [Aliases the workspace shares](../features/repositories.md#aliases-the-workspace-shares).
 - **The phone acts as you with its own key; one host applies.** Since the
   box is its own service member, what you do as yourself from the phone
   (post, approve or reject, answer an agent's question, clear a lockdown,

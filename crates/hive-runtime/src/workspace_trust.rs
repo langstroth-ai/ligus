@@ -136,24 +136,22 @@ fn shell_line(command: &str, args: &[String]) -> String {
         .join(" ")
 }
 
-/// The repository's first commit id (empty when not a git repo).
+/// The repository's first commit id (empty when not a git repo): the one
+/// root-commit function repos use too (`repos::git::root_commit`).
 fn first_commit(root: &Path) -> String {
-    hive_core::process_util::git()
-        .arg("-C")
-        .arg(root)
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.lines().last().map(str::to_string))
-        .unwrap_or_default()
+    crate::repos::git::root_commit(root).unwrap_or_default()
 }
 
-/// `SHA-256(canonical root path ‖ first commit id)`.
+/// `SHA-256(canonical root path ‖ first commit id)`. A chat's worktree
+/// (`<checkout>/.ligus/worktrees/…`) keys by its main checkout, so trust
+/// granted to a checkout holds in its chats' worktrees too.
 pub fn root_id(root: &Path) -> String {
     let canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    sha_hex(&[&canon.to_string_lossy(), &first_commit(root)])
+    let keyed = crate::repos::git::main_checkout(&canon)
+        .map(|m| std::fs::canonicalize(&m).unwrap_or(m))
+        .filter(|m| canon.starts_with(m.join(".ligus").join("worktrees")))
+        .unwrap_or(canon);
+    sha_hex(&[&keyed.to_string_lossy(), &first_commit(&keyed)])
 }
 
 /// The device-local trust table.
@@ -391,5 +389,16 @@ mod tests {
         // URL and args count.
         assert_ne!(item_digest(ItemKind::McpServer, "", &[], &[], "https://a"), item_digest(ItemKind::McpServer, "", &[], &[], "https://b"));
         assert_ne!(item_digest(ItemKind::McpServer, "x", &["1".into()], &[], ""), item_digest(ItemKind::McpServer, "x", &["2".into()], &[], ""));
+    }
+
+    /// A chat's worktree is the same trust root as its checkout (5.7).
+    #[test]
+    fn chat_worktree_shares_its_checkouts_root_id() {
+        let repo = repo_with_mcp("sh");
+        let git = |args: &[&str]| assert!(hive_core::process_util::git().arg("-C").arg(repo.path()).args(args).output().unwrap().status.success(), "{args:?}");
+        git(&["init", "-q"]);
+        git(&["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c"]);
+        let wt = crate::git_worktree::chat_worktree(repo.path(), &uuid::Uuid::new_v4().to_string()).unwrap();
+        assert_eq!(root_id(&wt), root_id(repo.path()));
     }
 }

@@ -34,6 +34,9 @@ pub enum EventStoreError {
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
 
+mod repo_tables;
+pub use repo_tables::{CheckoutSource, RepoMapping};
+
 /// A chat responder's compaction state as kept on this device: the first
 /// kept message (`boundary`), the ids the `summary` covers (everything before
 /// the boundary when it was made) and their
@@ -290,6 +293,7 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS idx_lamport_witnesses_session ON lamport_witnesses (session_id);
             "#,
         )?;
+        repo_tables::init(&conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn

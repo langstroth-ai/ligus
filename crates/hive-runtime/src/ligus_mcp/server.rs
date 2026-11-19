@@ -121,6 +121,13 @@ pub trait LigusHost: Send + Sync {
     fn forge_for(&self, _chat_id: Uuid) -> Option<super::forge_tools::ForgeBinding> {
         None
     }
+    /// Keep a file an agent offered, under the id of the proposal it is
+    /// offered in, until a person approves that proposal, when this host
+    /// uploads it (issue #118). Only offers this host staged are ever
+    /// uploaded. A host that can't keep files refuses offers.
+    fn stage_attachment(&self, _proposal_id: Uuid, _sha256: &str, _bytes: &[u8]) -> Result<(), String> {
+        Err("this host can't offer files".into())
+    }
 }
 
 /// One turn's binding and context.
@@ -459,7 +466,8 @@ impl LigusMcp {
             c.memory_proposals += 1;
         }
         let kind = match tool {
-            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives" => Some(0),
+            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives"
+            | "ligus_offer_file" => Some(0),
             "ligus_handoff" => Some(1),
             "ligus_ask_human" => Some(2),
             _ => None,
@@ -587,6 +595,7 @@ impl LigusMcp {
                     Err(e) => (denied_or_err(e), None),
                 }
             }
+            "ligus_offer_file" => (self.offer_file(st, &ctx, &s("path"), &s("title"), &s("body")), None),
             "ligus_propose_workflow" => {
                 let Some(def) = args.get("definition").filter(|d| d.is_object()) else {
                     return (denied_or_err("definition must be an object".into()), None);
@@ -828,6 +837,68 @@ impl LigusMcp {
                 (ToolResult::ok(json!({"ok": true})), None)
             }
             _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
+        }
+    }
+
+    /// `ligus_offer_file` (issue #118): an agent offers a file from its
+    /// worktree. Checked like a person's share (policy, blocklist, type by
+    /// content, size, archive bombs) and never carrying one of this device's
+    /// secrets, then staged on this host and filed as a proposal. Nothing is
+    /// uploaded until a person approves it.
+    fn offer_file(&self, st: &TurnState, ctx: &EffectCtx, path: &str, title: &str, body: &str) -> ToolResult {
+        let fail = |outcome: Outcome, m: String| ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": m}));
+        if title.is_empty() {
+            return fail(Outcome::Error, "a title is required".into());
+        }
+        let Some(wt) = st.spec.worktree.clone() else {
+            return fail(Outcome::Denied, "this turn has no worktree to offer a file from".into());
+        };
+        let rules = match self.svc(|svc| svc.attachment_rules(ctx.workspace_id)) {
+            Ok(r) => r,
+            Err(e) => return fail(Outcome::Error, e.to_string()),
+        };
+        if !rules.policy.enabled || !rules.policy.agents {
+            return fail(Outcome::Denied, "this workspace doesn't let agents offer files".into());
+        }
+        // Inside the worktree only: the file is opened first (no symlink as
+        // its last component) and the path of what was opened is checked,
+        // so swapping a directory for a symlink between a check and the read
+        // can't reach outside the worktree.
+        let (bytes, name) = match crate::attachment_safety::read_inside(&wt, path, rules.policy.max_bytes) {
+            Ok(x) => x,
+            Err(e) => return fail(Outcome::Denied, e),
+        };
+        // Never let a credential leave in a file: this device's own secrets,
+        // private keys and environment files.
+        if let Some(why) = crate::attachment_safety::credential_in(&name, &bytes) {
+            return fail(Outcome::Denied, why);
+        }
+        let prepared = match crate::attachment_blob::check_file(&name, bytes, &rules) {
+            Ok(p) => p,
+            Err(e) => return fail(Outcome::Denied, e),
+        };
+        let proposal_id = Uuid::new_v4();
+        if let Err(e) = self.host.stage_attachment(proposal_id, &prepared.sha256, &prepared.plaintext) {
+            return fail(Outcome::Denied, e);
+        }
+        let offer = hive_core::attachment::AttachmentRef {
+            // Bound to this host and the proposal when it is filed.
+            id: Uuid::nil(),
+            blob_id: String::new(),
+            sha256: prepared.sha256.clone(),
+            size: prepared.plaintext.len() as u64,
+            content_type: prepared.content_type.clone(),
+            name: prepared.name.clone(),
+            message_id: None,
+            proposal_id: None,
+        };
+        let author = ctx.author_id();
+        let r = self.svc(|svc| {
+            svc.as_agent(ctx.agent_id, |svc| svc.file_attachment_offer(ctx.session_id, ctx.workspace_id, title, body, &author, ctx.agent_id, offer.clone(), proposal_id))
+        });
+        match r {
+            Ok(id) => ToolResult::ok(json!({"ok": true, "proposalId": id.to_string(), "name": offer.name, "message": "Filed for review. The file is shared only after a person approves it."})),
+            Err(e) => fail(Outcome::Denied, e.to_string()),
         }
     }
 
@@ -1121,8 +1192,9 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
         if !channel.is_empty() && ch.to_lowercase() != channel {
             continue;
         }
-        let last = sess.messages.last().map(|m| flow::ms(&m.created_at)).unwrap_or(0);
-        out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": sess.messages.len()})));
+        let last = sess.messages.iter().rev().find(|m| !m.superseded).map(|m| flow::ms(&m.created_at)).unwrap_or(0);
+        let count = sess.messages.iter().filter(|m| !m.superseded).count();
+        out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": count})));
     }
     out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
     out.into_iter().take(limit).map(|(_, v)| v).collect()
@@ -1130,7 +1202,7 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
 
 fn read_messages(session: &ChatSession, since: Option<Uuid>, limit: usize) -> Vec<Value> {
     let start = since.and_then(|id| session.messages.iter().position(|m| m.id == id)).map(|i| i + 1).unwrap_or(0);
-    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming).collect();
+    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming && !m.superseded).collect();
     let tail = if since.is_some() { &msgs[..msgs.len().min(limit)] } else { &msgs[msgs.len().saturating_sub(limit)..] };
     tail.iter()
         .map(|m| {

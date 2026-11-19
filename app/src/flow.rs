@@ -269,6 +269,13 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: 
         if !host_live(&a.host_id) {
             continue;
         }
+        // An agent whose host says it has no checkout of this chat's repo
+        // is dropped like an offline one (advisory; that host refuses anyway).
+        if let Some(repo) = session.repo.as_ref().and_then(|r| r.repo_id) {
+            if !a.host_id.is_empty() && a.host_id != here && crate::repos_ui::host_lacks_repo(state, &a.host_id, repo) {
+                continue;
+            }
+        }
         let key = flow::agent_key(Some(a.id));
         let provider = state.resolve_runtime(&a.runtime_id).provider;
         if route_block(provider, &envelope, windows.get(&provider), &key, now_secs).is_some() {
@@ -1154,6 +1161,14 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
         _ => return,
     };
     let Some(reply) = session.messages.iter().find(|m| m.id == message_id).cloned() else { return };
+    // A superseded reply is a fenced duplicate: hidden, never an answer, so it
+    // tags nothing, applies no mark directives and hands nothing on. Drain its
+    // per-turn stashes so they don't linger.
+    if reply.superseded {
+        let _ = take_activity(message_id);
+        let _ = take_stashed(message_id);
+        return;
+    }
     let responder = facts.responder;
     let me = flow::agent_key(responder.agent_id);
     let trigger = trigger_of(&session, &reply);
@@ -1329,7 +1344,7 @@ pub(crate) const IDLE_OFFER_AFTER: std::time::Duration = std::time::Duration::fr
 
 /// Whether this device can run `agent`'s runtime itself (configured here,
 /// not a fallback).
-fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
+pub(crate) fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
     let Some(rt) = state.combined_runtimes().into_iter().find(|r| r.id == agent.runtime_id) else { return false };
     state.resolve_runtime(&agent.runtime_id).provider == rt.provider_kind
 }
@@ -1347,7 +1362,7 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     if state.responding.lock().unwrap().len() > 1 {
         return None;
     }
-    let mut svc = state.service.lock().unwrap();
+    let svc = state.service.lock().unwrap();
     let session = svc.load(session_id).ok().flatten()?;
     if session.turn_claims.contains_key(&prompt_id) {
         return None;
@@ -1360,12 +1375,20 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     if !can_run_here(state, &agent) {
         return None;
     }
+    // A chat with a repo: offer only with this device's own checkout of it.
+    if !crate::repos_ui::runs_here(state, &svc, &session) {
+        return None;
+    }
     let workspace_id = session.workspace_id;
-    if !svc.claim_turn(session_id, workspace_id, prompt_id).ok()? {
+    drop(svc);
+    // Through the dispatcher (design repos-and-checkouts 11.5): the claim
+    // carries this device's signed coverage of the chat's repo, and the
+    // host's worker claims the same prompt key, so whoever folds first runs
+    // it and the other watches.
+    if crate::dispatch_here(state, session_id, workspace_id, prompt_id, None, true, std::time::Duration::ZERO).ok()? != hive_core::dispatch::Step::Run {
         return None;
     }
     let from_host = agent.host_id.clone();
-    drop(svc);
     let now = flow::now_ms();
     let mut r = recruit("idle_host", &flow::tremble::GateQueue::default(), now);
     r.from_host = from_host;
@@ -1796,7 +1819,7 @@ fn record_handoff(
         .iter()
         .rev()
         .take_while(|m| m.role != MessageRole::User)
-        .filter(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent))
+        .filter(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
         .count() as u32;
     let card = HandoffCard {
         id: Uuid::new_v4(),
