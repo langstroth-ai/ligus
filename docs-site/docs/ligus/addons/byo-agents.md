@@ -52,7 +52,7 @@ provider: set the executable and flags on the runtime). An
 OpenAI-compatible custom HTTP endpoint uses `provider = "custom"`, which
 talks over HTTP rather than spawning a binary. To give a different CLI
 first-class streaming, extend the per-provider dispatch in
-`crates/hive-runtime/src/provider/dispatch.rs`.
+`crates/ligus-runtime/src/provider/dispatch.rs`.
 
 ## Subscription CLIs: Google Antigravity and GitHub Copilot
 
@@ -150,7 +150,7 @@ The provider determines how Ligus talks to the binary:
 | `copilot`     | positional arg (`-p "<prompt>"`), JSONL | `--output-format json --stream on --no-ask-user --no-color`; `--model` from the runtime; permission tier flags (below) |
 
 For agents that need a different invocation, the per-provider wiring lives in
-`crates/hive-runtime/src/provider/dispatch.rs` (with the generic spawn/stream
+`crates/ligus-runtime/src/provider/dispatch.rs` (with the generic spawn/stream
 helper in `subprocess.rs`). It supports stdin delivery or final-positional-arg
 delivery, and bounds each run with a wall-clock timeout
 (`LIGUS_AGENT_TIMEOUT_SECS`, default 300s).

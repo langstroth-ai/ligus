@@ -76,7 +76,7 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
           </div>
           <div className="truncate font-mono text-[11px] text-ink-soft">device {preview.deviceId}</div>
           {preview.standing === "alreadyMine" && <div className="opacity-70">Already one of your devices.</div>}
-          {preview.problem && <div style={{ color: "var(--hive-danger-ink)" }}>{preview.problem}</div>}
+          {preview.problem && <div style={{ color: "var(--ligus-danger-ink)" }}>{preview.problem}</div>}
           {preview.standing === "new" && (
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={matches} onChange={(e) => setMatches(e.target.checked)} />

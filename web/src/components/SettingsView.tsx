@@ -220,32 +220,32 @@ export function SettingsView({
     <Modal
       onClose={onClose}
       overlayClassName="z-[900] flex items-center justify-center p-4"
-      overlayStyle={{ background: "color-mix(in srgb, var(--hive-canvas) 60%, transparent)" }}
+      overlayStyle={{ background: "color-mix(in srgb, var(--ligus-canvas) 60%, transparent)" }}
       panelClassName="flex overflow-hidden"
       panelStyle={{
         width: 920,
         height: 680,
         maxWidth: "95vw",
         maxHeight: "90vh",
-        borderRadius: "var(--hive-radius-xl)",
-        border: "1px solid var(--hive-line)",
-        boxShadow: "var(--hive-shadow-pop)",
-        background: "var(--hive-canvas)",
-        color: "var(--hive-ink)",
+        borderRadius: "var(--ligus-radius-xl)",
+        border: "1px solid var(--ligus-line)",
+        boxShadow: "var(--ligus-shadow-pop)",
+        background: "var(--ligus-canvas)",
+        color: "var(--ligus-ink)",
       }}
     >
       {/* Nav column (§4: 208) */}
       <nav
         className="flex w-[208px] shrink-0 flex-col gap-3 overflow-y-auto border-r p-3"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       >
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search settings"
           aria-label="Search settings"
-          className="w-full rounded-xl border px-3 py-1.5 text-[13px] outline-none focus:border-[color:var(--hive-accent-cool)]"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+          className="w-full rounded-xl border px-3 py-1.5 text-[13px] outline-none focus:border-[color:var(--ligus-accent-cool)]"
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
         />
         {filtered.map((g) => (
           <div key={g.cap} className="flex flex-col">
@@ -270,16 +270,16 @@ export function SettingsView({
       <div className="flex min-w-0 flex-1 flex-col">
         <header
           className="flex shrink-0 items-center justify-between gap-3 border-b px-6 py-3"
-          style={{ borderColor: "var(--hive-line)" }}
+          style={{ borderColor: "var(--ligus-line)" }}
         >
-          <h1 className="text-[length:var(--hive-text-xl)] font-semibold tracking-[-0.01em]">{TAB_LABEL[tab]}</h1>
+          <h1 className="text-[length:var(--ligus-text-xl)] font-semibold tracking-[-0.01em]">{TAB_LABEL[tab]}</h1>
           <IconButton label="Close settings" onClick={onClose}>
             <IconX size={18} />
           </IconButton>
         </header>
         {/* Keyed by tab: each tab opens at its top instead of inheriting the
             previous tab's scroll offset. */}
-        <div key={tab} className="hive-enter min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div key={tab} className="ligus-enter min-h-0 flex-1 overflow-y-auto px-6 py-5">
           {tab === "account" && <AccountSection />}
           {tab === "appearance" && (
             <AppearanceSection

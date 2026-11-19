@@ -1,6 +1,6 @@
 // Workspace memory and live task state. Typed wrappers around the
 // `memory_*` and `task_state` Tauri commands (app/src/memory_ui.rs); the
-// shapes mirror the serde (camelCase) structs in hive_core::memory.
+// shapes mirror the serde (camelCase) structs in ligus_core::memory.
 import { invoke } from "@tauri-apps/api/core";
 
 export type ActorKind = "human" | "assistant" | "agent" | "system" | "service";
@@ -11,7 +11,7 @@ export interface MemoryAuthor {
   kind: ActorKind;
 }
 
-/// A chat's sandbox egress (hive_core::sandbox::EgressPolicy).
+/// A chat's sandbox egress (ligus_core::sandbox::EgressPolicy).
 export type EgressPolicy = { mode: "open" } | { mode: "allowList"; mcpServers: string[] } | { mode: "closed" };
 
 export interface MemorySource {
@@ -102,7 +102,7 @@ export interface TaskSlotDto {
   expiresAtMs: number;
 }
 
-/// Bounds the fold enforces (hive_core::memory), checked here so a form
+/// Bounds the fold enforces (ligus_core::memory), checked here so a form
 /// can say what's wrong before signing.
 export const MAX_TITLE = 120;
 export const MAX_BODY = 4000;

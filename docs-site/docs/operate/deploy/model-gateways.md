@@ -158,7 +158,7 @@ gateway = "litellm"
 | no gateway, endpoint is elsewhere on a listed gateway (an admin route, its root) | runs directly | refused |
 | no gateway, any other endpoint, or a CLI's own vendor endpoint | runs directly | refused (exclusive, the default); runs directly with `modelGatewaysExclusive: false` |
 
-On an exclusive host the one exception is a `hive-daemon` runtime whose
+On an exclusive host the one exception is a `ligus-daemon` runtime whose
 endpoint is on this host (`localhost` or a loopback address).
 
 ## CLI agents: what the agent process sees

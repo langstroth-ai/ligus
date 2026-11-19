@@ -8,7 +8,7 @@ name: kind-e2e
 # no plaintext in the relay database, restart on the same identity, Pod
 # Security "restricted" and NetworkPolicy isolation.
 # The chart sets LIGUS_* variables and the test pod runs `ligus`, so this
-# needs a tree at 0.1 or later (the Ligus rename; 0.1 ignores HIVE_*).
+# needs a tree at 0.1 or later.
 # Runs on release branches and tags, on PRs that touch the chart, the
 # container image or this workflow, and on manual dispatch. It takes ~15-25
 # min (two image builds plus a kind cluster), so ordinary crate changes no
@@ -36,7 +36,7 @@ env:
   # a tested commit (relay v0.3.0), never a moving branch. Bump it together
   # with the ligus chart's langstroth-relay dependency.
   RELAY_REPO: langstroth-ai/langstroth-relay
-  RELAY_REF: c20bba675733b590f387d8ec69046e0b619f4954
+  RELAY_REF: c01534a1699fbb9d479bb544f79c70d4737cafc7
 
 jobs:
   e2e:

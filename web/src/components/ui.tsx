@@ -30,22 +30,22 @@ export function Button({
   const variants: Record<Variant, { className: string; style: React.CSSProperties }> = {
     primary: {
       className: "shadow-sm hover:brightness-105 disabled:shadow-none",
-      style: { background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" },
+      style: { background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" },
     },
     ghost: {
-      className: "border hover:border-[color:var(--hive-accent-cool)]",
+      className: "border hover:border-[color:var(--ligus-accent-cool)]",
       style: {
-        borderColor: "var(--hive-line)",
-        background: "var(--hive-mist)",
-        color: "var(--hive-ink)",
+        borderColor: "var(--ligus-line)",
+        background: "var(--ligus-mist)",
+        color: "var(--ligus-ink)",
       },
     },
     danger: {
       className: "border hover:brightness-110",
       style: {
-        borderColor: "var(--hive-danger-line)",
-        background: "var(--hive-danger-tint)",
-        color: "var(--hive-danger-ink)",
+        borderColor: "var(--ligus-danger-line)",
+        background: "var(--ligus-danger-tint)",
+        color: "var(--ligus-danger-ink)",
       },
     },
   };
@@ -77,8 +77,8 @@ export function IconButton({
       {...rest}
       aria-label={label}
       title={rest.title ?? label}
-      className={`inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 transition-all hover:opacity-100 hover:bg-[color:var(--hive-overlay)] disabled:cursor-not-allowed disabled:opacity-30 ${className}`}
-      style={{ width: size, height: size, color: "var(--hive-ink)", ...rest.style }}
+      className={`inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 transition-all hover:opacity-100 hover:bg-[color:var(--ligus-overlay)] disabled:cursor-not-allowed disabled:opacity-30 ${className}`}
+      style={{ width: size, height: size, color: "var(--ligus-ink)", ...rest.style }}
     >
       {children}
     </button>
@@ -234,7 +234,7 @@ export function Card({
   return (
     <div
       className={`rounded-xl border ${className}`}
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", ...style }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", ...style }}
     >
       {children}
     </div>
@@ -249,19 +249,19 @@ export function Card({
 
 /// Shared style tokens promoted out of RightRail's private copies (R2).
 export const panelStyle: CSSProperties = {
-  borderColor: "var(--hive-line)",
-  background: "var(--hive-panel)",
+  borderColor: "var(--ligus-line)",
+  background: "var(--ligus-panel)",
 };
 export const fieldStyle: CSSProperties = {
-  borderColor: "var(--hive-line)",
+  borderColor: "var(--ligus-line)",
   // backgroundColor (not the `background` shorthand) so the global `select`
   // rule's chevron background-image isn't wiped on dropdowns using this style.
-  backgroundColor: "var(--hive-mist)",
-  color: "var(--hive-ink)",
+  backgroundColor: "var(--ligus-mist)",
+  color: "var(--ligus-ink)",
 };
 /// Cool selection tint + border (the exact §2 recipe), reused by active rows.
-export const SELECT_TINT = "color-mix(in srgb, var(--hive-accent-cool) 14%, transparent)";
-export const SELECT_LINE = "color-mix(in srgb, var(--hive-accent-cool) 38%, transparent)";
+export const SELECT_TINT = "color-mix(in srgb, var(--ligus-accent-cool) 14%, transparent)";
+export const SELECT_LINE = "color-mix(in srgb, var(--ligus-accent-cool) 38%, transparent)";
 
 /// §5.1 — the one 30px list row for every sidebar and pane entry. `active`
 /// paints the cool selection tint; `attn` turns the count into a warm pill.
@@ -290,13 +290,13 @@ export function NavRow({
     <button
       onClick={onClick}
       title={title}
-      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
+      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={active ? { background: SELECT_TINT } : undefined}
     >
       {icon != null && (
         <span
           className="grid h-4 w-4 shrink-0 place-items-center"
-          style={{ color: active ? "var(--hive-accent-ink)" : "var(--hive-ink-soft)" }}
+          style={{ color: active ? "var(--ligus-accent-ink)" : "var(--ligus-ink-soft)" }}
           aria-hidden
         >
           {icon}
@@ -305,18 +305,18 @@ export function NavRow({
       {children}
       <span
         className="min-w-0 flex-1 truncate text-[13px]"
-        style={{ fontWeight: active ? 600 : 400, color: "var(--hive-ink)" }}
+        style={{ fontWeight: active ? 600 : 400, color: "var(--ligus-ink)" }}
       >
         {label}
       </span>
       {typeof meter === "number" && (
         <span
           className="h-1 w-8 shrink-0 overflow-hidden rounded-full"
-          style={{ background: "color-mix(in srgb, var(--hive-ink) 14%, transparent)" }}
+          style={{ background: "color-mix(in srgb, var(--ligus-ink) 14%, transparent)" }}
         >
           <span
             className="block h-full"
-            style={{ width: `${Math.max(0, Math.min(1, meter)) * 100}%`, background: "var(--hive-accent-cool)" }}
+            style={{ width: `${Math.max(0, Math.min(1, meter)) * 100}%`, background: "var(--ligus-accent-cool)" }}
           />
         </span>
       )}
@@ -324,12 +324,12 @@ export function NavRow({
         (attn ? (
           <span
             className="shrink-0 rounded-full px-1.5 text-[10.5px] font-bold tabular-nums"
-            style={{ background: "var(--hive-warm-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
           >
             {count}
           </span>
         ) : (
-          <span className="shrink-0 text-[11.5px] tabular-nums" style={{ color: "var(--hive-ink-soft)" }}>
+          <span className="shrink-0 text-[11.5px] tabular-nums" style={{ color: "var(--ligus-ink-soft)" }}>
             {count}
           </span>
         ))}
@@ -343,7 +343,7 @@ export function SectionCap({ children, action }: { children: ReactNode; action?:
     <div className="flex h-[26px] items-center justify-between px-2.5">
       <span
         className="text-[11px] font-bold uppercase"
-        style={{ letterSpacing: "0.08em", color: "var(--hive-ink-soft)" }}
+        style={{ letterSpacing: "0.08em", color: "var(--ligus-ink-soft)" }}
       >
         {children}
       </span>
@@ -387,31 +387,31 @@ export function ChatRow({
         onClick={onClick}
         data-chat-id={chatId}
         aria-current={active ? "page" : undefined}
-        className="flex min-h-[46px] w-full flex-col justify-center gap-[3px] rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
+        className="flex min-h-[46px] w-full flex-col justify-center gap-[3px] rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
         style={active ? { background: SELECT_TINT } : undefined}
       >
         <span className="flex items-center gap-2">
           {unread > 0 && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ background: "var(--hive-accent-cool)" }}
+              style={{ background: "var(--ligus-accent-cool)" }}
               aria-hidden
             />
           )}
           <span
             className="min-w-0 flex-1 truncate text-[13px]"
-            style={{ fontWeight: unread > 0 ? 700 : 590, color: "var(--hive-ink)", letterSpacing: "-0.01em" }}
+            style={{ fontWeight: unread > 0 ? 700 : 590, color: "var(--ligus-ink)", letterSpacing: "-0.01em" }}
           >
             {title}
           </span>
           {when && (
-            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--hive-ink-soft)" }}>
+            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--ligus-ink-soft)" }}>
               {when}
             </span>
           )}
         </span>
         {(avatars || sub) && (
-          <span className="flex items-center gap-2 text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <span className="flex items-center gap-2 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
             {avatars}
             {sub && <span className="min-w-0 truncate">{sub}</span>}
           </span>
@@ -425,8 +425,8 @@ export function ChatRow({
           }}
           aria-label="Chat options"
           title="Chat options"
-          className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md opacity-0 transition-opacity hover:bg-[color:var(--hive-overlay)] group-hover/crow:opacity-100"
-          style={{ color: "var(--hive-ink-soft)" }}
+          className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md opacity-0 transition-opacity hover:bg-[color:var(--ligus-overlay)] group-hover/crow:opacity-100"
+          style={{ color: "var(--ligus-ink-soft)" }}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
             <circle cx="5" cy="12" r="1.4" />
@@ -462,15 +462,15 @@ export function Switch({
       onClick={() => onChange(!on)}
       className="relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full transition-colors disabled:opacity-40"
       style={{
-        background: on ? "var(--hive-accent-fill)" : "color-mix(in srgb, var(--hive-ink) 22%, transparent)",
+        background: on ? "var(--ligus-accent-fill)" : "color-mix(in srgb, var(--ligus-ink) 22%, transparent)",
       }}
     >
       <span
         className="absolute h-4 w-4 rounded-full transition-all"
         style={{
           left: on ? 16 : 2,
-          background: on ? "var(--hive-on-accent)" : "var(--hive-panel)",
-          boxShadow: "var(--hive-shadow-1)",
+          background: on ? "var(--ligus-on-accent)" : "var(--ligus-panel)",
+          boxShadow: "var(--ligus-shadow-1)",
         }}
       />
     </button>
@@ -479,9 +479,9 @@ export function Switch({
 
 /// §5.5 — three-segment permission picker (never a dropdown).
 const PERMS: { id: "auto" | "ask" | "off"; label: string; on: CSSProperties }[] = [
-  { id: "auto", label: "Auto", on: { background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success-ink)" } },
-  { id: "ask", label: "Ask", on: { background: "color-mix(in srgb, var(--hive-accent-warm) 18%, transparent)", color: "var(--hive-warm-ink)" } },
-  { id: "off", label: "Off", on: { background: "color-mix(in srgb, var(--hive-ink) 12%, transparent)", color: "var(--hive-ink)" } },
+  { id: "auto", label: "Auto", on: { background: "color-mix(in srgb, var(--ligus-success) 20%, transparent)", color: "var(--ligus-success-ink)" } },
+  { id: "ask", label: "Ask", on: { background: "color-mix(in srgb, var(--ligus-accent-warm) 18%, transparent)", color: "var(--ligus-warm-ink)" } },
+  { id: "off", label: "Off", on: { background: "color-mix(in srgb, var(--ligus-ink) 12%, transparent)", color: "var(--ligus-ink)" } },
 ];
 export function PermissionPicker({
   value,
@@ -498,7 +498,7 @@ export function PermissionPicker({
     <span
       role="group"
       className="inline-flex rounded-lg border p-0.5"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", opacity: disabled ? 0.55 : 1 }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", opacity: disabled ? 0.55 : 1 }}
     >
       {PERMS.map((p) => {
         const active = value === p.id;
@@ -510,7 +510,7 @@ export function PermissionPicker({
             title={p.id === "auto" ? "Runs without asking" : p.id === "ask" ? "Prompts each call" : "Never offered to the model"}
             onClick={() => onChange?.(p.id)}
             className={`rounded-md font-medium transition-colors ${compact ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}
-            style={active ? p.on : { color: "var(--hive-ink-soft)", background: "transparent" }}
+            style={active ? p.on : { color: "var(--ligus-ink-soft)", background: "transparent" }}
           >
             {p.label}
           </button>
@@ -524,12 +524,12 @@ export function PermissionPicker({
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[11.5px] font-semibold" style={{ color: "var(--hive-ink-soft)" }}>
+      <span className="text-[11.5px] font-semibold" style={{ color: "var(--ligus-ink-soft)" }}>
         {label}
       </span>
       {children}
       {hint && (
-        <span className="text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <span className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
           {hint}
         </span>
       )}
@@ -560,7 +560,7 @@ export function SelectField({
       aria-label={ariaLabel}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full cursor-pointer rounded-xl border px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--hive-accent-cool)] disabled:cursor-default disabled:opacity-50"
+      className="w-full cursor-pointer rounded-xl border px-3 py-2 text-sm outline-none transition-colors focus:border-[color:var(--ligus-accent-cool)] disabled:cursor-default disabled:opacity-50"
       style={fieldStyle}
     >
       {children}
@@ -574,7 +574,7 @@ export function EmptyHint({ text, action, icon }: { text: string; action?: React
   return (
     <div
       className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed px-3 py-4 text-center text-xs text-ink-soft"
-      style={{ borderColor: "var(--hive-line)", background: "color-mix(in srgb, var(--hive-mist) 55%, transparent)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "color-mix(in srgb, var(--ligus-mist) 55%, transparent)" }}
     >
       {icon && (
         <span aria-hidden className="text-ink-faint">
@@ -595,17 +595,17 @@ export function ErrorState({ text, onRetry }: { text: string; onRetry?: () => vo
     <div
       role="alert"
       className="flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-xs"
-      style={{ borderColor: "var(--hive-danger-line)", background: "var(--hive-danger-tint)", color: "var(--hive-ink)" }}
+      style={{ borderColor: "var(--ligus-danger-line)", background: "var(--ligus-danger-tint)", color: "var(--ligus-ink)" }}
     >
-      <span aria-hidden className="mt-px shrink-0" style={{ color: "var(--hive-danger-ink)" }}>
+      <span aria-hidden className="mt-px shrink-0" style={{ color: "var(--ligus-danger-ink)" }}>
         <IconAlertTriangle size={14} />
       </span>
       <div className="min-w-0 flex-1 leading-5">{text}</div>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors hover:border-[color:var(--hive-accent-cool)]"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+          className="shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors hover:border-[color:var(--ligus-accent-cool)]"
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
         >
           Retry
         </button>
@@ -620,9 +620,9 @@ export function LoadingState({ rows = 3, label = "Loading" }: { rows?: number; l
   return (
     <div role="status" aria-live="polite" aria-label={label} className="space-y-2">
       {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="rounded-xl border px-3 py-3" style={{ borderColor: "var(--hive-line)" }}>
-          <div className="hive-skel h-3" style={{ width: `${62 - i * 9}%` }} />
-          <div className="hive-skel mt-2 h-2.5" style={{ width: `${38 + i * 7}%` }} />
+        <div key={i} className="rounded-xl border px-3 py-3" style={{ borderColor: "var(--ligus-line)" }}>
+          <div className="ligus-skel h-3" style={{ width: `${62 - i * 9}%` }} />
+          <div className="ligus-skel mt-2 h-2.5" style={{ width: `${38 + i * 7}%` }} />
         </div>
       ))}
     </div>
@@ -632,11 +632,11 @@ export function LoadingState({ rows = 3, label = "Loading" }: { rows?: number; l
 export type Tone = "neutral" | "info" | "success" | "warn" | "danger";
 
 const TONE_STYLE: Record<Tone, CSSProperties> = {
-  neutral: { color: "var(--hive-ink-soft)", background: "var(--hive-overlay)", borderColor: "var(--hive-line)" },
-  info: { color: "var(--hive-info-ink)", background: "var(--hive-info-tint)", borderColor: "var(--hive-info-line)" },
-  success: { color: "var(--hive-success-ink)", background: "var(--hive-success-tint)", borderColor: "var(--hive-success-line)" },
-  warn: { color: "var(--hive-warn-ink)", background: "var(--hive-warn-tint)", borderColor: "var(--hive-warn-line)" },
-  danger: { color: "var(--hive-danger-ink)", background: "var(--hive-danger-tint)", borderColor: "var(--hive-danger-line)" },
+  neutral: { color: "var(--ligus-ink-soft)", background: "var(--ligus-overlay)", borderColor: "var(--ligus-line)" },
+  info: { color: "var(--ligus-info-ink)", background: "var(--ligus-info-tint)", borderColor: "var(--ligus-info-line)" },
+  success: { color: "var(--ligus-success-ink)", background: "var(--ligus-success-tint)", borderColor: "var(--ligus-success-line)" },
+  warn: { color: "var(--ligus-warn-ink)", background: "var(--ligus-warn-tint)", borderColor: "var(--ligus-warn-line)" },
+  danger: { color: "var(--ligus-danger-ink)", background: "var(--ligus-danger-tint)", borderColor: "var(--ligus-danger-line)" },
 };
 
 /// The one status chip: text always present (never colour alone), an optional
@@ -695,11 +695,11 @@ export function Banner({
     <div
       role={role}
       data-testid={testId}
-      className="hive-enter flex min-h-[34px] shrink-0 items-center gap-2.5 border-b px-4 py-1.5 text-[12.5px]"
+      className="ligus-enter flex min-h-[34px] shrink-0 items-center gap-2.5 border-b px-4 py-1.5 text-[12.5px]"
       style={{
-        borderColor: tone === "neutral" ? "var(--hive-line)" : t.borderColor,
-        background: tone === "neutral" ? "var(--hive-panel)" : `color-mix(in srgb, ${t.background} 100%, var(--hive-panel))`,
-        color: "var(--hive-ink)",
+        borderColor: tone === "neutral" ? "var(--ligus-line)" : t.borderColor,
+        background: tone === "neutral" ? "var(--ligus-panel)" : `color-mix(in srgb, ${t.background} 100%, var(--ligus-panel))`,
+        color: "var(--ligus-ink)",
       }}
     >
       <span aria-hidden className="inline-flex shrink-0" style={{ color: t.color }}>
@@ -735,7 +735,7 @@ export function LinkButton({
       disabled={disabled}
       onClick={onClick}
       className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline disabled:opacity-50"
-      style={{ color: tone === "accent" ? "var(--hive-accent-ink)" : "var(--hive-ink)" }}
+      style={{ color: tone === "accent" ? "var(--ligus-accent-ink)" : "var(--ligus-ink)" }}
     >
       {children}
     </button>
@@ -754,8 +754,8 @@ export function StatusDot({ on, label, size = 8 }: { on: boolean; label: string;
       style={{
         width: size,
         height: size,
-        background: on ? "var(--hive-success)" : "transparent",
-        boxShadow: on ? "0 0 0 2px var(--hive-panel)" : "inset 0 0 0 1.5px var(--hive-ink-faint)",
+        background: on ? "var(--ligus-success)" : "transparent",
+        boxShadow: on ? "0 0 0 2px var(--ligus-panel)" : "inset 0 0 0 1.5px var(--ligus-ink-faint)",
       }}
     />
   );
@@ -791,7 +791,7 @@ export function SegmentedTabs<T extends string>({
       role="tablist"
       aria-label={label}
       onKeyDown={onKey}
-      className="hive-scroll-x -mx-1 flex gap-0.5 overflow-x-auto px-1 pb-0.5"
+      className="ligus-scroll-x -mx-1 flex gap-0.5 overflow-x-auto px-1 pb-0.5"
     >
       {tabs.map((t) => {
         const on = t.id === value;
@@ -803,11 +803,11 @@ export function SegmentedTabs<T extends string>({
             aria-selected={on}
             tabIndex={on ? 0 : -1}
             onClick={() => onChange(t.id)}
-            className="relative shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-[12.5px] font-medium transition-colors hover:bg-[color:var(--hive-hover)]"
+            className="relative shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-[12.5px] font-medium transition-colors hover:bg-[color:var(--ligus-hover)]"
             style={{
-              color: on ? "var(--hive-ink)" : "var(--hive-ink-soft)",
-              background: on ? "var(--hive-mist)" : "transparent",
-              boxShadow: on ? "inset 0 0 0 1px var(--hive-line)" : undefined,
+              color: on ? "var(--ligus-ink)" : "var(--ligus-ink-soft)",
+              background: on ? "var(--ligus-mist)" : "transparent",
+              boxShadow: on ? "inset 0 0 0 1px var(--ligus-line)" : undefined,
             }}
           >
             {t.label}
@@ -839,8 +839,8 @@ export function FormDisclosure({
       <button
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-[30px] w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--hive-overlay)]"
-        style={{ color: "var(--hive-accent-ink)" }}
+        className="flex h-[30px] w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--ligus-overlay)]"
+        style={{ color: "var(--ligus-accent-ink)" }}
       >
         <span aria-hidden className="text-base leading-none">
           {open ? "×" : "+"}
@@ -947,8 +947,8 @@ export function Popover({
           left: pos?.left ?? -9999,
           top: pos?.top,
           bottom: pos?.bottom,
-          borderColor: "var(--hive-line)",
-          background: "var(--hive-panel)",
+          borderColor: "var(--ligus-line)",
+          background: "var(--ligus-panel)",
           visibility: pos ? "visible" : "hidden",
         }}
         onMouseDown={(e) => e.stopPropagation()}
@@ -964,7 +964,7 @@ export function PopoverHeader({ children }: { children: ReactNode }) {
   return (
     <div
       className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase"
-      style={{ letterSpacing: "0.06em", color: "var(--hive-ink-soft)" }}
+      style={{ letterSpacing: "0.06em", color: "var(--ligus-ink-soft)" }}
     >
       {children}
     </div>
@@ -1000,13 +1000,13 @@ export function PopoverItem({
       className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
       style={{
         background: active ? SELECT_TINT : "transparent",
-        color: danger ? "var(--hive-danger-ink)" : "var(--hive-ink)",
+        color: danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
       }}
     >
       {glyph != null && <span className="grid h-5 w-5 shrink-0 place-items-center">{glyph}</span>}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {kind != null && (
-        <span className="shrink-0 text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <span className="shrink-0 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
           {kind}
         </span>
       )}

@@ -23,9 +23,9 @@ export function SandboxGrantsBanner() {
     <div
       role="status"
       className="fixed bottom-4 left-4 z-[60] flex w-[360px] items-start gap-3 rounded-2xl border p-4 shadow-xl"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
-      <div className="mt-0.5" style={{ color: "var(--hive-accent-ink)" }} aria-hidden>
+      <div className="mt-0.5" style={{ color: "var(--ligus-accent-ink)" }} aria-hidden>
         <IconShield size={18} />
       </div>
       <div className="min-w-0 flex-1 text-sm">
@@ -38,7 +38,7 @@ export function SandboxGrantsBanner() {
               ack.mutate();
             }}
             className="rounded-lg px-3 py-1.5 text-sm font-medium hover:brightness-110"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             Review
           </button>

@@ -11,10 +11,10 @@
 > join as their own service members through box admissions redeemed from a
 > Secret (operator guide, Admitting a box); the enrollment steps below are
 > historical. This document is the longer design and keeps the older
-> Hive names.
+> Ligus names.
 
 Status: **design, not built.** Phase 0 (this document, a container image for
-the `hive` binary and `deploy/kubernetes/README.md`) is in the tree. Everything
+the `ligus` binary and `deploy/kubernetes/README.md`) is in the tree. Everything
 else is a proposal with acceptance tests per phase. Claims about third-party
 projects were checked against their public docs in November 2026 and are cited
 inline; anything not confirmed is marked *(unverified)*.
@@ -22,7 +22,7 @@ inline; anything not confirmed is marked *(unverified)*.
 ## 1. Goal and non-goals
 
 **Goal.** A team (or a hosting provider) can run every server-side piece of
-Hive on a Kubernetes cluster: the relay, an always-on `hive serve` per
+Ligus on a Kubernetes cluster: the relay, an always-on `ligus serve` per
 workspace, agent runners that scale with work, MCP tool servers and in-cluster
 model inference, with each agent turn able to run in an isolated sandbox. The
 same chart should work on a laptop (kind or k3d) and on a managed cluster.
@@ -30,19 +30,19 @@ same chart should work on a laptop (kind or k3d) and on a managed cluster.
 **Non-goals.**
 
 - The desktop app and the iPhone app stay clients. Nothing here moves the
-  workspace's source of truth into the cluster: Hive state is still a
+  workspace's source of truth into the cluster: Ligus state is still a
   per-device, end-to-end encrypted event log, and the cluster's pods are
   devices like any other.
 - No change to the relay's wire contract (`/v1`, `hrt1`, `hive-tunnel/1`).
 - No operator in the first phases (see [Section 10](#10-packaging)).
 
-## 2. What Hive's design implies for Kubernetes
+## 2. What Ligus's design implies for Kubernetes
 
 Four properties of today's code decide most of the shapes below.
 
-1. **A headless process is a device.** `hive serve` and `hive worker` bootstrap
+1. **A headless process is a device.** `ligus serve` and `ligus worker` bootstrap
    an identity (account and device keys) in `LIGUS_DATA_DIR` on first run and
-   keep their event log in `LIGUS_DATA_DIR/hive.db` (SQLite). The host id other
+   keep their event log in `LIGUS_DATA_DIR/ligus.db` (SQLite). The host id other
    members see is that device id (`cmd_register_worker` publishes
    `svc.device_id()`). Two pods sharing a data dir would be one device writing
    from two places; two pods with fresh data dirs are two different hosts.
@@ -75,11 +75,11 @@ them into the scaling and the security model at once, and isolates (4).
 ## 3. Architecture
 
 ```
-                    namespace: hive-relay                 namespace: hive-ws-<workspace> (one per workspace)
+                    namespace: langstroth-relay                 namespace: ligus-ws-<workspace> (one per workspace)
                  ┌─────────────────────────────┐        ┌───────────────────────────────────────────────────┐
- desktops ──────▶│ relay-sync  (Deployment, N) │◀──────▶│ hive-serve-0  (StatefulSet, 1)                    │
+ desktops ──────▶│ relay-sync  (Deployment, N) │◀──────▶│ ligus-serve-0  (StatefulSet, 1)                    │
  phones   ──────▶│ relay-tunnel (Deployment, 1)│◀──────▶│   sync, API/SSE, tunnel host, turn controller     │
- (HTTPS)         │ Postgres (external or CNPG) │  sync  │   PVC: identity, hive.db, tunnel keys, checkouts  │
+ (HTTPS)         │ Postgres (external or CNPG) │  sync  │   PVC: identity, ligus.db, tunnel keys, checkouts  │
                  └─────────────────────────────┘        │   Secret: workspace key, relay token, git, models │
                      ciphertext only, no keys           │        │ creates (Kueue-admitted)                 │
                                                         │        ▼                                          │
@@ -90,7 +90,7 @@ them into the scaling and the security model at once, and isolates (4).
                                                         │                                                   │
                                                         │ mcp-<name> (Deployment + Service), optional       │
                                                         └───────────────────────────────────────────────────┘
-                    namespace: hive-models (shared, optional)
+                    namespace: ligus-models (shared, optional)
                  ┌───────────────────────────────────────────────────────────────┐
                  │ vLLM / KServe LLMInferenceService / llm-d InferencePool       │
                  │ OpenAI-compatible Service, GPU nodes, scaled on queue depth   │
@@ -103,12 +103,12 @@ The relay is the one component that is already cloud-shaped: a static Go
 binary, configured by environment variables, content-blind, with a health
 endpoint that round-trips the store (`GET /v1/health`, `503` if the backend is
 down) and a Prometheus-style `/metrics` endpoint (optionally gated by
-`LIGUS_RELAY_METRICS_TOKEN`). It lives in its own repository
+`LANGSTROTH_RELAY_METRICS_TOKEN`). It lives in its own repository
 (`langstroth-ai/langstroth-relay`), and its chart should live there too and be pulled into
-the Hive umbrella chart as a dependency.
+the Ligus umbrella chart as a dependency.
 
 **Store.** Always Postgres on Kubernetes (`DATABASE_URL` from a Secret, plus
-`LIGUS_RELAY_REQUIRE_DB=1` so a misconfigured pod fails instead of silently
+`LANGSTROTH_RELAY_REQUIRE_DB=1` so a misconfigured pod fails instead of silently
 using the in-memory store). Either an external managed database (Cloud SQL,
 RDS, Azure Database for PostgreSQL) or an in-cluster operator such as
 CloudNativePG. The memory+snapshot store with a PVC is acceptable only for
@@ -118,8 +118,8 @@ kind/k3d.
 
 | Deployment | Replicas | Routes | Settings |
 |---|---|---|---|
-| `relay-sync` | 1 to N (HPA on CPU or requests) | everything except `/v1/tunnel/*` | `LIGUS_RELAY_TUNNEL=off` |
-| `relay-tunnel` | **exactly 1**, `strategy: Recreate` | `/v1/tunnel/*` | `LIGUS_RELAY_TUNNEL=open` or `allowlist`, APNs settings |
+| `relay-sync` | 1 to N (HPA on CPU or requests) | everything except `/v1/tunnel/*` | `LANGSTROTH_RELAY_TUNNEL=off` |
+| `relay-tunnel` | **exactly 1**, `strategy: Recreate` | `/v1/tunnel/*` | `LANGSTROTH_RELAY_TUNNEL=open` or `allowlist`, APNs settings |
 
 Both point at the same database, so host registrations, revoked phones and
 push tokens (stored through `TunnelStore`) are shared. `Recreate` matters: with
@@ -127,8 +127,8 @@ a rolling update, the old pod still holds a host's control socket while a
 phone's `/v1/tunnel/connect` lands on the new pod and fails. On shutdown the
 relay closes tunnel sockets with `4011 shutting_down` and hosts reconnect, so a
 `Recreate` rollout costs a few seconds of tunnel downtime and nothing else.
-The APNs key (`LIGUS_RELAY_APNS_KEY` or a mounted `.p8` via
-`LIGUS_RELAY_APNS_KEY_FILE`) is only needed on `relay-tunnel` *(verify which
+The APNs key (`LANGSTROTH_RELAY_APNS_KEY` or a mounted `.p8` via
+`LANGSTROTH_RELAY_APNS_KEY_FILE`) is only needed on `relay-tunnel` *(verify which
 instance sends pushes before splitting; the push path starts on the host's
 control connection, so it should be the tunnel instance)*.
 
@@ -163,28 +163,28 @@ there is no data dir: run the binary directly as a non-root UID with
 `readOnlyRootFilesystem`, which passes Pod Security `restricted`. A distroless
 static image (`CGO_ENABLED=0` already) is a small change in the relay repo.
 
-### 3.2 `hive serve`, one per workspace
+### 3.2 `ligus serve`, one per workspace
 
-`hive serve` is the always-on device for a workspace: relay sync, the agent
+`ligus serve` is the always-on device for a workspace: relay sync, the agent
 worker, the phone API and SSE stream, ntfy notifications, the relay tunnel
 host and the dashboard. It supports one workspace per process today.
 
 **Shape.** A StatefulSet with `replicas: 1`, a `volumeClaimTemplate` mounted
-at `LIGUS_DATA_DIR` (`/var/lib/hive`), `podManagementPolicy: OrderedReady`,
+at `LIGUS_DATA_DIR` (`/var/lib/ligus`), `podManagementPolicy: OrderedReady`,
 and `terminationGracePeriodSeconds` above serve's 15 s turn grace (30 s). One
 StatefulSet per workspace, in that workspace's namespace. A StatefulSet, not a
 Deployment, because a Deployment's rolling update can briefly run two pods on
 one `ReadWriteOnce` volume (if both land on the same node), which would be two
 writers on one identity and one SQLite file.
 
-**What lives on the PVC.** Device and account keys, `hive.db`, `config.toml`,
+**What lives on the PVC.** Device and account keys, `ligus.db`, `config.toml`,
 `serve.token`, `serve-state.json`, `repo-bindings.toml`, `runtimes.toml`,
 `tunnel/` (host signing key, Noise static key, paired phones) and, by default,
 `repos/` with the checkouts and per-chat worktrees. The PVC is secret
 material: use an encrypted StorageClass, and if you back it up (Velero,
 volume snapshots), the backup is as sensitive as the workspace key.
 
-**Configuration.** Everything `hive serve` needs is already settable by
+**Configuration.** Everything `ligus serve` needs is already settable by
 environment variable, so no config file has to be written by hand:
 
 | Setting | Source |
@@ -197,10 +197,10 @@ environment variable, so no config file has to be written by hand:
 | `LIGUS_NTFY_URL`, `LIGUS_NTFY_TOPIC`, `LIGUS_NTFY_TOKEN` | ConfigMap and Secret |
 | `LIGUS_SERVE_LABEL`, `LIGUS_SERVE_NAME`, `LIGUS_SERVE_OWNER` | values |
 
-`hive enroll` is not needed: env overrides `config.toml`. APNs keys do **not**
+`ligus enroll` is not needed: env overrides `config.toml`. APNs keys do **not**
 belong here; push is signed on the relay (see the relay section).
 
-**Listening address.** `hive serve` refuses unspecified and public binds
+**Listening address.** `ligus serve` refuses unspecified and public binds
 unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`. That check protects a host whose
 interfaces face a LAN or the internet. A pod's network namespace is private to
 the pod, so on Kubernetes binding `0.0.0.0:8787` inside the pod with
@@ -213,7 +213,7 @@ NetworkPolicies. A small code change makes this explicit (Section 12).
 
 **Reaching it from the phone.** In order of preference:
 
-1. **Relay tunnel** (`hive remote enable --relay https://<relay>`): outbound
+1. **Relay tunnel** (`ligus remote enable --relay https://<relay>`): outbound
    WebSocket only, Noise IK end to end, per-phone credentials and revocation.
    No inbound exposure at all. This is the default for Kubernetes.
 2. **Tailscale Kubernetes operator** exposing the ClusterIP Service on the
@@ -227,10 +227,10 @@ NetworkPolicies. A small code change makes this explicit (Section 12).
 would keep the token):
 
 ```sh
-kubectl -n hive-ws-acme exec -it hive-serve-0 -- hive remote enable --relay https://relay.example.com
-kubectl -n hive-ws-acme rollout restart statefulset/hive-serve
-kubectl -n hive-ws-acme exec -it hive-serve-0 -- hive serve enroll     # approve on the desktop
-kubectl -n hive-ws-acme exec -it hive-serve-0 -- hive pair --relay-only
+kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus remote enable --relay https://relay.example.com
+kubectl -n ligus-ws-acme rollout restart statefulset/ligus-serve
+kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus serve enroll     # approve on the desktop
+kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus pair --relay-only
 ```
 
 Owner enrollment (`LIGUS_SERVE_OWNER`) works unchanged: the desktop signs a
@@ -245,15 +245,15 @@ sync fails exits and is restarted, which is the right behavior under a
 
 ### 3.3 Agent runners
 
-Today there are two ways to run agents off the desktop: `hive serve` runs a
-worker thread for agents bound to it, and `hive worker` is the same worker
+Today there are two ways to run agents off the desktop: `ligus serve` runs a
+worker thread for agents bound to it, and `ligus worker` is the same worker
 without the API. Both run one turn at a time, and both run the turn in their
 own process tree.
 
-**Step 1: works with today's code (Phase 1).** A `hive-worker` StatefulSet
-with one identity per replica (`hive-worker-0`, `hive-worker-1`, ...), each
+**Step 1: works with today's code (Phase 1).** A `ligus-worker` StatefulSet
+with one identity per replica (`ligus-worker-0`, `ligus-worker-1`, ...), each
 registered as its own host (`--label $(POD_NAME)`). Agents are assigned to a
-specific replica with `hive set-agent-host` or from the desktop's Hosts list.
+specific replica with `ligus set-agent-host` or from the desktop's Hosts list.
 This is sharding, not autoscaling: adding a replica adds a host, and nothing
 moves to it until an agent is bound to it. Removing a replica leaves its
 agents bound to an offline host (the desktop then offers "Run on worker").
@@ -267,8 +267,8 @@ hosts, and scaling it down strands agents.
 **Step 2: controller and executors (Phase 3, recommended).** Split a turn in
 two:
 
-- The **turn controller** stays in the stateful pod (`hive serve` or
-  `hive worker`). It syncs, claims the turn (one device, so no cross-device
+- The **turn controller** stays in the stateful pod (`ligus serve` or
+  `ligus worker`). It syncs, claims the turn (one device, so no cross-device
   claim race), resolves the agent's runtime, assembles the prompt and context
   exactly as today, prepares a **git bundle** of the chat's base commit, and
   hands a **turn bundle** to an executor. When the executor finishes, the
@@ -276,7 +276,7 @@ two:
   a `FileDiff` proposal, and syncs. Only the controller holds the workspace
   key, the device keys, git credentials and the relay token.
 - A **turn executor** is an ephemeral pod (a Job or an agent-sandbox
-  `Sandbox`, Section 4) that runs `hive exec-turn` (a new subcommand): it
+  `Sandbox`, Section 4) that runs `ligus exec-turn` (a new subcommand): it
   reads the turn bundle, unpacks the git bundle into a scratch checkout, runs
   the model and tool loop (built-in file tools, `run_command`, stdio MCP
   servers, or a CLI agent such as Claude Code), streams deltas back, and
@@ -299,14 +299,14 @@ no callback is a result volume, but streaming deltas to the phone needs the
 callback.
 
 **Per-turn Jobs without the split** (each turn as a Job running the full
-`hive` binary with the data dir) does not work: the Job would need the PVC
+`ligus` binary with the data dir) does not work: the Job would need the PVC
 (one writer) and the keys (no isolation gained).
 
 ### 3.4 Repository checkouts
 
 | Option | How | Fits |
 |---|---|---|
-| **PVC per workspace** (today's model) | Checkouts under `LIGUS_REPOS_DIR` on the serve/worker PVC; per-chat worktrees and `hive/chat/<id>` branches persist there; `LIGUS_SERVE_APPLY_ON_APPROVE=1` commits approved diffs to the chat branch | Phase 1; the controller in Phase 3 |
+| **PVC per workspace** (today's model) | Checkouts under `LIGUS_REPOS_DIR` on the serve/worker PVC; per-chat worktrees and `ligus/chat/<id>` branches persist there; `LIGUS_SERVE_APPLY_ON_APPROVE=1` commits approved diffs to the chat branch | Phase 1; the controller in Phase 3 |
 | **Git bundle per turn** (recommended for executors) | Controller runs `git bundle create` for the chat's base commit (full or `--since` a shallow point), passes it in the turn bundle; executor clones from the bundle with no remote | Phase 3; executor needs no git credentials and no network to a forge |
 | **Ephemeral clone per turn** | Executor clones from the forge (partial clone, `--filter=blob:none`) with a short-lived read-only token | Very large repos where a bundle is too big; executor then needs forge egress and a credential |
 
@@ -316,7 +316,7 @@ installation tokens (one hour, scoped to the installed repositories and the
 permissions the App was granted) minted per operation. Clone and fetch need
 `contents: read`; pushing chat branches and opening pull requests need
 `contents: write` and `pull_requests: write`. A fine-grained personal access
-token in a Secret is the simpler fallback. Hive must not log either.
+token in a Secret is the simpler fallback. Ligus must not log either.
 
 Untrusted pull-request tests (the "Run PR tests" design on the
 `feat/fork-repos` branch, `docs/design/pr-test-sandbox.md`) map directly onto
@@ -326,13 +326,13 @@ token, collect the log and JUnit output as untrusted data (Section 4.4).
 
 ### 3.5 MCP servers
 
-Hive reads MCP servers from `LIGUS_MCP_CONFIG` (`stdio` with `command`/`args`,
+Ligus reads MCP servers from `LIGUS_MCP_CONFIG` (`stdio` with `command`/`args`,
 or `http`/`sse` with `url` and a `token_env`). On Kubernetes:
 
 - **HTTP MCP servers** run as their own Deployment and ClusterIP Service per
   server (or shared across workspaces in a tools namespace when they hold no
-  per-workspace secrets). Hive's config points at
-  `http://mcp-linear.hive-ws-acme.svc.cluster.local/mcp`, and the bearer token
+  per-workspace secrets). Ligus's config points at
+  `http://mcp-linear.ligus-ws-acme.svc.cluster.local/mcp`, and the bearer token
   comes from a Secret by the env name in `token_env`. Separate Deployments
   are better than sidecars: tokens for Linear or GitHub stay out of the serve
   pod and out of executors, a misbehaving server restarts alone, and a
@@ -344,11 +344,11 @@ or `http`/`sse` with `url` and a `token_env`). On Kubernetes:
 - **Operators.** ToolHive's Kubernetes operator (`MCPServer` CRD, runs stdio
   or HTTP servers behind a proxy that exposes streamable HTTP) and kagent's
   `MCPServer`/`RemoteMCPServer` resources (via kmcp) both produce exactly
-  this shape. Hive does not need either; the chart should accept a list of
+  this shape. Ligus does not need either; the chart should accept a list of
   plain URLs and let a cluster use whichever it has. See Section 5 for
   versions.
 
-Hive's own MCP policy stays in Hive: the requester-role gate
+Ligus's own MCP policy stays in Ligus: the requester-role gate
 (`LIGUS_MCP_MIN_ROLE`) and the exfiltration guard (MCP calls refused after a
 turn reads project files) run in the controller or executor before any call
 leaves the pod. NetworkPolicies add a second layer: an executor may reach only
@@ -357,7 +357,7 @@ the MCP Services its turn was granted.
 ### 3.6 In-cluster model inference
 
 A local model on Kubernetes is an OpenAI-compatible HTTP endpoint, which
-Hive already supports as a `custom` runtime:
+Ligus already supports as a `custom` runtime:
 
 ```toml
 # runtimes.toml on the serve/worker pod
@@ -366,15 +366,15 @@ id = "*"
 name = "In-cluster vLLM"
 provider = "custom"
 model = "Qwen/Qwen3-32B"
-endpoint = "http://qwen.hive-models.svc.cluster.local/v1/chat/completions"
+endpoint = "http://qwen.ligus-models.svc.cluster.local/v1/chat/completions"
 credential = { kind = "none" }
 ```
 
 Keyless runtimes and the built-in file tools are allowed only for endpoints
-Hive considers local (`hive_core::endpoint::endpoint_is_local_server`). A
+Ligus considers local (`ligus_core::endpoint::endpoint_is_local_server`). A
 fully qualified `*.svc.cluster.local` name passes today because `.local` is in
-the private-suffix list; a short name such as `qwen.hive-models` or
-`qwen.hive-models.svc` does not, and neither does a cluster with a custom
+the private-suffix list; a short name such as `qwen.ligus-models` or
+`qwen.ligus-models.svc` does not, and neither does a cluster with a custom
 cluster domain. Use the full name until the suffix list is configurable
 (Section 12).
 
@@ -386,11 +386,11 @@ Serving options, from simplest to most capable:
   runtime): model lifecycle, scale-to-zero, OpenAI-compatible routes.
 - **llm-d** with the **Gateway API Inference Extension**: an `InferencePool`
   behind a Gateway, with an endpoint picker that routes on KV-cache and queue
-  state. Hive talks to the Gateway's OpenAI-compatible URL and needs no
+  state. Ligus talks to the Gateway's OpenAI-compatible URL and needs no
   change.
 
-All three are runtimes from Hive's point of view. GPU scheduling and
-autoscaling belong to the model namespace, not to Hive pods (Section 8). A
+All three are runtimes from Ligus's point of view. GPU scheduling and
+autoscaling belong to the model namespace, not to Ligus pods (Section 8). A
 hosted provider key (`LIGUS_WS_SECRET_<ref>`) remains the other choice, with
 egress to that provider only.
 
@@ -452,7 +452,7 @@ controller (`TurnExecutor`, Section 12), rendering the same hardened pod
    turn plaintext to object storage; enabling it requires a bucket with
    customer-managed encryption keys in the workspace's own project, and the
    design must treat that bucket like the identity PVC. Open MCP connections
-   do not survive a suspend, so Hive's MCP sessions must be re-established
+   do not survive a suspend, so Ligus's MCP sessions must be re-established
    per resume.
 
 Why not agent-sandbox as the default: it adds a cluster-scoped controller
@@ -490,7 +490,7 @@ spec:
     seccompProfile: { type: RuntimeDefault }
   containers:
     - name: turn
-      image: <registry>/hive-executor@sha256:...   # pinned by digest
+      image: <registry>/ligus-executor@sha256:...   # pinned by digest
       args: ["exec-turn", "--bundle", "/in/turn.json"]
       securityContext:
         allowPrivilegeEscalation: false
@@ -528,8 +528,8 @@ for tiny turns.
 ### 4.5 The workspace sandbox envelope on Kubernetes
 
 Ligus 0.1 makes the envelope a workspace property
-(`hive_core::sandbox::SandboxEnvelope`, enforced per runtime by
-`hive_runtime::sandbox`). The executor should render it, not invent its own:
+(`ligus_core::sandbox::SandboxEnvelope`, enforced per runtime by
+`ligus_runtime::sandbox`). The executor should render it, not invent its own:
 
 | Envelope field | Desktop / worker today | Executor pod |
 |---|---|---|
@@ -564,7 +564,7 @@ Versions move fast; pin what the chart is tested against.
 | cosign / syft / distroless | cosign v3 (Sigstore bundle format default); syft 1.5x; distroless now Debian 13 (`cc-debian13`, `static-debian13`) | supply chain | sigstore blog; GitHub releases |
 
 For MCP, note that ToolHive's proxy accepts every request unless auth is
-configured, so a Hive install using it must either configure OIDC or rely on
+configured, so a Ligus install using it must either configure OIDC or rely on
 NetworkPolicy to make the Service reachable only from the workspace's own
 pods.
 
@@ -578,17 +578,17 @@ workspace namespace, in the controller's Secret and PVC. Executors get a
 turn-scoped model credential and nothing else. Telemetry (Section 11) never
 carries message content, prompts, file contents or tool arguments.
 
-**Tenancy: one namespace per workspace.** `hive-ws-<name>` holds the serve or
+**Tenancy: one namespace per workspace.** `ligus-ws-<name>` holds the serve or
 worker StatefulSet, its Secrets and PVCs, its MCP servers, its executors and
 its Kueue `LocalQueue`. This is the unit for RBAC, quotas, NetworkPolicies and
-deletion. Shared namespaces: `hive-relay`, `hive-models` (optional),
-`hive-tools` (optional, MCP servers holding no per-workspace secrets). Hard
+deletion. Shared namespaces: `langstroth-relay`, `ligus-models` (optional),
+`ligus-tools` (optional, MCP servers holding no per-workspace secrets). Hard
 multi-tenancy for mutually distrusting workspaces (a hosting provider) needs
 more than namespaces: separate node pools for executors, sandboxed runtimes
 (Section 4) and, ideally, a cluster per tenant or a virtual-cluster layer.
 
-**Pod Security.** Label every Hive namespace
-`pod-security.kubernetes.io/enforce: restricted`. All Hive pods run non-root,
+**Pod Security.** Label every Ligus namespace
+`pod-security.kubernetes.io/enforce: restricted`. All Ligus pods run non-root,
 drop all capabilities, use `RuntimeDefault` seccomp and a read-only root
 filesystem with writable `emptyDir` or PVC mounts. Nothing needs
 `hostNetwork`, `hostPath` or privileged mode; the chart refuses values that
@@ -602,17 +602,17 @@ The controller (Phase 3) gets a Role in its own namespace allowing
 `get` on `pods/log` for diagnostics. No ClusterRoles, no access to other
 namespaces.
 
-**NetworkPolicies** (default deny in every Hive namespace, then allow):
+**NetworkPolicies** (default deny in every Ligus namespace, then allow):
 
 | From | To | Why |
 |---|---|---|
 | ingress controller | `relay-*:8443` | clients |
 | `relay-*` | Postgres | store |
-| `hive-serve` | relay (egress, cluster or public), model endpoints, MCP Services, forge (GitHub) | sync, turns, git |
-| tailnet proxy or nothing | `hive-serve:8787` | phone API only if not via tunnel |
+| `ligus-serve` | relay (egress, cluster or public), model endpoints, MCP Services, forge (GitHub) | sync, turns, git |
+| tailnet proxy or nothing | `ligus-serve:8787` | phone API only if not via tunnel |
 | executors | controller callback, model endpoint, granted MCP Services, DNS | turn |
 | PR-test executors | nothing | untrusted code |
-| `hive-models` | nothing outbound except model registries during download | inference |
+| `ligus-models` | nothing outbound except model registries during download | inference |
 
 NetworkPolicy cannot match DNS names, so egress to hosted model providers or
 GitHub is either a broad CIDR allow, a CNI with FQDN policies (Cilium, Calico
@@ -623,9 +623,9 @@ executors that need any internet egress.
 **Secrets.** Kubernetes Secrets as the interface, filled by External Secrets
 Operator (from a cloud secret manager or Vault) or by SOPS-encrypted files in
 Git (Flux or Argo CD with a SOPS plugin). Enable etcd encryption at rest (KMS
-provider on managed clusters). Rotation: the workspace key rotates by Hive's
+provider on managed clusters). Rotation: the workspace key rotates by Ligus's
 own mechanism (rotate in the app, update the Secret, restart); relay tokens
-and model keys rotate by updating the Secret and restarting the pod (Hive
+and model keys rotate by updating the Secret and restarting the pod (Ligus
 reads them at start).
 
 **Images.** Pull by digest, verify cosign signatures at admission (Sigstore
@@ -635,9 +635,9 @@ minimal: the executor image is attack surface the agent controls.
 ## 7. Egress control for agents
 
 Agents are the component most likely to be talked into exfiltrating data.
-Layers, from Hive outward:
+Layers, from Ligus outward:
 
-1. Hive's own policy: tools only for requesters at `LIGUS_MCP_MIN_ROLE` or
+1. Ligus's own policy: tools only for requesters at `LIGUS_MCP_MIN_ROLE` or
    above, MCP refused after file reads, built-in file tools only on local
    model endpoints, `run_command` off by default.
 2. The executor holds nothing worth stealing beyond the turn's own inputs.
@@ -667,7 +667,7 @@ Layers, from Hive outward:
   per turn; the cluster autoscaler or Karpenter adds executor nodes when Kueue
   admits more work than fits. Inference: KEDA or the serving stack's own
   autoscaler on queue depth (vLLM's waiting-requests metric, or the
-  controller's `hive_turns_queued` gauge), including scale to zero for
+  controller's `ligus_turns_queued` gauge), including scale to zero for
   rarely used models.
 - **Cost.** The fixed cost per workspace is one small pod (serve) plus a PVC.
   The relay is shared and small. Spend scales with executors (CPU-seconds per
@@ -679,13 +679,13 @@ Layers, from Hive outward:
 
 | Image | Base | Contents |
 |---|---|---|
-| `hive` | `debian:bookworm-slim` (this change: `deploy/container/Dockerfile`, about 290 MB uncompressed, most of it git and its dependencies) | `hive` binary, git, CA certificates, tini; UID 65532 |
-| `hive-executor` (Phase 3) | same, or a Wolfi/Chainguard base | `hive` binary for `exec-turn`, git, plus whichever CLI agents and toolchains a workspace allows; one variant per toolchain |
-| `hive-relay` | today Alpine; proposed distroless static | relay binary (relay repo) |
+| `ligus` | `debian:bookworm-slim` (this change: `deploy/container/Dockerfile`, about 290 MB uncompressed, most of it git and its dependencies) | `ligus` binary, git, CA certificates, tini; UID 65532 |
+| `ligus-executor` (Phase 3) | same, or a Wolfi/Chainguard base | `ligus` binary for `exec-turn`, git, plus whichever CLI agents and toolchains a workspace allows; one variant per toolchain |
+| `langstroth-relay` | today Alpine; proposed distroless static | relay binary (relay repo) |
 
 Notes:
 
-- The `hive` binary shells out to `git` for worktrees, so a fully distroless
+- The `ligus` binary shells out to `git` for worktrees, so a fully distroless
   image needs a git binary added; a slim Debian or Wolfi base is the
   pragmatic choice. The release workflow already builds static musl binaries
   for `x86_64` and `aarch64`, so the image could also be assembled from the
@@ -695,12 +695,12 @@ Notes:
   (syft, or buildx `--sbom=true`) and SLSA provenance (`--provenance=mode=max`)
   attached as attestations.
 - CI: build the image on every PR that touches `crates/` or
-  `deploy/container/`, run `hive --version` and a kind smoke test (Section 13),
+  `deploy/container/`, run `ligus --version` and a kind smoke test (Section 13),
   scan with Trivy or Grype, and publish only from release tags.
 
 ## 10. Packaging
 
-**Helm first, Kustomize-friendly.** An umbrella chart `hive` with subcharts:
+**Helm first, Kustomize-friendly.** An umbrella chart `ligus` with subcharts:
 
 | Subchart | Renders | Notes |
 |---|---|---|
@@ -719,10 +719,10 @@ inflation; plain manifests generated from the chart go in
 `deploy/kubernetes/manifests/` for kind. Charts are published to GHCR as OCI
 artifacts and signed with cosign like the images.
 
-**An operator, later and only if needed.** CRDs such as `HiveWorkspace`
+**An operator, later and only if needed.** CRDs such as `LigusWorkspace`
 (serve StatefulSet, Secrets wiring, enrollment status, tunnel status),
-`HiveAgentPool` (executor template, backend, queue, egress grants) and
-`HiveWorker` earn their keep when one of these is true:
+`LigusAgentPool` (executor template, backend, queue, egress grants) and
+`LigusWorker` earn their keep when one of these is true:
 
 - many workspaces per cluster (a hosting provider) where per-workspace
   namespaces, quotas, Secrets and NetworkPolicies must be stamped out and
@@ -751,8 +751,8 @@ operator would mostly duplicate Helm.
   calls by tool name and outcome, executor dispatch latency, tunnel
   connection state and paired-phone count. No labels with chat titles, user
   names or message content. A `ServiceMonitor` or `PodMonitor` in the chart.
-- **Traces and metrics over OTLP.** `hive serve`, `hive worker` and
-  `hive exec-turn` emit OpenTelemetry spans and metrics when the standard
+- **Traces and metrics over OTLP.** `ligus serve`, `ligus worker` and
+  `ligus exec-turn` emit OpenTelemetry spans and metrics when the standard
   `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_SERVICE_NAME`,
   `OTEL_RESOURCE_ATTRIBUTES`) are set, and nothing otherwise. Spans: sync
   round, turn (claim, dispatch, model call, tool call, proposal filing),
@@ -761,7 +761,7 @@ operator would mostly duplicate Helm.
   counts and durations, never prompts, replies, file paths from the user's
   repo or tool arguments. The relay can emit HTTP server spans the same way.
 - **Logs.** JSON logs on stdout behind `LIGUS_LOG_FORMAT=json`, with the same
-  content rule. `hive pair` output never goes to a log.
+  content rule. `ligus pair` output never goes to a log.
 
 ## 12. Code changes, prioritized
 
@@ -769,20 +769,20 @@ operator would mostly duplicate Helm.
 
 1. **Explicit in-pod bind.** Accept `LIGUS_SERVE_LISTEN=0.0.0.0:8787` when
    running in a pod (`KUBERNETES_SERVICE_HOST` set) with a startup log line,
-   or document `LIGUS_SERVE_ALLOW_ANY_BIND=1`; and make `hive pair` refuse a
+   or document `LIGUS_SERVE_ALLOW_ANY_BIND=1`; and make `ligus pair` refuse a
    pairing URL built from an unspecified address (today it only catches
    loopback), pointing at `--public-url` or `--relay-only`.
 2. **`LIGUS_RUNTIMES_FILE`** (and the same for `repo-bindings.toml` if needed)
    so ConfigMaps can be mounted read-only instead of copied into the PVC.
 3. **Configurable stop grace.** `LIGUS_STOP_GRACE_SECS` (default 15) so
    `terminationGracePeriodSeconds` and the turn grace agree; log what was
-   interrupted. `hive worker` needs the same treatment: it checks for a
+   interrupted. `ligus worker` needs the same treatment: it checks for a
    signal only between ticks, and it installs its SIGTERM handler on the first
    wait, so a SIGTERM during the very first turn kills it outright and one
    during a later turn waits for the turn however long it takes (then the
    kubelet's SIGKILL lands mid-turn). Install the handler at start and bound
    the wait like serve does.
-4. **Worker health endpoint.** `hive worker --health-listen 0.0.0.0:9090`
+4. **Worker health endpoint.** `ligus worker --health-listen 0.0.0.0:9090`
    serving `/healthz`, `/readyz` (first sync done) and, with P1-6, `/metrics`.
 5. **Cluster-internal model endpoints.** Treat `*.svc`, `*.svc.<cluster
    domain>` and names from `LIGUS_PRIVATE_HOST_SUFFIXES` as local in
@@ -811,8 +811,8 @@ operator would mostly duplicate Helm.
 11. A `TurnExecutor` trait in the worker with the current in-process
     implementation and a Kubernetes implementation (Jobs; agent-sandbox
     behind a feature flag).
-12. `hive exec-turn`: runs one turn from a bundle with no identity, no
-    `hive.db` and no relay access; streams deltas and returns reply plus
+12. `ligus exec-turn`: runs one turn from a bundle with no identity, no
+    `ligus.db` and no relay access; streams deltas and returns reply plus
     patch.
 13. Turn bundle format (versioned JSON: prompt, context, runtime, tool
     grants, deadlines, trace context, a one-time callback token) and git
@@ -824,7 +824,7 @@ operator would mostly duplicate Helm.
 
 **P3: only if demand appears.**
 
-16. Several workspaces per `hive serve` process (today one per process; one
+16. Several workspaces per `ligus serve` process (today one per process; one
     StatefulSet per workspace is fine until there are hundreds).
 17. Agent pools spanning several hosts (an agent bound to a pool, with
     lease-based claims) if a single controller per workspace ever becomes
@@ -834,7 +834,7 @@ operator would mostly duplicate Helm.
     hosts).
 19. The operator (Section 10).
 
-Not needed: leader election for `hive serve` or `hive worker`. Each is a
+Not needed: leader election for `ligus serve` or `ligus worker`. Each is a
 single identity in a single-replica StatefulSet, and the StatefulSet already
 guarantees at most one pod per ordinal (except during a node partition with
 forced deletion, which operators must not do for these pods). The relay
@@ -846,9 +846,9 @@ tunnel is likewise pinned to one replica by its Deployment.
 
 1. `kind create cluster` (or `k3d cluster create`).
 2. Build and load the image: `docker build -f deploy/container/Dockerfile -t
-   hive:dev .` then `kind load docker-image hive:dev`.
+   ligus:dev .` then `kind load docker-image ligus:dev`.
 3. Install the relay with the memory store and a PVC (Postgres optional),
-   `LIGUS_RELAY_TUNNEL=open`.
+   `LANGSTROTH_RELAY_TUNNEL=open`.
 4. Create the workspace Secret from a desktop invite (relay URL, room, key),
    install the serve StatefulSet, and point it at the in-cluster relay.
    For the desktop to reach the same relay, `kubectl port-forward
@@ -881,17 +881,17 @@ kind quickstart.
 Acceptance (automated in CI on kind):
 
 1. Relay `GET /v1/health` is 200 through the Service; `/metrics` serves.
-2. `hive-serve-0` starts, completes its first sync and reports ready; it
-   appears in `hive hosts` from a second client (a CLI pod with its own data
+2. `ligus-serve-0` starts, completes its first sync and reports ready; it
+   appears in `ligus hosts` from a second client (a CLI pod with its own data
    dir standing in for the desktop).
 3. The second client posts `@agent hello` to an agent bound to the serve
    host; a reply from the stub model arrives within 30 s.
-4. Deleting `hive-serve-0` mid-turn: the pod comes back on the same PVC with
+4. Deleting `ligus-serve-0` mid-turn: the pod comes back on the same PVC with
    the same host id, and the interrupted reply is finished as interrupted.
 5. The relay's database contains no plaintext: grep every envelope body for a
    marker string posted in step 3 and find nothing.
-6. All Hive namespaces pass `restricted` Pod Security admission; a pod in an
-   unrelated namespace cannot reach `hive-serve:8787` (NetworkPolicy).
+6. All Ligus namespaces pass `restricted` Pod Security admission; a pod in an
+   unrelated namespace cannot reach `ligus-serve:8787` (NetworkPolicy).
 7. A `relay-tunnel` rollout (`Recreate`) reconnects the serve host within
    30 s and a tunnel client completes a request afterwards.
 
@@ -902,7 +902,7 @@ example; image signature verification policy.
 
 Acceptance:
 
-1. Prometheus scrapes serve, worker and relay; `hive_turns_total` increments
+1. Prometheus scrapes serve, worker and relay; `ligus_turns_total` increments
    per turn; no metric label contains message text (test with a marker).
 2. With an OTLP collector configured, a turn produces a trace spanning
    claim, model call and proposal; exported spans contain no marker text.

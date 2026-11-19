@@ -23,7 +23,7 @@ DevOps are on request.
 - **Only in the OS secret store**: the Ligus keychain on macOS, the Secret
   Service on a Linux desktop, `systemd-creds` on a headless box, a mounted
   Secret on Kubernetes. Each token is stored as `forge:<connection>:<read|write>`.
-- **Never** in `settings.json`, `forges.toml`, `hive.db`, a synced event, an
+- **Never** in `settings.json`, `forges.toml`, `ligus.db`, a synced event, an
   invite, a log, or a request to your relay.
 - **Never** on a command line or in an agent's environment. When Ligus runs
   `git push`, git asks Ligus's own credential helper, which reads the token

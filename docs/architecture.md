@@ -1,6 +1,6 @@
-# Hive architecture (Rust + Tauri) — developer guide
+# Ligus architecture (Rust + Tauri) — developer guide
 
-How Hive fits together: the crates, the data flow, and the invariants. This is the
+How Ligus fits together: the crates, the data flow, and the invariants. This is the
 "inner workings" reference.
 
 Mermaid diagrams below render on GitHub and in the mkdocs site.
@@ -11,7 +11,7 @@ Mermaid diagrams below render on GitHub and in the mkdocs site.
 
 A single Tauri v2 process hosts a **React/TypeScript** frontend (webview) and the
 **Rust backend** in-process. They talk over **Tauri IPC** (commands = request/reply,
-events = push). Multiuser goes through a separate **relay** (`hive-relay`).
+events = push). Multiuser goes through a separate **relay** (`langstroth-relay`).
 
 ```mermaid
 flowchart LR
@@ -21,11 +21,11 @@ flowchart LR
       IPCWrap["lib/ipc.ts (typed wrappers)"]
       UI --> IPCWrap
     end
-    subgraph Shell["app (hive-app)"]
+    subgraph Shell["app (ligus-app)"]
       CMD["#[tauri::command] handlers + AppState"]
       SYNC["background sync loop"]
     end
-    subgraph RT["hive-runtime"]
+    subgraph RT["ligus-runtime"]
       CS["ChatService"]
       ES["EventStore (SQLite)"]
       PROV["providers + dispatch + tool_loop"]
@@ -33,7 +33,7 @@ flowchart LR
       MCP["McpRegistry"]
       ID["IdentityStore"]
     end
-    Core["hive-core (pure: models, events, crypto, e2ee, config, context, prompts*)"]
+    Core["ligus-core (pure: models, events, crypto, e2ee, config, context, prompts*)"]
     IPCWrap <-->|"invoke / emit"| CMD
     CMD --> CS --> ES
     CMD --> PROV
@@ -43,12 +43,12 @@ flowchart LR
   PROV -->|HTTPS/SSE| LLM["LLM providers (Anthropic / OpenAI-compat / Ollama)"]
   PROV -->|stdin/stdout| CLI["subprocess agents (aider / pi / claude-code)"]
   MCP -->|stdio / http JSON-RPC| MServers["MCP servers"]
-  SE <-->|"/v1 envelopes (opaque, sealed)"| Relay["hive-relay (axum)"]
+  SE <-->|"/v1 envelopes (opaque, sealed)"| Relay["langstroth-relay (axum)"]
   Relay <--> SE2["other devices' SyncEngine"]
 ```
 
-\* prompt assembly / mentions / context-compaction live in `hive-runtime` (they
-compose `hive-core` types); pure domain logic lives in `hive-core`.
+\* prompt assembly / mentions / context-compaction live in `ligus-runtime` (they
+compose `ligus-core` types); pure domain logic lives in `ligus-core`.
 
 ---
 
@@ -56,11 +56,11 @@ compose `hive-core` types); pure domain logic lives in `hive-core`.
 
 ```mermaid
 flowchart TD
-  proto["hive-proto<br/>IPC DTOs + ts-rs"] 
-  core["hive-core<br/>models · events · crypto · e2ee · config · context_budget · git · proposals · skills · vault · mcp wire"]
-  runtime["hive-runtime<br/>event_store · chat_service · providers · dispatch · tool_loop · mcp · sync_engine · relay_client · identity_store · prompt · mentions · context"]
-  app["app (hive-app)<br/>commands · AppState · sync loop"]
-  relay["hive-relay (axum)<br/>rendezvous + forwarding"]
+  proto["ligus-proto<br/>IPC DTOs + ts-rs"] 
+  core["ligus-core<br/>models · events · crypto · e2ee · config · context_budget · git · proposals · skills · vault · mcp wire"]
+  runtime["ligus-runtime<br/>event_store · chat_service · providers · dispatch · tool_loop · mcp · sync_engine · relay_client · identity_store · prompt · mentions · context"]
+  app["app (ligus-app)<br/>commands · AppState · sync loop"]
+  relay["langstroth-relay (axum)<br/>rendezvous + forwarding"]
   web["web/ (React)"]
 
   runtime --> core
@@ -73,10 +73,10 @@ flowchart TD
   relay -. "wire contract only (no shared code)" .-> runtime
 ```
 
-Rule of thumb: **`hive-core` is pure and dependency-light** (serde + crypto, no IO,
+Rule of thumb: **`ligus-core` is pure and dependency-light** (serde + crypto, no IO,
 no tokio). Anything that does IO, spawns processes, or hits the network lives in
-**`hive-runtime`**. **`app`** is glue: it owns `AppState`, maps domain types
-to `hive-proto` DTOs, and wires the background tasks. The **relay shares no code**
+**`ligus-runtime`**. **`app`** is glue: it owns `AppState`, maps domain types
+to `ligus-proto` DTOs, and wires the background tasks. The **relay shares no code**
 with the client — only the `/v1` HTTP contract.
 
 ---
@@ -144,16 +144,16 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  protoT["hive-proto types<br/>#[derive(Serialize, Deserialize, TS)]"]
+  protoT["ligus-proto types<br/>#[derive(Serialize, Deserialize, TS)]"]
   protoT -->|"cargo test export_bindings"| TS["web/src/bindings/*.ts"]
   TS --> ipc["web/src/lib/ipc.ts wrappers"]
   ipc -->|"invoke(name, args)"| handlers["#[tauri::command] in app"]
-  handlers -->|"hive-core → DTO mapping"| protoT
+  handlers -->|"ligus-core → DTO mapping"| protoT
 ```
 
-The frontend never imports `hive-core` types directly — it consumes flat,
-camelCase **DTOs** from `hive-proto`, generated to TypeScript by **ts-rs**. CI runs
-`cargo test -p hive-proto export_bindings` and fails if `web/src/bindings/` drifts,
+The frontend never imports `ligus-core` types directly — it consumes flat,
+camelCase **DTOs** from `ligus-proto`, generated to TypeScript by **ts-rs**. CI runs
+`cargo test -p ligus-proto export_bindings` and fails if `web/src/bindings/` drifts,
 so the contract can't silently break. Bindings are committed.
 
 ---
@@ -166,7 +166,7 @@ ones into its own SQLite connection (WAL). The relay is **content-blind**.
 ```mermaid
 sequenceDiagram
   participant A as Device A (SyncEngine)
-  participant R as hive-relay
+  participant R as langstroth-relay
   participant B as Device B (SyncEngine)
 
   Note over A,B: same LIGUS_RELAY_URL + LIGUS_WORKSPACE (room); optional LIGUS_WORKSPACE_KEY
@@ -189,7 +189,7 @@ optimization; relay forwarding is sufficient for multiuser.
 
 ## 7. Cryptography
 
-Two independent layers, both in `hive-core`:
+Two independent layers, both in `ligus-core`:
 
 ```mermaid
 flowchart TD
@@ -213,13 +213,13 @@ flowchart TD
   follow-up.
 - Private keys live in a `KeyVault` (file-backed now; OS keystore at packaging).
 - **TLS** (transport only): every HTTP client is built with
-  `hive_forge::http_client_builder` / `new_http_client` (reqwest 0.13, rustls
+  `ligus_forge::http_client_builder` / `new_http_client` (reqwest 0.13, rustls
   with the ring provider, installed once per process). Server certificates are
   checked against the OS trust store, so roots an administrator installed are
   trusted too; on a host with no CA certificates (a minimal Linux container)
   the bundled Mozilla roots are used instead. One probe
-  (`hive_forge::uses_platform_roots`) makes that choice for the whole
-  process. TLS outside reqwest uses `hive_forge::tls_client_config`, which
+  (`ligus_forge::uses_platform_roots`) makes that choice for the whole
+  process. TLS outside reqwest uses `ligus_forge::tls_client_config`, which
   makes the same choice. The relay tunnel's WebSockets use it, so a relay
   that answers for sync behind a TLS-inspecting proxy whose root the OS
   trusts also works for remote access. They still refuse any message or
@@ -227,7 +227,7 @@ flowchart TD
 - **Proxies**: reqwest applies the environment proxies (`HTTPS_PROXY`,
   `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) and, where those set nothing, the
   OS proxy settings on macOS and Windows (hyper-util `Matcher::from_system`;
-  `hive-forge` enables `client-proxy-system`, so this holds in every binary,
+  `ligus-forge` enables `client-proxy-system`, so this holds in every binary,
   not only the desktop). The code-host guard reads the same matcher: its
   public-only resolver lets a proxy's own host through whether the proxy came
   from the environment or the OS, and it refuses a target named like a proxy
@@ -247,7 +247,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-  cfg["hive.config.toml"] --> reg["McpRegistry (enable gate)"]
+  cfg["ligus.config.toml"] --> reg["McpRegistry (enable gate)"]
   reg -->|"enabled only"| tools["list_all_tools (stdio/http JSON-RPC)"]
   tools --> loop["tool_loop: model ⇄ tools"]
   resolver["remote_manifest resolver"] --> skills["SkillProfile → injected into prompts"]
@@ -268,18 +268,18 @@ what opens the connection.
 |---|---|
 | All state changes go through signed events; UI reads projections | `ChatService.append_signed`, `events::project` |
 | Append-only; dedup by `event_id`; per-session `sequence` unique | `EventStore` schema + `ingest` |
-| Frontend ↔ backend types come from `hive-proto` via ts-rs (CI-gated) | `hive-proto`, `rust-tauri.yml` |
+| Frontend ↔ backend types come from `ligus-proto` via ts-rs (CI-gated) | `ligus-proto`, `rust-tauri.yml` |
 | MCP servers inert until enabled | `McpRegistry::enabled` / `list_tools` gate |
 | Relay is content-blind (ciphertext with a workspace key) | `SyncEngine::encode/decode` |
-| `hive-core` stays pure (no IO/tokio/network) | crate boundary |
+| `ligus-core` stays pure (no IO/tokio/network) | crate boundary |
 | Bad signatures quarantined, never projected | `envelope_verifier` |
 
 ---
 
 ## 10. Where to start reading
 
-- A feature touching state → `hive-core::events` (add a variant + projector arm) →
+- A feature touching state → `ligus-core::events` (add a variant + projector arm) →
   `ChatService` (a signed write path) → a command in `app` → a DTO in
-  `hive-proto` (regen bindings) → a view in `web/`.
-- A new provider → `hive-runtime::provider` + a `dispatch` arm.
-- A new MCP/skill/vault source → `hive-runtime::{mcp, remote_manifest, vault_fetcher}`.
+  `ligus-proto` (regen bindings) → a view in `web/`.
+- A new provider → `ligus-runtime::provider` + a `dispatch` arm.
+- A new MCP/skill/vault source → `ligus-runtime::{mcp, remote_manifest, vault_fetcher}`.

@@ -14,7 +14,7 @@ Quick start:
 
 ```bash
 docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
-docker run -d -p 8443:8443 -v hive-data:/data -e LIGUS_RELAY_DATA_DIR=/data langstroth-relay
+docker run -d -p 8443:8443 -v ligus-data:/data -e LANGSTROTH_RELAY_DATA_DIR=/data langstroth-relay
 curl http://localhost:8443/v1/health   # → ok
 ```
 
@@ -22,6 +22,6 @@ Then point each device at the resulting HTTPS URL (Settings → **Multiuser sync
 or `LIGUS_RELAY_URL`). Always set a shared `LIGUS_WORKSPACE_KEY` so traffic is
 end-to-end encrypted (the relay only ever sees ciphertext).
 
-> This monorepo keeps a Rust reference relay (`crates/hive-relay`) used only as an
+> This monorepo keeps a Rust reference relay (`crates/langstroth-relay`) used only as an
 > in-process fixture for the client's tests — it is **not** the deploy target. Use
 > the relay repo above for anything you run in production.

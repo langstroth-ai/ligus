@@ -57,7 +57,7 @@ dashboard as TOML, a good starting point to edit.
 ```sh
 ligus dashboard check                   # validate the file, evaluate every panel once, print the results
 ligus dashboard check --file other.toml # check another file
-ligus dashboard metrics                 # list the hive metrics panels can show
+ligus dashboard metrics                 # list the ligus metrics panels can show
 ligus dashboard default                 # print the generated default dashboard as TOML
 ```
 
@@ -157,7 +157,7 @@ by level. A `unit` starting with `$` reads as money (`unit = "$/h"` shows
 |---|---|---|
 | `prometheus` (the default) | `query` | An instant query against `LIGUS_PROMETHEUS_URL` (time series and sparklines use a range query) |
 | `http_json` (default when `url` is set) | `url`, `path` | `GET url` (http or https, from the host's network, at most 1 MiB) and the value at `path`, a JSON pointer such as `/data/0/temp`. No headers or credentials are sent |
-| `hive` (default when `metric` is set) | `metric` | A metric of the workspace this host serves (see [below](#ligus-metrics)) |
+| `ligus` (default when `metric` is set) | `metric` | A metric of the workspace this host serves (see [below](#ligus-metrics)) |
 | `mcp` (default when `tool` is set) | `server`, `tool`, `args`, `path` | A tool on one of the host's MCP servers, read like a JSON document (see [MCP tool panels](#mcp-tool-panels)) |
 
 ### Panel kinds
@@ -170,7 +170,7 @@ by level. A `unit` starting with `$` reads as money (`unit = "$/h"` shows
 | `bar`, `list` | Label/value rows | Every sample of a Prometheus query, a JSON array or object at `path`, or `rows = [{ label, query }]` / `rows = [{ label, path }]` |
 | `status` | Up/down rows | Rows as for `list`; a number is up at or above `up_when` (default 1), a string is up when it equals `up_text` (default ok, up, true, healthy, online, running, pass) |
 | `text` | One line of text | A string at `path`, a number, or a fixed `text = "…"` |
-| `table` | Columns and rows of cells (`http_json`, `mcp` and `hive` sources) | `path` to an array; `columns = [{ label, key, align }]` |
+| `table` | Columns and rows of cells (`http_json`, `mcp` and `ligus` sources) | `path` to an array; `columns = [{ label, key, align }]` |
 
 **Table panels.** `key` is a key of each item or a JSON pointer into it
 (`/user/login`); it defaults to the label. `align` is `leading`, `center` or
@@ -181,7 +181,7 @@ number of rows: default 20, at most 200. `limit` also caps the rows of
 
 ### Ligus metrics
 
-`source = "hive"` with `metric = "…"` reads the workspace this host serves,
+`source = "ligus"` with `metric = "…"` reads the workspace this host serves,
 from its synced event log. `ligus dashboard metrics` prints this list.
 
 | Metric | Shape | What |

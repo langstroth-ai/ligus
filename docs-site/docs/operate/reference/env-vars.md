@@ -3,10 +3,7 @@
 Every `LIGUS_*` variable Ligus 0.1.0 reads, from the code. Variables used
 only by the test suites are left out.
 
-**Spelling.** Only `LIGUS_*` names are read. A former `HIVE_*` name that is
-still set while the `LIGUS_*` one isn't is ignored, with a one-time
-`warning: HIVE_X is set but no longer read; rename it to LIGUS_X`. A blank
-value counts as unset. Boolean flags accept `1`/`true`/`on`/`yes` and
+**Spelling.** Only `LIGUS_*` names are read. A blank value counts as unset. Boolean flags accept `1`/`true`/`on`/`yes` and
 `0`/`false`/`off`/`no`, unless noted.
 
 **Desktop or CLI.** The desktop app reads few of these; most configure the
@@ -18,7 +15,7 @@ column says which. The relay's own variables are on
 
 | Variable | Default | Read by | Effect |
 |---|---|---|---|
-| `LIGUS_DATA_DIR` | `~/.ligus` | CLI | the CLI's data dir: identity, keys, `hive.db`, `config.toml`, serve and tunnel state. The desktop always uses its OS app-data dir (`ai.ligus.desktop`) |
+| `LIGUS_DATA_DIR` | `~/.ligus` | CLI | the CLI's data dir: identity, keys, `ligus.db`, `config.toml`, serve and tunnel state. The desktop always uses its OS app-data dir (`ai.ligus.desktop`) |
 | `LIGUS_RELAY_URL` | from `config.toml` | CLI; desktop on first launch only | relay base URL |
 | `LIGUS_RELAY_ACCESS_TOKEN` | from `config.toml` | CLI; desktop on first launch only | relay access token (`hrt1.…` or opaque). A `name:token` form is accepted and the `name:` dropped |
 | `LIGUS_WORKSPACE` | `default` | CLI; desktop on first launch only | relay room |
@@ -64,7 +61,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_ANTHROPIC_MODEL` | `claude-sonnet-4-6` | desktop | fallback model when no default is set |
 | `LIGUS_PROVIDER_API_KEY` | unset | desktop and CLI | a provider key that overrides the provider's own variable |
 | `LIGUS_RUNTIME_TEST_TIMEOUT_SECS` | `45` | desktop | timeout of the runtime **Test** button |
-| `LIGUS_LOG` | `info` | desktop | log filter (`tracing` syntax, for example `debug` or `hive_runtime=debug`) |
+| `LIGUS_LOG` | `info` | desktop | log filter (`tracing` syntax, for example `debug` or `ligus_runtime=debug`) |
 | `LIGUS_CLI_HOME` | per-turn | desktop, CLI | `shared` lets CLI agents write their real config dirs again. By default each turn gets a throwaway home ([details](../../ligus/addons/acp.md#cli-home)) |
 | `LIGUS_ACP_INIT_TIMEOUT_SECS` | `60` | desktop, CLI | how long an ACP agent may take to answer `initialize` before the turn falls back to the headless adapter |
 | `LIGUS_ACP_ASK_TIMEOUT_SECS` | `600` | desktop, CLI | how long an ACP permission request waits for a person before it's denied |

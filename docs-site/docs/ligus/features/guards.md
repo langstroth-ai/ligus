@@ -97,7 +97,7 @@ repository (**Sweep now** in Settings → Guards runs it at once):
   using, or one parked for a live chat's next turn
   ([worktree reuse](flow.md#reusing-worktrees)), is never touched;
 - the checkout of a deleted or archived chat is removed, along with any
-  worktrees parked for it, but its `hive/chat/...` branch is kept, since it
+  worktrees parked for it, but its `ligus/chat/...` branch is kept, since it
   may hold applied work nobody has merged yet;
 - an open proposal whose diff no longer applies to its chat's branch is
   marked **stale** and taken out of the Review inbox (you can still restore
@@ -173,4 +173,4 @@ dropped, redactions, lockdown signals, worktree clean-ups, throttles and the
 progress of long tool loops. It holds only ids, kinds, counts and short
 reason codes, never message, prompt or diff text, file paths or repository
 names; it is never synced, and it keeps the newest 20,000 entries. It lives
-in the `guard_signals` table of the device's `hive.db`, for local monitoring.
+in the `guard_signals` table of the device's `ligus.db`, for local monitoring.

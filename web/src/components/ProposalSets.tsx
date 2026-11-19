@@ -89,11 +89,11 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
   return (
     <div
       className="rounded-xl border"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
       data-testid="proposal-set"
     >
       <button
-        className="flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--hive-hover)]"
+        className="flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--ligus-hover)]"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
@@ -115,7 +115,7 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
       </button>
 
       {open && (
-        <div className="space-y-3 border-t px-3 pb-3 pt-2.5" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="space-y-3 border-t px-3 pb-3 pt-2.5" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="text-xs text-ink-soft">
             Round {set.round + 1} · support decays {set.decayPerRound}/round
             {set.scoutingDeadline && set.phase === "scouting" && (
@@ -148,7 +148,7 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
           </div>
 
           {live && (
-            <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
+            <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }}>
               {set.phase === "scouting" && (
                 <Button
                   variant="primary"
@@ -203,7 +203,7 @@ function QuorumDial({
         role="radiogroup"
         aria-label="Fast to careful"
         className="flex gap-0.5 rounded-lg border p-0.5 text-xs"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       >
         {DIALS.map((d) => {
           const on = set.dial === d.id;
@@ -217,9 +217,9 @@ function QuorumDial({
               onClick={() => !on && onDial(d.id)}
               className="flex-1 rounded-md px-2 py-1 font-medium transition-colors disabled:cursor-not-allowed"
               style={{
-                background: on ? "var(--hive-panel)" : "transparent",
-                boxShadow: on ? "var(--hive-shadow-1)" : undefined,
-                color: on ? "var(--hive-ink)" : "var(--hive-ink-soft)",
+                background: on ? "var(--ligus-panel)" : "transparent",
+                boxShadow: on ? "var(--ligus-shadow-1)" : undefined,
+                color: on ? "var(--ligus-ink)" : "var(--ligus-ink-soft)",
                 opacity: disabled && !on ? 0.6 : 1,
               }}
             >
@@ -271,7 +271,7 @@ function Alternative({
       className="rounded-lg border p-2.5"
       data-testid={`alternative-${alt.label}`}
       style={{
-        borderColor: front || winner ? "var(--tint-cool-line)" : "var(--hive-line)",
+        borderColor: front || winner ? "var(--tint-cool-line)" : "var(--ligus-line)",
         background: front || winner ? "color-mix(in srgb, var(--tint-cool) 45%, transparent)" : "transparent",
         opacity: alt.active || winner ? 1 : 0.7,
       }}
@@ -279,7 +279,7 @@ function Alternative({
       <div className="flex items-start gap-2">
         <span
           className="grid h-5 w-5 shrink-0 place-items-center rounded-md font-mono text-[11px] font-semibold"
-          style={{ background: "var(--hive-mist)", color: "var(--hive-ink-soft)" }}
+          style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
           aria-label={`Alternative ${alt.label}`}
         >
           {alt.label}
@@ -307,7 +307,7 @@ function Alternative({
             <button
               type="button"
               className="font-medium underline-offset-2 hover:underline"
-              style={{ color: "var(--hive-accent-ink)" }}
+              style={{ color: "var(--ligus-accent-ink)" }}
               onClick={() => setDiffOpen(true)}
             >
               View diff
@@ -320,7 +320,7 @@ function Alternative({
       <div className="mt-2">
         <div
           className="h-1.5 overflow-hidden rounded-full"
-          style={{ background: "color-mix(in srgb, var(--hive-ink) 10%, transparent)" }}
+          style={{ background: "color-mix(in srgb, var(--ligus-ink) 10%, transparent)" }}
           role="meter"
           aria-label={`Support for ${alt.label}`}
           aria-valuemin={0}
@@ -331,14 +331,14 @@ function Alternative({
             className="h-full rounded-full"
             style={{
               width: `${pct}%`,
-              background: alt.meetsQuorum ? "var(--hive-success)" : "var(--hive-accent-cool)",
+              background: alt.meetsQuorum ? "var(--ligus-success)" : "var(--ligus-accent-cool)",
             }}
           />
         </div>
         <div className="mt-1 flex flex-wrap gap-x-1.5 text-[11.5px] text-ink-soft">
           <span>
             {alt.qualifyingScouts}/{set.agentQuorum} scouts over the bar
-            {alt.meetsQuorum && <span style={{ color: "var(--hive-success-ink)" }}> · quorum met</span>}
+            {alt.meetsQuorum && <span style={{ color: "var(--ligus-success-ink)" }}> · quorum met</span>}
           </span>
           <span>· support {alt.support}</span>
           {alt.scouts > 0 && (
@@ -352,7 +352,7 @@ function Alternative({
 
       {/* Posted assessments only; pending scouts never show a number. */}
       {(alt.assessments.length > 0 || alt.pendingScouts.length > 0 || (awaiting > 0 && alt.active && set.phase === "scouting")) && (
-        <div className="mt-2 space-y-1 rounded-md px-2 py-1.5" style={{ background: "var(--hive-mist)" }}>
+        <div className="mt-2 space-y-1 rounded-md px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
           {alt.assessments.map((a) => (
             <div key={a.id} className="flex items-center gap-1.5 text-xs" data-testid="assessment">
               <span className="font-medium">{a.scoutName}</span>
@@ -456,7 +456,7 @@ function Preflight({ checks }: { checks: NonNullable<SetAlternativeDto["prefligh
         <span
           aria-hidden
           className="inline-flex"
-          style={{ color: ok ? "var(--hive-success-ink)" : skipped ? "var(--hive-ink-faint)" : "var(--hive-danger-ink)" }}
+          style={{ color: ok ? "var(--ligus-success-ink)" : skipped ? "var(--ligus-ink-faint)" : "var(--ligus-danger-ink)" }}
         >
           {ok ? <IconCheck size={12} /> : skipped ? <span className="w-3 text-center">–</span> : <IconX size={12} />}
         </span>
@@ -470,14 +470,14 @@ function Preflight({ checks }: { checks: NonNullable<SetAlternativeDto["prefligh
     <div
       className="mt-2 rounded-md border px-2 py-1.5"
       style={{
-        borderColor: checks.passed ? "var(--hive-success-line)" : "var(--hive-danger-line)",
-        background: checks.passed ? "var(--hive-success-tint)" : "var(--hive-danger-tint)",
+        borderColor: checks.passed ? "var(--ligus-success-line)" : "var(--ligus-danger-line)",
+        background: checks.passed ? "var(--ligus-success-tint)" : "var(--ligus-danger-tint)",
       }}
       data-testid="preflight"
     >
       <div
         className="mb-1 text-[11.5px] font-semibold"
-        style={{ color: checks.passed ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
+        style={{ color: checks.passed ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)" }}
       >
         Pre-flight {checks.passed ? "passed" : "failed"}
       </div>

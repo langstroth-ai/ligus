@@ -34,10 +34,10 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
             key={t.id}
             className="group flex shrink-0 items-center gap-1 rounded-lg px-2 py-0.5 text-[12px] transition-colors"
             style={{
-              background: active ? "var(--hive-mist)" : "transparent",
-              color: active ? "var(--hive-ink)" : "var(--hive-ink)",
+              background: active ? "var(--ligus-mist)" : "transparent",
+              color: active ? "var(--ligus-ink)" : "var(--ligus-ink)",
               opacity: active ? 1 : 0.6,
-              border: `1px solid ${active ? "var(--hive-line)" : "transparent"}`,
+              border: `1px solid ${active ? "var(--ligus-line)" : "transparent"}`,
             }}
           >
             <button
@@ -53,7 +53,7 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
                 type="button"
                 aria-label={`Close ${t.title}`}
                 title="Close terminal"
-                className="inline-flex h-4 w-4 items-center justify-center rounded opacity-0 transition-opacity hover:bg-[color:var(--hive-overlay)] group-hover:opacity-70"
+                className="inline-flex h-4 w-4 items-center justify-center rounded opacity-0 transition-opacity hover:bg-[color:var(--ligus-overlay)] group-hover:opacity-70"
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(t.id);
@@ -70,8 +70,8 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
           type="button"
           aria-label="New terminal"
           title="New terminal"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--hive-overlay)] hover:opacity-100"
-          style={{ color: "var(--hive-ink)" }}
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
+          style={{ color: "var(--ligus-ink)" }}
           onClick={onNew}
         >
           <IconPlus size={14} />

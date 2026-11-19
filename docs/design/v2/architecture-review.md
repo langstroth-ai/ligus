@@ -23,10 +23,10 @@ Unless a path says otherwise, citations are relative to the root of this repo on
 
 Not Reject. The cryptographic and data primitives are sound, and they already live in shared crates. They are:
 
-- the signed envelope with its frozen `hive-envelope-v3` preimage (`crates/hive-core/src/crypto.rs:100-127`);
-- the epoch-aware `SyncEngine`, which seals at the highest epoch and opens each body at its own epoch (`crates/hive-runtime/src/sync_engine.rs:97-260`);
-- the canonical-order fold (`crates/hive-core/src/events.rs:927-1005`);
-- device certificates, the config-log roster, and `ChatService` in `hive-runtime`.
+- the signed envelope with its frozen `hive-envelope-v3` preimage (`crates/ligus-core/src/crypto.rs:100-127`);
+- the epoch-aware `SyncEngine`, which seals at the highest epoch and opens each body at its own epoch (`crates/ligus-runtime/src/sync_engine.rs:97-260`);
+- the canonical-order fold (`crates/ligus-core/src/events.rs:927-1005`);
+- device certificates, the config-log roster, and `ChatService` in `ligus-runtime`.
 
 None of the vision's six deployment shapes needs a new storage model or a new sync protocol.
 
@@ -74,7 +74,7 @@ flowchart TB
     ROT["4 rotation sites: version = relay max + 1\n(lib.rs:4572, 12710, 13055, 13315)"]
     LIB --> SYNCD & TURND & WF & FLOW & GUARDS & PSET & ROT
   end
-  subgraph CLI["ligus CLI — crates/hive-cli"]
+  subgraph CLI["ligus CLI — crates/ligus-cli"]
     SERVE["serve/: phone REST+SSE, tunnel host,\ndashboards, own vote/apply (api.rs:696, 930)"]
     WORKER["worker.rs: drain_tick / run_turn (211, 359)\nown envelope composition (421-436)"]
     SYNCC["sync_engine(): with_key(epoch 0) only\n(main.rs:273-279)"]
@@ -83,9 +83,9 @@ flowchart TB
     WORKER --> SYNCC
   end
   subgraph Shared["Shared crates"]
-    CORE["hive-core: events, fold (project_with_hoist),\nauthorization.rs, e2ee, crypto, flow/, guard, workflow"]
-    RT["hive-runtime: ChatService (one author), EventStore (hive.db,\nguard_signals), SyncEngine, envelope_verifier, tool_loop,\nsandbox::enforce, device_enroll (act_as_owner_device)"]
-    PROTO["hive-proto: Tauri DTOs -> TS bindings"]
+    CORE["ligus-core: events, fold (project_with_hoist),\nauthorization.rs, e2ee, crypto, flow/, guard, workflow"]
+    RT["ligus-runtime: ChatService (one author), EventStore (ligus.db,\nguard_signals), SyncEngine, envelope_verifier, tool_loop,\nsandbox::enforce, device_enroll (act_as_owner_device)"]
+    PROTO["ligus-proto: Tauri DTOs -> TS bindings"]
   end
   Desktop --> RT
   CLI --> RT
@@ -101,20 +101,20 @@ flowchart TB
   SYNCD --> FEAT
   SYNCC --> TX
   Phone["iPhone: thin client, bearer or hpc1 Noise\nno signing key, plaintext from serve"] -->|REST/SSE or tunnel| SERVE
-  Ext["external observability tools"] -.->|read hive.db + guard_signals| RT
+  Ext["external observability tools"] -.->|read ligus.db + guard_signals| RT
 ```
 
 ### How this diverges from the vision
 
 | Vision requirement | Reality | Root cause |
 |---|---|---|
-| One product across solo, fleet, team, k8s and keyless cluster | Two host stacks: the desktop (`app/src`) and the CLI hosts (`hive-cli`). They share primitives but not orchestration. | No host layer. Orchestration was written as Tauri commands. |
+| One product across solo, fleet, team, k8s and keyless cluster | Two host stacks: the desktop (`app/src`) and the CLI hosts (`ligus-cli`). They share primitives but not orchestration. | No host layer. Orchestration was written as Tauri commands. |
 | Serve, worker and controller share the turn and workflow logic | The workflow engine (`app/src/workflows.rs:25` imports `tauri::{AppHandle, …}`), flow hooks, compaction, retrieval and the proposal-set apply are desktop-only. | Same. |
-| One workspace-applied sandbox envelope for every runtime | Composed twice (`app/src/guards.rs:789` vs `crates/hive-cli/src/worker.rs:421-436`). `isolate_writes` is enforced only on the desktop (`lib.rs:7953`). `protected_dirs` is never read: `builtin_tools.rs:433` hard-codes its own copy, and CLI runtimes are not covered. | The envelope is a data type, not an enforcement seam. |
+| One workspace-applied sandbox envelope for every runtime | Composed twice (`app/src/guards.rs:789` vs `crates/ligus-cli/src/worker.rs:421-436`). `isolate_writes` is enforced only on the desktop (`lib.rs:7953`). `protected_dirs` is never read: `builtin_tools.rs:433` hard-codes its own copy, and CLI runtimes are not covered. | The envelope is a data type, not an enforcement seam. |
 | Phones post as their own person | The phone has no signing key. serve signs with its single `ChatService.author`, which is the owner when enrolled (`chat_service.rs:108-113`). Phone votes are recorded as the owner's (`serve/api.rs:696-700`). | Identity is process-wide, not per request. |
 | Cluster holds no keys (shape 5) | serve and worker both get `LIGUS_WORKSPACE_KEY` (`deploy/helm/ligus/templates/_helpers.tpl:132-147` on `feat/k8s-phase1`). No executor, `exec-turn` or turn bundle exists. | No `TurnExecutor` seam; turn I/O is fused with `ChatService` writes (`worker.rs:359-520`). |
 | Multi-tenant SSO | `hrt1` has no tenant, device or workspace claims. Reads are open under the open policy. Workspace ids are client-chosen (`relay/scope.go:70-79`, `token.go:24-37`). | The relay has no tenancy model yet. Expected: these are design-page "to build" items. |
-| Content-free telemetry export | External tools read `hive.db` and `guard_signals` directly. Telemetry and coordination state are mixed in the synced `FlowRecorded` log. | No facts interface. |
+| Content-free telemetry export | External tools read `ligus.db` and `guard_signals` directly. Telemetry and coordination state are mixed in the synced `FlowRecorded` log. | No facts interface. |
 
 ---
 
@@ -124,7 +124,7 @@ Each symptom is traced to a root cause. **RC-n** are root causes; **Sym-n** are 
 
 ### RC-1: No host abstraction. The desktop *is* the reference host, and the CLI hosts are re-implementations. (Sym 1, 2, 3, 5)
 
-- **Keyring.** The desktop builds an epoch keyring from the relay's rotations (`app/src/lib.rs:11368-11385`, `build_keyring` at `:10939`) and passes it with `with_keyring` (`:11424`). Every CLI host (sync, serve, worker) calls `sync_engine()` → `with_key(derive_workspace_key(pass))`, which inserts **only epoch 0** (`crates/hive-cli/src/main.rs:273-279`, `sync_engine.rs:200-204`). No `hive-cli` code calls `fetch_key_rotations` or `with_keyring`.
+- **Keyring.** The desktop builds an epoch keyring from the relay's rotations (`app/src/lib.rs:11368-11385`, `build_keyring` at `:10939`) and passes it with `with_keyring` (`:11424`). Every CLI host (sync, serve, worker) calls `sync_engine()` → `with_key(derive_workspace_key(pass))`, which inserts **only epoch 0** (`crates/ligus-cli/src/main.rs:273-279`, `sync_engine.rs:200-204`). No `ligus-cli` code calls `fetch_key_rotations` or `with_keyring`.
   - Consequence: after any rotation, serve, worker and the phone behind them stop reading new traffic. `NotYetOpenable` holds the cursor (`sync_engine.rs:240-243`).
   - Worse, they keep **sealing at epoch 0**. A removed member who knew the passphrase can read those events.
 - **Turn path.** The desktop runs `send_message` → `maybe_respond` → `run_prepared_turn` → `run_prepared_turn_inner` (`lib.rs:8466, 8712, 7730, 7771`). The worker runs `drain_tick` → `run_turn` (`worker.rs:211, 359`). These are two prompt assemblers and two runtime-resolution paths, and only one of them has compaction, retrieval, the flow priming hooks and path redaction.
@@ -159,7 +159,7 @@ Their properties:
 
 ### RC-3: Keys are managed outside the signed log. (new K1; R3, R4)
 
-- `WorkspaceKeyRotation` is an unsigned `{version, sealed}` (`crates/hive-core/src/e2ee.rs:142-146`), sealed with anonymous ECDH (`e2ee.rs:85-128`, which has no sender authentication).
+- `WorkspaceKeyRotation` is an unsigned `{version, sealed}` (`crates/ligus-core/src/e2ee.rs:142-146`), sealed with anonymous ECDH (`e2ee.rs:85-128`, which has no sender authentication).
 - It is published to a relay side table that any admitted writer can append to (`relay/server.go:239, 709-726`; open by default).
 - Each device accepts **every rotation it can open** and seals at the highest version (`lib.rs:10939-10962`, `sync_engine.rs:216-228`).
 - The version is chosen as `relay max + 1` at four call sites, so it races. The relay also trims the keyring (`relay/memory.go:442-448`).
@@ -179,7 +179,7 @@ Their properties:
 
 ### RC-6: Telemetry, coordination state and audit share one channel. (Sym 7)
 
-- `FlowRecord` (`crates/hive-core/src/flow/mod.rs:265-294`) mixes several kinds of data in one synced, signed enum:
+- `FlowRecord` (`crates/ligus-core/src/flow/mod.rs:265-294`) mixes several kinds of data in one synced, signed enum:
   - coordination state that peers must fold (`Zone`, `Mark`, `Handoff`, `Beacon`, `AgentProfile`);
   - measurements (`TurnTagged`, `RouteDecision`, `EdgeWait`, `RouteStop`, `Progress`, `Touch`).
 - Guard decisions go to a device-local `guard_signals` table instead (`event_store.rs:150-159, 631-643`).
@@ -195,15 +195,15 @@ Their properties:
 
 ### RC-8: Policy depends on environment variables, per device. (new)
 
-- `IdentityMode::from_env` (`LIGUS_IDENTITY_MODE`, `crates/hive-runtime/src/identity_verifier.rs:62-69`) changes which events a device projects (held vs applied).
+- `IdentityMode::from_env` (`LIGUS_IDENTITY_MODE`, `crates/ligus-runtime/src/identity_verifier.rs:62-69`) changes which events a device projects (held vs applied).
 - Nothing in the app or CLI populates the GitHub identity cache (grep finds no `identity_cache` wiring outside `sync_engine.rs`), so a device with the variable set holds identity-gated events forever.
 - More generally, any per-device knob that changes the *fold* breaks convergence. The fold must depend only on the log.
 
 ### RC-9: Names (Sym 8)
 
-- Crates are still `hive-*` and the k8s branch reads `HIVE_*` env vars (`crates/hive-cli/src/main.rs:58,100` on `feat/k8s-phase1`), while its chart sets `LIGUS_*`.
+- Crates are still `ligus-*` and the k8s branch reads `LIGUS_*` env vars (`crates/ligus-cli/src/main.rs:58,100` on `feat/k8s-phase1`), while its chart sets `LIGUS_*`.
 - Cosmetic, except for the env mismatch, which is a real deploy bug (the chart only works with a release-branch image).
-- Wire identifiers and domain-separation strings must keep the `hive` spelling, and `compat.rs:1-30` already documents that.
+- Wire identifiers and domain-separation strings must keep the `ligus` spelling, and `compat.rs:1-30` already documents that.
 
 ---
 
@@ -219,7 +219,7 @@ flowchart TB
     WORKERB["ligus worker\nheadless HostApi, no UI"]
     CTRL["ligus controller (k8s)\nHostApi + K8s executor"]
   end
-  subgraph Host["ligus-host (new crate, from app/src + hive-cli)"]
+  subgraph Host["ligus-host (new crate, from app/src + ligus-cli)"]
     API["HostApi: chats, proposals, sets, workflows,\nagents, hosts, people (DTOs in ligus-proto)"]
     SESS["Principal/Signer per request:\nlocal device | certified phone | delegated (opt-in)"]
     DISP["Dispatcher: one turn_runs_here + claims + leases"]
@@ -232,8 +232,8 @@ flowchart TB
     DISP --> TURN --> EXEC
     TURN --> ENV
   end
-  subgraph Log["ligus-log (hive-core + runtime, unified)"]
-    STORE["EventStore (hive.db)"]
+  subgraph Log["ligus-log (ligus-core + runtime, unified)"]
+    STORE["EventStore (ligus.db)"]
     SYNC["SyncEngine (one loop impl)"]
     KEYS["KeyringEngine: epochs ONLY from signed\nWorkspaceKeyRotated on config log"]
     VER["Verifier: signature over received bytes"]
@@ -274,8 +274,8 @@ flowchart TB
 | **Principal/Signer per request** | Phones post as their own person (shape 3, 4, 6). | `append_signed(.., signer: &dyn Signer)`. The phone is just another **device**, certified by its person's account key with the *existing* `DeviceCertificate` (`hive-device-cert-v1`). | Do not invent a new identity type. A Secure Enclave P-256 key needs a new cert algorithm, so keep it as an option (Section 3.3). |
 | **TurnExecutor** | Shapes 4 and 5, PR tests, mesh interop. | `TurnBundle` in, deltas plus `TurnResult {reply, patch, facts}` out. The bundle carries the envelope verbatim. The executor never touches `ChatService`. | Do not move signing into executors. Executors hold no workspace or device key, ever. |
 | **EnvelopeEnforcer** | "One sandbox envelope for every runtime." | One function that maps envelope + runtime to an enforcement plan (args, MCP set, worktree, protected dirs, egress profile, k8s NetworkPolicy fragment). | Do not claim confinement for runtimes that cannot be confined. Keep refusing them, as `record_egress_refusal` does. |
-| **Relay split** | Shape 6. The relay is the "ciphertext only" trust anchor in shape 5. | Within the one Go module: `core/` (envelopes, SSE, tunnel, push, `hrt1`) and `services/` (directory, friends, pairing, membership mirror, admin), each with its own `Store` interface. A build tag or flag drops `services/` entirely. | Do not change `/v1` paths, `hrt1`, `hpc1`, `hive-tunnel/1` or the `X-Hive-*` headers. |
-| **FactsSink** | Stable, content-free export (Sym 7). | A trait emitting OTel GenAI spans and events with `ligus.*` attributes, plus an optional local OTLP or JSONL file. External tools consume OTLP and stop reading `hive.db`. | Do not sync telemetry. Do not export prompts, messages, diffs or paths. Do not name any external product in public code. |
+| **Relay split** | Shape 6. The relay is the "ciphertext only" trust anchor in shape 5. | Within the one Go module: `core/` (envelopes, SSE, tunnel, push, `hrt1`) and `services/` (directory, friends, pairing, membership mirror, admin), each with its own `Store` interface. A build tag or flag drops `services/` entirely. | Do not change `/v1` paths, `hrt1`, `hpc1`, `hive-tunnel/1` or the `X-Ligus-*` headers. |
+| **FactsSink** | Stable, content-free export (Sym 7). | A trait emitting OTel GenAI spans and events with `ligus.*` attributes, plus an optional local OTLP or JSONL file. External tools consume OTLP and stop reading `ligus.db`. | Do not sync telemetry. Do not export prompts, messages, diffs or paths. Do not name any external product in public code. |
 | **ligus-auth** (2.x) | Layer 3 (IdP, SCIM). | A separate service that mints `hrt1` with added claims. The relay only verifies. | Do not let the IdP grant workspace membership; layer 1 stays authoritative. |
 
 ### 3.2 Device and identity model
@@ -386,7 +386,7 @@ The relay operator can do the same without M. This defeats "the key is never on 
 
 **Fix (pre-2.0).**
 - Deserialize the envelope with `payload_raw: Box<RawValue>`, and compute the preimage from `payload_raw` (and from raw `scope`, `timestamp` and `actor_stamp` too).
-- Persist the raw envelope JSON in `hive.db`. It may already be there as `envelope_json`; verify.
+- Persist the raw envelope JSON in `ligus.db`. It may already be there as `envelope_json`; verify.
 - A verified envelope with unknown content is kept and re-folded after upgrade, instead of being skipped.
 - Also forbid `HashMap` in signed types (iteration order); use `BTreeMap`. Add a lint test.
 
@@ -514,7 +514,7 @@ The relay operator can do the same without M. This defeats "the key is never on 
 
 **Status (code, 2026-11-16).** Not yet met for chat turns. `TurnClaimed` resolves deterministically (the first claim in canonical fold order wins, `ChatService::claim_turn`), and a device that has synced a competing claim backs off, but two devices that both claim within one sync round trip can both run and post; the streaming placeholder is the second-line guard.
 
-**Status (code, 2026-11-18).** Met for committed results ([repos-and-checkouts](repos-and-checkouts.md) section 11). The dispatcher (`hive_core::dispatch`) is keyed by **device id**: a claim is signed by the device it names and may carry an epoch, the holder it supersedes and signed coverage of the chat's repo; the answer (a reply whose verified origin is that device) is the commit, and every other answer to the turn is marked superseded in the fold. Both dispatch gates, the deferred claim, hand-offs, the worker, workflow stage offers and the desktop's revision and regenerate turns call `ChatService::dispatch_turn`. Tested by `prop_dispatch_converges_and_commits_at_most_once` (N devices, partitions, crashes, reorderings, a revoked device writing backdated claims, a hostile member's live device claiming, handing over and answering with backdated lamports and chosen times). The adversarial review (same day) added the hand-over time check, at most two holds per device, the prompt-answer rule, agent-key origins from the workspace roster and the live-but-silent hand-over (section 11.2 to 11.6). Executions are not exactly-once: a partition can still run a turn twice; only one result commits.
+**Status (code, 2026-11-18).** Met for committed results ([repos-and-checkouts](repos-and-checkouts.md) section 11). The dispatcher (`ligus_core::dispatch`) is keyed by **device id**: a claim is signed by the device it names and may carry an epoch, the holder it supersedes and signed coverage of the chat's repo; the answer (a reply whose verified origin is that device) is the commit, and every other answer to the turn is marked superseded in the fold. Both dispatch gates, the deferred claim, hand-offs, the worker, workflow stage offers and the desktop's revision and regenerate turns call `ChatService::dispatch_turn`. Tested by `prop_dispatch_converges_and_commits_at_most_once` (N devices, partitions, crashes, reorderings, a revoked device writing backdated claims, a hostile member's live device claiming, handing over and answering with backdated lamports and chosen times). The adversarial review (same day) added the hand-over time check, at most two holds per device, the prompt-answer rule, agent-key origins from the workspace roster and the live-but-silent hand-over (section 11.2 to 11.6). Executions are not exactly-once: a partition can still run a turn twice; only one result commits.
 
 **Hidden assumptions.**
 - Actor id identifies a device (broken by delegation).
@@ -551,7 +551,7 @@ Rules for every phase:
 
 - main stays shippable;
 - each phase lands behind its own tests;
-- no change to `hrt1`, `hpc1`, `hive-tunnel/1`, `hive/sync/1`, the `X-Hive-*` headers, `/v1` paths, or any domain-separation string (`hive-envelope-v3`, `hive-device-cert-v1`, `hive-device-enroll-v1`, `hive-workspace-key-seal-v1`, `hive-workspace-key-argon2id`);
+- no change to `hrt1`, `hpc1`, `hive-tunnel/1`, `hive/sync/1`, the `X-Ligus-*` headers, `/v1` paths, or any domain-separation string (`hive-envelope-v3`, `hive-device-cert-v1`, `hive-device-enroll-v1`, `hive-workspace-key-seal-v1`, `hive-workspace-key-argon2id`);
 - new serialized fields use `skip_serializing_if` when empty;
 - public code never names any external observability product.
 
@@ -559,39 +559,39 @@ Rules for every phase:
 
 | # | Phase | Scope | Files / crates | Size | Risk | Depends on |
 |---|---|---|---|---|---|---|
-| **P0.1** | Raw-bytes verification | Keep `RawValue` for signed fields; preimage from raw; retain verified-but-unknown events; no `HashMap` in signed types | `hive-core/src/crypto.rs`, `events.rs` (envelope serde), `hive-runtime/src/sync_engine.rs`, `event_store.rs` | M | Medium: touches every verify path. Golden vectors make it safe. | none |
-| **P0.2** | AuthzEngine v1 | Extract every fold-time check into `hive-core/src/authz/` (one `fn authorize(env, &RosterAt) -> Decision`); config-frontier field; hold instead of skip; votes bound to signer + `diff_digest`; derived status; `rules_version`; self-revoke rule; S4/S5/S6 bounds | `hive-core/src/authorization.rs`, `events.rs:927-1005`, `proposals.rs`, `proposal_sets.rs`, `guard.rs`, `lease.rs`, `flow/`; `hive-runtime/src/chat_service.rs:1975-2010`; drop `vote_on_proposal`'s role parameter (`serve/api.rs:699`) | L | High: semantic. Mitigated by the prefix-stability and order-independence properties, plus replaying the owner's real `hive.db` before and after (diff the projected state; every difference must be explained). | P0.1 |
-| **P0.3** | Signed key rotations + KeyringEngine | `WorkspaceKeyRotated` config event; `hive-runtime/src/keyring.rs` used by the desktop and all CLI hosts; delete the four `max+1` sites; relay keyring becomes a legacy fallback | `hive-core/src/e2ee.rs`, `events.rs`, `authorization.rs`; new `hive-runtime/src/keyring.rs`; `app/src/lib.rs:4572, 10916-10962, 11368-11424, 12710, 13055, 13315`; `hive-cli/src/main.rs:273-279`, `serve/mod.rs:978, 1072` | M | Medium | P0.2 |
-| **P0.4** | Per-workspace trust roster | `build_roster(ws, verified_only)`; founder pin from first-sync (B2) | `hive-runtime/src/envelope_verifier.rs:278+`, `device_enroll.rs:207-245`, `sync_engine.rs:553-610` | M | Medium | P0.2 |
-| **P0.5** | Telemetry boundary | Stop emitting measurement `FlowRecord`s to the log; route them to `guard_signals` (renamed internally to facts); add a bounded `AgentOutcomeSummary` if scoring needs it | `hive-core/src/flow/mod.rs`, `app/src/flow.rs`, `hive-runtime/src/event_store.rs:150, 631` | S–M | Low | none |
-| **P0.6** | Phone vote guard (interim) | Refuse phone approvals on a delegated host unless the pairing is the owner's; record `pid` | `hive-cli/src/serve/api.rs:696-720` | S | Low | none |
+| **P0.1** | Raw-bytes verification | Keep `RawValue` for signed fields; preimage from raw; retain verified-but-unknown events; no `HashMap` in signed types | `ligus-core/src/crypto.rs`, `events.rs` (envelope serde), `ligus-runtime/src/sync_engine.rs`, `event_store.rs` | M | Medium: touches every verify path. Golden vectors make it safe. | none |
+| **P0.2** | AuthzEngine v1 | Extract every fold-time check into `ligus-core/src/authz/` (one `fn authorize(env, &RosterAt) -> Decision`); config-frontier field; hold instead of skip; votes bound to signer + `diff_digest`; derived status; `rules_version`; self-revoke rule; S4/S5/S6 bounds | `ligus-core/src/authorization.rs`, `events.rs:927-1005`, `proposals.rs`, `proposal_sets.rs`, `guard.rs`, `lease.rs`, `flow/`; `ligus-runtime/src/chat_service.rs:1975-2010`; drop `vote_on_proposal`'s role parameter (`serve/api.rs:699`) | L | High: semantic. Mitigated by the prefix-stability and order-independence properties, plus replaying the owner's real `ligus.db` before and after (diff the projected state; every difference must be explained). | P0.1 |
+| **P0.3** | Signed key rotations + KeyringEngine | `WorkspaceKeyRotated` config event; `ligus-runtime/src/keyring.rs` used by the desktop and all CLI hosts; delete the four `max+1` sites; relay keyring becomes a legacy fallback | `ligus-core/src/e2ee.rs`, `events.rs`, `authorization.rs`; new `ligus-runtime/src/keyring.rs`; `app/src/lib.rs:4572, 10916-10962, 11368-11424, 12710, 13055, 13315`; `ligus-cli/src/main.rs:273-279`, `serve/mod.rs:978, 1072` | M | Medium | P0.2 |
+| **P0.4** | Per-workspace trust roster | `build_roster(ws, verified_only)`; founder pin from first-sync (B2) | `ligus-runtime/src/envelope_verifier.rs:278+`, `device_enroll.rs:207-245`, `sync_engine.rs:553-610` | M | Medium | P0.2 |
+| **P0.5** | Telemetry boundary | Stop emitting measurement `FlowRecord`s to the log; route them to `guard_signals` (renamed internally to facts); add a bounded `AgentOutcomeSummary` if scoring needs it | `ligus-core/src/flow/mod.rs`, `app/src/flow.rs`, `ligus-runtime/src/event_store.rs:150, 631` | S–M | Low | none |
+| **P0.6** | Phone vote guard (interim) | Refuse phone approvals on a delegated host unless the pairing is the owner's; record `pid` | `ligus-cli/src/serve/api.rs:696-720` | S | Low | none |
 | **P0.7** | Relay hot fixes (relay repo; independent of the 2.0 tag but ship now) | Remove the GitHub bearer fallback; require sealed pairing payloads (or delete `/v1/pair` writes); open-relay keyring POST stays open but is now harmless after P0.3 | `relay/server.go:1322-1327, 746-800` | S | Low | none |
-| **P0.8** | Identity-mode env → workspace setting or removal | No fold behavior from env; remove `LIGUS_IDENTITY_MODE` or make it a signed workspace policy | `hive-runtime/src/identity_verifier.rs:62`, `sync_engine.rs:180-197` | S | Low | P0.2 |
+| **P0.8** | Identity-mode env → workspace setting or removal | No fold behavior from env; remove `LIGUS_IDENTITY_MODE` or make it a signed workspace policy | `ligus-runtime/src/identity_verifier.rs:62`, `sync_engine.rs:180-197` | S | Low | P0.2 |
 
 **Migration and rollback for P0.**
 
 - **Migration.** The owner's existing data is the only data.
-  1. Back up `hive.db` and the data dirs.
+  1. Back up `ligus.db` and the data dirs.
   2. Run a one-off `ligus doctor refold` that re-projects with the new engine and prints a diff of dropped or admitted events.
   3. After P0.3, rotate the workspace key once from the desktop. This produces the first signed rotation; the previous unsigned epochs stay readable as legacy history.
-- **Rollback.** All of P0 is code-only. The new event kinds deserialize as `Unknown` on older builds, which is acceptable because they are pre-release builds. Restore the backed-up `hive.db` to roll back. Tag the RC before P0 so it can be re-cut.
-- **Test strategy.** Each phase adds the property tests from Section 4. A replay harness (`crates/hive-core/tests/replay_owner_db.rs`, gated on an env path) runs the owner's real log, before and after, in CI locally.
+- **Rollback.** All of P0 is code-only. The new event kinds deserialize as `Unknown` on older builds, which is acceptable because they are pre-release builds. Restore the backed-up `ligus.db` to roll back. Tag the RC before P0 so it can be re-cut.
+- **Test strategy.** Each phase adds the property tests from Section 4. A replay harness (`crates/ligus-core/tests/replay_owner_db.rs`, gated on an env path) runs the owner's real log, before and after, in CI locally.
 
 ### 2.x, wire-compatible
 
 | # | Phase | Scope | Size | Notes |
 |---|---|---|---|---|
-| **P1** | `ligus-host` extraction, step 1 | New crate `crates/hive-host` (crate rename later). Move `workflows.rs`, `flow.rs`, `guards.rs` and `proposal_sets.rs` out of `app/src`, replacing `tauri::AppHandle` with an `Events` trait and `State<AppState>` with `&Host`. The Tauri app keeps thin command wrappers. | L | Mechanical. Risk: lock ordering; keep the same `Mutex` granularity. Test: the existing app tests move with the code; add `host_parity`. |
-| **P2** | Unified turn path | `TurnPlanner` (context: compaction, retrieval, vault, flow priming, redaction) + `Dispatcher` (one `turn_runs_here`, claims) + `ProposalApplier` (single apply, set 2PC, human gate) + `EnvelopeEnforcer` in `hive-host`. serve and worker call them; delete `worker::run_turn`'s duplicate assembly and `serve/api.rs::apply_on_this_host`. Removes the `*_inner` wrappers. | L | Depends on P1. Highest regression surface. Test: `prop_enforcement_plan_host_independent`, `prop_exactly_once_dispatch`, golden prompts per runtime. |
+| **P1** | `ligus-host` extraction, step 1 | New crate `crates/ligus-host` (crate rename later). Move `workflows.rs`, `flow.rs`, `guards.rs` and `proposal_sets.rs` out of `app/src`, replacing `tauri::AppHandle` with an `Events` trait and `State<AppState>` with `&Host`. The Tauri app keeps thin command wrappers. | L | Mechanical. Risk: lock ordering; keep the same `Mutex` granularity. Test: the existing app tests move with the code; add `host_parity`. |
+| **P2** | Unified turn path | `TurnPlanner` (context: compaction, retrieval, vault, flow priming, redaction) + `Dispatcher` (one `turn_runs_here`, claims) + `ProposalApplier` (single apply, set 2PC, human gate) + `EnvelopeEnforcer` in `ligus-host`. serve and worker call them; delete `worker::run_turn`'s duplicate assembly and `serve/api.rs::apply_on_this_host`. Removes the `*_inner` wrappers. | L | Depends on P1. Highest regression surface. Test: `prop_enforcement_plan_host_independent`, `prop_exactly_once_dispatch`, golden prompts per runtime. |
 | **P3** | `TurnExecutor` seam | Trait + `InProcess`; `TurnBundle` v1; `ligus exec-turn` + `Process` executor. | M | Unlocks the k8s Phase 3. The bundle schema is versioned and skips empty fields. |
 | **P4** | Per-request `Signer`, host as its own member | `append_signed(.., signer)`; serve gets its own account/role; `act_as_owner_device` behind an explicit legacy flag. | M | Depends on P0.2 (authz knows delegation). |
 | **P5** | Phone device keys | Pairing ceremony: the laptop certifies the phone's Ed25519 key (existing `DeviceCertificate`); serve "prepare/sign/commit" endpoints; iOS signs. Optional later: P-256 SE cert type with a new domain string. | M (Rust) + M (iOS) | Phone posts become non-forgeable by the host. Remove the P0.6 interim guard after this. |
-| **P6** | Relay split | Go packages `core/` and `services/`, separate stores; tenant claims in `hrt1` (additive JSON claims, same format); `HIVE_RELAY_WORKSPACE_SCOPE=strict` default in tenant mode; high-entropy workspace ids for new workspaces (old ids keep working). | M | `/v1` byte-compatible. Test: frozen vectors, tenant-isolation tests. |
+| **P6** | Relay split | Go packages `core/` and `services/`, separate stores; tenant claims in `hrt1` (additive JSON claims, same format); `LANGSTROTH_RELAY_WORKSPACE_SCOPE=strict` default in tenant mode; high-entropy workspace ids for new workspaces (old ids keep working). | M | `/v1` byte-compatible. Test: frozen vectors, tenant-isolation tests. |
 | **P7** | k8s controller and executor | `K8sJob` executor, chart executor role with a one-time callback port (not the phone API port), envelope → NetworkPolicy; keyless chart mode (`serve.enabled=false`, an external controller dispatches); rebase `feat/k8s-phase1` onto `LIGUS_*` env names. | L | Depends on P3. |
-| **P8** | FactsSink + OTLP | `ligus.facts.v1` OTel export; `ligus facts export`. External tools move off `hive.db`. | M | Depends on P0.5. |
+| **P8** | FactsSink + OTLP | `ligus.facts.v1` OTel export; `ligus facts export`. External tools move off `ligus.db`. | M | Depends on P0.5. |
 | **P9** | ligus-auth (OIDC→hrt1, SCIM) | Separate service. | L | Depends on P6. |
 | **P10** | Mesh executor + optional A2A inbound | | M | Depends on P3. |
-| **P11** | Crate and identifier rename | `hive-*` → `ligus-*` crates and internal identifiers. Wire identifiers are frozen (pinned by tests in `crypto.rs:319+`, `e2ee.rs:305+`). | S–M | Do it last, or right after P1 to reduce churn on moved files. Pure rename; CI-guarded. |
+| **P11** | Crate and identifier rename | `ligus-*` → `ligus-*` crates and internal identifiers. Wire identifiers are frozen (pinned by tests in `crypto.rs:319+`, `e2ee.rs:305+`). | S–M | Do it last, or right after P1 to reduce churn on moved files. Pure rename; CI-guarded. |
 
 ```mermaid
 flowchart LR

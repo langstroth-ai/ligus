@@ -2,7 +2,7 @@
 // selection state, so they ask for a jump with a window event; App owns the
 // switch (and remembers the chat per workspace like a sidebar click does).
 
-export const OPEN_CHAT_EVENT = "hive:open-chat";
+export const OPEN_CHAT_EVENT = "ligus:open-chat";
 
 export type OpenChatDetail = { sessionId: string; /** a message to scroll to and flash */ messageId?: string };
 
@@ -20,14 +20,14 @@ export function flashMessage(messageId: string, tries = 20) {
   }
   const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
-  el.classList.remove("hive-flash");
+  el.classList.remove("ligus-flash");
   void el.offsetWidth;
-  el.classList.add("hive-flash");
+  el.classList.add("ligus-flash");
 }
 
 /// Open the Settings sheet on a tab (e.g. "team-sync") from anywhere; App
 /// owns the sheet and closes any modal in front of it.
-export const OPEN_SETTINGS_EVENT = "hive:open-settings";
+export const OPEN_SETTINGS_EVENT = "ligus:open-settings";
 
 export function openSettingsTab(tab: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));

@@ -20,9 +20,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use hive_core::attachment::{self, AttachmentPolicy, AttachmentRef, SharedAttachment};
-use hive_runtime::attachment_blob as blob;
-use hive_runtime::attachment_safety as safety;
+use ligus_core::attachment::{self, AttachmentPolicy, AttachmentRef, SharedAttachment};
+use ligus_runtime::attachment_blob as blob;
+use ligus_runtime::attachment_safety as safety;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
@@ -48,25 +48,25 @@ pub(crate) fn stage(data_dir: &std::path::Path, proposal_id: Uuid, sha256: &str,
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
-    hive_runtime::private_file::write_private_atomic(&dir.join(proposal_id.to_string()), bytes).map_err(map_err)
+    ligus_runtime::private_file::write_private_atomic(&dir.join(proposal_id.to_string()), bytes).map_err(map_err)
 }
 
 /// The relay transport for `workspace_id`, when it is the active synced
 /// workspace.
-fn transport_for(state: &AppState, workspace_id: Uuid) -> Result<(hive_runtime::RelayClient, String, hive_runtime::keyring::KeyringEngine), String> {
+fn transport_for(state: &AppState, workspace_id: Uuid) -> Result<(ligus_runtime::RelayClient, String, ligus_runtime::keyring::KeyringEngine), String> {
     let (url, room, ring) = blob_transport(state).ok_or("no relay is configured for this workspace, so files can't be shared or fetched")?;
-    if hive_core::room_workspace_id(&room) != workspace_id {
+    if ligus_core::room_workspace_id(&room) != workspace_id {
         return Err("switch to this chat's workspace to use its files".into());
     }
     Ok((state.relay_client(&url), room, ring))
 }
 
-fn session_of(state: &AppState, session_id: &str) -> Result<hive_core::ChatSession, String> {
+fn session_of(state: &AppState, session_id: &str) -> Result<ligus_core::ChatSession, String> {
     let id = Uuid::parse_str(session_id).map_err(map_err)?;
     state.service.lock().unwrap().load(id).map_err(map_err)?.ok_or_else(|| "unknown chat".to_string())
 }
 
-fn shared_in(session: &hive_core::ChatSession, attachment_id: &str) -> Result<SharedAttachment, String> {
+fn shared_in(session: &ligus_core::ChatSession, attachment_id: &str) -> Result<SharedAttachment, String> {
     let id = Uuid::parse_str(attachment_id).map_err(map_err)?;
     session.attachments.get(&id).cloned().ok_or_else(|| "no such attachment in this chat".to_string())
 }
@@ -138,7 +138,7 @@ pub(crate) struct AttachmentView {
     sha256: String,
     author: String,
     sender: String,
-    author_kind: hive_core::ActorKind,
+    author_kind: ligus_core::ActorKind,
     deleted: bool,
     blocked: bool,
     mine: bool,
@@ -174,7 +174,7 @@ pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) 
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
     let rules = svc.attachment_rules(session.workspace_id).unwrap_or_default();
-    let (_, role) = svc.attachment_standing(session.workspace_id).unwrap_or((hive_core::ActorKind::Human, hive_core::WorkspaceRole::Viewer));
+    let (_, role) = svc.attachment_standing(session.workspace_id).unwrap_or((ligus_core::ActorKind::Human, ligus_core::WorkspaceRole::Viewer));
     let placed = blob::placed_attachments(&session);
     drop(svc);
     let signed_by = |mid: &Uuid| session.authz.message_authors.get(mid).cloned();
@@ -217,7 +217,7 @@ pub(crate) fn list_attachments_sync(state: State<AppState>, session_id: String) 
                 deleted: s.deleted,
                 blocked: rules.blocked.contains(&a.sha256),
                 mine: s.author == me,
-                can_delete: !s.deleted && (s.author == me || role.rank() >= hive_core::WorkspaceRole::Admin.rank()),
+                can_delete: !s.deleted && (s.author == me || role.rank() >= ligus_core::WorkspaceRole::Admin.rank()),
                 name_class: class,
                 risky_by_name: class.risky() || attachment::double_extension(&a.name),
                 from_agent_offer: a.proposal_id.is_some(),
@@ -460,7 +460,7 @@ pub(crate) fn attachment_rules_sync(state: State<AppState>) -> Result<Attachment
     drop(svc);
     Ok(AttachmentRulesView {
         can_share: !local_only && rules.policy.sharer_refusal(kind, role).is_none(),
-        can_edit: !local_only && role.rank() >= hive_core::WorkspaceRole::Admin.rank() && kind == hive_core::ActorKind::Human,
+        can_edit: !local_only && role.rank() >= ligus_core::WorkspaceRole::Admin.rank() && kind == ligus_core::ActorKind::Human,
         relay: blob_transport(&state).is_some(),
         local_only,
         blocked: rules.blocked.iter().cloned().collect(),
@@ -547,9 +547,9 @@ pub(crate) fn share_approved_offers(app: &AppHandle) {
 #[allow(clippy::too_many_arguments)]
 async fn share_offer(
     state: &AppState,
-    client: &hive_runtime::RelayClient,
+    client: &ligus_runtime::RelayClient,
     room: &str,
-    ring: &hive_runtime::keyring::KeyringEngine,
+    ring: &ligus_runtime::keyring::KeyringEngine,
     ws: Uuid,
     chat: Uuid,
     pid: Uuid,

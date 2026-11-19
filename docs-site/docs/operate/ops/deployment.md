@@ -21,7 +21,7 @@ Time: about 20 minutes for the relay, 2 minutes per teammate.
 | Where the relay runs | Fly.io, a VM with Docker, Kubernetes (preview) | a small always-on machine with a volume or Postgres |
 | Relay storage | Postgres, JSON snapshot on a volume, memory | snapshot for a small team; Postgres for more |
 | Who may use the relay | open, static token list, signed tokens | signed tokens (`hrt1`) for anything on the internet |
-| Relay-side membership | off, `LIGUS_RELAY_MEMBERSHIP=1` | off to start; see [Server-side membership](server-side-membership.md) |
+| Relay-side membership | off, `LANGSTROTH_RELAY_MEMBERSHIP=1` | off to start; see [Server-side membership](server-side-membership.md) |
 
 ## 1. Deploy the relay
 
@@ -31,7 +31,7 @@ version on Fly.io:
 ```sh
 git clone https://github.com/langstroth-ai/langstroth-relay && cd relay
 fly launch --config deploy/fly.toml --copy-config --no-deploy
-fly volumes create hive_data --size 1 --region <region>
+fly volumes create ligus_data --size 1 --region <region>
 fly deploy . --config deploy/fly.toml
 curl -s https://<app>.fly.dev/v1/health
 # ok
@@ -46,7 +46,7 @@ On your own machine (not the relay), with the relay binary built
 ./langstroth-relay keygen
 # private_key=…   # SECRET — keep on the issuer only (never on the relay)
 # public_key=…
-fly secrets set LIGUS_RELAY_TOKEN_PUBKEY=<public_key>
+fly secrets set LANGSTROTH_RELAY_TOKEN_PUBKEY=<public_key>
 curl -s -o /dev/null -w '%{http_code}\n' https://<app>.fly.dev/v1/workspaces/x/envelopes
 # 401
 ```
@@ -135,7 +135,7 @@ See
 
 ## 6. Security checklist
 
-- [ ] TLS in front of the relay; `LIGUS_RELAY_TOKEN_PUBKEY` set and verified with a `401`
+- [ ] TLS in front of the relay; `LANGSTROTH_RELAY_TOKEN_PUBKEY` set and verified with a `401`
 - [ ] issuer private key off the relay, in a password manager
 - [ ] tokens issued with an expiry, one per person and box
 - [ ] co-member invites where possible; invite links only over trusted channels; compare safety codes on first contact

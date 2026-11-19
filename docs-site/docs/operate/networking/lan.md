@@ -1,7 +1,7 @@
 # LAN discovery
 
 > **Roadmap — not in the current build.** Zero-config local peer discovery
-> (mDNS / Bonjour `_hive._tcp`) is a tracked follow-up. It is **not implemented
+> (mDNS / Bonjour `_ligus._tcp`) is a tracked follow-up. It is **not implemented
 > today.**
 
 ## What it will do

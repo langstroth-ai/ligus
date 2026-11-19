@@ -17,7 +17,7 @@ import { confirmDialog, promptDialog } from "@/components/Dialog";
 // New file / New folder / Rename / Delete to the mutation commands and refreshes
 // the affected directory. A debounced `onFsChanged` watcher re-fetches whichever
 // loaded directories contain a changed path. Everything is themed with
-// `--hive-*` tokens.
+// `--ligus-*` tokens.
 
 const ROOT = ""; // key for the workspace root level
 
@@ -280,12 +280,12 @@ export function FileTree() {
   return (
     <div
       className="flex h-full flex-col text-sm"
-      style={{ color: "var(--hive-ink)" }}
+      style={{ color: "var(--ligus-ink)" }}
       onContextMenu={(e) => openMenu(e, null)}
     >
       <div
         className="flex items-center justify-between gap-2 border-b px-3 py-2"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
       >
         <span className="text-[11px] font-semibold uppercase tracking-wider opacity-60">Explorer</span>
         <div className="flex items-center gap-1">
@@ -295,7 +295,7 @@ export function FileTree() {
             onClick={() => void doNewEntry(ROOT, false)}
             className="inline-flex h-6 w-6 items-center justify-center rounded-md opacity-70 hover:opacity-100"
             style={{ background: "transparent" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -309,7 +309,7 @@ export function FileTree() {
             onClick={() => void doNewEntry(ROOT, true)}
             className="inline-flex h-6 w-6 items-center justify-center rounded-md opacity-70 hover:opacity-100"
             style={{ background: "transparent" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -321,7 +321,7 @@ export function FileTree() {
       </div>
 
       {error && (
-        <div className="px-3 py-2 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+        <div className="px-3 py-2 text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
           {error}
         </div>
       )}
@@ -343,9 +343,9 @@ export function FileTree() {
           style={{
             top: menu.y,
             left: menu.x,
-            borderColor: "var(--hive-line)",
-            background: "var(--hive-panel)",
-            color: "var(--hive-ink)",
+            borderColor: "var(--ligus-line)",
+            background: "var(--ligus-panel)",
+            color: "var(--ligus-ink)",
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -365,7 +365,7 @@ export function FileTree() {
           />
           {menu.entry && (
             <>
-              <div className="my-1 border-t" style={{ borderColor: "var(--hive-line)" }} />
+              <div className="my-1 border-t" style={{ borderColor: "var(--ligus-line)" }} />
               <MenuItem
                 label="Rename"
                 onClick={() => {
@@ -396,8 +396,8 @@ function MenuItem({ label, onClick, danger }: { label: string; onClick: () => vo
     <button
       onClick={onClick}
       className="block w-full px-3 py-1.5 text-left"
-      style={{ color: danger ? "var(--hive-danger-ink)" : "var(--hive-ink)", background: "transparent" }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
+      style={{ color: danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)", background: "transparent" }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       {label}
@@ -522,7 +522,7 @@ function RowButton({
     <div
       className="group flex items-center"
       style={{ background: "transparent" }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       <button

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { needsOnboarding, shouldAutoTour, clearLegacyFirstRunFlags } from "./firstRun";
+import { needsOnboarding, shouldAutoTour } from "./firstRun";
 
 const settings = (onboarded: boolean, displayName: string) => ({ onboarded, displayName, tourSeen: false });
 
@@ -10,8 +10,8 @@ describe("first-run gate", () => {
   beforeEach(() => window.localStorage.clear());
 
   it("a fresh backend shows onboarding even with stale localStorage flags", () => {
-    window.localStorage.setItem("hive.onboarded", "1");
-    window.localStorage.setItem("hive.tourSeen", "1");
+    window.localStorage.setItem("ligus.onboarded", "1");
+    window.localStorage.setItem("ligus.tourSeen", "1");
     expect(needsOnboarding(settings(false, "You"))).toBe(true);
   });
 
@@ -28,20 +28,10 @@ describe("first-run gate", () => {
   });
 
   it("the tour auto-runs once, after onboarding, per data dir", () => {
-    window.localStorage.setItem("hive.tourSeen", "1");
+    window.localStorage.setItem("ligus.tourSeen", "1");
     expect(shouldAutoTour({ onboarded: true, tourSeen: false })).toBe(true);
     expect(shouldAutoTour({ onboarded: true, tourSeen: true })).toBe(false);
     expect(shouldAutoTour({ onboarded: false, tourSeen: false })).toBe(false);
     expect(shouldAutoTour(undefined)).toBe(false);
-  });
-
-  it("clears the 1.x flags", () => {
-    window.localStorage.setItem("hive.onboarded", "1");
-    window.localStorage.setItem("hive.tourSeen", "1");
-    window.localStorage.setItem("hive.theme", "harbor");
-    clearLegacyFirstRunFlags();
-    expect(window.localStorage.getItem("hive.onboarded")).toBeNull();
-    expect(window.localStorage.getItem("hive.tourSeen")).toBeNull();
-    expect(window.localStorage.getItem("hive.theme")).toBe("harbor");
   });
 });

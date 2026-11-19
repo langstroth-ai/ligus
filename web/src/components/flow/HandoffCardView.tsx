@@ -20,9 +20,9 @@ export function revealHandoffReply(card: HandoffCard): boolean {
   if (!target) return false;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   target.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
-  target.classList.remove("hive-flash");
+  target.classList.remove("ligus-flash");
   void target.offsetWidth;
-  target.classList.add("hive-flash");
+  target.classList.add("ligus-flash");
   target.setAttribute("tabindex", "-1");
   target.focus({ preventScroll: true });
   return true;
@@ -45,7 +45,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
   return (
     <div
       className="mb-2 ml-[53px] mr-3 max-w-[560px] rounded-lg border px-3 py-2 text-xs"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
       data-testid="handoff-card"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -62,7 +62,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
         <button
           type="button"
           className="inline-flex items-center gap-0.5 font-medium underline-offset-2 hover:underline"
-          style={{ color: "var(--hive-accent-ink)" }}
+          style={{ color: "var(--ligus-accent-ink)" }}
           onClick={() => setMissing(!revealHandoffReply(card))}
           title={`Jump to @${card.toName}'s reply`}
         >
@@ -90,7 +90,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
             Context parcel
           </button>
           {open && parcel && (
-            <div className="mt-1.5 space-y-1.5 border-l pl-3" style={{ borderColor: "var(--hive-line)" }}>
+            <div className="mt-1.5 space-y-1.5 border-l pl-3" style={{ borderColor: "var(--ligus-line)" }}>
               <ParcelList title="Key files" items={parcel.keyFiles} mono />
               <ParcelList title="Decisions" items={parcel.decisions} />
               <ParcelList title="Ruled out" items={parcel.ruledOut} />

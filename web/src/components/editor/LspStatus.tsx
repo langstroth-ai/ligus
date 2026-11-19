@@ -29,17 +29,17 @@ const PILL_CSS = `
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 8px; border-radius: 999px;
   font-size: 0.68rem; line-height: 1.4; font-weight: 500;
-  border: 1px solid var(--hive-line);
-  background: var(--hive-panel); color: var(--hive-ink-soft);
-  box-shadow: 0 1px 3px var(--hive-overlay);
+  border: 1px solid var(--ligus-line);
+  background: var(--ligus-panel); color: var(--ligus-ink-soft);
+  box-shadow: 0 1px 3px var(--ligus-overlay);
   user-select: none; white-space: nowrap; max-width: 260px;
 }
 .lsp-pill .lsp-label { overflow: hidden; text-overflow: ellipsis; }
 .lsp-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .lsp-spin {
   width: 9px; height: 9px; border-radius: 50%; flex: none;
-  border: 1.5px solid var(--hive-ink-faint);
-  border-top-color: var(--hive-accent-cool);
+  border: 1.5px solid var(--ligus-ink-faint);
+  border-top-color: var(--ligus-accent-cool);
   animation: lsp-spin 0.7s linear infinite;
 }
 @keyframes lsp-spin { to { transform: rotate(360deg); } }
@@ -77,7 +77,7 @@ export function LspStatus({ adapter, languageId }: Props) {
     if (MONACO_BUILTIN_LANGUAGES.has(languageId)) return null;
     return (
       <Pill>
-        <span className="lsp-dot" style={{ background: "var(--hive-warn)" }} />
+        <span className="lsp-dot" style={{ background: "var(--ligus-warn)" }} />
         <span className="lsp-label">{label} not found</span>
       </Pill>
     );
@@ -106,7 +106,7 @@ export function LspStatus({ adapter, languageId }: Props) {
   if (status.status === "error") {
     return (
       <Pill title={status.message ?? `${label} stopped`}>
-        <span className="lsp-dot" style={{ background: "var(--hive-danger)" }} />
+        <span className="lsp-dot" style={{ background: "var(--ligus-danger)" }} />
         <span className="lsp-label">error</span>
       </Pill>
     );
@@ -115,7 +115,7 @@ export function LspStatus({ adapter, languageId }: Props) {
   // ready
   return (
     <Pill title={`${label} ready`}>
-      <span className="lsp-dot" style={{ background: "var(--hive-success)" }} />
+      <span className="lsp-dot" style={{ background: "var(--ligus-success)" }} />
       <span className="lsp-label">{label}</span>
     </Pill>
   );

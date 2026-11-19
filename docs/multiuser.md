@@ -1,6 +1,6 @@
 # Testing multiuser across machines / OSes
 
-Hive syncs a workspace by forwarding **signed event envelopes** through a relay:
+Ligus syncs a workspace by forwarding **signed event envelopes** through a relay:
 every device that points at the same relay URL + room id converges to the same
 projected state. (Direct P2P — STUN/hole-punch — is an optimization tracked
 separately; relay forwarding is all you need to test multiuser.)
@@ -9,8 +9,8 @@ separately; relay forwarding is all you need to test multiuser.)
 
 ```bash
 # from the repo root, on a host both machines can reach
-cargo run --release -p hive-relay          # binds 0.0.0.0:8443
-# or: LIGUS_RELAY_ADDR=0.0.0.0:9000 cargo run -p hive-relay
+cargo run --release -p langstroth-relay          # binds 0.0.0.0:8443
+# or: LANGSTROTH_RELAY_ADDR=0.0.0.0:9000 cargo run -p langstroth-relay
 # or containerized:
 docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git && \
   docker run -p 8443:8443 langstroth-relay
@@ -85,7 +85,7 @@ Signing/notarization needs platform credentials (documented there).
 
 - **E2EE is opt-in via a shared key.** With `LIGUS_WORKSPACE_KEY` the relay sees
   only ciphertext (sealed + authenticated). Per-device key distribution (so you
-  don't share one key out-of-band) uses the `hive-core::e2ee` HPKE path and is a
+  don't share one key out-of-band) uses the `ligus-core::e2ee` HPKE path and is a
   follow-up.
 - **No membership/verify-on-read across peers yet.** Ingested events aren't
   signature-verified against a synced device roster (no membership exchange).

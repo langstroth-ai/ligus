@@ -4,7 +4,7 @@ Status: **draft for implementation**, protocol version 1. Open source (MIT),
 like the rest of this repo. The key words MUST, MUST NOT, SHOULD and MAY are
 used as in RFC 2119.
 
-This spec lets the Hive iPhone app reach a `hive serve` home host through a
+This spec lets the Ligus iPhone app reach a `ligus serve` home host through a
 relay, with no Tailscale/VPN and no inbound port on the host. The relay
 forwards bytes and can verify who may connect. It can't read, alter or forge
 anything, and it can't impersonate either end.
@@ -14,7 +14,7 @@ It covers:
 - §3 keys and identifiers, §4 the pairing link (v2), §5 the phone credential;
 - §6 the relay endpoints: host registration and control, host accept, phone connect;
 - §7 the end-to-end session (Noise), §8 stream multiplexing, §9 how the
-  existing `hive serve` HTTP + SSE API ([ios-app.md](ios-app.md)) runs over it unchanged;
+  existing `ligus serve` HTTP + SSE API ([ios-app.md](ios-app.md)) runs over it unchanged;
 - §10 keepalives, timeouts and reconnects, §11 limits, §12 error codes;
 - §13 renewal and revocation, §14 end-to-end encrypted push;
 - §15 relay seams and configuration, §16 host changes;
@@ -53,7 +53,7 @@ content.
 ## 1. Overview
 
 ```
- phone (iOS app)                    relay (Go, langstroth-ai/langstroth-relay)            host (hive serve)
+ phone (iOS app)                    relay (Go, langstroth-ai/langstroth-relay)            host (ligus serve)
  ───────────────                    ─────────────────────────────             ─────────────────
                                     ◀── WSS /v1/tunnel/host ─────────────────  persistent control
                                         challenge / hello(sig) / welcome        connection (§6.2)
@@ -123,7 +123,7 @@ There are two layers:
 
 ## 4. Pairing link v2
 
-The v1 link stays valid: `hive://pair?url=<b64u(serverURL)>&token=<token>`.
+The v1 link stays valid: `ligus://pair?url=<b64u(serverURL)>&token=<token>`.
 v2 **adds** parameters, so a v1 app still pairs over the direct path and
 ignores the rest.
 
@@ -140,7 +140,7 @@ ignores the rest.
 Example (from the vectors):
 
 ```
-hive://pair?url=aHR0cDovLzEwMC4xMDEuMTAyLjEwNDo4Nzg3&token=4f1c…aabb&v=2
+ligus://pair?url=aHR0cDovLzEwMC4xMDEuMTAyLjEwNDo4Nzg3&token=4f1c…aabb&v=2
   &hid=2LGZFj2lCKlo49_pwPzGjw&hs=rX2_Zzy_XPP_rKyNHdO0tEeMyKpm054V5n1xdD_gFzo
   &relay=aHR0cHM6Ly9yZWxheS5leGFtcGxlLmNvbQ&ps=GGzSn9ODtHFtphJFAOvwhBIns8-YMbiqpMRV0K2kWAI&exp=1793000600
 ```
@@ -229,7 +229,7 @@ The relay:
 2. verifies the challenge signature;
 3. asks the policy `Register(hostId, hostPub, reg)` (§15.1), where `reg` is the
    optional registration token from `hello`. The open default admits per
-   `LIGUS_RELAY_TUNNEL`. A policy may also require a token or register the
+   `LANGSTROTH_RELAY_TUNNEL`. A policy may also require a token or register the
    host as `pending` (awaiting the operator's approval);
 4. stores `{hostId, hostPub, createdAt, lastSeen}` durably. The store is
    included in the relay's backup; it's relay-only state.
@@ -245,7 +245,7 @@ The host keeps exactly one of these open whenever remote access is enabled.
 ```
 relay → host  {"t":"challenge","v":1,"nonce":"<b64u 32 random bytes>"}
 host  → relay {"t":"hello","v":1,"hostId":"…","hostPub":"<b64u>","sig":"<b64u>",
-               "reg":"<optional token>","agent":"hive-serve/1.16.0"}
+               "reg":"<optional token>","agent":"ligus-serve/1.16.0"}
                sig = Ed25519(host_sign_key, ctx("host-auth", hostId, nonce_raw32))
 relay → host  {"t":"welcome","status":"active"|"pending","maxSessions":8,"push":true|false}
 ```
@@ -327,7 +327,7 @@ attempts), a wrong tag, and a malformed `enroll` all close with
 `unauthorized` (4001). The relay can't tell these apart for the phone without
 helping an attacker probe windows, so the phone MUST NOT present 4001 during
 enrollment as "re-pair" or "bad credential". It presents **"pairing code
-expired or already used"** and asks the owner to run `hive pair` again.
+expired or already used"** and asks the owner to run `ligus pair` again.
 
 The relay MUST cap an enrollment-mode splice at 5 minutes and 4 MiB in total,
 so a `pending` host can't use enrollment as a free tunnel. The phone then
@@ -537,7 +537,7 @@ Response head (RESPONSE):
 - An SSE response stays open, sending events as DATA. The phone cancels it
   with RESET `cancel`.
 
-Host connector (`hive serve`):
+Host connector (`ligus serve`):
 
 - `path` MUST start with `/v1/`; anything else gets a `404`.
 - The connector builds an `http::Request` and calls the axum router
@@ -564,7 +564,7 @@ Host connector (`hive serve`):
 
 Phone client: the transport layer maps each `URLRequest` onto one stream and
 builds an `HTTPURLResponse` and body or byte sequence from the reply. In the
-iOS app that's one more implementation of its `HiveTransport` protocol (the
+iOS app that's one more implementation of its `LigusTransport` protocol (the
 abstraction the direct and demo transports already share; a `URLProtocol`
 would also work). The API client, the SSE parser and `Last-Event-ID` resume
 are unchanged.
@@ -705,7 +705,7 @@ unused for 90 days.
 
 ### 13.2 Revocation
 
-`hive phones revoke <pid|name>` on the host:
+`ligus phones revoke <pid|name>` on the host:
 
 1. marks the record revoked (`phones.json`). From then on S1 rejects that
    phone's handshakes, and TunnelPeer re-checks reject its requests. **The
@@ -772,16 +772,16 @@ box's certified, unrevoked device), and a retry request
 over `"ligus-revocation-retry-v1\0" ‖ JSON`, with `requester`; the box takes
 it only from a certified, unrevoked, non-phone device of a current member).
 
-`hive remote reset` generates new host keys, so a new `host_id`: every phone
+`ligus remote reset` generates new host keys, so a new `host_id`: every phone
 must re-pair. Use it if the host key may have leaked.
 
 ## 14. End-to-end encrypted push
 
-(When `hive serve` sends which kind, its host-side limits, and how to set up
+(When `ligus serve` sends which kind, its host-side limits, and how to set up
 push with your own APNs key: [`push-notifications.md`](push-notifications.md).)
 
 The host encrypts and the relay forwards ciphertext to APNs. A relay pushes
-only when it has an APNs key for the app build in use (`LIGUS_RELAY_APNS_*`). A
+only when it has an APNs key for the app build in use (`LANGSTROTH_RELAY_APNS_*`). A
 relay without a `PushSender` acks `push` with `ok:false, code:"push_unavailable"`,
 and the host falls back to ntfy if that's configured.
 
@@ -820,14 +820,14 @@ sends it without the preview instead.
 - The relay sends APNs `apns-push-type: alert`, priority 10 (`high`) or 5
   (`normal`), `apns-expiration` now + 1 h, and `apns-collapse-id = collapse`
   when present. The payload:
-  `{"aps":{"alert":{"title":"Hive","body":"New activity on your host"},"mutable-content":1},"hive":{"v":1,"hid":"…","pid":"…","ct":"…"}}`.
+  `{"aps":{"alert":{"title":"Ligus","body":"New activity on your host"},"mutable-content":1},"hive":{"v":1,"hid":"…","pid":"…","ct":"…"}}`.
 - The Notification Service Extension:
   1. decrypts with the push key for `(hid, pid)`;
   2. accepts the notification only if `|ts − now| ≤ 3600` and `seq` is greater
      than the last seen `seq` (kept where only the app and its extension can
      read it: the iOS app uses the shared Keychain access group);
   3. then replaces the title and body and sets the deep link
-     `hive://chat/<chatId>`.
+     `ligus://chat/<chatId>`.
 
   On any failure it leaves the generic text. A relay can therefore suppress,
   delay or replay pushes, but a replay shows only the generic text.
@@ -839,7 +839,7 @@ with an APNs key of the Apple team that signed the app. A relay without such a
 key has no `PushSender`, reports `"push":false`, and acks host pushes
 `push_unavailable`; hosts fall back to ntfy.
 
-An open relay configured with an APNs key of its own (`LIGUS_RELAY_APNS_*`)
+An open relay configured with an APNs key of its own (`LANGSTROTH_RELAY_APNS_*`)
 does push, but only to builds of the app signed by the same Apple team as
 that key: someone self-hosting builds and signs the app themselves
 ([`push-notifications.md`](push-notifications.md#turning-push-on-for-yourself)).
@@ -874,11 +874,11 @@ are included in the backup:
 
 | Var | Meaning |
 |---|---|
-| `LIGUS_RELAY_TUNNEL` | `off` (**default**: `/v1/tunnel/*` → 404), `open` (any host may register and is `active`), `allowlist` (only `LIGUS_RELAY_TUNNEL_HOSTS`) |
-| `LIGUS_RELAY_TUNNEL_HOSTS` | comma-separated `host_id`s for `allowlist` |
+| `LANGSTROTH_RELAY_TUNNEL` | `off` (**default**: `/v1/tunnel/*` → 404), `open` (any host may register and is `active`), `allowlist` (only `LANGSTROTH_RELAY_TUNNEL_HOSTS`) |
+| `LANGSTROTH_RELAY_TUNNEL_HOSTS` | comma-separated `host_id`s for `allowlist` |
 
 When the relay's existing access gate is configured
-(`LIGUS_RELAY_TOKEN_PUBKEY` / `LIGUS_RELAY_ACCESS_TOKENS`), `Register` also
+(`LANGSTROTH_RELAY_TOKEN_PUBKEY` / `LANGSTROTH_RELAY_ACCESS_TOKENS`), `Register` also
 requires `regToken` to pass that `EntitlementVerifier`. This reuses `hrt1`
 operator tokens.
 
@@ -920,21 +920,21 @@ the policy again, and re-checks a connected host at once, sending it
 safe from any goroutine, and doesn't change the wire protocol. A policy
 calls it right after admitting or suspending a host.
 
-## 16. Host changes (`hive serve`), summary
+## 16. Host changes (`ligus serve`), summary
 
-- New module `crates/hive-cli/src/serve/tunnel/`: keys, phones, the control
+- New module `crates/ligus-cli/src/serve/tunnel/`: keys, phones, the control
   client (tokio-tungstenite + rustls), sessions (snow), mux and connector.
 - State lives in `<LIGUS_DATA_DIR>/tunnel/`, all files 0600: `keys.json`,
   `phones.json`, `relay.json`, and `pending/` for enrollment windows and
   revocations.
 - **CLI:**
-  - `hive remote enable --relay <url> [--reg-token T]`, `hive remote status|disable|reset`;
-  - `hive pair` prints the v2 link when remote access is enabled (`--relay-only`
+  - `ligus remote enable --relay <url> [--reg-token T]`, `ligus remote status|disable|reset`;
+  - `ligus pair` prints the v2 link when remote access is enabled (`--relay-only`
     omits `url`/`token`);
-  - `hive phones list|revoke`.
+  - `ligus phones list|revoke`.
 
-  `hive pair` and `hive phones` run as separate processes. They write
-  `pending/` files, and `hive serve` picks them up within 2 s. This is the
+  `ligus pair` and `ligus phones` run as separate processes. They write
+  `pending/` files, and `ligus serve` picks them up within 2 s. This is the
   same file-handoff model as `serve.token`.
 - **API:** the auth middleware accepts `TunnelPeer`, plus the tunnel-only
   routes (§9). No handler changes.
@@ -996,7 +996,7 @@ lists the supported versions.
 ### 19.1 Vectors
 
 [`relay-tunnel/vectors.json`](relay-tunnel/vectors.json) is deterministic.
-Every secret is `SHA256("hive-tunnel test " + label)`.
+Every secret is `SHA256("ligus-tunnel test " + label)`.
 
 | Key | Contents |
 |---|---|
@@ -1078,14 +1078,14 @@ They use the real Go relay binary, built from a pinned commit in CI.
   - after E4, a second enrollment with the same `ps` fails;
   - a different static on an unconsumed window fails;
   - after `exp`, the window is gone (4001).
-- **T-revoke:** a live SSE session ends within 1 s of `hive phones revoke`.
+- **T-revoke:** a live SSE session ends within 1 s of `ligus phones revoke`.
   Reconnect gives 4003. A request on a pre-revocation session gives 401.
 - **T-push:** a host push reaches a fake `PushSender`. Its `ct` decrypts with
   the phone's key and with nothing the relay holds.
 - **T-version:** a wrong subprotocol gives 426, and `"v":2` in hello gives 4026.
 - **T-wrong-prologue:** a phone with the right `hs` but the wrong `hid` fails
   the handshake.
-- **T-api-parity:** the existing `hive serve` integration suite (auth aside)
+- **T-api-parity:** the existing `ligus serve` integration suite (auth aside)
   also runs through the tunnel connector. Same results, including
   `Last-Event-ID` replay and `message.delta` streaming.
 - **T-backpressure:** a phone that stops reading a 50 MB response stream
@@ -1094,7 +1094,7 @@ They use the real Go relay binary, built from a pinned commit in CI.
 ## 20. Open questions
 
 1. ~~Who offers the tunnel?~~ Decided: any self-hosted relay, with
-   `LIGUS_RELAY_TUNNEL=open` or `allowlist`.
+   `LANGSTROTH_RELAY_TUNNEL=open` or `allowlist`.
 2. Multi-instance routing (§15.4): accept single-instance for v1, or build
    `fly-replay` routing?
 3. Should the phone auth key move to a Secure Enclave P-256 key

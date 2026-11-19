@@ -33,7 +33,7 @@ describe("prompt templates", () => {
   });
 
   it("tolerates corrupt storage", () => {
-    window.localStorage.setItem("hive.promptTemplates", "{not json");
+    window.localStorage.setItem("ligus.promptTemplates", "{not json");
     expect(loadTemplates()).toEqual([]);
   });
 });

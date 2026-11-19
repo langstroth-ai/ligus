@@ -66,7 +66,7 @@ export function EgressPresetsPanel({ chat }: { chat?: { id: string; title: strin
       {q.isError && <ErrorState text="Couldn't load network presets." onRetry={() => void q.refetch()} />}
       {q.isPending && <LoadingState rows={1} label="Loading network presets" />}
       {d && (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }} data-testid="egress-presets">
+        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="egress-presets">
           {d.available.map((p) => (
             <PresetRow
               key={p.name}
@@ -102,7 +102,7 @@ function PresetRow({
   const wsOn = d.workspace.includes(p.name);
   const viaHost = d.host.includes(p.name);
   return (
-    <li className="space-y-2 px-3 py-2.5 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+    <li className="space-y-2 px-3 py-2.5 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

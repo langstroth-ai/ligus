@@ -15,7 +15,7 @@ interface State {
 /// Crash backstop. A render throw anywhere below this boundary is caught by
 /// `getDerivedStateFromError` (which swaps in the fallback) instead of tearing
 /// down the whole React tree to a white screen. `componentDidCatch` logs the
-/// stack for diagnostics. All colors route through `--hive-*` tokens.
+/// stack for diagnostics. All colors route through `--ligus-*` tokens.
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
@@ -42,16 +42,16 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex h-full items-center justify-center p-4">
           <div
             className="max-w-sm rounded-xl border px-4 py-4 text-center text-sm"
-            style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+            style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           >
-            <div className="font-medium" style={{ color: "var(--hive-danger-ink)" }}>
+            <div className="font-medium" style={{ color: "var(--ligus-danger-ink)" }}>
               {this.props.label ? `${this.props.label} hit a problem.` : "This panel hit a problem."}
             </div>
             <p className="mt-1 text-xs opacity-70">The rest of the app is still working.</p>
             <button
               onClick={this.reset}
               className="mt-3 rounded-lg px-3 py-1.5 text-xs font-medium transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               Try again
             </button>
@@ -59,7 +59,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
               <pre
                 className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-lg p-2 text-[11px] leading-5"
-                style={{ background: "var(--hive-overlay)", color: "var(--hive-ink)" }}
+                style={{ background: "var(--ligus-overlay)", color: "var(--ligus-ink)" }}
               >
                 {message}
               </pre>
@@ -74,13 +74,13 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div
         className="flex h-full min-h-screen flex-col items-center justify-center p-6"
-        style={{ background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+        style={{ background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
       >
         <div
           className="w-full max-w-md rounded-2xl border p-6 text-center"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--ligus-danger-ink)" }}>
             Something went wrong
           </h1>
           <p className="mt-2 text-sm opacity-70">
@@ -90,7 +90,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <button
             onClick={() => location.reload()}
             className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             Reload
           </button>
@@ -98,7 +98,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
             <pre
               className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-[11px] leading-5"
-              style={{ background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+              style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
             >
               {message}
               {error.stack ? `\n\n${error.stack}` : ""}

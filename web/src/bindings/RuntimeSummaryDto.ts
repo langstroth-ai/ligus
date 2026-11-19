@@ -22,11 +22,11 @@ contextWindow: number | null,
  */
 keepAlive?: string | null, 
 /**
- * Ollama `think`: let a reasoning model think. None = Hive default (off).
+ * Ollama `think`: let a reasoning model think. None = Ligus default (off).
  */
 think?: boolean | null, 
 /**
- * Model rounds per tool-using turn (HTTP runtimes). None = Hive default (24).
+ * Model rounds per tool-using turn (HTTP runtimes). None = Ligus default (24).
  */
 maxToolRounds?: number | null, 
 /**

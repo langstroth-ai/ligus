@@ -1,6 +1,6 @@
 //! Workflow engine — drives a `WorkflowRun`'s DAG over the existing turn
 //! machinery. All the pure logic (ready-set, gate outcomes, templates) lives
-//! in `hive_core::workflow`; this module owns the IO: posting stage prompts,
+//! in `ligus_core::workflow`; this module owns the IO: posting stage prompts,
 //! running turns, creating gate proposals, suspending on votes, and
 //! persisting every transition as a synced `WorkflowRunUpserted` event.
 //!
@@ -13,15 +13,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hive_core::workflow::{self as wf, NodeRunStatus, WorkflowNodeKind, WorkflowRunStatus};
-use hive_core::{
+use ligus_core::workflow::{self as wf, NodeRunStatus, WorkflowNodeKind, WorkflowRunStatus};
+use ligus_core::{
     ActionProposal, ChatMessage, ChatSession, MessageRole, ProposalKind, ProposalStatus, Timestamp,
     WorkspaceAgent,
 };
-use hive_proto::{
+use ligus_proto::{
     WorkflowDefinitionDto, WorkflowNodeDto, WorkflowNodeRunDto, WorkflowRunDto, WorkflowRunEvent,
 };
-use hive_runtime::ChatTurn;
+use ligus_runtime::ChatTurn;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -345,7 +345,7 @@ async fn drive_run_inner(
                         match crate::guards::wait_for_capacity(
                             app,
                             responder.runtime.provider,
-                            hive_core::throttle::TurnPriority::Workflow,
+                            ligus_core::throttle::TurnPriority::Workflow,
                             &agent_key,
                             Some(run_id),
                         )
@@ -559,9 +559,9 @@ fn stage_mention_token(agent: Option<&WorkspaceAgent>) -> String {
 /// us) or must be dispatched to its owner. Single source of truth for the
 /// local-vs-remote split — `owns_responder` in `lib.rs` delegates here so the
 /// two can't drift, and this pure form is unit-testable without a `Responder`.
-#[cfg_attr(not(test), allow(dead_code))] // the gate itself is `hive_runtime::turn_dispatch`
+#[cfg_attr(not(test), allow(dead_code))] // the gate itself is `ligus_runtime::turn_dispatch`
 pub(crate) fn stage_owner_runs_here(local_actor_id: &str, owner_actor_id: &str) -> bool {
-    hive_runtime::turn_dispatch::owner_runs_here(local_actor_id, owner_actor_id)
+    ligus_runtime::turn_dispatch::owner_runs_here(local_actor_id, owner_actor_id)
 }
 
 /// Suspend the driver until a remote-owned stage's reply syncs back, then return
@@ -807,11 +807,11 @@ fn close_orphaned_gates(
 // Agent-authored workflows ([[workflow: {…}]] reply directive)
 // ---------------------------------------------------------------------------
 
-pub(crate) use hive_runtime::workflow_directive::definition_from_directive;
+pub(crate) use ligus_runtime::workflow_directive::definition_from_directive;
 #[cfg(test)]
-use hive_runtime::workflow_directive::slug;
+use ligus_runtime::workflow_directive::slug;
 #[cfg(test)]
-use hive_runtime::workflow_directive::relax_json;
+use ligus_runtime::workflow_directive::relax_json;
 
 /// Roster lookup for rendering a stage's agent by name.
 pub(crate) fn agent_name_in(session: &ChatSession) -> impl Fn(Uuid) -> Option<String> + '_ {
@@ -1263,7 +1263,7 @@ mod relax_json_tests {
 #[cfg(test)]
 mod directive_tests {
     use super::*;
-    use hive_core::WorkspaceAgent;
+    use ligus_core::WorkspaceAgent;
 
     fn session_with_scout() -> ChatSession {
         let mut s = ChatSession::new("Demo", Uuid::nil(), "anthropic");
@@ -1423,7 +1423,7 @@ mod cross_device_tests {
         session.workspace_agents.push(scout.clone());
         let prompt = format!("{} do the thing", stage_mention_token(Some(&scout)));
         assert_eq!(
-            hive_runtime::parse_mentions(&prompt, &session).agents,
+            ligus_runtime::parse_mentions(&prompt, &session).agents,
             vec![scout.id]
         );
     }
@@ -1447,7 +1447,7 @@ mod cross_device_tests {
         // by a different author after it.
         let stale = msg(MessageRole::Assistant, "Scout", "old output");
         let prompt = msg(MessageRole::User, "Mara", "@Scout go");
-        let other = msg(MessageRole::Assistant, "Hive", "not the stage agent");
+        let other = msg(MessageRole::Assistant, "Ligus", "not the stage agent");
         let after_id = prompt.id;
         let messages = vec![stale, prompt, other];
         assert!(match_stage_reply(&messages, after_id, "Scout").is_none());

@@ -67,9 +67,9 @@ export function Avatar({
           display: "grid",
           placeItems: "center",
           borderRadius: "50%",
-          background: "var(--hive-panel)",
-          color: "var(--hive-ink-soft)",
-          boxShadow: "0 0 0 1.5px var(--hive-panel)",
+          background: "var(--ligus-panel)",
+          color: "var(--ligus-ink-soft)",
+          boxShadow: "0 0 0 1.5px var(--ligus-panel)",
         }}
       >
         {host === "remote" ? <CloudGlyph size={badge - 4} /> : <LaptopGlyph size={badge - 4} />}

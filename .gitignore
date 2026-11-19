@@ -9,7 +9,7 @@ dist/
 site/
 
 # Local workspace runtime state
-.hive/
+.ligus/
 
 # Rust / Cargo
 /target/

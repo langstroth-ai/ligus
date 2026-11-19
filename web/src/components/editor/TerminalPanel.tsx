@@ -19,12 +19,12 @@ import { IconX } from "@/lib/icons";
 // `terminal_*` IPC), rendered with xterm.js. Unlike LogsView (read-only), this
 // is interactive — keystrokes are piped to the PTY master and its output is
 // streamed back. Terminals live in the shared `terminalStore`; this component
-// owns the xterm instances + PTY lifecycle. Colours are derived from Hive's
-// `--hive-*` tokens and re-applied on the `hive:theme` window event.
+// owns the xterm instances + PTY lifecycle. Colours are derived from Ligus's
+// `--ligus-*` tokens and re-applied on the `ligus:theme` window event.
 
-// ── xterm theming from Hive tokens ───────────────────────────────────────────
+// ── xterm theming from Ligus tokens ───────────────────────────────────────────
 // xterm wants concrete colours (no CSS custom properties), so we read the
-// computed `--hive-*` tokens off :root and convert them to hex — the same idiom
+// computed `--ligus-*` tokens off :root and convert them to hex — the same idiom
 // as monacoTheme.ts. The 16 ANSI colours can't be derived from four brand
 // tokens, so we keep a legible fixed set per scheme (matching common terminals)
 // and only drive background/foreground/cursor/selection from the palette.
@@ -87,10 +87,10 @@ const ANSI = {
 } as const;
 
 function buildXtermTheme(scheme: "light" | "dark"): ITheme {
-  const ink = toHex(readToken("--hive-ink"));
-  const canvas = toHex(readToken("--hive-canvas"));
+  const ink = toHex(readToken("--ligus-ink"));
+  const canvas = toHex(readToken("--ligus-canvas"));
   const accent =
-    toHex(readToken("--hive-accent-cool")) ?? toHex(readToken("--hive-accent-warm"));
+    toHex(readToken("--ligus-accent-cool")) ?? toHex(readToken("--ligus-accent-warm"));
   const fallback = scheme === "dark" ? { bg: "#1c2129", fg: "#e8eaee" } : { bg: "#f6f5f1", fg: "#26282b" };
   return {
     background: canvas ?? fallback.bg,
@@ -178,11 +178,11 @@ function TerminalSession({ id, active }: SessionProps) {
     const onTheme = () => {
       term.options.theme = buildXtermTheme(currentScheme());
     };
-    window.addEventListener("hive:theme", onTheme);
+    window.addEventListener("ligus:theme", onTheme);
 
     return () => {
       clearTimeout(resizeTimer);
-      window.removeEventListener("hive:theme", onTheme);
+      window.removeEventListener("ligus:theme", onTheme);
       ro.disconnect();
       dataSub.dispose();
       void outUnlisten.then((fn) => fn());
@@ -215,7 +215,7 @@ function TerminalSession({ id, active }: SessionProps) {
     <div
       className="absolute inset-0"
       hidden={!active}
-      style={{ background: "var(--hive-canvas)" }}
+      style={{ background: "var(--ligus-canvas)" }}
     >
       <div ref={hostRef} className="h-full w-full p-1.5" />
     </div>
@@ -269,14 +269,14 @@ export function TerminalPanel({ onCollapse }: Props) {
   }, []);
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col" style={{ background: "var(--hive-canvas)" }}>
+    <div className="flex h-full min-h-0 w-full flex-col" style={{ background: "var(--ligus-canvas)" }}>
       {/* Header: label · tab strip (+new / close per tab) · collapse */}
       <div
         className="flex h-8 shrink-0 items-center gap-2 px-2"
         style={{
-          borderBottom: "1px solid var(--hive-line)",
-          background: "var(--hive-panel)",
-          color: "var(--hive-ink)",
+          borderBottom: "1px solid var(--ligus-line)",
+          background: "var(--ligus-panel)",
+          color: "var(--ligus-ink)",
         }}
       >
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide" style={{ opacity: 0.6 }}>
@@ -294,8 +294,8 @@ export function TerminalPanel({ onCollapse }: Props) {
             type="button"
             aria-label="Hide terminal"
             title="Hide terminal"
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--hive-overlay)] hover:opacity-100"
-            style={{ color: "var(--hive-ink)" }}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
+            style={{ color: "var(--ligus-ink)" }}
             onClick={onCollapse}
           >
             <IconX size={14} />
@@ -308,7 +308,7 @@ export function TerminalPanel({ onCollapse }: Props) {
         {terminals.length === 0 ? (
           <div
             className="flex h-full w-full items-center justify-center text-[12px]"
-            style={{ color: "var(--hive-ink)", opacity: 0.5 }}
+            style={{ color: "var(--ligus-ink)", opacity: 0.5 }}
           >
             No terminal. Use ＋ to open one.
           </div>

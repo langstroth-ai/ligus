@@ -113,7 +113,7 @@ export function Row({ label, hint, children }: { label: string; hint?: string; c
       <div>
         <div className="text-sm">{label}</div>
         {hint && (
-          <div className="text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <div className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
             {hint}
           </div>
         )}
@@ -143,7 +143,7 @@ export function NumberInput({
       type="number"
       aria-label={label}
       className="w-28 rounded-xl border px-3 py-1.5 text-sm"
-      style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+      style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
       value={value}
       min={min}
       max={max}

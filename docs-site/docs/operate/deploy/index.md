@@ -35,7 +35,7 @@ Before choosing, two rules hold in every shape:
 ```mermaid
 flowchart LR
   subgraph Laptop["Your laptop"]
-    App["Ligus desktop app<br/>hive.db, keys/, settings.json"]
+    App["Ligus desktop app<br/>ligus.db, keys/, settings.json"]
     Agent["Agent CLIs / model APIs<br/>(claude, codex, Ollama, ...)"]
     Repo[("Your repo<br/>.ligus/worktrees")]
     App --> Agent
@@ -56,7 +56,7 @@ flowchart LR
     Desk["Ligus desktop<br/>your account + device key"]
   end
   subgraph Home["Home server (always on)"]
-    Serve["ligus serve<br/>own device key, hive.db,<br/>serve.token, tunnel keys"]
+    Serve["ligus serve<br/>own device key, ligus.db,<br/>serve.token, tunnel keys"]
     Worker["ligus worker (optional)"]
     Relay["langstroth-relay (optional here)<br/>ciphertext only"]
   end
@@ -110,7 +110,7 @@ flowchart TB
     Tun --> PG
   end
   subgraph WS["namespace: ligus-ws-acme (one per workspace)"]
-    Serve["ligus serve StatefulSet<br/>PVC: keys, hive.db"]
+    Serve["ligus serve StatefulSet<br/>PVC: keys, ligus.db"]
     Workers["ligus worker StatefulSet<br/>one identity per replica"]
     MCP["MCP server Deployments"]
     Exec["sandboxed executor Jobs<br/>(template; controller is Phase 3)<br/>no workspace key"]

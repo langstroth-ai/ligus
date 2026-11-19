@@ -46,7 +46,7 @@ export function BindWorkspacePrompt() {
     <div className="flex h-full items-center justify-center p-8">
       <div
         className="flex max-w-md flex-col items-center gap-4 rounded-2xl border px-8 py-10 text-center"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       >
         <div className="text-base font-semibold tracking-tight">
           This workspace isn&rsquo;t linked to a folder on this device

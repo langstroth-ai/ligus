@@ -59,7 +59,7 @@ trust on first use per workspace: the account's own first word there (the
 device that signed its admission, or the founder's seed) anchors its key, a
 registration nobody of that lineage signed is refused, and only an account
 with no anchor is disputed by a conflicting self-certified registration
-(`hive_core::account_keys`; [phase0-specs](phase0-specs.md), "Held events and
+(`ligus_core::account_keys`; [phase0-specs](phase0-specs.md), "Held events and
 account-key disputes"). A relay that could already
 inject identity into a shared workspace before the invitee joined it could
 also make its key look verified. The relay also maps handle to `githubId`; a
@@ -92,7 +92,7 @@ Design, for when the relay can store an opaque record per device:
 ## Tests
 
 - `keyring_tests::directory_keys_verified_only_from_a_certified_devices_publication`
-  (hive-runtime): a key published on a pinned config log by a device
+  (ligus-runtime): a key published on a pinned config log by a device
   certified for the account is verified; a key nobody published (relay
   substitution), another account's key, a key from an unpinned fold and a
   revoked device's key are not.
@@ -105,7 +105,7 @@ Design, for when the relay can store an opaque record per device:
 
 ## Code
 
-- `crates/hive-runtime/src/directory_trust.rs`: `signed_ka_keys`, `plan`.
+- `crates/ligus-runtime/src/directory_trust.rs`: `signed_ka_keys`, `plan`.
 - `app/src/lib.rs`: `seal_plan`, used by `invite_by_handle` and
   `friend_open_dm` (both take `confirm_unverified`; the DM decides before it
   creates anything, so a refusal leaves no half-made DM).

@@ -30,7 +30,7 @@ export function EmptyCanvas({
   onOpenPalette: () => void;
 }) {
   return (
-    <div className="hive-enter flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+    <div className="ligus-enter flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <CombMark />
       <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Nothing open in {workspaceName}</h2>
       <p className="max-w-[360px] text-[13px] leading-[1.55] text-ink-soft">
@@ -46,13 +46,13 @@ export function EmptyCanvas({
       </div>
       <p className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-ink-soft">
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>⌘K</kbd> anything
+          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘K</kbd> anything
         </span>
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>⌘⇧]</kbd> next chat
+          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘⇧]</kbd> next chat
         </span>
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>⌘J</kbd> tools rail
+          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘J</kbd> tools rail
         </span>
       </p>
     </div>
@@ -64,14 +64,14 @@ export function EmptyCanvas({
 export function CanvasLoading({ label }: { label: string }) {
   return (
     <div role="status" aria-label={label} className="flex h-full min-h-0">
-      <div className="w-56 shrink-0 space-y-2 border-r p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="w-56 shrink-0 space-y-2 border-r p-3" style={{ borderColor: "var(--ligus-line)" }}>
         {[70, 55, 80, 45, 60].map((w, i) => (
-          <div key={i} className="hive-skel h-3" style={{ width: `${w}%` }} />
+          <div key={i} className="ligus-skel h-3" style={{ width: `${w}%` }} />
         ))}
       </div>
       <div className="min-w-0 flex-1 space-y-2.5 p-4">
         {[90, 75, 82, 60, 88, 40, 70].map((w, i) => (
-          <div key={i} className="hive-skel h-3" style={{ width: `${w}%` }} />
+          <div key={i} className="ligus-skel h-3" style={{ width: `${w}%` }} />
         ))}
       </div>
     </div>

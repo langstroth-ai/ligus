@@ -1,13 +1,13 @@
 # `ligus` CLI reference
 
 `ligus` is the headless Ligus client: the same runtime as the desktop app
-(`hive-core` + `hive-runtime`) wired to flags and environment variables
+(`ligus-core` + `ligus-runtime`) wired to flags and environment variables
 instead of a window. It runs workers, the phone's home host
 (`ligus serve`) and scripts. Install it with
 `brew install langstroth-ai/ligus/ligus` (macOS and Linux) or build the container
 image in `deploy/container/`.
 
-This page is checked against `crates/hive-cli/src/main.rs` for 0.1.0. The
+This page is checked against `crates/ligus-cli/src/main.rs` for 0.1.0. The
 built-in help is `ligus --help` (also `-h`, `help`, or `--help` after any
 command); it prints to stderr and exits with status 2.
 
@@ -17,14 +17,14 @@ command); it prints to stderr and exits with status 2.
   `~/.ligus`, else `./ligus-data` when `HOME` is unset. A data dir that
   holds (or links to) data Ligus did not create is refused. The dir is one
   Ligus **device**: its
-  identity (`identity.json`, `keys/`), its event log (`hive.db`) and, for
+  identity (`identity.json`, `keys/`), its event log (`ligus.db`) and, for
   `ligus serve`, the phone credentials. Never run two processes that write
   to one data dir.
 - **Connection.** `LIGUS_RELAY_URL`, `LIGUS_RELAY_ACCESS_TOKEN`,
   `LIGUS_WORKSPACE` (default `default`) and `LIGUS_WORKSPACE_KEY` override
   what `ligus enroll` saved in `<data dir>/config.toml`.
 - **First run** of any command creates a fresh identity in the data dir
-  (named `hive-cli`).
+  (named `ligus-cli`).
 - **Errors** print `error: …` and exit 1.
 - Flags are matched anywhere after the command; values follow the flag as
   the next argument (`--label box`, not `--label=box`).
@@ -41,7 +41,7 @@ command); it prints to stderr and exits with status 2.
 $ ligus whoami
 account : 78616e73-8a66-4c01-96ee-169f0fce430d
 device  : df2bb74f-592e-475d-a1ee-ebd4068e1123
-name    : hive-cli
+name    : ligus-cli
 data dir: /home/you/.ligus
 room    : default
 ```

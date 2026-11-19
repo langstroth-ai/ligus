@@ -1,9 +1,9 @@
 [package]
-name = "hive-tunnel-check"
+name = "ligus-tunnel-check"
 version = "0.1.0"
 edition = "2021"
 
-# Standalone: not a member of the hive workspace.
+# Standalone: not a member of the ligus workspace.
 [workspace]
 
 [dependencies]

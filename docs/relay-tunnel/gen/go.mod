@@ -1,4 +1,4 @@
-module hivetunnelvectors
+module ligustunnelvectors
 
 go 1.25
 

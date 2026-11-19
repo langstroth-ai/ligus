@@ -111,7 +111,7 @@ const messages = [
   msg({
     id: "m5",
     role: "assistant",
-    author: "hive",
+    author: "ligus",
     responderName: "Zaz",
     runtimeId: "rt-ollama",
     runtimeLabel: "ollama / qwen3-coder",
@@ -180,7 +180,7 @@ export const diffs = [
 export const agents = [
   { id: "ag-scout", name: "scout", runtimeId: "rt-claude", role: "Explores options and reviews", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null },
   { id: "ag-builder", name: "builder", runtimeId: "rt-codex", role: "Implements changes", ownerActorId: "a-maya", hostId: "h-box", avatarUrl: null, avatarColorHex: "#4a8c48" },
-  { id: "ag-hive", name: "hive", runtimeId: "rt-ollama", role: "Default assistant", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null },
+  { id: "ag-ligus", name: "ligus", runtimeId: "rt-ollama", role: "Default assistant", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null },
 ];
 
 export const members = [
@@ -424,7 +424,7 @@ export const routing = {
   ],
   recent: [
     { atMs: now - 600_000, sessionId: "chat-1", taskClass: "test", mode: "shadow", chosen: "ag-scout", wouldPick: "ag-scout", preferred: "ag-scout", explore: false, reason: "threadMemory", epsilon: 0.1 },
-    { atMs: now - 3_000_000, sessionId: "chat-2", taskClass: "feature", mode: "shadow", chosen: "ag-builder", wouldPick: "ag-hive", preferred: "ag-builder", explore: true, reason: "explore", epsilon: 0.22 },
+    { atMs: now - 3_000_000, sessionId: "chat-2", taskClass: "feature", mode: "shadow", chosen: "ag-builder", wouldPick: "ag-ligus", preferred: "ag-builder", explore: true, reason: "explore", epsilon: 0.22 },
   ],
   stops: [{ route: "ag-builder:feature", name: "builder · feature", reason: "3 failed turns in a row", untilMs: now + 18 * 60_000, failures: 3 }],
   exploration: { explored: 9, share: 0.19, meanEpsilon: 0.14, exploredWins: 4, exploredJudged: 7, incumbentRate: 0.71 },
@@ -456,7 +456,7 @@ export const roster = {
   agents: [
     { agentId: "ag-scout", name: "scout", runtimeId: "rt-claude", career: "reviewer", why: "14 judged, 86% approved", judged: 14, approved: 12, profile: null },
     { agentId: "ag-builder", name: "builder", runtimeId: "rt-codex", career: "proposer", why: "11 judged, 64% approved", judged: 11, approved: 7, profile: null },
-    { agentId: "ag-hive", name: "hive", runtimeId: "rt-ollama", career: "probation", why: "2 judged so far", judged: 2, approved: 1, profile: null },
+    { agentId: "ag-ligus", name: "ligus", runtimeId: "rt-ollama", career: "probation", why: "2 judged so far", judged: 2, approved: 1, profile: null },
   ],
   diversity: { agents: 3, runtimes: 3, providers: 3, monoculture: false, advice: "" },
 };

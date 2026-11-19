@@ -314,7 +314,7 @@ function renderTrayTemplatePng(pathname, size = 128) {
 
 function markGroup({
   markMode = "color",
-  id = "hive-brand",
+  id = "ligus-brand",
 }) {
   const brand = palette.studio;
   const radius = 14;
@@ -436,12 +436,12 @@ if (pngIndex !== -1) {
 
 mkdirSync(__dirname, { recursive: true });
 
-writeFile("hive-mark.svg", buildMarkSvg({ size: 512, id: "asset-mark" }));
-writeFile("hive-mark-mono.svg", buildMarkSvg({ size: 512, markMode: "mono", id: "asset-mark-mono" }));
-writeFile("hive-app-icon.svg", buildIconSvg({ size: 1024, id: "asset-icon" }));
-writeFile("hive-tray-template.svg", buildTraySvg({ size: 64, id: "asset-tray-template" }));
-writeFile("hive-lockup.svg", buildLockupSvg({ id: "asset-lockup" }));
-writeFile("hive-brand-tokens.json", JSON.stringify(palette, null, 2) + "\n");
-renderTrayTemplatePng(path.join(__dirname, "hive-tray-template-128.png"));
+writeFile("ligus-mark.svg", buildMarkSvg({ size: 512, id: "asset-mark" }));
+writeFile("ligus-mark-mono.svg", buildMarkSvg({ size: 512, markMode: "mono", id: "asset-mark-mono" }));
+writeFile("ligus-app-icon.svg", buildIconSvg({ size: 1024, id: "asset-icon" }));
+writeFile("ligus-tray-template.svg", buildTraySvg({ size: 64, id: "asset-tray-template" }));
+writeFile("ligus-lockup.svg", buildLockupSvg({ id: "asset-lockup" }));
+writeFile("ligus-brand-tokens.json", JSON.stringify(palette, null, 2) + "\n");
+renderTrayTemplatePng(path.join(__dirname, "ligus-tray-template-128.png"));
 
 console.log("Generated brand assets in", __dirname);

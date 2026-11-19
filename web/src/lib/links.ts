@@ -27,7 +27,7 @@ export function forgeLabel(provider: string, host: string): string {
 
 /// A name without control, bidi or zero-width characters (they can reorder
 /// the text after them or make one name look like another). The same set
-/// as `hive_proto::names::is_hidden_name_char`, supplementary planes
+/// as `ligus_proto::names::is_hidden_name_char`, supplementary planes
 /// included (musical format characters, tags and the variation selectors
 /// supplement): checked against the shared display-name vectors.
 export function stripBidi(s: string): string {
@@ -78,11 +78,11 @@ export function chipFor(status: LinkStatus | null | undefined): { kind: ChipKind
 export function chipColor(kind: ChipKind): { border: string; ink: string } {
   switch (kind) {
     case "verified":
-      return { border: "var(--hive-accent-cool)", ink: "var(--hive-ink)" };
+      return { border: "var(--ligus-accent-cool)", ink: "var(--ligus-ink)" };
     case "stale":
-      return { border: "var(--hive-danger-ink)", ink: "var(--hive-danger-ink)" };
+      return { border: "var(--ligus-danger-ink)", ink: "var(--ligus-danger-ink)" };
     default:
-      return { border: "var(--hive-line)", ink: "var(--hive-ink-soft)" };
+      return { border: "var(--ligus-line)", ink: "var(--ligus-ink-soft)" };
   }
 }
 

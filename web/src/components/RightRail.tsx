@@ -174,12 +174,12 @@ export function RightRail({
     <aside
       data-tour="right-rail"
       className="relative flex shrink-0 overflow-hidden border-l"
-      style={{ width, borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+      style={{ width, borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
     >
       {showPaneRail && (
         <div
           className="flex w-10 shrink-0 flex-col items-center gap-2 border-r py-3"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-overlay)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-overlay)" }}
         >
           {panes.map((item) => (
             <button
@@ -187,8 +187,8 @@ export function RightRail({
               onClick={() => onChangePane(item.id)}
               className="relative flex h-10 w-10 items-center justify-center rounded-2xl transition-colors"
               style={{
-                background: pane === item.id ? "var(--hive-mist)" : "transparent",
-                color: pane === item.id ? "var(--hive-accent-ink)" : "var(--hive-ink)",
+                background: pane === item.id ? "var(--ligus-mist)" : "transparent",
+                color: pane === item.id ? "var(--ligus-accent-ink)" : "var(--ligus-ink)",
                 opacity: pane === item.id ? 1 : 0.72,
               }}
               title={item.label}
@@ -200,7 +200,7 @@ export function RightRail({
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
                   className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
-                  style={{ background: "var(--hive-warm-fill)", color: "var(--hive-on-accent)" }}
+                  style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
                   {paneBadges[item.id]}
@@ -215,7 +215,7 @@ export function RightRail({
       <button
         onClick={onClose}
         className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg opacity-55 transition-opacity hover:opacity-100"
-        style={{ color: "var(--hive-ink)" }}
+        style={{ color: "var(--ligus-ink)" }}
         title="Close panel (Esc)"
         aria-label="Close panel"
       >
@@ -286,7 +286,7 @@ export function RailFrame({
   }, [title]);
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--ligus-line)" }}>
         <h2 className="pr-8 text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
         <p className="mt-0.5 pr-2 text-xs leading-[1.45] text-ink-soft">{subtitle}</p>
         {actions && <div className="mt-2">{actions}</div>}
@@ -420,16 +420,16 @@ function ToolsPane({
           <div
             className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2.5 text-[12px] leading-5"
             style={{
-              borderColor: "color-mix(in srgb, var(--hive-accent-cool) 38%, transparent)",
+              borderColor: "color-mix(in srgb, var(--ligus-accent-cool) 38%, transparent)",
               background: SELECT_TINT,
-              color: "var(--hive-ink)",
+              color: "var(--ligus-ink)",
             }}
           >
             <span>These are inherited from the workspace.</span>
             <button
               onClick={() => setScope("workspace")}
               className="font-medium underline underline-offset-2"
-              style={{ color: "var(--hive-accent-ink)" }}
+              style={{ color: "var(--ligus-accent-ink)" }}
             >
               Edit in Workspace
             </button>
@@ -451,7 +451,7 @@ function ToolsPane({
           </Section>
 
           <Section title="Agents available to @mention">
-            {/* The default agent (@hive) always exists — it answers untagged
+            {/* The default agent (@ligus) always exists — it answers untagged
                 messages and is bound to the active runtime — even before the
                 user adds any of their own. Showing it here (and counting it in
                 the sidebar) stops the pane claiming "no agents" while one is
@@ -465,7 +465,7 @@ function ToolsPane({
               />
               <div className="min-w-0">
                 <div className="truncate text-[13px] font-medium">@{PRIMARY_HANDLE}</div>
-                <div className="truncate text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+                <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
                   {activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"} · default
                 </div>
               </div>
@@ -481,7 +481,7 @@ function ToolsPane({
                 />
                 <div className="min-w-0">
                   <div className="truncate text-[13px] font-medium">@{agent.name}</div>
-                  <div className="truncate text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+                  <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
                     {agent.runtimeId} · {agent.role || "agent"}
                   </div>
                   <div className="mt-0.5">
@@ -500,7 +500,7 @@ function ToolsPane({
                 setShowAddAgent(true);
               }}
               className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed px-3 py-2 text-[12px] font-medium transition-colors hover:brightness-110"
-              style={{ borderColor: "var(--hive-line)", color: "var(--hive-ink-soft)" }}
+              style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
             >
               <IconPlus size={13} /> Add an agent
             </button>
@@ -519,7 +519,7 @@ function ToolsPane({
       ) : (
         <>
           <Section title="Agent roster">
-            <p className="px-1 pb-1 text-[11.5px] leading-snug" style={{ color: "var(--hive-ink-soft)" }}>
+            <p className="px-1 pb-1 text-[11.5px] leading-snug" style={{ color: "var(--ligus-ink-soft)" }}>
               Agents are personas you @mention — each bound to a host. Their host
               is where they run: this device, or a Worker (a headless box you
               enroll under People → Remote agents).
@@ -622,7 +622,7 @@ function ToolsPane({
                 <RuntimeCard key={rt.id} runtime={rt} active={rt.id === activeRuntimeId} />
               ))
             )}
-            <p className="px-1 pt-1 text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+            <p className="px-1 pt-1 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
               Manage in Settings → Models.
             </p>
           </Section>
@@ -654,7 +654,7 @@ function ToolsPane({
               onToggle={() => setShowInstallMcp((v) => !v)}
             >
               <Card className="space-y-2 p-3">
-                <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
                   Paste a manifest URL, GitHub blob URL, or owner/repo/path reference.
                 </p>
                 <input
@@ -665,7 +665,7 @@ function ToolsPane({
                   style={fieldStyle}
                 />
                 {mcpError && (
-                  <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+                  <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
                     {mcpError}
                   </div>
                 )}
@@ -694,7 +694,7 @@ function ScopeToggle({ scope, onScope }: { scope: ToolsScope; onScope: (s: Tools
   return (
     <div
       className="mb-4 flex rounded-xl border p-0.5"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
     >
       {opts.map((o) => {
         const active = scope === o.id;
@@ -707,11 +707,11 @@ function ScopeToggle({ scope, onScope }: { scope: ToolsScope; onScope: (s: Tools
             style={
               active
                 ? {
-                    background: "var(--hive-panel)",
-                    color: "var(--hive-ink)",
-                    boxShadow: "0 1px 2px color-mix(in srgb, var(--hive-ink) 14%, transparent)",
+                    background: "var(--ligus-panel)",
+                    color: "var(--ligus-ink)",
+                    boxShadow: "0 1px 2px color-mix(in srgb, var(--ligus-ink) 14%, transparent)",
                   }
-                : { color: "var(--hive-ink-soft)" }
+                : { color: "var(--ligus-ink-soft)" }
             }
           >
             {o.label}
@@ -747,8 +747,8 @@ function McpServerCard({
           onClick={() => setOpen((o) => !o)}
           aria-label={open ? `Collapse ${server.id}` : `Expand ${server.id}`}
           title={open ? "Collapse" : "Expand"}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md hover:bg-[color:var(--hive-overlay)]"
-          style={{ color: "var(--hive-ink-soft)" }}
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
+          style={{ color: "var(--ligus-ink-soft)" }}
         >
           <span
             className="transition-transform"
@@ -762,12 +762,12 @@ function McpServerCard({
             <span className="truncate text-[13px] font-medium">{server.id}</span>
             <span
               className="shrink-0 text-[11px] uppercase tracking-[0.08em]"
-              style={{ color: disabled ? "var(--hive-ink-soft)" : "var(--hive-success-ink)" }}
+              style={{ color: disabled ? "var(--ligus-ink-soft)" : "var(--ligus-success-ink)" }}
             >
               {disabled ? "inert" : "enabled"}
             </span>
           </div>
-          <div className="truncate text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
             [{server.transport}] {server.detail}
           </div>
         </div>
@@ -780,7 +780,7 @@ function McpServerCard({
         ) : (
           <span
             className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
-            style={{ background: "var(--hive-mist)", color: "var(--hive-ink-soft)" }}
+            style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
           >
             {disabled ? "off" : "on"}
           </span>
@@ -789,7 +789,7 @@ function McpServerCard({
       {open && (
         <div
           className="mt-2.5 border-t pt-2.5 text-[11.5px] leading-5"
-          style={{ borderColor: "var(--hive-line)", color: "var(--hive-ink-soft)" }}
+          style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
         >
           {disabled
             ? "Disabled — inert gate: this server is never launched or connected."
@@ -816,10 +816,10 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
     return (
       <span
         className="inline-flex items-center gap-1 text-[11px]"
-        style={{ color: "var(--hive-ink-soft)" }}
+        style={{ color: "var(--ligus-ink-soft)" }}
         title="Runs on this device — a local persona"
       >
-        <span className="h-2 w-2 rounded-full" style={{ background: "var(--hive-line)" }} aria-hidden />
+        <span className="h-2 w-2 rounded-full" style={{ background: "var(--ligus-line)" }} aria-hidden />
         This device
       </span>
     );
@@ -830,7 +830,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
   return (
     <span
       className="inline-flex items-center gap-1 text-[11px]"
-      style={{ color: "var(--hive-ink-soft)" }}
+      style={{ color: "var(--ligus-ink-soft)" }}
       title={
         online
           ? `Headless — runs on worker “${label}”`
@@ -840,7 +840,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
       <span aria-hidden className="inline-flex"><IconMonitor size={12} /></span>
       <span className="truncate">{label}</span>
       <span aria-hidden>·</span>
-      <span style={{ color: online ? "var(--hive-success-ink)" : "var(--hive-warn-ink)" }}>
+      <span style={{ color: online ? "var(--ligus-success-ink)" : "var(--ligus-warn-ink)" }}>
         {online ? "online" : "offline"}
       </span>
     </span>
@@ -876,8 +876,8 @@ function AgentRosterRow({
             <span
               className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[9px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
               style={{
-                background: "color-mix(in srgb, var(--hive-ink) 55%, transparent)",
-                color: "var(--hive-canvas)",
+                background: "color-mix(in srgb, var(--ligus-ink) 55%, transparent)",
+                color: "var(--ligus-canvas)",
               }}
             >
               Edit
@@ -929,7 +929,7 @@ function AgentRosterRow({
         <button
           onClick={onRemove}
           className="text-xs hover:opacity-80"
-          style={{ color: "var(--hive-danger-ink)" }}
+          style={{ color: "var(--ligus-danger-ink)" }}
         >
           Remove
         </button>
@@ -948,8 +948,8 @@ function RuntimeCard({
   onSelect?: () => void;
 }) {
   const style = {
-    borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)",
-    background: active ? SELECT_TINT : "var(--hive-mist)",
+    borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
+    background: active ? SELECT_TINT : "var(--ligus-mist)",
   } as const;
   const inner = (
     <div className="flex items-center justify-between gap-3">
@@ -964,7 +964,7 @@ function RuntimeCard({
         {runtime.isManaged && (
           <span
             className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
-            style={{ background: "var(--hive-mist)" }}
+            style={{ background: "var(--ligus-mist)" }}
             title="A runtime you configured (vs. an auto-detected local CLI)"
           >
             Configured
@@ -974,8 +974,8 @@ function RuntimeCard({
           <span
             className="rounded-full px-2 py-1 text-xs font-semibold"
             style={{
-              background: "color-mix(in srgb, var(--hive-success) 18%, transparent)",
-              color: "var(--hive-success-ink)",
+              background: "color-mix(in srgb, var(--ligus-success) 18%, transparent)",
+              color: "var(--ligus-success-ink)",
             }}
           >
             Active
@@ -994,7 +994,7 @@ function RuntimeCard({
   return (
     <button
       onClick={onSelect}
-      className="w-full rounded-2xl border px-3.5 py-3.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
+      className="w-full rounded-2xl border px-3.5 py-3.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={style}
     >
       {inner}
@@ -1011,7 +1011,7 @@ function RuntimeCard({
 
 /// Status pill for a queued item's host: online = success, offline = warn
 /// ("OFFLINE → queued"), device/unknown = neutral. All tints route through
-/// --hive-* tokens (R1).
+/// --ligus-* tokens (R1).
 function HostStatusBadge({ item }: { item: QueuedWorkDto }) {
   switch (item.hostStatus) {
     case "online":
@@ -1045,8 +1045,8 @@ function RunOnWorkerMenu({
       <button
         ref={anchorRef}
         onClick={() => setOpen((v) => !v)}
-        className="shrink-0 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors hover:bg-[color:var(--hive-overlay)]"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+        className="shrink-0 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors hover:bg-[color:var(--ligus-overlay)]"
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
       >
         Run on worker
       </button>
@@ -1054,7 +1054,7 @@ function RunOnWorkerMenu({
         <Popover anchorRef={anchorRef} onDismiss={() => setOpen(false)} align="right" minWidth={200}>
           <PopoverHeader>Online workers</PopoverHeader>
           {workers.length === 0 ? (
-            <div className="px-2 py-1.5 text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+            <div className="px-2 py-1.5 text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
               No online workers.
             </div>
           ) : (
@@ -1182,19 +1182,19 @@ function DiffFileBlock({
   const pathClass = wide ? "text-[13px]" : "text-[11px]";
   let newLine = 0;
   return (
-    <div className="overflow-hidden rounded-lg border" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="overflow-hidden rounded-lg border" style={{ borderColor: "var(--ligus-line)" }}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
-        style={{ background: "var(--hive-mist)" }}
+        style={{ background: "var(--ligus-mist)" }}
       >
         <span className="text-ink-soft" aria-hidden>{open ? "▾" : "▸"}</span>
         <span className={`min-w-0 flex-1 truncate font-mono ${pathClass}`}>{file.path}</span>
-        {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success-ink)" }}>+{file.added}</span>}
-        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger-ink)" }}>−{file.removed}</span>}
+        {file.added > 0 && <span className={pathClass} style={{ color: "var(--ligus-success-ink)" }}>+{file.added}</span>}
+        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--ligus-danger-ink)" }}>−{file.removed}</span>}
       </button>
       {open && (
-        <div className={`overflow-x-auto font-mono ${fontClass}`} style={{ background: "var(--hive-overlay)" }}>
+        <div className={`overflow-x-auto font-mono ${fontClass}`} style={{ background: "var(--ligus-overlay)" }}>
           {file.lines.map((line, i) => {
             const isAdd = line.startsWith("+") && !line.startsWith("+++");
             const isDel = line.startsWith("-") && !line.startsWith("---");
@@ -1206,20 +1206,20 @@ function DiffFileBlock({
             }
             const num = isDel || isMeta || isHunk ? "" : String(newLine++);
             const color = isAdd
-              ? "var(--hive-success-ink)"
+              ? "var(--ligus-success-ink)"
               : isDel
-                ? "var(--hive-danger-ink)"
+                ? "var(--ligus-danger-ink)"
                 : isHunk
-                  ? "var(--hive-accent-ink)"
+                  ? "var(--ligus-accent-ink)"
                   : isMeta
-                    ? "var(--hive-ink-soft)"
-                    : "var(--hive-ink)";
-            const rowBg = isAdd ? "var(--hive-success-tint)" : isDel ? "var(--hive-danger-tint)" : isHunk ? "var(--hive-info-tint)" : undefined;
+                    ? "var(--ligus-ink-soft)"
+                    : "var(--ligus-ink)";
+            const rowBg = isAdd ? "var(--ligus-success-tint)" : isDel ? "var(--ligus-danger-tint)" : isHunk ? "var(--ligus-info-tint)" : undefined;
             return (
               <div key={i} className="flex" style={{ whiteSpace: "pre", background: rowBg }}>
                 <span
                   className="select-none pr-2 pl-2 text-right"
-                  style={{ minWidth: "3ch", color: "var(--hive-ink-faint)" }}
+                  style={{ minWidth: "3ch", color: "var(--ligus-ink-faint)" }}
                   aria-hidden
                 >
                   {num}
@@ -1263,7 +1263,7 @@ export function ApplyConflictActions({
   onOpen: () => void;
 }) {
   return (
-    <div role="alert" className="mt-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+    <div role="alert" className="mt-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="mb-1.5">{conflict.message}</div>
       <div className="flex flex-wrap gap-2">
         {conflict.kind === "conflict" && (
@@ -1459,7 +1459,7 @@ function ProposalCard({
       {superseded && (
         <div
           className="mt-2 rounded-lg px-2.5 py-1.5 text-xs"
-          style={{ background: "var(--hive-mist)", color: "var(--hive-ink-soft)" }}
+          style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
         >
           Superseded by a newer revision.
         </div>
@@ -1490,7 +1490,7 @@ function ProposalCard({
             <div
               data-testid="offered-file"
               className="mt-2 rounded-md border px-2 py-1.5 text-xs"
-              style={{ borderColor: proposal.offeredFile.risky ? "var(--hive-danger)" : "var(--hive-line)" }}
+              style={{ borderColor: proposal.offeredFile.risky ? "var(--ligus-danger)" : "var(--ligus-line)" }}
             >
               <div className="font-medium">Shares the file “{proposal.offeredFile.name}” with this chat</div>
               <div className="text-ink-soft">
@@ -1513,7 +1513,7 @@ function ProposalCard({
                 <button
                   type="button"
                   className="rounded-md px-2 py-0.5 text-xs font-medium transition-colors hover:brightness-110"
-                  style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-ink)" }}
+                  style={{ border: "1px solid var(--ligus-line)", color: "var(--ligus-accent-ink)" }}
                   onClick={() => setDiffOpen(true)}
                 >
                   View full diff ↗
@@ -1548,7 +1548,7 @@ function ProposalCard({
             <div key={a.actorId} className="flex items-center gap-1.5 text-xs">
               <span
                 aria-hidden
-                style={{ color: a.approved ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
+                style={{ color: a.approved ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)" }}
               >
                 {a.approved ? "✓" : "✕"}
               </span>
@@ -1568,8 +1568,8 @@ function ProposalCard({
               disabled={busy}
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
-                background: "color-mix(in srgb, var(--hive-success) 20%, transparent)",
-                color: "var(--hive-success-ink)",
+                background: "color-mix(in srgb, var(--ligus-success) 20%, transparent)",
+                color: "var(--ligus-success-ink)",
               }}
               onClick={() => vote.mutate(true)}
             >
@@ -1579,8 +1579,8 @@ function ProposalCard({
               disabled={busy}
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
-                background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)",
-                color: "var(--hive-danger-ink)",
+                background: "color-mix(in srgb, var(--ligus-danger) 18%, transparent)",
+                color: "var(--ligus-danger-ink)",
               }}
               onClick={() => vote.mutate(false)}
             >
@@ -1627,13 +1627,13 @@ function ProposalCard({
             <div key={r.id} className="flex items-center gap-2 text-ink-soft">
               {r.state === "open" && <span>Waiting for {hostName(r)} to apply it</span>}
               {r.state === "applied" && (
-                <span style={{ color: "var(--hive-success-ink)" }}>
+                <span style={{ color: "var(--ligus-success-ink)" }}>
                   Applied on {hostName(r)}
                   {r.commit ? ` (${r.commit.slice(0, 12)})` : ""}
                 </span>
               )}
               {r.state === "failed" && (
-                <span style={{ color: "var(--hive-danger-ink)" }}>
+                <span style={{ color: "var(--ligus-danger-ink)" }}>
                   {hostName(r)} couldn't apply it: {r.reason ?? "no reason given"}
                 </span>
               )}
@@ -1641,7 +1641,7 @@ function ProposalCard({
               {r.state === "open" && r.mine && (
                 <button
                   className="rounded text-xs hover:underline disabled:opacity-50"
-                  style={{ color: "var(--hive-accent-ink)" }}
+                  style={{ color: "var(--ligus-accent-ink)" }}
                   disabled={busy}
                   onClick={() => withdraw.mutate(r.id)}
                 >
@@ -1658,7 +1658,7 @@ function ProposalCard({
             <select
               aria-label="Host to apply on"
               className="min-w-0 rounded-lg border bg-transparent px-2 py-1 text-xs"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
               value={pickedHost?.id ?? ""}
               onChange={(e) => setApplyHost(e.target.value)}
             >
@@ -1671,7 +1671,7 @@ function ProposalCard({
           )}
           <button
             className="rounded-xl px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
-            style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-ink)" }}
+            style={{ border: "1px solid var(--ligus-line)", color: "var(--ligus-accent-ink)" }}
             disabled={busy || !pickedHost}
             title="That host applies it once, on its checkout, and reports the result. Nobody else applies it meanwhile."
             onClick={() => pickedHost && requestApply.mutate(pickedHost.id)}
@@ -1690,7 +1690,7 @@ function ProposalCard({
         <button
           disabled={busy}
           className="mt-2 w-full rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-          style={{ border: "1px dashed var(--hive-line)", color: "var(--hive-ink)" }}
+          style={{ border: "1px dashed var(--ligus-line)", color: "var(--ligus-ink)" }}
           onClick={() => sendBack.mutate()}
         >
           {sendBack.isPending ? "Sending to agent…" : "Send to agent to revise"}
@@ -1738,9 +1738,9 @@ export function ProposalDiffModal({
     <Modal
       onClose={onClose}
       panelClassName="flex max-h-[88vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-2xl border"
-      panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)", boxShadow: "var(--hive-shadow-pop)" }}
+      panelStyle={{ background: "var(--ligus-panel)", borderColor: "var(--ligus-line)", boxShadow: "var(--ligus-shadow-pop)" }}
     >
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--ligus-line)" }}>
         <div className="min-w-0">
           <div className="truncate font-semibold">{title}</div>
           <div className="text-xs text-ink-soft">
@@ -1780,7 +1780,7 @@ function RefinementThread({
   disabled: boolean;
 }) {
   return (
-    <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="text-xs font-medium text-ink-soft">Refinement</div>
       {proposal.refinements.length > 0 && (
         <div className="mt-2 flex flex-col gap-2">
@@ -1793,8 +1793,8 @@ function RefinementThread({
                   <span
                     className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                     style={{
-                      color: "var(--hive-warm-ink)",
-                      background: "color-mix(in srgb, var(--hive-accent-warm) 15%, transparent)",
+                      color: "var(--ligus-warm-ink)",
+                      background: "color-mix(in srgb, var(--ligus-accent-warm) 15%, transparent)",
                     }}
                   >
                     changes
@@ -1816,7 +1816,7 @@ function RefinementThread({
           placeholder="Comment or request a change…"
           rows={2}
           disabled={disabled}
-          className="w-full resize-y rounded-xl border px-3 py-2 text-sm outline-none focus:border-[color:var(--hive-accent-cool)] disabled:opacity-50"
+          className="w-full resize-y rounded-xl border px-3 py-2 text-sm outline-none focus:border-[color:var(--ligus-accent-cool)] disabled:opacity-50"
           style={fieldStyle}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit();
@@ -1836,7 +1836,7 @@ function RefinementThread({
             disabled={disabled || submitting || !note.trim()}
             onClick={onSubmit}
             className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {submitting ? "Adding…" : asChangeRequest ? "Request changes" : "Comment"}
           </button>
@@ -2206,7 +2206,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     <RailFrame title="People" subtitle="Workspace members and governance roles for this chat.">
       <Section title="Members">
         {error && (
-          <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+          <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
             {error}
           </div>
         )}
@@ -2220,7 +2220,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             </div>
           </Card>
         ) : (
-          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", color: "var(--hive-warm-ink)" }}>
+          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-warm-ink)" }}>
             You aren't in this workspace's roster — it was created under a different identity. If it's
             your own, re-create it; identity is stable going forward.
           </div>
@@ -2233,7 +2233,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <div className="flex items-center gap-2 font-medium">
                 <span className="relative shrink-0">
                   <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={26} />
-                  <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--hive-panel)" }}>
+                  <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--ligus-panel)" }}>
                     <StatusDot
                       on={online}
                       size={9}
@@ -2309,7 +2309,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ color: "var(--hive-danger-ink)" }}
+                  style={{ color: "var(--ligus-danger-ink)" }}
                   disabled={Boolean(member.removeRefusal)}
                   onClick={() =>
                     confirmThen(
@@ -2331,7 +2331,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 
         <FormDisclosure label="Invite someone" open={showInvite} onToggle={() => setShowInvite((v) => !v)}>
           <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
               Make a single-use invite link and send it over a channel you trust. It carries your safety code so they
               can check it came from you. To invite someone you already share another workspace with, use People.
             </p>
@@ -2353,7 +2353,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 
         <FormDisclosure label="Membership history" open={showAudit} onToggle={() => setShowAudit((v) => !v)}>
           <Card className="space-y-1.5 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
               A tamper-evident audit from the signed config log — who joined or was removed, by whom,
               and when.
             </p>
@@ -2363,7 +2363,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               (audit.data ?? []).map((e, i) => (
                 <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="min-w-0 truncate">
-                    <span style={{ color: e.action === "removed" ? "var(--hive-danger-ink)" : "var(--hive-accent-warm)" }}>
+                    <span style={{ color: e.action === "removed" ? "var(--ligus-danger-ink)" : "var(--ligus-accent-warm)" }}>
                       {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
                     </span>{" "}
                     <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
@@ -2385,7 +2385,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <>
             <p className="text-xs text-ink-soft">
               Who the relay accepts writes from. Requires a relay with membership turned on
-              (LIGUS_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write.
+              (LANGSTROTH_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write.
             </p>
             {(srvMembers.data ?? []).map((m) => (
               <Card key={m.account} className="flex items-center justify-between px-3 py-2">
@@ -2397,7 +2397,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </div>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--hive-danger-ink)" }}
+                  style={{ color: "var(--ligus-danger-ink)" }}
                   onClick={() =>
                     confirmThen(`Remove @${m.login} from this workspace on the relay?`, () =>
                       srvRemoveMutation.mutate(m.account),
@@ -2412,7 +2412,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             {(srvMembers.data ?? []).length === 0 && (
               <Card className="space-y-2 p-3">
                 <div className="text-sm font-semibold">Enable member controls</div>
-                <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
                   Claim this workspace on the relay so it enforces who can write — you become the
                   owner. No-op on an open relay.
                 </p>
@@ -2462,7 +2462,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             {lastCode && (
               <div
                 className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
-                style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+                style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
               >
                 <code className="truncate text-xs">{lastCode}</code>
                 <button className="shrink-0 text-xs underline" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
@@ -2480,7 +2480,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
                   </span>
                 </span>
-                <button className="shrink-0 text-xs" style={{ color: "var(--hive-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
+                <button className="shrink-0 text-xs" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
                   Revoke
                 </button>
               </div>
@@ -2589,19 +2589,19 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
         <span
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
           style={{
-            background: "color-mix(in srgb, var(--hive-accent-cool) 15%, transparent)",
-            color: "var(--hive-accent-ink)",
+            background: "color-mix(in srgb, var(--ligus-accent-cool) 15%, transparent)",
+            color: "var(--ligus-accent-ink)",
           }}
         >
           {host.kind}
         </span>
       </div>
-      <span className="shrink-0 text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+      <span className="shrink-0 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
         {host.online ? "online" : relativeAgo(host.lastSeen)}
       </span>
     </div>
     {gateways && (
-      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--hive-ink-soft)" }} title="Model gateways this host's operator lists">
+      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} title="Model gateways this host's operator lists">
         Gateways: {gateways}
       </div>
     )}
@@ -2633,7 +2633,7 @@ function targetLabel(agentIds: string[], agents: WorkspaceAgentDto[]): string {
 
 /**
  * Compact multi-select of workspace agents for scoping a skill/vault. No
- * selection ⇒ global (primary + every agent). Colors route through --hive-*.
+ * selection ⇒ global (primary + every agent). Colors route through --ligus-*.
  */
 function AgentTargetPicker({
   agents,
@@ -2648,17 +2648,17 @@ function AgentTargetPicker({
     onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
   return (
     <div>
-      <div className="mb-1 text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+      <div className="mb-1 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
         Applies to {selected.length === 0 ? "all agents (global)" : `${selected.length} agent(s)`}
       </div>
       {agents.length === 0 ? (
-        <div className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <div className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
           No agents in this workspace — this stays global.
         </div>
       ) : (
         <div
           className="max-h-32 space-y-1 overflow-auto rounded-xl p-2"
-          style={{ background: "var(--hive-mist)" }}
+          style={{ background: "var(--ligus-mist)" }}
         >
           {agents.map((agent) => (
             <label key={agent.id} className="flex cursor-pointer items-center gap-2 text-sm">
@@ -2666,7 +2666,7 @@ function AgentTargetPicker({
                 type="checkbox"
                 checked={selected.includes(agent.id)}
                 onChange={() => toggle(agent.id)}
-                style={{ accentColor: "var(--hive-accent-cool)" }}
+                style={{ accentColor: "var(--ligus-accent-cool)" }}
               />
               <span className="truncate">{agent.name}</span>
             </label>
@@ -2682,7 +2682,7 @@ function TargetBadge({ agentIds, agents }: { agentIds: string[]; agents: Workspa
   return (
     <span
       className="inline-block rounded-full px-2 py-0.5 text-[10.5px] font-medium"
-      style={{ background: "var(--hive-mist)", color: "var(--hive-ink-soft)" }}
+      style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
     >
       {targetLabel(agentIds, agents)}
     </span>
@@ -2742,7 +2742,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="hover:opacity-80"
-                  style={{ color: "var(--hive-danger-ink)" }}
+                  style={{ color: "var(--ligus-danger-ink)" }}
                   onClick={() => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url))}
                 >
                   Remove
@@ -2752,7 +2752,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
             {preview?.url === vault.url && (
               <pre
                 className="mt-3 max-h-56 overflow-auto rounded-2xl p-3 text-xs leading-5"
-                style={{ background: "var(--hive-mist)" }}
+                style={{ background: "var(--ligus-mist)" }}
               >
                 {preview.text}
               </pre>
@@ -2782,7 +2782,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+              <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2839,7 +2839,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               <button
                 onClick={() => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id))}
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
               >
                 Remove
               </button>
@@ -2849,7 +2849,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
         {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded for this chat." />}
         <FormDisclosure label="Install skill" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
           <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
               Supports direct URLs, GitHub blob URLs, and owner/repo/path references.
             </p>
             <input
@@ -2872,7 +2872,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+              <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2961,10 +2961,10 @@ function ContextPane({
     : 0;
   const budgetColor =
     budgetPct >= 90
-      ? "var(--hive-danger)"
+      ? "var(--ligus-danger)"
       : budgetPct >= 70
-        ? "var(--hive-accent-warm)"
-        : "var(--hive-accent-cool)";
+        ? "var(--ligus-accent-warm)"
+        : "var(--ligus-accent-cool)";
   const hasCompaction = (data?.overflowMessageCount ?? 0) > 0;
   const summaryLabel =
     data?.summaryStrategy === "cached"
@@ -2995,7 +2995,7 @@ function ContextPane({
               {data ? `${fmtTokens(data.contextWindowTokens)} window` : ""}
             </span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--hive-mist)" }}>
+          <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--ligus-mist)" }}>
             <div
               className="h-full rounded-full transition-all duration-300"
               style={{ width: `${budgetPct}%`, background: budgetColor }}
@@ -3003,7 +3003,7 @@ function ContextPane({
           </div>
           <div
             className="mt-1.5 text-right text-[11px] font-medium"
-            style={{ color: budgetPct >= 90 ? "var(--hive-danger-ink)" : budgetPct >= 70 ? "var(--hive-warm-ink)" : "var(--hive-ink-soft)" }}
+            style={{ color: budgetPct >= 90 ? "var(--ligus-danger-ink)" : budgetPct >= 70 ? "var(--ligus-warm-ink)" : "var(--ligus-ink-soft)" }}
           >
             {budgetPct}%
           </div>
@@ -3019,8 +3019,8 @@ function ContextPane({
             <div
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
-                background: "color-mix(in srgb, var(--hive-accent-warm) 10%, transparent)",
-                color: "var(--hive-warm-ink)",
+                background: "color-mix(in srgb, var(--ligus-accent-warm) 10%, transparent)",
+                color: "var(--ligus-warm-ink)",
               }}
             >
               {data.overflowMessageCount} earlier messages are currently condensed to fit the context window.
@@ -3031,8 +3031,8 @@ function ContextPane({
             <div
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
-                background: "color-mix(in srgb, var(--hive-danger) 10%, transparent)",
-                color: "var(--hive-danger-ink)",
+                background: "color-mix(in srgb, var(--ligus-danger) 10%, transparent)",
+                color: "var(--ligus-danger-ink)",
               }}
             >
               Context is getting full — consider removing unused skills or vaults below.
@@ -3133,7 +3133,7 @@ export function SubtleSelectField({
   return (
     <label
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", opacity: disabled ? 0.6 : 1 }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", opacity: disabled ? 0.6 : 1 }}
       title={title}
     >
       <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
@@ -3144,7 +3144,7 @@ export function SubtleSelectField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="min-w-0 flex-1 appearance-none bg-transparent text-sm font-medium outline-none"
-        style={{ color: "var(--hive-ink)", fontFamily: "inherit", backgroundImage: "none", paddingRight: 4 }}
+        style={{ color: "var(--ligus-ink)", fontFamily: "inherit", backgroundImage: "none", paddingRight: 4 }}
       >
         {children}
       </select>
@@ -3169,12 +3169,12 @@ export function Stack({ children }: { children: ReactNode }) {
 }
 
 export const panelStyle = {
-  borderColor: "var(--hive-line)",
-  background: "var(--hive-panel)",
+  borderColor: "var(--ligus-line)",
+  background: "var(--ligus-panel)",
 } as const;
 
 export const fieldStyle = {
-  borderColor: "var(--hive-line)",
-  background: "var(--hive-panel)",
-  color: "var(--hive-ink)",
+  borderColor: "var(--ligus-line)",
+  background: "var(--ligus-panel)",
+  color: "var(--ligus-ink)",
 } as const;

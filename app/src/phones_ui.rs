@@ -1,6 +1,6 @@
 //! "Add this phone" on the desktop: certify the phone's P-256 Secure Enclave
 //! key as one of your devices, from the code its app shows
-//! (`hive_runtime::phone_enroll`).
+//! (`ligus_runtime::phone_enroll`).
 //!
 //! The person pastes (or scans) the phone's `ligusphone1:` code, compares the
 //! fingerprint with the phone's screen, and confirms with their passkey: the
@@ -8,7 +8,7 @@
 //! rules require their presence for every phone enrollment, so the desktop's
 //! presence sheet opens while `certify_phone_code` runs.
 
-use hive_runtime::phone_enroll::{PhoneCode, PhoneStanding};
+use ligus_runtime::phone_enroll::{PhoneCode, PhoneStanding};
 use tauri::State;
 
 use crate::AppState;

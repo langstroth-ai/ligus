@@ -1,14 +1,14 @@
 //! Workspace memory and live task state on the desktop
-//! (`hive_core::memory`; design `docs/design/v2/workspace-memory.md`): the
+//! (`ligus_core::memory`; design `docs/design/v2/workspace-memory.md`): the
 //! Memory pane's list, search, edit, remove, conflict resolution and proposal
 //! inbox, and the chat's task-state panel. Every write is this device's
 //! person's, judged by the fold's own rules in `ChatService`.
 
 use std::collections::BTreeMap;
 
-use hive_core::memory::{self, MemoryEntry, MemoryOp, MemorySource, ProposalState, TaskSlot};
-use hive_runtime::chat_service::MemoryDraft;
-use hive_runtime::ChatService;
+use ligus_core::memory::{self, MemoryEntry, MemoryOp, MemorySource, ProposalState, TaskSlot};
+use ligus_runtime::chat_service::MemoryDraft;
+use ligus_runtime::ChatService;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -60,11 +60,11 @@ pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]
         }
     }
     let me = svc.author().id.clone();
-    let config = svc.load(hive_core::workspace_config_session_id(wid)).ok().flatten();
+    let config = svc.load(ligus_core::workspace_config_session_id(wid)).ok().flatten();
     let mut agent_names: BTreeMap<String, String> =
         config.iter().flat_map(|c| c.workspace_agents.iter()).map(|a| (a.id.to_string(), a.name.clone())).collect();
-    agent_names.insert(hive_core::flow::PRIMARY.to_string(), "Ligus".into());
-    let moderator = config.is_some_and(|c| c.role_of(&me).rank() >= hive_core::WorkspaceRole::Admin.rank());
+    agent_names.insert(ligus_core::flow::PRIMARY.to_string(), "Ligus".into());
+    let moderator = config.is_some_and(|c| c.role_of(&me).rank() >= ligus_core::WorkspaceRole::Admin.rank());
     let mut edited_after_removal: Vec<MemoryEntry> = m.edited_after_removal().cloned().collect();
     edited_after_removal.sort_by_key(|e| std::cmp::Reverse(e.edited_after_removal.iter().map(|r| r.at_ms).max().unwrap_or(0)));
     Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, agent_names, me, moderator, edited_after_removal })
@@ -211,15 +211,15 @@ pub(crate) struct TaskSlotDto {
     pub expires_at_ms: i64,
 }
 
-pub(crate) fn task_dtos(session: &hive_core::ChatSession, agents: &[hive_core::WorkspaceAgent], now_ms: i64) -> Vec<TaskSlotDto> {
+pub(crate) fn task_dtos(session: &ligus_core::ChatSession, agents: &[ligus_core::WorkspaceAgent], now_ms: i64) -> Vec<TaskSlotDto> {
     let mut out: Vec<TaskSlotDto> = session
         .flow
         .tasks
         .iter()
         .map(|s| {
-            let agent_name = hive_core::flow::agent_from_key(&s.update.agent_key)
+            let agent_name = ligus_core::flow::agent_from_key(&s.update.agent_key)
                 .and_then(|a| agents.iter().find(|x| x.id == a).map(|x| x.name.clone()))
-                .unwrap_or_else(|| if s.update.agent_key == hive_core::flow::PRIMARY { "Ligus".into() } else { s.by.name.clone() });
+                .unwrap_or_else(|| if s.update.agent_key == ligus_core::flow::PRIMARY { "Ligus".into() } else { s.by.name.clone() });
             TaskSlotDto { agent_name, active: s.active(now_ms), stale: s.stale(now_ms), expires_at_ms: s.expires_at_ms(), slot: s.clone() }
         })
         .collect();
@@ -238,12 +238,12 @@ pub(crate) fn task_state_sync(state: tauri::State<'_, AppState>, session_id: Str
     let svc = state.service.lock().unwrap();
     let Some(session) = svc.load(sid).map_err(|e| e.to_string())? else { return Ok(vec![]) };
     let agents = svc
-        .load(hive_core::workspace_config_session_id(session.workspace_id))
+        .load(ligus_core::workspace_config_session_id(session.workspace_id))
         .ok()
         .flatten()
         .map(|c| c.workspace_agents)
         .unwrap_or_else(|| session.workspace_agents.clone());
-    Ok(task_dtos(&session, &agents, hive_core::flow::now_ms()))
+    Ok(task_dtos(&session, &agents, ligus_core::flow::now_ms()))
 }
 
 #[cfg(test)]
@@ -252,10 +252,10 @@ mod tests {
 
     #[test]
     fn task_dtos_name_agents_and_order_current_first() {
-        let mut s = hive_core::ChatSession::new("c", Uuid::new_v4(), "rt");
-        let agent = hive_core::WorkspaceAgent::new("coder", "rt");
+        let mut s = ligus_core::ChatSession::new("c", Uuid::new_v4(), "rt");
+        let agent = ligus_core::WorkspaceAgent::new("coder", "rt");
         let slot = |key: String, at_ms: i64| TaskSlot {
-            update: hive_core::memory::TaskStateUpdate { task_id: s.id, agent_key: key, turn_id: Uuid::new_v4(), summary: "s".into(), ..Default::default() },
+            update: ligus_core::memory::TaskStateUpdate { task_id: s.id, agent_key: key, turn_id: Uuid::new_v4(), summary: "s".into(), ..Default::default() },
             writer: Uuid::new_v4(),
             by: Default::default(),
             at_ms,

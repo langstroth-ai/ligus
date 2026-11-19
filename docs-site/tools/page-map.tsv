@@ -7,28 +7,27 @@
 #   old_path  page path (.md) on an old site; its URL is /old/path/
 #   new_path  page path under docs-site/docs/
 #   sources   where the old URL was served (comma list):
-#               1x          docs.apiaryhq.ai, the 1.x site (main, v1.18.0)
 #               ligus       docs.ligus.ai, the 0.1 user site before the merge
 #               langstroth  docs.langstroth.ai, the 0.1 operator site before the merge
 #   Every row is redirected on every host, whatever its sources.
-#   index.md is the home page on docs.langstroth.ai; on docs.ligus.ai and
-#   docs.apiaryhq.ai the old home goes to Using Ligus.
+#   index.md is the home page on docs.langstroth.ai; on docs.ligus.ai the old
+#   home goes to Using Ligus.
 #   Removed pages (pricing, tiering, managed service, upgrade-from-hive) point
 #   at the page that replaces them.
 addons/acp.md	ligus/addons/acp.md	ligus,langstroth
-addons/byo-agents.md	ligus/addons/byo-agents.md	1x,ligus,langstroth
+addons/byo-agents.md	ligus/addons/byo-agents.md	ligus,langstroth
 addons/ligus-mcp.md	ligus/addons/ligus-mcp.md	ligus,langstroth
-addons/linear.md	ligus/addons/linear.md	1x,ligus,langstroth
-addons/mcp.md	ligus/addons/mcp.md	1x,ligus,langstroth
-addons/skills.md	ligus/addons/skills.md	1x,ligus,langstroth
-concepts/agents.md	ligus/concepts/agents.md	1x,ligus,langstroth
-concepts/for-agents.md	ligus/concepts/for-agents.md	1x,ligus,langstroth
-concepts/headless-agents.md	operate/concepts/headless-agents.md	1x,ligus,langstroth
-concepts/identity.md	ligus/concepts/identity.md	1x,ligus,langstroth
-concepts/security.md	ligus/concepts/security.md	1x,ligus,langstroth
-concepts/tools-and-consent.md	ligus/concepts/tools-and-consent.md	1x,ligus,langstroth
-concepts/vaults.md	ligus/concepts/vaults.md	1x,ligus,langstroth
-concepts/workspaces.md	ligus/concepts/workspaces.md	1x,ligus,langstroth
+addons/linear.md	ligus/addons/linear.md	ligus,langstroth
+addons/mcp.md	ligus/addons/mcp.md	ligus,langstroth
+addons/skills.md	ligus/addons/skills.md	ligus,langstroth
+concepts/agents.md	ligus/concepts/agents.md	ligus,langstroth
+concepts/for-agents.md	ligus/concepts/for-agents.md	ligus,langstroth
+concepts/headless-agents.md	operate/concepts/headless-agents.md	ligus,langstroth
+concepts/identity.md	ligus/concepts/identity.md	ligus,langstroth
+concepts/security.md	ligus/concepts/security.md	ligus,langstroth
+concepts/tools-and-consent.md	ligus/concepts/tools-and-consent.md	ligus,langstroth
+concepts/vaults.md	ligus/concepts/vaults.md	ligus,langstroth
+concepts/workspaces.md	ligus/concepts/workspaces.md	ligus,langstroth
 deploy/index.md	operate/deploy/index.md	ligus,langstroth
 deploy/keys-off-cluster.md	operate/deploy/keys-off-cluster.md	ligus,langstroth
 deploy/kubernetes.md	operate/deploy/kubernetes.md	ligus,langstroth
@@ -42,63 +41,63 @@ deploy/solo.md	operate/deploy/solo.md	ligus,langstroth
 deploy/upgrade-from-hive.md	operate/ops/operations.md	ligus,langstroth
 deploy/with-an-agent.md	operate/deploy/with-an-agent.md	ligus,langstroth
 features/code-hosts.md	ligus/features/code-hosts.md	ligus,langstroth
-features/collaboration.md	ligus/features/collaboration.md	1x,ligus,langstroth
-features/collaborators.md	ligus/features/collaborators.md	1x,ligus,langstroth
-features/dashboard.md	ligus/features/dashboard.md	1x,ligus,langstroth
+features/collaboration.md	ligus/features/collaboration.md	ligus,langstroth
+features/collaborators.md	ligus/features/collaborators.md	ligus,langstroth
+features/dashboard.md	ligus/features/dashboard.md	ligus,langstroth
 features/flow.md	ligus/features/flow.md	ligus,langstroth
-features/git.md	ligus/features/git.md	1x,ligus,langstroth
+features/git.md	ligus/features/git.md	ligus,langstroth
 features/guards.md	ligus/features/guards.md	ligus,langstroth
-features/invites.md	ligus/features/invites.md	1x,ligus,langstroth
+features/invites.md	ligus/features/invites.md	ligus,langstroth
 features/linked-identities.md	ligus/features/linked-identities.md	ligus,langstroth
-features/mentions-and-notifications.md	ligus/features/mentions-and-notifications.md	1x,ligus,langstroth
-features/multi-agent.md	ligus/features/multi-agent.md	1x,ligus,langstroth
-features/onboarding.md	ligus/features/onboarding.md	1x,ligus,langstroth
-features/phone-app.md	ligus/features/phone-app.md	1x,ligus,langstroth
+features/mentions-and-notifications.md	ligus/features/mentions-and-notifications.md	ligus,langstroth
+features/multi-agent.md	ligus/features/multi-agent.md	ligus,langstroth
+features/onboarding.md	ligus/features/onboarding.md	ligus,langstroth
+features/phone-app.md	ligus/features/phone-app.md	ligus,langstroth
 features/proposal-sets.md	ligus/features/proposal-sets.md	ligus,langstroth
-features/right-rail.md	ligus/features/right-rail.md	1x,ligus,langstroth
-features/scheduling.md	ligus/features/scheduling.md	1x,ligus,langstroth
-features/settings.md	ligus/features/settings.md	1x,ligus,langstroth
-features/voice-and-slash.md	ligus/features/voice-and-slash.md	1x,ligus,langstroth
-features/workflows.md	ligus/features/workflows.md	1x,ligus,langstroth
+features/right-rail.md	ligus/features/right-rail.md	ligus,langstroth
+features/scheduling.md	ligus/features/scheduling.md	ligus,langstroth
+features/settings.md	ligus/features/settings.md	ligus,langstroth
+features/voice-and-slash.md	ligus/features/voice-and-slash.md	ligus,langstroth
+features/workflows.md	ligus/features/workflows.md	ligus,langstroth
 forges/forgejo-gitea-codeberg.md	ligus/forges/forgejo-gitea-codeberg.md	ligus,langstroth
 forges/github.md	ligus/forges/github.md	ligus,langstroth
 forges/gitlab.md	ligus/forges/gitlab.md	ligus,langstroth
-getting-started/configuring-a-runtime.md	ligus/getting-started/configuring-a-runtime.md	1x,ligus,langstroth
-getting-started/first-chat.md	ligus/getting-started/first-chat.md	1x,ligus,langstroth
-getting-started/first-launch.md	ligus/getting-started/first-launch.md	1x,ligus,langstroth
-getting-started/homebrew.md	ligus/getting-started/homebrew.md	1x,ligus,langstroth
-getting-started/offline-local-models.md	ligus/getting-started/offline-local-models.md	1x,ligus,langstroth
+getting-started/configuring-a-runtime.md	ligus/getting-started/configuring-a-runtime.md	ligus,langstroth
+getting-started/first-chat.md	ligus/getting-started/first-chat.md	ligus,langstroth
+getting-started/first-launch.md	ligus/getting-started/first-launch.md	ligus,langstroth
+getting-started/homebrew.md	ligus/getting-started/homebrew.md	ligus,langstroth
+getting-started/offline-local-models.md	ligus/getting-started/offline-local-models.md	ligus,langstroth
 help/troubleshooting.md	ligus/help/troubleshooting.md	ligus,langstroth
-images/CAPTURE_GUIDE.md	ligus/images/CAPTURE_GUIDE.md	1x,ligus,langstroth
-images/README.md	ligus/images/README.md	1x,ligus,langstroth
-index.md	ligus/index.md	1x,ligus,langstroth
-networking/lan.md	operate/networking/lan.md	1x,ligus,langstroth
-networking/remote-access.md	operate/networking/remote-access.md	1x,ligus,langstroth
-networking/rendezvous.md	operate/networking/rendezvous.md	1x,ligus,langstroth
-networking/self-host.md	operate/networking/self-host.md	1x,ligus,langstroth
-networking/turn.md	operate/networking/turn.md	1x,ligus,langstroth
+images/CAPTURE_GUIDE.md	ligus/images/CAPTURE_GUIDE.md	ligus,langstroth
+images/README.md	ligus/images/README.md	ligus,langstroth
+index.md	ligus/index.md	ligus,langstroth
+networking/lan.md	operate/networking/lan.md	ligus,langstroth
+networking/remote-access.md	operate/networking/remote-access.md	ligus,langstroth
+networking/rendezvous.md	operate/networking/rendezvous.md	ligus,langstroth
+networking/self-host.md	operate/networking/self-host.md	ligus,langstroth
+networking/turn.md	operate/networking/turn.md	ligus,langstroth
 operate/deploy/upgrade-from-hive.md	operate/ops/operations.md	langstroth
-ops/build.md	operate/ops/build.md	1x,ligus,langstroth
-ops/deployment.md	operate/ops/deployment.md	1x,ligus,langstroth
+ops/build.md	operate/ops/build.md	ligus,langstroth
+ops/deployment.md	operate/ops/deployment.md	ligus,langstroth
 ops/linux-sandbox.md	operate/ops/linux-sandbox.md	ligus,langstroth
-ops/managed-service.md	operate/networking/self-host.md	1x,ligus,langstroth
+ops/managed-service.md	operate/networking/self-host.md	ligus,langstroth
 ops/operations.md	operate/ops/operations.md	ligus,langstroth
-ops/pricing.md	operate/networking/self-host.md	1x,ligus,langstroth
-ops/serve-box.md	operate/ops/serve-box.md	1x,ligus,langstroth
+ops/pricing.md	operate/networking/self-host.md	ligus,langstroth
+ops/serve-box.md	operate/ops/serve-box.md	ligus,langstroth
 ops/serve-repos.md	operate/ops/serve-repos.md	ligus,langstroth
-ops/server-side-membership.md	operate/ops/server-side-membership.md	1x,ligus,langstroth
-ops/tiering.md	operate/networking/self-host.md	1x,ligus,langstroth
-ops/troubleshooting.md	ligus/help/troubleshooting.md	1x,ligus,langstroth
+ops/server-side-membership.md	operate/ops/server-side-membership.md	ligus,langstroth
+ops/tiering.md	operate/networking/self-host.md	ligus,langstroth
+ops/troubleshooting.md	ligus/help/troubleshooting.md	ligus,langstroth
 reference/cli.md	ligus/reference/cli.md	ligus,langstroth
-reference/config-toml.md	operate/reference/config-toml.md	1x,ligus,langstroth
+reference/config-toml.md	operate/reference/config-toml.md	ligus,langstroth
 reference/env-vars.md	operate/reference/env-vars.md	ligus,langstroth
 reference/identity-link-statement.md	operate/reference/identity-link-statement.md	ligus,langstroth
-reference/invite-payload.md	operate/reference/invite-payload.md	1x,ligus,langstroth
+reference/invite-payload.md	operate/reference/invite-payload.md	ligus,langstroth
 reference/runtime-matrix.md	ligus/reference/runtime-matrix.md	ligus,langstroth
 reference/serve-api.md	operate/reference/serve-api.md	ligus,langstroth
 reference/settings.md	ligus/reference/settings.md	ligus,langstroth
-reference/whats-new.md	ligus/reference/whats-new.md	1x,ligus,langstroth
-reference/wire-protocols.md	operate/reference/wire-protocols.md	1x,ligus,langstroth
+reference/whats-new.md	ligus/reference/whats-new.md	ligus,langstroth
+reference/wire-protocols.md	operate/reference/wire-protocols.md	ligus,langstroth
 security/index.md	operate/security/index.md	ligus,langstroth
 security/runbooks.md	operate/security/runbooks.md	ligus,langstroth
 security/threat-model.md	operate/security/threat-model.md	ligus,langstroth

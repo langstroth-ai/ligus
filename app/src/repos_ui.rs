@@ -8,9 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use hive_core::ChatSession;
-use hive_runtime::event_store::CheckoutSource;
-use hive_runtime::repos::{self as rr, TurnCheckout};
+use ligus_core::ChatSession;
+use ligus_runtime::event_store::CheckoutSource;
+use ligus_runtime::repos::{self as rr, TurnCheckout};
 use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
@@ -28,11 +28,11 @@ pub(crate) fn host_label() -> String {
 fn coverage_default(state: &AppState, ws: Uuid) -> bool {
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    svc.workspace_roster(ws).ok().and_then(|r| r.role_of(&me)).is_some_and(|r| r == hive_core::WorkspaceRole::Owner)
+    svc.workspace_roster(ws).ok().and_then(|r| r.role_of(&me)).is_some_and(|r| r == ligus_core::WorkspaceRole::Owner)
 }
 
 /// This desktop's coverage of the active workspace's repos, for its beat.
-pub(crate) fn beat_coverage(state: &AppState, ws: Uuid) -> Vec<hive_core::workspace_repo::CoverageEntry> {
+pub(crate) fn beat_coverage(state: &AppState, ws: Uuid) -> Vec<ligus_core::workspace_repo::CoverageEntry> {
     let default_on = coverage_default(state, ws);
     let (maps, aliases, repos) = {
         let svc = state.service.lock().unwrap();
@@ -54,7 +54,7 @@ pub(crate) fn beat_coverage(state: &AppState, ws: Uuid) -> Vec<hive_core::worksp
 /// (locally; nothing is published, review F7/F16). Idempotent.
 pub(crate) fn migrate_bound_folder(state: &AppState, ws: Uuid) {
     let folder = crate::workspace_dir_for(&state.settings.lock().unwrap().workspace_dirs, &ws.to_string());
-    if folder.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(Path::new(&folder)) {
+    if folder.trim().is_empty() || !ligus_runtime::git_worktree::is_git_repo(Path::new(&folder)) {
         return;
     }
     let svc = state.service.lock().unwrap();
@@ -145,8 +145,8 @@ pub(crate) fn gated_checkout(state: &AppState, session: &ChatSession) -> Result<
 /// cut from this device's HEAD would never be pinned (review F3).
 pub(crate) fn view_dir(checkout: &Path, session_id: Uuid) -> String {
     let chat = session_id.to_string();
-    if hive_runtime::git_worktree::chat_branch_exists(checkout, &chat) {
-        if let Ok(wt) = hive_runtime::git_worktree::chat_worktree(checkout, &chat) {
+    if ligus_runtime::git_worktree::chat_branch_exists(checkout, &chat) {
+        if let Ok(wt) = ligus_runtime::git_worktree::chat_worktree(checkout, &chat) {
             return wt.to_string_lossy().into_owned();
         }
     }
@@ -165,7 +165,7 @@ pub(crate) fn host_lacks_repo(state: &AppState, host_id: &str, repo: Uuid) -> bo
 
 /// Authoritative for this device: whether a turn in `session` could run
 /// here now (no repo, or this device's checkout of it is ready).
-pub(crate) fn runs_here(state: &AppState, svc: &hive_runtime::ChatService, session: &ChatSession) -> bool {
+pub(crate) fn runs_here(state: &AppState, svc: &ligus_runtime::ChatService, session: &ChatSession) -> bool {
     if session.repo.as_ref().and_then(|r| r.repo_id).is_none() {
         return true;
     }
@@ -176,11 +176,11 @@ pub(crate) fn runs_here(state: &AppState, svc: &hive_runtime::ChatService, sessi
 
 /// This device's coverage of `session`'s repo for the dispatcher (design
 /// repos-and-checkouts 11.4): read-only, what its own gate would say.
-pub(crate) fn dispatch_coverage(svc: &hive_runtime::ChatService, session: &ChatSession) -> hive_core::dispatch::Coverage {
+pub(crate) fn dispatch_coverage(svc: &ligus_runtime::ChatService, session: &ChatSession) -> ligus_core::dispatch::Coverage {
     if session.repo.as_ref().and_then(|r| r.repo_id).is_none() {
-        return hive_core::dispatch::Coverage::NoRepo;
+        return ligus_core::dispatch::Coverage::NoRepo;
     }
-    let Ok(roster) = svc.workspace_roster(session.workspace_id) else { return hive_core::dispatch::Coverage::Missing };
+    let Ok(roster) = svc.workspace_roster(session.workspace_id) else { return ligus_core::dispatch::Coverage::Missing };
     rr::dispatch_coverage(svc.store(), svc.device_id(), session, &roster, &rr::cloning())
 }
 
@@ -203,15 +203,15 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
     let svc = state.service.lock().unwrap();
     let roster = svc.workspace_roster(ws).map_err(map_err)?;
     let me = svc.author().id.clone();
-    let can_admin = roster.role_of(&me).is_some_and(|r| r.rank() >= hive_core::WorkspaceRole::Admin.rank());
-    let hosts = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?.map(|c| c.workspace_hosts).unwrap_or_default();
+    let can_admin = roster.role_of(&me).is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
+    let hosts = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?.map(|c| c.workspace_hosts).unwrap_or_default();
     let my_host = svc.device_id().to_string();
     let reports = rr::host_reports(&roster, &hosts, &state.host_presence);
     let entries = rr::workspace_repos(&roster);
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
     let mine = rr::coverage_in(svc.store(), ws, &roster, &rr::cloning());
     let maps = svc.store().repo_mappings(ws).map_err(map_err)?;
-    let looks = hive_core::workspace_repo::lookalikes(&live);
+    let looks = ligus_core::workspace_repo::lookalikes(&live);
     let accepted = svc.store().accepted_aliases(ws).unwrap_or_default();
     let is_accepted = |kind: &str, alias: &str, target: &str| accepted.iter().any(|(k, a, t)| k == kind && a == alias && t == target);
     let al = rr::aliases(svc.store(), ws, Some(&roster));
@@ -273,7 +273,7 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
             let name = Path::new(&folder).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             json!({ "canonical": c, "name": name, "viaFork": fork, "path": folder })
         });
-    let coverage_on = rr::coverage_reporting(svc.store(), ws, roster.role_of(&me) == Some(hive_core::WorkspaceRole::Owner));
+    let coverage_on = rr::coverage_reporting(svc.store(), ws, roster.role_of(&me) == Some(ligus_core::WorkspaceRole::Owner));
     let host_aliases: Vec<Value> = roster
         .host_aliases
         .iter()
@@ -316,14 +316,14 @@ pub fn add_workspace_repo_sync(state: State<AppState>, input: String, name: Opti
 }
 
 fn guess_kind(input: &str) -> String {
-    let host = hive_core::workspace_repo::canonical_repo(input, "", &Default::default())
+    let host = ligus_core::workspace_repo::canonical_repo(input, "", &Default::default())
         .ok()
         .unwrap_or_else(|| input.to_string())
         .split('/')
         .next()
         .unwrap_or("")
         .to_string();
-    hive_forge::conn::known_kind(&host).map(|(k, _)| k.as_str().to_string()).unwrap_or_default()
+    ligus_forge::conn::known_kind(&host).map(|(k, _)| k.as_str().to_string()).unwrap_or_default()
 }
 
 fn parse(id: &str) -> Result<Uuid, String> {
@@ -392,7 +392,7 @@ pub fn accept_repo_alias_sync(state: State<AppState>, alias: String, accept: boo
     state.service.lock().unwrap().accept_alias_for(ws, &alias, target.as_deref(), accept).map_err(map_err)
 }
 
-fn live_repo(state: &AppState, ws: Uuid, id: Uuid) -> Result<hive_core::workspace_repo::WorkspaceRepo, String> {
+fn live_repo(state: &AppState, ws: Uuid, id: Uuid) -> Result<ligus_core::workspace_repo::WorkspaceRepo, String> {
     let roster = state.service.lock().unwrap().workspace_roster(ws).map_err(map_err)?;
     roster.repos.get(&id).filter(|e| !e.removed).map(|e| e.repo.clone()).ok_or_else(|| "no such repository in this workspace".into())
 }
@@ -478,7 +478,7 @@ pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> R
     let me = svc.device_id().to_string();
     let my_actor = svc.author().id.clone();
     // Re-pinning (review residual 3): an Admin's, or the chat's creator's.
-    let admin = roster.role_of(&my_actor).is_some_and(|r| r.rank() >= hive_core::WorkspaceRole::Admin.rank());
+    let admin = roster.role_of(&my_actor).is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
     let can_repin = cr.base_commit.is_some() && (admin || (!s.creator_actor_id.is_empty() && s.creator_actor_id == my_actor));
     drop(svc);
     let pinned = pinned_elsewhere(&state, &s, id, &me, &my_actor, here_ok);
@@ -589,7 +589,7 @@ pub async fn clone_workspace_repo(state: State<'_, AppState>, repo_id: String, p
 pub(crate) async fn clone_repo_into(
     state: &AppState,
     ws: Uuid,
-    repo: &hive_core::workspace_repo::WorkspaceRepo,
+    repo: &ligus_core::workspace_repo::WorkspaceRepo,
     url: &str,
     parent: &Path,
     pin: Option<&str>,
@@ -620,7 +620,7 @@ pub async fn open_chat_checkout(ligus_app: tauri::AppHandle, session_id: String)
 pub fn open_chat_checkout_sync(state: State<AppState>, session_id: String) -> Result<String, String> {
     let sid = parse(&session_id)?;
     let checkout = chat_checkout(&state, sid).ok_or("this chat has no repository checkout on this device")?;
-    let wt = hive_runtime::git_worktree::chat_worktree_path_of(&checkout, &sid.to_string()).filter(|p| std::fs::symlink_metadata(p).is_ok());
+    let wt = ligus_runtime::git_worktree::chat_worktree_path_of(&checkout, &sid.to_string()).filter(|p| std::fs::symlink_metadata(p).is_ok());
     let dir = openable_dir(&checkout, wt.as_deref())?;
     open_folder(&dir)?;
     Ok(dir.to_string_lossy().into_owned())
@@ -678,7 +678,7 @@ pub(crate) fn open_folder_command(dir: &Path) -> std::process::Command {
     let program = "explorer";
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let program = "xdg-open";
-    let mut c = hive_core::process_util::command(program);
+    let mut c = ligus_core::process_util::command(program);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

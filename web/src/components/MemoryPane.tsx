@@ -24,7 +24,7 @@ import {
   type MemoryView,
 } from "@/lib/memory";
 
-const fieldStyle = { borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" };
+const fieldStyle = { borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" };
 
 function when(ms: number): string {
   return ms > 0 ? new Date(ms).toLocaleString() : "";
@@ -186,7 +186,7 @@ function EntryCard({
   const src = e.current.source?.chatId;
   const restricted = egressNote(e);
   return (
-    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-entry">
+    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-entry">
       {editing ? (
         <EntryEditor
           initial={editing}
@@ -229,7 +229,7 @@ function EntryCard({
             </div>
           )}
           <p className={`mt-1 whitespace-pre-wrap break-words text-xs ${expanded ? "" : "line-clamp-3"}`}>{e.current.body}</p>
-          <div className="mt-1 text-xs" style={{ color: "var(--hive-ink-soft)" }}>
+          <div className="mt-1 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
             {provenance(e.current)} · {when(e.current.atMs)}
             {src && view.chatTitles[src] && ` · from “${view.chatTitles[src]}”`}
             {e.revisionCount > 1 && ` · ${e.revisionCount} versions`}
@@ -291,18 +291,18 @@ function EntryCard({
 function LateEditCard({ e }: { e: MemoryEntry }) {
   const removed = e.removed;
   return (
-    <li className="rounded-lg border px-2.5 py-2 text-xs" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-late-edit">
+    <li className="rounded-lg border px-2.5 py-2 text-xs" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-late-edit">
       <div>
         A note {removed ? `removed by ${provenance(removed)} on ${when(removed.atMs)}` : "that was removed"} was edited after its removal:
       </div>
-      <ul className="mt-0.5 list-disc pl-4" style={{ color: "var(--hive-ink-soft)" }}>
+      <ul className="mt-0.5 list-disc pl-4" style={{ color: "var(--ligus-ink-soft)" }}>
         {(e.editedAfterRemoval ?? []).map((r) => (
           <li key={r.rev}>
             {provenance(r)} · {when(r.atMs)}
           </li>
         ))}
       </ul>
-      <div className="mt-0.5" style={{ color: "var(--hive-ink-soft)" }}>
+      <div className="mt-0.5" style={{ color: "var(--ligus-ink-soft)" }}>
         The edit wasn't applied; its text is in the workspace history only. Write a new note if it's still needed.
       </div>
     </li>
@@ -311,8 +311,8 @@ function LateEditCard({ e }: { e: MemoryEntry }) {
 
 function ConflictRow({ c, mine, onKeepCurrent, onTakeTheirs }: { c: MemoryRevision; mine: boolean; onKeepCurrent: () => void; onTakeTheirs: () => void }) {
   return (
-    <div className="mt-1.5 rounded-md border px-2 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-conflict">
-      <div style={{ color: "var(--hive-ink-soft)" }}>
+    <div className="mt-1.5 rounded-md border px-2 py-1.5 text-xs" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-conflict">
+      <div style={{ color: "var(--ligus-ink-soft)" }}>
         {c.removal ? `${provenance(c)} removed this while it was being edited` : `${provenance(c)} edited an earlier version at the same time:`}
       </div>
       {!c.removal && <p className="mt-0.5 whitespace-pre-wrap break-words">{c.body}</p>}
@@ -336,7 +336,7 @@ function ProposalCard({ p, view, onDecide }: { p: MemoryProposalState; view: Mem
   const src = p.proposal.source?.chatId;
   const verb = op.op === "create" ? "New note" : op.op === "edit" ? "Edit" : "Remove";
   return (
-    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--hive-line)" }} data-testid="memory-proposal">
+    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-proposal">
       <div className="flex items-center gap-2">
         <Badge tone="info">{verb}</Badge>
         <span className="min-w-0 truncate font-semibold">
@@ -344,13 +344,13 @@ function ProposalCard({ p, view, onDecide }: { p: MemoryProposalState; view: Mem
         </span>
       </div>
       {op.op === "edit" && (
-        <div className="mt-0.5 text-xs" style={{ color: "var(--hive-ink-soft)" }}>
+        <div className="mt-0.5 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
           Changes “<bdi>{target?.current.title ?? "a note no longer in the list"}</bdi>”
         </div>
       )}
       {op.op !== "remove" && <p className="mt-1 whitespace-pre-wrap break-words text-xs">{op.body}</p>}
       {p.proposal.rationale && <p className="mt-1 text-xs italic">Why: {p.proposal.rationale}</p>}
-      <div className="mt-1 text-xs" style={{ color: "var(--hive-ink-soft)" }}>
+      <div className="mt-1 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
         by {proposedBy(p, view.agentNames)}
         {src && view.chatTitles[src] && ` in “${view.chatTitles[src]}”`} · {when(p.atMs)}
       </div>
@@ -394,7 +394,7 @@ function EntryEditor({
         onChange={(e) => setBody(e.target.value)}
       />
       <input aria-label="Tags" placeholder="Tags, comma separated" className="w-full rounded-xl border px-3 py-1.5 text-sm" style={fieldStyle} value={tags} onChange={(e) => setTags(e.target.value)} />
-      {problem && (title || body) && <div className="text-xs" style={{ color: "var(--hive-ink-soft)" }}>{problem}</div>}
+      {problem && (title || body) && <div className="text-xs" style={{ color: "var(--ligus-ink-soft)" }}>{problem}</div>}
       <div className="flex gap-1.5">
         <Button size="sm" variant="primary" disabled={!!problem} onClick={() => onSave({ ...initial, title: title.trim(), body, tags: parseTags(tags) })}>
           {saveLabel}

@@ -44,11 +44,11 @@ export function TeamSyncSection() {
 }
 
 const PROBE_COLOR: Record<RelayProbeDto["status"], string> = {
-  ok: "var(--hive-success)",
-  unauthorized: "var(--hive-warn)",
-  httpError: "var(--hive-warn)",
-  unreachable: "var(--hive-warn)",
-  unconfigured: "var(--hive-ink)",
+  ok: "var(--ligus-success)",
+  unauthorized: "var(--ligus-warn)",
+  httpError: "var(--ligus-warn)",
+  unreachable: "var(--ligus-warn)",
+  unconfigured: "var(--ligus-ink)",
 };
 const PROBE_ICON: Record<RelayProbeDto["status"], ReactNode> = {
   ok: <IconCheck size={13} />,
@@ -152,7 +152,7 @@ function SyncSection() {
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
         {s?.connectionState === "limited" ? (
           <div className="space-y-1">
-            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-warn-ink)" }}>
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--ligus-warn-ink)" }}>
               <IconAlertTriangle size={13} /> Syncing, but writes are waiting
             </span>
             <div className="text-xs text-ink-soft">
@@ -161,19 +161,19 @@ function SyncSection() {
           </div>
         ) : s?.connectionState === "error" ? (
           <div className="space-y-1">
-            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger-ink)" }}>
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--ligus-danger-ink)" }}>
               <IconAlertTriangle size={13} /> Sync error
             </span>
             <div className="text-xs text-ink-soft">
               {s.lastError ?? "The last sync attempt failed."}
             </div>
-            <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+            <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
               Reconnect — check your relay URL, key, or access token below, then test the connection.
             </div>
           </div>
         ) : s?.connectionState === "live" ? (
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="flex items-center gap-1.5" style={{ color: "var(--hive-success-ink)" }}>
+            <span className="flex items-center gap-1.5" style={{ color: "var(--ligus-success-ink)" }}>
               <IconHexagon size={13} /> Live
             </span>
             <span className="text-ink-soft">·</span>
@@ -185,12 +185,12 @@ function SyncSection() {
               <span
                 className="flex items-center gap-1"
                 title="Messages sealed with the workspace key"
-                style={{ color: "var(--hive-success-ink)" }}
+                style={{ color: "var(--ligus-success-ink)" }}
               >
                 <IconLock size={12} /> encrypted
               </span>
             ) : (
-              <span className="flex items-center gap-1" style={{ color: "var(--hive-warn-ink)" }}>
+              <span className="flex items-center gap-1" style={{ color: "var(--ligus-warn-ink)" }}>
                 <IconAlertTriangle size={12} /> plaintext
               </span>
             )}
@@ -227,7 +227,7 @@ function SyncSection() {
           // Surface the live sync failure right next to the fix affordance until
           // the user runs a fresh probe.
           s?.connectionState === "error" && (
-            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
               <IconAlertTriangle size={13} />
               {s.lastError ?? "Sync is failing — test the connection."}
             </span>
@@ -287,7 +287,7 @@ function SyncSection() {
         {c?.hasRelayAccessToken && (
           <button
             className="text-xs hover:opacity-80"
-            style={{ color: "var(--hive-danger-ink)" }}
+            style={{ color: "var(--ligus-danger-ink)" }}
             onClick={() => clearSecret.mutate("relayAccessToken")}
           >
             clear
@@ -309,7 +309,7 @@ function SyncSection() {
         {showAdvanced ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />} Advanced — set room &amp; key by hand
       </button>
       {showAdvanced && (
-        <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
           <p className="text-xs text-ink-soft">
             Normally the rail’s ＋ fills these in. Set them by hand only to join a specific room
             or change the passphrase directly.
@@ -337,7 +337,7 @@ function SyncSection() {
             {c?.hasWorkspaceKey && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 onClick={() => clearSecret.mutate("workspaceKey")}
               >
                 clear
@@ -368,7 +368,7 @@ function SyncSection() {
             {issuerSet.data && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 onClick={() => saveIssuer.mutate("")}
               >
                 clear
@@ -460,7 +460,7 @@ function PeersSection() {
       </div>
 
       {shortCode && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--hive-accent-cool)" }}>
+        <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--ligus-accent-cool)" }}>
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
               Share this code (expires in {Math.round(shortCode.expiresIn / 60)} min)
@@ -481,7 +481,7 @@ function PeersSection() {
         </div>
       )}
 
-      <div className="flex gap-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="flex gap-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={redeemInput}
           onChange={(e) => setRedeemInput(e.target.value)}
@@ -510,7 +510,7 @@ function PeersSection() {
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId))}
             >
               Remove
@@ -520,11 +520,11 @@ function PeersSection() {
         {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers added yet.</p>}
       </div>
 
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="Friend's full peer code (hive_…)"
+          placeholder="Friend's full peer code (ligus_…)"
           className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
           style={fieldStyle}
         />

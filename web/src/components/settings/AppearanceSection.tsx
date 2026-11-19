@@ -23,8 +23,8 @@ export function AppearanceSection({
             onClick={() => onAppearanceModeChange(m)}
             className="rounded-xl border px-3 py-2 capitalize"
             style={{
-              borderColor: m === appearanceMode ? "var(--hive-accent-cool)" : "var(--hive-line)",
-              background: m === appearanceMode ? "var(--hive-mist)" : "transparent",
+              borderColor: m === appearanceMode ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
+              background: m === appearanceMode ? "var(--ligus-mist)" : "transparent",
             }}
           >
             {m === "auto" ? "Auto (system)" : m}
@@ -44,8 +44,8 @@ export function AppearanceSection({
             onClick={() => onPaletteChange(t)}
             className="flex items-center gap-2 rounded-xl border px-3 py-2 capitalize"
             style={{
-              borderColor: t === palette ? "var(--hive-accent-cool)" : "var(--hive-line)",
-              background: t === palette ? "var(--hive-mist)" : "transparent",
+              borderColor: t === palette ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
+              background: t === palette ? "var(--ligus-mist)" : "transparent",
             }}
           >
             <span className="h-3 w-3 rounded-full" style={{ background: THEMES[t].light.accentCool }} />

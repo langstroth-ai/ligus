@@ -73,7 +73,7 @@ export function SchedulesSection() {
         <div
           key={s.id}
           className="flex items-start justify-between gap-3 rounded-lg border p-3"
-          style={{ borderColor: "var(--hive-line)" }}
+          style={{ borderColor: "var(--ligus-line)" }}
         >
           <div className="min-w-0">
             <div className="font-medium">{s.label || "Scheduled run"}</div>
@@ -88,7 +88,7 @@ export function SchedulesSection() {
             />
             <button
               className="text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => confirmThen(`Remove schedule "${s.label || "Scheduled run"}"?`, () => remove.mutate(s.id))}
             >
               Remove
@@ -99,7 +99,7 @@ export function SchedulesSection() {
       {(schedules.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No schedules yet.</p>}
 
       {/* Add form */}
-      <div className="mt-2 space-y-2 rounded-lg border p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="mt-2 space-y-2 rounded-lg border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <div className="text-sm font-medium">New schedule</div>
         <input
           value={label}

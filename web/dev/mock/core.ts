@@ -267,7 +267,7 @@ function handle(cmd: string, args: Args): unknown {
         { id: "gitea:codeberg.org", kind: "gitea", flavor: "codeberg", displayName: "Codeberg", baseUrl: "https://codeberg.org", authSource: "token", hasRead: true, hasWrite: false, user: null, deviceFlow: false, openLabel: "Open WIP PR", holder: "this device" },
       ];
     case "forges_repos":
-      return { login: "ana", owners: ["ana"], repos: [{ repo: { owner: "ana", name: "hive-notes" }, description: "Bee notes", private: false, defaultBranch: "main", updatedAt: "2026-11-01", webUrl: "https://github.com/ana/hive-notes", fork: false }], hasMore: false };
+      return { login: "ana", owners: ["ana"], repos: [{ repo: { owner: "ana", name: "hive-notes" }, description: "Bee notes", private: false, defaultBranch: "main", updatedAt: "2026-11-01", webUrl: "https://github.com/ana/ligus-notes", fork: false }], hasMore: false };
     case "request_apply_on_host":
       return "mock-apply-request";
     case "withdraw_apply_request":

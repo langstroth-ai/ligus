@@ -1,7 +1,7 @@
 /// The community relay: a free, best-effort relay run by the Langstroth
 /// project. It is only ever a preset in the relay pickers (onboarding, a new
 /// workspace, Settings → Team sync) that the person chooses; Ligus never falls
-/// back to it silently. Mirrored in Rust as `hive_core::COMMUNITY_RELAY_URL`
+/// back to it silently. Mirrored in Rust as `ligus_core::COMMUNITY_RELAY_URL`
 /// (a test there checks the two match).
 export const COMMUNITY_RELAY_URL = "https://relay.langstroth.ai";
 

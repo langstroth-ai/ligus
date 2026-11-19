@@ -47,7 +47,7 @@ header_file() { # name header-line
 
 cli_row() { # name driver
   local cli="$1" driver="$2" log="$OUT/$1-$2.log"
-  if LIGUS_LIVE_CLI="$cli" LIGUS_LIVE_DRIVER="$driver" cargo test -q -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture >"$log" 2>&1 \
+  if LIGUS_LIVE_CLI="$cli" LIGUS_LIVE_DRIVER="$driver" cargo test -q -p ligus-runtime --lib live_cli_smoke -- --ignored --nocapture >"$log" 2>&1 \
      && grep -q "MATRIX .* result=ok" "$log"; then
     echo "pass"
   else
@@ -90,7 +90,7 @@ for row in $ROWS; do
     openai-api) r=$( [ -n "${OPENAI_API_KEY:-}" ] && http_row openai https://api.openai.com/v1/chat/completions "${OPENAI_MODEL:-gpt-5-mini}" "$OPENAI_API_KEY" || echo "N/A (no OPENAI_API_KEY)" ) ;;
     gemini-api) r=$( [ -n "${GEMINI_API_KEY:-}" ] && http_row gemini https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "${GEMINI_MODEL:-gemini-2.5-flash}" "$GEMINI_API_KEY" || echo "N/A (no GEMINI_API_KEY)" ) ;;
     llama-cpp) r=$(http_row llama "${LLAMA_URL:-http://localhost:8080/v1/chat/completions}" "${LLAMA_MODEL:-default}") ;;
-    ollama) r=$(LIGUS_OLLAMA_LIVE_ENDPOINT="${OLLAMA_URL:-http://localhost:11434}" cargo test -q -p hive-runtime --test ollama_live -- --nocapture >"$OUT/ollama.log" 2>&1 && echo pass || echo "FAIL ($OUT/ollama.log)") ;;
+    ollama) r=$(LIGUS_OLLAMA_LIVE_ENDPOINT="${OLLAMA_URL:-http://localhost:11434}" cargo test -q -p ligus-runtime --test ollama_live -- --nocapture >"$OUT/ollama.log" 2>&1 && echo pass || echo "FAIL ($OUT/ollama.log)") ;;
     mlx) r=$(http_row mlx "${MLX_URL:-http://localhost:8080/v1/chat/completions}" "${MLX_MODEL:-default}") ;;
     *) r="unknown row" ;;
   esac

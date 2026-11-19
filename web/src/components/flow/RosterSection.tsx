@@ -34,8 +34,8 @@ export function RosterView({
       <div
         className="rounded-xl border px-3 py-2 text-xs"
         style={{
-          borderColor: d.monoculture ? "var(--hive-warn)" : "var(--hive-line)",
-          background: "var(--hive-mist)",
+          borderColor: d.monoculture ? "var(--ligus-warn)" : "var(--ligus-line)",
+          background: "var(--ligus-mist)",
         }}
       >
         <div className="font-semibold">
@@ -51,10 +51,10 @@ export function RosterView({
         ) : (
           <ul className="space-y-2 text-xs">
             {report.agents.map((a) => (
-              <li key={a.agentId ?? a.name} className="space-y-1.5 rounded-lg border px-2 py-2" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={a.agentId ?? a.name} className="space-y-1.5 rounded-lg border px-2 py-2" style={{ borderColor: "var(--ligus-line)" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold">{a.name}</span>
-                  <span style={{ color: "var(--hive-ink-soft)" }}>
+                  <span style={{ color: "var(--ligus-ink-soft)" }}>
                     {CAREER_LABEL[a.career]} · {a.why} · {a.approved}/{a.judged} approved
                   </span>
                 </div>

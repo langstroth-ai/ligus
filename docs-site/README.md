@@ -79,30 +79,27 @@ Old URLs must keep working. After you move a page:
    `netlify.toml` (the 301s).
 3. Build, then run `python3 docs-site/tools/redirects.py check --refs --built`.
 
-The check reads the three older sites from git (`--refs`, needs full
-history): docs.apiaryhq.ai (the 1.x site, at v1.18.0 on main),
-docs.ligus.ai and docs.langstroth.ai (the two 0.1 sites before they were
-merged). Every old page, every path an old host redirected and every old
-file must be covered. With `--built` it runs every old URL on all three hosts
+The check reads the two older sites from git (`--refs`, needs full
+history): docs.ligus.ai and docs.langstroth.ai (the two 0.1 sites before
+they were merged). Every old page, every path an old host redirected and
+every old file must be covered. With `--built` it runs every old URL on both hosts
 through an emulation of the Netlify rules and fails on any that doesn't land
 on its page in one 301, and on `version.json` being redirected on any host.
 
 ## How old URLs are answered
 
-- **docs.langstroth.ai** (the primary domain): every old path of the three
+- **docs.langstroth.ai** (the primary domain): every old path of the two
   old sites answers a forced 301 to its new page under `/ligus/` or
   `/operate/`. The old home (`/`) is the new home. Old screenshot URLs
   (`/images/...`) go to `/ligus/images/...`.
-- **docs.ligus.ai** and **docs.apiaryhq.ai** (domain aliases of the same
-  site): every old page answers a forced 301 straight to its new page on
+- **docs.ligus.ai** (a domain alias of the same site): every old page answers a forced 301 straight to its new page on
   docs.langstroth.ai, and the old home goes to Using Ligus (`/ligus/`).
   Any other path goes to the same path on docs.langstroth.ai, where the
   rules above answer it.
-- **version.json** is the exception: on both aliases it is served as it is
+- **version.json** is the exception: on the alias it is served as it is
   (a 200 rewrite listed before the redirects), so update checks in shipped
-  desktop builds (`https://docs.ligus.ai/version.json`, and
-  `https://docs.apiaryhq.ai/version.json` in 1.x) never depend on following a
-  redirect. Its headers (`Cache-Control: max-age=300`,
+  desktop builds (`https://docs.ligus.ai/version.json`) never depend on
+  following a redirect. Its headers (`Cache-Control: max-age=300`,
   `Access-Control-Allow-Origin: *`) apply on every host. Builds from 0.1 on
   read `https://docs.langstroth.ai/version.json` first and fall back to the
   docs.ligus.ai URL.
@@ -122,7 +119,7 @@ Everything except the domains comes from `netlify.toml`.
 | Publish directory | `docs-site/site` (`site` in the toml) |
 | Python | 3.12 (`PYTHON_VERSION` in the toml) |
 | Primary domain | `docs.langstroth.ai` |
-| Domain aliases | `docs.ligus.ai` now; `docs.apiaryhq.ai` at the 0.1 release |
+| Domain alias | `docs.ligus.ai` |
 
 ### Owner steps
 
@@ -152,18 +149,5 @@ Do these in order. None of them needs a code change.
 3. **Retire `ligus-docs`.** Once step 2 checks out, delete the `ligus-docs`
    site (Site configuration → General → Danger zone → Delete this site), or
    at least stop its builds (Build & deploy → Stop builds).
-4. **At the 0.1 release, move docs.apiaryhq.ai.** Until then it stays on
-   GitHub Pages, published from `main` by the 1.x docs workflow. Once 0.1 is
-   on `main` (whose docs workflow no longer publishes to Pages): on
-   `langstroth-docs`, add the domain alias `docs.apiaryhq.ai`; change its DNS
-   record from GitHub Pages to a CNAME for `langstroth-docs.netlify.app`;
-   wait for the certificate; then turn off GitHub Pages for the repository
-   (Settings → Pages: remove the custom domain and unpublish). Check that
-   `curl -sI https://docs.apiaryhq.ai/version.json` answers 200 and
-   `curl -sI https://docs.apiaryhq.ai/ops/deployment/` answers 301 to
-   `https://docs.langstroth.ai/operate/ops/deployment/`.
-5. In Domain management, confirm `docs.langstroth.ai` is the primary domain
+4. In Domain management, confirm `docs.langstroth.ai` is the primary domain
    and HTTPS is forced (the default once a certificate exists).
-
-The rules for docs.apiaryhq.ai are already in `netlify.toml`; they do
-nothing until the alias is added.

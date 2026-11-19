@@ -178,7 +178,7 @@ their first min(prefix) bits are equal. Args: dict a b (strings "addr/len").
 {{- end -}}
 {{- range $k := list "serve" "worker" -}}
 {{- range (index $.Values $k).extraEnv -}}
-{{- if regexMatch "^(LIGUS|HIVE)_MODEL_GATEWAY" (toString .name) -}}
+{{- if hasPrefix "LIGUS_MODEL_GATEWAY" (toString .name) -}}
 {{- fail (printf "%s.extraEnv: %s is set by the chart from modelGateways; remove it" $k .name) -}}
 {{- end -}}
 {{- end -}}

@@ -29,7 +29,7 @@ export function EditorTabs() {
       role="tablist"
       aria-label="Open files"
       className="flex shrink-0 items-stretch overflow-x-auto border-b"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
     >
       {tabs.map((t) => {
         const active = t.path === activePath;
@@ -43,11 +43,11 @@ export function EditorTabs() {
             onClick={() => editorStore.setActive(t.path)}
             className="group flex min-w-0 cursor-pointer select-none items-center gap-1.5 border-r px-3 py-1.5 text-xs transition-colors"
             style={{
-              borderColor: "var(--hive-line)",
-              background: active ? "var(--hive-canvas)" : "transparent",
+              borderColor: "var(--ligus-line)",
+              background: active ? "var(--ligus-canvas)" : "transparent",
               opacity: active ? 1 : 0.65,
               boxShadow: active
-                ? "inset 0 -2px 0 0 var(--hive-accent-cool)"
+                ? "inset 0 -2px 0 0 var(--ligus-accent-cool)"
                 : undefined,
             }}
           >
@@ -61,7 +61,7 @@ export function EditorTabs() {
                 <span
                   aria-label="Unsaved changes"
                   className="h-2 w-2 rounded-full group-hover:opacity-0"
-                  style={{ background: "var(--hive-ink)" }}
+                  style={{ background: "var(--ligus-ink)" }}
                 />
               )}
               <button
@@ -70,10 +70,10 @@ export function EditorTabs() {
                   e.stopPropagation();
                   editorStore.closeTab(t.path);
                 }}
-                className={`absolute inset-0 flex items-center justify-center rounded transition-opacity hover:bg-[color:var(--hive-overlay)] ${
+                className={`absolute inset-0 flex items-center justify-center rounded transition-opacity hover:bg-[color:var(--ligus-overlay)] ${
                   t.dirty ? "opacity-0 group-hover:opacity-100" : "opacity-50 group-hover:opacity-100"
                 }`}
-                style={{ color: "var(--hive-ink)" }}
+                style={{ color: "var(--ligus-ink)" }}
                 tabIndex={active ? 0 : -1}
               >
                 <IconX size={12} />

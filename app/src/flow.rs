@@ -1,4 +1,4 @@
-//! The app side of [`hive_core::flow`]: settings, the hooks the dispatch path
+//! The app side of [`ligus_core::flow`]: settings, the hooks the dispatch path
 //! calls (prime a turn's context, tag a finished turn, record hand-offs), and
 //! the Tauri commands behind the Flow pane.
 //!
@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use hive_core::flow::{self, FlowRecord, FlowState, HandoffCard, RouteDecision, RouteMode, TurnTag};
-use hive_core::{ChatMessage, ChatSession, MessageRole};
-use hive_runtime::provider::ChatTurn;
+use ligus_core::flow::{self, FlowRecord, FlowState, HandoffCard, RouteDecision, RouteMode, TurnTag};
+use ligus_core::{ChatMessage, ChatSession, MessageRole};
+use ligus_runtime::provider::ChatTurn;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use hive_runtime::chat_service::ChatService;
+use ligus_runtime::chat_service::ChatService;
 
 use crate::{map_err, AppState, DispatchTarget, Responder};
 
@@ -153,7 +153,7 @@ pub(crate) fn view_with(svc: &ChatService, workspace_id: Uuid) -> WorkspaceView 
             return view.clone();
         }
     }
-    let config_id = hive_core::workspace_config_session_id(workspace_id);
+    let config_id = ligus_core::workspace_config_session_id(workspace_id);
     let mut sessions = Vec::new();
     for id in svc.store().list_session_ids().unwrap_or_default() {
         if id == config_id {
@@ -192,7 +192,7 @@ const FILE_MEMORY_MS: i64 = 30 * 86_400_000;
 /// Whether a message names its responder (an `@agent` or `@primary`). An
 /// explicit choice always wins: the router never sees it.
 fn addressed(body: &str, session: &ChatSession) -> bool {
-    let m = hive_runtime::mentions::parse_mentions(body, session);
+    let m = ligus_runtime::mentions::parse_mentions(body, session);
     m.primary || !m.agents.is_empty()
 }
 
@@ -202,7 +202,7 @@ pub(crate) fn key_secret(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
         let s = state.settings.lock().unwrap();
         // Only the active room's passphrase is known here; a workspace without
         // one (relay-less) keys under its id.
-        s.workspace_passphrase.as_deref().filter(|p| !p.is_empty()).map(hive_core::derive_workspace_key)
+        s.workspace_passphrase.as_deref().filter(|p| !p.is_empty()).map(ligus_core::derive_workspace_key)
     };
     flow::keys::workspace_secret(key, workspace_id)
 }
@@ -229,22 +229,22 @@ fn key_secret_cache(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
 /// so it backs off before a person's own requests do). The primary is never
 /// filtered: it answers when no one else may.
 pub(crate) fn route_block(
-    provider: hive_core::ModelProviderKind,
-    envelope: &hive_core::sandbox::SandboxEnvelope,
-    window: Option<&hive_core::throttle::PlanWindow>,
+    provider: ligus_core::ModelProviderKind,
+    envelope: &ligus_core::sandbox::SandboxEnvelope,
+    window: Option<&ligus_core::throttle::PlanWindow>,
     agent_key: &str,
     now_secs: i64,
 ) -> Option<&'static str> {
-    if hive_runtime::sandbox::enforce(provider, envelope, &Vec::new()).refuse.is_some() {
+    if ligus_runtime::sandbox::enforce(provider, envelope, &Vec::new()).refuse.is_some() {
         return Some("envelope");
     }
-    let d = hive_core::throttle::ThrottlePolicy::default().decide(
-        hive_core::throttle::TurnPriority::Workflow,
+    let d = ligus_core::throttle::ThrottlePolicy::default().decide(
+        ligus_core::throttle::TurnPriority::Workflow,
         agent_key,
         window,
         now_secs,
     );
-    matches!(d, hive_core::throttle::ThrottleDecision::Defer { .. }).then_some("throttled")
+    matches!(d, ligus_core::throttle::ThrottleDecision::Defer { .. }).then_some("throttled")
 }
 
 /// The candidates the router may pick from: the primary plus the chat's agents
@@ -254,7 +254,7 @@ pub(crate) fn route_block(
 /// [`route_block`]).
 fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: &WorkspaceView) -> Vec<flow::route::Candidate> {
     let careers = careers(view);
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
     let here = svc.device_id().to_string();
     let host_live = |id: &str| id.is_empty() || id == here || hosts.iter().any(|h| h.id == id && state.host_presence.is_online(h, &now));
@@ -409,7 +409,7 @@ pub(crate) fn routed_target(
     trigger_id: Uuid,
     body: &str,
     local_only: bool,
-    links: &hive_core::DeviceLinks,
+    links: &ligus_core::DeviceLinks,
 ) -> (Option<DispatchTarget>, Option<RouteDecision>) {
     let base = crate::dispatch_target(body, session, local_only, links);
     route_target(state, svc, session, trigger_id, body, base)
@@ -445,8 +445,8 @@ pub(crate) fn record_route_if_missing(state: &AppState, session_id: Uuid, trigge
 const CAREERS_SINCE_UNIX: i64 = 1_794_614_400; // 2026-11-14 00:00 UTC
 
 /// Every agent on the workspace roster (union across chats).
-fn roster(view: &WorkspaceView) -> Vec<hive_core::WorkspaceAgent> {
-    let mut out: Vec<hive_core::WorkspaceAgent> = Vec::new();
+fn roster(view: &WorkspaceView) -> Vec<ligus_core::WorkspaceAgent> {
+    let mut out: Vec<ligus_core::WorkspaceAgent> = Vec::new();
     for s in view.sessions.iter() {
         for a in &s.workspace_agents {
             if !out.iter().any(|x| x.id == a.id) {
@@ -562,7 +562,7 @@ pub(crate) fn flow_set_agent_profile(
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::AgentProfile(profile))
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::AgentProfile(profile))
         .map_err(map_err)
 }
 
@@ -586,7 +586,7 @@ pub(crate) struct BoardRow {
 struct BoardAgent {
     key: String,
     name: String,
-    agent: Option<hive_core::WorkspaceAgent>,
+    agent: Option<ligus_core::WorkspaceAgent>,
 }
 
 fn board_agents(view: &WorkspaceView) -> Vec<BoardAgent> {
@@ -600,7 +600,7 @@ fn busy_agents(view: &WorkspaceView, now: i64) -> std::collections::HashSet<Stri
     let mut out: std::collections::HashSet<String> = view
         .sessions
         .iter()
-        .flat_map(|s| hive_runtime::pending_mentions(s).into_iter().map(|p| flow::agent_key(Some(p.agent_id))))
+        .flat_map(|s| ligus_runtime::pending_mentions(s).into_iter().map(|p| flow::agent_key(Some(p.agent_id))))
         .collect();
     for (k, st) in &view.config.route_stops {
         if st.active(now) {
@@ -717,7 +717,7 @@ pub(crate) fn post_pickup(
     wid: Uuid,
     body: String,
     auto: bool,
-) -> Result<ChatMessage, hive_runtime::chat_service::ChatError> {
+) -> Result<ChatMessage, ligus_runtime::chat_service::ChatError> {
     if auto {
         svc.as_agent(None, |s| s.post_user_message(sid, wid, body))
     } else {
@@ -771,17 +771,17 @@ pub(crate) fn cut_turn_worktree(
     repo_root: &std::path::Path,
     chat_id: &str,
     turn_id: &str,
-) -> std::io::Result<hive_runtime::git_worktree::Worktree> {
+) -> std::io::Result<ligus_runtime::git_worktree::Worktree> {
     if settings(state).reuse_worktrees {
-        hive_runtime::git_worktree::cut_turn_worktree_reusing(repo_root, chat_id, turn_id)
+        ligus_runtime::git_worktree::cut_turn_worktree_reusing(repo_root, chat_id, turn_id)
     } else {
-        hive_runtime::git_worktree::cut_turn_worktree(repo_root, chat_id, turn_id)
+        ligus_runtime::git_worktree::cut_turn_worktree(repo_root, chat_id, turn_id)
     }
 }
 
 /// Done with a turn's worktree (its diff is captured): park it for the chat's
 /// next turn, or remove it.
-pub(crate) fn release_worktree(state: &AppState, wt: hive_runtime::git_worktree::Worktree, session_id: Uuid) {
+pub(crate) fn release_worktree(state: &AppState, wt: ligus_runtime::git_worktree::Worktree, session_id: Uuid) {
     let result = if settings(state).reuse_worktrees { wt.park(&session_id.to_string()) } else { wt.remove() };
     if let Err(e) = result {
         tracing::warn!(target: "worktree", "couldn't release a turn worktree: {e}");
@@ -808,14 +808,14 @@ pub(crate) struct HomeReport {
 
 fn local_base_branch(state: &AppState) -> String {
     let root = state.workspace_repo_root();
-    if root.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&root)) {
+    if root.trim().is_empty() || !ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&root)) {
         return String::new();
     }
-    let base = hive_runtime::git_worktree::chat_base(std::path::Path::new(&root));
+    let base = ligus_runtime::git_worktree::chat_base(std::path::Path::new(&root));
     if base != "HEAD" {
         return base;
     }
-    hive_core::process_util::git()
+    ligus_core::process_util::git()
         .arg("-C")
         .arg(&root)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -856,7 +856,7 @@ pub(crate) fn home_report(state: &AppState, workspace_id: Uuid) -> HomeReport {
     };
     let relay = local_relay(state);
     let base = local_base_branch(state);
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     let (coordinator_label, coordinator_online) = match beacon.as_ref().filter(|b| !b.coordinator_host_id.is_empty()) {
         Some(b) => match hosts.iter().find(|h| h.id == b.coordinator_host_id) {
             Some(h) => (h.label.clone(), Some(state.host_presence.is_online(h, &now))),
@@ -912,7 +912,7 @@ pub(crate) fn flow_publish_beacon_sync(state: State<'_, AppState>, note: String,
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Beacon(beacon))
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::Beacon(beacon))
         .map_err(map_err)
 }
 
@@ -1027,13 +1027,13 @@ pub(crate) fn prime_turns(
         }
     }
     // Live task state: what the other agents on this chat report, as
-    // untrusted, delimited data (hive_core::memory).
-    if let Some(block) = hive_core::memory::task_context_block(
+    // untrusted, delimited data (ligus_core::memory).
+    if let Some(block) = ligus_core::memory::task_context_block(
         &session.flow.tasks,
         &me,
         flow::now_ms(),
         TASK_STATE_IN_CONTEXT,
-        &hive_core::memory::fresh_nonce(),
+        &ligus_core::memory::fresh_nonce(),
     ) {
         blocks.push(block);
     }
@@ -1082,8 +1082,8 @@ fn activity() -> &'static Mutex<HashMap<Uuid, Activity>> {
 
 /// Watch a turn's live tool activity. The exit status is what the tool runner
 /// reported, never the agent's own account.
-pub(crate) fn observe_activity(message_id: Uuid, act: &hive_runtime::provider::dispatch::StreamActivity) {
-    use hive_runtime::provider::dispatch::StreamActivity;
+pub(crate) fn observe_activity(message_id: Uuid, act: &ligus_runtime::provider::dispatch::StreamActivity) {
+    use ligus_runtime::provider::dispatch::StreamActivity;
     let mut all = activity().lock().unwrap();
     if all.len() > 256 && !all.contains_key(&message_id) {
         all.clear();
@@ -1360,7 +1360,7 @@ pub(crate) const IDLE_OFFER_AFTER: std::time::Duration = std::time::Duration::fr
 
 /// Whether this device can run `agent`'s runtime itself (configured here,
 /// not a fallback).
-pub(crate) fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
+pub(crate) fn can_run_here(state: &AppState, agent: &ligus_core::WorkspaceAgent) -> bool {
     let Some(rt) = state.combined_runtimes().into_iter().find(|r| r.id == agent.runtime_id) else { return false };
     state.resolve_runtime(&agent.runtime_id).provider == rt.provider_kind
 }
@@ -1401,7 +1401,7 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     // carries this device's signed coverage of the chat's repo, and the
     // host's worker claims the same prompt key, so whoever folds first runs
     // it and the other watches.
-    if crate::dispatch_here(state, session_id, workspace_id, prompt_id, None, true, std::time::Duration::ZERO).ok()? != hive_core::dispatch::Step::Run {
+    if crate::dispatch_here(state, session_id, workspace_id, prompt_id, None, true, std::time::Duration::ZERO).ok()? != ligus_core::dispatch::Step::Run {
         return None;
     }
     let from_host = agent.host_id.clone();
@@ -1446,7 +1446,7 @@ fn gate_waits(view: &WorkspaceView, since: i64) -> Vec<flow::EdgeWait> {
     let mut out = Vec::new();
     for sess in view.sessions.iter() {
         for p in &sess.proposals {
-            if p.status == hive_core::ProposalStatus::Open {
+            if p.status == ligus_core::ProposalStatus::Open {
                 continue;
             }
             let Some(decided) = p.approvals.iter().map(|a| flow::ms(&a.created_at)).max() else { continue };
@@ -1551,7 +1551,7 @@ fn apply_mark_directives(
 /// Before a turn's diff is filed for review: flag other agents' locks and
 /// claims on the files it touches (the proposal still goes up; a person
 /// decides).
-pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace_id: Uuid, agent: Option<Uuid>, proposal: &mut hive_core::ActionProposal) {
+pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace_id: Uuid, agent: Option<Uuid>, proposal: &mut ligus_core::ActionProposal) {
     let (config, protected) = {
         let svc = state.service.lock().unwrap();
         let config = svc.flow_config(workspace_id).unwrap_or_default();
@@ -1561,7 +1561,7 @@ pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace
             .load(session_id)
             .ok()
             .flatten()
-            .is_some_and(|s| hive_core::guard::guards_protect(&s, &proposal.changed_files));
+            .is_some_and(|s| ligus_core::guard::guards_protect(&s, &proposal.changed_files));
         (config, protected)
     };
     // Path zones: the review bar comes from where the change lands.
@@ -1612,7 +1612,7 @@ pub(crate) fn diff_touches(diff: &str) -> Vec<(String, &'static str)> {
 /// After a file-diff proposal is applied: record a workspace touch per
 /// changed file (opaque keys only), attributed to the turn that produced it,
 /// and clear the producer's own claims and locks on those files.
-pub(crate) fn after_apply(state: &AppState, session_id: Uuid, workspace_id: Uuid, proposal: &hive_core::ActionProposal, repo_root: &str) {
+pub(crate) fn after_apply(state: &AppState, session_id: Uuid, workspace_id: Uuid, proposal: &ligus_core::ActionProposal, repo_root: &str) {
     let Some(diff) = proposal.diff.as_deref() else { return };
     let session = match state.service.lock().unwrap().load(session_id) {
         Ok(Some(s)) => s,
@@ -1723,7 +1723,7 @@ pub(crate) fn flow_add_mark_sync(
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Mark(mark))
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::Mark(mark))
         .map_err(map_err)
 }
 
@@ -1735,7 +1735,7 @@ pub(crate) fn flow_clear_mark(state: State<'_, AppState>, mark_id: String) -> Re
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::MarkCleared { mark_id: id })
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::MarkCleared { mark_id: id })
         .map_err(map_err)
 }
 
@@ -1756,7 +1756,7 @@ pub(crate) fn flow_set_zone(
     state: State<'_, AppState>,
     pattern: String,
     kind: flow::ZoneKind,
-    approval_floor: Option<hive_core::WorkspaceRole>,
+    approval_floor: Option<ligus_core::WorkspaceRole>,
     required_approvals: Option<u32>,
     note: String,
 ) -> Result<(), String> {
@@ -1778,7 +1778,7 @@ pub(crate) fn flow_set_zone(
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Zone(zone))
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::Zone(zone))
         .map_err(map_err)
 }
 
@@ -1790,7 +1790,7 @@ pub(crate) fn flow_remove_zone(state: State<'_, AppState>, zone_id: String) -> R
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::ZoneRemoved { zone_id: id })
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::ZoneRemoved { zone_id: id })
         .map_err(map_err)
 }
 
@@ -1835,7 +1835,7 @@ fn record_handoff(
     filed: &[Uuid],
     directives: &flow::directives::FlowDirectives,
 ) {
-    let Some(to) = hive_runtime::cascade_target(session, reply) else { return };
+    let Some(to) = ligus_runtime::cascade_target(session, reply) else { return };
     let to_key = flow::agent_key(Some(to.id));
     if to_key == me {
         return;
@@ -1884,9 +1884,9 @@ fn record_handoff(
 pub(crate) fn record_stage_handoff(
     state: &AppState,
     session: &ChatSession,
-    run: &hive_core::WorkflowRun,
-    node: &hive_core::WorkflowNode,
-    agent: Option<&hive_core::WorkspaceAgent>,
+    run: &ligus_core::WorkflowRun,
+    node: &ligus_core::WorkflowNode,
+    agent: Option<&ligus_core::WorkspaceAgent>,
 ) {
     if !settings(state).handoff_cards {
         return;
@@ -1895,7 +1895,7 @@ pub(crate) fn record_stage_handoff(
     let to_name = agent.map(|a| a.name.clone()).unwrap_or_else(|| "Ligus".into());
     for dep in &node.depends_on {
         let Some(up) = run.definition.nodes.iter().find(|n| &n.id == dep) else { continue };
-        let hive_core::WorkflowNodeKind::Agent { agent_id, .. } = &up.kind else { continue };
+        let ligus_core::WorkflowNodeKind::Agent { agent_id, .. } = &up.kind else { continue };
         let Some(up_state) = run.node_state(dep) else { continue };
         let from = flow::agent_key(*agent_id);
         if from == to {
@@ -1917,7 +1917,7 @@ pub(crate) fn record_stage_handoff(
             branch: format!("ligus/chat/{}", session.id),
             files: vec![],
             quality: flow::HandoffQuality {
-                error: up_state.status == hive_core::NodeRunStatus::Failed,
+                error: up_state.status == ligus_core::NodeRunStatus::Failed,
                 turns: up_state.attempts.max(1),
                 ..Default::default()
             },
@@ -2079,8 +2079,8 @@ fn turn_success(sess: &ChatSession, t: &TurnTag) -> Option<bool> {
     for pid in &t.proposal_ids {
         if let Some(p) = sess.proposals.iter().find(|p| p.id == *pid) {
             match p.status {
-                hive_core::ProposalStatus::Approved | hive_core::ProposalStatus::Applied => return Some(true),
-                hive_core::ProposalStatus::Rejected => judged = Some(false),
+                ligus_core::ProposalStatus::Approved | ligus_core::ProposalStatus::Applied => return Some(true),
+                ligus_core::ProposalStatus::Rejected => judged = Some(false),
                 _ if p.superseded_by.is_some() => judged = Some(false),
                 _ => {}
             }
@@ -2138,7 +2138,7 @@ pub(crate) struct StopRow {
 /// Whether a runtime id runs on a local model (a local server or Ollama).
 pub(crate) fn is_local_runtime(state: &AppState, runtime_id: &str) -> bool {
     state.combined_runtimes().iter().find(|r| r.id == runtime_id).is_some_and(|r| {
-        r.provider_kind == hive_core::ModelProviderKind::Ollama || hive_core::endpoint::endpoint_is_local_server(&r.endpoint)
+        r.provider_kind == ligus_core::ModelProviderKind::Ollama || ligus_core::endpoint::endpoint_is_local_server(&r.endpoint)
     })
 }
 
@@ -2207,13 +2207,13 @@ pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) ->
                 let Some(p) = sess.proposals.iter().find(|p| p.id == *pid) else { continue };
                 row.proposals += 1;
                 match p.status {
-                    hive_core::ProposalStatus::Approved | hive_core::ProposalStatus::Applied => {
+                    ligus_core::ProposalStatus::Approved | ligus_core::ProposalStatus::Applied => {
                         row.accepted += 1;
                         row.judged += 1;
                     }
-                    hive_core::ProposalStatus::Rejected => row.judged += 1,
-                    hive_core::ProposalStatus::Open if p.superseded_by.is_some() => row.judged += 1,
-                    hive_core::ProposalStatus::Open => {}
+                    ligus_core::ProposalStatus::Rejected => row.judged += 1,
+                    ligus_core::ProposalStatus::Open if p.superseded_by.is_some() => row.judged += 1,
+                    ligus_core::ProposalStatus::Open => {}
                 }
             }
         }
@@ -2277,7 +2277,7 @@ pub(crate) fn flow_clear_route_stop_sync(state: State<'_, AppState>, route: Stri
         .service
         .lock()
         .unwrap()
-        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::RouteStop(stop))
+        .record_flow(ligus_core::workspace_config_session_id(wid), wid, FlowRecord::RouteStop(stop))
         .map_err(map_err)
 }
 
@@ -2295,19 +2295,19 @@ pub(crate) fn flow_routing_report_sync(state: State<'_, AppState>, days: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_core::{ChatToolCall, ChatToolResult};
+    use ligus_core::{ChatToolCall, ChatToolResult};
 
     /// An automatic board pickup posts text someone else filed (a proposal's
     /// or a failed stage's title): it must not clear the author gate as this
     /// device's own user. A person's pickup still does.
     #[test]
     fn auto_pickup_is_not_the_host_user_speaking() {
-        let store = hive_runtime::EventStore::open_in_memory().unwrap();
-        let author = hive_core::ActorIdentity::new("u1", "Ana", hive_core::ActorKind::Human);
+        let store = ligus_runtime::EventStore::open_in_memory().unwrap();
+        let author = ligus_core::ActorIdentity::new("u1", "Ana", ligus_core::ActorKind::Human);
         let mut svc = ChatService::new(
             store,
-            hive_core::SigningKeypair::generate().unwrap(),
-            hive_core::SigningKeypair::generate().unwrap(),
+            ligus_core::SigningKeypair::generate().unwrap(),
+            ligus_core::SigningKeypair::generate().unwrap(),
             author,
         );
         svc.enable_test_presence();
@@ -2317,14 +2317,14 @@ mod tests {
         let auto = post_pickup(&mut svc, chat, wid, body.clone(), true).unwrap().id;
         assert_eq!(svc.trigger_author_role(chat, auto).unwrap(), None);
         let manual = post_pickup(&mut svc, chat, wid, body, false).unwrap().id;
-        assert_eq!(svc.trigger_author_role(chat, manual).unwrap(), Some(hive_core::WorkspaceRole::Owner));
+        assert_eq!(svc.trigger_author_role(chat, manual).unwrap(), Some(ligus_core::WorkspaceRole::Owner));
     }
 
     #[test]
     fn routing_skips_runtimes_the_envelope_refuses_or_the_plan_window_throttles() {
-        use hive_core::sandbox::{EgressPolicy, SandboxEnvelope};
-        use hive_core::throttle::{PlanWindow, WindowStatus};
-        use hive_core::ModelProviderKind as P;
+        use ligus_core::sandbox::{EgressPolicy, SandboxEnvelope};
+        use ligus_core::throttle::{PlanWindow, WindowStatus};
+        use ligus_core::ModelProviderKind as P;
         let open = SandboxEnvelope::default();
         let closed = SandboxEnvelope { egress: EgressPolicy::Closed, ..Default::default() };
         assert!(open.egress.is_open() && !closed.egress.is_open());
@@ -2356,7 +2356,7 @@ mod tests {
 
     #[test]
     fn observes_test_runs_in_live_activity() {
-        use hive_runtime::provider::dispatch::StreamActivity;
+        use ligus_runtime::provider::dispatch::StreamActivity;
         let id = Uuid::new_v4();
         observe_activity(id, &StreamActivity::Tool { id: "a".into(), name: "Bash".into(), input_json: r#"{"command":"npm test"}"#.into() });
         observe_activity(id, &StreamActivity::Tool { id: "b".into(), name: "Read".into(), input_json: "{}".into() });
@@ -2401,7 +2401,7 @@ mod tests {
         let (a, b) = (flow::agent_key(Some(s.workspace_agents[0].id)), flow::agent_key(Some(s.workspace_agents[1].id)));
         let mut add = |explore: bool, pick: &str, ok: bool| {
             let trigger = Uuid::new_v4();
-            s.flow.apply(&FlowRecord::RouteDecision(hive_core::flow::RouteDecision {
+            s.flow.apply(&FlowRecord::RouteDecision(ligus_core::flow::RouteDecision {
                 trigger_id: trigger,
                 task_class: "refactor".into(),
                 chosen: pick.into(),
@@ -2459,8 +2459,8 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
     #[test]
     fn new_agents_start_on_probation_and_older_ones_are_grandfathered() {
         let mut s = session_with(&["veteran", "newbie"]);
-        s.workspace_agents[0].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX - 10);
-        s.workspace_agents[1].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
+        s.workspace_agents[0].created_at = ligus_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX - 10);
+        s.workspace_agents[1].created_at = ligus_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
         let (vet, new) = (flow::agent_key(Some(s.workspace_agents[0].id)), flow::agent_key(Some(s.workspace_agents[1].id)));
         let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
         let c = careers(&view);
@@ -2472,10 +2472,10 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
     #[test]
     fn board_suggests_the_agent_whose_threshold_is_crossed_most() {
         let mut s = session_with(&["veteran", "newbie"]);
-        s.workspace_agents[1].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
+        s.workspace_agents[1].created_at = ligus_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
         let newbie = flow::agent_key(Some(s.workspace_agents[1].id));
-        let mut p = hive_core::ActionProposal::new("Rename parser", hive_core::ProposalKind::Decision, "veteran");
-        p.created_at = hive_core::Timestamp::from_unix_seconds(1_000);
+        let mut p = ligus_core::ActionProposal::new("Rename parser", ligus_core::ProposalKind::Decision, "veteran");
+        p.created_at = ligus_core::Timestamp::from_unix_seconds(1_000);
         s.proposals.push(p);
         let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
         let rows = board(&view, 1_000_000 + 8 * 3_600_000);
@@ -2491,7 +2491,7 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
 
     #[test]
     fn beacon_mismatches_name_the_difference() {
-        let b = hive_core::flow::HomeBeacon { relay_url: "https://relay.example/".into(), base_branch: "main".into(), ..Default::default() };
+        let b = ligus_core::flow::HomeBeacon { relay_url: "https://relay.example/".into(), base_branch: "main".into(), ..Default::default() };
         assert!(beacon_mismatches(&b, "https://relay.example", "main").is_empty());
         let m = beacon_mismatches(&b, "", "develop");
         assert_eq!(m.len(), 2);
@@ -2518,15 +2518,15 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
     #[test]
     fn gate_waits_come_from_decided_proposals() {
         let mut s = session_with(&[]);
-        let mut p = hive_core::ActionProposal::new("x", hive_core::ProposalKind::Decision, "coder");
-        p.created_at = hive_core::Timestamp::from_unix_seconds(1_000);
-        p.cast_vote(hive_core::ProposalApproval {
+        let mut p = ligus_core::ActionProposal::new("x", ligus_core::ProposalKind::Decision, "coder");
+        p.created_at = ligus_core::Timestamp::from_unix_seconds(1_000);
+        p.cast_vote(ligus_core::ProposalApproval {
             actor_id: "u".into(),
-            role: hive_core::WorkspaceRole::Owner,
+            role: ligus_core::WorkspaceRole::Owner,
             approved: true,
-            created_at: hive_core::Timestamp::from_unix_seconds(4_600), diff_digest: None });
+            created_at: ligus_core::Timestamp::from_unix_seconds(4_600), diff_digest: None });
         s.proposals.push(p);
-        s.proposals.push(hive_core::ActionProposal::new("open", hive_core::ProposalKind::Decision, "coder"));
+        s.proposals.push(ligus_core::ActionProposal::new("open", ligus_core::ProposalKind::Decision, "coder"));
         let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
         let w = gate_waits(&view, 0);
         assert_eq!(w.len(), 1);
@@ -2537,7 +2537,7 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
     fn session_with(agents: &[&str]) -> ChatSession {
         let mut s = ChatSession::new("t", Uuid::new_v4(), "rt");
         for a in agents {
-            s.workspace_agents.push(hive_core::WorkspaceAgent::new(*a, "rt2"));
+            s.workspace_agents.push(ligus_core::WorkspaceAgent::new(*a, "rt2"));
         }
         s
     }
@@ -2554,7 +2554,7 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
     fn recorded_decisions_name_the_target_only_in_live_mode() {
         let s = session_with(&["coder"]);
         let id = s.workspace_agents[0].id;
-        let mut d = hive_core::flow::RouteDecision {
+        let mut d = ligus_core::flow::RouteDecision {
             trigger_id: Uuid::new_v4(),
             task_class: "refactor".into(),
             chosen: flow::agent_key(Some(id)),
@@ -2582,7 +2582,7 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
         let mut s = session_with(&["coder"]);
         let key = flow::agent_key(Some(s.workspace_agents[0].id));
         let now = 10 * 3_600_000;
-        let d = hive_core::flow::RouteDecision {
+        let d = ligus_core::flow::RouteDecision {
             trigger_id: Uuid::new_v4(),
             task_class: "refactor".into(),
             chosen: key.clone(),

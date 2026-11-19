@@ -1,7 +1,7 @@
 # Running untrusted PR tests in a container sandbox
 
 Status: design only, not built. Written for the maintainer setup where a
-headless host (`hive serve`) helps review pull requests from people the owner
+headless host (`ligus serve`) helps review pull requests from people the owner
 doesn't know. Today agents may read a PR's diff through a read-only GitHub
 MCP server, and the review skills forbid running PR code outside a sandbox.
 This note describes the sandbox and what a "Run PR tests" action would take.
@@ -12,7 +12,7 @@ An external PR is arbitrary code. Its tests, `Makefile`, `conftest.py`,
 `setup.py`/build backends, npm `postinstall` scripts, Go `//go:generate`
 lines and test fixtures all execute with whatever the runner has. On the
 host that would mean the owner's `gh` login (repo scope on an upstream where
-the owner is an admin), the Hive identity and workspace key, the relay
+the owner is an admin), the Ligus identity and workspace key, the relay
 tunnel, other checkouts, the Tailscale network (lab services, Prometheus,
 model gateways) and the Docker socket. The sandbox must give the PR code
 none of these, and must survive the code being actively hostile (fork bombs,
@@ -26,11 +26,11 @@ something a turn can trigger by itself.
 
 1. **Materialize the PR without running anything.** On the host, with the
    host's credentials but no PR code executing:
-   `git fetch upstream pull/<n>/head:refs/hive/pr/<n>` in the fork checkout
+   `git fetch upstream pull/<n>/head:refs/ligus/pr/<n>` in the fork checkout
    (fetch-only remote; `--no-recurse-submodules`; hooks never run on fetch),
-   then `git archive refs/hive/pr/<n> | tar -x -C <scratch>/src` into a fresh
+   then `git archive refs/ligus/pr/<n> | tar -x -C <scratch>/src` into a fresh
    scratch dir. `git archive` gives a plain tree: no `.git`, no hooks, no
-   remotes, no credentials, no `.hive/` worktrees. Record the head SHA; the
+   remotes, no credentials, no `.ligus/` worktrees. Record the head SHA; the
    run is pinned to it (a force-push later doesn't change what ran).
    LFS and submodules are not fetched (a PR that needs them fails, loudly).
 
@@ -62,13 +62,13 @@ something a turn can trigger by itself.
      --pids-limit 512 --memory 4g --memory-swap 4g --cpus 2 \
      --ulimit nofile=4096:4096 --ulimit fsize=2147483648 \
      --stop-timeout 5 \
-     --label hive.sandbox=pr-<n>-<sha> \
+     --label ligus.sandbox=pr-<n>-<sha> \
      <base-image@digest> \
      sh -c 'cp -a /src/. /work/ && <recipe command>'
    ```
 
    - **No credentials mounted**: no `~/.config/gh`, `~/.ssh`, `~/.docker`,
-     Hive data dir, env file or Docker socket; the environment is built from
+     Ligus data dir, env file or Docker socket; the environment is built from
      scratch (`--env-file` with only recipe variables, never `-e` passthrough
      of the host env).
    - **Read-only source**: the pristine tree is mounted read-only; tests run
@@ -91,7 +91,7 @@ something a turn can trigger by itself.
    Output is untrusted text: it is shown, never fed back as instructions,
    and terminal escape sequences are stripped.
 
-5. **Cleanup.** Container removed, scratch dir deleted, `refs/hive/pr/<n>`
+5. **Cleanup.** Container removed, scratch dir deleted, `refs/ligus/pr/<n>`
    deleted. Nothing from the run stays on the host.
 
 ## Recipes
@@ -110,9 +110,9 @@ own docs (`docs/agents/testing.md`, `sdk/CONTRIBUTING.md`):
 Cluster suites (Ginkgo end-to-end, Kind) are out of scope: they need a
 cluster and network, which is a different trust problem.
 
-## Wiring it into Hive
+## Wiring it into Ligus
 
-What it would take on the `hive serve` side:
+What it would take on the `ligus serve` side:
 
 - **Action**: `POST /v1/chats/{id}/pr-tests {pr, recipe}` creates a
   `RunPrTests` proposal (kind `action`, not `file_diff`) showing the PR

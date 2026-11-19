@@ -18,10 +18,10 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use hive_core::identity_link::{IdentityLink, LinkMethod};
-use hive_core::Timestamp;
-use hive_runtime::chat_service::LinkDraft;
-use hive_runtime::identity_links::{
+use ligus_core::identity_link::{IdentityLink, LinkMethod};
+use ligus_core::Timestamp;
+use ligus_runtime::chat_service::LinkDraft;
+use ligus_runtime::identity_links::{
     self, account_key_openssh, CachedCheck, ForgeConfig, LinkCheckCache, LinkContext, LinkFetcher, LinkStatus,
     SelfHostedForge, LINK_NAMESPACE,
 };
@@ -131,7 +131,7 @@ pub(crate) async fn identity_link_prepare(
 ) -> Result<LinkDraftDto, String> {
     let provider = provider.trim().to_ascii_lowercase();
     let host = host.trim().to_ascii_lowercase();
-    if method == LinkMethod::KeyPublished && !hive_core::identity_link::KEY_PUBLISHED_PROVIDERS.contains(&provider.as_str()) {
+    if method == LinkMethod::KeyPublished && !ligus_core::identity_link::KEY_PUBLISHED_PROVIDERS.contains(&provider.as_str()) {
         return Err("Adding your Ligus key as a signing key is only offered on GitHub and GitLab: elsewhere it would grant push access.".into());
     }
     if !matches!(method, LinkMethod::SshSig | LinkMethod::KeyPublished) {
@@ -141,7 +141,7 @@ pub(crate) async fn identity_link_prepare(
     if discoverable {
         let cid = state.settings.lock().unwrap().contact.as_ref().map(|c| c.cid.clone());
         let cid = cid.ok_or("This device has no contact yet; publish to workspaces first.")?;
-        targets.push((hive_runtime::contacts::contact_workspace_id(&cid), "Your contact card".into()));
+        targets.push((ligus_runtime::contacts::contact_workspace_id(&cid), "Your contact card".into()));
     }
     if targets.is_empty() {
         return Err("Pick at least one workspace to show this identity in.".into());
@@ -275,7 +275,7 @@ pub(crate) async fn identity_link_publish(
     if let LinkStatus::Stale { reason, .. } | LinkStatus::Invalid { reason } = &status {
         return Err(format!("{}: {reason}", l0.host));
     }
-    let contact_ws = state.settings.lock().unwrap().contact.as_ref().map(|c| hive_runtime::contacts::contact_workspace_id(&c.cid));
+    let contact_ws = state.settings.lock().unwrap().contact.as_ref().map(|c| ligus_runtime::contacts::contact_workspace_id(&c.cid));
     let mut published = Vec::new();
     for (ws, l) in ready {
         if Some(ws) == contact_ws {
@@ -333,7 +333,7 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
         (s.identity_links.contact_links.clone(), s.identity_links.checks_on())
     };
     let svc = state.service.lock().unwrap();
-    let per_ws: Vec<(Uuid, hive_runtime::chat_service::WorkspaceLinks)> =
+    let per_ws: Vec<(Uuid, ligus_runtime::chat_service::WorkspaceLinks)> =
         conns.iter().filter_map(|(ws, _)| svc.identity_links(*ws).ok().map(|wl| (*ws, wl))).collect();
     let me = svc.author().account_id;
     // The key this account's links must be checked under: this device's own
@@ -347,7 +347,7 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
             per_ws.iter().filter_map(|(_, wl)| wl.account_keys.get(&account).cloned()).collect();
         let fp = (me != Some(account))
             .then(|| {
-                hive_runtime::directory_trust::co_members(svc.store(), me.unwrap_or_default())
+                ligus_runtime::directory_trust::co_members(svc.store(), me.unwrap_or_default())
                     .into_iter()
                     .find(|c| c.account_id == account)
                     .filter(|c| !c.key_conflict)
@@ -355,7 +355,7 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
             })
             .flatten();
         match fp {
-            Some(fp) => keys.into_iter().find(|k| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(k).eq_ignore_ascii_case(&fp)),
+            Some(fp) => keys.into_iter().find(|k| ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(k).eq_ignore_ascii_case(&fp)),
             None if me == Some(account) && keys.len() == 1 => keys.into_iter().next(),
             None => None,
         }
@@ -363,7 +363,7 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
     let Some(agreed) = agreed else { return Vec::new() };
     let now = Timestamp::now();
     let names: BTreeMap<Uuid, String> = conns.into_iter().collect();
-    hive_runtime::chat_service::links_for_account(&per_ws, account, |k| k == agreed.as_slice())
+    ligus_runtime::chat_service::links_for_account(&per_ws, account, |k| k == agreed.as_slice())
         .into_iter()
         .map(|shown| {
             let l = shown.link;
@@ -544,15 +544,15 @@ pub(crate) struct LinkChipDto {
 
 /// This device's contact-record link publications (opt-in), signed for the
 /// contact's workspace.
-pub(crate) fn contact_link_envelopes(state: &AppState, cid: &str) -> Vec<hive_core::SessionEventEnvelope> {
+pub(crate) fn contact_link_envelopes(state: &AppState, cid: &str) -> Vec<ligus_core::SessionEventEnvelope> {
     let links = state.settings.lock().unwrap().identity_links.contact_links.clone();
-    let ws = hive_runtime::contacts::contact_workspace_id(cid);
+    let ws = ligus_runtime::contacts::contact_workspace_id(cid);
     let svc = state.service.lock().unwrap();
     let key = svc.account_public_key();
     links
         .into_iter()
         .filter(|l| l.expires_at > Timestamp::now())
-        .filter(|l| hive_core::identity_link::check_statement(l, ws, Some(&key)).is_ok())
+        .filter(|l| ligus_core::identity_link::check_statement(l, ws, Some(&key)).is_ok())
         .map(|l| svc.signed_link_publication(ws, l))
         .collect()
 }

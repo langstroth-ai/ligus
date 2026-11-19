@@ -50,7 +50,7 @@ sequenceDiagram
   I-->>A: ID token (issuer, audience, nonce checked; JWKS-verified)
   A-->>D: relay access token (hrt1, 15 min) + refresh token (device-bound)
   D->>R: Authorization: Bearer hrt1.…
-  R->>R: verify with LIGUS_RELAY_TOKEN_PUBKEY, check workspaces and tid
+  R->>R: verify with LANGSTROTH_RELAY_TOKEN_PUBKEY, check workspaces and tid
 ```
 
 - **Desktop and CLI** sign in with a **device code**: the app shows a short
@@ -66,7 +66,7 @@ sequenceDiagram
 ## Tokens
 
 Access tokens are ordinary relay `hrt1` tokens signed by the langstroth-auth
-issuer key. The relay verifies them with `LIGUS_RELAY_TOKEN_PUBKEY` exactly as
+issuer key. The relay verifies them with `LANGSTROTH_RELAY_TOKEN_PUBKEY` exactly as
 before.
 
 | Claim | Value |
@@ -106,17 +106,17 @@ other users can read. It can also come from a systemd credential named
 ### 2. Point the relay at it
 
 ```sh
-LIGUS_RELAY_TOKEN_PUBKEY=3b6a27bc…        # the public key from keygen
-LIGUS_RELAY_WORKSPACE_SCOPE=strict        # tokens only reach their workspaces
-LIGUS_RELAY_TENANTS=home                  # optional: only this tenant's tokens
+LANGSTROTH_RELAY_TOKEN_PUBKEY=3b6a27bc…        # the public key from keygen
+LANGSTROTH_RELAY_WORKSPACE_SCOPE=strict        # tokens only reach their workspaces
+LANGSTROTH_RELAY_TENANTS=home                  # optional: only this tenant's tokens
 ```
 
 | Relay setting | Default | Effect |
 |---|---|---|
-| `LIGUS_RELAY_TOKEN_PUBKEY` | unset | require signed tokens from this issuer |
-| `LIGUS_RELAY_WORKSPACE_SCOPE` | `off` | `strict`: every workspace route needs a token listing that workspace |
-| `LIGUS_RELAY_TENANTS` | unset | comma-separated tenant ids; tokens without a listed `tid` get `401` |
-| `LIGUS_RELAY_TOKEN_PUBKEY_NEXT` | unset | a second issuer key accepted while you rotate the issuer key |
+| `LANGSTROTH_RELAY_TOKEN_PUBKEY` | unset | require signed tokens from this issuer |
+| `LANGSTROTH_RELAY_WORKSPACE_SCOPE` | `off` | `strict`: every workspace route needs a token listing that workspace |
+| `LANGSTROTH_RELAY_TENANTS` | unset | comma-separated tenant ids; tokens without a listed `tid` get `401` |
+| `LANGSTROTH_RELAY_TOKEN_PUBKEY_NEXT` | unset | a second issuer key accepted while you rotate the issuer key |
 
 ### 3. Register langstroth-auth at your IdP
 
@@ -276,7 +276,7 @@ workspaces. langstroth-auth keeps them apart:
 - the same IdP subject in two tenants is two unrelated users;
 - sign-in state, codes, device codes, nonces and refresh tokens from one
   tenant are rejected by another;
-- with `LIGUS_RELAY_TENANTS`, the relay itself refuses other tenants' tokens.
+- with `LANGSTROTH_RELAY_TENANTS`, the relay itself refuses other tenants' tokens.
 
 Tenant-aware relay authorization beyond this is a design; see
 [multi-tenant](multi-tenant.md).
@@ -312,6 +312,6 @@ Tenant-aware relay authorization beyond this is a design; see
 - The file store is for one instance. With Postgres you can run more, but
   sign-in and device-code steps are held in memory, so give the load balancer
   session affinity.
-- Rotating the issuer key: start the relay with `LIGUS_RELAY_TOKEN_PUBKEY_NEXT`
+- Rotating the issuer key: start the relay with `LANGSTROTH_RELAY_TOKEN_PUBKEY_NEXT`
   set to the new key, switch langstroth-auth to it, and after an access TTL make it
   the only key.

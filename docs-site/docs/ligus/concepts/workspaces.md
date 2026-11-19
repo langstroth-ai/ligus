@@ -36,7 +36,7 @@ Account ──── Device ──── Ligus instance
 
 Every meaningful state change — chat title rename, member add, tool
 call, approval — becomes an event. Ligus stores those events in an
-**append-only SQLite database** (`hive.db` in the app's data
+**append-only SQLite database** (`ligus.db` in the app's data
 directory). Each envelope's full JSON is stored verbatim, with indexed
 columns (`session_id`, `sequence`, `kind`, `scope`, `timestamp`) for
 ordering and filtering.
@@ -49,7 +49,7 @@ to compute current state.
 flowchart LR
     Mut[User or agent mutation] --> Delta[sessionDeltaEvents]
     Delta --> Sign[Sign envelope<br/>Ed25519]
-    Sign --> Disk[SQLite event log<br/>hive.db]
+    Sign --> Disk[SQLite event log<br/>ligus.db]
     Sign --> P2P[Broadcast over peer-link]
     P2P --> Peer[Peer's ingestRemoteEnvelopes]
     Disk --> Proj[SessionProjector]
@@ -106,7 +106,7 @@ linked on this device shows a *link-a-folder* prompt (you can still chat, review
 and drive remote agents while it's unlinked).
 
 Within a **git** workspace, **each chat gets its own isolated worktree** — a
-branch `hive/chat/<id>` — so parallel chats can't clobber each other's edits. A
+branch `ligus/chat/<id>` — so parallel chats can't clobber each other's edits. A
 write-capable agent turn is cut from the chat's branch and still surfaces as a
 **reviewable proposal**; approving it commits onto that chat's branch (not your
 main tree), so a chat accumulates work only through changes you've approved.

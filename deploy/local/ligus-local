@@ -213,7 +213,7 @@ cmd_install_cli() {
   if [ $FROM_SOURCE = 1 ]; then
     ac_have cargo || { ac_check cargo fail "cargo not found" "install Rust (https://rustup.rs), or drop --from-source"; ac_raise 3; ac_finish "$AC_TOOL" install-cli; }
     local dir=${BIN_DIR:-$HOME/.local/bin}
-    if (cd "$ROOT" && cargo build --release -p hive-cli >&2); then
+    if (cd "$ROOT" && cargo build --release -p ligus-cli >&2); then
       mkdir -p "$dir"
       install -m 0755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/ligus" "$dir/ligus"
       ac_check install pass "built and installed $dir/ligus"

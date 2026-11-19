@@ -7,7 +7,7 @@ v1.18.0 release.
 ## Summary
 
 Workflows keep their run engine (`app/src/workflows.rs` + the pure
-scheduler in `hive-core/src/workflow.rs`): DAG of agent stages and approval
+scheduler in `ligus-core/src/workflow.rs`): DAG of agent stages and approval
 gates, crash recovery, cross-device stages, gate proposals, phone approvals.
 What changes is **who writes definitions**:
 
@@ -31,7 +31,7 @@ without a human vote.
 
 The payload is the existing directive JSON (it is already documented to
 agents, it addresses agents by roster name and it already has a strict
-parser + validator, `definition_from_directive` → `hive_core::workflow::validate`):
+parser + validator, `definition_from_directive` → `ligus_core::workflow::validate`):
 
 ```json
 {"name": "…", "description": "…", "inputLabel": "…",
@@ -71,8 +71,8 @@ Channels:
    request), so it does not cost a tool slot on ordinary turns; when offered
    it takes one slot from the cap rather than growing it.
 
-Not done: a Hive-served MCP server exposing `propose_workflow` to CLI
-runtimes for in-turn validation. Hive is an MCP *client* today; serving MCP
+Not done: a Ligus-served MCP server exposing `propose_workflow` to CLI
+runtimes for in-turn validation. Ligus is an MCP *client* today; serving MCP
 to every spawned CLI agent is new surface (per-turn stdio server, auth,
 lifecycle). The directive path already gives those runtimes the same
 capability with one turn of latency on errors. See open question 3.
@@ -101,7 +101,7 @@ Review pane." Errors post "X suggested a workflow, but it couldn't be filed
 
 ### Approval → definition
 
-`ChatService::vote_on_proposal` (shared by the desktop and `hive serve`, so
+`ChatService::vote_on_proposal` (shared by the desktop and `ligus serve`, so
 the phone path gets it too): when a vote moves a proposal that carries a
 `workflow` to *approved*, the same call saves the definition
 (`WorkflowDefinitionsUpdated`, replace-by-id) and marks the proposal
@@ -141,13 +141,13 @@ No change needed. Gate approvals (`workflow.approval` push), dashboard
 `workflows.*` metrics and run details read runs and definitions, which are
 unchanged. A workflow proposal appears in the phone's proposal list as a
 decision with the stage rendering as its body; approving it there goes
-through `vote_on_proposal` in `hive serve` and adds the definition.
+through `vote_on_proposal` in `ligus serve` and adds the definition.
 
 ## 4. Migration
 
 None required. `WorkflowDefinitionsUpdated` / `WorkflowRunUpserted` are
 unchanged on the wire; existing definitions load, render read-only, run,
-pause and delete. The node `x`/`y` canvas positions stay in the hive-core
+pause and delete. The node `x`/`y` canvas positions stay in the ligus-core
 model (serde-compatible, ignored) and are dropped from the app DTO. The new
 fields (`ActionProposal.workflow`, `WorkflowDefinition.disabled`) are
 `serde(default)` + skipped when empty, so old events decode and old peers
@@ -183,14 +183,14 @@ Kept:
 - the whole run engine, gates, crash recovery, cross-device stages;
 - `list_workflows`, `remove_workflow`, `list_workflow_runs`,
   `start/cancel/resume_workflow_run`;
-- `hive_core::workflow::preset_*` (test fixtures and examples; no UI);
+- `ligus_core::workflow::preset_*` (test fixtures and examples; no UI);
 - the `[[workflow:]]` directive (now files a proposal instead of saving).
 
 Added: `set_workflow_enabled` command, `propose_workflow` tool,
 `ActionProposal.workflow`, `WorkflowDefinition.disabled`,
 `ProposalDto.workflow`, `revises`.
 
-Trust note: the review step is enforced by Hive clients (the desktop files
+Trust note: the review step is enforced by Ligus clients (the desktop files
 agent output as a proposal), not by event-log authorization.
 `WorkflowDefinitionsUpdated` keeps its Contributor floor, so a modified
 client with a Contributor key could still write definitions directly, as
@@ -211,7 +211,7 @@ runtime-specific.
    here. If wanted, it is an engine feature (a `trigger` on the definition +
    a scheduler that starts runs, which also changes the "only humans start
    runs" safety property) and should be its own design.
-3. **In-turn validation for CLI runtimes.** Worth a Hive-served stdio MCP
+3. **In-turn validation for CLI runtimes.** Worth a Ligus-served stdio MCP
    server (`propose_workflow`, maybe `propose` too) passed to Claude Code /
    Codex / etc. via their MCP config? Today they get errors one turn later.
 4. **Auto-apply on approval.** Implemented as auto-apply (definitions are
@@ -220,6 +220,6 @@ runtime-specific.
 5. **Host placement.** Placement is still derived from the stage's agent
    (its owner device / worker), not stated per stage. A per-stage `host`
    field would need engine support; not added.
-6. **Worker (hive-cli) replies** don't parse reply directives at all today,
+6. **Worker (ligus-cli) replies** don't parse reply directives at all today,
    so an agent running on a headless worker can't propose a workflow from
    there. Pre-existing gap; unchanged.

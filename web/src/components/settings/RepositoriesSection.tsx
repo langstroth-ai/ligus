@@ -49,7 +49,7 @@ function HostChip({ h }: { h: RepoHostCoverage }) {
   return (
     <span
       className="rounded-full border px-2 py-0.5 text-xs"
-      style={{ borderColor: "var(--hive-line)", opacity: h.online ? 1 : 0.6 }}
+      style={{ borderColor: "var(--ligus-line)", opacity: h.online ? 1 : 0.6 }}
       title={h.online ? "online" : "offline"}
     >
       {ok ? "✓ " : ""}
@@ -65,7 +65,7 @@ export function RepoSuggestion({ data, onDone }: { data: WorkspaceReposDto; onDo
   const s = data.suggestion;
   if (!s || dismissed) return null;
   return (
-    <div className="mb-4 rounded-2xl border p-4 text-sm" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
+    <div className="mb-4 rounded-2xl border p-4 text-sm" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <div>
         This folder is <code>{s.canonical}</code>
         {s.viaFork ? " (through your fork)" : ""}.{" "}
@@ -107,7 +107,7 @@ export function RepoSuggestion({ data, onDone }: { data: WorkspaceReposDto; onDo
 /// else an Accept button. Accepting changes only identity matching here.
 function AliasChip({ alias, accepted, onToggle }: { alias: string; accepted: boolean; onToggle: (accept: boolean) => void }) {
   return (
-    <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+    <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
       <code>{alias}</code>
       {accepted ? (
         <>
@@ -136,7 +136,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
     }
   };
   return (
-    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium">
@@ -147,7 +147,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
             {r.defaultBranch ? ` · ${r.defaultBranch}` : ""}
           </div>
           {r.lookalikeOf && (
-            <div className="text-xs" style={{ color: "var(--hive-accent-warm, orange)" }}>
+            <div className="text-xs" style={{ color: "var(--ligus-accent-warm, orange)" }}>
               Same history as {r.lookalikeOf}, different owner. Check the full name before cloning it.
             </div>
           )}

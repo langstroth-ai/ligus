@@ -1,6 +1,6 @@
 // Flow: routing, hand-offs, backpressure, the task board and workspace marks.
 // Typed wrappers around the `flow_*` Tauri commands (app/src/flow.rs). The
-// shapes mirror the serde (camelCase) structs in hive_core::flow.
+// shapes mirror the serde (camelCase) structs in ligus_core::flow.
 import { invoke } from "@tauri-apps/api/core";
 
 export interface HandoffQuality {

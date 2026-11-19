@@ -124,7 +124,7 @@ composer command.
 ## Local models: at most 16 tools a turn
 
 Runtimes that use Ligus's own tool loop (Ollama, and `custom` or
-`hive-daemon` OpenAI-compatible endpoints with **Supports tools** on; see
+`ligus-daemon` OpenAI-compatible endpoints with **Supports tools** on; see
 [Offline setup with local models](../getting-started/offline-local-models.md#tools-and-mcp))
 are offered **at most 16 tools per turn**. Small open models choose worse
 from a long list, and every tool definition costs prompt tokens on every

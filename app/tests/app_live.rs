@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! LIGUS_APP_LIVE_ENDPOINT=http://host:8080 \
-//!   cargo test -p Hive --features e2e --test app_live -- --nocapture
+//!   cargo test -p ligus-desktop --features e2e --test app_live -- --nocapture
 //! ```
 //!
 //! `harness = false`: macOS only lets the main thread create the app's
@@ -14,7 +14,7 @@
 fn main() {
     #[cfg(feature = "e2e")]
     {
-        let failed = hive_app_lib::e2e::run_live();
+        let failed = ligus_desktop_lib::e2e::run_live();
         if failed > 0 {
             eprintln!("{failed} scenario(s) failed");
             std::process::exit(1);

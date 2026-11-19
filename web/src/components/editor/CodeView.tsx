@@ -21,16 +21,16 @@ import { IconPanelLeft } from "@/lib/icons";
 // This is the only piece that knows the layout; every child is self-contained
 // (no props, or a single collapse callback) and drives the shared stores. The
 // resize idiom (pointer-drag handle + persisted size) mirrors DiffView's
-// resizable changes list. Everything is themed via `--hive-*` tokens.
+// resizable changes list. Everything is themed via `--ligus-*` tokens.
 
 // External requests the shell can make of the active code view (from the
 // command palette). Consumed once via `onConsumePending`, so a fresh request
 // after switching back into the view fires again.
 export type CodeViewIntent = "quick-open" | "new-terminal";
 
-const TREE_WIDTH_KEY = "hive.code.treeWidth";
-const TREE_VISIBLE_KEY = "hive.code.treeVisible";
-const TERM_HEIGHT_KEY = "hive.code.termHeight";
+const TREE_WIDTH_KEY = "ligus.code.treeWidth";
+const TREE_VISIBLE_KEY = "ligus.code.treeVisible";
+const TERM_HEIGHT_KEY = "ligus.code.termHeight";
 const MIN_TREE_WIDTH = 160;
 const MAX_TREE_WIDTH = 480;
 const DEFAULT_TREE_WIDTH = 240;
@@ -160,11 +160,11 @@ export function CodeView({
   }
 
   return (
-    <div className="flex h-full min-h-0" style={{ background: "var(--hive-canvas)" }}>
+    <div className="flex h-full min-h-0" style={{ background: "var(--ligus-canvas)" }}>
       {/* Activity strip: always-present toggles for the tree + terminal. */}
       <div
         className="flex w-9 shrink-0 flex-col items-center gap-1 border-r py-2"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
       >
         <button
           type="button"
@@ -172,8 +172,8 @@ export function CodeView({
           aria-pressed={treeVisible}
           title="Toggle file tree"
           onClick={toggleTree}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg transition-all hover:bg-[color:var(--hive-overlay)]"
-          style={{ color: "var(--hive-ink)", opacity: treeVisible ? 1 : 0.5 }}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-lg transition-all hover:bg-[color:var(--ligus-overlay)]"
+          style={{ color: "var(--ligus-ink)", opacity: treeVisible ? 1 : 0.5 }}
         >
           <IconPanelLeft size={16} />
         </button>
@@ -183,8 +183,8 @@ export function CodeView({
           aria-pressed={termVisible}
           title="Toggle terminal"
           onClick={() => setTermVisible((v) => !v)}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg font-mono text-[11px] leading-none transition-all hover:bg-[color:var(--hive-overlay)]"
-          style={{ color: "var(--hive-ink)", opacity: termVisible ? 1 : 0.5 }}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-lg font-mono text-[11px] leading-none transition-all hover:bg-[color:var(--ligus-overlay)]"
+          style={{ color: "var(--ligus-ink)", opacity: termVisible ? 1 : 0.5 }}
         >
           {">_"}
         </button>
@@ -195,7 +195,7 @@ export function CodeView({
         <>
           <div
             className="shrink-0 overflow-hidden"
-            style={{ width: treeWidth, borderRight: "1px solid var(--hive-line)" }}
+            style={{ width: treeWidth, borderRight: "1px solid var(--ligus-line)" }}
           >
             <FileTree />
           </div>
@@ -203,13 +203,13 @@ export function CodeView({
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize file tree"
-            className="relative w-1.5 shrink-0 cursor-col-resize transition-colors hover:bg-[color:var(--hive-overlay)]"
+            className="relative w-1.5 shrink-0 cursor-col-resize transition-colors hover:bg-[color:var(--ligus-overlay)]"
             style={{ touchAction: "none" }}
             onPointerDown={startTreeResize}
           >
             <span
               className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
-              style={{ background: "var(--hive-line)" }}
+              style={{ background: "var(--ligus-line)" }}
             />
           </div>
         </>
@@ -227,13 +227,13 @@ export function CodeView({
               role="separator"
               aria-orientation="horizontal"
               aria-label="Resize terminal"
-              className="relative h-1.5 shrink-0 cursor-row-resize transition-colors hover:bg-[color:var(--hive-overlay)]"
+              className="relative h-1.5 shrink-0 cursor-row-resize transition-colors hover:bg-[color:var(--ligus-overlay)]"
               style={{ touchAction: "none" }}
               onPointerDown={startTermResize}
             >
               <span
                 className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2"
-                style={{ background: "var(--hive-line)" }}
+                style={{ background: "var(--ligus-line)" }}
               />
             </div>
             <div className="shrink-0" style={{ height: termHeight }}>

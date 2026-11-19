@@ -72,7 +72,7 @@ both:
 | **Relay** | a Noise session through your relay's tunnel; the relay forwards ciphertext only | the box's host id and public key, the relay URL, and the phone's own key and credential (90 days, renewed daily while used) |
 
 Pair by scanning the QR code `ligus pair` prints (or opening its
-`hive://pair?…` link; `ligus://` works too). A **v2** link carries the relay
+`ligus://pair?…` link). A **v2** link carries the relay
 details as well as, when there is a usable direct address, the URL and token.
 A box listening only on loopback (`127.0.0.1`) with remote access off prints
 no link, since the phone can't reach it; see
@@ -136,7 +136,7 @@ sent anywhere, and there's no push in the demo.
   unread count and up to five recent participants. Chats are filed under their
   channels, in the desktop's sidebar order.
 - Start a chat or send a message from the phone. `@mentions` route exactly as
-  on the desktop: `@agent` wakes that agent, `@hive` the chat's primary
+  on the desktop: `@agent` wakes that agent, `@ligus` the chat's primary
   runtime. See [Multi-agent collaboration](multi-agent.md).
 - Replies stream live. A reply produced on the `ligus serve` box streams token
   by token; one produced on another device (your desktop, a worker) appears
@@ -149,7 +149,7 @@ sent anywhere, and there's no push in the demo.
   off in **Settings → Share typing status** (on by default; the desktop has
   the same switch under **Settings → Profile → Privacy**). Nothing is sent
   while a chat waits for its founder.
-- **Which device answered.** A reply from the chat's primary `@hive` says
+- **Which device answered.** A reply from the chat's primary `@ligus` says
   where it ran: "This device" (the box), "Your other device", or "<name>'s
   device".
 - Unread counts and read marks belong to the box, not to each device:
@@ -167,8 +167,8 @@ sent anywhere, and there's no push in the demo.
   context-window estimate, recent workflow runs, and the chat's skills and
   vaults.
 
-!!! note "Who answers `@hive`"
-    Only a desktop runs a chat's primary runtime (`@hive`). Chat details says
+!!! note "Who answers `@ligus`"
+    Only a desktop runs a chat's primary runtime (`@ligus`). Chat details says
     whether your desktop is available. If it's closed, the turn waits and is
     answered when the desktop opens. For chats the phone creates to be
     answered by your desktop, enroll the box as
@@ -366,10 +366,10 @@ failures mean:
 | `push UNAVAILABLE` | the relay has no APNs key | [Push through your own relay](../../operate/networking/remote-access.md#push-through-your-own-relay) |
 | `notifications OFF` | the app never asked this box for notifications: push is off in the app, iOS permission was never given, or the app was reinstalled (or its bundle id changed) and hasn't asked again | in the app, **Settings → Notifications** on, and allow notifications when iOS asks |
 | `refused: no_push_token` | the relay has no APNs token for the phone: it never registered one, the relay restarted without durable storage, or APNs said the token was dead | open the app with notifications allowed; it registers its token every time it connects |
-| `topic not allowed on this relay` | the app's bundle id isn't one the relay pushes to | add it to `LIGUS_RELAY_APNS_TOPICS` on the relay and restart it |
-| `BadDeviceToken` | environment mismatch: a build run from Xcode has a sandbox token, an App Store or TestFlight build a production one | `LIGUS_RELAY_APNS_ENV=auto` (the default) on the relay; open the app again |
-| `DeviceTokenNotForTopic` / `TopicDisallowed` | the topic the relay used isn't the app on the phone | set `LIGUS_RELAY_APNS_TOPIC` / `LIGUS_RELAY_APNS_TOPICS` to the build's bundle id, and update the app (current builds report their bundle id) |
-| `InvalidProviderToken` | the relay's APNs key, Key ID or Team ID is wrong, or from another team than the app | fix the relay's `LIGUS_RELAY_APNS_KEY*` / `TEAM_ID` |
+| `topic not allowed on this relay` | the app's bundle id isn't one the relay pushes to | add it to `LANGSTROTH_RELAY_APNS_TOPICS` on the relay and restart it |
+| `BadDeviceToken` | environment mismatch: a build run from Xcode has a sandbox token, an App Store or TestFlight build a production one | `LANGSTROTH_RELAY_APNS_ENV=auto` (the default) on the relay; open the app again |
+| `DeviceTokenNotForTopic` / `TopicDisallowed` | the topic the relay used isn't the app on the phone | set `LANGSTROTH_RELAY_APNS_TOPIC` / `LANGSTROTH_RELAY_APNS_TOPICS` to the build's bundle id, and update the app (current builds report their bundle id) |
+| `InvalidProviderToken` | the relay's APNs key, Key ID or Team ID is wrong, or from another team than the app | fix the relay's `LANGSTROTH_RELAY_APNS_KEY*` / `TEAM_ID` |
 | `Unregistered` (410) | the app was uninstalled or reinstalled | open the app so it registers a new token |
 | `no answer from the relay` | the relay didn't ack within 15 s | the relay's log (`tunnel push` lines) |
 | `accepted` but nothing on the phone | APNs took it; the phone didn't show it | iOS **Settings → Notifications → Ligus**, Focus modes, and open the app once since installing (it stores the key its notification extension decrypts with) |
@@ -499,7 +499,7 @@ app:
 - applying a proposal-set alternative (you can vote on it from the phone);
 - switching dearth mode and approving joins (the phone clears a chat
   lockdown with your passkey);
-- answering `@hive`: only a desktop runs a chat's primary runtime;
+- answering `@ligus`: only a desktop runs a chat's primary runtime;
 - removing or re-roling members, and issuing invite links to people (the
   phone admits a box, nothing else about membership);
 - direct messages: the phone's key isn't certified in a DM's own workspace;

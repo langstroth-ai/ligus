@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hive-core",
-    "crates/hive-proto",
-    "crates/hive-runtime",
-    "crates/hive-forge",
-    "crates/hive-cli",
+    "crates/ligus-core",
+    "crates/ligus-proto",
+    "crates/ligus-runtime",
+    "crates/ligus-forge",
+    "crates/ligus-cli",
     "app",
 ]
 
@@ -19,8 +19,8 @@ authors = ["Ligus"]
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: signatures cover re-serialized payloads, so floats must
-# parse back to the exact bits they were written from (see hive-core sec_tests).
-# raw_value: envelopes keep the bytes they were signed over (hive-core
+# parse back to the exact bits they were written from (see ligus-core sec_tests).
+# raw_value: envelopes keep the bytes they were signed over (ligus-core
 # envelope_wire), so unknown fields survive verification, storage and re-sync.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 thiserror = "2"
@@ -32,14 +32,14 @@ tracing = "0.1"
 ts-rs = "12"
 
 # Internal crates
-hive-core = { path = "crates/hive-core" }
-hive-proto = { path = "crates/hive-proto" }
+ligus-core = { path = "crates/ligus-core" }
+ligus-proto = { path = "crates/ligus-proto" }
 # default-features = false MUST be set here at the workspace root (not just on
 # the member dep) or cargo silently ignores it. This lets the app's own `p2p`
-# feature gate whether hive-runtime pulls iroh, so the Windows cross-build can
+# feature gate whether ligus-runtime pulls iroh, so the Windows cross-build can
 # drop it via `--no-default-features` while native builds keep P2P on.
-hive-runtime = { path = "crates/hive-runtime", default-features = false }
-hive-forge = { path = "crates/hive-forge" }
+ligus-runtime = { path = "crates/ligus-runtime", default-features = false }
+ligus-forge = { path = "crates/ligus-forge" }
 
 [profile.release]
 strip = true

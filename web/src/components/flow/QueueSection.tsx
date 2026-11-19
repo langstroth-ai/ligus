@@ -31,9 +31,9 @@ export function QueueView({ report: r }: { report: QueueReport }) {
         <div
           role="alert"
           className="flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs leading-[1.5]"
-          style={{ borderColor: "var(--hive-warn-line)", background: "var(--hive-warn-tint)" }}
+          style={{ borderColor: "var(--ligus-warn-line)", background: "var(--ligus-warn-tint)" }}
         >
-          <span aria-hidden className="mt-0.5 inline-flex shrink-0" style={{ color: "var(--hive-warn-ink)" }}>
+          <span aria-hidden className="mt-0.5 inline-flex shrink-0" style={{ color: "var(--ligus-warn-ink)" }}>
             <IconAlertTriangle size={13} />
           </span>
           <span>{r.alert}</span>
@@ -59,7 +59,7 @@ export function QueueView({ report: r }: { report: QueueReport }) {
           </thead>
           <tbody>
             {r.edges.map((e) => (
-              <tr key={e.edge} className="border-t" style={{ borderColor: "var(--hive-line)" }}>
+              <tr key={e.edge} className="border-t" style={{ borderColor: "var(--ligus-line)" }}>
                 <td className="py-1">{EDGE_LABEL[e.edge] ?? e.edge}</td>
                 <td>{e.samples ? duration(e.medianWaitMs) : "—"}</td>
                 <td>{e.samples ? pct(e.trembleShare) : "—"}</td>

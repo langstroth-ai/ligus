@@ -26,7 +26,7 @@ import {
   type ClaudePermissionMode,
   type RelayProbeDto,
 } from "@/lib/ipc";
-import { HiveBrandIcon } from "@/components/HiveBrand";
+import { LigusBrandIcon } from "@/components/LigusBrand";
 import { RelayPicker } from "@/components/RelayPicker";
 import { relayUrlFor, type RelayChoice } from "@/lib/communityRelay";
 import { Avatar } from "@/components/Avatar";
@@ -56,7 +56,7 @@ const THEME_CHOICES: { name: ThemeName; label: string; blurb: string }[] = [
 
 // backgroundColor (not the `background` shorthand) so the global `select` rule's
 // chevron background-image survives on the runtime/model dropdowns.
-const inputStyle = { borderColor: "var(--hive-line)", backgroundColor: "var(--hive-panel)" };
+const inputStyle = { borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-panel)" };
 const field = "w-full rounded-xl border px-3 py-2.5 text-sm outline-none";
 
 // The Claude Code `--model` value can be a short alias (opus) or a full id
@@ -279,7 +279,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           if (!ok) {
             setAgentAckFail(true);
             setError(
-              "Couldn't reach that provider with this key — @hive won't answer until it works. Fix the key, or press Continue again to set it up anyway.",
+              "Couldn't reach that provider with this key — @ligus won't answer until it works. Fix the key, or press Continue again to set it up anyway.",
             );
             return;
           }
@@ -402,10 +402,10 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "var(--hive-canvas)" }}>
-      <div className="w-full max-w-md rounded-3xl border p-8" style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "var(--ligus-canvas)" }}>
+      <div className="w-full max-w-md rounded-3xl border p-8" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}>
         <div className="mb-1 flex items-center gap-3">
-          <HiveBrandIcon size={40} />
+          <LigusBrandIcon size={40} />
           <div className="text-xl font-semibold">Welcome to Ligus</div>
         </div>
         <div className="mb-4 text-sm text-ink-soft">
@@ -414,7 +414,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
         </div>
         <div className="mb-5 flex gap-1.5">
           {[1, 2, 3, 4, 5].map((n) => (
-            <div key={n} className="h-1 flex-1 rounded-full" style={{ background: n <= step ? "var(--hive-accent-cool)" : "var(--hive-line)" }} />
+            <div key={n} className="h-1 flex-1 rounded-full" style={{ background: n <= step ? "var(--ligus-accent-cool)" : "var(--ligus-line)" }} />
           ))}
         </div>
 
@@ -458,7 +458,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           <div className="space-y-3">
             <div className="text-sm font-medium">Open your project</div>
             <div className="text-xs text-ink-soft">Pick the folder agents should work in (a git repo is ideal).</div>
-            <button className="rounded-xl px-3 py-2.5 text-sm font-semibold" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }} onClick={pickFolder}>
+            <button className="rounded-xl px-3 py-2.5 text-sm font-semibold" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }} onClick={pickFolder}>
               {folder ? "Choose a different folder…" : "Choose folder…"}
             </button>
             {folder && <div className="truncate rounded-lg border px-3 py-2 font-mono text-xs" style={inputStyle}>✓ {folder}</div>}
@@ -486,11 +486,11 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
               (choice === "codex" && env && !env.codex)) && (
               <div
                 className="rounded-xl border px-3 py-2 text-xs"
-                style={{ borderColor: "color-mix(in srgb, var(--hive-warn) 45%, transparent)", background: "color-mix(in srgb, var(--hive-warn) 12%, transparent)" }}
+                style={{ borderColor: "color-mix(in srgb, var(--ligus-warn) 45%, transparent)", background: "color-mix(in srgb, var(--ligus-warn) 12%, transparent)" }}
               >
-                <span style={{ color: "var(--hive-warn-ink)" }}>
+                <span style={{ color: "var(--ligus-warn-ink)" }}>
                   {choice === "claudeCode" ? "Claude Code" : "Codex"} isn't on your PATH yet, so
-                  @hive won't answer until it's installed.
+                  @ligus won't answer until it's installed.
                 </span>{" "}
                 <button
                   type="button"
@@ -581,7 +581,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                 {agentProbe && agentProbe !== "running" && (
                   <div
                     className="text-xs"
-                    style={{ color: agentProbe.ok ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
+                    style={{ color: agentProbe.ok ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)" }}
                   >
                     {agentProbe.ok
                       ? `✓ Connected (${agentProbe.latency_ms} ms)`
@@ -615,7 +615,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
             </div>
 
             {teamMode === "join" && (
-              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
                 <input
                   value={inviteCode}
                   onChange={(e) => { setInviteCode(e.target.value); setProbe(null); }}
@@ -636,7 +636,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
             )}
 
             {teamMode === "host" && (
-              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+              <div className="space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
                 <RelayPicker
                   choice={relayChoice}
                   onChoice={(c) => { setRelayChoice(c); setProbe(null); }}
@@ -668,7 +668,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                   {testing ? "Testing…" : "Test connection"}
                 </button>
                 {probe && (
-                  <span className="text-xs" style={{ color: connectionOk ? "var(--hive-success-ink)" : "var(--hive-accent-warm)" }}>
+                  <span className="text-xs" style={{ color: connectionOk ? "var(--ligus-success-ink)" : "var(--ligus-accent-warm)" }}>
                     {connectionOk ? "✓ Connected" : probe.detail}
                   </span>
                 )}
@@ -691,11 +691,11 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                     type="button"
                     onClick={() => pickTheme(t.name)}
                     className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left"
-                    style={{ borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)", background: active ? "var(--hive-mist)" : "transparent" }}
+                    style={{ borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: active ? "var(--ligus-mist)" : "transparent" }}
                   >
                     <span
                       className="relative h-8 w-8 shrink-0 overflow-hidden rounded-lg border"
-                      style={{ borderColor: "var(--hive-line)", background: p.canvas }}
+                      style={{ borderColor: "var(--ligus-line)", background: p.canvas }}
                       aria-hidden
                     >
                       <span className="absolute bottom-1 left-1 h-3 w-3 rounded-full" style={{ background: p.accentWarm }} />
@@ -716,7 +716,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                   type="button"
                   onClick={() => pickAppearance(m)}
                   className="flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium capitalize"
-                  style={{ borderColor: appearance === m ? "var(--hive-accent-cool)" : "var(--hive-line)", background: appearance === m ? "var(--hive-mist)" : "transparent" }}
+                  style={{ borderColor: appearance === m ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: appearance === m ? "var(--ligus-mist)" : "transparent" }}
                 >
                   {m}
                 </button>
@@ -726,7 +726,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           </div>
         )}
 
-        {error && <p className="mt-3 text-xs" style={{ color: "var(--hive-warm-ink)" }}>{error}</p>}
+        {error && <p className="mt-3 text-xs" style={{ color: "var(--ligus-warm-ink)" }}>{error}</p>}
 
         <div className="mt-6 flex items-center justify-between">
           <button className="text-xs opacity-50 hover:opacity-100 disabled:opacity-20" disabled={step === 1 || busy} onClick={() => setStep((s) => s - 1)}>
@@ -742,7 +742,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
               onClick={next}
               disabled={!canNext || busy}
               className="rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               {busy ? "…" : step === 5 ? "Finish" : "Next"}
             </button>
@@ -771,7 +771,7 @@ function RuntimeOption({
     <button
       onClick={() => setChoice(v)}
       className="flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left text-sm"
-      style={{ borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)", background: active ? "var(--hive-mist)" : "transparent" }}
+      style={{ borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: active ? "var(--ligus-mist)" : "transparent" }}
     >
       <span className="font-medium">{label}</span>
       <span className="ml-2 text-xs text-ink-soft">{note}</span>
@@ -797,7 +797,7 @@ function TeamModeOption<T extends string>({
     <button
       onClick={() => set(v)}
       className="flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left"
-      style={{ borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)", background: active ? "var(--hive-mist)" : "transparent" }}
+      style={{ borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)", background: active ? "var(--ligus-mist)" : "transparent" }}
     >
       <span className="text-sm font-medium">{title}</span>
       <span className="text-xs text-ink-soft">{note}</span>

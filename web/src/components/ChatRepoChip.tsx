@@ -60,15 +60,15 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
   };
   const label = current ? `${current.name ?? "Unknown repository"}${current.baseBranch ? ` · ${current.baseBranch}` : ""}` : "No repository";
   return (
-    <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
       <button
         type="button"
         aria-label="Chat repository"
         className="flex items-center gap-1 rounded-full border px-2 py-0.5"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
         onClick={() => setOpen((o) => !o)}
       >
-        {warning && <span aria-hidden style={{ color: "var(--hive-accent-warm, orange)" }}>●</span>}
+        {warning && <span aria-hidden style={{ color: "var(--ligus-accent-warm, orange)" }}>●</span>}
         {label}
       </button>
       {warning && <span className="text-ink-soft">{warning}</span>}
@@ -76,7 +76,7 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
         <div
           role="menu"
           className="absolute left-3 top-8 z-20 min-w-56 rounded-xl border p-1 shadow"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
           {live.map((r) => (
             <button key={r.id} role="menuitem" type="button" className="block w-full rounded-lg px-2 py-1 text-left hover:bg-black/5" onClick={() => void pick(r.id)}>
@@ -91,7 +91,7 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
               role="menuitem"
               type="button"
               className="mt-1 block w-full rounded-lg border-t px-2 py-1 text-left hover:bg-black/5"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
               title={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
               onClick={() => void repin()}
             >
@@ -149,7 +149,7 @@ export function PinnedHostWarning({
   return (
     <div role="alert" className="mb-2 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span aria-hidden style={{ color: "var(--hive-accent-warm, orange)" }}>
+        <span aria-hidden style={{ color: "var(--ligus-accent-warm, orange)" }}>
           ●
         </span>
         <span>

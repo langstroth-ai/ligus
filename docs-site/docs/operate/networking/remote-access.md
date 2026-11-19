@@ -58,9 +58,7 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
   this port directly.
 - `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
   (default: the machine's host name). The box also
-  uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
-  (a box that still shows as "hive-cli", from before 0.1, takes it on its
-  next start).
+  uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one.
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).
 
@@ -97,7 +95,7 @@ box has synced.
 ligus pair
 ```
 
-`ligus pair` prints a QR code and the `hive://pair?…` link. Scan it with the
+`ligus pair` prints a QR code and the `ligus://pair?…` link. Scan it with the
 phone's camera or from the app. With remote access on, it's a **v2 link**: it
 carries the direct URL and token (when there's a usable direct path) plus the
 box's host id, its public key, the relay URL and a one-time pairing secret.
@@ -212,12 +210,12 @@ environment, not on the box:
 
 | Relay env | Meaning |
 |---|---|
-| `LIGUS_RELAY_TUNNEL=off` | default. The tunnel routes answer 404 |
-| `LIGUS_RELAY_TUNNEL=open` | any host may register and is active at once |
-| `LIGUS_RELAY_TUNNEL=allowlist` | only the host ids in `LIGUS_RELAY_TUNNEL_HOSTS` (comma-separated; get a box's id from `ligus remote status`) |
+| `LANGSTROTH_RELAY_TUNNEL=off` | default. The tunnel routes answer 404 |
+| `LANGSTROTH_RELAY_TUNNEL=open` | any host may register and is active at once |
+| `LANGSTROTH_RELAY_TUNNEL=allowlist` | only the host ids in `LANGSTROTH_RELAY_TUNNEL_HOSTS` (comma-separated; get a box's id from `ligus remote status`) |
 
-If the relay also gates access with tokens (`LIGUS_RELAY_ACCESS_TOKENS` or
-`LIGUS_RELAY_TOKEN_PUBKEY`), a box must present one to register: pass it with
+If the relay also gates access with tokens (`LANGSTROTH_RELAY_ACCESS_TOKENS` or
+`LANGSTROTH_RELAY_TOKEN_PUBKEY`), a box must present one to register: pass it with
 `ligus remote enable --reg-token`.
 
 Check the relay with `GET https://<relay-url>/v1/tunnel/info`. A relay with
@@ -249,19 +247,19 @@ yourself under the same team.
 2. **Give the relay the key.**
 
     ```sh
-    LIGUS_RELAY_TUNNEL=open
-    LIGUS_RELAY_APNS_KEY_FILE=/path/to/AuthKey_<KEYID>.p8   # or LIGUS_RELAY_APNS_KEY=<inline PEM>
-    LIGUS_RELAY_APNS_KEY_ID=<Key ID>
-    LIGUS_RELAY_APNS_TEAM_ID=<Team ID>
-    LIGUS_RELAY_APNS_TOPIC=<the app's bundle id>
-    LIGUS_RELAY_APNS_TOPICS=<more bundle ids, comma-separated>   # optional, e.g. a dev build
-    LIGUS_RELAY_APNS_ENV=auto        # optional: auto (default) | sandbox | production
+    LANGSTROTH_RELAY_TUNNEL=open
+    LANGSTROTH_RELAY_APNS_KEY_FILE=/path/to/AuthKey_<KEYID>.p8   # or LANGSTROTH_RELAY_APNS_KEY=<inline PEM>
+    LANGSTROTH_RELAY_APNS_KEY_ID=<Key ID>
+    LANGSTROTH_RELAY_APNS_TEAM_ID=<Team ID>
+    LANGSTROTH_RELAY_APNS_TOPIC=<the app's bundle id>
+    LANGSTROTH_RELAY_APNS_TOPICS=<more bundle ids, comma-separated>   # optional, e.g. a dev build
+    LANGSTROTH_RELAY_APNS_ENV=auto        # optional: auto (default) | sandbox | production
     ```
 
     A dev build and an App Store build have different bundle ids. The app
     tells the relay its bundle id with its push token, and the relay pushes
-    with that topic when it is `LIGUS_RELAY_APNS_TOPIC` or listed in
-    `LIGUS_RELAY_APNS_TOPICS` (relay v0.3 and later); any other is refused.
+    with that topic when it is `LANGSTROTH_RELAY_APNS_TOPIC` or listed in
+    `LANGSTROTH_RELAY_APNS_TOPICS` (relay v0.3 and later); any other is refused.
     `auto` uses the environment each phone reports: sandbox for development
     builds (run from Xcode), production for TestFlight and App Store builds. Keep the `.p8`
     readable only by the relay's user and out of version control.
@@ -302,7 +300,7 @@ stopped. Check the service (`systemctl --user status ligus-serve`) and its log.
 causes:
 
 - the relay's tunnel is off: `/v1/tunnel/info` answers 404. Set
-  `LIGUS_RELAY_TUNNEL` on the relay;
+  `LANGSTROTH_RELAY_TUNNEL` on the relay;
 - the relay URL is wrong or isn't `https`;
 - the relay requires a registration token: pass `--reg-token`;
 - the box was replaced by a newer connection with the same keys (two

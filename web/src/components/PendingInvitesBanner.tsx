@@ -60,10 +60,10 @@ export function PendingInvitesBanner() {
           <div
             key={key}
             className="rounded-2xl border p-4 shadow-xl"
-            style={{ borderColor: bad ? "var(--hive-danger-ink)" : "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+            style={{ borderColor: bad ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
           >
             <div className="flex items-start gap-3">
-              <div className="mt-0.5" style={{ color: "var(--hive-accent-ink)" }} aria-hidden>
+              <div className="mt-0.5" style={{ color: "var(--ligus-accent-ink)" }} aria-hidden>
                 <IconUsers size={18} />
               </div>
               <div className="min-w-0 flex-1">
@@ -90,7 +90,7 @@ export function PendingInvitesBanner() {
                     </>
                   )}
                 </div>
-                <div className="mt-1 text-xs" style={{ color: bad ? "var(--hive-danger-ink)" : undefined }}>
+                <div className="mt-1 text-xs" style={{ color: bad ? "var(--ligus-danger-ink)" : undefined }}>
                   {trustNote(inv.trust, inv.founderName)}
                 </div>
                 {inv.safetyCode && (
@@ -104,7 +104,7 @@ export function PendingInvitesBanner() {
                       onClick={() => accept.mutate(inv)}
                       disabled={busy}
                       className="rounded-lg px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-70"
-                      style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+                      style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
                     >
                       {joining ? "Joining…" : "Accept"}
                     </button>

@@ -64,7 +64,7 @@ export function ZonesView({
         ) : (
           <ul className="space-y-1.5 text-xs">
             {zones.map((z) => (
-              <li key={z.id} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={z.id} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
                 <span>
                   <code className="break-all">{z.pattern}</code> · {zoneSummary(z)}
                   {z.note && ` — ${z.note}`}
@@ -80,9 +80,9 @@ export function ZonesView({
       <Section title="Add a zone">
         <input
           aria-label="Pattern"
-          placeholder="crates/hive-core/"
+          placeholder="crates/ligus-core/"
           className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
         />
@@ -96,7 +96,7 @@ export function ZonesView({
           min={0}
           placeholder={kind === "core" ? "Approvals (default 2)" : "Approvals (optional)"}
           className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           value={approvals}
           onChange={(e) => setApprovals(e.target.value)}
         />

@@ -76,7 +76,7 @@ export const Markdown = memo(function Markdown({
   youIsMe?: boolean;
 }) {
   return (
-    <div className="hive-md text-[length:var(--hive-text-md)] leading-[1.6]">
+    <div className="ligus-md text-[length:var(--ligus-text-md)] leading-[1.6]">
       <ReactMarkdown
         remarkPlugins={
           youName ? [remarkGfm, remarkBreaks, remarkYouMention({ name: youName, me: youIsMe })] : [remarkGfm, remarkBreaks]
@@ -94,7 +94,7 @@ export const Markdown = memo(function Markdown({
                   if (safe) window.open(safe, "_blank", "noopener,noreferrer");
                 }}
                 className="underline decoration-dotted underline-offset-2"
-                style={{ color: "var(--hive-accent-ink)" }}
+                style={{ color: "var(--ligus-accent-ink)" }}
               >
                 {children}
               </a>
@@ -115,7 +115,7 @@ export const Markdown = memo(function Markdown({
                   window.open(safe, "_blank", "noopener,noreferrer");
                 }}
                 className="underline decoration-dotted underline-offset-2"
-                style={{ color: "var(--hive-accent-cool)" }}
+                style={{ color: "var(--ligus-accent-cool)" }}
               >
                 [{label}]
               </a>
@@ -129,7 +129,7 @@ export const Markdown = memo(function Markdown({
             <code
               className={className}
               style={{
-                background: "color-mix(in srgb, var(--hive-ink) 18%, transparent)",
+                background: "color-mix(in srgb, var(--ligus-ink) 18%, transparent)",
                 borderRadius: "4px",
                 padding: "0.1em 0.35em",
                 fontSize: "0.9em",
@@ -170,16 +170,16 @@ function CodeBlock({ children }: { children: ReactNode }) {
   const language = hl?.language || hint;
 
   return (
-    <div className="group/code relative my-2 overflow-hidden rounded-xl border" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="group/code relative my-2 overflow-hidden rounded-xl border" style={{ borderColor: "var(--ligus-line)" }}>
       {/* Header bar: language label (left) + Copy (right). */}
       <div
         className="flex items-center justify-between px-3 py-1 text-[11px]"
-        style={{ background: "var(--hive-panel)", borderBottom: "1px solid var(--hive-line)", color: "var(--hive-ink-soft)" }}
+        style={{ background: "var(--ligus-panel)", borderBottom: "1px solid var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
       >
         <span className="font-mono lowercase">{language || "text"}</span>
         <button
           className="rounded-md px-1.5 py-0.5 opacity-0 transition-opacity group-hover/code:opacity-80 group-focus-within/code:opacity-80 focus-visible:!opacity-100 hover:!opacity-100"
-          style={{ color: copied ? "var(--hive-success-ink)" : undefined }}
+          style={{ color: copied ? "var(--ligus-success-ink)" : undefined }}
           onClick={() => {
             void navigator.clipboard.writeText(source);
             setCopied(true);
@@ -193,7 +193,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
       </div>
       <pre
         className="hljs overflow-x-auto p-3 text-[0.85rem] leading-6"
-        style={{ background: "var(--hive-overlay)" }}
+        style={{ background: "var(--ligus-overlay)" }}
       >
         {hl ? (
           <code className={`hljs language-${language}`} dangerouslySetInnerHTML={{ __html: hl.html }} />

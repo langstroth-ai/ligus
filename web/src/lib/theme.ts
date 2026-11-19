@@ -1,6 +1,6 @@
 // Design-token palettes for the React shell, applied to :root as CSS custom
 // properties. Each theme is an accent *family* with a light and a dark variant;
-// the appearance mode (auto/light/dark) picks the variant. `pollen` (Hive's
+// the appearance mode (auto/light/dark) picks the variant. `pollen` (Ligus's
 // warm honey-gold identity) is the launch default.
 //
 //  pollen — honey / gold (brand)
@@ -239,8 +239,8 @@ export const THEMES: Record<ThemeName, ThemeVariants> = {
   },
 };
 
-const STORAGE_KEY = "hive.theme";
-const MODE_KEY = "hive.appearance";
+const STORAGE_KEY = "ligus.theme";
+const MODE_KEY = "ligus.appearance";
 const DEFAULT_THEME: ThemeName = "pollen";
 
 /// The user's preferred accent family (independent of light/dark mode).
@@ -311,10 +311,10 @@ export function applyTheme(p: Palette) {
           warn: "rgb(170,116,24)",
           overlay: "rgba(0,0,0,0.05)",
         };
-  root.style.setProperty("--hive-success", status.success);
-  root.style.setProperty("--hive-danger", status.danger);
-  root.style.setProperty("--hive-warn", status.warn);
-  root.style.setProperty("--hive-overlay", status.overlay);
+  root.style.setProperty("--ligus-success", status.success);
+  root.style.setProperty("--ligus-danger", status.danger);
+  root.style.setProperty("--ligus-warn", status.warn);
+  root.style.setProperty("--ligus-overlay", status.overlay);
   // Chat-layer scheme-derived numbers (redesign). Like the status tokens they
   // depend on light/dark, never on the accent family — so keying them to a
   // theme name would be wrong. They set the target lightness for turn fills,
@@ -338,26 +338,26 @@ export function applyTheme(p: Palette) {
           fillL: "45%",
           onAccent: "rgb(255,255,255)",
         };
-  root.style.setProperty("--hive-turn-mix", chat.turnMix);
-  root.style.setProperty("--hive-turn-rail-l", chat.turnRailL);
-  root.style.setProperty("--hive-turn-name-l", chat.turnNameL);
-  root.style.setProperty("--hive-accent-ink-l", chat.accentInkL);
-  root.style.setProperty("--hive-fill-l", chat.fillL);
-  root.style.setProperty("--hive-on-accent", chat.onAccent);
-  root.style.setProperty("--hive-canvas", p.canvas);
-  root.style.setProperty("--hive-ink", p.ink);
-  root.style.setProperty("--hive-panel", p.panel);
-  root.style.setProperty("--hive-mist", p.mist);
-  root.style.setProperty("--hive-line", p.line);
-  root.style.setProperty("--hive-accent-warm", p.accentWarm);
-  root.style.setProperty("--hive-accent-cool", p.accentCool);
-  root.style.setProperty("--hive-sidebar-top", p.sidebarTop);
-  root.style.setProperty("--hive-sidebar-bottom", p.sidebarBottom);
-  root.style.setProperty("--hive-sidebar-ink", p.sidebarInk);
-  root.style.setProperty("--hive-sidebar-ink-muted", p.sidebarInkMuted);
+  root.style.setProperty("--ligus-turn-mix", chat.turnMix);
+  root.style.setProperty("--ligus-turn-rail-l", chat.turnRailL);
+  root.style.setProperty("--ligus-turn-name-l", chat.turnNameL);
+  root.style.setProperty("--ligus-accent-ink-l", chat.accentInkL);
+  root.style.setProperty("--ligus-fill-l", chat.fillL);
+  root.style.setProperty("--ligus-on-accent", chat.onAccent);
+  root.style.setProperty("--ligus-canvas", p.canvas);
+  root.style.setProperty("--ligus-ink", p.ink);
+  root.style.setProperty("--ligus-panel", p.panel);
+  root.style.setProperty("--ligus-mist", p.mist);
+  root.style.setProperty("--ligus-line", p.line);
+  root.style.setProperty("--ligus-accent-warm", p.accentWarm);
+  root.style.setProperty("--ligus-accent-cool", p.accentCool);
+  root.style.setProperty("--ligus-sidebar-top", p.sidebarTop);
+  root.style.setProperty("--ligus-sidebar-bottom", p.sidebarBottom);
+  root.style.setProperty("--ligus-sidebar-ink", p.sidebarInk);
+  root.style.setProperty("--ligus-sidebar-ink-muted", p.sidebarInkMuted);
   root.style.colorScheme = p.scheme;
   // Let scheme-aware embeds (Monaco diff, xterm logs) react to theme flips.
-  window.dispatchEvent(new Event("hive:theme"));
+  window.dispatchEvent(new Event("ligus:theme"));
   syncNativeTitlebar(p);
 }
 
@@ -371,8 +371,8 @@ export function currentScheme(): "light" | "dark" {
 export function useColorScheme(): "light" | "dark" {
   return useSyncExternalStore(
     (cb) => {
-      window.addEventListener("hive:theme", cb);
-      return () => window.removeEventListener("hive:theme", cb);
+      window.addEventListener("ligus:theme", cb);
+      return () => window.removeEventListener("ligus:theme", cb);
     },
     currentScheme,
     () => "light" as const,

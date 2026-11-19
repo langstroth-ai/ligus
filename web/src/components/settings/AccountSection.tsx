@@ -177,7 +177,7 @@ function IdentitySection() {
           <Avatar name={settings.data?.displayName || name || "You"} url={settings.data?.avatarUrl} kind="human" size={52} />
           <span
             className="absolute inset-0 flex items-center justify-center rounded-full text-[10px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
-            style={{ background: "color-mix(in srgb, var(--hive-ink) 45%, transparent)", color: "var(--hive-canvas)" }}
+            style={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)", color: "var(--ligus-canvas)" }}
           >
             Edit
           </span>
@@ -324,7 +324,7 @@ export function DevicesSection() {
         <div
           key={r.hostId}
           className="rounded-xl border px-3 py-2.5 text-xs"
-          style={{ borderColor: "var(--hive-accent-cool)" }}
+          style={{ borderColor: "var(--ligus-accent-cool)" }}
         >
           <strong>{r.label}</strong> says it's your device. On it, run <code>ligus serve enroll</code> (or look in
           its log) and paste the code with <em>Add a device</em>.
@@ -361,10 +361,10 @@ export function DevicesSection() {
                 <span className="text-ink-soft"> (must match the device's terminal)</span>
               </div>
               {!preview.knownWorkspace && (
-                <div style={{ color: "var(--hive-danger-ink)" }}>This code is for a workspace this desktop doesn't have.</div>
+                <div style={{ color: "var(--ligus-danger-ink)" }}>This code is for a workspace this desktop doesn't have.</div>
               )}
               {preview.revoked && (
-                <div style={{ color: "var(--hive-danger-ink)" }}>
+                <div style={{ color: "var(--ligus-danger-ink)" }}>
                   This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
                 </div>
               )}
@@ -410,7 +410,7 @@ export function DevicesSection() {
             <div className="truncate text-sm font-medium">
               {d.label}
               {d.thisDevice && <span className="text-ink-soft"> · this device</span>}
-              {d.revoked && <span style={{ color: "var(--hive-danger-ink)" }}> · revoked</span>}
+              {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
             </div>
             <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
             {d.revoked &&
@@ -421,7 +421,7 @@ export function DevicesSection() {
           {!d.thisDevice && !d.revoked && (
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => void revoke(d.deviceId, d.label)}
             >
               Revoke
@@ -469,7 +469,7 @@ function RevocationStatus({ r, onRetry }: { r: DeviceRevocationDto; onRetry: () 
       <ul className="ml-3">
         {steps.map(([label, s]) => (
           <li key={label} title={s.detail}>
-            <span style={{ color: s.state === "failed" ? "var(--hive-danger-ink)" : undefined }}>
+            <span style={{ color: s.state === "failed" ? "var(--ligus-danger-ink)" : undefined }}>
               {label}: {STEP_LABEL[s.state]}
             </span>
             {s.detail ? <span> · {s.detail}</span> : null}

@@ -47,7 +47,7 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
       ) : (
         <ul className="space-y-2 text-xs">
           {rows.map((r) => (
-            <li key={r.id} className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}>
+            <li key={r.id} className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}>
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge tone={r.kind === "failingTests" || r.kind === "failedStage" ? "danger" : "neutral"}>
                   {BOARD_KIND_LABEL[r.kind]}

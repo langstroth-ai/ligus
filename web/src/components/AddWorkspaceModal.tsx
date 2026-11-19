@@ -204,9 +204,9 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     <Modal
       onClose={onClose}
       overlayClassName="z-[900] flex items-center justify-center p-4"
-      overlayStyle={{ background: "color-mix(in srgb, var(--hive-ink) 45%, transparent)" }}
+      overlayStyle={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)" }}
       panelClassName="w-full max-w-md rounded-2xl border p-5 shadow-2xl"
-      panelStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-base font-semibold">Add workspace</h2>
@@ -215,15 +215,15 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
         </button>
       </div>
 
-      <div className="mb-4 flex gap-1 rounded-lg p-1" style={{ background: "color-mix(in srgb, var(--hive-ink) 12%, transparent)" }}>
+      <div className="mb-4 flex gap-1 rounded-lg p-1" style={{ background: "color-mix(in srgb, var(--ligus-ink) 12%, transparent)" }}>
         {(["create", "join"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className="flex-1 rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors"
             style={{
-              background: tab === t ? "var(--hive-accent-cool)" : "transparent",
-              color: tab === t ? "#fff" : "var(--hive-ink)",
+              background: tab === t ? "var(--ligus-accent-cool)" : "transparent",
+              color: tab === t ? "#fff" : "var(--ligus-ink)",
             }}
           >
             {t === "create" ? "Create" : "Join"}
@@ -243,19 +243,19 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             onClick={onAddPasskey}
             disabled={busy || hasPasskey}
             className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {hasPasskey ? "Passkey created ✓" : busy ? "Waiting for your passkey…" : "1. Create a passkey"}
           </button>
           {words ? (
-            <div className="space-y-2 rounded-lg border p-2" style={{ borderColor: "var(--hive-line)" }}>
+            <div className="space-y-2 rounded-lg border p-2" style={{ borderColor: "var(--ligus-line)" }}>
               <code className="block whitespace-pre-wrap text-xs" data-testid="new-workspace-recovery-words">
                 {words}
               </code>
               <button
                 onClick={onSecured}
                 className="w-full rounded-lg px-3 py-2 text-sm font-semibold"
-                style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+                style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
               >
                 I wrote them down
               </button>
@@ -265,7 +265,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
               onClick={onRecoveryKey}
               disabled={busy || !hasPasskey}
               className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               2. Create a recovery key
             </button>
@@ -284,7 +284,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             onKeyDown={(e) => e.key === "Enter" && onCreate()}
             placeholder="Workspace name (e.g. Acme App)"
             className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-            style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+            style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
           />
           {needsRelayPick ? (
             <div className="space-y-1.5" data-testid="new-workspace-relay">
@@ -296,7 +296,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
                 onOwnUrl={setOwnRelayUrl}
                 allowNone
                 inputClassName="w-full rounded-lg border px-3 py-2 font-mono text-xs outline-none"
-                inputStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+                inputStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
               />
             </div>
           ) : (
@@ -306,12 +306,12 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             onClick={onCreate}
             disabled={busy || !name.trim() || pickedRelayMissing}
             className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {busy ? "Creating…" : "Create workspace"}
           </button>
           {lastInvite && (
-            <div className="rounded-lg border p-2" style={{ borderColor: "var(--hive-line)" }}>
+            <div className="rounded-lg border p-2" style={{ borderColor: "var(--ligus-line)" }}>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
                 Invite code
               </div>
@@ -341,20 +341,20 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             placeholder="hivews1:…"
             rows={3}
             className="w-full resize-none rounded-lg border px-3 py-2 font-mono text-xs outline-none"
-            style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+            style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
           />
           <button
             onClick={onJoin}
             disabled={busy || !invite.trim()}
             className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
-            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {busy ? "Joining…" : "Join workspace"}
           </button>
           <div className="flex items-center gap-2 pt-1 text-xs text-ink-soft">
-            <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
+            <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
             or a short code
-            <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
+            <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
           </div>
           <div className="flex gap-2">
             <input
@@ -363,13 +363,13 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
               onKeyDown={(e) => e.key === "Enter" && joinByShortCode()}
               placeholder="e.g. K7P2QX"
               className="flex-1 rounded-lg border px-3 py-2 font-mono text-sm uppercase outline-none"
-              style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+              style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
             />
             <button
               onClick={joinByShortCode}
               disabled={busy || !joinCode.trim()}
               className="shrink-0 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               Use code
             </button>
@@ -378,7 +378,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
       )}
 
       {rooms.length > 0 && (
-        <div className="mt-5 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="mt-5 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
             Your team workspaces
           </div>
@@ -395,7 +395,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
                   </button>
                   <button
                     className="underline opacity-70 hover:opacity-100"
-                    style={{ color: "var(--hive-danger-ink)" }}
+                    style={{ color: "var(--ligus-danger-ink)" }}
                     onClick={() => leave(w)}
                   >
                     Leave

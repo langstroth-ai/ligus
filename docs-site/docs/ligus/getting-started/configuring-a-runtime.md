@@ -24,7 +24,7 @@ Open **Settings → Models** to add or edit.
 | `antigravity`     | Local `agy` CLI (Google Antigravity; uses your Google AI Pro/Ultra sub) | the CLI's own Google sign-in | yes (the CLI's own tools) |
 | `copilot`         | Local `copilot` CLI (GitHub Copilot; uses your Copilot sub) | `copilot login` or a token env var | yes (the CLI's own tools) |
 | `hermes`          | Any stdin-driven CLI agent (set the executable and flags on the runtime) | depends on the CLI | the CLI's own |
-| `hive-daemon`     | Remote `hived` instance                          | bearer token              | passthrough |
+| `ligus-daemon`     | Remote `ligusd` instance                          | bearer token              | passthrough |
 | `custom`          | OpenAI-compatible HTTP endpoint                   | varies                    | varies |
 
 `claude-code`, `aider`, `pi`, `codex`, `antigravity`, `copilot` and
@@ -141,7 +141,7 @@ Ligus at the binary:
 
     Ligus bootstraps a temporary `models.json` and `PI_CODING_AGENT_DIR`
     so `pi` can reach your configured OpenAI-compatible endpoint (see
-    `crates/hive-runtime/src/provider/subprocess.rs`).
+    `crates/ligus-runtime/src/provider/subprocess.rs`).
 
 For any other OpenAI-compatible server, don't install a binary — add a
 **Custom** runtime (`provider = "custom"`) and fill in the base URL, as

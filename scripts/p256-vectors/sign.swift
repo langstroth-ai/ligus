@@ -2,10 +2,10 @@
 // Secure Enclave key signs (P256.Signing over the raw preimage, SHA-256 by
 // CryptoKit), then normalizes S to the low half as Ligus requires.
 //
-//   cargo test -p hive-core --test p256_vectors p256_vector_inputs -- --ignored
+//   cargo test -p ligus-core --test p256_vectors p256_vector_inputs -- --ignored
 //     (with LIGUS_P256_INPUTS=/tmp/p256_inputs.jsonl)
 //   swift scripts/p256-vectors/sign.swift /tmp/p256_inputs.jsonl \
-//     > crates/hive-core/tests/golden/p256_cryptokit.jsonl
+//     > crates/ligus-core/tests/golden/p256_cryptokit.jsonl
 import CryptoKit
 import Foundation
 

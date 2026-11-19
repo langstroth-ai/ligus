@@ -1,4 +1,4 @@
-# ![Ligus](images/hive-lockup-light.svg#only-light){ .hero-lockup }![Ligus](images/hive-lockup-dark.svg#only-dark){ .hero-lockup }
+# ![Ligus](images/ligus-lockup-light.svg#only-light){ .hero-lockup }![Ligus](images/ligus-lockup-dark.svg#only-dark){ .hero-lockup }
 
 **A shared LLM workspace for developers.** Bring your own subscription
 (Claude, OpenAI, OpenRouter, Ollama, aider, pi, or any local agent),
@@ -87,8 +87,8 @@ machine. Ligus flips that:
 
 ## Built with
 
-Ligus is a **Tauri v2** desktop app — a Rust backend (`crates/hive-core`,
-`hive-runtime`, `hive-cli`, plus `app/`) with a React + TypeScript
+Ligus is a **Tauri v2** desktop app — a Rust backend (`crates/ligus-core`,
+`ligus-runtime`, `ligus-cli`, plus `app/`) with a React + TypeScript
 frontend (`web/`). One codebase ships **macOS, Windows, and Linux**. State is an
 append-only event log in SQLite; replies stream from your chosen runtime (the
 `claude` CLI by default — bring your own subscription).

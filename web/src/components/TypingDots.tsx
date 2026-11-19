@@ -26,7 +26,7 @@ export function TypingDots({ label }: { label: string }) {
   return (
     <div
       className="inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm"
-      style={{ borderColor: "color-mix(in srgb, var(--hive-accent-cool) 26%, transparent)", background: "color-mix(in srgb, var(--hive-accent-cool) 10%, transparent)" }}
+      style={{ borderColor: "color-mix(in srgb, var(--ligus-accent-cool) 26%, transparent)", background: "color-mix(in srgb, var(--ligus-accent-cool) 10%, transparent)" }}
     >
       <span className="opacity-70">{label}</span>
       <span className="inline-flex gap-0.5">

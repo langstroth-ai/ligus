@@ -93,7 +93,7 @@ export function OrgSignInSection() {
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => signOut.mutate()}
             >
               Sign out
@@ -105,7 +105,7 @@ export function OrgSignInSection() {
           </div>
         </div>
       ) : flow ? (
-        <div className="space-y-2 rounded-xl border px-3 py-3" style={{ borderColor: "var(--hive-accent-cool)" }}>
+        <div className="space-y-2 rounded-xl border px-3 py-3" style={{ borderColor: "var(--ligus-accent-cool)" }}>
           <p className="text-xs text-ink-soft">
             Go to <code>{flow.verificationUri}</code> and enter this code:
           </p>

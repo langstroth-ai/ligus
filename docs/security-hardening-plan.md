@@ -44,7 +44,7 @@ ordering below reflects hard dependencies.
 > Done: the trust events (`AccountKeyRegistered`, `DeviceCertificateAdded`), the
 > `WorkspaceRoster` + `build_roster` (folds trust events in canonical order,
 > verifies each cert chains to its account key) and the 3-way `Verdict`
-> (`hive-runtime::envelope_verifier`), and verify-on-ingest wired into
+> (`ligus-runtime::envelope_verifier`), and verify-on-ingest wired into
 > `apply_fetched` with the **non-bricking policy** (reject only provably-bad —
 > bad signature / revoked / impersonation; *hold* unsigned/unknown, never drop).
 > It is purely additive: with no trust events in the log the roster is empty and
@@ -59,17 +59,17 @@ ordering below reflects hard dependencies.
 > decision below before implementation.
 
 
-**Finding.** `verify_stream` / `DeviceRoster` exist (`crates/hive-runtime/src/envelope_verifier.rs`) but have **zero production callers** — the live ingest path (`sync_engine::apply_fetched` → `event_store::ingest`) never verifies signatures or revocation. So a peer can inject events signed by an unknown/revoked device, or unsigned events, and they are projected. (Authorship spoofing is already *provable* against — #35's v2 preimage binds `actor_stamp` — but nothing *checks* the signature yet.)
+**Finding.** `verify_stream` / `DeviceRoster` exist (`crates/ligus-runtime/src/envelope_verifier.rs`) but have **zero production callers** — the live ingest path (`sync_engine::apply_fetched` → `event_store::ingest`) never verifies signatures or revocation. So a peer can inject events signed by an unknown/revoked device, or unsigned events, and they are projected. (Authorship spoofing is already *provable* against — #35's v2 preimage binds `actor_stamp` — but nothing *checks* the signature yet.)
 
 **What verification needs, and the two questions it must answer.** `verify_stream` needs a resolver mapping `signer_device_id → signing public key (+ revoked)`. To trust that mapping it must answer:
-1. *What is device D's public signing key?* — from D's `DeviceCertificate` (`crates/hive-core/src/crypto.rs`), which binds `device_id → device_public_key → account_id`, **signed by the account key**.
+1. *What is device D's public signing key?* — from D's `DeviceCertificate` (`crates/ligus-core/src/crypto.rs`), which binds `device_id → device_public_key → account_id`, **signed by the account key**.
 2. *Does D legitimately belong to the account it stamps as author?* — which requires trusting **that account's public key**. This is the hard part: *how do we know an account key is really this person's?*
 
 ### Identity is already anchored on GitHub — leverage it
 
 Two things already ship that make (2) tractable without a from-scratch web-of-trust PKI:
 
-- **The account id is derived from the GitHub user id.** `account_id_for(github_id)` (`hive-runtime::github`) — a workspace member's stable identity *is* their immutable GitHub identity, not a random UUID. Invites add members keyed by it (`invite_by_handle`, `app/src/lib.rs:6065`).
+- **The account id is derived from the GitHub user id.** `account_id_for(github_id)` (`ligus-runtime::github`) — a workspace member's stable identity *is* their immutable GitHub identity, not a random UUID. Invites add members keyed by it (`invite_by_handle`, `app/src/lib.rs:6065`).
 - **A GitHub-authenticated key directory already exists.** Clients `directory_register` their device's **X25519 key-agreement** public key under their signed-in GitHub login (the call is authenticated by the GitHub token, so the relay only lets you list devices under *your* login). `directory_lookup(handle)` returns `DirectoryEntry { github_id, login, devices: [{device_id, ka_public}] }`. Invite-by-handle already resolves `@alice` this way and seals the workspace key to her registered devices (`relay_client.rs`, `invite_by_handle`).
 
 > ⚠️ Scope of the existing mechanism: this directory lives **on the relay**, so invite-by-handle / directory resolution is **relay-dependent** — it needs a relay both parties are registered on, and it does **not** work in pure-P2P / no-relay mode (that path uses the passphrase + short-code join). It is a *per-relay* directory, not a global one.
@@ -80,13 +80,13 @@ So S1's "device-key distribution" is largely **extend what already ships**: add 
 
 The directory binding **trusts the relay** to assert "this key belongs to @alice." That is exactly the tension with the review's *"authorization must not depend on trusting the relay."* Three binding options span the trade-off:
 
-- **Option A — relay-attested (lowest friction, relay semi-trusted).** Reuse the directory: the relay verified the GitHub token at registration, so it vouches `github_id → keys`. Almost no new user friction; **but a malicious relay could substitute a key.** Fine for a **relay you run / enterprise** (the enterprise relay already gates on GitHub via `LIGUS_RELAY_ADMIN_LOGINS`); not fine for a hostile relay.
+- **Option A — relay-attested (lowest friction, relay semi-trusted).** Reuse the directory: the relay verified the GitHub token at registration, so it vouches `github_id → keys`. Almost no new user friction; **but a malicious relay could substitute a key.** Fine for a **relay you run / enterprise** (the enterprise relay already gates on GitHub via `LANGSTROTH_RELAY_ADMIN_LOGINS`); not fine for a hostile relay.
 - **Option B — GitHub-hosted proof (relay untrusted, more friction).** The user posts a signed `@alice ↔ key K` statement to a GitHub-controlled location (gist/repo/signed commit); verifiers fetch it straight from `github.com` and check it's hosted under `@alice` **and** signed by K. GitHub becomes the CA; the relay is bypassed for identity. Keybase-style.
 - **Option C — GitHub's native signing-key directory (relay untrusted, moderate friction).** Register the account public key as one of the user's GitHub **SSH signing keys**; verifiers fetch `api.github.com/users/<login>/ssh_signing_keys`. Reuses a first-class GitHub feature (also makes signed commits show "Verified"); one-time key-add friction.
 
-**Recommended split:** Option **A** for trusted relays (reuse the shipped directory), Options **B/C** as the relay-untrusted path for self-hosters who need identity to survive a hostile relay. In all cases **authorization** (who is a member, in what role) stays in Hive events (S2), and **device→account** stays the existing `DeviceCertificate` — GitHub only answers *identity*.
+**Recommended split:** Option **A** for trusted relays (reuse the shipped directory), Options **B/C** as the relay-untrusted path for self-hosters who need identity to survive a hostile relay. In all cases **authorization** (who is a member, in what role) stays in Ligus events (S2), and **device→account** stays the existing `DeviceCertificate` — GitHub only answers *identity*.
 
-> **Status — Option C implemented in `hive-runtime` (default OFF).** A
+> **Status — Option C implemented in `ligus-runtime` (default OFF).** A
 > `LIGUS_IDENTITY_MODE` toggle (`relay` = Option A, the default & byte-for-byte
 > current behavior | `github-signing-keys` = Option C) selects the mode
 > ([`identity_verifier::IdentityMode`]). Option C fetches
@@ -143,7 +143,7 @@ Do this **first** among the security items, but the one decision to make before 
 
 ## S2 — Point-in-time authorization
 
-**Finding.** `chat_service::append_signed` authorizes against the **current** roster (`actor_role`, `crates/hive-runtime/src/chat_service.rs`), and `actor_role` returns **`Owner` for any non-member** (a deliberate local-creator affordance, but a footgun). Synced foreign events are **never** re-authorized (`authorization.rs` doc comment). So authorization is advisory client-side gating on the *writer*, at *write time*.
+**Finding.** `chat_service::append_signed` authorizes against the **current** roster (`actor_role`, `crates/ligus-runtime/src/chat_service.rs`), and `actor_role` returns **`Owner` for any non-member** (a deliberate local-creator affordance, but a footgun). Synced foreign events are **never** re-authorized (`authorization.rs` doc comment). So authorization is advisory client-side gating on the *writer*, at *write time*.
 
 **Design.** Authorization must be evaluated against the roster **as of the event's canonical position**, on **read**, not just trusted from the author:
 1. During projection, evaluate each governance/content event with `authorize(payload, role_of(signer) as-of this point, state-so-far)`. Because projection now folds in canonical order (phase 2), "state so far" is well-defined and deterministic.
@@ -161,7 +161,7 @@ Do this **first** among the security items, but the one decision to make before 
 > builds the ring from the passphrase key + every openable rotation. Migration is
 > additive (unversioned bodies = epoch 0). Tested by `rotated_epochs_do_not_strand_history`.
 
-**Finding.** `WorkspaceKeyRotation` has a `version` (`crates/hive-core/src/e2ee.rs`) but **events carry no epoch tag** (`SealedEnvelope` is just `{nonce, ciphertext}`), and the client holds a **single** key (`SyncEngine.key`). After a real rotation (`remove_and_revoke`), events sealed under the **old** key become undecryptable and are silently skipped (mitigated for *loss* by phase 7's cursor fix, but they still can't be read).
+**Finding.** `WorkspaceKeyRotation` has a `version` (`crates/ligus-core/src/e2ee.rs`) but **events carry no epoch tag** (`SealedEnvelope` is just `{nonce, ciphertext}`), and the client holds a **single** key (`SyncEngine.key`). After a real rotation (`remove_and_revoke`), events sealed under the **old** key become undecryptable and are silently skipped (mitigated for *loss* by phase 7's cursor fix, but they still can't be read).
 
 **Design.**
 1. Stamp the sealing epoch on the wire: `SealedEnvelope { version: u32, nonce, ciphertext }`.
@@ -188,7 +188,7 @@ Do this **first** among the security items, but the one decision to make before 
 
 Independent, each self-contained but with its own dependency:
 
-- **Open-relay reads are unauthenticated** (`crates/hive-relay/src/lib.rs` — `list_envelopes`/`list_keyring` have no membership check under `EntitlementPolicy::Open`): anyone who knows/guesses the room id fetches all ciphertext + the keyring. Mitigation: require a read token even on the open relay, and derive room ids with real entropy (today `room_workspace_id` is UUIDv5 of a possibly-guessable **name**). *Content stays confidential under E2EE, but metadata + ciphertext exposure is real.*
+- **Open-relay reads are unauthenticated** (`crates/langstroth-relay/src/lib.rs` — `list_envelopes`/`list_keyring` have no membership check under `EntitlementPolicy::Open`): anyone who knows/guesses the room id fetches all ciphertext + the keyring. Mitigation: require a read token even on the open relay, and derive room ids with real entropy (today `room_workspace_id` is UUIDv5 of a possibly-guessable **name**). *Content stays confidential under E2EE, but metadata + ciphertext exposure is real.*
 - **Metadata leakage.** The keyring's `sealed` map is keyed by cleartext `device_id` and carries a cleartext `version` → the relay learns the device roster + rotation cadence. Presence/candidate blobs leak per-device liveness. Mitigation: opaque per-device tags; document the residual (a content-blind relay still sees participant count + timing).
 - **Private keys at rest are plaintext** (`identity_store.rs::FileKeyVault` writes raw Ed25519 seeds unencrypted; `ka_secret` is plaintext in `settings.json`). Mitigation: encrypt at rest under an OS-keychain-held KEK (macOS Keychain / Windows Credential Manager / Linux Secret Service). **Platform-specific and migration-sensitive** (a botched migration locks users out of their identity) — needs its own careful PR with a fallback + backup path.
 - **Plaintext fallback.** With no passphrase set, sync runs in the clear (`workspace_key()` → `None`). Decide: refuse to sync a shared workspace without a key, or make E2EE mandatory for team rooms.

@@ -128,7 +128,7 @@ function PortableConfigSection() {
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="# Export to fill this, or paste a hive.toml to import…"
+        placeholder="# Export to fill this, or paste a ligus.toml to import…"
         spellCheck={false}
         className="mt-2 h-40 w-full rounded-xl border p-3 font-mono text-xs"
         style={fieldStyle}
@@ -183,7 +183,7 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
 
   const addable = (found ?? []).filter((p) => p.addable);
   return (
-    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
+    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-medium">Detect my setup</div>
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void detect()}>
@@ -212,7 +212,7 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
                   Add
                 </Button>
               ) : (
-                <span className="text-xs text-ink-soft">available as @hive</span>
+                <span className="text-xs text-ink-soft">available as @ligus</span>
               )}
             </div>
           ))}
@@ -421,7 +421,7 @@ function ProviderRow({
         </span>
         <span className="flex items-center gap-2 text-xs">
           {provider.needsKey ? (
-            <span style={{ color: provider.hasKey ? "var(--hive-success-ink)" : "var(--hive-accent-warm)" }}>
+            <span style={{ color: provider.hasKey ? "var(--ligus-success-ink)" : "var(--ligus-accent-warm)" }}>
               {provider.hasKey ? "● key set" : "○ no key"}
             </span>
           ) : configured && provider.baseUrl.trim() !== "" ? (
@@ -432,7 +432,7 @@ function ProviderRow({
         </span>
       </button>
       {open && (
-        <div className="border-t px-3 py-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="border-t px-3 py-3" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="text-xs text-ink-soft">{provider.note}</div>
           {provider.needsKey && (
             <div className="mt-2 flex items-center gap-2">
@@ -478,9 +478,9 @@ function ProviderRow({
               className="mt-2 rounded-lg px-2.5 py-1.5 text-xs"
               style={{
                 background: probe.ok
-                  ? "color-mix(in srgb, var(--hive-success) 12%, transparent)"
-                  : "color-mix(in srgb, var(--hive-danger) 12%, transparent)",
-                color: probe.ok ? "var(--hive-success-ink)" : "var(--hive-danger-ink)",
+                  ? "color-mix(in srgb, var(--ligus-success) 12%, transparent)"
+                  : "color-mix(in srgb, var(--ligus-danger) 12%, transparent)",
+                color: probe.ok ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)",
               }}
             >
               {probe.ok
@@ -525,7 +525,7 @@ function ProviderRow({
           <div className="mt-2 text-right">
             <button
               className="text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => (configured ? remove.mutate() : onHide())}
             >
               Remove
@@ -559,7 +559,7 @@ function DefaultModelPicker() {
     onError: (e) => toast.error(`Couldn't set model: ${errMsg(e)}`),
   });
   return (
-    <div className="mb-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
+    <div className="mb-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <label className="block text-xs text-ink-soft">Default model (Primary Runtime · Anthropic)</label>
       <select
         value={current}
@@ -621,12 +621,12 @@ function RuntimesSection() {
   // ("" = the runtime's own endpoint).
   const [runtimeGateway, setRuntimeGateway] = useState("");
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts, retry: false });
-  const thinkProviders = ["ollama", "custom", "hive-daemon"];
-  const httpProviders = ["ollama", "openAI", "openRouter", "azure", "custom", "hive-daemon"];
-  // Providers whose "Supports tools" runs Hive's agent tool loop (MCP + file
+  const thinkProviders = ["ollama", "custom", "ligus-daemon"];
+  const httpProviders = ["ollama", "openAI", "openRouter", "azure", "custom", "ligus-daemon"];
+  // Providers whose "Supports tools" runs Ligus's agent tool loop (MCP + file
   // tools): ones that may front a local or self-hosted server. Hosted APIs
   // never get it, so workspace files never go to a third-party cloud.
-  const agentToolProviders = ["ollama", "custom", "hive-daemon"];
+  const agentToolProviders = ["ollama", "custom", "ligus-daemon"];
   // null = the form is adding; an id = editing that runtime in place (add_runtime
   // upserts by id, so the same form both adds and edits).
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -767,7 +767,7 @@ function RuntimesSection() {
     const t = setTimeout(() => setFormEndpoint(runtimeEndpoint.trim()), 400);
     return () => clearTimeout(t);
   }, [runtimeEndpoint]);
-  // Role hint for the typed model, from Hive's model-family profiles.
+  // Role hint for the typed model, from Ligus's model-family profiles.
   const [formModel, setFormModel] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setFormModel(runtimeModel.trim()), 250);
@@ -857,13 +857,13 @@ function RuntimesSection() {
                   <button
                     onClick={() => confirmThen(`Remove runtime "${runtime.label}"?`, () => removeRuntimeMutation.mutate(runtime.id))}
                     className="text-xs hover:opacity-80"
-                    style={{ color: "var(--hive-danger-ink)" }}
+                    style={{ color: "var(--ligus-danger-ink)" }}
                   >
                     Remove
                   </button>
                 )}
                 {runtime.isDefault ? (
-                  <span className="rounded-full px-2 py-1 text-xs" style={{ background: "var(--hive-mist)" }}>
+                  <span className="rounded-full px-2 py-1 text-xs" style={{ background: "var(--ligus-mist)" }}>
                     default
                   </span>
                 ) : (
@@ -871,7 +871,7 @@ function RuntimesSection() {
                     onClick={() => setDefaultMutation.mutate(runtime.id)}
                     disabled={setDefaultMutation.isPending}
                     className="rounded-full border px-2 py-1 text-xs hover:opacity-80 disabled:opacity-50"
-                    style={{ borderColor: "var(--hive-line)" }}
+                    style={{ borderColor: "var(--ligus-line)" }}
                   >
                     Set default
                   </button>
@@ -881,7 +881,7 @@ function RuntimesSection() {
             {tests[runtime.id]?.result && (
               <div className="mt-2 rounded-xl px-3 py-2 text-xs" style={fieldStyle}>
                 {tests[runtime.id]!.result!.ok ? (
-                  <span style={{ color: "var(--hive-success-ink)" }}>
+                  <span style={{ color: "var(--ligus-success-ink)" }}>
                     ✓ Responded in {tests[runtime.id]!.result!.latency_ms} ms
                     {tests[runtime.id]!.result!.reply
                       ? ` — "${tests[runtime.id]!.result!.reply.slice(0, 60)}"`
@@ -891,7 +891,7 @@ function RuntimesSection() {
                       : ""}
                   </span>
                 ) : (
-                  <span style={{ color: "var(--hive-danger-ink)" }}>
+                  <span style={{ color: "var(--ligus-danger-ink)" }}>
                     ✕ {tests[runtime.id]!.result!.error ?? "No response"}
                   </span>
                 )}
@@ -910,7 +910,7 @@ function RuntimesSection() {
       <div
         ref={formRef}
         className="space-y-2 rounded-2xl border p-4"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       >
         <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-soft">
           {editingId ? `Edit runtime · ${editingId}` : "Add runtime"}
@@ -1116,7 +1116,7 @@ function RuntimesSection() {
                   />
                   <span>Allow workspace file tools for this endpoint</span>
                 </div>
-                <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
+                <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
                   This endpoint isn't on this machine or a private network (LAN, Tailscale). With this
                   on, Ligus's file tools send the contents of files the model reads from your workspace
                   to it. Off: the model here only gets your MCP tools.
@@ -1131,7 +1131,7 @@ function RuntimesSection() {
             {httpProviders.includes(runtimeProvider) && !agentToolProviders.includes(runtimeProvider) ? (
               <>
                 Supports tools (not used for hosted APIs: Ligus's MCP and file tools only run against
-                local or self-hosted servers — Ollama, Custom, Hive daemon — so workspace files never
+                local or self-hosted servers — Ollama, Custom, Ligus daemon — so workspace files never
                 go to a third-party cloud)
               </>
             ) : (
@@ -1140,7 +1140,7 @@ function RuntimesSection() {
                 {agentToolProviders.includes(runtimeProvider) ? " and Ligus's built-in file tools" : ""} to this model
                 {runtimeProvider === "ollama"
                   ? " when the server's probe says it can call them"
-                  : ["custom", "hive-daemon"].includes(runtimeProvider)
+                  : ["custom", "ligus-daemon"].includes(runtimeProvider)
                     ? " over the OpenAI tools API; a server that rejects tools falls back to plain chat"
                     : ""}
                 )
@@ -1160,7 +1160,7 @@ function RuntimesSection() {
             <button
               onClick={resetRuntimeForm}
               className="rounded-xl border px-3 py-2 text-sm hover:opacity-80"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
             >
               Cancel
             </button>
@@ -1288,7 +1288,7 @@ function OllamaModelsPanel({
     return (
       <div className="mt-1 space-y-1">
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span style={{ color: p.error ? "var(--hive-danger-ink)" : undefined }} className={p.error ? "" : "opacity-70"}>
+          <span style={{ color: p.error ? "var(--ligus-danger-ink)" : undefined }} className={p.error ? "" : "opacity-70"}>
             {p.error
               ? `✕ ${p.error}`
               : pct !== null
@@ -1313,16 +1313,16 @@ function OllamaModelsPanel({
               </button>
             </div>
           ) : (
-            <button onClick={() => void cancel(p.model)} className="text-xs hover:opacity-80" style={{ color: "var(--hive-danger-ink)" }}>
+            <button onClick={() => void cancel(p.model)} className="text-xs hover:opacity-80" style={{ color: "var(--ligus-danger-ink)" }}>
               Cancel
             </button>
           )}
         </div>
         {!p.error && (
-          <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--hive-line)" }} role="progressbar" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
+          <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--ligus-line)" }} role="progressbar" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
             <div
               className={`h-full rounded-full transition-[width] ${pct === null ? "animate-pulse" : ""}`}
-              style={{ width: `${pct ?? 15}%`, background: "var(--hive-accent-cool)" }}
+              style={{ width: `${pct ?? 15}%`, background: "var(--ligus-accent-cool)" }}
             />
           </div>
         )}
@@ -1331,7 +1331,7 @@ function OllamaModelsPanel({
   };
 
   return (
-    <div className="mt-3 space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="mt-3 space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
           Models on {list.data?.host ?? "this server"}
@@ -1350,7 +1350,7 @@ function OllamaModelsPanel({
         </div>
       </div>
       {list.isError && (
-        <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+        <p className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
           ✕ {errMsg(list.error)}
         </p>
       )}
@@ -1364,20 +1364,20 @@ function OllamaModelsPanel({
           const pull = pulls[m.name];
           const meta = [m.parameterSize, m.quantization, m.sizeBytes ? fmtBytes(m.sizeBytes) : ""].filter(Boolean).join(" · ");
           return (
-            <div key={m.name} className="rounded-lg px-2 py-1.5" style={{ background: "var(--hive-mist)" }}>
+            <div key={m.name} className="rounded-lg px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-mono text-sm">{m.name}</span>
                     {current && (
-                      <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}>
+                      <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}>
                         current
                       </span>
                     )}
                     {m.loaded && (
                       <span
                         className="rounded-full border px-2 py-0.5 text-[10px]"
-                        style={{ borderColor: "var(--hive-success)", color: "var(--hive-success-ink)" }}
+                        style={{ borderColor: "var(--ligus-success)", color: "var(--ligus-success-ink)" }}
                         title={m.expiresAt ? `Loaded in memory; unloads at ${new Date(m.expiresAt).toLocaleTimeString()}` : "Loaded in memory"}
                       >
                         loaded{m.loadedContextLength ? ` · ${fmtCtx(m.loadedContextLength)}` : ""}
@@ -1414,7 +1414,7 @@ function OllamaModelsPanel({
                       }
                       disabled={remove.isPending}
                       className="text-xs hover:opacity-80 disabled:opacity-50"
-                      style={{ color: "var(--hive-danger-ink)" }}
+                      style={{ color: "var(--ligus-danger-ink)" }}
                     >
                       Remove
                     </button>
@@ -1426,7 +1426,7 @@ function OllamaModelsPanel({
           );
         })}
         {newPulls.map((p) => (
-          <div key={p.model} className="rounded-lg px-2 py-1.5" style={{ background: "var(--hive-mist)" }}>
+          <div key={p.model} className="rounded-lg px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
             <span className="font-mono text-sm">{p.model}</span>
             {renderPull(p)}
           </div>
@@ -1573,7 +1573,7 @@ function AgentsSection() {
               </div>
               <button
                 className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 onClick={() => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id))}
               >
                 Remove
@@ -1584,7 +1584,7 @@ function AgentsSection() {
         {(templates.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No saved agents yet.</p>}
       </div>
 
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -1663,7 +1663,7 @@ function TemplatesSection() {
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger-ink)" }}
+              style={{ color: "var(--ligus-danger-ink)" }}
               onClick={() => confirmThen(`Delete template "${t.name}"?`, () => setItems(removeTemplate(t.id)))}
             >
               Delete
@@ -1672,7 +1672,7 @@ function TemplatesSection() {
         ))}
         {items.length === 0 && <p className="text-sm text-ink-soft">No templates yet.</p>}
       </div>
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}

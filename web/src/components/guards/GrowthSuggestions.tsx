@@ -39,7 +39,7 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
     <Banner
       tone="neutral"
       testId="growth-suggestion"
-      icon={<span style={{ color: "var(--hive-accent-ink)" }}><IconSparkle size={14} /></span>}
+      icon={<span style={{ color: "var(--ligus-accent-ink)" }}><IconSparkle size={14} /></span>}
       title={`${next.title}.`}
       detail={<span title={next.reason}>{next.reason}</span>}
       actions={
@@ -48,7 +48,7 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
           <button
             type="button"
             aria-label="Dismiss suggestion"
-            className="grid h-6 w-6 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--hive-hover)] hover:text-ink"
+            className="grid h-6 w-6 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--ligus-hover)] hover:text-ink"
             onClick={dismiss}
           >
             <IconX size={13} />

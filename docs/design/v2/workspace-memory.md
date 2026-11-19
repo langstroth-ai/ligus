@@ -19,8 +19,8 @@ Two features:
   agents working on the same task, updated as it goes rather than only at
   the end of its turn.
 
-Nothing here performs IO in `hive-core`; the fold rules, bounds, search and
-the agent-facing rendering are pure functions there. `hive-runtime` writes the
+Nothing here performs IO in `ligus-core`; the fold rules, bounds, search and
+the agent-facing rendering are pure functions there. `ligus-runtime` writes the
 events, the Ligus MCP server exposes the tools, and the desktop, web, serve
 (phone) and CLI surfaces read and write through `ChatService`.
 
@@ -83,7 +83,7 @@ New `FlowRecord` types (type tags, camelCase):
 An older decoder reads each as `FlowRecord::Unknown` (inert). The golden
 vectors are `flowRecorded/memoryWritten`, `flowRecorded/memoryRemoved`,
 `flowRecorded/memoryProposed`, `flowRecorded/memoryProposalDecided` and
-`flowRecorded/taskState` in `crates/hive-core/tests/golden/envelopes_v3.jsonl`,
+`flowRecorded/taskState` in `crates/ligus-core/tests/golden/envelopes_v3.jsonl`,
 and the phone action `proposeMemory` in `golden/phone_actions_v1.jsonl`.
 
 ### 2.1 Wire shapes
@@ -337,7 +337,7 @@ is no tool that writes memory directly or decides a proposal.
 
 ### 7.1 Search
 
-A pure function (`hive_core::memory::search`): the query is split into
+A pure function (`ligus_core::memory::search`): the query is split into
 lowercase terms (Unicode-aware, punctuation is a separator, at most 16 terms
 of at most 64 characters); an entry matches when every term occurs in its
 title, body or tags (substring, case-insensitive), and every given tag is
@@ -467,7 +467,7 @@ fixtures with marker strings in every text field and asserts none leaves.
 
 ## 12. Tests
 
-- Core property tests (`crates/hive-core/tests/memory_props.rs`, 4096 cases
+- Core property tests (`crates/ligus-core/tests/memory_props.rs`, 4096 cases
   in release before merge, 256 in CI): the memory fold is a function of the
   event set (any permutation folds alike); no accepted edit is ever lost
   (every allowed edit is the head, a conflict, or named by a later

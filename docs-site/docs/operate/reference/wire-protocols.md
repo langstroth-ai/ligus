@@ -7,7 +7,7 @@ implementation would need.
 
 ## 1. Event envelope + local store
 
-State lives in **SQLite** (`hive.db` in the app data dir): an append-only
+State lives in **SQLite** (`ligus.db` in the app data dir): an append-only
 `events` table, one signed envelope per row (`envelope_json` TEXT), projected
 into a `ChatSession` on read. Each envelope serializes to JSON with `camelCase`
 keys:
@@ -44,7 +44,7 @@ are backward compatible.
 
 The signature is **Ed25519** over a canonical preimage (sorted-key JSON,
 ISO8601 dates) of the envelope's identifying fields + payload. See
-`crates/hive-core/src/{crypto,events}.rs`. Envelopes that fail verification are
+`crates/ligus-core/src/{crypto,events}.rs`. Envelopes that fail verification are
 quarantined, not applied. Envelopes that can't be judged yet (a signer whose
 certificate or admission hasn't arrived, a disputed account key) are held in
 a bounded device-local table, never applied until they verify, and never
@@ -56,7 +56,7 @@ A person's invite (`joinApproved` of `invite:<id>`) may carry `redeemKey`
 beside `admission`). Its redemption (`memberAdded` with `invite`) then needs
 `proof`: that key's signature over `ligus-person-invite-redeem-v1\0` ‖
 workspace id ‖ invite id ‖ member id length (u32, little-endian) ‖ member id ‖
-redeeming device id (`hive_core::admission::person_redemption_message`).
+redeeming device id (`ligus_core::admission::person_redemption_message`).
 The key's 32-byte seed rides in the `hivews1:` code as hex under `"ak"`,
 outside the invite's signed claims, as a box admission's does.
 
@@ -90,7 +90,7 @@ implements `initialize`, `tools/list`, and `tools/call`, over two transports:
 - **http** — JSON-RPC POSTs to the configured endpoint.
 
 An installed server stays inert until you enable it. Wire types and bridges
-live in `crates/hive-runtime/src/mcp/`.
+live in `crates/ligus-runtime/src/mcp/`.
 
 ## Canonical JSON conventions
 
@@ -121,31 +121,31 @@ would break mixed-version peers, paired
 phones, relays, invites, or (for the cryptographic ones) every existing
 signature and encrypted workspace. Tests pin their exact bytes. If one ever has
 to change, it ships as a new protocol version accepted alongside the old one.
-The phone deep-link scheme is the exception that grows: phones accept both
-`ligus://` and `hive://`, and `ligus serve` keeps emitting `hive://` until
-every paired phone runs a build that registers `ligus://`.
 
 | Identifier | Kind | Where |
 |---|---|---|
-| `hive-envelope-v3\0` | Signature context (event envelopes) | `hive-core/src/crypto.rs` |
-| `hive-device-cert-v1\0` | Signature context (device certificates) | `hive-core/src/crypto.rs` |
-| `hive-workspace-key-seal-v1` | HKDF info (sealing workspace keys to devices) | `hive-core/src/e2ee.rs` |
-| `hive-workspace-key-argon2id` | Argon2id salt (passphrase workspace keys) | `hive-core/src/e2ee.rs` |
-| `hive-device-enroll-v1\0` | Signature context (device enrollment codes) | `hive-runtime/src/device_enroll.rs` |
-| `hive-tunnel/1` | HKDF salt and `ctx` label (phone tunnel) | `hive-cli/src/serve/tunnel/mod.rs` |
-| `hive-tunnel.1` | WebSocket subprotocol (phone tunnel) | `hive-cli/src/serve/tunnel/mod.rs` |
-| `hive/sync/1` | iroh ALPN (peer sync) | `hive-runtime/src/peer_iroh.rs` |
+| `hive-envelope-v3\0` | Signature context (event envelopes) | `ligus-core/src/crypto.rs` |
+| `hive-device-cert-v1\0` | Signature context (device certificates) | `ligus-core/src/crypto.rs` |
+| `hive-workspace-key-seal-v1` | HKDF info (sealing workspace keys to devices) | `ligus-core/src/e2ee.rs` |
+| `hive-workspace-key-argon2id` | Argon2id salt (passphrase workspace keys) | `ligus-core/src/e2ee.rs` |
+| `hive-device-enroll-v1\0` | Signature context (device enrollment codes) | `ligus-runtime/src/device_enroll.rs` |
+| `hive-tunnel/1` | HKDF salt and `ctx` label (phone tunnel) | `ligus-cli/src/serve/tunnel/mod.rs` |
+| `hive-tunnel.1` | WebSocket subprotocol (phone tunnel) | `ligus-cli/src/serve/tunnel/mod.rs` |
+| `hive/sync/1` | iroh ALPN (peer sync) | `ligus-runtime/src/peer_iroh.rs` |
 | `hrt1.` | Relay access-token format | relay, clients |
-| `hpc1.` | Phone credential format | `hive-cli/src/serve/tunnel/cred.rs` |
+| `hpc1.` | Phone credential format | `ligus-cli/src/serve/tunnel/cred.rs` |
 | `hivews1:` | Workspace invite prefix | app, CLI |
-| `hivedev1:` | Device enrollment code prefix | `hive-runtime/src/device_enroll.rs` |
-| `hive_`, `hivepeer1:` | Peer code prefixes | `hive-runtime/src/peer.rs` |
+| `hivedev1:` | Device enrollment code prefix | `ligus-runtime/src/device_enroll.rs` |
+| `hive_`, `hivepeer1:` | Peer code prefixes | `ligus-runtime/src/peer.rs` |
 | `X-Hive-Github-Token`, `X-Hive-More`, `X-Hive-Next-After`, `X-Hive-Event-Id` | Relay HTTP headers | relay, clients |
-| `hive://` | Phone deep-link scheme (`hive://pair`, `hive://chat/<id>`) | `ligus serve`, phone app |
+| `hiveconfiglogses`, `hiveroomworkspac` | UUIDv5 namespaces (config log, relay room) | `ligus-core/src/channel.rs` |
+| `hivegithaccount\x01`, `hivedmroompair01` | Retired UUIDv5 namespaces, kept unused | `ligus-runtime/src/frozen_ns.rs` |
+| `hive`, `hiveLink` | Keys in the relay's APNs payload that the phone reads | relay, phone app |
+| `hive_relay_requests_*` | Relay Prometheus metric names | relay |
 
 Strings added in 0.1 use the `ligus` spelling. Among them, the SSHSIG
 namespace of a [linked account](../../ligus/features/linked-identities.md),
-`ligus-identity-link-v1@ligus.ai` (`hive-core/src/identity_link.rs`, pinned by
+`ligus-identity-link-v1@ligus.ai` (`ligus-core/src/identity_link.rs`, pinned by
 `link_namespace_is_frozen`), is a length-prefixed SSHSIG field passed to
 `ssh-keygen -Y sign -n`, so unlike the signature contexts above it has no
 `\0` terminator. See the [statement reference](identity-link-statement.md).

@@ -55,7 +55,7 @@
   },
   "pairing": {
     "eid": "BfvmfuXlCrp5KGmnwVxzgg",
-    "link": "hive://pair?url=aHR0cDovLzEwMC4xMDEuMTAyLjEwNDo4Nzg3&token=4f1c0de5a1b2c3d4e5f60718293a4b5c6d7e8f9011223344556677889900aabb&v=2&hid=2LGZFj2lCKlo49_pwPzGjw&hs=rX2_Zzy_XPP_rKyNHdO0tEeMyKpm054V5n1xdD_gFzo&relay=aHR0cHM6Ly9yZWxheS5leGFtcGxlLmNvbQ&ps=GGzSn9ODtHFtphJFAOvwhBIns8-YMbiqpMRV0K2kWAI&exp=1793000600",
+    "link": "ligus://pair?url=aHR0cDovLzEwMC4xMDEuMTAyLjEwNDo4Nzg3&token=4f1c0de5a1b2c3d4e5f60718293a4b5c6d7e8f9011223344556677889900aabb&v=2&hid=2LGZFj2lCKlo49_pwPzGjw&hs=rX2_Zzy_XPP_rKyNHdO0tEeMyKpm054V5n1xdD_gFzo&relay=aHR0cHM6Ly9yZWxheS5leGFtcGxlLmNvbQ&ps=GGzSn9ODtHFtphJFAOvwhBIns8-YMbiqpMRV0K2kWAI&exp=1793000600",
     "pairingSecret": "GGzSn9ODtHFtphJFAOvwhBIns8-YMbiqpMRV0K2kWAI",
     "pskHex": "873d5e526ba65f754b1017ea9228814134082a2596e051603caadee1098ec7d1",
     "tag": "GLcxYur31MX5y25s4exOCV9H01vu34Q6a7pn1RQE5Vc",

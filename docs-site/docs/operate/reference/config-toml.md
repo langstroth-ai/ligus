@@ -1,7 +1,7 @@
 # `ligus.config.toml` reference
 
 Ligus reads one TOML file per workspace, at the workspace root, via
-`hive-core::config`. The Settings → **Models** and **Tools** sections write
+`ligus-core::config`. The Settings → **Models** and **Tools** sections write
 back to it through the encoder, so hand-edited and GUI-edited files
 round-trip cleanly.
 
@@ -38,7 +38,7 @@ default_model = "claude-sonnet-4-5"
 kind = "relay"                   # local | relay | lan
 
 [transport.relay]
-endpoint = "wss://relay.hive.example/v1"
+endpoint = "wss://relay.ligus.example/v1"
 account_token_env = "LIGUS_RELAY_TOKEN"
 
 [sync]
@@ -62,7 +62,7 @@ access_remote_runtime = true
 id = "anthropic"
 name = "Anthropic"
 kind = "remote"                  # local | remote
-provider = "anthropic"           # ollama | openai | anthropic | openrouter | custom | hive-daemon | aider | pi | claude-code | codex | antigravity | copilot | hermes
+provider = "anthropic"           # ollama | openai | anthropic | openrouter | custom | ligus-daemon | aider | pi | claude-code | codex | antigravity | copilot | hermes
 endpoint = "https://api.anthropic.com"
 models = ["claude-sonnet-4-5", "claude-opus-4-7"]
 preferred_model = "claude-sonnet-4-5"
@@ -156,7 +156,7 @@ One block per LLM or CLI agent. See
 |---------------------------------|----------|---------------------------------------------------|
 | `id`                            | string   | Workspace-unique identifier (required)            |
 | `name`                          | string   | Display label                                     |
-| `provider`                      | string   | `ollama` / `openai` / `anthropic` / `openrouter` / `custom` / `hive-daemon` / `aider` / `pi` / `claude-code` / `codex` / `antigravity` (or `agy`) / `copilot` (or `github-copilot`) / `hermes` (required) |
+| `provider`                      | string   | `ollama` / `openai` / `anthropic` / `openrouter` / `custom` / `ligus-daemon` / `aider` / `pi` / `claude-code` / `codex` / `antigravity` (or `agy`) / `copilot` (or `github-copilot`) / `hermes` (required) |
 | `kind`                          | string   | `local` / `remote` (default `remote`)             |
 | `endpoint`                      | string   | HTTP base URL, or the binary path for CLI agents  |
 | `metrics_endpoint`              | string   | Optional metrics URL                              |
@@ -209,4 +209,4 @@ Defaults applied to new chats:
 - Unknown top-level tables (e.g. `[[vaults]]`, `[[skills]]`, `[[runtime_pools]]`,
   `[retrieval]`) — these are managed in-app, not through this file.
 
-The loader and encoder live in `hive-core::config`.
+The loader and encoder live in `ligus-core::config`.

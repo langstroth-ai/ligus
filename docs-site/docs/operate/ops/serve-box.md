@@ -156,7 +156,7 @@ pane. That writes a signed `proposalApplyRequested` naming the host's device.
 - The host first judges the `proposalApplied` it would write as every fold
   will (the request withdrawn, the proposal no longer approved, a human gate
   or a held vote all stop it here), then applies the patch in the chat's
-  worktree of its checkout (`hive/chat/<chat id>`), on the base the person
+  worktree of its checkout (`ligus/chat/<chat id>`), on the base the person
   saw when the request names one, and commits with a
   `Ligus-Apply-Request: <request id>` trailer. The worktree must be clean:
   anything an agent turn left uncommitted there would ride along in the

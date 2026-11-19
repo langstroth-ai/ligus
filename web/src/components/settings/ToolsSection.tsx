@@ -162,7 +162,7 @@ export function ToolsSection() {
           </Field>
           <Field
             label="Bearer token (optional)"
-            hint="Kept on this device only — never synced, exported or written to hive.config.toml."
+            hint="Kept on this device only — never synced, exported or written to ligus.config.toml."
           >
             <input
               type="password"
@@ -208,7 +208,7 @@ export function ToolsSection() {
             {s.shellTools && s.shellTools.length > 0 && (
               <span
                 className="ml-2 text-xs font-medium"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 title="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
               >
                 · offers a shell ({s.shellTools.join(", ")}): Owner turns only
@@ -274,7 +274,7 @@ export function ToolsSection() {
             {s.isManaged && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 onClick={() => remove.mutate(s.id)}
               >
                 Remove

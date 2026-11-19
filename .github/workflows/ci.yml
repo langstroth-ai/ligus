@@ -167,7 +167,7 @@ jobs:
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
-      # The test-only passkey shortcut (hive-runtime `test-presence`) must
+      # The test-only passkey shortcut (ligus-runtime `test-presence`) must
       # never be in a shipped binary's build graph.
       - name: No test-presence in shipped builds
         shell: bash
@@ -176,9 +176,9 @@ jobs:
       - name: Check ts-rs bindings are in sync
         if: runner.os == 'Linux'
         run: |
-          cargo test --locked -p hive-proto export_bindings
+          cargo test --locked -p ligus-proto export_bindings
           if ! git diff --quiet -- web/src/bindings; then
-            echo "::error::ts-rs bindings are stale — run 'cargo test -p hive-proto export_bindings' and commit web/src/bindings/"
+            echo "::error::ts-rs bindings are stale — run 'cargo test -p ligus-proto export_bindings' and commit web/src/bindings/"
             git diff -- web/src/bindings
             exit 1
           fi

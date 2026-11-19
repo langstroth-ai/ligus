@@ -44,7 +44,7 @@ Tauri's built-in **updater** can be enabled later with an update signing keypair
 
 ## CI
 
-`.github/workflows/rust-tauri.yml` runs `cargo build -p hive-app --release` on the
+`.github/workflows/rust-tauri.yml` runs `cargo build -p ligus-app --release` on the
 macOS/Windows/Linux matrix (validates the bundle compiles). Wiring real signing +
 attaching artifacts to GitHub Releases is gated on the secrets above and is a release-
 engineering step, not part of PR CI.
@@ -61,4 +61,4 @@ per-language `register` imports (monaco-editor 0.56+), or a Vite `manualChunks` 
 The relay deploys independently of the desktop app and lives in its own repo,
 [github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)
 (`docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git`), bind via
-`LIGUS_RELAY_ADDR`. See that repo's README + `deploy/fly.toml` for hosting.
+`LANGSTROTH_RELAY_ADDR`. See that repo's README + `deploy/fly.toml` for hosting.

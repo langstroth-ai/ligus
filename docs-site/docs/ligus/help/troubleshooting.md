@@ -155,7 +155,7 @@ curl -s http://<listen>/v1/health
 | direct path times out | phone not on the same LAN or tailnet; firewall | check Tailscale on both; `curl` the URL from another device |
 | `serve: not connected` | relay tunnel off (`/v1/tunnel/info` 404), wrong or `http` URL, missing `--reg-token`, two serve processes on one data dir | see the `last error` |
 | `serve: unknown … is it running?` | `ligus serve` stopped | `systemctl --user status ligus-serve` |
-| `status pending` | relay registered the box but hasn't activated it (allowlist) | add the host id to `LIGUS_RELAY_TUNNEL_HOSTS` |
+| `status pending` | relay registered the box but hasn't activated it (allowlist) | add the host id to `LANGSTROTH_RELAY_TUNNEL_HOSTS` |
 | phone: host offline | the box has no live relay connection | `ligus remote status` |
 | phone: revoked or credential expired | revoked, or unused for 90 days | pair again |
 | writes fail with 403 | the box's role doesn't allow it, or it is `pending`/`revoked` as your device | `/v1/health` with the token shows `identity.mode` |
@@ -183,7 +183,7 @@ rate-limited, or refused by the relay and why). The full checklist is in
    whether its agent's host is online. The worker beats every 30 s; it
    counts as offline after 90 s.
 3. **Was the agent mentioned?** Workers answer `@agent` mentions for their
-   agents. `@hive` (the chat's primary runtime) is answered only by a
+   agents. `@ligus` (the chat's primary runtime) is answered only by a
    desktop. On a serve box, `LIGUS_SERVE_DEFAULT_AGENT` routes un-mentioned
    phone messages to an agent.
 4. **Does the runtime resolve?** A worker uses workspace runtimes only
@@ -236,7 +236,7 @@ The sweep runs 3 minutes after launch and every 6 hours
 | You notice | What happened | Get it back |
 |---|---|---|
 | a turn's worktree is gone | no turn was running in it (left by a crash) | unfinished edits were saved as a patch under `<repo>/.ligus/stopped-turns/`; `git apply` it |
-| a deleted or archived chat's checkout is gone | the sweep removes it | the chat's `hive/chat/<id>` branch is kept |
+| a deleted or archived chat's checkout is gone | the sweep removes it | the chat's `ligus/chat/<id>` branch is kept |
 | a proposal left the Review inbox, marked **stale** | its diff no longer applies to the chat's branch | Review pane → **Restore to the inbox**, or ask the agent to redo it |
 
 A worktree a turn is using, or one parked for a live chat's next turn, is
@@ -285,11 +285,6 @@ has read project files, MCP calls are refused (the exfiltration guard). See
   its own mechanism: check the chat's worktree and `git log`.
 - Edits arrive as a proposal; they reach your working tree only after
   **Implement**.
-
-## A `HIVE_*` setting has no effect
-
-Ligus reads only `LIGUS_*` names. Look for
-`warning: HIVE_X is set but no longer read; rename it to LIGUS_X`.
 
 ## Tests fail after pulling main
 

@@ -1,170 +1,170 @@
 @import "tailwindcss";
 
-/* Default Hive design tokens (pollen palette — the launch default).
+/* Default Ligus design tokens (pollen palette — the launch default).
    `applyTheme()` overrides these on :root at runtime; these defaults cover
    first paint before the theme JS runs. Full palette set lives in
    src/lib/theme.ts. */
 :root {
   font-size: 14px;
-  --hive-canvas: rgb(249, 243, 228);
-  --hive-ink: rgb(38, 29, 16);
-  --hive-panel: rgb(255, 252, 244);
-  --hive-mist: rgb(243, 233, 212);
-  --hive-line: rgba(120, 84, 24, 0.12);
-  --hive-accent-warm: rgb(214, 130, 56);
-  --hive-accent-cool: rgb(216, 150, 32);
-  --hive-sidebar-top: rgb(74, 46, 18);
-  --hive-sidebar-bottom: rgb(134, 88, 28);
-  --hive-sidebar-ink: rgb(252, 242, 216);
-  --hive-sidebar-ink-muted: rgb(248, 234, 206);
+  --ligus-canvas: rgb(249, 243, 228);
+  --ligus-ink: rgb(38, 29, 16);
+  --ligus-panel: rgb(255, 252, 244);
+  --ligus-mist: rgb(243, 233, 212);
+  --ligus-line: rgba(120, 84, 24, 0.12);
+  --ligus-accent-warm: rgb(214, 130, 56);
+  --ligus-accent-cool: rgb(216, 150, 32);
+  --ligus-sidebar-top: rgb(74, 46, 18);
+  --ligus-sidebar-bottom: rgb(134, 88, 28);
+  --ligus-sidebar-ink: rgb(252, 242, 216);
+  --ligus-sidebar-ink-muted: rgb(248, 234, 206);
   /* Status + overlay tokens (light defaults; applyTheme overrides per scheme).
      Replace hardcoded #34c759 / #ff5a5f / rgba(0,0,0,…) literals with these so
      every palette (esp. light variants) stays legible. */
-  --hive-success: rgb(34, 140, 80);
-  --hive-danger: rgb(198, 55, 55);
-  --hive-warn: rgb(170, 116, 24);
-  --hive-overlay: rgba(0, 0, 0, 0.05);
+  --ligus-success: rgb(34, 140, 80);
+  --ligus-danger: rgb(198, 55, 55);
+  --ligus-warn: rgb(170, 116, 24);
+  --ligus-overlay: rgba(0, 0, 0, 0.05);
 
-  /* Derived chat-layer tokens (redesign). Built from the base --hive-* tokens
+  /* Derived chat-layer tokens (redesign). Built from the base --ligus-* tokens
      with color-mix / relative-color, so they follow every palette automatically
      when applyTheme() overrides the base vars — no per-theme wiring needed. */
   /* ink-soft: secondary TEXT — 70% keeps ≥4.5:1 on canvas/panel/mist in every
      palette (55% was 3.3–3.7:1 in light themes). ink-faint: placeholders,
      disabled controls and decoration only (≥3:1), never body/meta text. */
-  --hive-ink-soft: color-mix(in srgb, var(--hive-ink) 70%, transparent);
-  --hive-ink-faint: color-mix(in srgb, var(--hive-ink) 56%, transparent);
-  --hive-hover: color-mix(in srgb, var(--hive-ink) 6%, transparent);
-  /* Faint separator between flat turns (redesign) — softer than --hive-line. */
-  --hive-hairline: color-mix(in srgb, var(--hive-ink) 7%, transparent);
-  --tint-cool: color-mix(in srgb, var(--hive-accent-cool) 14%, transparent);
-  --tint-cool-line: color-mix(in srgb, var(--hive-accent-cool) 38%, transparent);
-  --tint-warm: color-mix(in srgb, var(--hive-accent-warm) 13%, transparent);
-  --tint-warm-line: color-mix(in srgb, var(--hive-accent-warm) 40%, transparent);
+  --ligus-ink-soft: color-mix(in srgb, var(--ligus-ink) 70%, transparent);
+  --ligus-ink-faint: color-mix(in srgb, var(--ligus-ink) 56%, transparent);
+  --ligus-hover: color-mix(in srgb, var(--ligus-ink) 6%, transparent);
+  /* Faint separator between flat turns (redesign) — softer than --ligus-line. */
+  --ligus-hairline: color-mix(in srgb, var(--ligus-ink) 7%, transparent);
+  --tint-cool: color-mix(in srgb, var(--ligus-accent-cool) 14%, transparent);
+  --tint-cool-line: color-mix(in srgb, var(--ligus-accent-cool) 38%, transparent);
+  --tint-warm: color-mix(in srgb, var(--ligus-accent-warm) 13%, transparent);
+  --tint-warm-line: color-mix(in srgb, var(--ligus-accent-warm) 40%, transparent);
 
   /* Neutral "muted" accent — the shared-workspace / system identity (requested
      muted token). Derived from ink so it tracks every palette. */
-  --hive-accent-muted: color-mix(in srgb, var(--hive-ink) 34%, var(--hive-panel));
+  --ligus-accent-muted: color-mix(in srgb, var(--ligus-ink) 34%, var(--ligus-panel));
 
   /* Scheme-derived numbers — light first-paint defaults; applyTheme() overrides
      these per light/dark scheme (they depend on scheme, never on the accent
      family). Drive the turn fill/rail/name lightness + filled-control lightness
      so a single rule set stays legible in every palette. */
-  --hive-turn-mix: 91%;
-  --hive-turn-rail-l: 54%;
-  --hive-turn-name-l: 40%;
-  --hive-accent-ink-l: 42%;
-  --hive-fill-l: 45%;
-  --hive-on-accent: rgb(255, 255, 255);
+  --ligus-turn-mix: 91%;
+  --ligus-turn-rail-l: 54%;
+  --ligus-turn-name-l: 40%;
+  --ligus-accent-ink-l: 42%;
+  --ligus-fill-l: 45%;
+  --ligus-on-accent: rgb(255, 255, 255);
 
   /* Text-weight + fill-weight variants of the semantic accents: same hue and
      chroma, lightness replaced via relative-colour so they follow every palette
      with no per-theme wiring. *-ink read as text; *-fill back filled controls
-     where --hive-on-accent is guaranteed legible. */
-  --hive-success-ink: oklch(from var(--hive-success) var(--hive-accent-ink-l) c h);
-  --hive-danger-ink: oklch(from var(--hive-danger) var(--hive-accent-ink-l) c h);
-  --hive-warn-ink: oklch(from var(--hive-warn) var(--hive-accent-ink-l) c h);
-  --hive-warm-ink: oklch(from var(--hive-accent-warm) var(--hive-accent-ink-l) c h);
-  --hive-accent-fill: oklch(from var(--hive-accent-cool) var(--hive-fill-l) c h);
-  --hive-warm-fill: oklch(from var(--hive-accent-warm) var(--hive-fill-l) c h);
+     where --ligus-on-accent is guaranteed legible. */
+  --ligus-success-ink: oklch(from var(--ligus-success) var(--ligus-accent-ink-l) c h);
+  --ligus-danger-ink: oklch(from var(--ligus-danger) var(--ligus-accent-ink-l) c h);
+  --ligus-warn-ink: oklch(from var(--ligus-warn) var(--ligus-accent-ink-l) c h);
+  --ligus-warm-ink: oklch(from var(--ligus-accent-warm) var(--ligus-accent-ink-l) c h);
+  --ligus-accent-fill: oklch(from var(--ligus-accent-cool) var(--ligus-fill-l) c h);
+  --ligus-warm-fill: oklch(from var(--ligus-accent-warm) var(--ligus-fill-l) c h);
 
-  --hive-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --ligus-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   /* ── 0.1 token layer (additive: no existing name changes; the phone matches
      themes by palette name, so these derive from the base tokens) ── */
   /* Text-weight accent (links, active tabs) — the accent at the scheme's legible
-     lightness; raw --hive-accent-cool is a fill colour, 2.5:1 as text in pollen. */
-  --hive-accent-ink: oklch(from var(--hive-accent-cool) var(--hive-accent-ink-l) c h);
-  --hive-danger-fill: oklch(from var(--hive-danger) var(--hive-fill-l) c h);
+     lightness; raw --ligus-accent-cool is a fill colour, 2.5:1 as text in pollen. */
+  --ligus-accent-ink: oklch(from var(--ligus-accent-cool) var(--ligus-accent-ink-l) c h);
+  --ligus-danger-fill: oklch(from var(--ligus-danger) var(--ligus-fill-l) c h);
   /* Semantic status quads: *-ink (text), *-tint (wash), *-line (border). */
-  --hive-success-tint: color-mix(in srgb, var(--hive-success) 11%, transparent);
-  --hive-success-line: color-mix(in srgb, var(--hive-success) 34%, transparent);
-  --hive-danger-tint: color-mix(in srgb, var(--hive-danger) 10%, transparent);
-  --hive-danger-line: color-mix(in srgb, var(--hive-danger) 34%, transparent);
-  --hive-warn-tint: color-mix(in srgb, var(--hive-warn) 13%, transparent);
-  --hive-warn-line: color-mix(in srgb, var(--hive-warn) 38%, transparent);
-  --hive-info-ink: var(--hive-accent-ink);
-  --hive-info-tint: var(--tint-cool);
-  --hive-info-line: var(--tint-cool-line);
+  --ligus-success-tint: color-mix(in srgb, var(--ligus-success) 11%, transparent);
+  --ligus-success-line: color-mix(in srgb, var(--ligus-success) 34%, transparent);
+  --ligus-danger-tint: color-mix(in srgb, var(--ligus-danger) 10%, transparent);
+  --ligus-danger-line: color-mix(in srgb, var(--ligus-danger) 34%, transparent);
+  --ligus-warn-tint: color-mix(in srgb, var(--ligus-warn) 13%, transparent);
+  --ligus-warn-line: color-mix(in srgb, var(--ligus-warn) 38%, transparent);
+  --ligus-info-ink: var(--ligus-accent-ink);
+  --ligus-info-tint: var(--tint-cool);
+  --ligus-info-line: var(--tint-cool-line);
   /* Names used by 0.1 code before they existed — alias, don't break. */
-  --hive-warning: var(--hive-warn);
-  --hive-surface: var(--hive-panel);
+  --ligus-warning: var(--ligus-warn);
+  --ligus-surface: var(--ligus-panel);
   /* Keyboard focus ring (≥3:1 against every surface). */
-  --hive-focus: var(--hive-accent-ink);
+  --ligus-focus: var(--ligus-accent-ink);
 
   /* Spacing (4px grid), radii, type, elevation, motion. */
-  --hive-space-1: 4px;
-  --hive-space-2: 8px;
-  --hive-space-3: 12px;
-  --hive-space-4: 16px;
-  --hive-space-5: 20px;
-  --hive-space-6: 24px;
-  --hive-space-8: 32px;
-  --hive-radius-sm: 6px;
-  --hive-radius-md: 8px;
-  --hive-radius-lg: 10px;
-  --hive-radius-xl: 14px;
-  --hive-radius-pill: 999px;
-  --hive-text-2xs: 0.75rem;    /* 10.5px — caps labels only */
-  --hive-text-xs: 0.8215rem;   /* 11.5px — meta, hints */
-  --hive-text-sm: 0.9286rem;   /* 13px — dense UI, rail rows */
-  --hive-text-md: 1rem;        /* 14px — body */
-  --hive-text-lg: 1.143rem;    /* 16px — pane/section titles */
-  --hive-text-xl: 1.357rem;    /* 19px — sheet titles */
-  --hive-shadow-1: 0 1px 2px color-mix(in srgb, var(--hive-ink) 10%, transparent);
-  --hive-shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--hive-ink) 22%, transparent);
-  --hive-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--hive-line);
-  --hive-dur: 140ms;
-  --hive-ease: cubic-bezier(0.2, 0, 0, 1);
+  --ligus-space-1: 4px;
+  --ligus-space-2: 8px;
+  --ligus-space-3: 12px;
+  --ligus-space-4: 16px;
+  --ligus-space-5: 20px;
+  --ligus-space-6: 24px;
+  --ligus-space-8: 32px;
+  --ligus-radius-sm: 6px;
+  --ligus-radius-md: 8px;
+  --ligus-radius-lg: 10px;
+  --ligus-radius-xl: 14px;
+  --ligus-radius-pill: 999px;
+  --ligus-text-2xs: 0.75rem;    /* 10.5px — caps labels only */
+  --ligus-text-xs: 0.8215rem;   /* 11.5px — meta, hints */
+  --ligus-text-sm: 0.9286rem;   /* 13px — dense UI, rail rows */
+  --ligus-text-md: 1rem;        /* 14px — body */
+  --ligus-text-lg: 1.143rem;    /* 16px — pane/section titles */
+  --ligus-text-xl: 1.357rem;    /* 19px — sheet titles */
+  --ligus-shadow-1: 0 1px 2px color-mix(in srgb, var(--ligus-ink) 10%, transparent);
+  --ligus-shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--ligus-ink) 22%, transparent);
+  --ligus-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--ligus-line);
+  --ligus-dur: 140ms;
+  --ligus-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Tailwind reads its scale from the tokens, so `text-xs`, `rounded-xl`,
    `text-ink-soft`, `bg-mist`, `border-line` … all mean the design system. */
 @theme inline {
-  --color-canvas: var(--hive-canvas);
-  --color-panel: var(--hive-panel);
-  --color-mist: var(--hive-mist);
-  --color-line: var(--hive-line);
-  --color-ink: var(--hive-ink);
-  --color-ink-soft: var(--hive-ink-soft);
-  --color-ink-faint: var(--hive-ink-faint);
-  --color-accent: var(--hive-accent-cool);
-  --color-accent-ink: var(--hive-accent-ink);
-  --color-success-ink: var(--hive-success-ink);
-  --color-danger-ink: var(--hive-danger-ink);
-  --color-warn-ink: var(--hive-warn-ink);
-  --text-xs: var(--hive-text-xs);
+  --color-canvas: var(--ligus-canvas);
+  --color-panel: var(--ligus-panel);
+  --color-mist: var(--ligus-mist);
+  --color-line: var(--ligus-line);
+  --color-ink: var(--ligus-ink);
+  --color-ink-soft: var(--ligus-ink-soft);
+  --color-ink-faint: var(--ligus-ink-faint);
+  --color-accent: var(--ligus-accent-cool);
+  --color-accent-ink: var(--ligus-accent-ink);
+  --color-success-ink: var(--ligus-success-ink);
+  --color-danger-ink: var(--ligus-danger-ink);
+  --color-warn-ink: var(--ligus-warn-ink);
+  --text-xs: var(--ligus-text-xs);
   --text-xs--line-height: 1.45;
-  --text-sm: var(--hive-text-sm);
+  --text-sm: var(--ligus-text-sm);
   --text-sm--line-height: 1.45;
-  --radius-md: var(--hive-radius-sm);
-  --radius-lg: var(--hive-radius-md);
-  --radius-xl: var(--hive-radius-lg);
-  --radius-2xl: var(--hive-radius-xl);
+  --radius-md: var(--ligus-radius-sm);
+  --radius-lg: var(--ligus-radius-md);
+  --radius-xl: var(--ligus-radius-lg);
+  --radius-2xl: var(--ligus-radius-xl);
 }
 
 /* ── Focus: one visible ring for every keyboard-reachable control ── */
 :where(button, a[href], summary, select, [role="tab"], [role="switch"], [role="radio"], [role="menuitem"], [role="option"], [tabindex]:not(textarea):not(input)):focus-visible {
-  outline: 2px solid var(--hive-focus);
+  outline: 2px solid var(--ligus-focus);
   outline-offset: 2px;
 }
 /* Text fields: accent border + halo (an outline on every click would be noise). */
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea):not(.monaco-editor *):not(.xterm *):not(.cmp-in *):focus-visible {
   outline: none;
-  border-color: var(--hive-accent-cool) !important;
+  border-color: var(--ligus-accent-cool) !important;
   box-shadow: 0 0 0 3px var(--tint-cool);
 }
-:where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--hive-accent-fill); }
-:where(input[type="checkbox"], input[type="radio"]):focus-visible { outline: 2px solid var(--hive-focus); outline-offset: 2px; }
+:where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--ligus-accent-fill); }
+:where(input[type="checkbox"], input[type="radio"]):focus-visible { outline: 2px solid var(--ligus-focus); outline-offset: 2px; }
 
 /* Shared motion: short, and off when the OS asks. */
-@keyframes hive-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
-.hive-enter { animation: hive-fade-in var(--hive-dur) var(--hive-ease) both; }
+@keyframes ligus-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.ligus-enter { animation: ligus-fade-in var(--ligus-dur) var(--ligus-ease) both; }
 /* Briefly mark the element a cross-surface link jumped to. */
-@keyframes hive-flash { 0% { box-shadow: 0 0 0 0 transparent; } 20% { box-shadow: 0 0 0 3px var(--tint-cool-line); background-color: var(--tint-cool); } 100% { box-shadow: 0 0 0 0 transparent; } }
-.hive-flash { animation: hive-flash 1.6s var(--hive-ease) 1; border-radius: var(--hive-radius-md); }
+@keyframes ligus-flash { 0% { box-shadow: 0 0 0 0 transparent; } 20% { box-shadow: 0 0 0 3px var(--tint-cool-line); background-color: var(--tint-cool); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.ligus-flash { animation: ligus-flash 1.6s var(--ligus-ease) 1; border-radius: var(--ligus-radius-md); }
 @media (prefers-reduced-motion: reduce) {
-  .hive-enter, .hive-flash { animation: none; }
-  .hive-flash { outline: 2px solid var(--hive-focus); outline-offset: 2px; }
+  .ligus-enter, .ligus-flash { animation: none; }
+  .ligus-flash { outline: 2px solid var(--ligus-focus); outline-offset: 2px; }
   *, *::before, *::after { transition-duration: 0.01ms !important; }
 }
 
@@ -181,43 +181,43 @@
      the canvas, separated by a hairline, with a rounded hover highlight. This
      is token-driven, so every palette (light + the darker Obsidian) inherits
      it unchanged. --tn (name/handle colour) is the only per-identity accent. */
-  --turn-accent: var(--hive-accent-cool);
-  --tr: oklch(from var(--turn-accent) var(--hive-turn-rail-l) c h);
-  --tn: oklch(from var(--turn-accent) var(--hive-turn-name-l) c h);
+  --turn-accent: var(--ligus-accent-cool);
+  --tr: oklch(from var(--turn-accent) var(--ligus-turn-rail-l) c h);
+  --tn: oklch(from var(--turn-accent) var(--ligus-turn-name-l) c h);
   display: flex; gap: 11px; padding: 9px 12px; border-radius: 8px; position: relative; outline: none;
 }
 /* Hairline between consecutive turns (a quiet divider, not a card edge). */
-.tt + .tt { border-top: 1px solid var(--hive-hairline); }
-.tt:hover { background: var(--hive-hover); }
+.tt + .tt { border-top: 1px solid var(--ligus-hairline); }
+.tt:hover { background: var(--ligus-hover); }
 .tt:focus-visible { outline: 2px solid var(--tr); outline-offset: -2px; }
-.tt.human { --turn-accent: var(--hive-accent-warm); }
-.tt.agent { --turn-accent: var(--hive-accent-cool); }
-.tt.shared { --turn-accent: var(--hive-accent-muted); }
-.tt.shared .tt-handle, .tt.shared .tt-name { color: var(--hive-ink-soft); }
-.tt.shared .tt-text { color: var(--hive-ink-soft); }
+.tt.human { --turn-accent: var(--ligus-accent-warm); }
+.tt.agent { --turn-accent: var(--ligus-accent-cool); }
+.tt.shared { --turn-accent: var(--ligus-accent-muted); }
+.tt.shared .tt-handle, .tt.shared .tt-name { color: var(--ligus-ink-soft); }
+.tt.shared .tt-text { color: var(--ligus-ink-soft); }
 .tt.is-stale { opacity: 0.6; }
 .tt-av { padding-top: 2px; flex: none; }
 .tt-body { flex: 1; min-width: 0; }
 .tt-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.tt-name { font-weight: 600; font-size: 14px; color: var(--hive-ink); }
+.tt-name { font-weight: 600; font-size: 14px; color: var(--ligus-ink); }
 .tt-handle { font-weight: 600; font-size: 14px; color: var(--tn); }
-.tt-model { font-size: 11px; color: var(--hive-ink-soft); font-family: var(--hive-mono); }
+.tt-model { font-size: 11px; color: var(--ligus-ink-soft); font-family: var(--ligus-mono); }
 .tt-spacer { flex: 1; }
-.tt-time { font-size: 12px; color: var(--hive-ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tt-attr { font-size: 12px; color: var(--hive-ink-soft); margin-top: 1px; }
-.tt-text { font-size: 14px; margin-top: 2px; line-height: 1.5; color: var(--hive-ink); text-wrap: pretty; }
+.tt-time { font-size: 12px; color: var(--ligus-ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tt-attr { font-size: 12px; color: var(--ligus-ink-soft); margin-top: 1px; }
+.tt-text { font-size: 14px; margin-top: 2px; line-height: 1.5; color: var(--ligus-ink); text-wrap: pretty; }
 .tt-actions { margin-top: 2px; display: flex; align-items: center; gap: 4px; min-height: 20px; flex-wrap: wrap; }
-.tt-system { text-align: center; font-size: 12px; color: var(--hive-ink-soft); padding: 8px 0; display: flex; align-items: center; gap: 8px; justify-content: center; }
-.tt-system .ln { height: 1px; background: var(--hive-line); flex: 1; max-width: 120px; }
+.tt-system { text-align: center; font-size: 12px; color: var(--ligus-ink-soft); padding: 8px 0; display: flex; align-items: center; gap: 8px; justify-content: center; }
+.tt-system .ln { height: 1px; background: var(--ligus-line); flex: 1; max-width: 120px; }
 
 /* Header badge (shared / workspace agent) + live/error state tags. */
-.tt-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--hive-ink-soft); background: var(--hive-overlay); border: 1px solid var(--hive-line); border-radius: 5px; padding: 1px 6px; }
-.tt-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--hive-mono); font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--hive-ink-soft); background: var(--hive-overlay); border: 1px solid var(--hive-line); border-radius: 5px; padding: 2px 6px; }
+.tt-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 1px 6px; }
+.tt-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--ligus-mono); font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 2px 6px; }
 .tt-tag.live { color: var(--tn); border-color: color-mix(in srgb, var(--tr) 34%, transparent); }
 .tt-tag.live i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: blip 1.1s infinite; }
 .tt-tag.live i:nth-child(2) { animation-delay: 0.16s; }
 .tt-tag.live i:nth-child(3) { animation-delay: 0.32s; }
-.tt-tag.bad { color: var(--hive-danger-ink); border-color: color-mix(in srgb, var(--hive-danger) 32%, transparent); background: color-mix(in srgb, var(--hive-danger) 8%, transparent); }
+.tt-tag.bad { color: var(--ligus-danger-ink); border-color: color-mix(in srgb, var(--ligus-danger) 32%, transparent); background: color-mix(in srgb, var(--ligus-danger) 8%, transparent); }
 @keyframes blip { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 .tt-caret { display: inline-block; width: 2px; height: 14px; background: var(--tr); margin-left: 2px; vertical-align: -2px; animation: cblink 1s steps(1) infinite; }
 @keyframes cblink { 50% { opacity: 0; } }
@@ -225,86 +225,86 @@
 
 /* avatars: human = circle, agent = rounded square (kept from the shared Avatar
    component; the badge overlay for owned/shared agents rides the turn). */
-.av { flex: none; display: grid; place-items: center; color: var(--hive-on-accent); font-weight: 600; position: relative; }
+.av { flex: none; display: grid; place-items: center; color: var(--ligus-on-accent); font-weight: 600; position: relative; }
 .av.human { border-radius: 50%; }
 .av.agent { border-radius: 30%; }
 
 /* Tool-call activity — one dim line at rest, expands to its output. */
-.tcall { margin-top: 8px; border: 1px solid var(--hive-line); border-radius: 8px; background: var(--hive-mist); overflow: hidden; }
+.tcall { margin-top: 8px; border: 1px solid var(--ligus-line); border-radius: 8px; background: var(--ligus-mist); overflow: hidden; }
 .tcall summary { list-style: none; }
 .tcall summary::-webkit-details-marker { display: none; }
-.tcall-chev { display: inline-flex; transition: transform 0.16s; color: var(--hive-ink-faint); }
+.tcall-chev { display: inline-flex; transition: transform 0.16s; color: var(--ligus-ink-faint); }
 .tcall[open] > .tcall-h .tcall-chev { transform: rotate(90deg); }
-.tcall-h { display: flex; align-items: center; gap: 8px; width: 100%; font: inherit; font-size: 12px; color: var(--hive-ink-soft); background: none; border: 0; padding: 7px 10px; cursor: pointer; text-align: left; }
-.tcall-h:hover { background: var(--hive-hover); }
-.tcall-n { font-family: var(--hive-mono); font-size: 11.5px; color: var(--hive-ink); }
-.tcall-a { font-family: var(--hive-mono); font-size: 11px; color: var(--hive-ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tcall-badge { margin-left: auto; font-family: var(--hive-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; border-radius: 4px; padding: 2px 5px; flex: none; }
-.tcall-badge.ok { color: var(--hive-success-ink); background: color-mix(in srgb, var(--hive-success) 14%, transparent); }
-.tcall-badge.bad { color: var(--hive-danger-ink); background: color-mix(in srgb, var(--hive-danger) 14%, transparent); }
-.tcall-o { margin: 0; padding: 10px 12px; border-top: 1px solid var(--hive-line); font-family: var(--hive-mono); font-size: 11px; line-height: 1.65; color: var(--hive-ink-soft); white-space: pre-wrap; overflow-x: auto; background: var(--hive-panel); }
-.tcall-o.bad { color: var(--hive-danger-ink); background: color-mix(in srgb, var(--hive-danger) 7%, transparent); }
+.tcall-h { display: flex; align-items: center; gap: 8px; width: 100%; font: inherit; font-size: 12px; color: var(--ligus-ink-soft); background: none; border: 0; padding: 7px 10px; cursor: pointer; text-align: left; }
+.tcall-h:hover { background: var(--ligus-hover); }
+.tcall-n { font-family: var(--ligus-mono); font-size: 11.5px; color: var(--ligus-ink); }
+.tcall-a { font-family: var(--ligus-mono); font-size: 11px; color: var(--ligus-ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tcall-badge { margin-left: auto; font-family: var(--ligus-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; border-radius: 4px; padding: 2px 5px; flex: none; }
+.tcall-badge.ok { color: var(--ligus-success-ink); background: color-mix(in srgb, var(--ligus-success) 14%, transparent); }
+.tcall-badge.bad { color: var(--ligus-danger-ink); background: color-mix(in srgb, var(--ligus-danger) 14%, transparent); }
+.tcall-o { margin: 0; padding: 10px 12px; border-top: 1px solid var(--ligus-line); font-family: var(--ligus-mono); font-size: 11px; line-height: 1.65; color: var(--ligus-ink-soft); white-space: pre-wrap; overflow-x: auto; background: var(--ligus-panel); }
+.tcall-o.bad { color: var(--ligus-danger-ink); background: color-mix(in srgb, var(--ligus-danger) 7%, transparent); }
 
 /* Streaming / interrupted note under a turn. */
-.tt-note { display: flex; align-items: center; gap: 9px; font-size: 12px; line-height: 1.45; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--hive-line); background: var(--hive-overlay); color: var(--hive-ink-soft); flex-wrap: wrap; }
-.tt-note.bad { color: var(--hive-danger-ink); border-color: color-mix(in srgb, var(--hive-danger) 28%, transparent); background: color-mix(in srgb, var(--hive-danger) 7%, transparent); }
+.tt-note { display: flex; align-items: center; gap: 9px; font-size: 12px; line-height: 1.45; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--ligus-line); background: var(--ligus-overlay); color: var(--ligus-ink-soft); flex-wrap: wrap; }
+.tt-note.bad { color: var(--ligus-danger-ink); border-color: color-mix(in srgb, var(--ligus-danger) 28%, transparent); background: color-mix(in srgb, var(--ligus-danger) 7%, transparent); }
 .tt-note span { flex: 1; min-width: 120px; }
 
 /* Reactions row. */
-.react { font: inherit; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; background: var(--hive-panel); border: 1px solid var(--hive-line); border-radius: 14px; padding: 3px 9px; cursor: pointer; color: var(--hive-ink-soft); }
+.react { font: inherit; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; background: var(--ligus-panel); border: 1px solid var(--ligus-line); border-radius: 14px; padding: 3px 9px; cursor: pointer; color: var(--ligus-ink-soft); }
 .react:hover { border-color: var(--tint-cool-line); }
 .react.on { border-color: var(--tint-cool-line); background: var(--tint-cool); }
-.react span { font-family: var(--hive-mono); font-size: 10.5px; }
+.react span { font-family: var(--ligus-mono); font-size: 10.5px; }
 
 /* ===== Composer — a turn-shaped card; the "next turn" in the transcript. ===== */
 .cmp { display: flex; flex-direction: column; gap: 6px; }
-.cmp-card { border: 1px solid var(--hive-line); border-radius: 12px; background: var(--hive-panel); padding: 9px 10px; transition: border-color 0.14s, box-shadow 0.14s; }
+.cmp-card { border: 1px solid var(--ligus-line); border-radius: 12px; background: var(--ligus-panel); padding: 9px 10px; transition: border-color 0.14s, box-shadow 0.14s; }
 .cmp.is-focused .cmp-card, .cmp.is-sending .cmp-card { border-color: var(--tint-cool-line); box-shadow: 0 0 0 3px var(--tint-cool); }
-.cmp.is-error .cmp-card { border-color: color-mix(in srgb, var(--hive-danger) 46%, transparent); }
+.cmp.is-error .cmp-card { border-color: color-mix(in srgb, var(--ligus-danger) 46%, transparent); }
 .cmp-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px 0 8px; border-radius: 7px; background: var(--hive-mist); border: 1px solid var(--hive-line); font-size: 11.5px; color: var(--hive-ink-soft); }
-.chip b { color: var(--hive-ink); font-weight: 560; font-size: 11.5px; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip button { width: 16px; height: 16px; display: grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--hive-ink-faint); cursor: pointer; }
-.chip button:hover { background: var(--hive-hover); color: var(--hive-ink); }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px 0 8px; border-radius: 7px; background: var(--ligus-mist); border: 1px solid var(--ligus-line); font-size: 11.5px; color: var(--ligus-ink-soft); }
+.chip b { color: var(--ligus-ink); font-weight: 560; font-size: 11.5px; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip button { width: 16px; height: 16px; display: grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--ligus-ink-faint); cursor: pointer; }
+.chip button:hover { background: var(--ligus-hover); color: var(--ligus-ink); }
 .cmp-in { position: relative; }
-.cmp-in textarea { width: 100%; min-height: 44px; max-height: 220px; border: 0; background: none; resize: none; font: inherit; font-size: 14px; line-height: 1.5; color: var(--hive-ink); outline: none; padding: 4px 2px; }
-.cmp-in textarea::placeholder { color: var(--hive-ink-faint); }
+.cmp-in textarea { width: 100%; min-height: 44px; max-height: 220px; border: 0; background: none; resize: none; font: inherit; font-size: 14px; line-height: 1.5; color: var(--ligus-ink); outline: none; padding: 4px 2px; }
+.cmp-in textarea::placeholder { color: var(--ligus-ink-faint); }
 .cmp-f { display: flex; align-items: center; gap: 5px; margin-top: 6px; }
 .cmp-f .sp { flex: 1; }
-.cmp-err { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 8px; padding: 9px 11px; border-radius: 9px; font-size: 12px; color: var(--hive-danger-ink); background: color-mix(in srgb, var(--hive-danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--hive-danger) 26%, transparent); }
+.cmp-err { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 8px; padding: 9px 11px; border-radius: 9px; font-size: 12px; color: var(--ligus-danger-ink); background: color-mix(in srgb, var(--ligus-danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ligus-danger) 26%, transparent); }
 .cmp-err span { flex: 1; min-width: 150px; }
 .cmp-err b { font-weight: 650; }
 
 /* Icon + filled buttons (composer + card actions). */
-.ib { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; border: 0; background: none; color: var(--hive-ink-soft); cursor: pointer; }
-.ib:hover { background: var(--hive-hover); color: var(--hive-ink); }
-.send { width: 30px; height: 30px; border-radius: 9px; border: 0; background: var(--hive-accent-fill); color: var(--hive-on-accent); display: grid; place-items: center; cursor: pointer; }
-.send:disabled { background: var(--hive-mist); color: var(--hive-ink-faint); cursor: default; }
+.ib { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; border: 0; background: none; color: var(--ligus-ink-soft); cursor: pointer; }
+.ib:hover { background: var(--ligus-hover); color: var(--ligus-ink); }
+.send { width: 30px; height: 30px; border-radius: 9px; border: 0; background: var(--ligus-accent-fill); color: var(--ligus-on-accent); display: grid; place-items: center; cursor: pointer; }
+.send:disabled { background: var(--ligus-mist); color: var(--ligus-ink-faint); cursor: default; }
 
 /* Composer footer hint line ("Live — type @ or / …") with keycaps. */
-.hint { font-size: 12px; color: var(--hive-ink-soft); padding: 7px 6px 0; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-.kbd { font-family: var(--hive-mono); font-size: 11px; background: var(--hive-mist); border: 1px solid var(--hive-line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; line-height: 1.5; }
+.hint { font-size: 12px; color: var(--ligus-ink-soft); padding: 7px 6px 0; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.kbd { font-family: var(--ligus-mono); font-size: 11px; background: var(--ligus-mist); border: 1px solid var(--ligus-line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; line-height: 1.5; }
 
 /* Route pill (composer): the resolved recipient / default @route. */
 .rp-wrap { position: relative; }
-.rp { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; font: inherit; font-size: 12px; cursor: pointer; color: var(--hive-ink); background: var(--tint-cool); border: 1px solid var(--tint-cool-line); }
-.rp:hover, .rp.on { background: color-mix(in srgb, var(--hive-accent-cool) 20%, transparent); }
-.rp b { font-weight: 620; font-size: 12px; color: var(--hive-accent-fill); }
-.rp-ar { color: var(--hive-accent-fill); font-family: var(--hive-mono); }
-.rp-sep { color: var(--hive-ink-soft); }
-.rp-via { color: var(--hive-ink-soft); }
-.route-glyph { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: var(--tint-cool); color: var(--hive-accent-cool); flex: none; }
+.rp { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ligus-ink); background: var(--tint-cool); border: 1px solid var(--tint-cool-line); }
+.rp:hover, .rp.on { background: color-mix(in srgb, var(--ligus-accent-cool) 20%, transparent); }
+.rp b { font-weight: 620; font-size: 12px; color: var(--ligus-accent-fill); }
+.rp-ar { color: var(--ligus-accent-fill); font-family: var(--ligus-mono); }
+.rp-sep { color: var(--ligus-ink-soft); }
+.rp-via { color: var(--ligus-ink-soft); }
+.route-glyph { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: var(--tint-cool); color: var(--ligus-accent-cool); flex: none; }
 
 /* Popover (route runtime picker). Anchored above the pill. */
-.pop { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 50; min-width: 262px; background: var(--hive-panel); border: 1px solid var(--hive-line); border-radius: 11px; box-shadow: var(--hive-shadow-pop); padding: 5px; max-height: 340px; overflow: auto; }
-.pop-h { font-family: var(--hive-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--hive-ink-faint); padding: 7px 9px 4px; }
-.pop-i { display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; font-size: 12.5px; color: var(--hive-ink); background: none; border: 0; border-radius: 8px; padding: 6px 9px; cursor: pointer; text-align: left; }
-.pop-i:hover { background: var(--hive-hover); }
+.pop { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 50; min-width: 262px; background: var(--ligus-panel); border: 1px solid var(--ligus-line); border-radius: 11px; box-shadow: var(--ligus-shadow-pop); padding: 5px; max-height: 340px; overflow: auto; }
+.pop-h { font-family: var(--ligus-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ligus-ink-faint); padding: 7px 9px 4px; }
+.pop-i { display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; font-size: 12.5px; color: var(--ligus-ink); background: none; border: 0; border-radius: 8px; padding: 6px 9px; cursor: pointer; text-align: left; }
+.pop-i:hover { background: var(--ligus-hover); }
 .pop-i.sel { background: var(--tint-cool); }
 .pop-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pop-t b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pop-t span { font-family: var(--hive-mono); font-size: 10.5px; color: var(--hive-ink-faint); }
-.pop-n { font-size: 11px; line-height: 1.5; color: var(--hive-ink-faint); padding: 8px 9px 5px; margin-top: 4px; border-top: 1px solid var(--hive-line); }
+.pop-t span { font-family: var(--ligus-mono); font-size: 10.5px; color: var(--ligus-ink-faint); }
+.pop-n { font-size: 11px; line-height: 1.5; color: var(--ligus-ink-faint); padding: 8px 9px 5px; margin-top: 4px; border-top: 1px solid var(--ligus-line); }
 
 html,
 body,
@@ -315,8 +315,8 @@ body,
 }
 
 body {
-  background: var(--hive-canvas);
-  color: var(--hive-ink);
+  background: var(--ligus-canvas);
+  color: var(--ligus-ink);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
@@ -339,8 +339,8 @@ body {
 }
 
 /* An agent reply's @you, shown as @<requester>; tinted when it's the viewer. */
-.hive-mention { font-weight: 600; color: var(--hive-accent-ink, var(--hive-accent-cool)); }
-.hive-mention-me {
+.ligus-mention { font-weight: 600; color: var(--ligus-accent-ink, var(--ligus-accent-cool)); }
+.ligus-mention-me {
   background: var(--tint-cool);
   box-shadow: inset 0 0 0 1px var(--tint-cool-line);
   border-radius: 4px;
@@ -348,32 +348,32 @@ body {
 }
 
 /* Markdown rendering for chat messages (Tailwind preflight strips these). */
-.hive-md > :first-child { margin-top: 0; }
-.hive-md > :last-child { margin-bottom: 0; }
-.hive-md p { margin: 0.5em 0; }
-.hive-md ul,
-.hive-md ol { margin: 0.5em 0; padding-left: 1.4em; }
-.hive-md ul { list-style: disc; }
-.hive-md ol { list-style: decimal; }
-.hive-md li { margin: 0.2em 0; }
-.hive-md h1,
-.hive-md h2,
-.hive-md h3,
-.hive-md h4 { margin: 0.8em 0 0.4em; font-weight: 600; line-height: 1.3; }
-.hive-md h1 { font-size: 1.4em; }
-.hive-md h2 { font-size: 1.25em; }
-.hive-md h3 { font-size: 1.1em; }
-.hive-md blockquote {
+.ligus-md > :first-child { margin-top: 0; }
+.ligus-md > :last-child { margin-bottom: 0; }
+.ligus-md p { margin: 0.5em 0; }
+.ligus-md ul,
+.ligus-md ol { margin: 0.5em 0; padding-left: 1.4em; }
+.ligus-md ul { list-style: disc; }
+.ligus-md ol { list-style: decimal; }
+.ligus-md li { margin: 0.2em 0; }
+.ligus-md h1,
+.ligus-md h2,
+.ligus-md h3,
+.ligus-md h4 { margin: 0.8em 0 0.4em; font-weight: 600; line-height: 1.3; }
+.ligus-md h1 { font-size: 1.4em; }
+.ligus-md h2 { font-size: 1.25em; }
+.ligus-md h3 { font-size: 1.1em; }
+.ligus-md blockquote {
   margin: 0.5em 0;
   padding-left: 0.9em;
-  border-left: 3px solid var(--hive-line);
+  border-left: 3px solid var(--ligus-line);
   opacity: 0.85;
 }
-.hive-md table { border-collapse: collapse; margin: 0.5em 0; display: block; overflow-x: auto; }
-.hive-md th,
-.hive-md td { border: 1px solid var(--hive-line); padding: 0.3em 0.6em; }
-.hive-md hr { border: none; border-top: 1px solid var(--hive-line); margin: 0.8em 0; }
-.hive-md a { word-break: break-word; }
+.ligus-md table { border-collapse: collapse; margin: 0.5em 0; display: block; overflow-x: auto; }
+.ligus-md th,
+.ligus-md td { border: 1px solid var(--ligus-line); padding: 0.3em 0.6em; }
+.ligus-md hr { border: none; border-top: 1px solid var(--ligus-line); margin: 0.8em 0; }
+.ligus-md a { word-break: break-word; }
 
 /* Native <select> popups (esp. Windows/Chromium) inherit a light text color
    that ends up light-on-white. Force theme-legible colors on the POPUP only
@@ -382,7 +382,7 @@ body {
    dark box inside every styled select wrapper. Controls that want a fill set
    it explicitly. */
 select {
-  color: var(--hive-ink);
+  color: var(--ligus-ink);
   /* Strip the native OS chrome (macOS' blue double-arrow box that ignores the
      theme) and draw our own chevron, so every dropdown matches the app in every
      palette. The open option list stays OS-native — WebKit won't style that
@@ -398,36 +398,36 @@ select {
 }
 select option,
 select optgroup {
-  color: var(--hive-ink);
-  background-color: var(--hive-panel);
+  color: var(--ligus-ink);
+  background-color: var(--ligus-panel);
 }
 
 /* Syntax highlighting (highlight.js) — token colors derived from the app's
    theme vars so they adapt to every palette + light/dark with no separate dark
    rules. Kept deliberately restrained: a few hue families over the code fg. */
-.hljs { color: var(--hive-ink); background: transparent; }
-.hljs-comment, .hljs-quote { color: var(--hive-ink-soft); font-style: italic; }
+.hljs { color: var(--ligus-ink); background: transparent; }
+.hljs-comment, .hljs-quote { color: var(--ligus-ink-soft); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-name {
-  color: oklch(from var(--hive-accent-cool) 0.62 0.16 h);
+  color: oklch(from var(--ligus-accent-cool) 0.62 0.16 h);
 }
 .hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute, .hljs-meta .hljs-string {
-  color: oklch(from var(--hive-success) 0.62 0.14 h);
+  color: oklch(from var(--ligus-success) 0.62 0.14 h);
 }
 .hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link, .hljs-selector-attr, .hljs-selector-pseudo {
-  color: oklch(from var(--hive-accent-warm) 0.7 0.14 h);
+  color: oklch(from var(--ligus-accent-warm) 0.7 0.14 h);
 }
 .hljs-title, .hljs-title.function_, .hljs-section, .hljs-built_in, .hljs-type, .hljs-class .hljs-title {
-  color: oklch(from var(--hive-accent-cool) 0.7 0.12 h);
+  color: oklch(from var(--ligus-accent-cool) 0.7 0.12 h);
 }
-.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-property { color: var(--hive-ink); }
+.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-property { color: var(--ligus-ink); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
-.hljs-deletion { color: var(--hive-danger-ink, var(--hive-danger)); }
+.hljs-deletion { color: var(--ligus-danger-ink, var(--ligus-danger)); }
 
 /* Skeleton block (LoadingState). */
-.hive-skel { border-radius: var(--hive-radius-sm); background: color-mix(in srgb, var(--hive-ink) 9%, transparent); animation: hive-pulse 1.4s ease-in-out infinite; }
-@keyframes hive-pulse { 50% { opacity: 0.5; } }
-@media (prefers-reduced-motion: reduce) { .hive-skel { animation: none; } }
+.ligus-skel { border-radius: var(--ligus-radius-sm); background: color-mix(in srgb, var(--ligus-ink) 9%, transparent); animation: ligus-pulse 1.4s ease-in-out infinite; }
+@keyframes ligus-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .ligus-skel { animation: none; } }
 /* Horizontal scrollers (segmented tabs) without a heavy scrollbar. */
-.hive-scroll-x { scrollbar-width: none; }
-.hive-scroll-x::-webkit-scrollbar { display: none; }
+.ligus-scroll-x { scrollbar-width: none; }
+.ligus-scroll-x::-webkit-scrollbar { display: none; }

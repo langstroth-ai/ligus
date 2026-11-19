@@ -3,7 +3,7 @@
 #   ligus dashboard check
 # The built-in Ligus section (agents, proposals, workflows, turns, this host)
 # shows above these sections; `builtin = false` hides it. Format reference
-# and the list of hive metrics: docs/dashboard.md, `ligus dashboard metrics`.
+# and the list of ligus metrics: docs/dashboard.md, `ligus dashboard metrics`.
 
 title = "Dashboard"
 

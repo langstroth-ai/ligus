@@ -109,7 +109,7 @@ const chatDrafts = new Map<string, string>();
 const chatScroll = new Map<string, { top: number; pinned: boolean }>();
 
 /// The backend's refusal while a workspace waits for its founder's signed
-/// founding (`hive_runtime::chat_service::WAITING_FOR_FOUNDER`).
+/// founding (`ligus_runtime::chat_service::WAITING_FOR_FOUNDER`).
 export function isWaitingForFounder(message: string): boolean {
   return message.includes("waiting for the workspace's founder");
 }
@@ -956,7 +956,7 @@ export function ChatView({
   // The composer's resolved route (mockup §7.5): the first @mention in the draft
   // routes the turn; with none, it falls back to @primary (the chat's runtime).
   const routeMention = input.match(/@([\w-]+)/)?.[1]?.toLowerCase();
-  // "@hive" and "@primary" both resolve to the default agent (no roster lookup).
+  // "@ligus" and "@primary" both resolve to the default agent (no roster lookup).
   const routeIsPrimary =
     routeMention === "primary" || routeMention === PRIMARY_HANDLE;
   const routeHit =
@@ -970,7 +970,7 @@ export function ChatView({
       : routeHit.kind
     : runtimeVia;
   // Streaming/pending turns are authored by the resolved recipient: the
-  // @mentioned agent, else the default agent ("Hive" / @hive) — matching the
+  // @mentioned agent, else the default agent ("Ligus" / @ligus) — matching the
   // persisted turn so the head doesn't change identity when the stream lands.
   const streamAuthor = routeHandle !== "primary" ? routeHandle : PRIMARY_NAME;
   const streamHandle = routeHandle !== "primary" ? routeHandle : PRIMARY_HANDLE;
@@ -1005,7 +1005,7 @@ export function ChatView({
     <div className={`flex h-full min-w-0 flex-col ${embedded ? "" : "p-4"}`}>
       <div
         className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
       >
         <div className="relative flex min-h-0 flex-1 flex-col">
         {!embedded && <ChatRepoChip sessionId={sessionId} />}
@@ -1022,11 +1022,11 @@ export function ChatView({
           {!chat.isLoading && !chat.isError && messages.length === 0 && !optimisticUser && (
             <div
               className="max-w-lg rounded-3xl border p-6"
-              style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+              style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
             >
               <div
                 className="flex h-11 w-11 items-center justify-center rounded-2xl"
-                style={{ background: "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)", color: "var(--hive-accent-ink)" }}
+                style={{ background: "color-mix(in srgb, var(--ligus-accent-cool) 18%, transparent)", color: "var(--ligus-accent-ink)" }}
                 aria-hidden
               >
                 <IconMessage size={22} />
@@ -1047,12 +1047,12 @@ export function ChatView({
                       });
                     }}
                     className="group/starter flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all hover:border-transparent hover:shadow-sm"
-                    style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+                    style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
                   >
                     <span className="flex-1">{p}</span>
                     <span
                       className="shrink-0 -rotate-90 opacity-0 transition-opacity group-hover/starter:opacity-60"
-                      style={{ color: "var(--hive-accent-ink)" }}
+                      style={{ color: "var(--ligus-accent-ink)" }}
                       aria-hidden
                     >
                       <IconArrowDown size={14} />
@@ -1062,7 +1062,7 @@ export function ChatView({
               </div>
               <div
                 className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-4 text-xs opacity-55"
-                style={{ borderColor: "var(--hive-line)" }}
+                style={{ borderColor: "var(--ligus-line)" }}
               >
                 <span><code>/</code> for commands</span>
                 <span><code>@file</code> button to add a file</span>
@@ -1098,7 +1098,7 @@ export function ChatView({
               const shared = Boolean(rosterAgent) && rosterAgent!.ownerActorId.trim() === "";
               const turnColor = rosterAgent?.avatarColorHex ?? m.authorColorHex ?? undefined;
               // The mentionable handle for an agent turn: the roster name, else
-              // the default agent's "@hive" (its author is stored as "Hive").
+              // the default agent's "@ligus" (its author is stored as "Ligus").
               const handle =
                 m.role === "user" || m.role === "system"
                   ? undefined
@@ -1216,7 +1216,7 @@ export function ChatView({
                 <button
                   onClick={() => void handleStop()}
                   className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
-                  style={{ border: "1px solid var(--hive-line)" }}
+                  style={{ border: "1px solid var(--ligus-line)" }}
                 >
                   Stop &amp; retry
                 </button>
@@ -1235,7 +1235,7 @@ export function ChatView({
                       .catch((e) => toast.error(`Couldn't reset: ${errMsg(e)}`));
                   }}
                   className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
-                  style={{ border: "1px solid var(--hive-line)" }}
+                  style={{ border: "1px solid var(--ligus-line)" }}
                   title="Force this chat out of a stuck state"
                 >
                   Reset chat
@@ -1300,11 +1300,11 @@ export function ChatView({
                 }`}
                 style={
                   isNew
-                    ? { background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }
+                    ? { background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }
                     : {
-                        background: "var(--hive-surface)",
-                        color: "var(--hive-ink-soft)",
-                        border: "1px solid var(--hive-line)",
+                        background: "var(--ligus-surface)",
+                        color: "var(--ligus-ink-soft)",
+                        border: "1px solid var(--ligus-line)",
                       }
                 }
               >
@@ -1318,7 +1318,7 @@ export function ChatView({
         {/* The Claude-Code routing note lives in the route-pill popover (below),
             where routing is chosen — a standalone banner here just duplicated it
             and shoved the composer down mid-session (F9). */}
-        <div className="border-t px-4 py-3.5" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="border-t px-4 py-3.5" style={{ borderColor: "var(--ligus-line)" }}>
           {/* Composer — a turn-shaped card; the "next turn" in the transcript
               (spec §7.5). Card lights its accent border on focus / while sending;
               the route pill resolves the recipient, and the @ / popovers stay. */}
@@ -1536,7 +1536,7 @@ export function ChatView({
                     type="button"
                     onClick={() => setRouteOpen((o) => !o)}
                     className={`rp${routeOpen ? " on" : ""}`}
-                    title="Runtime backing @hive — click to switch which model answers untagged messages"
+                    title="Runtime backing @ligus — click to switch which model answers untagged messages"
                     aria-expanded={routeOpen}
                   >
                     <span className="rp-ar" aria-hidden>→</span>
@@ -1581,7 +1581,7 @@ export function ChatView({
                           {rt.id === currentRuntimeId && (
                             <span
                               aria-label={`backs @${PRIMARY_HANDLE}`}
-                              style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--hive-accent-fill)" }}
+                              style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ligus-accent-fill)" }}
                             >
                               <span style={{ fontSize: 11, fontWeight: 600 }}>@{PRIMARY_HANDLE}</span>
                               <IconCheck size={12} />
@@ -1695,9 +1695,9 @@ function DaySeparator({ label }: { label: string }) {
   if (!label) return null;
   return (
     <div className="my-2 flex items-center gap-3 px-1 opacity-60" aria-label={label}>
-      <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
+      <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
       <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
-      <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
+      <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
     </div>
   );
 }
@@ -1791,11 +1791,11 @@ function MessageBody({
             <button
               key={p}
               type="button"
-              // Open in Hive's editor; App's editorStore subscription reveals the
+              // Open in Ligus's editor; App's editorStore subscription reveals the
               // code canvas. A path that no longer exists just toasts on open.
               onClick={() => editorStore.requestOpen(p)}
-              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 font-mono text-xs transition-colors hover:border-[color:var(--hive-accent-cool)]"
-              style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 font-mono text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
+              style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
               title={`Open ${p} in the editor`}
             >
               <span aria-hidden className="opacity-60">
@@ -1817,7 +1817,7 @@ function MessageBody({
             <span
               key={`f-${p}-${i}`}
               className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
               title="A file on the sender's device; it wasn't shared"
             >
               <IconFile size={13} /> {fileBaseName(p)} (on the sender's device)
@@ -1826,7 +1826,7 @@ function MessageBody({
           {sessionId && shown.map((v) => <SharedAttachmentCard key={v.id} sessionId={sessionId} view={v} />)}
           {files.isFetched &&
             unplaced.map((id) => (
-              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--hive-line)" }}>
+              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--ligus-line)" }}>
                 An attachment that isn't available
               </span>
             ))}
@@ -1842,7 +1842,7 @@ function AttachmentChip({ path, image }: { path: string; image?: boolean }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       title={path}
     >
       <span aria-hidden className="opacity-60">
@@ -1867,7 +1867,7 @@ function ImageAttachment({ path }: { path: string }) {
     return (
       <div
         className="h-32 w-32 animate-pulse rounded-lg border"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
         title={fileBaseName(path)}
       />
     );
@@ -1878,7 +1878,7 @@ function ImageAttachment({ path }: { path: string }) {
         src={img.data}
         alt={fileBaseName(path)}
         className="max-h-64 max-w-[min(20rem,100%)] rounded-lg border object-contain"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
       />
     </a>
   );
@@ -1990,7 +1990,7 @@ const Bubble = memo(function Bubble({
   /// The mentionable handle for an agent turn (rendered "@handle"); the human
   /// name (`author`) is shown as-is. Falls back to `author` when absent.
   handle?: string;
-  /// For a primary-@hive turn: whose hive answered (shown as "· Alice"), so two
+  /// For a primary-@ligus turn: whose @ligus answered (shown as "· Alice"), so two
   /// same-named default agents are distinguishable.
   responderName?: string;
   responderDevice?: string;
@@ -2056,7 +2056,7 @@ const Bubble = memo(function Bubble({
     // popping into shape only when the turn retires. Markdown is memoized on
     // content, so each delta re-parses the accumulated text once; partial/unclosed
     // markup (an open ``` fence) renders gracefully. The caret trails the content.
-    <div className="hive-stream">
+    <div className="ligus-stream">
       <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} sessionId={sessionId} messageId={messageId} />
       <span className="tt-caret" />
     </div>
@@ -2221,16 +2221,16 @@ function FilePickerModal({
     <Modal
       onClose={onClose}
       overlayClassName="z-[900] flex items-start justify-center pt-[12vh]"
-      overlayStyle={{ background: "color-mix(in srgb, var(--hive-ink) 45%, transparent)" }}
+      overlayStyle={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)" }}
       panelClassName="w-full max-w-lg overflow-hidden rounded-2xl border shadow-2xl"
-      panelStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search workspace files…"
         className="w-full border-b bg-transparent px-4 py-3 text-base outline-none"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -2252,7 +2252,7 @@ function FilePickerModal({
             onMouseEnter={() => setActive(i)}
             onClick={() => onPick(f)}
             className="block w-full truncate px-4 py-2 text-left font-mono text-sm"
-            style={{ background: i === active ? "var(--hive-mist)" : "transparent" }}
+            style={{ background: i === active ? "var(--ligus-mist)" : "transparent" }}
           >
             {f}
           </button>
@@ -2267,7 +2267,7 @@ function FilePickerModal({
 function CopyAction({ body }: { body: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <span style={copied ? { color: "var(--hive-success-ink)" } : undefined}>
+    <span style={copied ? { color: "var(--ligus-success-ink)" } : undefined}>
       <IconAction
         title={copied ? "Copied" : "Copy"}
         onClick={() => {
@@ -2298,7 +2298,7 @@ function IconAction({
       title={title}
       aria-label={title}
       className="flex h-6 w-6 items-center justify-center rounded-md opacity-60 transition-all hover:opacity-100"
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-mist)")}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-mist)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       {children}

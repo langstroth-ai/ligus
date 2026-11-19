@@ -27,8 +27,8 @@ export function DangerZoneSection() {
       <div
         className="rounded-2xl border p-4"
         style={{
-          borderColor: "color-mix(in srgb, var(--hive-danger) 35%, transparent)",
-          background: "color-mix(in srgb, var(--hive-danger) 8%, transparent)",
+          borderColor: "color-mix(in srgb, var(--ligus-danger) 35%, transparent)",
+          background: "color-mix(in srgb, var(--ligus-danger) 8%, transparent)",
         }}
       >
         <div className="font-medium">Reset local data</div>

@@ -55,14 +55,14 @@ function languageForPath(path: string): string {
 const GUTTER_LINE_CAP = 2000;
 
 const GUTTER_CSS = `
-.hive-gl { width: 3px !important; left: 3px !important; border-radius: 2px; }
-.hive-gl-add { background: var(--hive-success); }
-.hive-gl-mod { background: var(--hive-accent-cool); }
-.hive-gl-del { background: transparent; }
-.hive-gl-del::after {
+.ligus-gl { width: 3px !important; left: 3px !important; border-radius: 2px; }
+.ligus-gl-add { background: var(--ligus-success); }
+.ligus-gl-mod { background: var(--ligus-accent-cool); }
+.ligus-gl-del { background: transparent; }
+.ligus-gl-del::after {
   content: ""; position: absolute; left: -1px; bottom: -2px; width: 0; height: 0;
   border-left: 4px solid transparent; border-right: 4px solid transparent;
-  border-top: 5px solid var(--hive-danger);
+  border-top: 5px solid var(--ligus-danger);
 }
 `;
 
@@ -293,9 +293,9 @@ export function EditorView() {
     const diff = computeLineDiff(head, cur);
     const line = (ln: number) => new monaco.Range(ln, 1, ln, 1);
     const decos: Monaco.editor.IModelDeltaDecoration[] = [
-      ...diff.added.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "hive-gl hive-gl-add" } })),
-      ...diff.modified.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "hive-gl hive-gl-mod" } })),
-      ...diff.deleted.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "hive-gl hive-gl-del" } })),
+      ...diff.added.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "ligus-gl ligus-gl-add" } })),
+      ...diff.modified.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "ligus-gl ligus-gl-mod" } })),
+      ...diff.deleted.map((ln) => ({ range: line(ln), options: { linesDecorationsClassName: "ligus-gl ligus-gl-del" } })),
     ];
     if (!decoRef.current) decoRef.current = editor.createDecorationsCollection();
     decoRef.current.set(decos);
@@ -483,7 +483,7 @@ export function EditorView() {
   const openInDiff = useCallback(() => {
     const path = mountedPath.current;
     if (!path) return;
-    window.dispatchEvent(new CustomEvent("hive:editor-open-in-diff", { detail: { path } }));
+    window.dispatchEvent(new CustomEvent("ligus:editor-open-in-diff", { detail: { path } }));
   }, []);
 
   /// "Send selection to chat": drop the current selection (or the caret's line
@@ -508,12 +508,12 @@ export function EditorView() {
     const ext = path.slice(path.lastIndexOf(".") + 1);
     const lang = ext && ext !== path ? `${ext} ` : "";
     const block = "```" + lang + "// " + path + "\n" + snippet + "\n```";
-    window.dispatchEvent(new CustomEvent("hive:editor-send-to-chat", { detail: { text: block } }));
+    window.dispatchEvent(new CustomEvent("ligus:editor-send-to-chat", { detail: { text: block } }));
     toast.success("Selection sent to chat.");
   }, []);
 
   return (
-    <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--hive-canvas)" }}>
+    <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--ligus-canvas)" }}>
       {/* Gutter decoration styles (theme tokens only, works in every palette). */}
       <style>{GUTTER_CSS}</style>
       <EditorTabs />
@@ -523,12 +523,12 @@ export function EditorView() {
       {!empty && activePath && (
         <div
           className="flex items-center gap-2 border-b px-3 py-1"
-          style={{ borderColor: "var(--hive-line)" }}
+          style={{ borderColor: "var(--ligus-line)" }}
         >
           {changedLines > 0 && (
             <span
               className="shrink-0 rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
-              style={{ color: "var(--hive-accent-ink)", background: "var(--hive-mist)" }}
+              style={{ color: "var(--ligus-accent-ink)", background: "var(--ligus-mist)" }}
               title="Lines changed vs the last commit (HEAD)"
             >
               {changedLines} changed vs HEAD
@@ -548,12 +548,12 @@ export function EditorView() {
         <div
           className="flex items-center gap-3 border-b px-3 py-1.5 text-xs"
           style={{
-            borderColor: "var(--hive-line)",
-            background: "var(--hive-mist)",
-            color: "var(--hive-ink)",
+            borderColor: "var(--ligus-line)",
+            background: "var(--ligus-mist)",
+            color: "var(--ligus-ink)",
           }}
         >
-          <span style={{ color: "var(--hive-warn-ink)" }}>
+          <span style={{ color: "var(--ligus-warn-ink)" }}>
             <IconAlertTriangle size={14} />
           </span>
           <span className="flex-1">
@@ -618,7 +618,7 @@ export function EditorView() {
         {empty && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm"
-            style={{ color: "var(--hive-ink)", opacity: 0.5, background: "var(--hive-canvas)" }}
+            style={{ color: "var(--ligus-ink)", opacity: 0.5, background: "var(--ligus-canvas)" }}
           >
             <IconFile size={28} />
             <p>Open a file to start editing.</p>

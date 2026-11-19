@@ -13,7 +13,7 @@ export function avColor(seed: string): string {
 }
 
 /// Up to two letters, `@` stripped, hyphen/underscore = word break
-/// ("@alice-claude" → "AC", "Hive" → "HI").
+/// ("@alice-claude" → "AC", "Ligus" → "HI").
 export function initials(name: string): string {
   const cleaned = name.replace(/^@/, "").replace(/[-_]/g, " ");
   const parts = cleaned.split(/\s+/).filter(Boolean);

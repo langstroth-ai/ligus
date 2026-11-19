@@ -115,12 +115,12 @@ export function PermissionsSection() {
       {(tier === "landlock" || tier === "unconfined") && (
         <div
           className="space-y-2 rounded-2xl border p-3"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
         >
           <div className="text-sm font-medium">
             {tier === "landlock" ? "Agent sandbox: Landlock (no namespaces)" : "No agent sandbox"}
           </div>
-          <p className="text-xs" style={{ color: tier === "unconfined" ? "var(--hive-danger-ink)" : "var(--hive-warm-ink)" }}>
+          <p className="text-xs" style={{ color: tier === "unconfined" ? "var(--ligus-danger-ink)" : "var(--ligus-warm-ink)" }}>
             {tier === "landlock"
               ? "Agents run under Landlock and seccomp without bubblewrap's namespaces: a weaker sandbox than bubblewrap. "
               : "CLI agent turns (at any tier), commands, MCP servers and pre-flight tests are refused on this device; chat with an HTTP model (no local tools) still runs. "}
@@ -139,7 +139,7 @@ export function PermissionsSection() {
       {health.data?.macos && (
         <div
           className="space-y-2 rounded-2xl border p-3"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
         >
           <div className="text-sm font-medium">macOS file access</div>
           <p className="text-xs text-ink-soft">
@@ -149,14 +149,14 @@ export function PermissionsSection() {
             hidden prompt.
           </p>
           {health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+            <p className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
               Ligus is running from a temporary location (App Translocation), so permission grants
               won't stick. Move Ligus to <code>/Applications</code> and reopen it — or install via{" "}
               <code>brew install --cask langstroth-ai/ligus/ligus-app</code>.
             </p>
           )}
           {health.data?.quarantined && !health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
+            <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
               This copy still carries the “downloaded from the internet” quarantine flag, which can
               keep permissions from persisting. Installing via Homebrew avoids it.
             </p>
@@ -191,7 +191,7 @@ export function PermissionsSection() {
           <strong>Accept file edits</strong> to let it create/modify files in your workspace.
         </p>
       ) : (
-        <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
+        <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
           The <code>claude</code> agent can modify files
           {permissionMode === "runCommands" ? " and run shell commands (build, test, git)" : ""}
           {permissionMode === "bypassPermissions" ? " and run any command or tool" : ""} in your
@@ -201,7 +201,7 @@ export function PermissionsSection() {
       <div className="mt-4 space-y-2">
         <div className="text-sm font-medium">Local model file tools</div>
         <p className="text-xs text-ink-soft">
-          Local or self-hosted model runtimes (Ollama, or a Custom / Hive daemon endpoint such as a
+          Local or self-hosted model runtimes (Ollama, or a Custom / Ligus daemon endpoint such as a
           llama.cpp server — never hosted APIs like OpenAI or OpenRouter) with{" "}
           <strong>Supports tools</strong> on get Ligus's built-in tools: <code>read_file</code>,{" "}
           <code>list_dir</code> and <code>search</code>, plus <code>edit_file</code> and{" "}
@@ -239,13 +239,13 @@ export function PermissionsSection() {
           </span>
         </div>
         {tools.enabled && tools.runCommand && (
-          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
             Local models can run any shell command in the turn's folder without asking. A command is
             not sandboxed: it can reach the network and anything your account can.
           </p>
         )}
         {tools.enabled && tools.writeInPlace && (
-          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
             Outside a git repository, local models edit your files directly with no review step.
           </p>
         )}

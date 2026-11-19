@@ -12,12 +12,12 @@ This is the quick orientation for contributors — deeper docs live in
 
 ```
 crates/
-  hive-core      pure domain: models, config, crypto, events/projector, authz
-  hive-runtime   IO/orchestration: SQLite event store, providers, MCP, sync
-  hive-proto     IPC DTOs shared with the frontend (ts-rs generates web/src/bindings)
-  hive-forge     code hosts (GitHub, GitLab, Forgejo, Gitea)
-  hive-cli       the ligus CLI and ligus serve
-app/       the Tauri shell: commands/events, app wiring
+  ligus-core      pure domain: models, config, crypto, events/projector, authz
+  ligus-runtime   IO/orchestration: SQLite event store, providers, MCP, sync
+  ligus-proto     IPC DTOs shared with the frontend (ts-rs generates web/src/bindings)
+  ligus-forge     code hosts (GitHub, GitLab, Forgejo, Gitea)
+  ligus-cli       the ligus CLI and ligus serve
+app/             the Tauri shell (package ligus-desktop): commands/events, app wiring
 web/             React + TypeScript frontend (Vite + Bun)
 docs/            developer/maintainer docs (this audience)
 docs-site/       the published docs (docs.langstroth.ai): docs/ligus/ and docs/operate/
@@ -30,16 +30,20 @@ cargo test --workspace          # Rust crates + the Tauri app
 cd web && bun install           # first time
 cd web && bun run build         # frontend typecheck (tsc) + build
 cargo tauri dev                 # run the app (frontend + backend)
-cargo run -p langstroth-relay         # run the relay locally (:8443)
 ```
+
+To sync against a local relay, run one from
+[langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) in its
+checkout: `go run ./cmd/langstroth-relay` (serves `http://0.0.0.0:8443`, in
+memory).
 
 ## IPC type bindings (ts-rs)
 
-DTOs in `hive-proto` generate the TypeScript bindings in `web/src/bindings/`.
+DTOs in `ligus-proto` generate the TypeScript bindings in `web/src/bindings/`.
 After changing a DTO, regenerate and commit them:
 
 ```bash
-cargo test -p hive-proto export_bindings
+cargo test -p ligus-proto export_bindings
 ```
 
 CI fails if `web/src/bindings/` is out of sync with the Rust types.
@@ -47,7 +51,7 @@ CI fails if `web/src/bindings/` is out of sync with the Rust types.
 ## Conventions
 
 - Match the surrounding code's style, naming, and comment density.
-- Keep `hive-core` pure (no IO); IO/orchestration belongs in `hive-runtime`.
+- Keep `ligus-core` pure (no IO); IO/orchestration belongs in `ligus-runtime`.
 - Events are append-only and signed; add new behavior as `SessionEvent` variants
   with projector + authorization coverage (see [`docs/architecture.md`](docs/architecture.md)).
 

@@ -70,7 +70,7 @@ button saves everything.
 
 After onboarding:
 
-- The app data dir `ai.ligus.desktop/` — the event store `hive.db`
+- The app data dir `ai.ligus.desktop/` — the event store `ligus.db`
   (every workspace's signed events), your account + device records
   (public bits) in `identity.json`, private key seeds under `keys/`, and
   `settings.json` (runtime/provider config, including any API keys and the

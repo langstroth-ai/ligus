@@ -78,7 +78,7 @@ Planned, not yet implemented:
 - **On-disk caching + indexing** (semantic search over large vaults)
   instead of whole-file injection.
 - **More kinds** — Notion, Google Drive, S3. Extend the `VaultSource`
-  enum in `hive-core` and add a fetcher arm in
-  `hive-runtime/src/vault_fetcher.rs`; the Settings UI picks up new
+  enum in `ligus-core` and add a fetcher arm in
+  `ligus-runtime/src/vault_fetcher.rs`; the Settings UI picks up new
   kinds from the enum. Or expose the source through an MCP server
   (`search_vault`-style tools) — that works today.

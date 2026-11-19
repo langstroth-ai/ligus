@@ -259,7 +259,7 @@ Args: dict rules what.
 - name: LIGUS_POD_VOLUME
   value: /var/lib/ligus
 # HOME (agent CLIs' logins and caches) is outside the data dir: agent
-# processes never read the data dir (keys, hive.db, serve.token).
+# processes never read the data dir (keys, ligus.db, serve.token).
 - name: HOME
   value: /home/ligus
 - name: POD_NAME
@@ -424,8 +424,7 @@ Secret: secrets are files. Args: dict v component.
 {{- $chart := list "LIGUS_DATA_DIR" "HOME" "LIGUS_RELAY_URL" "LIGUS_WORKSPACE" "LIGUS_REQUIRE_SANDBOX" "LIGUS_SANDBOX" "LIGUS_SECRET_BACKEND" "LIGUS_SECRETS_DIR" "LIGUS_WS_SECRET_DIR" "LIGUS_ADMISSION_FILE" "LIGUS_SERVE_OWNER" -}}
 {{- range .v.extraEnv -}}
 {{- $n := toString .name -}}
-{{- $base := regexReplaceAll "^HIVE_" $n "LIGUS_" -}}
-{{- if or (has $base $chart) (regexMatch "^LIGUS_(WORKSPACE_KEY|RELAY_ACCESS_TOKEN|REMOTE_REG_TOKEN|NTFY_TOKEN)(_FILE)?$" $base) (hasPrefix "LIGUS_WS_SECRET_" $base) -}}
+{{- if or (has $n $chart) (regexMatch "^LIGUS_(WORKSPACE_KEY|RELAY_ACCESS_TOKEN|REMOTE_REG_TOKEN|NTFY_TOKEN)(_FILE)?$" $n) (hasPrefix "LIGUS_WS_SECRET_" $n) -}}
 {{- fail (printf "%s.extraEnv: %s is set by the chart (secrets are mounted files, the sandbox settings come from agentSandbox.*); remove it" $.component $n) -}}
 {{- end -}}
 {{- if and .valueFrom (or .valueFrom.secretKeyRef) -}}
@@ -438,7 +437,7 @@ Secret: secrets are files. Args: dict v component.
 {{- define "ligus.validateAgentEnv" -}}
 {{- $allow := .root.Values.agentEnvAllowList -}}
 {{- range $allow -}}
-{{- if regexMatch "^(LIGUS|HIVE)_" (toString .) -}}
+{{- if hasPrefix "LIGUS_" (toString .) -}}
 {{- fail (printf "agentEnvAllowList: %s is one of Ligus's own variables; only model provider and forge keys belong there" (toString .)) -}}
 {{- end -}}
 {{- end -}}

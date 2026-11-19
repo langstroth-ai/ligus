@@ -1,5 +1,5 @@
 [app]
-name = "Hive"
+name = "Ligus"
 local_mode = false
 sync_mode = "workspace"
 default_runtime = "primary-runtime"
