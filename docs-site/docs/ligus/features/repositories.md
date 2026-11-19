@@ -99,7 +99,10 @@ A checkout has one **managing host** on a machine: the first Ligus process
 to use it writes a marker in its git directory. When the desktop app and a
 `ligus serve` box run on the same Mac, the box refuses the desktop's folder and
 keeps its own clone. On a box, `ligus repos takeover <path>` takes over a
-checkout from a host that is gone.
+checkout from a host that is gone. Work that doesn't claim a checkout leaves
+one another host manages alone too: the desktop's hygiene sweep skips it, and
+a chat without a repository doesn't run in (or apply into) a workspace folder
+that another host manages.
 
 **Tell other members which of these repositories this device has checked
 out** is on by default in workspaces you own and off elsewhere. With it off,
@@ -114,7 +117,20 @@ none. Contributors and above can change it; agents can't.
 A new chat branch, `hive/chat/<chat-id>`, is cut from the chat's base branch
 (`upstream/<branch>` in a fork, else `origin/<branch>`, else the local branch).
 The first host to cut it **pins** that commit for the chat, so every device
-starts the chat from the same base.
+starts the chat from the same base. The first pin wins: a later pin from
+another host or a member changes nothing, and pointing the chat at another
+repository and back keeps the pin it had.
+
+To move the base, an Admin or the chat's creator picks **Move the base to the
+latest ‹branch›** in the chip (with your passkey under rules v2). Each host
+with the chat's branch rebuilds it on the new base on its next turn: it
+replays the chat's applied proposals there in order (leaving out reverted
+ones, and skipping one the new base already contains) and moves the branch
+only if it is still where it was. If it can't, the turn doesn't run and the
+chat says why: a commit on the chat's branch that isn't an applied proposal
+(Ligus never drops someone's work), local changes in the chat's folder, a
+proposal that doesn't apply on the new base, or a new base that host hasn't
+fetched.
 
 ### Where a turn runs
 
@@ -142,9 +158,11 @@ repository, the composer says so when you address it: "ScoutBee runs on
 mac-test, which has no WeFit. Clone there · Run here this time". **Clone
 there** tells you how to clone it on that host (from the phone connected to
 it). **Run here this time** sends that one message's turn to this device
-instead; it is offered only when this device has the repository, can run the
-agent's runtime, and the agent is yours. The host backs off when it sees this
-device's claim on the turn.
+instead; it is offered, and honoured, only when the chat has a repository,
+the agent's host says it lacks it, this device has it ready, can run the
+agent's runtime, and the agent is yours. It decides only what this device
+does: nothing makes another member's device run a turn. The host backs off
+when it sees this device's claim on the turn.
 
 While a host is cloning the repository, a turn it has already claimed waits
 for the clone (up to ten minutes). Coverage shown elsewhere is a hint: the
@@ -169,12 +187,16 @@ When a proposal doesn't apply, the card offers:
 
 - **Ask the agent to rebase**: files a follow-up turn to the agent that made
   it, with the conflict as this device's git reports it (found without
-  changing the branch) and the branch's current tip. The agent's new version
-  supersedes this one and needs approval again; an edited result never enters
-  the chat's history without a vote.
+  changing the branch) and the branch's current tip. The conflict is quoted
+  as data in a block nothing in it can close, and the proposal's title stays
+  on one line, so text a patch chose never reads as your words. The agent's
+  new version supersedes this one and needs approval again; an edited result
+  never enters the chat's history without a vote.
 - **Open in editor**: opens the chat's folder for the repository with your
   system's default handler for folders, to look at the conflict or at local
-  changes in the way.
+  changes in the way. Only a real folder inside the checkout is opened (never
+  a link, which a repository could plant there), and on macOS never an app or
+  other package the opener would launch; no shell is involved.
 
 Every apply commit carries `Ligus-Proposal: <id>` in its trailer block.
 Before a turn, a host replays any applied proposal its chat branch lacks (by

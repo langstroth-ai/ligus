@@ -127,6 +127,23 @@ config events; checkouts and their paths never leave a device.
   content can't change afterwards (a re-upsert that would is refused), so a
   replay only ever applies the approved bytes. A host fulfilling a person's
   "Apply on" request uses the same checkout check as a turn.
+- **A chat's pinned base** can't be moved by any member: the first pin wins
+  (switching the chat's repository away and back keeps it), and moving it
+  takes an explicit re-pin by an Admin or the chat's creator, from their own
+  device, with presence under rules v2, naming the pin it replaces. A host
+  follows a re-pin only by rebuilding the chat branch from the ledger, and
+  refuses rather than drop a commit that isn't an applied proposal.
+- **One managing host per checkout** also binds work that doesn't claim one:
+  hygiene never sweeps, and a chat without a repository never runs or
+  applies in, a checkout another host on the machine manages.
+- **Desktop actions on repository text.** "Ask the agent to rebase" quotes
+  git's conflict output as data in a fence it can't close and keeps the
+  agent's title on one line, so a patch's file names can't pose as your
+  message. "Open in editor" hands the OS opener one absolute path to a real
+  folder inside the checkout (never a link a repository planted, never a
+  macOS package it would launch; on Windows one quoted argument, so
+  `explorer` can't read a comma as a switch). "Clone into…" never follows a
+  redirect and names the folder from `[a-z0-9-]` only.
 - **A remote URL** with `#`, `?` or a backslash has no identity: git connects
   to the host before them, so `https://evil.example#@github.com/o/n` never
   reads as github.com's repository.

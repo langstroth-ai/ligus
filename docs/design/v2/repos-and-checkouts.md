@@ -850,6 +850,26 @@ conflict and the branch tip; the revision supersedes and needs a vote) and
 command-layer tests for these, the gate, apply and clone run in the in-app
 harness's offline checks (`app/src/e2e.rs`, `--features e2e`).
 
+Also built after the adversarial review of those pieces (2026-11-18): review
+residual 3, re-pinning. `ChatBasePinned` is first pin wins per repo
+(`ChatSession::repo_bases`, kept across repo switches); the explicit
+`ChatBaseRepinned {repo_id, commit, previous}` needs an Admin or the chat's
+creator, a human on their own device, presence under rules v2, and `previous`
+equal to the pin in force (a compare-and-swap in authz and in the fold).
+`prepare_chat` follows a re-pin when the chat branch was cut from an earlier
+pin (`apply::branch_cut_point`): `apply::rebase_onto_repin` rebuilds the branch
+on the new pin from the ledger in scratch indexes and moves it by `reset
+--keep` in a clean chat worktree or `update-ref <new> <old>`, or refuses
+visibly. Residual 6: hygiene and legacy turns and applies (a chat without a
+repo, in the bound folder; the box's legacy binding) check
+`marker::managed_elsewhere` and leave another host's checkout alone. Per-turn
+scope also covers `implement_proposal`'s command run (its directory and
+sandbox policy from the chat's own catalog), the legacy apply's folder, the
+tool loop's reply root and the Ligus forge tools' binding. "Clone into…"
+never follows a redirect, pinned or not; "Open in editor" opens only a real
+folder inside the checkout and refuses packages on macOS; "Run here this
+time" is honoured only in the case the composer offers it.
+
 Not built yet: the phone UI (in the separate phone app repository; the box API
 it needs is here), "Clone there" from the desktop to another host (the review
 keeps it phone-only), workspace-synced repo and host aliases (Phase 4,

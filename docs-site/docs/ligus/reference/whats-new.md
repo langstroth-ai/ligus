@@ -16,9 +16,11 @@ Full release notes are on the
   otherwise says why, and takes its runtimes, MCP servers and trust from its
   own chat's folder, never the one on screen. The composer warns when an
   agent's host lacks the chat's repository and can run that turn here once
-  instead. Chat branches start from a pinned base, applied proposals replay
-  on every host, and an apply never half-applies; a conflict offers **Ask the
-  agent to rebase** and **Open in editor**. See
+  instead. Chat branches start from a pinned base (the first pin wins; an
+  Admin or the chat's creator can move it, and every host rebuilds its chat
+  branch there or says why it can't), applied proposals replay on every host,
+  and an apply never half-applies; a conflict offers **Ask the agent to
+  rebase** and **Open in editor**. See
   [Workspace repositories](../features/repositories.md) and
   [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
 - **The phone acts as you with its own key; one host applies.** Since the
