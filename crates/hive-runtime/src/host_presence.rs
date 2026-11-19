@@ -46,7 +46,7 @@ type Beat = hive_core::workspace_repo::HostBeat;
 /// Seal a beat for `host_id` at `at` (unix seconds) under `ring`'s seal key
 /// (none when this device may not seal).
 pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Value> {
-    seal_beat(ring, &Beat { host_id: host_id.to_string(), at, seq: 0, coverage: Vec::new() })
+    seal_beat(ring, &Beat { host_id: host_id.to_string(), at, ..Default::default() })
 }
 
 /// Seal a full beat (with this host's repo coverage and its `seq`).
@@ -122,15 +122,22 @@ pub async fn publish_host_beat(relay: &RelayClient, room: &str, ring: &KeyringEn
     relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
 }
 
-/// Publish this host's beat with its repo coverage (`seq` orders beats from
-/// one host; coverage replaces the host's previous coverage).
-pub async fn publish_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, host_id: &str, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> Result<(), RelayError> {
+/// This host's beat now, with its repo coverage (`seq` orders beats from
+/// one host; coverage replaces the host's previous coverage). Unsigned: the
+/// caller signs the coverage with the host's device key
+/// (`ChatService::sign_beat`), or readers ignore it.
+pub fn beat_now(host_id: &str, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> Beat {
     let now = Timestamp::now().inner().unix_timestamp();
     let seq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let Some(blob) = seal_beat(ring, &Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { seq }, coverage }) else {
+    Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { seq }, coverage, ..Default::default() }
+}
+
+/// Publish a whole beat (see [`beat_now`]) to the room's presence channel.
+pub async fn publish_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, beat: &Beat) -> Result<(), RelayError> {
+    let Some(blob) = seal_beat(ring, beat) else {
         return Ok(());
     };
-    relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
+    relay.publish_presence(room, &host_presence_slot(&beat.host_id), &blob).await
 }
 
 /// Read every host's whole latest beat in the room.
@@ -176,12 +183,13 @@ impl HostPresence {
         }
     }
 
-    /// Record a whole beat: its liveness, and its coverage when its `seq`
-    /// is the highest seen for the host (a coverage-less beat leaves the
-    /// last coverage alone).
-    pub fn record_beat(&self, beat: &Beat) {
+    /// Record a whole beat: its liveness, and, when `verified` (its host's
+    /// own device signed the coverage: `HostBeat::coverage_verified`), its
+    /// coverage when its `seq` is the highest seen for the host (a
+    /// coverage-less or unverified beat leaves the last coverage alone).
+    pub fn record_beat(&self, beat: &Beat, verified: bool) {
         self.record(&beat.host_id, beat.at);
-        if beat.coverage.is_empty() || !beat.coverage_ok() || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp()) {
+        if !verified || beat.coverage.is_empty() || !beat.coverage_ok() || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp()) {
             return;
         }
         let mut c = self.coverage.lock().unwrap_or_else(|p| p.into_inner());
@@ -193,10 +201,11 @@ impl HostPresence {
         }
     }
 
-    /// Merge fetched whole beats.
-    pub fn merge_beats(&self, beats: HashMap<String, Beat>) {
+    /// Merge fetched whole beats; `verified` says whether a beat's coverage
+    /// is its own host's signed report (see [`Self::record_beat`]).
+    pub fn merge_beats(&self, beats: HashMap<String, Beat>, verified: impl Fn(&Beat) -> bool) {
         for b in beats.values() {
-            self.record_beat(b);
+            self.record_beat(b, verified(b));
         }
     }
 
@@ -284,12 +293,12 @@ mod tests {
         use hive_core::workspace_repo::{CoverageEntry, HostBeat};
         let k = key("room secret");
         let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
-        let newer = HostBeat { host_id: "box".into(), at: 100, seq: 7, coverage: vec![entry("present")] };
-        let older = HostBeat { host_id: "box".into(), at: 200, seq: 3, coverage: vec![entry("missing")] };
+        let newer = HostBeat { host_id: "box".into(), at: 100, seq: 7, coverage: vec![entry("present")], ..Default::default() };
+        let older = HostBeat { host_id: "box".into(), at: 200, seq: 3, coverage: vec![entry("missing")], ..Default::default() };
         for order in [[&newer, &older], [&older, &newer]] {
             let p = HostPresence::new();
             for b in order {
-                p.record_beat(b);
+                p.record_beat(b, true);
             }
             assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
             assert_eq!(p.beat_of("box"), Some(200), "liveness is the newest beat either way");
@@ -299,11 +308,31 @@ mod tests {
         let opened = open_beats(&blobs, &k, 1_000);
         assert_eq!(opened["box"].coverage, newer.coverage);
         // Over the bound: liveness kept, coverage dropped.
-        let big = HostBeat { host_id: "big".into(), at: 1, seq: 1, coverage: (0..65).map(|_| entry("present")).collect() };
+        let big = HostBeat { host_id: "big".into(), at: 1, seq: 1, coverage: (0..65).map(|_| entry("present")).collect(), ..Default::default() };
         blobs.insert(host_presence_slot("big"), seal_beat(&k, &big).unwrap());
         let opened = open_beats(&blobs, &k, 1_000);
         assert!(opened["big"].coverage.is_empty());
         assert_eq!(HostPresence::new().coverage_of("nobody"), None);
+    }
+
+    /// Repos review residual 1: a beat any member sealed for another host
+    /// keeps its liveness, but its coverage counts only when the reader
+    /// verified the host's own signature on it.
+    #[test]
+    fn unverified_coverage_is_ignored() {
+        use hive_core::workspace_repo::{CoverageEntry, HostBeat};
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let p = HostPresence::new();
+        let real = HostBeat { host_id: "box".into(), at: 5, seq: 1, coverage: vec![entry("present")], ..Default::default() };
+        let forged = HostBeat { host_id: "box".into(), at: 9, seq: 2, coverage: vec![entry("missing")], ..Default::default() };
+        let mut beats = HashMap::new();
+        beats.insert("box".to_string(), real.clone());
+        p.merge_beats(beats, |b| b == &real);
+        let mut beats = HashMap::new();
+        beats.insert("box".to_string(), forged);
+        p.merge_beats(beats, |_| false);
+        assert_eq!(p.coverage_of("box").unwrap()[0].state, "present", "the forged report is ignored");
+        assert_eq!(p.beat_of("box"), Some(9), "its liveness still counts");
     }
 
     /// A beat whose `seq` is from the far future (a forged beat sealed by any
@@ -314,11 +343,11 @@ mod tests {
         use hive_core::workspace_repo::{CoverageEntry, HostBeat};
         let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
         let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        let forged = HostBeat { host_id: "box".into(), at: 1, seq: u64::MAX, coverage: vec![entry("missing")] };
-        let real = HostBeat { host_id: "box".into(), at: 2, seq: now_ms, coverage: vec![entry("present")] };
+        let forged = HostBeat { host_id: "box".into(), at: 1, seq: u64::MAX, coverage: vec![entry("missing")], ..Default::default() };
+        let real = HostBeat { host_id: "box".into(), at: 2, seq: now_ms, coverage: vec![entry("present")], ..Default::default() };
         let p = HostPresence::new();
-        p.record_beat(&forged);
-        p.record_beat(&real);
+        p.record_beat(&forged, true);
+        p.record_beat(&real, true);
         assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
         // Opened from the relay: the same.
         let k = key("room secret");

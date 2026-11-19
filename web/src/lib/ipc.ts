@@ -81,8 +81,10 @@ export const getChat = (sessionId: string) =>
 export const getContextTelemetry = (sessionId: string) =>
   invoke<ContextTelemetryDto | null>("get_context_telemetry", { sessionId });
 
-export const sendMessage = (sessionId: string, body: string) =>
-  invoke<void>("send_message", { sessionId, body });
+/// `runHere`: "Run here this time" — a message to an agent pinned to a host
+/// without the chat's repository runs on this device instead, once.
+export const sendMessage = (sessionId: string, body: string, runHere?: boolean) =>
+  invoke<void>("send_message", runHere ? { sessionId, body, runHere: true } : { sessionId, body });
 
 /// Stop the in-flight turn for a session (the composer's Stop button). Aborts
 /// generation and kills any CLI subprocess; safe no-op if nothing is running.
@@ -2162,10 +2164,27 @@ export interface WorkspaceRepoDto {
   defaultBranch: string;
   removed: boolean;
   /// This device: its own checkout path, and folders a scan found.
-  here: { state: string; code: string; viaFork: boolean; path: string | null; found: string[] };
+  /// `viaAlias`: the checkout matches only through an accepted synced alias.
+  here: { state: string; code: string; viaFork: boolean; viaAlias?: boolean; path: string | null; found: string[] };
   hosts: RepoHostCoverage[];
   /// Same claimed history as this other repo, different canonical.
   lookalikeOf?: string | null;
+  /// Synced aliases (other spellings of this repo), and whether this device
+  /// accepted each. Names only: they never change where git connects.
+  aliases?: RepoAliasDto[];
+}
+
+/// One synced alias and whether a person on this device accepted it.
+export interface RepoAliasDto {
+  alias: string;
+  accepted: boolean;
+}
+
+/// One synced host alias (an SSH host a forge serves from → its host).
+export interface HostAliasDto {
+  alias: string;
+  host: string;
+  accepted: boolean;
 }
 
 export interface WorkspaceReposDto {
@@ -2176,6 +2195,7 @@ export interface WorkspaceReposDto {
   hostLabel: string;
   coverageReporting: boolean;
   scanRoots: string[];
+  hostAliases?: HostAliasDto[];
 }
 
 export interface ChatWorkspaceRepoDto {
@@ -2185,8 +2205,24 @@ export interface ChatWorkspaceRepoDto {
   removed: boolean;
   baseBranch: string;
   basePinned: boolean;
+  /// The pinned base in force (40 or 64 hex), when one is pinned.
+  baseCommit?: string | null;
+  /// This person may move the pinned base (an Admin, or the chat's creator).
+  canRepin?: boolean;
   /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
   here: { state: string; reason: string };
+  /// The chat's agents pinned to another host that says it has no checkout
+  /// of this repo (the composer's warning).
+  pinnedElsewhere?: PinnedElsewhere[];
+}
+
+export interface PinnedElsewhere {
+  agentId: string;
+  agentName: string;
+  hostId: string;
+  hostLabel: string;
+  /// This device has the repo, runs the agent's runtime, and the agent is yours.
+  canRunHere: boolean;
 }
 
 export const listWorkspaceRepos = () => invoke<WorkspaceReposDto>("list_workspace_repos");
@@ -2201,6 +2237,15 @@ export const addWorkspaceRepo = (input: string, opts: { name?: string; kind?: st
 export const renameWorkspaceRepo = (repoId: string, name: string, branch?: string) =>
   invoke<void>("rename_workspace_repo", { repoId, name, branch: branch ?? null });
 export const removeWorkspaceRepo = (repoId: string) => invoke<void>("remove_workspace_repo", { repoId });
+/// Admin, with a passkey: replace a repo's synced aliases.
+export const setRepoAliases = (repoId: string, aliases: string[]) => invoke<string[]>("set_repo_aliases", { repoId, aliases });
+/// Admin, with a passkey: map a host alias to a repository host ("" clears it).
+export const setHostAlias = (alias: string, host: string) => invoke<void>("set_host_alias", { alias, host });
+/// This device only: use a synced alias here (or stop using it).
+/// `target`: the repo id or host shown with the alias; the device refuses if
+/// the workspace has since pointed the alias elsewhere.
+export const acceptRepoAlias = (alias: string, accept: boolean, target?: string) =>
+  invoke<string>("accept_repo_alias", { alias, accept, target: target ?? null });
 export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
 export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
 export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });
@@ -2208,3 +2253,16 @@ export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("se
 export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
 export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
   invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });
+/// "Clone into…": clone a workspace repo by id into `parent` through this
+/// device's connection to its host, and bind it here.
+export const cloneWorkspaceRepo = (repoId: string, parent: string) =>
+  invoke<{ path: string; rootMatches: boolean | null }>("clone_workspace_repo", { repoId, parent });
+/// Move the chat's pinned base (Admin or the chat's creator, with presence):
+/// to `commit`, or with none to the latest of its base branch on this device.
+export const repinChatBase = (sessionId: string, commit?: string) =>
+  invoke<string>("repin_chat_base", commit ? { sessionId, commit } : { sessionId });
+/// Open the chat's folder for its repository with the OS's default handler.
+export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat_checkout", { sessionId });
+/// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
+export const askAgentToRebase = (sessionId: string, proposalId: string) =>
+  invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });

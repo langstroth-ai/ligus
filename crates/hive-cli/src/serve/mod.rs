@@ -210,6 +210,10 @@ pub struct Shared {
     /// this process wrote one, so a `DeviceRevoked` it folds in is enforced
     /// then, not at the next poll ([`revocation_watch`]).
     pub roster_kick: Notify,
+    /// How many full passes the revocation watch has completed (each one
+    /// after acting on what it saw), so tests can await "the watch has looked
+    /// since X" instead of sleeping.
+    pub revocation_passes: std::sync::atomic::AtomicU64,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -646,7 +650,7 @@ impl Shared {
         };
         s.messages[start.min(s.messages.len())..]
             .iter()
-            .filter(|m| m.role != MessageRole::System)
+            .filter(|m| m.role != MessageRole::System && !m.superseded)
             .filter(|m| !(m.role == MessageRole::User && m.actor_identity.as_ref().is_some_and(|a| a.id == me)))
             .count()
     }
@@ -699,7 +703,7 @@ impl Shared {
                             continue;
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         if let Some(text) = m.body.get(from..) {
                             self.hub.emit("message.delta", json!({ "chatId": chat, "messageId": message, "text": text }));
                         }
@@ -710,7 +714,7 @@ impl Shared {
                             self.local_streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&message);
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         let name = if done { "message.done" } else { "message.created" };
                         let me = notify::Me::in_chat(&author, s, &links);
                         let mut dto = api::message_dto(chat, m, viewer);
@@ -1037,6 +1041,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         token_gen: watch::Sender::new(0),
         revocation_checks: Default::default(),
         roster_kick: Notify::new(),
+        revocation_passes: Default::default(),
         host_id,
         tunnel,
         svc: Mutex::new(svc),
@@ -1193,6 +1198,7 @@ async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                 shared.revoke_phones_of_revoked_devices();
             }
         }
+        shared.revocation_passes.fetch_add(1, Ordering::SeqCst);
         tokio::select! {
             _ = tokio::time::sleep(REVOCATION_WATCH) => {}
             _ = shared.roster_kick.notified() => {}
@@ -1350,13 +1356,15 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(_) => hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
-            if let Err(e) = publish_beat(&relay, &room, &ring, &shared.host_id, coverage).await {
+            let beat = shared.lock().signed_beat(shared.ws, coverage);
+            if let Err(e) = publish_beat(&relay, &room, &ring, &beat).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
             coordinator.tick(&shared, &relay, &room, &ring).await;
         }
         if let Ok(beats) = fetch_beats(&relay, &room, &ring).await {
-            shared.presence.merge_beats(beats);
+            let verified = shared.lock().beat_verifier(shared.ws);
+            shared.presence.merge_beats(beats, verified);
         }
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
@@ -1381,7 +1389,7 @@ pub(crate) fn repos_refresh(shared: &Shared) {
         let svc = shared.lock();
         svc.workspace_roster(shared.ws).map_err(|e| e.to_string()).and_then(|r| {
             let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
-            let aliases = svc.store().ssh_host_aliases().map_err(|e| e.to_string())?;
+            let aliases = hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&r));
             Ok((r, roots, aliases))
         })
     }) else {
@@ -1412,7 +1420,11 @@ pub(crate) fn repo_coverage(shared: &Shared) -> Vec<hive_core::workspace_repo::C
             return Vec::new();
         }
         let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
-        (svc.store().repo_mappings(shared.ws).unwrap_or_default(), svc.store().ssh_host_aliases().unwrap_or_default(), hive_runtime::repos::live_repos(&roster))
+        (
+            svc.store().repo_mappings(shared.ws).unwrap_or_default(),
+            hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&roster)),
+            hive_runtime::repos::live_repos(&roster),
+        )
     };
     hive_runtime::repos::coverage_from(&maps, &aliases, &repos, &hive_runtime::repos::cloning())
 }
@@ -1592,14 +1604,15 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 host_label: &shared.opts.label,
                 settings: ToolSettings::from_env(),
                 ligus: Some(worker::ligus_server(shared.clone())),
+                presence: Some(&shared.presence),
             };
             let sink = ServeSink(shared.clone());
-            let mut failed: HashSet<Uuid> = HashSet::new();
+            let mut drain = worker::DrainState::default();
             while !shared.stopping() {
                 if !worker::apply_tick(&ctx, &shared.svc).is_empty() {
                     shared.after_write();
                 }
-                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut failed, &sink).await {
+                if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut drain, &sink).await {
                     eprintln!("worker: tick failed (retrying): {e}");
                 }
                 tokio::select! {

@@ -13,7 +13,6 @@ use hive_core::{
     workspace_config_session_id, ActorIdentity, ActorKind, SigningKeypair, WorkspaceMember,
     WorkspaceRole,
 };
-use uuid::Uuid;
 
 use crate::{ChatService, EventStore, RelayClient, SyncEngine};
 
@@ -22,7 +21,6 @@ fn service(path: &std::path::Path, id: &str) -> ChatService {
     let author = ActorIdentity::new(id, id, ActorKind::Human);
     ChatService::new(
         store,
-        Uuid::new_v4(),
         SigningKeypair::generate().unwrap(),
         SigningKeypair::generate().unwrap(),
         author,

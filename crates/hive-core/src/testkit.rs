@@ -32,12 +32,13 @@ pub struct Person {
 
 impl Person {
     pub fn new(name: &str) -> Self {
+        let device = SigningKeypair::generate().unwrap();
         Self {
             name: name.into(),
             account_id: Uuid::new_v4(),
             account: SigningKeypair::generate().unwrap(),
-            device_id: Uuid::new_v4(),
-            device: SigningKeypair::generate().unwrap(),
+            device_id: crate::crypto::device_id_for(crate::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
+            device,
             recovery: RecoveryKey::from_seed([0; 32]),
         }
         .with_test_recovery()
@@ -59,7 +60,7 @@ impl Person {
     }
 
     pub fn certificate(&self) -> DeviceCertificate {
-        DeviceCertificate::issue(&self.account, self.account_id, self.device_id, &self.device.public_key_bytes(), Timestamp::epoch())
+        DeviceCertificate::issue(&self.account, self.account_id, &self.device.public_key_bytes(), Timestamp::epoch())
     }
 }
 
@@ -311,7 +312,8 @@ impl Phone {
         loop {
             getrandom::fill(&mut b).expect("randomness");
             if let Ok(key) = p256::ecdsa::SigningKey::from_slice(&b) {
-                return Self { device_id: Uuid::new_v4(), key };
+                let device_id = crate::crypto::device_id_for(crate::crypto::SigAlg::P256, &crate::crypto::p256_public_key(&key));
+                return Self { device_id, key };
             }
         }
     }
@@ -330,7 +332,7 @@ impl SignedWorld {
     /// `owner`'s certificate for `phone` (P-256, signed by their account key).
     pub fn phone_certificate(&self, owner: &str, phone: &Phone) -> DeviceCertificate {
         let p = &self.people[owner];
-        DeviceCertificate::issue_p256(&p.account, p.account_id, phone.device_id, &phone.public_key(), Timestamp::epoch())
+        DeviceCertificate::issue_p256(&p.account, p.account_id, &phone.public_key(), Timestamp::epoch())
     }
 
     /// An event by `by`, signed by their phone's P-256 key (no presence).

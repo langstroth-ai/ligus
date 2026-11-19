@@ -43,6 +43,17 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        -- Synced aliases a person on this device accepted (design 12): an
+        -- alias joins identity matching here only while the workspace still
+        -- names it with the same target.
+        CREATE TABLE IF NOT EXISTS accepted_aliases (
+            workspace_id TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            alias        TEXT NOT NULL,
+            target       TEXT NOT NULL,
+            accepted_ms  INTEGER NOT NULL,
+            PRIMARY KEY (workspace_id, kind, alias, target)
+        );
         "#,
     )
 }
@@ -273,6 +284,31 @@ impl EventStore {
             )?,
             None => self.conn.execute("DELETE FROM ssh_host_aliases WHERE alias = ?1", [alias])?,
         };
+        Ok(())
+    }
+
+    /// The synced aliases a person on this device accepted in
+    /// `workspace_id`: (kind, alias, target), kind `repo` (target: the repo
+    /// id) or `host` (target: the canonical host).
+    pub fn accepted_aliases(&self, workspace_id: Uuid) -> Result<Vec<(String, String, String)>> {
+        let mut st = self.conn.prepare("SELECT kind, alias, target FROM accepted_aliases WHERE workspace_id = ?1 ORDER BY kind, alias")?;
+        let rows = st.query_map([workspace_id.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Accept (or, with `accept` false, take back) a synced alias here.
+    pub fn set_alias_accepted(&self, workspace_id: Uuid, kind: &str, alias: &str, target: &str, accept: bool) -> Result<()> {
+        if accept {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO accepted_aliases (workspace_id, kind, alias, target, accepted_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![workspace_id.to_string(), kind, alias, target, now_ms()],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM accepted_aliases WHERE workspace_id = ?1 AND kind = ?2 AND alias = ?3",
+                rusqlite::params![workspace_id.to_string(), kind, alias],
+            )?;
+        }
         Ok(())
     }
 

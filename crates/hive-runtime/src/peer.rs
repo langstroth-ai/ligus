@@ -162,7 +162,9 @@ impl PeerLink for LoopbackLink {
 /// agnostic: it serializes/deserializes envelopes and tracks which it has
 /// already seen, so the same instance can broadcast and ingest without loops.
 pub struct PeerSync {
-    seen: HashSet<Uuid>,
+    /// Each copy seen, by its event id and signature: another signer's copy
+    /// under an id is its own envelope to carry (`hive_core::copies`).
+    seen: HashSet<(Uuid, Option<Vec<u8>>)>,
     /// The workspaces this link carries. Only their events are sent, and an
     /// inbound event of any other workspace is dropped: a store holds every
     /// workspace on the device (its local one included), and a peer link must
@@ -205,9 +207,10 @@ impl PeerSync {
         let mut out = Vec::new();
         let ids = store.list_session_ids().map_err(|e| PeerError::Store(e.to_string()))?;
         for session_id in ids {
-            let envs = store.list(session_id).map_err(|e| PeerError::Store(e.to_string()))?;
+            // Every copy held, not only the first of an id to arrive here.
+            let envs = store.list_copies(session_id).map_err(|e| PeerError::Store(e.to_string()))?;
             for env in envs {
-                if self.workspaces.contains(&env.workspace_id) && self.seen.insert(env.event_id) {
+                if self.workspaces.contains(&env.workspace_id) && self.seen.insert((env.event_id, env.signature.clone())) {
                     out.push(serde_json::to_vec(&env)?);
                 }
             }
@@ -247,7 +250,7 @@ impl PeerSync {
             tracing::warn!(event_id = %env.event_id, "dropped a peer event of a workspace this link doesn't carry");
             return Ok(false);
         }
-        self.seen.insert(env.event_id);
+        self.seen.insert((env.event_id, env.signature.clone()));
 
         // P0.4: the workspace's own roster; this envelope's trust content
         // counts only once it verifies (see rosters_for_batch).
@@ -326,14 +329,14 @@ mod tests {
     }
 
     fn sample_envelope(seq: i64) -> SessionEventEnvelope {
-        SessionEventEnvelope::new(
+        crate::event_store::fixture_signed(&SessionEventEnvelope::new(
             Uuid::nil(),
             Uuid::nil(),
             seq,
             SessionEvent::MessageAppended {
                 message: ChatMessage::new(MessageRole::User, "u", "hello"),
             },
-        )
+        ))
     }
 
     #[tokio::test]
@@ -376,12 +379,12 @@ mod tests {
         let room = Uuid::new_v4();
         let local = Uuid::new_v4();
         let msg = |ws: Uuid, body: &str| {
-            SessionEventEnvelope::new(
+            crate::event_store::fixture_signed(&SessionEventEnvelope::new(
                 Uuid::new_v4(),
                 ws,
                 1,
                 SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) },
-            )
+            ))
         };
         let store_a = EventStore::open_in_memory().unwrap();
         let shared = msg(room, "team");
@@ -403,6 +406,32 @@ mod tests {
         assert!(!store_b.has_event(private.event_id).unwrap());
     }
 
+    /// Every copy a device holds goes out, not only the first to arrive:
+    /// another signer's copy under an honest event's id that reached this
+    /// device first must not keep the honest one from its peers.
+    #[test]
+    fn every_copy_under_an_id_is_forwarded() {
+        let room = Uuid::new_v4();
+        let honest = crate::event_store::fixture_signed(&SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            room,
+            1,
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "honest") },
+        ));
+        let mut other = honest.clone();
+        other.payload = SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Mal", "mine") };
+        other.clear_raw();
+        hive_core::sign_envelope(&mut other, Uuid::new_v4(), &hive_core::SigningKeypair::generate().unwrap());
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.ingest(&other).unwrap();
+        store.ingest(&honest).unwrap();
+        let mut sync = PeerSync::new([room]);
+        let out = sync.take_unpushed(&store).unwrap();
+        assert!(out.iter().any(|d| String::from_utf8_lossy(d).contains("honest")), "the honest copy never left this device");
+        assert_eq!(out.len(), 2);
+        assert!(sync.take_unpushed(&store).unwrap().is_empty(), "each copy goes out once");
+    }
+
     #[test]
     fn apply_verifies_before_ingest() {
         use hive_core::crypto::{DeviceCertificate, SigningKeypair};
@@ -412,14 +441,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {

@@ -439,7 +439,7 @@ pub(crate) async fn send_scouts(
     tauri::async_runtime::spawn(async move {
         for body in prompts {
             let state = app2.state::<AppState>();
-            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body).await {
+            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body, None).await {
                 tracing::warn!(target: "proposal_sets", "scout turn failed: {e}");
             }
             let _ = app2.emit("workspace://synced", 1);
@@ -856,7 +856,7 @@ mod tests {
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }

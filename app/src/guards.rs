@@ -592,6 +592,17 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
         roots.push((bound, None));
     }
+    // Never a checkout another host on this machine manages (its marker,
+    // review residual 6): its chat worktrees and branches are that host's,
+    // and sweeping them would remove its live trees.
+    let me = state.service.lock().unwrap().device_id();
+    roots.retain(|(p, _)| match hive_runtime::repos::marker::managed_elsewhere(p, me) {
+        Some(label) => {
+            tracing::info!(target: "worktree", "hygiene skips {}: managed by {label}", p.display());
+            false
+        }
+        None => true,
+    });
     if roots.is_empty() {
         *state.guards.hygiene.lock().unwrap() = report.clone();
         return report;
@@ -812,13 +823,13 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
-    filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+    filter_mcp_servers(state, servers.to_vec(), egress)
         .into_iter()
         .filter(|s| s.enabled && s.auth.is_none())
         .filter(|s| shell || mcp_known_shell_free(state, &s.id))
@@ -832,17 +843,19 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
         .collect()
 }
 
-/// How the turn's runtime honors the envelope (extra flags, or a refusal).
-/// `shell`: whether the turn has the shell; without it, MCP servers that
-/// offer one (or that this device hasn't seen list their tools) stay out.
-pub(crate) fn enforcement_for(
+/// How the turn's runtime honors the envelope (extra flags, or a refusal),
+/// with the turn's own MCP catalog (review F14). `shell`: whether the turn
+/// has the shell; without it, MCP servers that offer one (or that this
+/// device hasn't seen list their tools) stay out.
+pub(crate) fn enforcement_for_servers(
     state: &AppState,
     provider: hive_core::ModelProviderKind,
     envelope: &hive_core::sandbox::SandboxEnvelope,
+    servers: &[hive_runtime::McpServerSpec],
     shell: bool,
 ) -> hive_runtime::sandbox::Enforcement {
     let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
-        claude_mcp_entries(state, &envelope.egress, shell)
+        claude_mcp_entries(state, servers, &envelope.egress, shell)
     } else {
         Vec::new()
     };
@@ -879,10 +892,13 @@ pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
 /// List the tools of the enabled servers this turn may reach that this
 /// device hasn't listed yet (each bounded), so `mcp_known_shell_free` can
 /// judge them.
-pub(crate) async fn probe_mcp_shells(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) {
+pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy) {
     state.ensure_fresh_mcp_tokens().await;
     const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
-    let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+    // The turn's own catalog (review F14), tokens re-read after the refresh.
+    let mut servers = servers.to_vec();
+    crate::apply_mcp_auth(&mut servers, &state.settings.lock().unwrap());
+    let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, servers, egress)
         .into_iter()
         .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
         .filter(|s| state.mcp_probe_failed.lock().unwrap().get(&s.id).is_none_or(|t| t.elapsed() > RETRY))
@@ -908,13 +924,15 @@ pub(crate) async fn probe_mcp_shells(state: &AppState, egress: &hive_core::sandb
 
 /// The OS-sandbox policy for one turn on this desktop: the envelope, the
 /// author gate's plan, and the endpoints of the MCP servers the envelope
-/// lets this chat reach (their hosts join the egress allow-list).
-pub(crate) fn turn_sandbox_policy(
+/// lets this chat reach (their hosts join the egress allow-list), from the
+/// turn's own MCP catalog (review F14), never the window's.
+pub(crate) fn turn_sandbox_policy_with(
     state: &AppState,
     session: &hive_core::ChatSession,
     envelope: &hive_core::sandbox::SandboxEnvelope,
     gate: &hive_runtime::author_gate::GatePlan,
     isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
 ) -> hive_runtime::executor::TurnPolicy {
     let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
@@ -922,12 +940,39 @@ pub(crate) fn turn_sandbox_policy(
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
-    for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+    for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
         }
         policy.mcp_ids.push(s.id.clone());
     }
+    policy
+}
+
+/// The policy every child of one turn runs under (the CLI, stdio MCP
+/// servers, `run_command`), before its stream starts (the shell probe, the
+/// MCP tool listing, the API tool loop's MCP calls) and during it: the
+/// turn's envelope, gate and own MCP catalog, the shell only when
+/// [`hive_runtime::author_gate::shell_allowed`] said so (and then MCP
+/// servers this device hasn't seen list no shell stay out of the CLI's
+/// set), and the agent's grants. Never the out-of-turn baseline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn turn_child_policy(
+    state: &AppState,
+    session: &hive_core::ChatSession,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    gate: &hive_runtime::author_gate::GatePlan,
+    isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
+    shell_allowed: bool,
+    grants: hive_core::sandbox::PathGrants,
+) -> hive_runtime::executor::TurnPolicy {
+    let mut policy = turn_sandbox_policy_with(state, session, envelope, gate, isolated, servers);
+    policy.shell_allowed = shell_allowed;
+    if !shell_allowed {
+        policy.mcp_ids.retain(|id| mcp_known_shell_free(state, id));
+    }
+    policy.grants = grants;
     policy
 }
 
@@ -1834,6 +1879,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         }
         for m in &s.messages {
             if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+                && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
                 *by_agent.entry(m.author.clone()).or_default() += 1;
@@ -1879,6 +1925,35 @@ mod tests {
             },
         );
         t.into_values().next().unwrap()
+    }
+
+    /// Every child a desktop turn spawns runs under the turn's policy: the
+    /// shell probe before the engine, and in the engine (which lists MCP
+    /// tools, runs the API tool loop and streams under `TurnInput::policy`,
+    /// `hive_runtime::turn_engine`) the policy built here with the shell gate,
+    /// the grants and the turn's own MCP catalog. Outside a turn scope a
+    /// stdio MCP server would fall back to the baseline.
+    #[test]
+    fn every_spawn_in_a_desktop_turn_is_in_the_turns_policy() {
+        let src = include_str!("lib.rs");
+        let start = src.find("async fn run_prepared_turn_inner(").expect("run_prepared_turn_inner");
+        let end = start + src[start..].find("\n}\n").expect("its end");
+        let body = &src[start..end];
+        let lines: Vec<&str> = body.lines().collect();
+        let mut seen = 0;
+        for call in ["probe_mcp_shells(", "mcp_tool_set(", "try_tool_loop(", "stream_with_tools("] {
+            for (i, line) in lines.iter().enumerate().filter(|(_, l)| l.contains(call)) {
+                let window = lines[i.saturating_sub(2)..=i].join("\n");
+                assert!(window.contains("executor::with_turn("), "{call} outside a turn scope: {line}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 1, "the shell probe was found ({seen})");
+        // Both policies come from the one builder, so the shell gate and the
+        // grants are applied to each, and the engine runs under the second.
+        assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
+        assert!(!body.contains("turn_sandbox_policy_with(") && !body.contains("turn_sandbox_policy("), "a policy built without the shell gate");
+        assert!(body.contains("policy: sandbox_policy,"), "the engine runs under the turn's policy");
     }
 
     #[test]

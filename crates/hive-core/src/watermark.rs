@@ -56,24 +56,51 @@ pub const MAX_WATERMARK_ENTRIES: usize = 4096;
 /// At most this many heads per entry.
 pub const MAX_HEADS: usize = 8;
 
-/// One log's signer chains: event id → (signer, prev).
+/// One chain link: an event's signer and the `prev` it names.
+type Link = (Option<Uuid>, Option<Uuid>);
+
+/// One log's signer chains: event id → each (signer, prev) under it, one
+/// per different copy (more than one only when signers' copies share the
+/// id, see [`crate::copies`]).
 #[derive(Debug, Default, Clone)]
 pub struct Chains {
-    links: BTreeMap<Uuid, (Option<Uuid>, Option<Uuid>)>,
+    links: BTreeMap<Uuid, Vec<Link>>,
 }
 
 impl Chains {
+    /// Every event's link.
     pub fn of(envelopes: &[&SessionEventEnvelope]) -> Self {
-        let links = envelopes
-            .iter()
-            .map(|e| (e.event_id, (e.signer_device_id, e.actor_stamp.as_ref().and_then(|s| s.prev))))
-            .collect();
+        let mut count: BTreeMap<Uuid, usize> = BTreeMap::new();
+        for e in envelopes {
+            *count.entry(e.event_id).or_default() += 1;
+        }
+        let mut links: BTreeMap<Uuid, Vec<Link>> = BTreeMap::new();
+        // The different copies of a repeated id (an exact duplicate is one).
+        let mut seen: BTreeMap<Uuid, Vec<crate::copies::CopyKey>> = BTreeMap::new();
+        for e in envelopes {
+            if count[&e.event_id] > 1 {
+                let k = crate::copies::copy_key(e);
+                let v = seen.entry(e.event_id).or_default();
+                if v.contains(&k) {
+                    continue;
+                }
+                v.push(k);
+            }
+            links.entry(e.event_id).or_default().push((e.signer_device_id, e.actor_stamp.as_ref().and_then(|s| s.prev)));
+        }
         Self { links }
     }
 
     /// Every event of `signer` reachable back from `heads` through `prev`
     /// links (heads included), staying on that signer's events and never
     /// entering one of `gaps` (an id the watermark's author didn't hold).
+    ///
+    /// An id under which the log holds more than one copy claiming
+    /// `signer` (its equivocation, or a copy no key of it signed) is never
+    /// covered and coverage stops there: which copy the watermark's author
+    /// held can't be told, and following either's `prev` would let a copy
+    /// signed after the cut extend a chain it was never part of (fail closed,
+    /// as at a gap).
     pub fn ancestors(&self, signer: Uuid, heads: &[Uuid], gaps: &[Uuid]) -> BTreeSet<Uuid> {
         let mut out = BTreeSet::new();
         let mut stack: Vec<Uuid> = heads.iter().filter(|h| !gaps.contains(h)).copied().collect();
@@ -81,13 +108,13 @@ impl Chains {
             if gaps.contains(&id) {
                 continue;
             }
-            let Some((s, prev)) = self.links.get(&id) else { continue };
-            if *s != Some(signer) || !out.insert(id) {
+            let Some(links) = self.links.get(&id) else { continue };
+            let mut mine = links.iter().filter(|(s, _)| *s == Some(signer));
+            let (Some((_, prev)), None) = (mine.next(), mine.next()) else { continue };
+            if !out.insert(id) {
                 continue;
             }
-            if let Some(p) = prev {
-                stack.push(*p);
-            }
+            stack.extend(*prev);
         }
         out
     }

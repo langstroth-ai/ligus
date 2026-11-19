@@ -182,7 +182,7 @@ every fold will, stores and syncs it.
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; for `clearLockdown`, `preview.lockdowns` lists the lockdowns it names (`{raiseEventId, signal, detail, raisedAt}`), and a raise that isn't in force on the box (a stale view: refresh and prepare again) is a 403; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
+| `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's, derived from its Secure Enclave key: see the iOS spec). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; for `clearLockdown`, `preview.lockdowns` lists the lockdowns it names (`{raiseEventId, signal, detail, raisedAt}`), and a raise that isn't in force on the box (a stale view: refresh and prepare again) is a 403; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
 | `POST /v1/phone-actions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | only when `presenceRequired`: puts the assertion into the stamp and answers `{preimage}`. 409 when the action needs no passkey or was already confirmed; 404 unknown or expired `prepareId` |
 | `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post), `requestId` (requestApply) or `proposalId` (proposeMemory). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
 
@@ -299,10 +299,10 @@ voter's account, so they never act as the person (see
 |---|---|---|
 | `GET /v1/repos` | `?q=&owner=&page=&perPage=&forge=` | local checkouts and running clone jobs, plus: without `forge`, `github` (the GitHub connection's repos, as before) and `forges` (every connection); with `forge=<id>`, that connection's repos under `forge` |
 | `GET /v1/repos/fork` | `?repo=owner/name&forge=` | the signed-in account's fork, if any. 412 if the connection isn't signed in |
-| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` or `{repoId}` | Contributor. Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). With `repoId`, a workspace repository: the URL is rebuilt from its canonical for a connected host, the address is re-checked and pinned, and the clone is mapped and reported as this box's checkout (404 for an unknown or removed repository). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
+| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` or `{repoId}` | Contributor, and the box **owner** (below). Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). With `repoId`, a workspace repository: the URL is rebuilt from its canonical for a connected host, the address is re-checked and pinned, and the clone is mapped and reported as this box's checkout (404 for an unknown or removed repository). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
 | `GET /v1/repos/clone/:job` | | job status (last 20 finished kept) |
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
-| `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor. Binds a checkout under the repos dir; `null`/`""` = workspace default |
+| `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor, owner. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |
 | `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
 
@@ -310,13 +310,19 @@ voter's account, so they never act as the person (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `GET /v1/workspace-repos` | | `{repos, hostId, label}`. Each repo: `id`, `name`, `canonical`, `forgeKind`, `defaultBranch`, `removed`, `lookalikeOf`, `here` (`state`: `present`, `cloning`, `missing`, `error`; `code`; `viaFork`; `checkout`: the folder name; `found`: folder names a scan found), and `hosts` (every other host's `state`, `unknown` when it reports nothing). No paths |
+| `GET /v1/workspace-repos` | | `{repos, hostAliases, hostId, label}`. Each repo: `id`, `name`, `canonical`, `forgeKind`, `defaultBranch`, `removed`, `lookalikeOf`, `here` (`state`: `present`, `cloning`, `missing`, `error`; `code`; `viaFork`; `checkout`: the folder name; `found`: folder names a scan found), `hosts` (every other host's `state`, `unknown` when it reports nothing, or when its report isn't signed by that host's own certified device) and `aliases` (the workspace's synced names for it). `hostAliases`: `[{alias, host}]`. No paths |
 | `POST /v1/workspace-repos` | `{input, name?, kind?, branch?}` | Admin with presence: a box (Contributor) answers 403 |
-| `PATCH /v1/workspace-repos/{id}` | `{name, branch?}` | Admin |
+| `PATCH /v1/workspace-repos/{id}` | `{name, branch?}` | Admin, owner |
 | `DELETE /v1/workspace-repos/{id}` | | Admin with presence |
-| `POST /v1/workspace-repos/{id}/confirm` | `{checkout}` | Contributor. Use a found checkout (by folder name) |
-| `POST /v1/workspace-repos/rescan` | | Scan the repos dir and scan roots again |
-| `PUT /v1/chats/{id}/workspace-repo` | `{repoId \| null, baseBranch?}` | Contributor. The chat's repository (a removed one is refused). The answer is the chat's `workspaceRepo` |
+| `POST /v1/workspace-repos/{id}/confirm` | `{checkout}` | Contributor, owner. Use a found checkout (by folder name) |
+| `POST /v1/workspace-repos/rescan` | | Owner. Scan the repos dir and scan roots again |
+| `PUT /v1/chats/{id}/workspace-repo` | `{repoId \| null, baseBranch?}` | Contributor, owner. The chat's repository (a removed one is refused). The answer is the chat's `workspaceRepo` |
+
+**Owner** (repos review F12): the request comes from a phone certified to
+the account of the Admin who admitted this box, over its own pairing, or
+with the `serve.token` bearer on a box whose listener is loopback. Anything
+else answers `403` with `owner_required`: these spend the box's own
+code-host access or steer its checkouts.
 
 `GET /v1/chats/{id}/details` adds `workspaceRepo`: `{id, name, canonical,
 removed, baseBranch, basePinned, here: {state, reason}}`, where `state` is

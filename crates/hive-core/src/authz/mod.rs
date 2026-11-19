@@ -206,6 +206,7 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
                 | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
+                | SessionEvent::ChatBaseRepinned { .. }
                 | SessionEvent::AttachmentShared { .. }
                 | SessionEvent::AttachmentDeleted { .. }
         )
@@ -425,6 +426,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // account (certified, not revoked, not delegated, not a phone), with that
     // account's passkey presence (the presence table).
     if let SessionEvent::DeviceCertificateAdded { certificate } = &env.payload {
+        // A device id is the one its key derives (`crypto::device_id_for`):
+        // a certificate of any other id is someone else's device id under a
+        // key of their own (squatting), refused wherever it sorts.
+        if !certificate.id_matches_key() {
+            return Decision::deny("a device certificate names the device id its key derives");
+        }
         // A phone certificate never takes over a device id this roster
         // already holds as a desktop or box, or as a phone with another key:
         // it would replace that device's key (and make it a phone) without
@@ -622,10 +629,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 role = ws_role;
             }
         }
-        // R5: revoking a device your own account certified is self-service.
+        // R5: revoking a device your own account holds is self-service (not
+        // someone else's device whose key you certified for yourself, nor one
+        // that can't tell you from such an adopter).
         if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-            if account.is_some_and(|a| ctx.running.account_certified(a, *device_id)) {
+            if account.is_some_and(|a| ctx.running.account_owns_device(a, *device_id)) {
                 return Decision::Allow;
             }
         }
@@ -891,6 +900,36 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                     return Decision::deny("pins a base for a repository this chat doesn't use");
                 }
             }
+            // Review residual 3: re-pinning is explicit, a person's (never an
+            // agent or a runtime effect, through their own device), an
+            // Admin's or the chat's creator's, from the pin in force.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never re-pins a chat's base");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person re-pins a chat's base through their own device");
+                }
+                let creator = !fold.creator_actor_id.is_empty() && fold.creator_actor_id == author;
+                if !creator && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only an Admin or the chat's creator re-pins its base");
+                }
+                if !crate::workspace_repo::is_commit_id(commit) || !crate::workspace_repo::is_commit_id(previous) || commit == previous {
+                    return Decision::deny("malformed re-pin");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("re-pins a base for a repository this chat doesn't use");
+                }
+                let history = fold.repo_bases.get(repo_id);
+                if history.and_then(|h| h.last()) != Some(previous) {
+                    return Decision::deny("re-pins from a base that isn't the one in force");
+                }
+                if history.is_some_and(|h| h.len() >= crate::workspace_repo::MAX_BASE_PINS) {
+                    return Decision::deny("this chat has re-pinned its base too many times");
+                }
+            }
             _ => {}
         }
         let d = evaluate(&env.payload, author, role, fold);
@@ -1052,7 +1091,7 @@ pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r Roste
             return Err("signed by a device that doesn't act for its author".into());
         }
     }
-    crate::crypto::verify_envelope(env, &d.public_key).map_err(|_| "bad signature".to_string())?;
+    d.verifying_key(env).ok_or("bad signature")?;
     Ok(d)
 }
 
@@ -1172,7 +1211,7 @@ fn service_member_refusal(
         }
         SessionEvent::DeviceRevoked { device_id, .. } => {
             let own = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-            let mine = roster.and_then(|r| r.devices.get(device_id)).is_some_and(|d| own.is_some_and(|a| d.accounts.contains(&a)));
+            let mine = roster.is_some_and(|r| own.is_some_and(|a| r.account_owns_device(a, *device_id)));
             (!mine).then(|| "a service member revokes only its own device".into())
         }
         SessionEvent::MemberAdded { member, .. } if member.id != author => Some("a service member admits no one".into()),
@@ -1277,7 +1316,20 @@ fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &Rost
         }
         SessionEvent::MemberRemoved { member_id, .. } if member_id != author => vec![member_id.clone()],
         SessionEvent::DeviceRevoked { device_id, .. } => {
-            let accounts = roster.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
+            // Whose device it is: the members who hold it. A device someone
+            // certified here must be held by someone other than the author
+            // (the author's own is R5's, above): a device id is derived from
+            // its key, so anyone who knows a key can certify it for
+            // themselves, which makes it no more theirs to revoke. A device
+            // nobody certified here (a phone known only by its pairing) is
+            // an Admin's to revoke, as before.
+            let own = roster.members.get(author).and_then(|m| m.account_id);
+            let empty = std::collections::BTreeSet::new();
+            let accounts = match roster.devices.get(device_id).filter(|d| !d.accounts.is_empty()) {
+                None => &empty,
+                Some(d) if d.holders.iter().any(|a| Some(*a) != own) => &d.holders,
+                Some(_) => return Some("a revocation names a device someone else holds here".into()),
+            };
             roster
                 .members
                 .iter()
@@ -1340,7 +1392,11 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
     use crate::workspace_repo as wr;
     let live = |id: &Uuid| roster.repo_live(*id);
     match e {
-        SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::WorkspaceRepoRemoved { .. }
+        SessionEvent::WorkspaceRepoAdded { .. }
+        | SessionEvent::WorkspaceRepoUpdated { .. }
+        | SessionEvent::WorkspaceRepoRemoved { .. }
+        | SessionEvent::WorkspaceRepoAliasesSet { .. }
+        | SessionEvent::WorkspaceHostAliasSet { .. }
             if !on_config =>
         {
             Err("workspace repositories live on the workspace config log".into())
@@ -1353,8 +1409,14 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
             if roster.repos.values().filter(|r| !r.removed).count() >= wr::MAX_LIVE_REPOS {
                 return Err("too many repositories".into());
             }
+            // Design 12: an alias already owns this name.
+            if let Some(why) = wr::shadowed_by_alias(roster, &repo.canonical) {
+                return Err(why);
+            }
             Ok(())
         }
+        SessionEvent::WorkspaceRepoAliasesSet { repo_id, aliases } => wr::repo_aliases_ok(roster, *repo_id, aliases),
+        SessionEvent::WorkspaceHostAliasSet { alias, host } => wr::host_alias_ok(roster, alias, host),
         SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } => {
             if !live(repo_id) {
                 return Err("no such repository".into());

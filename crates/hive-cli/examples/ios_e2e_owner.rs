@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         let store = EventStore::open(dir.join("hive.db"))?;
         let device_kp = ids.device_keypair(stored.device.id)?;
         let account_kp = ids.account_keypair(stored.account.id)?;
-        Ok(ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor()))
+        Ok(ChatService::new(store, device_kp, account_kp, stored.account.actor()))
     };
     let ws = hive_core::room_workspace_id(room);
     sync(&dir, relay, room, key, stored.device.id).await?;

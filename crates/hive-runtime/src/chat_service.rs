@@ -140,6 +140,11 @@ pub struct ChatService {
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
     stream_hold: std::collections::HashMap<Uuid, String>,
+    /// The dispatcher's wait clock (design repos-and-checkouts 11.4): per
+    /// claim key, the holder and epoch this device last saw and since when,
+    /// so "how long has this holder been silent" restarts at every new
+    /// holder whichever path asks (both gates, the watcher, the worker).
+    dispatch_seen: std::collections::HashMap<Uuid, (Option<Uuid>, u32, std::time::Instant)>,
     /// Where every append is published ([`ChatService::subscribe`]).
     changes: ChangeFeed,
 }
@@ -154,13 +159,10 @@ const STREAM_HOLD: usize = 512;
 pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
 impl ChatService {
-    pub fn new(
-        store: EventStore,
-        device_id: Uuid,
-        keypair: SigningKeypair,
-        account_keypair: SigningKeypair,
-        author: ActorIdentity,
-    ) -> Self {
+    /// A service signing with `keypair`: its device id is the one that key
+    /// derives (`hive_core::crypto::device_id_for`).
+    pub fn new(store: EventStore, keypair: SigningKeypair, account_keypair: SigningKeypair, author: ActorIdentity) -> Self {
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &keypair.public_key_bytes());
         // This crate's unit tests: every author holds an account, since rules
         // v2 governance needs an account's presence.
         #[cfg(test)]
@@ -194,6 +196,7 @@ impl ChatService {
             agent_messages: std::collections::HashMap::new(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
+            dispatch_seen: std::collections::HashMap::new(),
             changes: ChangeFeed::default(),
         }
     }
@@ -389,7 +392,7 @@ impl ChatService {
     /// An enrollment request for this device in `workspace_id` (the code the
     /// owner pastes into their desktop), signed by this device's key.
     pub fn enrollment_request(&self, workspace_id: Uuid, label: &str) -> crate::device_enroll::DeviceEnrollment {
-        crate::device_enroll::DeviceEnrollment::new(workspace_id, self.device_id, &self.keypair, label)
+        crate::device_enroll::DeviceEnrollment::new(workspace_id, &self.keypair, label)
     }
 
     /// Where this device stands in `workspace_id`: its own identity, enrolled as
@@ -439,13 +442,8 @@ impl ChatService {
                 "this desktop's account key isn't the one the workspace trusts for you".into(),
             ));
         }
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            request.device_id,
-            &request.device_public_key,
-            Timestamp::now(),
-        );
+        // `verify` above checked the id is the one the key derives.
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
         self.append_signed(
             config_id,
             ws,
@@ -497,7 +495,7 @@ impl ChatService {
     /// with no pin (created here, or the device-local one).
     pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
         let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
-        let envs = self.store.list(workspace_config_session_id(workspace_id))?;
+        let envs = self.store.list_copies(workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
     }
 
@@ -911,13 +909,7 @@ impl ChatService {
                 signing_public_key: self.account_keypair.public_key_bytes().to_vec(),
             },
         )?;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -959,13 +951,7 @@ impl ChatService {
         )?;
         // Adopt the new account key, then re-certify this device under it.
         self.account_keypair = new_keypair;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -1444,13 +1430,106 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id },
+            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id, epoch: 0, supersedes: None, repo_id: None },
         )?;
         Ok(self
             .load(session_id)?
             .and_then(|s| s.turn_claims.get(&trigger_id).copied())
             .map(|w| w == self.device_id)
             .unwrap_or(true))
+    }
+
+    /// This host's presence beat for `workspace_id` with its repo coverage,
+    /// the coverage signed with this device's own key (repos review residual
+    /// 1: a beat is sealed with the workspace key every member holds, so
+    /// readers use a coverage report only when its host signed it).
+    pub fn signed_beat(&self, workspace_id: Uuid, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> hive_core::workspace_repo::HostBeat {
+        let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
+        if !beat.coverage.is_empty() {
+            beat.sign_coverage(workspace_id, self.device_id, &self.keypair);
+        }
+        beat
+    }
+
+    /// Whether a fetched beat's coverage is its host's own signed report
+    /// that the current roster of `workspace_id` vouches for (certified, not
+    /// revoked, acting for a member). Unsigned or wrongly signed: ignored.
+    pub fn beat_verifier(&self, workspace_id: Uuid) -> impl Fn(&hive_core::workspace_repo::HostBeat) -> bool {
+        let roster = self.workspace_roster(workspace_id).ok();
+        move |b| roster.as_ref().is_some_and(|r| b.coverage_verified(workspace_id, r))
+    }
+
+    /// The device-keyed dispatcher's one entry (design repos-and-checkouts
+    /// 11; `hive_core::dispatch`): decide what this device does about the
+    /// turn `trigger` (for `agent`, a hand-off receiver; `None` for the plain
+    /// trigger key), write the claim it calls for, re-fold, and say whether
+    /// to run, look again later, or stand down. Never returns
+    /// [`hive_core::dispatch::Step::Claim`].
+    ///
+    /// `ctx` carries what only the caller knows: eligibility from
+    /// `turn_runs_here` (both dispatch gates), this host's coverage of the
+    /// chat's repo, how long it has waited and whether the holder is live
+    /// on the presence channel. Whether the holder is gone (revoked, or no
+    /// longer a member's) is read from the current roster here.
+    pub fn dispatch_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<Uuid>, ctx: DispatchCtx) -> Result<hive_core::dispatch::Step> {
+        use hive_core::dispatch::{self as d, Step};
+        let key = hive_core::turn_claim_key(trigger, agent);
+        let Some(session) = self.load(session_id)? else { return Ok(Step::StandDown) };
+        // How long this device has watched the current holder (or, with no
+        // holder, the unclaimed turn): the caller's word, or this service's
+        // own clock, whichever is longer.
+        if self.dispatch_seen.len() >= 8192 {
+            self.dispatch_seen.clear();
+        }
+        let watched = {
+            let now = std::time::Instant::now();
+            let cur = (session.turn_claims.get(&key).copied(), session.turn_dispatch.get(&key).map(|x| x.epoch).unwrap_or(0));
+            let e = self.dispatch_seen.entry(key).or_insert((cur.0, cur.1, now));
+            if (e.0, e.1) != cur {
+                *e = (cur.0, cur.1, now);
+            }
+            now.duration_since(e.2)
+        };
+        let ctx = DispatchCtx { waited: ctx.waited.max(watched), ..ctx };
+        let roster = self.workspace_roster(workspace_id).ok();
+        let me = self.device_id;
+        let view = |s: &ChatSession| {
+            let holder = s.turn_claims.get(&key).copied();
+            let age = s
+                .messages
+                .iter()
+                .find(|m| m.id == trigger)
+                .map(|m| {
+                    let secs = (hive_core::Timestamp::now().0 - m.created_at.0).whole_seconds();
+                    std::time::Duration::from_secs(secs.max(0) as u64)
+                })
+                .unwrap_or_default();
+            d::View {
+                me,
+                eligible: ctx.eligible,
+                coverage: ctx.coverage,
+                waited: ctx.waited,
+                age,
+                holder_live: holder.is_some_and(|h| (ctx.holder_live)(h)),
+                holder_gone: holder.is_some_and(|h| roster.as_ref().is_some_and(|r| d::holder_gone(r, h))),
+            }
+        };
+        let repo = session.repo.as_ref().and_then(|r| r.repo_id);
+        match d::decide(&session, key, repo, &view(&session)) {
+            Step::Claim(c) => {
+                self.append_signed(
+                    session_id,
+                    workspace_id,
+                    SessionEvent::TurnClaimed { trigger_id: key, device_id: self.device_id, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id },
+                )?;
+                let Some(after) = self.load(session_id)? else { return Ok(Step::StandDown) };
+                Ok(match d::decide(&after, key, repo, &view(&after)) {
+                    Step::Claim(_) => Step::Wait(std::time::Duration::from_secs(1)),
+                    other => other,
+                })
+            }
+            other => Ok(other),
+        }
     }
 
     /// [`Self::claim_turn`] for one receiver of `trigger`: a hand-off reply
@@ -2320,14 +2399,18 @@ impl ChatService {
             return Ok(0);
         }
         let envelopes = self.store.config_envelopes(workspace_id)?;
-        let verdicts =
-            hive_core::fold_decisions(&envelopes, self.trusted_founder.as_deref(), self.local_workspace_id, hive_core::WorkspaceAuthz::Unchecked);
+        let verdicts = hive_core::fold_copy_decisions(
+            &envelopes,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+            hive_core::WorkspaceAuthz::Unchecked,
+        );
         let mut closed = 0;
         for (invite, expires_ms) in open {
             let redeemed = envelopes
                 .iter()
                 .find(|e| {
-                    verdicts.get(&e.event_id) == Some(&hive_core::Verdict::Allowed)
+                    verdicts.get(e) == Some(hive_core::Verdict::Allowed)
                         && matches!(&e.payload, SessionEvent::MemberAdded { member, invite: Some(i), .. }
                             if *i == invite && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == member.id))
                 })
@@ -2396,7 +2479,9 @@ impl ChatService {
         let sessions = self.store.sessions_of_workspace(workspace_id)?;
         let mut logs = Vec::new();
         for sid in sessions {
-            logs.push((sid, self.store.list(sid)?));
+            // Every copy held: the device's own event under an id another
+            // signer's copy reached first is still one of its heads.
+            logs.push((sid, self.store.list_copies(sid)?));
         }
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {
@@ -2819,7 +2904,8 @@ impl ChatService {
         // Every event on the chain is judged against this chat's own
         // workspace; one stamped with another workspace fails closed.
         let Some(chat_workspace) = self.store.workspace_of(session_id)? else { return Ok(None) };
-        let envs = self.store.list(session_id)?;
+        // Every copy (a forged copy that arrived first doesn't hide a link).
+        let envs = self.store.list_copies(session_id)?;
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
@@ -3038,7 +3124,7 @@ impl ChatService {
     /// This is one message's signers only; a turn's gate is
     /// [`Self::trigger_author_role`], which follows the chain.
     pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let envs = self.store.list(session_id)?;
+        let envs = self.store.list_copies(session_id)?;
         let touching = touching_message(&envs, message_id);
         if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
             return Ok(None);
@@ -3182,7 +3268,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
                 continue;
             };
             let answered = session.messages[i + 1..].iter().any(|later| {
-                if later.role != MessageRole::Assistant {
+                if later.role != MessageRole::Assistant || later.superseded {
                     return false;
                 }
                 match later.reply_to_message_id {
@@ -3212,7 +3298,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
     // another agent (not itself). It's actionable work for that agent's worker,
     // which — unlike the desktop's inline loop — otherwise never sees it. Bound by
     // cascade depth so an A↔B chain across devices/workers can't loop forever.
-    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System) {
+    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
         if let Some(agent) = cascade_target(session, last) {
             out.retain(|p| p.agent_id != agent.id);
             out.push(PendingMention {
@@ -3234,6 +3320,42 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
 /// hand-off starts its receiver wherever that agent runs, exactly once: a
 /// duplicate delivery folds to the same card, and the receiver's reply
 /// (stamped as answering the handing reply) clears it.
+/// What only a dispatch site knows about a turn ([`ChatService::dispatch_turn`]).
+pub struct DispatchCtx<'a> {
+    /// `turn_runs_here` at this gate (a local-only or solo device always is).
+    pub eligible: bool,
+    /// This host's coverage of the chat's repo (`repos::dispatch_coverage`).
+    pub coverage: hive_core::dispatch::Coverage,
+    /// How long this device has watched the turn.
+    pub waited: std::time::Duration,
+    /// Whether a device beats on the presence channel now.
+    pub holder_live: &'a dyn Fn(Uuid) -> bool,
+}
+
+impl<'a> DispatchCtx<'a> {
+    /// An eligible device with no repo to cover, that hasn't waited, and
+    /// sees every holder as live (so it never hands a turn over).
+    pub fn plain(holder_live: &'a dyn Fn(Uuid) -> bool) -> Self {
+        Self { eligible: true, coverage: hive_core::dispatch::Coverage::NoRepo, waited: std::time::Duration::ZERO, holder_live }
+    }
+}
+
+/// The receiver a pending turn's claim is keyed by
+/// ([`hive_core::turn_claim_key`]), the same on every host: `None` for a user
+/// message's first mentioned agent (what the desktop's gates and older
+/// devices claim), and the agent itself for a hand-off or cascade (an
+/// agent's message, as the desktop's `handoff_turn` and `respond_once`
+/// claim) or for a user message's later mentions, each of which may run on
+/// another host.
+pub fn claim_receiver(session: &ChatSession, pm: &PendingMention) -> Option<Uuid> {
+    let Some(m) = session.messages.iter().find(|m| m.id == pm.message_id) else { return Some(pm.agent_id) };
+    if m.role != MessageRole::User {
+        return Some(pm.agent_id);
+    }
+    let first = crate::mentions::parse_mentions(&m.body, session).agents.first().copied();
+    (first != Some(pm.agent_id)).then_some(pm.agent_id)
+}
+
 pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
     let mut out = pending_mentions(session);
     if session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH {
@@ -3247,7 +3369,7 @@ pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
         // cascade of the same reply may have answered it first).
         let answered = session.messages[at + 1..]
             .iter()
-            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id));
+            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id) && !m.superseded);
         if !answered {
             out.retain(|p| p.agent_id != agent_id);
             out.push(PendingMention { session_id: session.id, message_id: trigger, agent_id, agent_name: agent.name.clone() });
@@ -3275,6 +3397,7 @@ pub fn empty_reply_notice(runtime_label: &str) -> String {
 /// every host's queue use this same rule, so exactly one responder runs.
 pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Option<&'a hive_core::WorkspaceAgent> {
     if !matches!(reply.role, MessageRole::Assistant | MessageRole::Agent)
+        || reply.superseded
         || session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH
     {
         return None;
@@ -3370,7 +3493,8 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
         Some(oid) => m.responder_id == Some(oid),
         None => m.responder_id.is_none() && !own_author.is_empty() && m.author == own_author,
     };
-    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming).collect();
+    // A superseded answer (the dispatcher fenced a duplicate) is never context.
+    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded).collect();
     let mut turns: Vec<ChatTurn> = kept
         .iter()
         .filter_map(|m| {
@@ -3508,11 +3632,56 @@ mod tests {
         let store = EventStore::open_in_memory().unwrap();
         let kp = SigningKeypair::generate().unwrap();
         let public = kp.public_key_bytes().to_vec();
-        let device_id = Uuid::new_v4();
         let account_kp = SigningKeypair::generate().unwrap();
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        (ChatService::new(store, device_id, kp, account_kp, author), public)
+        (ChatService::new(store, kp, account_kp, author), public)
+    }
+
+    /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
+    /// A holds is watched, not run; once A stays silent past the claim
+    /// timeout (and isn't live) this device hands it over and runs it; A's
+    /// late answer is then fenced.
+    #[test]
+    fn dispatch_turn_watches_then_hands_over_a_silent_holder() {
+        use hive_core::dispatch::{Coverage, Step, CLAIM_TIMEOUT};
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let trigger = svc.post_user_message(chat.id, wid, "@hive go").unwrap().id;
+        let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+        // A claimed the turn half a minute ago (a hand-over signed sooner
+        // after the claim than the timeout allows is ignored by the fold).
+        env.timestamp = hive_core::Timestamp::from_unix_seconds(hive_core::Timestamp::now().inner().unix_timestamp() - 30);
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        fn live(_: Uuid) -> bool {
+            true
+        }
+        fn silent(_: Uuid) -> bool {
+            false
+        }
+        let ctx = |waited, holder_live: &'static dyn Fn(Uuid) -> bool| DispatchCtx { eligible: true, coverage: Coverage::NoRepo, waited, holder_live };
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(std::time::Duration::ZERO, &silent)).unwrap(), Step::Wait(_)));
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &live)).unwrap(), Step::Wait(_)), "a live holder keeps it");
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::Run);
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.turn_claims[&trigger], svc.device_id());
+        assert_eq!(s.turn_dispatch[&trigger].epoch, 2);
+        // A's late answer (signed by A) is fenced; ours commits.
+        let mut late = ChatMessage::new(MessageRole::Assistant, "hive", "late");
+        late.reply_to_message_id = Some(trigger);
+        late.origin_device_id = Some(device_a);
+        let late_id = late.id;
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::MessageAppended { message: late }).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        let ours = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, Some(trigger)).unwrap();
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.messages.iter().find(|m| m.id == late_id).unwrap().superseded);
+        assert_eq!(s.turn_dispatch[&trigger].answer, Some(ours));
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::StandDown);
     }
 
     /// A hand-off reply that starts two receivers on two devices: device A
@@ -3530,7 +3699,7 @@ mod tests {
         let device_a = Uuid::new_v4();
         // Device A's claim for the first receiver, signed by device A and
         // synced in (this device can't claim on A's behalf).
-        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a };
+        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a, epoch: 0, supersedes: None, repo_id: None };
         assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
         let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
         hive_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());
@@ -3868,7 +4037,7 @@ mod tests {
 
         let store = EventStore::open_in_memory().unwrap();
         let device_kp = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes());
         let account_kp = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let author = ActorIdentity {
@@ -3882,7 +4051,7 @@ mod tests {
             avatar_url: None,
             contact: None,
         };
-        let mut svc = ChatService::new(store, device_id, device_kp, account_kp, author);
+        let mut svc = ChatService::new(store, device_kp, account_kp, author);
 
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         svc.post_user_message(chat.id, chat.workspace_id, "hello").unwrap();
@@ -3956,7 +4125,7 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     /// A3: with an agent vault, an agent bound to this device signs its own
@@ -4818,12 +4987,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             verdict_for(&build_roster(&all), env),
-            Verdict::Quarantine(QuarantineReason::Impersonation),
-            "ingest refuses a stamp naming a known account its signer doesn't sign for"
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+            "ingest holds (never applies) a stamp naming a known account its signer doesn't sign for"
         );
         assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
-        // The same stamp on a governance event (self-promotion) is refused
-        // at ingest too.
+        // The same stamp on a governance event (self-promotion) is held at
+        // ingest too.
         // (Authoring refuses it for lack of presence; a peer that skips the
         // check publishes it anyway.)
         assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
@@ -4832,7 +5001,7 @@ mod tests {
         con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
-        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
+        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
         // The same stamp on an agent's reply caps nothing upward either.
         let r = agent_reply(&mut con, chat, wid, Some(Uuid::new_v4()), Some(honest), "@coder go");
         assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
@@ -5177,7 +5346,7 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         let mut author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
         author.account_id = Some(Uuid::new_v4());
-        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        let mut svc = ChatService::new(store, kp, account_kp, author);
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let mid = svc
             .begin_assistant_message(chat.id, chat.workspace_id, "Hive", "anthropic", None, None)
@@ -5554,7 +5723,7 @@ mod flow_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     #[test]
@@ -5725,8 +5894,8 @@ mod flow_tests {
     }
 
     /// A chat whose fold changes without a new row in its own log is observed
-    /// again: an equivocating copy of one of its events (both copies are
-    /// denied), or a trust change on its workspace's config log.
+    /// again: another copy under one of its event ids, or a trust change on
+    /// its workspace's config log.
     #[test]
     fn facts_export_reobserves_chats_whose_fold_changed_elsewhere() {
         use crate::facts::{Cursor, Since};
@@ -5744,8 +5913,8 @@ mod flow_tests {
         let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
         let c1 = cursor_of(&first);
 
-        // An equivocating copy of the reply's completion lands in the
-        // evidence table, not the log: the chat's fold changed all the same.
+        // Another copy under the reply's completion's id lands in the
+        // copies table, not the log: the chat is observed again.
         let (_, envs) = svc.store.envelopes_after_row(0).unwrap();
         let mut forged = envs.iter().filter(|e| e.session_id == chat.id).last().unwrap().clone();
         forged.payload = SessionEvent::SessionTitleChanged { title: "other".into() };

@@ -12,8 +12,10 @@ pub mod chat;
 pub mod compat;
 pub mod config;
 pub mod context_budget;
+pub mod copies;
 pub mod crypto;
 pub mod device_link;
+pub mod dispatch;
 pub mod e2ee;
 pub mod endpoint;
 pub mod envelope_wire;
@@ -78,7 +80,7 @@ pub use e2ee::{
     seal_symmetric, seal_symmetric_kid, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
-    fold_decisions, project, project_authorized, project_config, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
+    fold_copy_decisions, fold_decisions, project, project_authorized, project_config, CopyVerdicts, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
     SessionEventEnvelope,
 };
 pub use git_context::{GitContextReader, GitFileChange, GitFileDiff, GitSnapshot};

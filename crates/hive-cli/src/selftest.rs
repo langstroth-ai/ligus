@@ -257,7 +257,7 @@ fn probe_chat() -> Result<(Mutex<hive_runtime::ChatService>, uuid::Uuid, uuid::U
     let author = hive_core::ActorIdentity::new("turn-test".to_string(), "turn-test".to_string(), hive_core::ActorKind::Human);
     let kp = hive_core::SigningKeypair::generate()?;
     let account = hive_core::SigningKeypair::generate()?;
-    let mut svc = hive_runtime::ChatService::new(hive_runtime::EventStore::open_in_memory()?, uuid::Uuid::new_v4(), kp, account, author);
+    let mut svc = hive_runtime::ChatService::new(hive_runtime::EventStore::open_in_memory()?, kp, account, author);
     let ws = uuid::Uuid::new_v4();
     svc.ensure_workspace_config(ws)?;
     let chat = svc.create_chat("turn test", ws, "")?.id;

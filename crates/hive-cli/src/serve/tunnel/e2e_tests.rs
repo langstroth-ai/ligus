@@ -16,6 +16,12 @@ use crate::serve::tunnel::frame::{self, Frame, ResponseHead};
 use crate::serve::tunnel::testkit::{self, FakeRelay, HostInfo, PhoneKeys};
 use crate::serve::tunnel::{self as tun, cred, PairingSecret, RelaySettings};
 
+/// The overall deadline for anything a test awaits. Every wait returns as
+/// soon as its condition holds, so this only bounds a genuinely stuck test;
+/// latency bounds the spec makes are asserted separately (in watch passes,
+/// see [`watch_caught_up`]), never by how fast a loaded machine is.
+const WAIT: Duration = Duration::from_secs(30);
+
 async fn serve_with_relay(relay: &str) -> Harness {
     let (endpoint, _) = spawn_model(vec![]).await;
     let relay = relay.to_string();
@@ -64,20 +70,20 @@ fn pair_link(h: &Harness) -> String {
 async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
 
     // Pair: `ligus pair` leaves a window in pending/, serve announces it.
     let link = pair_link(&h);
     let (relay_url, hid, hs, ps) = parse_link(&link);
     assert_eq!((relay_url.as_str(), hid.as_str(), hs), (relay.url.as_str(), t.host_id(), *t.keys.static_pub()));
-    let announced = relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    let announced = relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     assert_eq!(announced["tagHash"], json!(ps.tag_hash()));
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (mut c, pid, credential) = testkit::phone_enroll(&info, &phone, &ps, "Test iPhone").await.unwrap();
     assert!(t.registry.is_active(&pid));
-    relay.wait_for("enrollClose", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enrollClose", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     assert!(!tun::pending_dir(&t.dir).join(format!("enroll-{}.json", ps.eid)).exists());
     // The enrollment connection already carries the API.
     let health = c.request("GET", "/v1/health", None).await.unwrap();
@@ -96,7 +102,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
 
     // SSE: the hub's events arrive as DATA on an open stream.
     let sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
-    let head = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let head = c.recv_timeout(WAIT).await.unwrap();
     assert_eq!((head.ty, head.stream), (frame::RESPONSE, sse));
     let head: ResponseHead = serde_json::from_slice(&head.payload).unwrap();
     assert_eq!(head.status, 200);
@@ -104,7 +110,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     h.handle.shared.hub.emit("turn.status", json!({ "canary": "tunnel-sse" }));
     let mut text = String::new();
     while !text.contains("tunnel-sse") {
-        let f = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+        let f = c.recv_timeout(WAIT).await.unwrap();
         if f.ty == frame::DATA && f.stream == sse {
             text.push_str(&String::from_utf8_lossy(&f.payload));
         }
@@ -155,7 +161,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
                     let ct = tun::b64u_decode(m["ct"].as_str().unwrap_or_default()).unwrap_or_default();
                     m["pid"] == json!(pid) && ct.len() > 28 && testkit::open_push(&key, t.host_id(), &pid, &ct)["seq"] == json!(seq + 1)
                 },
-                Duration::from_secs(5),
+                WAIT,
             )
             .await
             .unwrap();
@@ -179,10 +185,10 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     // Revocation from another process (`ligus phones revoke`): the live SSE
     // session gets GOAWAY revoked within ~1 s of serve noticing (≤ 2 s poll).
     let sse = c.open("GET", "/v1/events", &[], None, true).await.unwrap();
-    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let _ = c.recv_timeout(WAIT).await.unwrap();
     let data_dir = h.handle.shared.cfg.data_dir.clone();
     tun::cli::phones_revoke(&data_dir, Some(&pid), &h.handle.shared.opts.token_file, false).unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         // GOAWAY from the box, or the relay's 4003 close if its revocation
         // (control or HTTP) lands first: both end the session as revoked.
@@ -199,30 +205,24 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
         }
         assert_eq!(f.stream, sse);
     }
-    let rv = relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+    let rv = relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
     assert!(rv["exp"].as_u64().unwrap() >= claims.exp, "revocation lasts until the latest credential's exp");
     // Acked → the pending file is gone; reconnect is refused at the relay.
-    for _ in 0..50 {
-        if !tun::pending_dir(&t.dir).join(format!("revoke-{pid}.json")).exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(!tun::pending_dir(&t.dir).join(format!("revoke-{pid}.json")).exists());
+    let pending = tun::pending_dir(&t.dir).join(format!("revoke-{pid}.json"));
+    wait_until("the relay acks the revocation (pending file removed)", WAIT, || !pending.exists()).await;
     let err = testkit::phone_session(&info, &phone, &new_cred).await.err().expect("revoked");
     assert_eq!(testkit::close_code(&err), Some(4003));
     // The direct-path token was rotated, and serve picked it up.
     let old_token = h.token.clone();
-    let mut refused = false;
-    for _ in 0..40 {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
         let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old_token).send().await.unwrap();
         if r.status() == 401 {
-            refused = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(tokio::time::Instant::now() < deadline, "old bearer token still accepted after revoke");
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(refused, "old bearer token still accepted after revoke");
     let new_token = h.handle.shared.token();
     assert_ne!(new_token, old_token);
     assert_eq!(h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&new_token).send().await.unwrap().status(), 200);
@@ -230,13 +230,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
 
 /// Until the phone's cancelled `/v1/events` streams are gone.
 async fn wait_background(t: &tun::TunnelHost, pid: &str) {
-    for _ in 0..100 {
-        if t.foreground_streams(pid) == 0 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the events stream still counts as foreground");
+    wait_until("the events stream stops counting as foreground", WAIT, || t.foreground_streams(pid) == 0).await;
 }
 
 /// The four notification kinds, end to end: a real serve projection change
@@ -247,10 +241,10 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
     use hive_core::{workflow, ActionProposal, NodeRunStatus, ProposalKind};
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let (_, _, _, ps) = parse_link(&pair_link(&h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, credential) = testkit::phone_enroll(&info, &phone, &ps, "Push phone").await.unwrap();
@@ -266,7 +260,7 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
 
     // Foreground: an open events stream → a finished reply pushes nothing.
     let sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
-    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let _ = c.recv_timeout(WAIT).await.unwrap();
     assert_eq!(t.foreground_streams(&pid), 1);
     let seq0 = t.registry.get(&pid).unwrap().push_seq;
     let mid = shared.lock().begin_assistant_message(chat_id, ws, "coder".to_string(), "gw".to_string(), Some(h.agent_id), None).unwrap();
@@ -289,7 +283,7 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
                         let ct = tun::b64u_decode(m["ct"].as_str().unwrap_or_default()).unwrap_or_default();
                         m["pid"] == json!(pid) && ct.len() > 28 && testkit::open_push(&key, &hid, &pid, &ct)["seq"] == json!(seq)
                     },
-                    Duration::from_secs(5),
+                    WAIT,
                 )
                 .await
                 .unwrap();
@@ -349,10 +343,10 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
 async fn push_phone() -> (FakeRelay, Harness, Arc<tun::TunnelHost>, testkit::PhoneConn<testkit::ClientWs>, String, [u8; 32]) {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let (_, _, _, ps) = parse_link(&pair_link(&h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, credential) = testkit::phone_enroll(&info, &phone, &ps, "Push phone").await.unwrap();
@@ -374,7 +368,7 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let _sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
-    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let _ = c.recv_timeout(WAIT).await.unwrap();
     assert_eq!(t.foreground_streams(&pid), 1);
     let content = tun::PushContent { kind: "message.done".into(), chat_id: Some(chat_id.clone()), title: "coder replied".into(), ..Default::default() };
     // While the phone is talking, the app is open: no push.
@@ -384,7 +378,7 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
     // …but past the quiet window the push goes out.
     let later = std::time::Instant::now() + tun::push::FOREGROUND_QUIET + Duration::from_secs(1);
     assert_eq!(t.push_all_at(&content, later), 1, "a quiet phone's stale stream must not suppress pushes");
-    let m = relay.wait_for("push", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+    let m = relay.wait_for("push", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
     let pt = testkit::open_push(&key, t.host_id(), &pid, &tun::b64u_decode(m["ct"].as_str().unwrap()).unwrap());
     assert_eq!(pt["kind"], "message.done");
     assert!(m.get("diag").is_none(), "a real push never asks for diagnostics");
@@ -400,18 +394,18 @@ async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
 async fn push_test_reports_each_hop_through_the_running_serve() {
     let (relay, h, t, mut c, pid, key) = push_phone().await;
     let _sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
-    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    let _ = c.recv_timeout(WAIT).await.unwrap();
     *relay.state.push_reply.lock().unwrap() =
         Some(json!({ "ok": true, "detail": "apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id A1)" }));
 
     // In process: the report.
-    let r = t.push_test(None, Duration::from_secs(5)).await;
+    let r = t.push_test(None, WAIT).await;
     assert!(r.connected && r.push_available && r.error.is_none(), "{r:?}");
     let p = &r.phones[0];
     assert!(p.push_enabled && p.app_open && p.sent, "{p:?}");
     let ack = p.relay.as_ref().expect("relay answered");
     assert!(ack.ok && ack.detail.as_deref() == Some("apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id A1)"), "{ack:?}");
-    let m = relay.wait_for("push", |m| m["pid"] == json!(pid) && m["diag"] == json!(true), Duration::from_secs(5)).await.unwrap();
+    let m = relay.wait_for("push", |m| m["pid"] == json!(pid) && m["diag"] == json!(true), WAIT).await.unwrap();
     let pt = testkit::open_push(&key, t.host_id(), &pid, &tun::b64u_decode(m["ct"].as_str().unwrap()).unwrap());
     assert_eq!((pt["kind"].as_str(), pt["title"].as_str()), (Some("test"), Some("Test notification")));
 
@@ -422,7 +416,7 @@ async fn push_test_reports_each_hop_through_the_running_serve() {
     // A refusal: the command fails, and names the hop and the fix.
     *relay.state.push_reply.lock().unwrap() =
         Some(json!({ "ok": false, "code": "push_failed", "detail": "apns production topic com.zazulam.ligus: 400 BadDeviceToken" }));
-    let r = t.push_test(Some("Push phone"), Duration::from_secs(5)).await;
+    let r = t.push_test(Some("Push phone"), WAIT).await;
     let ack = r.phones[0].relay.clone().unwrap();
     assert_eq!((ack.ok, ack.code.as_deref()), (false, Some("push_failed")));
     let (text, ok) = tun::cli::describe_push_test(&r);
@@ -449,10 +443,10 @@ async fn tunnel_request_after_revocation_on_open_session_gets_401() {
     // racing the revocation is refused by the auth middleware.
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let (_, _, _, ps) = parse_link(&pair_link(&h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
@@ -532,11 +526,11 @@ async fn forge_tokens_can_be_set_through_the_tunnel() {
     let h = serve_with_relay(&relay.url).await;
     // Forge changes need the owner's presence on every box (5.7).
     h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.example.com", "auth": "token"}))).await;
     let t = h.handle.shared.tunnel.clone().unwrap();
     let (_, _, _, ps) = parse_link(&pair_link(&h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
@@ -568,10 +562,10 @@ async fn forge_tokens_can_be_set_through_the_tunnel() {
 async fn a_revoked_phone_device_cuts_its_tunnel() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let (_, _, _, ps) = parse_link(&pair_link(&h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
@@ -587,17 +581,13 @@ async fn a_revoked_phone_device_cuts_its_tunnel() {
     }
     crate::sync_once(&h.desktop).await.unwrap();
     // The box pulls it and revokes the pairing.
-    let mut cut = false;
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while t.registry.is_active(&pid) {
+        assert!(tokio::time::Instant::now() < deadline, "the revoked phone's pairing stayed active");
         h.handle.shared.sync_kick.notify_one();
-        if !t.registry.is_active(&pid) {
-            cut = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(cut, "the revoked phone's pairing stayed active");
-    relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
     let mut req = axum::http::Request::builder().uri("/v1/chats").body(axum::body::Body::empty()).unwrap();
     req.extensions_mut().insert(tun::TunnelPeer { pid });
     use tower::ServiceExt;
@@ -618,7 +608,7 @@ fn device_claim(t: &tun::TunnelHost, phone: &PhoneKeys, keys: &PhoneKeys) -> Val
 /// A fresh pairing window the relay has heard of.
 async fn open_window(h: &Harness, relay: &FakeRelay) -> PairingSecret {
     let (_, _, _, ps) = parse_link(&pair_link(h));
-    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, WAIT).await.unwrap();
     ps
 }
 
@@ -647,6 +637,25 @@ async fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
         assert!(tokio::time::Instant::now() < deadline, "timed out waiting for: {what}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// Full passes the box's revocation watch has completed.
+fn watch_passes(h: &Harness) -> u64 {
+    h.handle.shared.revocation_passes.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Until the revocation watch has completed two full passes after this call.
+/// The first may have read the store just before the call; the second began
+/// after it, so it saw every store and registry change made before the call
+/// and acted on it. "Cut by then" is the spec's latency bound (at most one
+/// [`crate::serve::REVOCATION_WATCH`] sleep plus one roster fold after the
+/// change) stated in the watch's own passes: load can slow the passes
+/// without failing the test, but a cut that waits for anything else (a sync
+/// round, a later store change, a slower timer) still fails it.
+async fn watch_caught_up(h: &Harness) {
+    assert!(crate::serve::REVOCATION_WATCH <= Duration::from_millis(500), "the spec: the roster is re-checked within 0.5 s of a store change");
+    let p0 = watch_passes(h);
+    wait_until("two full revocation-watch passes", WAIT, || watch_passes(h) >= p0 + 2).await;
 }
 
 /// Wait for the phone's session to end (GOAWAY, or the socket closing).
@@ -683,7 +692,7 @@ fn pushes_to(relay: &FakeRelay, pid: &str) -> usize {
 async fn revoking_a_phone_device_cuts_tunnel_and_push_and_reports_each_step() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
 
     // A live session that registered an APNs token and turned pushes on.
@@ -691,21 +700,27 @@ async fn revoking_a_phone_device_cuts_tunnel_and_push_and_reports_each_step() {
     assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
     assert!(relay.state.push_tokens.lock().unwrap().contains(&pid));
     // Pushes reach the phone before (so the "none after" check can fail).
-    let before = t.push_test(Some(&pid), Duration::from_secs(5)).await;
+    let before = t.push_test(Some(&pid), WAIT).await;
     assert!(before.phones[0].sent, "{before:?}");
     assert_eq!(relay.state.delivered.lock().unwrap().iter().filter(|p| **p == pid).count(), 1);
 
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
     h.handle.shared.sync_kick.notify_one();
-    // The close event itself: the live tunnel ends (the timeout only stops a
-    // hung test; it is no latency bound).
-    assert!(session_ends(&mut c, Duration::from_secs(30)).await, "the revoked phone's live tunnel stayed open");
-    assert_eq!(h.handle.shared.device_lookup(phone.device_id), tun::device_bind::DeviceLookup::Revoked);
-    assert!(!t.registry.is_active(&pid));
+    // Bound: from the moment the box's roster has the revocation.
+    let shared = h.handle.shared.clone();
+    wait_until("the box folds the revocation", WAIT, || {
+        shared.device_lookup(phone.device_id) == tun::device_bind::DeviceLookup::Revoked
+    })
+    .await;
+    // Bound: the watch's first full pass after the box's roster has the
+    // revocation cuts the pairing (the cut ends the live session at once).
+    watch_caught_up(&h).await;
+    assert!(!t.registry.is_active(&pid), "the first watch pass after the fold didn't cut the pairing");
+    assert!(session_ends(&mut c, WAIT).await, "the revoked phone's live tunnel stayed open");
 
     // The relay is told (HTTP route), drops the push token, and the steps settle.
-    wait_until("revocation steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    wait_until("revocation steps settle", WAIT, || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
     let e = t.ledger.list().remove(0);
     assert_eq!(e.status.device_id, phone.device_id.to_string());
     assert_eq!((e.status.tunnel.state, e.status.push.state, e.status.session.state), (StepState::Done, StepState::Done, StepState::NotApplicable));
@@ -719,10 +734,10 @@ async fn revoking_a_phone_device_cuts_tunnel_and_push_and_reports_each_step() {
     // No push after revocation: neither the gated path nor push-test sends one.
     let sent_before = pushes_to(&relay, &pid);
     t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
-    t.push_all(&tun::PushContent { kind: "test".into(), title: "x".into(), ..Default::default() });
+    // Both report what they handed to the relay connection: nothing.
+    assert_eq!(t.push_all(&tun::PushContent { kind: "test".into(), title: "x".into(), ..Default::default() }), 0, "a push for the revoked phone was sent");
     let after = t.push_test(Some(&pid), Duration::from_secs(1)).await;
     assert!(!after.phones[0].sent);
-    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(pushes_to(&relay, &pid), sent_before, "a push for the revoked phone reached the relay");
     assert_eq!(relay.state.delivered.lock().unwrap().iter().filter(|p| **p == pid).count(), 1);
 
@@ -739,11 +754,11 @@ async fn revoking_a_phone_device_cuts_tunnel_and_push_and_reports_each_step() {
 async fn a_revoked_phone_device_cannot_pair_again() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, info, keys, pid, _, phone) = pair_bound(&h, &relay).await;
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("pairing cut", WAIT, || !t.registry.is_active(&pid)).await;
     let active = || t.registry.list().into_iter().filter(|r| r.is_active()).count();
 
     // Same keys, with the claim.
@@ -770,7 +785,7 @@ async fn a_revoked_phone_device_cannot_pair_again() {
 async fn every_pairing_must_prove_its_phone_device() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let info = host_info(&h, &relay.url);
     let active = || t.registry.list().into_iter().filter(|r| r.is_active()).count();
@@ -815,7 +830,7 @@ async fn every_pairing_must_prove_its_phone_device() {
 async fn a_revocation_arriving_by_any_path_cuts_promptly() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
     let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
     assert_eq!(c.request("GET", "/v1/health", None).await.unwrap().status, 200);
@@ -832,17 +847,19 @@ async fn a_revocation_arriving_by_any_path_cuts_promptly() {
         .expect("the desktop wrote it");
     let mut other_process = hive_runtime::event_store::EventStore::open(h.handle.shared.cfg.data_dir.join("hive.db")).unwrap();
     assert!(other_process.ingest(&revocation).unwrap());
-    // The timeout only stops a hung test; it is no latency bound.
-    assert!(session_ends(&mut c, Duration::from_secs(30)).await, "live tunnel stayed open");
-    assert!(!t.registry.is_active(&pid));
+    // Bound: the watch's first full pass after the event landed cuts the
+    // pairing; no sync round runs in between (only the watch cuts).
+    watch_caught_up(&h).await;
+    assert!(!t.registry.is_active(&pid), "the first watch pass after the event landed didn't cut the pairing");
+    assert!(session_ends(&mut c, WAIT).await, "live tunnel stayed open");
     // Reported: the ledger has this device's revocation.
-    wait_until("revocation reported", Duration::from_secs(30), || {
+    wait_until("revocation reported", WAIT, || {
         t.ledger.list().iter().any(|e| e.status.device_id == phone.device_id.to_string())
     })
     .await;
     // Told by the HTTP route or the control `revoke`, whichever lands first
     // (under load the control ack can settle the step before the HTTP call).
-    wait_until("relay told", Duration::from_secs(5), || {
+    wait_until("relay told", WAIT, || {
         relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid)) || relay.state.revoked.lock().unwrap().contains(&pid)
     })
     .await;
@@ -855,14 +872,14 @@ async fn a_revocation_arriving_by_any_path_cuts_promptly() {
 async fn relay_failures_are_reported_and_retried() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
     *relay.state.http_revoke_fail.lock().unwrap() = Some(503);
     relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
     // The tunnel and push steps settle separately; wait for both.
-    wait_until("tunnel and push steps failed", Duration::from_secs(20), || {
+    wait_until("tunnel and push steps failed", WAIT, || {
         t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Failed && e.status.push.state == StepState::Failed)
     })
     .await;
@@ -873,7 +890,7 @@ async fn relay_failures_are_reported_and_retried() {
     assert!(!t.registry.is_active(&pid));
     *relay.state.http_revoke_fail.lock().unwrap() = None;
     h.send(reqwest::Method::POST, &format!("/v1/revocations/{}/retry", phone.device_id), None).await;
-    wait_until("steps settle after retry", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    wait_until("steps settle after retry", WAIT, || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
     assert!(!t.registry.is_active(&pid));
     h.handle.shutdown();
 
@@ -881,12 +898,12 @@ async fn relay_failures_are_reported_and_retried() {
     let relay = FakeRelay::start().await;
     relay.state.http_revoke_off.store(true, std::sync::atomic::Ordering::SeqCst);
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("steps settle via control ack", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
-    relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(1)).await.unwrap();
+    wait_until("steps settle via control ack", WAIT, || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
     assert!(relay.state.http_revokes.lock().unwrap().iter().all(|(s, _)| *s == 404));
     h.handle.shutdown();
 }
@@ -913,13 +930,13 @@ async fn the_session_step_ends_the_langstroth_auth_session() {
     let auth_url = spawn(auth).await;
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     t.set_auth_admin(Some(tun::revocation::AuthAdmin { url: auth_url, tenant: "acme".into(), token: "admin-test-token".into() }));
     let (_, _, _, _, _, phone) = pair_bound(&h, &relay).await;
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("steps settle", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    wait_until("steps settle", WAIT, || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
     let e = t.ledger.list().remove(0);
     assert_eq!(e.status.session.state, StepState::Done);
     assert_eq!(e.status.summary(), "revoked: tunnel cut, push removed, session ended");
@@ -935,19 +952,19 @@ async fn the_session_step_ends_the_langstroth_auth_session() {
 async fn a_revocation_racing_an_enrollment_still_refuses_it() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
     let keys = PhoneKeys::generate();
     revoke_on_desktop(&h, keys.device_id());
     crate::sync_once(&h.desktop).await.unwrap();
     h.handle.shared.sync_kick.notify_one();
     let shared = h.handle.shared.clone();
-    wait_until("the box folds the revocation", Duration::from_secs(10), || {
+    wait_until("the box folds the revocation", WAIT, || {
         shared.device_lookup(keys.device_id()) == tun::device_bind::DeviceLookup::Revoked
     })
     .await;
     // Let the watch see that change (there is no pairing to cut yet).
-    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    watch_caught_up(&h).await;
     // The claim check at msg1 still sees the device as certified (a stale
     // view); every later lookup sees the real roster.
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -961,8 +978,11 @@ async fn a_revocation_racing_an_enrollment_still_refuses_it() {
     }));
     let ps = open_window(&h, &relay).await;
     let info = host_info(&h, &relay.url);
+    // Returns once the box decided E4 (PONG after storing the pairing, or
+    // the session ended on a refusal); a stored pairing bumps the registry
+    // generation, which the watch's next pass re-checks.
     let _ = testkit::phone_enroll(&info, &keys, &ps, "racer").await;
-    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    watch_caught_up(&h).await;
     let active: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
     assert!(active.is_empty(), "a pairing of a revoked device stayed active: {:?}", active.iter().map(|r| &r.pid).collect::<Vec<_>>());
     h.handle.shutdown();
@@ -976,7 +996,7 @@ async fn a_revocation_racing_an_enrollment_still_refuses_it() {
 async fn revoking_a_phone_device_rotates_the_direct_token() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, info, _, pid, _, phone) = pair_bound(&h, &relay).await;
     let (_, _, keep_keys, keep_pid, keep_cred, _) = pair_bound(&h, &relay).await;
     let old = h.token.clone();
@@ -986,8 +1006,8 @@ async fn revoking_a_phone_device_rotates_the_direct_token() {
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
     h.handle.shared.sync_kick.notify_one();
-    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
-    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    wait_until("pairing cut", WAIT, || !t.registry.is_active(&pid)).await;
+    wait_until("token rotated", WAIT, || h.handle.shared.token() != old).await;
     let on_disk = std::fs::read_to_string(&h.handle.shared.opts.token_file).unwrap();
     assert_eq!(on_disk.trim(), h.handle.shared.token());
 
@@ -995,7 +1015,7 @@ async fn revoking_a_phone_device_rotates_the_direct_token() {
     let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
     assert_eq!(r.status(), 401);
     // … and the stream it opened has ended.
-    let ended = tokio::time::timeout(Duration::from_secs(3), async {
+    let ended = tokio::time::timeout(WAIT, async {
         while stream.recv().await.is_some() {}
     })
     .await;
@@ -1015,7 +1035,7 @@ async fn revoking_a_phone_device_rotates_the_direct_token() {
     let now = h.handle.shared.token();
     let r = h.client.post(format!("{}/v1/chats", h.base)).bearer_auth(&now).json(&json!({ "title": "later" })).send().await.unwrap();
     assert!(r.status().is_success());
-    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    watch_caught_up(&h).await;
     assert_eq!(h.handle.shared.token(), now);
     h.handle.shutdown();
 }
@@ -1029,11 +1049,11 @@ async fn revocation_presence_is_signed_and_checked_against_the_roster() {
     use hive_runtime::revocation_status as rs;
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, _, _, phone) = pair_bound(&h, &relay).await;
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("ledger entry", Duration::from_secs(10), || !t.ledger.list().is_empty()).await;
+    wait_until("ledger entry", WAIT, || !t.ledger.list().is_empty()).await;
     let ws = h.handle.shared.ws;
     let k = hive_runtime::keyring::KeyringEngine::passphrase(ws, hive_core::derive_workspace_key("serve-test"));
 
@@ -1057,7 +1077,7 @@ async fn revocation_presence_is_signed_and_checked_against_the_roster() {
     h.handle.shared.sync_kick.notify_one();
     let desk_id = desk.device_id();
     let shared = h.handle.shared.clone();
-    wait_until("box knows the desktop device", Duration::from_secs(10), || shared.lock().retry_requester_key(ws, desk_id).is_some()).await;
+    wait_until("box knows the desktop device", WAIT, || shared.lock().retry_requester_key(ws, desk_id).is_some()).await;
     let svc = h.handle.shared.lock();
     assert!(svc.retry_requester_key(ws, Uuid::new_v4()).is_none(), "an unknown device");
     assert!(svc.retry_requester_key(ws, phone.device_id).is_none(), "a revoked phone");
@@ -1081,22 +1101,51 @@ async fn revocation_presence_is_signed_and_checked_against_the_roster() {
 async fn chat_traffic_does_not_recheck_the_roster() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
     let checks = || h.handle.shared.revocation_checks.load(std::sync::atomic::Ordering::Relaxed);
-    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    watch_caught_up(&h).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "busy" }))).await["chat"]["id"].as_str().unwrap().to_string();
-    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
-    let before = checks();
-    for i in 0..8 {
-        h.send(reqwest::Method::POST, &format!("/v1/chats/{chat}/messages"), Some(json!({ "body": format!("msg {i}") }))).await;
-        tokio::time::sleep(crate::serve::REVOCATION_WATCH).await;
+    // (events row, equivocations row, registry generation) right now.
+    let config_id = workspace_config_session_id(h.handle.shared.ws);
+    let mark = || {
+        let svc = h.handle.shared.lock();
+        (svc.store().max_row_id().unwrap(), svc.store().max_equivocation_row_id().unwrap(), t.registry.generation())
+    };
+    // Whether anything that legitimately re-checks (a config-log row, a
+    // registry change) happened since `m`: the box's own start-up writes and
+    // the pairing's bookkeeping can land late on a loaded machine.
+    let disturbed = |m: (i64, i64, u64)| {
+        let svc = h.handle.shared.lock();
+        svc.store().session_rows_after(config_id, m.0, m.1).unwrap() || t.registry.generation() != m.2
+    };
+    let mut quiet_round = false;
+    for _ in 0..10 {
+        // Marked before the watch catches up: anything that landed before
+        // the mark is behind the watch by the time `before` is read.
+        let m = mark();
+        watch_caught_up(&h).await;
+        let before = checks();
+        // Each message is a store change the watch has fully looked at (a
+        // pass that began after it) before the next one, without re-checking.
+        for i in 0..8 {
+            h.send(reqwest::Method::POST, &format!("/v1/chats/{chat}/messages"), Some(json!({ "body": format!("msg {i}") }))).await;
+            watch_caught_up(&h).await;
+        }
+        assert!(mark().0 > m.0, "the chat messages were stored");
+        if disturbed(m) {
+            continue; // not only chat traffic in this round: try again
+        }
+        assert_eq!(checks(), before, "chat messages re-checked the roster");
+        quiet_round = true;
+        break;
     }
-    assert_eq!(checks(), before, "chat messages re-checked the roster");
+    assert!(quiet_round, "never had a round of only chat traffic");
+    let before = checks();
     // A revocation on the config log is still picked up.
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("pairing cut", WAIT, || !t.registry.is_active(&pid)).await;
     assert!(checks() > before);
     h.handle.shutdown();
 }
@@ -1110,16 +1159,16 @@ async fn a_skewed_clock_still_confirms_the_revocation() {
     // Only the HTTP route can confirm.
     relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
-    wait_until("relay confirms despite the skew", Duration::from_secs(8), || {
+    wait_until("pairing cut", WAIT, || !t.registry.is_active(&pid)).await;
+    wait_until("relay confirms despite the skew", WAIT, || {
         relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid))
     })
     .await;
-    wait_until("steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Done)).await;
+    wait_until("steps settle", WAIT, || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Done)).await;
     h.handle.shutdown();
 }
 
@@ -1133,7 +1182,7 @@ async fn a_skewed_clock_still_confirms_the_revocation() {
 async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
-    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    relay.wait_connected(WAIT).await.unwrap();
     let (t, _, _, a, _, _) = pair_bound(&h, &relay).await;
     let (_, _, _, b, _, _) = pair_bound(&h, &relay).await;
     let old = h.token.clone();
@@ -1144,16 +1193,16 @@ async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
     revoke_on_desktop(&h, own);
     crate::sync_once(&h.desktop).await.unwrap();
     h.handle.shared.sync_kick.notify_one();
-    wait_until("every pairing cut", Duration::from_secs(15), || !t.registry.is_active(&a) && !t.registry.is_active(&b)).await;
+    wait_until("every pairing cut", WAIT, || !t.registry.is_active(&a) && !t.registry.is_active(&b)).await;
     for pid in [&a, &b] {
-        relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+        relay.wait_for("revoke", |m| m["pid"] == json!(pid), WAIT).await.unwrap();
         let mut req = axum::http::Request::builder().uri("/v1/chats").body(axum::body::Body::empty()).unwrap();
         req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
         use tower::ServiceExt;
         let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
         assert_eq!(resp.status(), 401);
     }
-    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    wait_until("token rotated", WAIT, || h.handle.shared.token() != old).await;
     let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
     assert_eq!(r.status(), 401);
     let rotated = h.handle.shared.token();
@@ -1161,8 +1210,70 @@ async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
     // A pairing made after the revocation is cut as it appears; the token
     // isn't rotated again.
     let (_, _, _, c, _, _) = pair_bound(&h, &relay).await;
-    wait_until("the later pairing cut", Duration::from_secs(10), || !t.registry.is_active(&c)).await;
+    wait_until("the later pairing cut", WAIT, || !t.registry.is_active(&c)).await;
     assert_eq!(h.handle.shared.token(), rotated);
+    h.handle.shutdown();
+}
+
+/// Repos review residual 2 and F12: clone, rename, set-chat-repo, rescan and
+/// confirm are the box owner's. A paired phone that isn't certified to the
+/// account of the person who admitted the box is refused; once the founder
+/// (who admitted it) certifies the phone for their account, it may; once
+/// that phone is revoked, it may not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_actions_need_the_box_owners_certified_phone() {
+    use tower::ServiceExt;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (_t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    let call = |method: &str, uri: &str, body: serde_json::Value| {
+        let mut req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri.to_string())
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
+        let shared = h.handle.shared.clone();
+        async move { crate::serve::api::router(shared).oneshot(req).await.unwrap().status().as_u16() }
+    };
+    let gated = [
+        ("POST", "/v1/workspace-repos/rescan".to_string(), json!({})),
+        ("POST", "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        ("PATCH", format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        ("POST", format!("/v1/workspace-repos/{}/confirm", Uuid::new_v4()), json!({ "checkout": "nowhere" })),
+    ];
+    for (m, u, b) in &gated {
+        assert_eq!(call(m, u, b.clone()).await, 403, "{m} {u} from a phone that isn't the owner's");
+    }
+    let founder = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the certificate", Duration::from_secs(15), || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_ok()
+    })
+    .await;
+    assert_eq!(h.handle.shared.lock().box_owner_accounts(ws).unwrap(), std::collections::BTreeSet::from([founder]), "the founder admitted the box");
+    assert_eq!(call("POST", "/v1/workspace-repos/rescan", json!({})).await, 200, "the owner's certified phone");
+    // An unknown repo id is now a 404, not the owner refusal.
+    assert_ne!(call("POST", "/v1/repos/clone", json!({ "repoId": Uuid::new_v4() })).await, 403);
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the revocation", Duration::from_secs(15), || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_err()
+    })
+    .await;
+    // The pairing itself is cut too (401 from the auth middleware), or the
+    // gate refuses: never allowed.
+    let st = call("POST", "/v1/workspace-repos/rescan", json!({})).await;
+    assert!(st == 401 || st == 403, "{st}");
     h.handle.shutdown();
 }
 

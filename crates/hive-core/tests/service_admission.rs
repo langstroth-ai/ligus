@@ -592,3 +592,99 @@ fn an_admission_for_a_join_request_admits_only_that_boxs_device() {
     let bad = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() + HOUR_MS, None, key().public()).for_device(&[1; 3]));
     assert_eq!(w.verdict(bad), Verdict::Denied);
 }
+
+/// A holder of the code copies the box's redemption id with a redemption of
+/// their own (signed by their own device, so it is their own event, not an
+/// equivocation): a closure naming that id can't tell which one its closer
+/// saw, so it admits neither (fail closed), and never the thief.
+#[test]
+fn a_thief_copying_the_named_redemptions_id_is_never_admitted() {
+    // Copies of one id from two signers fold in the order of their signer
+    // ids: make the thief's sort first (the case a closure naming the id
+    // would otherwise admit).
+    let mut w = (0..256)
+        .map(|_| world())
+        .find(|w| w.people["box2"].device_id < w.people["box"].device_id)
+        .expect("a world where the thief's device id sorts first");
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    // The thief published its identity early (its chain link is older).
+    w.publish_identity("box2");
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    assert_eq!(w.verdict(close), Verdict::Allowed);
+    // The thief's own redemption, under the box's redemption id.
+    let m = w.member_of("box2", WorkspaceRole::Contributor);
+    let proof = key().prove(w.wid, id, "box2", w.people["box2"].device_id);
+    let orig = w.cfg.iter().find(|e| e.event_id == ok).unwrap().clone();
+    let mut copy = w.draft("box2", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
+    copy.event_id = ok;
+    copy.lamport = orig.lamport;
+    if let (Some(s), Some(o)) = (copy.actor_stamp.as_mut(), orig.actor_stamp.as_ref()) {
+        s.log_head = o.log_head;
+    }
+    w.finish(&mut copy, "box2", None);
+    w.push_env(None, copy);
+    let roster = w.roster();
+    assert!(!roster.members.contains_key("box2"), "the thief was admitted through a closed admission");
+}
+
+/// Without the code there is no redemption to confuse a closure with: a
+/// self-certified stranger copying the box's redemption id with a
+/// "redemption" carrying no proof (the invite id and the redemption id are
+/// on the log for anyone holding the workspace key) leaves the box admitted.
+#[test]
+fn a_proofless_copy_of_the_named_redemption_doesnt_unadmit_the_box() {
+    let mut w = world();
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    w.publish_identity("eve");
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    assert_eq!(w.verdict(close), Verdict::Allowed);
+    assert!(w.roster().members.contains_key("box"), "control");
+    let orig = w.cfg.iter().find(|e| e.event_id == ok).unwrap().clone();
+    let mut m = w.member_of("eve", WorkspaceRole::Contributor);
+    m.actor.kind = ActorKind::Service;
+    let mut copy = w.draft("eve", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: None }, None);
+    copy.event_id = ok;
+    copy.lamport = orig.lamport;
+    if let (Some(s), Some(o)) = (copy.actor_stamp.as_mut(), orig.actor_stamp.as_ref()) {
+        s.log_head = o.log_head;
+    }
+    w.finish(&mut copy, "eve", None);
+    w.push_env(None, copy);
+    let roster = w.roster();
+    assert!(!roster.members.contains_key("eve"));
+    assert!(roster.members.contains_key("box"), "a proofless copy of its redemption's id unadmitted the box");
+}
+
+/// The same with the box's own record and proof replayed: a stranger
+/// certifies the box's device id for themselves and signs, under it, a copy
+/// of the box's redemption (its member record and proof, which name that
+/// device) with the stranger's account on the stamp.
+#[test]
+fn a_replayed_proof_through_a_squatted_device_id_doesnt_unadmit_the_box() {
+    use hive_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
+    let mut w = world();
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    w.publish_identity("eve");
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    let box_device = w.people["box"].device_id;
+    let k = SigningKeypair::generate().unwrap();
+    let eve = &w.people["eve"];
+    let cert = DeviceCertificate::issue_for_id(&eve.account, eve.account_id, box_device, &k.public_key_bytes(), hive_core::Timestamp::epoch());
+    w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let orig = w.cfg.iter().find(|e| e.event_id == ok).unwrap().clone();
+    let mut copy = orig.clone();
+    if let Some(s) = copy.actor_stamp.as_mut() {
+        s.actor.account_id = Some(w.people["eve"].account_id);
+    }
+    copy.clear_raw();
+    sign_envelope(&mut copy, box_device, &k);
+    w.push_env(None, copy);
+    assert!(w.roster().members.contains_key("box"), "a replayed proof under a squatted device id unadmitted the box");
+}

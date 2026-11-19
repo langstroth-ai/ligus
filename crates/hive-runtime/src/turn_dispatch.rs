@@ -133,7 +133,11 @@ pub fn dispatch_target(body: &str, session: &ChatSession, local_only: bool, link
 /// this device answers it anyway. Long enough that a healthy peer's
 /// `TurnClaimed` syncs first and this never fires; short enough that the user
 /// isn't left staring at a dead chat.
-pub const DEFERRED_CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+///
+/// It is the dispatcher's claim timeout (`hive_core::dispatch::CLAIM_TIMEOUT`,
+/// design repos-and-checkouts 11.5): the same wait also hands a claimed turn
+/// over when its holder goes silent.
+pub const DEFERRED_CLAIM_TIMEOUT: std::time::Duration = hive_core::dispatch::CLAIM_TIMEOUT;
 
 /// Whether a turn we deferred is *still* unanswered once
 /// [`DEFERRED_CLAIM_TIMEOUT`] has elapsed, and this device should take it over.
@@ -141,11 +145,23 @@ pub const DEFERRED_CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Three independent guards, each conservative in the same direction: a false
 /// "already handled" costs one unanswered turn, a false "unanswered" costs a
 /// duplicate answer in a live room.
+///
+/// Since the dispatcher (design repos-and-checkouts 11.5) a claim no longer
+/// ends the fallback: a claimed turn whose holder went silent is handed over
+/// (the desktop's dispatch watch uses [`turn_still_open`]).
 pub fn deferred_turn_unanswered(session: &ChatSession, trigger_id: Uuid) -> bool {
     // 1. Someone claimed it, including us on an earlier pass.
     if session.turn_claims.contains_key(&trigger_id) {
         return false;
     }
+    turn_still_open(session, trigger_id)
+}
+
+/// Guards 2 and 3 of [`deferred_turn_unanswered`] without the claim check:
+/// nobody answered the trigger (a superseded duplicate doesn't count) and
+/// the user hasn't moved on. The dispatcher's watcher uses it, because a
+/// claimed turn whose holder went silent is exactly what it hands over.
+pub fn turn_still_open(session: &ChatSession, trigger_id: Uuid) -> bool {
     let Some(at) = session.messages.iter().position(|m| m.id == trigger_id) else {
         // Trigger vanished (message deleted mid-wait): nothing to answer.
         return false;
@@ -157,6 +173,7 @@ pub fn deferred_turn_unanswered(session: &ChatSession, trigger_id: Uuid) -> bool
     //    ids.
     let answered = session.messages[at + 1..].iter().any(|m| {
         m.role == MessageRole::Assistant
+            && !m.superseded
             && m.reply_to_message_id.is_some_and(|id| session.messages[at..].iter().any(|target| target.id == id))
     });
     if answered {
@@ -181,20 +198,24 @@ pub fn user_turn_answered(session: &ChatSession, trigger: Uuid) -> bool {
         .chain(session.messages[at + 1..].iter().take_while(|m| m.role == MessageRole::System).map(|m| m.id))
         .collect();
     session.messages[at + 1..].iter().any(|m| {
-        matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.reply_to_message_id.is_some_and(|id| keys.contains(&id))
+        matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
+            && !m.superseded
+            && m.reply_to_message_id.is_some_and(|id| keys.contains(&id))
     })
 }
 
 /// The user messages among `arrived` (what one sync pull brought into this
-/// chat) that may still need an answer, in transcript order: unanswered, and
-/// not claimed by another device. Ownership, addressing and the claim are
-/// checked per trigger when it runs.
-pub fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid], my_device: Uuid) -> Vec<Uuid> {
+/// chat) that may still need an answer, in transcript order: unanswered.
+/// Ownership, addressing and the claim are checked per trigger when it runs
+/// (through the dispatcher: a turn another device holds is watched, not
+/// dropped).
+pub fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid]) -> Vec<Uuid> {
     session
         .messages
         .iter()
         .filter(|m| m.role == MessageRole::User && arrived.contains(&m.id))
-        .filter(|m| session.turn_claims.get(&m.id).is_none_or(|d| *d == my_device))
+        // A foreign claim is the dispatcher's to judge: this device watches
+        // its holder and hands a silent one over.
         .filter(|m| !user_turn_answered(session, m.id))
         .map(|m| m.id)
         .collect()
@@ -275,12 +296,13 @@ mod tests {
         s.messages.push(user);
         assert!(!user_turn_answered(&s, trigger));
         assert!(deferred_turn_unanswered(&s, trigger));
-        let me = Uuid::new_v4();
-        assert_eq!(synced_user_triggers(&s, &[trigger], me), vec![trigger]);
-        // Claimed by another device: not ours, and not a fallback.
+        assert_eq!(synced_user_triggers(&s, &[trigger]), vec![trigger]);
+        // Claimed by another device: not a fallback, but still a synced
+        // trigger (the dispatcher watches its holder) and still open.
         s.turn_claims.insert(trigger, Uuid::new_v4());
-        assert!(synced_user_triggers(&s, &[trigger], me).is_empty());
+        assert_eq!(synced_user_triggers(&s, &[trigger]), vec![trigger]);
         assert!(!deferred_turn_unanswered(&s, trigger));
+        assert!(turn_still_open(&s, trigger));
         s.turn_claims.clear();
         // A reply to a System row right after the trigger answers it.
         let sys = msg(MessageRole::System, None);
@@ -289,6 +311,10 @@ mod tests {
         s.messages.push(msg(MessageRole::Assistant, Some(sys_id)));
         assert!(user_turn_answered(&s, trigger));
         assert!(!deferred_turn_unanswered(&s, trigger));
+        // A superseded duplicate answer doesn't count.
+        s.messages.last_mut().unwrap().superseded = true;
+        assert!(!user_turn_answered(&s, trigger));
+        s.messages.last_mut().unwrap().superseded = false;
         // A deleted trigger counts as answered.
         assert!(user_turn_answered(&s, Uuid::new_v4()));
     }

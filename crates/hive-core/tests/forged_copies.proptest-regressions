@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0e9ce00598690a0706ed3f2cb3798570dee164ea14cbe8649d89c6dcd5aa9937 # shrinks to p = Plan { n_chat: 2, n_cfg: 0, twins: 252, forgeries: [(0, 0, false, false)], devices: [(848204987694331661, 0), (0, 7067111096)] }
+cc 22dd7d9c9e0cb2940b3bf5a3473c9f042c41ec95e7604b0bbbcfe200a14e5bc8 # shrinks to p = Plan { n_chat: 2, n_cfg: 0, twins: 10531, forgeries: [(93, 4, false, false)], devices: [(4015437399242582549, 0), (0, 2448837730)] }
+cc ecc608199600e88645f4eb7c1be881bbe6a24e57e2a05120dac41b1591432589 # shrinks to p = Plan { n_chat: 2, n_cfg: 0, twins: 0, forgeries: [(0, 4, false, false)], devices: [(0, 0), (0, 0)] }, missing = 153

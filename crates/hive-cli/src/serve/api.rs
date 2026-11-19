@@ -294,7 +294,7 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// When a chat last changed: its own stamp or its newest message.
 fn updated_at(s: &ChatSession) -> Timestamp {
-    s.messages.iter().map(|m| m.created_at).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
+    s.messages.iter().filter(|m| !m.superseded).map(|m| m.created_at).chain([s.updated_at, s.created_at]).max().unwrap_or(s.updated_at)
 }
 
 pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
@@ -302,7 +302,7 @@ pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
         .messages
         .iter()
         .rev()
-        .find(|m| m.role != MessageRole::System && !m.body.trim().is_empty())
+        .find(|m| m.role != MessageRole::System && !m.body.trim().is_empty() && !m.superseded)
         .map(|m| truncate(&m.body.replace('\n', " "), 140))
         .unwrap_or_default();
     json!({
@@ -812,8 +812,10 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
         (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc), svc.author().clone())
     };
     let me = super::notify::Me::in_chat(&author, &chat, &links);
+    // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
     let list: Vec<Value> = slice
         .iter()
+        .filter(|m| !m.superseded)
         .map(|m| {
             let mut v = linked_message_dto(&chat, m, &links, viewer);
             add_requester(&mut v, &chat, m, &me);

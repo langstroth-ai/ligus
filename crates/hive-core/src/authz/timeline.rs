@@ -35,13 +35,37 @@ pub struct AgentState {
 }
 
 /// One device, as the trust events on this log certify it.
+///
+/// A device id is derived from the device's signing key
+/// ([`crate::crypto::device_id_for`]) and a certificate whose id isn't its
+/// key's never verifies, so every certificate of one id names one key, and
+/// only that device can sign under its id. Another account can still
+/// certify the same device (its key) for itself, but that never lets it
+/// sign as the device; who *holds* the device is [`DeviceState::holders`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DeviceState {
     /// Accounts whose (undisputed) key certified this device.
     pub accounts: BTreeSet<Uuid>,
     pub revoked: bool,
-    /// The device's signing key, from its certificate.
+    /// The device's signing key: the one its id derives from.
     pub public_key: Vec<u8>,
+    /// The accounts that hold this device (see
+    /// [`RosterState::account_holds_device`]). When more than one account
+    /// certified it anywhere on the log, the ones the device itself vouched
+    /// for: a certificate of it the device published, or a config event it
+    /// signed stamped for that account (only the device's holder can sign
+    /// either, and the whole log is read, so no position, backdated or not,
+    /// changes it). An account that certified someone else's device key for
+    /// itself holds nothing. A device that vouched for no one (a phone: its
+    /// person's laptop enrolls it) is held by every account that certified
+    /// it.
+    pub holders: BTreeSet<Uuid>,
+    /// Whether [`DeviceState::holders`] was read from the device's own
+    /// signatures (it vouched for them), rather than being every account
+    /// that certified it. Only then does holding a device more than one
+    /// account certified make it one's own to revoke (R5): a device that
+    /// vouched for no one can't tell its person from an adopter.
+    pub vouched: bool,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
     /// owner's desktop approving `hive serve enroll`), or that a certified,
@@ -53,8 +77,8 @@ pub struct DeviceState {
     /// `authz::authorize`).
     pub delegated_for: BTreeSet<Uuid>,
     /// A phone: its key is a P-256 Secure Enclave key (the certificate's
-    /// `alg`, inside the account's signature). Capped to the phone tier
-    /// (`authz::phone`).
+    /// `alg`, inside the account's signature and the id's derivation).
+    /// Capped to the phone tier (`authz::phone`).
     pub phone: bool,
 }
 
@@ -62,6 +86,16 @@ impl DeviceState {
     /// Whether this device signs for `account` as a delegated host.
     pub fn delegated_for(&self, account: Uuid) -> bool {
         self.delegated_for.contains(&account)
+    }
+
+    /// The device's key, when `env` (signed by this device) verifies under
+    /// it and the account its stamp names (if any) certified this device.
+    pub fn verifying_key(&self, env: &SessionEventEnvelope) -> Option<&[u8]> {
+        let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+        if account.is_some_and(|a| !self.accounts.contains(&a)) || self.public_key.is_empty() {
+            return None;
+        }
+        crate::crypto::verify_envelope(env, &self.public_key).is_ok().then_some(self.public_key.as_slice())
     }
 }
 
@@ -117,6 +151,13 @@ pub struct RosterState {
     pub founder: String,
     /// The workspace's repositories by id (a removed one is a tombstone).
     pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
+    /// Each live repo's synced aliases (`WorkspaceRepoAliasesSet`; design
+    /// 12). Names only; a device uses one only after a person there accepts
+    /// it.
+    pub repo_aliases: BTreeMap<Uuid, Vec<String>>,
+    /// Synced host aliases, alias host → a live repo's canonical host
+    /// (`WorkspaceHostAliasSet`).
+    pub host_aliases: BTreeMap<String, String>,
     /// The attachment policy and the blocklist of content hashes in force
     /// (issue #118).
     pub attachments: crate::attachment::AttachmentRules,
@@ -137,6 +178,30 @@ impl RosterState {
         self.devices.get(&device).is_some_and(|d| d.accounts.contains(&account))
     }
 
+    /// Whether `account` holds the device `device` names
+    /// ([`DeviceState::holders`]): revoking a device is self-service for an
+    /// account that holds it (R5), and an unbound agent of an account runs
+    /// only on a device that account holds. An account that certified
+    /// someone else's device (its key) for itself holds nothing.
+    pub fn account_holds_device(&self, account: Uuid, device: Uuid) -> bool {
+        self.devices.get(&device).is_some_and(|d| d.holders.contains(&account))
+    }
+
+    /// Whether `device` is `account`'s own to revoke (R5, and a service
+    /// member's own device): `account` holds it, and either the device
+    /// itself vouched for it or no other current member holds it. A device
+    /// more than one member certified that vouched for none of them (a
+    /// phone, a box its person's desktop enrolled) is held by its person and
+    /// any adopter alike, so it is no one's own: it is revoked down the
+    /// ranks over all of them (or by its person once the others are gone).
+    pub fn account_owns_device(&self, account: Uuid, device: Uuid) -> bool {
+        self.devices.get(&device).is_some_and(|d| {
+            d.holders.contains(&account)
+                && (d.vouched
+                    || d.holders.iter().all(|h| *h == account || !self.members.values().any(|m| m.account_id == Some(*h))))
+        })
+    }
+
     /// Whether a device is certified (by some undisputed account) and not
     /// revoked.
     pub fn device_trusted(&self, device: Uuid) -> bool {
@@ -144,7 +209,7 @@ impl RosterState {
     }
 
     /// Whether `host` may hold keys for `agent_id` here: the agent is bound
-    /// to that host, or, unbound, its owner's account certified the host.
+    /// to that host, or, unbound, its owner's account holds the host.
     pub fn agent_bound_to(&self, agent_id: Uuid, host: Uuid) -> bool {
         let Some(agent) = self.agents.get(&agent_id) else { return false };
         if !self.device_trusted(host) {
@@ -156,7 +221,7 @@ impl RosterState {
                 .get(&agent.owner)
                 .and_then(|m| m.account_id)
                 .or_else(|| Uuid::parse_str(&agent.owner).ok());
-            owner_account.is_some_and(|a| self.account_certified(a, host))
+            owner_account.is_some_and(|a| self.account_holds_device(a, host))
         } else {
             agent.host_id == host.to_string()
         }
@@ -211,6 +276,10 @@ pub struct RosterTracker {
     /// the enrolled device re-publishing its certificate later doesn't undo it
     /// (it only ever holds certificates it was handed).
     enrolled_by_other: BTreeSet<(Uuid, Uuid)>,
+    /// Device id → the accounts it vouched for anywhere on the log, for each
+    /// device more than one account certified ([`RosterTracker::vouched`]):
+    /// what [`DeviceState::holders`] reads.
+    vouched: Arc<BTreeMap<Uuid, BTreeSet<Uuid>>>,
 }
 
 impl RosterTracker {
@@ -231,6 +300,66 @@ impl RosterTracker {
         }
         t.refresh(session);
         t
+    }
+
+    /// Record whom each device vouched for ([`RosterTracker::vouched`]); a
+    /// fold of a log with certificates sets it before folding.
+    pub fn set_vouched(&mut self, vouched: BTreeMap<Uuid, BTreeSet<Uuid>>) {
+        self.vouched = Arc::new(vouched);
+    }
+
+    /// For each Ed25519 device that more than one account certified on
+    /// `envelopes` (a whole log, any position, any verdict), the accounts
+    /// among them it vouched for: a certificate of itself it published, or
+    /// any event it signed stamped for the account. Each is a signature by
+    /// the device's own key (the one its id derives from), so nobody else can
+    /// add one. A phone's never count (a phone is enrolled by another device
+    /// and can't enroll itself), so a stolen phone can't take its person's
+    /// hold away.
+    pub fn vouched(envelopes: &[&SessionEventEnvelope]) -> BTreeMap<Uuid, BTreeSet<Uuid>> {
+        // Nothing to tell apart (the common case) unless some device id has
+        // certificates naming more than one account: checked before any
+        // signature is.
+        let mut named: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        for e in envelopes {
+            if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
+                named.entry(certificate.device_id).or_default().insert(certificate.account_id);
+            }
+        }
+        if named.values().all(|a| a.len() < 2) {
+            return BTreeMap::new();
+        }
+        let trust: Vec<SessionEventEnvelope> = envelopes
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.payload,
+                    SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. } | SessionEvent::DeviceCertificateAdded { .. }
+                )
+            })
+            .map(|e| (*e).clone())
+            .collect();
+        let directory = crate::copies::SignerDirectory::of(&trust);
+        let contested: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> =
+            directory.devices().filter(|(_, (k, a))| a.len() > 1 && k.len() == crate::crypto::KEY_LEN).collect();
+        let mut out: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        if contested.is_empty() {
+            return out;
+        }
+        for e in envelopes {
+            let Some((key, claimants)) = e.signer_device_id.and_then(|d| contested.get(&d)) else { continue };
+            let mut named: Vec<Uuid> = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id).into_iter().collect();
+            if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
+                if Some(certificate.device_id) == e.signer_device_id {
+                    named.push(certificate.account_id);
+                }
+            }
+            named.retain(|a| claimants.contains(a) && !out.get(&e.signer_device_id.unwrap_or_default()).is_some_and(|v| v.contains(a)));
+            if !named.is_empty() && crate::crypto::verify_envelope(e, key).is_ok() {
+                out.entry(e.signer_device_id.unwrap_or_default()).or_default().extend(named);
+            }
+        }
+        out
     }
 
     /// Fold the trust side of an event (account keys and device certificates
@@ -278,8 +407,13 @@ impl RosterTracker {
                 self.certs.push(certificate.clone());
                 let key = (certificate.device_id, certificate.account_id);
                 match env.signer_device_id {
+                    // Published by the device itself: its signature under the
+                    // key the certificate names (the one its id derives from)
+                    // proves it, so nobody else can make one.
                     Some(s) if s == certificate.device_id => {
-                        self.self_published.insert(key);
+                        if crate::crypto::verify_envelope(env, &certificate.device_public_key).is_ok() {
+                            self.self_published.insert(key);
+                        }
                     }
                     // Only a publisher that itself holds the account (certified,
                     // not revoked, not delegated, at this position) enrolls:
@@ -346,6 +480,22 @@ impl RosterTracker {
             SessionEvent::WorkspaceRepoRemoved { repo_id } if allowed => {
                 if let Some(r) = self.state.repos.get_mut(repo_id) {
                     r.removed = true;
+                }
+                // Its aliases go with it (a later add starts clean).
+                self.state.repo_aliases.remove(repo_id);
+            }
+            SessionEvent::WorkspaceRepoAliasesSet { repo_id, aliases } if allowed => {
+                if aliases.is_empty() {
+                    self.state.repo_aliases.remove(repo_id);
+                } else {
+                    self.state.repo_aliases.insert(*repo_id, aliases.clone());
+                }
+            }
+            SessionEvent::WorkspaceHostAliasSet { alias, host } if allowed => {
+                if host.is_empty() {
+                    self.state.host_aliases.remove(alias);
+                } else {
+                    self.state.host_aliases.insert(alias.clone(), host.clone());
                 }
             }
             SessionEvent::IdentityLinkPublished { link } if allowed => {
@@ -418,6 +568,8 @@ impl RosterTracker {
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
+                // One key per id (it derives the id): every certificate of
+                // this id names it.
                 d.public_key = cert.device_public_key.clone();
                 let phone = cert.alg == crate::crypto::SigAlg::P256;
                 d.phone |= phone;
@@ -429,6 +581,14 @@ impl RosterTracker {
                     d.delegated_for.insert(cert.account_id);
                 }
             }
+        }
+        // Who holds each device (see `DeviceState::holders`).
+        for (id, d) in devices.iter_mut() {
+            d.holders = match self.vouched.get(id) {
+                Some(v) => d.accounts.intersection(v).copied().collect(),
+                None => d.accounts.clone(),
+            };
+            d.vouched = !d.holders.is_empty() && self.vouched.contains_key(id);
         }
         for d in &fold.guards.revoked_devices {
             devices.entry(*d).or_default().revoked = true;
@@ -474,8 +634,16 @@ pub struct ConfigTimeline {
     at: Vec<u32>,
     /// `states[0]` is the base seed's roster.
     states: Vec<Arc<RosterState>>,
-    /// Every config event this device holds (folded or not) → its lamport.
-    held: HashMap<Uuid, u64>,
+    /// Every config event this device holds (folded or not) → its lamports
+    /// (one per kept copy: two signers' copies of one id can sit at two
+    /// lamports, see [`crate::copies`]).
+    held: HashMap<Uuid, Vec<u64>>,
+    /// Every account key and certificate on the log (all copies), and who
+    /// can sign under each device and agent key id from them
+    /// ([`crate::copies::SignerDirectory`], built on first use): what a chat
+    /// fold tells copies of one id apart by.
+    signer_events: Arc<Vec<SessionEventEnvelope>>,
+    signers: Arc<std::sync::OnceLock<crate::copies::SignerDirectory>>,
     /// Every rotation body on the log, authorized or not: keys a device can
     /// open from these are read-only candidates (B1; never sealed under
     /// unless authorized).
@@ -504,6 +672,9 @@ pub enum CutKind {
 pub struct Cut {
     /// The cut event's canonical key (a config position).
     pub key: (u64, Uuid),
+    /// Which copy of its id the cut event is ([`crate::copies::CopyRef`]):
+    /// `0` unless another signer's copy shares the id.
+    pub copy: u32,
     pub kind: CutKind,
     /// For a removal: the agent keys of agents the member owned there.
     pub agent_keys: BTreeSet<Uuid>,
@@ -521,13 +692,20 @@ impl Cut {
         }
     }
 
-    /// The events of one log this cut's watermark covers (held by its author).
-    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<Uuid> {
+    /// The events of one log this cut's watermark covers (held by its
+    /// author), as `(signer, event id)`: an id names a signer's own event.
+    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<(Option<Uuid>, Uuid)> {
         let mut out = BTreeSet::new();
         for w in self.watermark.iter().filter(|w| w.log == log) {
-            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps));
+            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps).into_iter().map(|id| (Some(w.signer), id)));
         }
         out
+    }
+
+    /// Whether `env` (the copy `copy` of its id) sorts before this cut in
+    /// the fold's order.
+    pub fn is_before(&self, env: &SessionEventEnvelope, copy: u32) -> bool {
+        (env.canonical_key(), copy) < (self.key, self.copy)
     }
 
     /// The config position the cut's later events are judged at.
@@ -544,7 +722,22 @@ impl ConfigTimeline {
 
     /// Note an event of the config log this device holds (folded or not).
     pub fn note_held(&mut self, event_id: Uuid, lamport: u64) {
-        self.held.insert(event_id, lamport);
+        let l = self.held.entry(event_id).or_default();
+        if !l.contains(&lamport) {
+            l.push(lamport);
+        }
+    }
+
+    /// Record the log's account keys and certificates (see
+    /// [`crate::copies::signer_events`]).
+    pub fn set_signer_events(&mut self, events: Vec<SessionEventEnvelope>) {
+        self.signer_events = Arc::new(events);
+        self.signers = Arc::default();
+    }
+
+    /// Who can sign on this workspace, from the config log's certificates.
+    pub fn signers(&self) -> &crate::copies::SignerDirectory {
+        self.signers.get_or_init(|| crate::copies::SignerDirectory::of(&self.signer_events))
     }
 
     /// Note a rotation body seen on the log (authorized or not).
@@ -601,6 +794,10 @@ impl ConfigTimeline {
         }
         self.states[0].fingerprint().hash(&mut h);
         self.cuts.hash(&mut h);
+        for e in self.signer_events.iter() {
+            e.event_id.hash(&mut h);
+            crate::copies::copy_key(e).hash(&mut h);
+        }
         self.fingerprint = h.finish().max(1);
         self
     }
@@ -646,13 +843,13 @@ impl ConfigTimeline {
     pub fn at(&self, frontier: CfgFrontier) -> Result<&RosterState, Option<HoldReason>> {
         match self.held.get(&frontier.event_id) {
             None => {
-                let newest = self.held.values().copied().max().unwrap_or(0);
+                let newest = self.held.values().flatten().copied().max().unwrap_or(0);
                 if !self.held.is_empty() && (frontier.lamport < newest || frontier.lamport > newest.saturating_add(FRONTIER_SLACK)) {
                     return Err(None);
                 }
                 return Err(Some(HoldReason::ConfigFrontierAhead));
             }
-            Some(l) if *l != frontier.lamport => return Err(None),
+            Some(l) if !l.contains(&frontier.lamport) => return Err(None),
             Some(_) => {}
         }
         if self.states.is_empty() {

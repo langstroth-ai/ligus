@@ -201,7 +201,7 @@ fn git(dir: &Path, args: &[&str]) {
 fn world(servers: Vec<McpServerSpec>) -> World {
     let dir = tempfile::tempdir().unwrap();
     let store = EventStore::open(dir.path().join("hive.db")).unwrap();
-    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("x", "Alex", ActorKind::Human));
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("x", "Alex", ActorKind::Human));
     let account = Uuid::new_v4().to_string();
     svc.set_author_account(account.clone(), "Alex", None);
     let ws = Uuid::new_v4();
@@ -578,9 +578,13 @@ async fn concurrent_turns_and_ui_reads_never_deadlock() {
             text(&format!("Turn {k} done.")),
         ])
         .await;
+        // Each turn answers its own message: two answers to one trigger
+        // are a duplicate the dispatcher fences (repos-and-checkouts 11.5).
+        let trigger = w.host.inner.svc.lock().unwrap().post_user_message(w.chat, w.ws, &format!("@coder task {k}")).unwrap().id;
         let w = w.clone();
         turns.push(tokio::spawn(async move {
-            let i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+            let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+            i.reply_to = Some(trigger);
             run(&w.host, i).await
         }));
     }
@@ -594,5 +598,24 @@ async fn concurrent_turns_and_ui_reads_never_deadlock() {
     }
     let s = load(&w);
     assert_eq!(s.proposals.iter().filter(|p| p.kind == ProposalKind::FileDiff).count(), 4);
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
+}
+
+/// The placeholder is the dispatcher's commit (repos-and-checkouts 11.5): a
+/// turn whose trigger another answer already committed stops at its
+/// placeholder, on every host, with nothing streamed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fenced_placeholder_stops_the_turn() {
+    let (endpoint, model) = spawn_model(vec![text("A second answer.")]).await;
+    let w = world(Vec::new());
+    {
+        let mut svc = w.host.inner.svc.lock().unwrap();
+        let first = svc.begin_assistant_message(w.chat, w.ws, "coder", "rt", Some(w.coder), Some(w.trigger)).unwrap();
+        svc.complete_assistant_message(w.chat, w.ws, first, "The first answer.").unwrap();
+    }
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect_err("fenced");
+    assert_eq!(err.message, TURN_FENCED);
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call for a fenced turn");
+    let s = load(&w);
     assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }

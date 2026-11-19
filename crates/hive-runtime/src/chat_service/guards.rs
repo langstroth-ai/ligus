@@ -316,7 +316,7 @@ mod tests {
         let kp = hive_core::SigningKeypair::generate().unwrap();
         let account_kp = hive_core::SigningKeypair::generate().unwrap();
         let author = hive_core::ActorIdentity::new("ada", "Ada", hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     #[test]
@@ -405,11 +405,11 @@ mod tests {
         let mut svc = service();
         let ws = Uuid::new_v4();
         let cfg = svc.ensure_workspace_config(ws).unwrap();
-        let (eve_acct, eve_dev) = (Uuid::new_v4(), Uuid::new_v4());
         let (acct_kp, dev_kp) = (hive_core::SigningKeypair::generate().unwrap(), hive_core::SigningKeypair::generate().unwrap());
+        let (eve_acct, eve_dev) = (Uuid::new_v4(), hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &dev_kp.public_key_bytes()));
         let mut actor = hive_core::ActorIdentity::new(eve_acct.to_string(), "eve", hive_core::ActorKind::Human);
         actor.account_id = Some(eve_acct);
-        let cert = hive_core::DeviceCertificate::issue(&acct_kp, eve_acct, eve_dev, &dev_kp.public_key_bytes(), Timestamp::now());
+        let cert = hive_core::DeviceCertificate::issue(&acct_kp, eve_acct, &dev_kp.public_key_bytes(), Timestamp::now());
         let member = hive_core::WorkspaceMember {
             id: eve_acct.to_string(),
             actor: actor.clone(),
@@ -491,7 +491,6 @@ mod tests {
         let author = hive_core::ActorIdentity::new(name, name, hive_core::ActorKind::Human);
         ChatService::new(
             store,
-            Uuid::new_v4(),
             hive_core::SigningKeypair::generate().unwrap(),
             hive_core::SigningKeypair::generate().unwrap(),
             author,

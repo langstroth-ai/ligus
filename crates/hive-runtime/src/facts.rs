@@ -144,7 +144,7 @@ pub struct Cursor {
     pub signals: i64,
     pub events: i64,
     /// Rows of the equivocation evidence table: an equivocating copy changes
-    /// a chat's fold (both copies are denied) without adding a log row.
+    /// a chat's fold (the fold decides which copies count) without adding a log row.
     pub equivocations: i64,
 }
 
@@ -288,7 +288,7 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
         }
     } else {
         let replies: Vec<&hive_core::ChatMessage> =
-            s.messages.iter().rev().filter(|m| is_agent_role(m.role)).take(MAX_REPLIES_PER_CHAT).collect();
+            s.messages.iter().rev().filter(|m| is_agent_role(m.role) && !m.superseded).take(MAX_REPLIES_PER_CHAT).collect();
         for m in replies.into_iter().rev() {
             let mut a = Attrs::new(&ws);
             a.s("ligus.chat.id", &chat).id("ligus.turn.id", Some(m.id)).s("ligus.agent.key", &agent_key(m.responder_id));

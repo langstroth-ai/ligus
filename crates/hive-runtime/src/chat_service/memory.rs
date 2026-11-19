@@ -188,7 +188,6 @@ mod tests {
         let store = EventStore::open(dir.path().join("hive.db")).unwrap();
         let mut svc = ChatService::new(
             store,
-            Uuid::new_v4(),
             hive_core::SigningKeypair::generate().unwrap(),
             hive_core::SigningKeypair::generate().unwrap(),
             hive_core::ActorIdentity::new("ana", "Ana", hive_core::ActorKind::Human),

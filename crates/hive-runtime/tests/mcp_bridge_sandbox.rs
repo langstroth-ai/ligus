@@ -33,7 +33,7 @@ impl LigusHost for Host {
 async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
     let dir = tempfile::tempdir().unwrap();
     let store = EventStore::open(dir.path().join("hive.db")).unwrap();
-    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
     let wid = Uuid::new_v4();
     let chat = svc.create_chat("A", wid, "rt").unwrap();
     let reply = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, None).unwrap();

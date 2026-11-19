@@ -342,6 +342,15 @@ pub fn turn_timeout() -> Duration {
 }
 
 /// Run one claimed turn end to end.
+/// Why a turn stopped right after its placeholder: another device's answer
+/// to the same turn committed first.
+pub const TURN_FENCED: &str = "another device answered this turn first";
+
+/// Whether this device's placeholder `mid` was fenced by the dispatcher.
+fn placeholder_fenced(svc: &ChatService, chat_id: Uuid, mid: Uuid) -> bool {
+    svc.load(chat_id).ok().flatten().is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
+}
+
 pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome, TurnError> {
     let TurnInput {
         workspace_id,
@@ -408,6 +417,14 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     host.begun(mid);
     host.changed();
     let fail = |message: String| TurnError { message, stopped: false, message_id: Some(mid) };
+    // The placeholder is the dispatcher's commit (design repos-and-checkouts
+    // 11.5): fenced means another device's answer to this turn committed
+    // first, so this run stops here.
+    if placeholder_fenced(&locked(host), chat_id, mid) {
+        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+        host.changed();
+        return Err(fail(TURN_FENCED.into()));
+    }
 
     // The repo gate: a chat with a repo runs only in this host's checkout.
     let checkout = match host.checkout(&session, mid).await {

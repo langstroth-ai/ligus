@@ -39,7 +39,11 @@ impl ChatService {
             return Err(ChatError::Unauthorized("only a person's own device enrolls their phone".into()));
         }
         let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
-        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account, device_id, public_key, Timestamp::now());
+        // A phone's device id is the one its Secure Enclave key derives.
+        if device_id != hive_core::crypto::device_id_for(SigAlg::P256, public_key) {
+            return Err(ChatError::Unauthorized("the phone's device id isn't the one its key derives".into()));
+        }
+        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account, public_key, Timestamp::now());
         let config_id = self.ensure_workspace_config(workspace_id)?;
         self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate: certificate.clone() })?;
         Ok(certificate)
@@ -79,14 +83,55 @@ impl ChatService {
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        let member = config
+        // The one member who holds this phone (someone else who certified
+        // its key for themselves leaves it naming no one: fail closed).
+        let mut people = config
             .members
             .iter()
-            .find(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.accounts.contains(&a)))
-            .ok_or_else(|| ChatError::Unauthorized("that phone's person isn't a member here".into()))?;
+            .filter(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.holders.contains(&a)));
+        let member = match (people.next(), people.next()) {
+            (Some(m), None) => m,
+            _ => return Err(ChatError::Unauthorized("that phone's person isn't a member here".into())),
+        };
         let mut actor = member.actor.clone();
         actor.device_id = Some(phone);
         Ok(actor)
+    }
+
+    /// The accounts of the person who admitted this box (repos review F12,
+    /// the box owner): the Admins whose `JoinApproved` issued the admission
+    /// this box's own `MemberAdded` redeemed, while they are still members
+    /// at Admin or above. Empty when this device wasn't admitted that way.
+    pub fn box_owner_accounts(&self, workspace_id: Uuid) -> Result<std::collections::BTreeSet<Uuid>> {
+        let mut out = std::collections::BTreeSet::new();
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(out) };
+        let me = self.author.id.as_str();
+        let invite = self.store.config_envelopes(workspace_id)?.into_iter().find_map(|e| match &e.payload {
+            SessionEvent::MemberAdded { member, invite: Some(i), .. }
+                if member.id == me
+                    && e.signer_device_id == Some(self.device_id)
+                    && e.actor_stamp.as_ref().is_some_and(|st| st.actor.id == me) =>
+            {
+                Some(*i)
+            }
+            _ => None,
+        });
+        let Some(invite) = invite else { return Ok(out) };
+        let roster = timeline.current();
+        for approver in config.guards.join_approvals.get(&hive_core::authorization::invite_subject(invite)).into_iter().flatten() {
+            if let Some(m) = roster.members.get(approver).filter(|m| m.role.rank() >= hive_core::WorkspaceRole::Admin.rank()) {
+                out.extend(m.account_id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether phone `phone` is certified here (enrolled, not revoked, its
+    /// person a member) for one of `accounts`.
+    pub fn phone_of_accounts(&self, workspace_id: Uuid, phone: Uuid, accounts: &std::collections::BTreeSet<Uuid>) -> bool {
+        let Ok(person) = self.phone_person(workspace_id, phone) else { return false };
+        person.account_id.is_some_and(|a| accounts.contains(&a))
     }
 
     /// Draft `payload` on `session_id` (a chat of `workspace_id`, or its
@@ -265,14 +310,13 @@ impl ChatService {
         env.signer_device_id = Some(phone);
         env.signature = Some(signature);
         let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
-        let key = timeline
+        let device = timeline
             .current()
             .devices
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
-            .map(|d| d.public_key.clone())
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        hive_core::crypto::verify_envelope(&env, &key).map_err(|_| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
+        device.verifying_key(&env).ok_or_else(|| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.ingest(&env)?;
         self.changes.local(&env);

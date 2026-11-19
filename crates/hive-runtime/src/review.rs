@@ -261,17 +261,25 @@ pub enum SignedBy {
 
 impl crate::ChatService {
     /// The actor id that signed `answer` (a `HumanAnswered` in a chat).
+    /// Every copy held is read (`EventStore::list_copies`): another
+    /// signer's copy under the answer's id that arrived first doesn't hide
+    /// it.
     pub fn flow_answer_author(&self, session_id: Uuid, answer: &hive_core::flow::HumanAnswered) -> Option<String> {
-        let envs = self.store().list(session_id).ok()?;
+        let envs = self.store().list_copies(session_id).ok()?;
         envs.iter()
             .find(|e| matches!(&e.payload, hive_core::SessionEvent::FlowRecorded { record: hive_core::flow::FlowRecord::HumanAnswered(a) } if a == answer))
             .and_then(|e| e.actor_stamp.as_ref().map(|s| s.actor.id.clone()))
     }
 
     /// Who signed the latest `ProposalUpserted` of `proposal_id` in a chat.
+    /// Every copy held is read, and the latest is the latest in the log's
+    /// canonical order (not by arrival), so every device badges alike.
     pub fn proposal_signer(&self, session_id: Uuid, proposal_id: Uuid, agent_authored: bool) -> Option<SignedBy> {
-        let envs = self.store().list(session_id).ok()?;
-        let env = envs.iter().rev().find(|e| matches!(&e.payload, hive_core::SessionEvent::ProposalUpserted { proposal } if proposal.id == proposal_id))?;
+        let envs = self.store().list_copies(session_id).ok()?;
+        let env = envs
+            .iter()
+            .filter(|e| matches!(&e.payload, hive_core::SessionEvent::ProposalUpserted { proposal } if proposal.id == proposal_id))
+            .max_by_key(|e| e.canonical_key())?;
         let kind = env.actor_stamp.as_ref().map(|s| s.actor.kind);
         Some(match kind {
             Some(hive_core::ActorKind::Agent) => SignedBy::Agent,

@@ -65,6 +65,11 @@ pub struct Typing {
     window: Mutex<Option<(Instant, u32)>>,
     /// chat → who else is typing there, as last emitted.
     others: Mutex<HashMap<Uuid, Vec<(String, String)>>>,
+    /// Wakes [`typing_loop`] early (it otherwise looks every 500 ms).
+    kick: tokio::sync::Notify,
+    /// Tests: a clock they set and advance instead of waiting on real time.
+    #[cfg(test)]
+    clock: Mutex<Option<Instant>>,
 }
 
 /// What a ping asks the box to do.
@@ -77,6 +82,39 @@ pub enum Decision {
 }
 
 impl Typing {
+    /// The time the throttle, budget and expiry go by: the real clock, or
+    /// in tests the one they set.
+    pub fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(t) = *self.clock.lock().unwrap_or_else(|e| e.into_inner()) {
+            return t;
+        }
+        Instant::now()
+    }
+
+    /// Tests: stop the clock at `at` (it moves only by [`Self::advance`]).
+    #[cfg(test)]
+    pub fn freeze_clock(&self, at: Instant) {
+        *self.clock.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
+    }
+
+    /// Tests: move the frozen clock on by `by` and have [`typing_loop`]
+    /// look at once.
+    #[cfg(test)]
+    pub fn advance(&self, by: Duration) {
+        {
+            let mut c = self.clock.lock().unwrap_or_else(|e| e.into_inner());
+            *c = Some(c.unwrap_or_else(Instant::now) + by);
+        }
+        self.kick.notify_one();
+    }
+
+    /// Tests: whether the box still holds `chat` as typing (not expired).
+    #[cfg(test)]
+    pub fn is_typing(&self, chat: Uuid) -> bool {
+        self.mine.lock().unwrap_or_else(|e| e.into_inner()).get(&chat).is_some_and(|e| e.typing)
+    }
+
     /// Count one request against the window; false when over budget.
     pub fn admit(&self, now: Instant) -> bool {
         let mut w = self.window.lock().unwrap_or_else(|e| e.into_inner());
@@ -206,7 +244,7 @@ pub async fn post_typing(
     Json(req): Json<TypingReq>,
 ) -> ApiResult<Json<Value>> {
     let chat = load_phone_chat(&s, &id)?;
-    if !s.typing.admit(Instant::now()) {
+    if !s.typing.admit(s.typing.now()) {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "typing pings too often"));
     }
     let in_dm = chat.workspace_id != s.ws;
@@ -217,7 +255,7 @@ pub async fn post_typing(
     }
     let blocked = s.lock().write_block().is_some() || (in_dm && s.dms.is_archived(chat.workspace_id));
     let typing = req.typing && !blocked;
-    let published = match s.typing.ping(chat.id, chat.workspace_id, typing, Instant::now()) {
+    let published = match s.typing.ping(chat.id, chat.workspace_id, typing, s.typing.now()) {
         Decision::Publish(t) => publish(&s, chat.id, chat.workspace_id, t).await,
         Decision::Skip => false,
     };
@@ -271,7 +309,7 @@ fn others_typing(s: &Shared, chat: &ChatSession, beats: &[HumanBeat]) -> Vec<(St
 pub async fn typing_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut last_poll: Option<Instant> = None;
     loop {
-        for (chat, ws) in shared.typing.expire(Instant::now()) {
+        for (chat, ws) in shared.typing.expire(shared.typing.now()) {
             publish(&shared, chat, ws, false).await;
         }
         let listening = shared.hub.listeners() > 0;
@@ -286,6 +324,7 @@ pub async fn typing_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+            _ = shared.typing.kick.notified() => {}
             _ = stop.wait_for(|s| *s) => return,
         }
     }

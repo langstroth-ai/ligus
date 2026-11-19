@@ -1,15 +1,20 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  acceptRepoAlias,
   addWorkspaceRepo,
   bindRepoCheckout,
+  cloneWorkspaceRepo,
   listWorkspaceRepos,
   pickWorkspaceFolder,
   removeWorkspaceRepo,
   renameWorkspaceRepo,
   rescanRepos,
+  setHostAlias,
+  setRepoAliases,
   setRepoCoverageReporting,
   unbindRepoCheckout,
+  type HostAliasDto,
   type RepoHostCoverage,
   type WorkspaceRepoDto,
   type WorkspaceReposDto,
@@ -98,7 +103,30 @@ export function RepoSuggestion({ data, onDone }: { data: WorkspaceReposDto; onDo
   );
 }
 
+/// A synced alias: "used here" once a person on this device accepted it,
+/// else an Accept button. Accepting changes only identity matching here.
+function AliasChip({ alias, accepted, onToggle }: { alias: string; accepted: boolean; onToggle: (accept: boolean) => void }) {
+  return (
+    <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+      <code>{alias}</code>
+      {accepted ? (
+        <>
+          <span className="text-ink-soft">used here</span>
+          <button type="button" className="underline" onClick={() => onToggle(false)} aria-label={`Stop using ${alias} here`}>
+            stop
+          </button>
+        </>
+      ) : (
+        <button type="button" className="underline" onClick={() => onToggle(true)} aria-label={`Accept ${alias} here`}>
+          accept here
+        </button>
+      )}
+    </span>
+  );
+}
+
 function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceReposDto; refresh: () => void }) {
+  const [cloning, setCloning] = useState(false);
   const run = async (what: string, f: () => Promise<unknown>) => {
     try {
       await f();
@@ -126,6 +154,21 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
         </div>
         {data.canAdmin && !r.removed && (
           <div className="flex shrink-0 gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                const list = await promptDialog(
+                  "Other names of this repository (comma separated): an old owner, or a different case on a case-sensitive server. Names only; each device uses one after someone there accepts it.",
+                  { defaultValue: (r.aliases ?? []).map((a) => a.alias).join(", ") },
+                );
+                if (list === null) return;
+                const aliases = list.split(",").map((a) => a.trim()).filter(Boolean);
+                await run("Couldn't set the aliases", () => setRepoAliases(r.id, aliases));
+              }}
+            >
+              Aliases…
+            </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -161,6 +204,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
               <span>
                 ✓ <code className="text-xs">{r.here.path}</code>
                 {r.here.viaFork ? " (via a fork)" : ""}
+                {r.here.viaAlias ? " (via alias)" : ""}
               </span>
               {r.here.state === "error" && <span className="text-xs">now points elsewhere; it no longer counts as {r.name}</span>}
               <Button size="sm" variant="ghost" onClick={() => run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!))}>
@@ -179,6 +223,32 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
               >
                 Bind folder…
               </Button>
+              {!r.canonical.startsWith("local:") && r.here.state !== "cloning" && (
+                <Button
+                  size="sm"
+                  disabled={cloning}
+                  title={`Clone ${r.canonical} into a folder you pick, through this device's connection to its host`}
+                  onClick={async () => {
+                    const parent = await pickWorkspaceFolder();
+                    if (!parent) return;
+                    setCloning(true);
+                    try {
+                      const c = await cloneWorkspaceRepo(r.id, parent);
+                      toast.success(`Cloned ${r.name} into ${c.path}.`);
+                      if (c.rootMatches === false) {
+                        toast.error(`${r.name}'s clone doesn't contain the first commit the workspace entry names. Check it's the right repository.`);
+                      }
+                      refresh();
+                    } catch (e) {
+                      toast.error(`Couldn't clone ${r.name}: ${errMsg(e)}`);
+                    } finally {
+                      setCloning(false);
+                    }
+                  }}
+                >
+                  {cloning ? "Cloning…" : "Clone into…"}
+                </Button>
+              )}
             </>
           )}
           {r.here.found.map((f) => (
@@ -188,6 +258,19 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
                 Use it
               </Button>
             </span>
+          ))}
+        </div>
+      )}
+      {!r.removed && (r.aliases ?? []).length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-ink-soft">Also known as:</span>
+          {(r.aliases ?? []).map((a) => (
+            <AliasChip
+              key={a.alias}
+              alias={a.alias}
+              accepted={a.accepted}
+              onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(a.alias, accept, r.id))}
+            />
           ))}
         </div>
       )}
@@ -263,6 +346,7 @@ export function RepositoriesSection() {
           <div className="mt-3 text-sm text-ink-soft">Ask an admin to add a repository.</div>
         ))}
       </Section>
+      {data && <HostAliasesSection data={data} refresh={refresh} />}
       {data && (
         <Section title="On this device">
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -301,6 +385,77 @@ export function RepositoriesSection() {
         </Section>
       )}
     </div>
+  );
+}
+
+/// Settings → Repositories → Host aliases: SSH hosts a self-hosted forge
+/// serves from, mapped to its host for identity matching. Synced (Admin,
+/// with a passkey); each device uses one only after someone there accepts
+/// it. Never where git connects.
+export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto; refresh: () => void }) {
+  const [alias, setAlias] = useState("");
+  const [host, setHost] = useState("");
+  const list: HostAliasDto[] = data.hostAliases ?? [];
+  if (!data.canAdmin && list.length === 0) return null;
+  const run = async (what: string, f: () => Promise<unknown>) => {
+    try {
+      await f();
+      refresh();
+    } catch (e) {
+      toast.error(`${what}: ${errMsg(e)}`);
+    }
+  };
+  return (
+    <Section title="Host aliases">
+      <p className="mb-2 text-xs text-ink-soft">
+        Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this
+        workspace recognizes checkouts, never where git connects, and each device uses it only after someone there
+        accepts it.
+      </p>
+      {list.map((h) => (
+        <div key={h.alias} className="flex flex-wrap items-center gap-2 py-1 text-sm">
+          <code>{h.alias}</code> → <code>{h.host}</code>
+          <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
+          {data.canAdmin && (
+            <Button size="sm" variant="ghost" onClick={() => void run("Couldn't remove it", () => setHostAlias(h.alias, ""))}>
+              Remove
+            </Button>
+          )}
+        </div>
+      ))}
+      {data.canAdmin && (
+        <form
+          className="mt-2 flex gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!alias.trim() || !host.trim()) return;
+            await run("Couldn't add it", () => setHostAlias(alias.trim(), host.trim()));
+            setAlias("");
+            setHost("");
+          }}
+        >
+          <input
+            aria-label="Alias host"
+            className="flex-1 rounded-xl border px-3 py-2 text-sm"
+            style={fieldStyle}
+            placeholder="ssh.git.example.com"
+            value={alias}
+            onChange={(e) => setAlias(e.target.value)}
+          />
+          <input
+            aria-label="Repository host"
+            className="flex-1 rounded-xl border px-3 py-2 text-sm"
+            style={fieldStyle}
+            placeholder="git.example.com"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+          />
+          <Button type="submit" disabled={!alias.trim() || !host.trim()}>
+            Add alias
+          </Button>
+        </form>
+      )}
+    </Section>
   );
 }
 

@@ -72,7 +72,7 @@ import {
   type EmojiEntry,
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
-import { ChatRepoChip } from "@/components/ChatRepoChip";
+import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import { detectMention, filterMentions } from "@/lib/mentions";
@@ -771,14 +771,14 @@ export function ChatView({
   }, [slash]);
 
   // Dispatch a fully-built message body as a turn (the actual send).
-  async function sendBody(body: string, sentAttachments: typeof attachments) {
+  async function sendBody(body: string, sentAttachments: typeof attachments, runHere = false) {
     setStreamError(null);
     setOptimisticUser(body);
     setSending(true);
     lastActivityRef.current = Date.now();
     setStalled(false);
     try {
-      await sendMessage(sessionId, body);
+      await sendMessage(sessionId, body, runHere || undefined);
     } catch (e) {
       // Keep the draft + attachments so nothing is lost, and offer a retry.
       setSending(false);
@@ -791,12 +791,17 @@ export function ChatView({
         toast.info("Waiting for the workspace's founder. Your draft is kept; send it once their founding syncs.");
         return;
       }
-      toast.error(`Couldn't send: ${errMsg(e)}`, { label: "Retry", run: () => void sendBody(body, sentAttachments) });
+      toast.error(`Couldn't send: ${errMsg(e)}`, { label: "Retry", run: () => void sendBody(body, sentAttachments, runHere) });
     } finally {
       qc.invalidateQueries({ queryKey: ["chat", sessionId] });
       qc.invalidateQueries({ queryKey: ["chats"] });
     }
   }
+
+  // "Run here this time" for the next message to a pinned agent whose host
+  // lacks the chat's repository (one message; reset on send or chat switch).
+  const [runHereOnce, setRunHereOnce] = useState(false);
+  useEffect(() => setRunHereOnce(false), [sessionId]);
 
   async function handleSend() {
     const text = input.trim();
@@ -830,7 +835,8 @@ export function ChatView({
       setQueued(body);
       return;
     }
-    void sendBody(body, sentAttachments);
+    void sendBody(body, sentAttachments, runHereOnce);
+    setRunHereOnce(false);
   }
 
   // Stop the in-flight turn and free the composer immediately. The backend
@@ -1316,6 +1322,14 @@ export function ChatView({
           {/* Composer — a turn-shaped card; the "next turn" in the transcript
               (spec §7.5). Card lights its accent border on focus / while sending;
               the route pill resolves the recipient, and the @ / popovers stay. */}
+          {!embedded && (
+            <PinnedHostWarning
+              sessionId={sessionId}
+              routeHandle={routeHandle}
+              runHere={runHereOnce}
+              onRunHere={setRunHereOnce}
+            />
+          )}
           <div className={`cmp${composerFocused ? " is-focused" : ""}${sending ? " is-sending" : ""}`}>
             <div
               className="cmp-card"

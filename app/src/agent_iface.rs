@@ -43,9 +43,19 @@ impl LigusHost for AppHost {
         crate::attachments::stage(&state.data_dir, proposal_id, sha256, bytes)
     }
 
-    fn forge_for(&self, _chat_id: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+    /// The code host of the turn's own chat (review F14): its repo's
+    /// checkout on this device, else its workspace's bound folder; never
+    /// the folder the window happens to show (another chat's forge and
+    /// credentials).
+    fn forge_for(&self, chat_id: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
         let state = self.app.state::<AppState>();
-        let root = state.workspace_root.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let root = match crate::repos_ui::chat_checkout(&state, chat_id) {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => {
+                let ws = state.service.lock().unwrap_or_else(|e| e.into_inner()).load(chat_id).ok().flatten()?.workspace_id;
+                crate::legacy_folder(&state, ws).ok()?
+            }
+        };
         (!root.trim().is_empty()).then(|| crate::forges::binding_for_dir(&state.data_dir, std::path::Path::new(&root))).flatten()
     }
 }

@@ -26,9 +26,12 @@ pub(crate) struct DesktopHost<'a> {
     pub session_id: Uuid,
     pub workspace_id: Uuid,
     pub agent_id: Option<Uuid>,
-    /// The responder's name (the repo gate's refusal names it).
-    pub author: String,
     pub provider: ModelProviderKind,
+    /// The turn's own MCP catalog (its chat's folder, review F14).
+    pub mcp: Vec<McpServerSpec>,
+    /// Where the turn runs: its chat's directory and checkout, after the
+    /// repo gate (`crate::turn_scope`, run before the engine).
+    pub checkout: Checkout,
 }
 
 impl DesktopHost<'_> {
@@ -51,7 +54,11 @@ impl TurnHost for DesktopHost<'_> {
             // Renew any near-expiry remote-server tokens first. The turn's
             // sandbox envelope decides which servers it may reach at all.
             self.state.ensure_fresh_mcp_tokens().await;
-            crate::guards::filter_mcp_servers(self.state, self.state.combined_mcp_servers(), &egress)
+            // The turn's own catalog, never the viewed one's; tokens refreshed
+            // above are re-read from the settings.
+            let mut servers = self.mcp.clone();
+            crate::apply_mcp_auth(&mut servers, &self.state.settings.lock().unwrap());
+            crate::guards::filter_mcp_servers(self.state, servers, &egress)
         }
     }
 
@@ -67,30 +74,13 @@ impl TurnHost for DesktopHost<'_> {
         crate::flow::directive_guidance().to_vec()
     }
 
-    fn checkout(&self, session: &ChatSession, _message_id: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
-        // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
-        // with a repo runs only in this device's checkout of it, on its chat
-        // branch brought up to date; never in other code.
-        let gate = crate::repos_ui::turn_repo(self.state, session);
-        let result = match gate {
-            Err(reason) => Err(format!("{} did not run: {reason}", self.author)),
-            // A repo chat reads and runs in its own chat worktree, never the
-            // active chat's folder (review F14).
-            Ok(Some(r)) => Ok(Checkout {
-                context: r.context,
-                workspace_root: Some(r.chat_worktree.to_string_lossy().into_owned()),
-                repo_root: Some(r.checkout),
-                base: Some((r.tip, r.base_branch)),
-            }),
-            Ok(None) => {
-                let root = self.state.workspace_root.lock().unwrap().clone();
-                // Worktrees are cut from the workspace's own checkout, not
-                // from the root, which follows the active chat's worktree.
-                let repo_root = crate::turn_repo_root(&self.state.workspace_repo_root(), &root);
-                Ok(Checkout { context: String::new(), workspace_root: Some(root), repo_root: Some(repo_root.into()), base: None })
-            }
-        };
-        async move { result }
+    fn checkout(&self, _session: &ChatSession, _message_id: Uuid) -> impl Future<Output = Result<Checkout, String>> + Send {
+        // Resolved with the host-side repo gate (repos-and-checkouts 5.3,
+        // review F8) before the engine ran (`crate::turn_scope`): a repo chat
+        // runs only in this device's checkout of it, in its own chat
+        // worktree, never the active chat's folder (review F14).
+        let checkout = self.checkout.clone();
+        async move { Ok(checkout) }
     }
 
     fn cut_worktree(&self, repo_root: &Path, chat_id: &str, turn_id: &str) -> std::io::Result<Worktree> {
@@ -113,7 +103,8 @@ impl TurnHost for DesktopHost<'_> {
     }
 
     fn finalize(&self, svc: &mut ChatService, a: FinalizeArgs<'_>) -> Result<String, String> {
-        let root = self.state.workspace_root.lock().unwrap().clone();
+        // The turn's own chat directory (review F14), not the window's.
+        let root = self.checkout.workspace_root.clone().unwrap_or_default();
         let Some(mid) = a.ctx.message_id else { return Err("no reply to finalize".into()) };
         crate::finalize_reply_with(svc, a.ctx.session_id, a.ctx.workspace_id, mid, &a.ctx.author, a.ctx.agent_id, &root, a.full, a.edits_in_review, a.mcp)
     }

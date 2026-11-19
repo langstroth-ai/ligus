@@ -1192,8 +1192,9 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
         if !channel.is_empty() && ch.to_lowercase() != channel {
             continue;
         }
-        let last = sess.messages.last().map(|m| flow::ms(&m.created_at)).unwrap_or(0);
-        out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": sess.messages.len()})));
+        let last = sess.messages.iter().rev().find(|m| !m.superseded).map(|m| flow::ms(&m.created_at)).unwrap_or(0);
+        let count = sess.messages.iter().filter(|m| !m.superseded).count();
+        out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": count})));
     }
     out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
     out.into_iter().take(limit).map(|(_, v)| v).collect()
@@ -1201,7 +1202,7 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
 
 fn read_messages(session: &ChatSession, since: Option<Uuid>, limit: usize) -> Vec<Value> {
     let start = since.and_then(|id| session.messages.iter().position(|m| m.id == id)).map(|i| i + 1).unwrap_or(0);
-    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming).collect();
+    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming && !m.superseded).collect();
     let tail = if since.is_some() { &msgs[..msgs.len().min(limit)] } else { &msgs[msgs.len().saturating_sub(limit)..] };
     tail.iter()
         .map(|m| {

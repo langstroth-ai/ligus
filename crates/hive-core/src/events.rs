@@ -68,7 +68,24 @@ pub enum SessionEvent {
     /// deterministically on every device (see `ChatSession::turn_claims`); a
     /// device that has synced another device's winning claim backs off. Benign
     /// coordination — not projection-gated.
-    TurnClaimed { trigger_id: Uuid, device_id: Uuid },
+    ///
+    /// The device-keyed dispatcher (`crate::dispatch`, design
+    /// repos-and-checkouts 11) adds three optional fields, all absent on a
+    /// plain first claim (which then folds exactly as before): `epoch`, the
+    /// claim generation (absent = 1); `supersedes`, the holder a hand-over
+    /// takes the turn from (required past epoch 1); and `repo_id`, the
+    /// claiming device's signed statement that it holds a confirmed checkout
+    /// of the chat's repo (a covering claim displaces a non-covering holder).
+    TurnClaimed {
+        trigger_id: Uuid,
+        device_id: Uuid,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        epoch: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        supersedes: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+    },
     MemberAdded {
         member: WorkspaceMember,
         /// The Admin-issued invite a self-enrollment redeems (an id whose
@@ -446,6 +463,27 @@ pub enum SessionEvent {
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.
     WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Name other spellings of a live repo (config log; Admin, presence;
+    /// never an agent): normal-form canonicals the same repo also goes by
+    /// (an old owner, a case split on a case-sensitive forge). Replaces the
+    /// repo's list; at most 8; disjoint from every live canonical and alias
+    /// and no look-alike of one (`workspace_repo::repo_aliases_ok`). Names
+    /// only: identity matching on a device that accepted them, never where a
+    /// clone connects (design repos-and-checkouts 12).
+    WorkspaceRepoAliasesSet {
+        repo_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
+    },
+    /// Map a host name (an SSH host a forge serves from, say) to a live
+    /// repo's canonical host for identity matching (config log; Admin,
+    /// presence; never an agent). `host` empty clears the alias. At most 16;
+    /// never shadows a live repo's host (`workspace_repo::host_alias_ok`).
+    WorkspaceHostAliasSet {
+        alias: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host: String,
+    },
     /// Pick this chat's repository (chat log; Contributor; never an agent).
     /// `None` = no repo. Must name a live repo at the author's position.
     ChatRepoSet {
@@ -457,6 +495,14 @@ pub enum SessionEvent {
     /// Pin the commit this chat's branch was cut from, for its repo (chat
     /// log; Contributor; never an agent).
     ChatBasePinned { repo_id: Uuid, commit: String },
+    /// Move this chat's pinned base for its repo from `previous` to `commit`
+    /// (chat log; Admin or the chat's creator, a human through their own
+    /// device, with presence under rules v2). The only way a pin changes:
+    /// `ChatBasePinned` is first-pin-wins. `previous` must be the pin in
+    /// force, so two re-pins racing can't both land. Every host with a chat
+    /// branch on an earlier pin rebases it onto `commit` by replaying the
+    /// chat's ledger there, or refuses the chat's turns visibly.
+    ChatBaseRepinned { repo_id: Uuid, commit: String, previous: String },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
@@ -599,8 +645,11 @@ impl SessionEvent {
             SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
             SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+            SessionEvent::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
             SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
             SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
+            SessionEvent::ChatBaseRepinned { .. } => "chatBaseRepinned",
             SessionEvent::AttachmentPolicySet { .. } => "attachmentPolicySet",
             SessionEvent::AttachmentHashBlocked { .. } => "attachmentHashBlocked",
             SessionEvent::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
@@ -648,6 +697,8 @@ impl SessionEvent {
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. }
             | SessionEvent::AttachmentPolicySet { .. }
             | SessionEvent::AttachmentHashBlocked { .. }
             | SessionEvent::AttachmentHashUnblocked { .. } => EventScope::Workspace,
@@ -766,10 +817,14 @@ impl ChatSession {
         match event {
             SessionEvent::SessionSnapshot { .. } => {}
             SessionEvent::MessageAppended { message } => {
+                // `superseded` is fold state (`crate::dispatch::note_answer`),
+                // never the author's.
+                let mut message = message.clone();
+                message.superseded = false;
                 if let Some(idx) = self.message_index(message.id) {
-                    self.messages[idx] = message.clone();
+                    self.messages[idx] = message;
                 } else {
-                    self.messages.push(message.clone());
+                    self.messages.push(message);
                 }
             }
             SessionEvent::MessageChunkReceived { message_id, chunk } => {
@@ -786,11 +841,17 @@ impl ChatSession {
             }
             SessionEvent::MessageRemoved { message_id } => {
                 self.messages.retain(|m| &m.id != message_id);
+                crate::dispatch::note_removed(self, *message_id);
             }
-            SessionEvent::TurnClaimed { trigger_id, device_id } => {
-                // First claim in canonical fold order wins; later claims for the
-                // same trigger are ignored. Deterministic across devices.
-                self.turn_claims.entry(*trigger_id).or_insert(*device_id);
+            SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } => {
+                // The dispatcher's fold (`crate::dispatch`): a plain first
+                // claim wins in canonical order as it always did; a covering
+                // claim or a hand-over may move the turn. Deterministic.
+                crate::dispatch::fold_claim(
+                    self,
+                    *trigger_id,
+                    crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id },
+                );
             }
             SessionEvent::MemberAdded { member, invite, .. } => {
                 if let Some(id) = invite {
@@ -916,20 +977,47 @@ impl ChatSession {
                     self.apply_outcomes.entry(*request_id).or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
                 }
             }
+            // A chat's pin is per repo and outlives switching repos: pointing
+            // the chat away and back restores the repo's pin, never clears
+            // it (else any Contributor could re-pin by switching twice,
+            // review residual 3).
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {
-                let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
-                let base_commit = if same { self.repo.as_ref().and_then(|r| r.base_commit.clone()) } else { None };
+                let base_commit = repo_id.and_then(|r| self.repo_bases.get(&r)).and_then(|h| h.last().cloned());
                 self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
             }
+            // First pin wins: a later `ChatBasePinned` for a repo that has a
+            // pin (two hosts cutting the branch at once, or a member trying
+            // to move it) changes nothing. Moving it is `ChatBaseRepinned`.
             SessionEvent::ChatBasePinned { repo_id, commit } => {
-                if let Some(r) = self.repo.as_mut().filter(|r| r.repo_id == Some(*repo_id)) {
-                    r.base_commit = Some(commit.clone());
+                if !self.repo_bases.contains_key(repo_id) && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    self.repo_bases.insert(*repo_id, vec![commit.clone()]);
+                    if let Some(r) = self.repo.as_mut() {
+                        r.base_commit = Some(commit.clone());
+                    }
+                }
+            }
+            // A re-pin lands only on the pin it names as `previous` (a
+            // compare-and-swap in the fold; authz checks the same), and
+            // keeps the earlier pins: a host's branch on any of them
+            // follows by rebasing.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                let current = self.repo_bases.get(repo_id).and_then(|h| h.last());
+                if current == Some(previous) && commit != previous && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    let history = self.repo_bases.entry(*repo_id).or_default();
+                    if history.len() < crate::workspace_repo::MAX_BASE_PINS {
+                        history.push(commit.clone());
+                        if let Some(r) = self.repo.as_mut() {
+                            r.base_commit = Some(commit.clone());
+                        }
+                    }
                 }
             }
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -1144,6 +1232,10 @@ impl ChatSession {
 }
 
 /// The proposal-set view of a `SessionEvent`, for [`crate::proposal_sets::apply`].
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
 fn set_change(event: &SessionEvent) -> Option<SetChange<'_>> {
     Some(match event {
         SessionEvent::ProposalSetOpened { set } => SetChange::Opened(set),
@@ -1339,6 +1431,11 @@ pub enum Verdict {
 
 /// Every event's verdict in a fold (the base seed and anything sorting before
 /// it are absent), for audits and the authorization property tests.
+///
+/// By event id. An id kept under more than one copy (different signers, see
+/// [`crate::copies`]) is `Allowed` when any copy is (else `Held` when any
+/// is); an id none of whose copies is kept is `Denied`. Code that acts on
+/// one envelope's verdict reads [`fold_copy_decisions`] instead.
 pub fn fold_decisions(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
@@ -1348,6 +1445,42 @@ pub fn fold_decisions(
     let mut out = std::collections::BTreeMap::new();
     fold(envelopes, trusted_founder, trusted_workspace, workspace, None, Some(&mut out));
     out
+}
+
+/// Every kept copy's verdict in a fold (see [`crate::copies`]).
+#[derive(Debug, Clone, Default)]
+pub struct CopyVerdicts {
+    by_copy: std::collections::BTreeMap<crate::copies::CopyRef, Verdict>,
+    copies: crate::copies::Copies,
+}
+
+impl CopyVerdicts {
+    /// The verdict on this very envelope: a copy the fold left out (another
+    /// signer's forgery under a real id, an equivocation) is `Denied`, never
+    /// the verdict of the copy it shares an id with. `None` for an envelope
+    /// the fold never judged (the base seed, anything before it) and for a
+    /// lamport witness.
+    pub fn get(&self, env: &SessionEventEnvelope) -> Option<Verdict> {
+        if crate::lamport::is_witness(env) {
+            return None;
+        }
+        match self.copies.of(env) {
+            Some(r) => self.by_copy.get(&r).copied(),
+            None => Some(Verdict::Denied),
+        }
+    }
+}
+
+/// [`fold_decisions`] by copy: what each envelope's own verdict is.
+pub fn fold_copy_decisions(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+) -> CopyVerdicts {
+    let mut by_copy = std::collections::BTreeMap::new();
+    let (_, copies, _) = fold_copies(envelopes, trusted_founder, trusted_workspace, workspace, None, Some(&mut by_copy));
+    CopyVerdicts { by_copy, copies }
 }
 
 /// Fold one log. A workspace-config log is folded twice when it holds a cut
@@ -1362,91 +1495,108 @@ fn fold(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     timeline: Option<&mut crate::authz::ConfigTimeline>,
-    mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
 ) -> Option<ChatSession> {
-    // Equivocation (review P-A2c, owner decision): two envelopes under one
-    // event id with different signed content both drop out before anything
-    // else, so neither folds, coverage never passes through the id, and the
-    // result doesn't depend on which one a device saw first.
-    // Lamport bounds (see [`crate::lamport`]): judged over every envelope
-    // the log holds, equivocated copies included (any event is a witness).
-    let bounds = crate::lamport::Bounds::of(envelopes);
-    // Lamport witnesses count for the bounds only: they fold as nothing, and
-    // one sharing an id with a stored event is no equivocation.
-    let real: std::borrow::Cow<'_, [SessionEventEnvelope]> = if envelopes.iter().any(crate::lamport::is_witness) {
-        std::borrow::Cow::Owned(envelopes.iter().filter(|e| !crate::lamport::is_witness(e)).cloned().collect())
-    } else {
-        std::borrow::Cow::Borrowed(envelopes)
-    };
-    let (envelopes, equivocated) = split_equivocations(&real);
-    let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut(), &bounds);
-    if let Some(d) = decisions {
-        for id in equivocated {
-            d.insert(id, Verdict::Denied);
+    let mut by_copy = decisions.as_ref().map(|_| std::collections::BTreeMap::new());
+    let (out, _, dropped) = fold_copies(envelopes, trusted_founder, trusted_workspace, workspace, timeline, by_copy.as_mut());
+    if let (Some(d), Some(by_copy)) = (decisions, by_copy) {
+        let rank = |v: Verdict| match v {
+            Verdict::Allowed => 2,
+            Verdict::Held => 1,
+            Verdict::Denied => 0,
+        };
+        for ((id, _), v) in by_copy {
+            let e = d.entry(id).or_insert(v);
+            if rank(v) > rank(*e) {
+                *e = v;
+            }
+        }
+        for id in dropped {
+            d.entry(id).or_insert(Verdict::Denied);
         }
     }
     out
 }
 
-/// What makes two envelopes under one id the same event: the signer, the
-/// signature and the signed preimage (a copy that only travelled, or was
-/// re-sealed, keeps all three).
-fn equivocation_key(e: &SessionEventEnvelope) -> (Option<Uuid>, Option<Vec<u8>>, Vec<u8>) {
-    (e.signer_device_id, e.signature.clone(), crate::crypto::envelope_preimage(e))
-}
-
-/// Whether `a` and `b` (one event id) are different events: an equivocation.
-pub fn equivocates(a: &SessionEventEnvelope, b: &SessionEventEnvelope) -> bool {
-    a.event_id == b.event_id && a.session_id == b.session_id && equivocation_key(a) != equivocation_key(b)
-}
-
-/// The log without its equivocated ids (and with exact duplicates folded
-/// into one), and the equivocated ids.
-fn split_equivocations(envelopes: &[SessionEventEnvelope]) -> (std::borrow::Cow<'_, [SessionEventEnvelope]>, std::collections::BTreeSet<Uuid>) {
-    let mut count: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
-    for e in envelopes {
-        *count.entry(e.event_id).or_default() += 1;
-    }
-    if count.values().all(|c| *c == 1) {
-        return (std::borrow::Cow::Borrowed(envelopes), Default::default());
-    }
-    let mut keys: std::collections::HashMap<Uuid, Vec<(Option<Uuid>, Option<Vec<u8>>, Vec<u8>)>> = std::collections::HashMap::new();
-    for e in envelopes.iter().filter(|e| count[&e.event_id] > 1) {
-        let k = equivocation_key(e);
-        let v = keys.entry(e.event_id).or_default();
-        if !v.contains(&k) {
-            v.push(k);
+/// [`fold`], by copy: also returns how the kept copies are told apart and
+/// the ids none of whose copies is kept.
+fn fold_copies(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    timeline: Option<&mut crate::authz::ConfigTimeline>,
+    decisions: Option<&mut std::collections::BTreeMap<crate::copies::CopyRef, Verdict>>,
+) -> (Option<ChatSession>, crate::copies::Copies, std::collections::BTreeSet<Uuid>) {
+    // Lamport bounds (see [`crate::lamport`]): judged over every envelope
+    // the log holds, every copy of an id included (any event is a witness).
+    let bounds = crate::lamport::Bounds::of(envelopes);
+    // Lamport witnesses count for the bounds only: they fold as nothing, and
+    // one sharing an id with a stored event is never a copy of it.
+    let real: std::borrow::Cow<'_, [SessionEventEnvelope]> = if envelopes.iter().any(crate::lamport::is_witness) {
+        std::borrow::Cow::Owned(envelopes.iter().filter(|e| !crate::lamport::is_witness(e)).cloned().collect())
+    } else {
+        std::borrow::Cow::Borrowed(envelopes)
+    };
+    // Copies of one id (see [`crate::copies`]): only an attested copy
+    // counts against an attested one, and only the same signer's second
+    // copy is an equivocation (review P-A2c, owner decision): that signer's
+    // copies drop out before anything else, so none folds, coverage never
+    // passes through them, and the result doesn't depend on which copy a
+    // device saw first. A config fold records its signers for the chats.
+    let resolved = crate::copies::resolve(&real, || {
+        let mut d = crate::copies::SignerDirectory::of(&real);
+        if let WorkspaceAuthz::Timeline(t) = workspace {
+            d.extend(t.signers());
         }
+        d
+    });
+    let mut timeline = timeline;
+    let out = fold_log(
+        &resolved.kept,
+        trusted_founder,
+        trusted_workspace,
+        workspace,
+        timeline.as_deref_mut(),
+        decisions,
+        &bounds,
+        &resolved.copies,
+    );
+    if let Some(t) = timeline {
+        t.set_signer_events(crate::copies::signer_events(&real));
     }
-    let equivocated: std::collections::BTreeSet<Uuid> = keys.iter().filter(|(_, v)| v.len() > 1).map(|(id, _)| *id).collect();
-    let mut seen = std::collections::HashSet::new();
-    let kept = envelopes
-        .iter()
-        .filter(|e| !equivocated.contains(&e.event_id) && seen.insert(e.event_id))
-        .cloned()
-        .collect();
-    (std::borrow::Cow::Owned(kept), equivocated)
+    (out, resolved.copies, resolved.dropped)
 }
 
+/// Whether `a` and `b` (one event id, one log) are different events: two
+/// copies [`crate::copies`] tells apart (an equivocation only when one
+/// signer signed both).
+pub fn equivocates(a: &SessionEventEnvelope, b: &SessionEventEnvelope) -> bool {
+    a.event_id == b.event_id && a.session_id == b.session_id && crate::copies::copy_key(a) != crate::copies::copy_key(b)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn fold_log(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     timeline: Option<&mut crate::authz::ConfigTimeline>,
-    decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    decisions: Option<&mut std::collections::BTreeMap<crate::copies::CopyRef, Verdict>>,
     bounds: &crate::lamport::Bounds,
+    copies: &crate::copies::Copies,
 ) -> Option<ChatSession> {
     let none = std::collections::BTreeSet::new();
     let is_config = envelopes
         .first()
         .is_some_and(|e| e.session_id == crate::channel::workspace_config_session_id(e.workspace_id));
     if !is_config {
-        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &none, bounds });
+        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &none, bounds, copies });
     }
     let mut first = crate::authz::ConfigTimeline::default();
-    let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, LeftOut { cut: &none, bounds });
-    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first, bounds);
+    let pass1 =
+        fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, LeftOut { cut: &none, bounds, copies });
+    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first, bounds, copies);
     // Closed box admissions (Phase B): the redemptions no allowed closure
     // names, wherever they sort. The closures are read from the fold the
     // denials so far leave, never from the first pass alone: a denial can
@@ -1462,14 +1612,14 @@ fn fold_log(
     // (fail closed).
     if envelopes.iter().any(|e| matches!(e.payload, SessionEvent::AdmissionClosed { .. })) {
         loop {
-            let closed = if deny.is_empty() {
-                pass1.as_ref().map(|s| s.guards.closed_admissions.clone()).unwrap_or_default()
+            let (closed, invites) = if deny.is_empty() {
+                pass1.as_ref().map(|s| (s.guards.closed_admissions.clone(), s.guards.service_invites.clone())).unwrap_or_default()
             } else {
-                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, LeftOut { cut: &deny, bounds })
-                    .map(|s| s.guards.closed_admissions)
+                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, LeftOut { cut: &deny, bounds, copies })
+                    .map(|s| (s.guards.closed_admissions, s.guards.service_invites))
                     .unwrap_or_default()
             };
-            let more = crate::admission::closure_denials(envelopes, &closed);
+            let more = crate::admission::closure_denials(envelopes, &closed, &invites, copies);
             if more.is_subset(&deny) {
                 break;
             }
@@ -1482,12 +1632,16 @@ fn fold_log(
         }
         return pass1;
     }
-    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &deny, bounds })
+    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &deny, bounds, copies })
 }
 
 /// The config events a cut denies outright: by a cut member or device,
 /// sorting before the cut, not covered by its watermark (Phase A, item 2).
-fn config_cut_denials(envelopes: &[SessionEventEnvelope], t: &crate::authz::ConfigTimeline) -> std::collections::BTreeSet<Uuid> {
+fn config_cut_denials(
+    envelopes: &[SessionEventEnvelope],
+    t: &crate::authz::ConfigTimeline,
+    copies: &crate::copies::Copies,
+) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
     if t.cuts().is_empty() {
         return out;
@@ -1495,7 +1649,7 @@ fn config_cut_denials(envelopes: &[SessionEventEnvelope], t: &crate::authz::Conf
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     let chains = crate::watermark::Chains::of(&all);
     for cut in t.cuts() {
-        out.extend(cut_exclusion(envelopes, &chains, cut));
+        out.extend(cut_exclusion(envelopes, &chains, cut, copies));
     }
     out
 }
@@ -1506,12 +1660,16 @@ fn cut_exclusion(
     envelopes: &[SessionEventEnvelope],
     chains: &crate::watermark::Chains,
     cut: &crate::authz::Cut,
-) -> std::collections::BTreeSet<Uuid> {
+    copies: &crate::copies::Copies,
+) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
     let Some(log) = envelopes.first().map(|e| e.session_id) else { return out };
     let covered = cut.covered(log, chains);
     for e in envelopes {
-        let before = e.canonical_key() < cut.key || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
+        // Before the cut in the fold's order: another signer's copy under
+        // the cut's own id and lamport is no exception.
+        let copy = copies.kept(e);
+        let before = cut.is_before(e, copy.1) || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
         // Judged as of the cut, not erased: a removed or demoted member's
         // self-validating publications (keys, certificates, passkeys) stand,
         // as they would after the cut. Any other uncovered config event of
@@ -1537,8 +1695,11 @@ fn cut_exclusion(
                 matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == *d)
             }
         };
-        if before && !still_ok && e.canonical_key() != cut.key && cut.applies(e) && !covered.contains(&e.event_id) {
-            out.insert(e.event_id);
+        let is_cut = (e.canonical_key(), copy.1) == (cut.key, cut.copy);
+        // Covered: on its signer's chain at an id the watermark reaches.
+        let is_covered = covered.contains(&(e.signer_device_id, e.event_id));
+        if before && !still_ok && !is_cut && cut.applies(e) && !is_covered {
+            out.insert(copy);
         }
     }
     out
@@ -1548,7 +1709,7 @@ fn cut_exclusion(
 /// demoting yourself, or a device revoking itself; a role change counts
 /// when the payload says it lowers the role, which the re-judging pass
 /// confirms against the roster).
-fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState) -> Option<crate::authz::Cut> {
+fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState, copy: u32) -> Option<crate::authz::Cut> {
     use crate::authz::CutKind;
     let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
     let (kind, agent_keys, watermark) = match &env.payload {
@@ -1572,7 +1733,7 @@ fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState)
         }
         _ => return None,
     };
-    Some(crate::authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark })
+    Some(crate::authz::Cut { key: env.canonical_key(), copy, kind, agent_keys, watermark })
 }
 
 /// Phase A, item 2 (review P-A2b): a cut is judged without its subject's
@@ -1588,36 +1749,40 @@ fn config_denials_with_rejudged_cuts(
     workspace: WorkspaceAuthz<'_>,
     first: &crate::authz::ConfigTimeline,
     bounds: &crate::lamport::Bounds,
-) -> std::collections::BTreeSet<Uuid> {
+    copies: &crate::copies::Copies,
+) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     let chains = crate::watermark::Chains::of(&all);
-    let mut deny = config_cut_denials(envelopes, first);
-    let mut accepted: std::collections::BTreeSet<(u64, Uuid)> = first.cuts().iter().map(|c| c.key).collect();
+    let mut deny = config_cut_denials(envelopes, first, copies);
+    // A cut is known by its position and its copy (two signers' copies can
+    // share a position, see `crate::copies`).
+    let at = |c: &crate::authz::Cut| (c.key, c.copy);
+    let mut accepted: std::collections::BTreeSet<((u64, Uuid), u32)> = first.cuts().iter().map(at).collect();
     // Candidates the positional pass refused whose subject has uncovered
     // earlier events (the only ones re-judging can change).
-    let mut candidates: Vec<(crate::authz::Cut, std::collections::BTreeSet<Uuid>)> = envelopes
+    let mut candidates: Vec<(crate::authz::Cut, std::collections::BTreeSet<crate::copies::CopyRef>)> = envelopes
         .iter()
-        .filter(|e| !accepted.contains(&e.canonical_key()))
-        .filter_map(|e| candidate_cut(e, first.current()))
+        .filter_map(|e| candidate_cut(e, first.current(), copies.kept(e).1))
+        .filter(|c| !accepted.contains(&at(c)))
         .map(|c| {
-            let x = cut_exclusion(envelopes, &chains, &c);
+            let x = cut_exclusion(envelopes, &chains, &c, copies);
             (c, x)
         })
         .filter(|(_, x)| !x.is_empty())
         .collect();
-    candidates.sort_by_key(|(c, _)| c.key);
+    candidates.sort_by_key(|(c, _)| at(c));
     for _ in 0..=candidates.len() {
         let mut changed = false;
         for (c, x) in &candidates {
-            if accepted.contains(&c.key) {
+            if accepted.contains(&at(c)) {
                 continue;
             }
-            let trial: std::collections::BTreeSet<Uuid> = deny.union(x).copied().collect();
+            let trial: std::collections::BTreeSet<crate::copies::CopyRef> = deny.union(x).copied().collect();
             let mut t = crate::authz::ConfigTimeline::default();
-            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, LeftOut { cut: &trial, bounds });
-            if t.cuts().iter().any(|k| k.key == c.key) {
-                accepted.extend(t.cuts().iter().map(|k| k.key));
-                deny = trial.union(&config_cut_denials(envelopes, &t)).copied().collect();
+            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, LeftOut { cut: &trial, bounds, copies });
+            if t.cuts().iter().any(|k| at(k) == at(c)) {
+                accepted.extend(t.cuts().iter().map(at));
+                deny = trial.union(&config_cut_denials(envelopes, &t, copies)).copied().collect();
                 changed = true;
             }
         }
@@ -1632,8 +1797,16 @@ fn config_denials_with_rejudged_cuts(
 /// denies, and the lamports out of bounds (`crate::lamport`).
 #[derive(Clone, Copy)]
 struct LeftOut<'a> {
-    cut: &'a std::collections::BTreeSet<Uuid>,
+    cut: &'a std::collections::BTreeSet<crate::copies::CopyRef>,
     bounds: &'a crate::lamport::Bounds,
+    /// How copies of one id are told apart (see [`crate::copies`]).
+    copies: &'a crate::copies::Copies,
+}
+
+/// Whether `payload` is a record its event id names
+/// ([`crate::memory::bound_event_id`]).
+fn id_bound_record(payload: &SessionEvent, event_id: Uuid) -> bool {
+    matches!(payload, SessionEvent::FlowRecorded { record } if crate::memory::bound_event_id(record) == Some(event_id))
 }
 
 fn fold_pass(
@@ -1642,11 +1815,11 @@ fn fold_pass(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     mut timeline: Option<&mut crate::authz::ConfigTimeline>,
-    mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    mut decisions: Option<&mut std::collections::BTreeMap<crate::copies::CopyRef, Verdict>>,
     left_out: LeftOut<'_>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
-    let LeftOut { cut: cut_denied, bounds } = left_out;
+    let LeftOut { cut: cut_denied, bounds, copies } = left_out;
     use crate::lamport::Plausibility;
 
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
@@ -1696,6 +1869,11 @@ fn fold_pass(
         }
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
+    // Whom each device vouched for anywhere on this log: who holds a device
+    // never depends on a position (see `authz::DeviceState::holders`).
+    if ordered.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
+        tracker.set_vouched(authz::RosterTracker::vouched(&ordered));
+    }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
     let mut last_vote: std::collections::HashMap<(Uuid, String), (u64, bool)> = std::collections::HashMap::new();
@@ -1713,7 +1891,7 @@ fn fold_pass(
     let checked = !matches!(workspace, WorkspaceAuthz::Unchecked);
     // Phase A, item 2: on a chat log, the events each cut covers (its
     // watermark's chains on this log).
-    let cut_cover: Vec<std::collections::BTreeSet<Uuid>> = match workspace {
+    let cut_cover: Vec<std::collections::BTreeSet<(Option<Uuid>, Uuid)>> = match workspace {
         WorkspaceAuthz::Timeline(t) if !t.cuts().is_empty() => {
             let chains = crate::watermark::Chains::of(&ordered);
             let log = ordered[base].session_id;
@@ -1725,9 +1903,10 @@ fn fold_pass(
         // A lamport its log can't account for (see `crate::lamport`): denied,
         // and not a position anything can name.
         let plausibility = bounds.of_env(env);
+        let copy = copies.kept(env);
         if plausibility == Plausibility::Implausible {
             if let Some(d) = decisions.as_deref_mut() {
-                d.insert(env.event_id, Verdict::Denied);
+                d.insert(copy, Verdict::Denied);
             }
             continue;
         }
@@ -1736,7 +1915,16 @@ fn fold_pass(
         let mut allowed = false;
         let mut held = false;
         'judge: {
-            if cut_denied.contains(&env.event_id) {
+            if cut_denied.contains(&copy) {
+                break 'judge;
+            }
+            // A record known by the event that made it (a new memory entry
+            // or a memory proposal, `crate::memory::bound_event_id`) under an
+            // id more than one signer holds: every copy is denied, as two
+            // events under one id were before copies were told apart. One
+            // signer can't take another's new entry or proposal (and its
+            // acceptance) by signing under its id.
+            if copy.1 != 0 && id_bound_record(&env.payload, env.event_id) {
                 break 'judge;
             }
             // Its log head isn't here yet: held until it arrives.
@@ -1776,7 +1964,7 @@ fn fold_pass(
                         // whatever frontier it claims; a revoked device's
                         // never folds (Phase A, item 2).
                         for (cut, covered) in t.cuts().iter().zip(&cut_cover) {
-                            if !cut.applies(env) || covered.contains(&env.event_id) {
+                            if !cut.applies(env) || covered.contains(&(env.signer_device_id, env.event_id)) {
                                 continue;
                             }
                             if matches!(cut.kind, authz::CutKind::Revoked(_)) {
@@ -1851,7 +2039,7 @@ fn fold_pass(
                     _ => None,
                 };
                 if let Some((kind, agent_keys, watermark)) = cut {
-                    t.push_cut(authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark });
+                    t.push_cut(authz::Cut { key: env.canonical_key(), copy: copy.1, kind, agent_keys, watermark });
                 }
             }
             // Checked-fold rewrites: votes carry the signer's real role, and an
@@ -1989,7 +2177,37 @@ fn fold_pass(
                 _ => false,
             };
             if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
-                session.apply(payload);
+                let ms = crate::admission::envelope_ms(env);
+                if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
+                    // The dispatcher's fold (`crate::dispatch`) with the
+                    // claim's signed time and whether the holder it would
+                    // displace is gone at its position.
+                    let holder_gone = session
+                        .turn_claims
+                        .get(trigger_id)
+                        .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
+                    let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
+                    crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                } else {
+                    session.apply(payload);
+                }
+                // The dispatcher's commit (`crate::dispatch`): an answer whose
+                // origin device is the signer (or certified the signing agent
+                // key, as the workspace roster at its position holds it)
+                // commits its turn or is marked superseded.
+                if let SessionEvent::MessageAppended { message } = payload {
+                    let agent_host = |k: Uuid| {
+                        at.and_then(|r| r.valid_agent_key(k))
+                            .or_else(|| tracker.state.valid_agent_key(k))
+                            .map(|key| key.host_device_id)
+                    };
+                    let origin = message
+                        .origin_device_id
+                        .filter(|o| env.signer_device_id == Some(*o) || env.signer_device_id.and_then(agent_host) == Some(*o));
+                    if let Some(o) = origin {
+                        crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
+                    }
+                }
             }
             session.updated_at = env.timestamp;
         }
@@ -2001,7 +2219,7 @@ fn fold_pass(
             } else {
                 Verdict::Denied
             };
-            d.insert(env.event_id, v);
+            d.insert(copy, v);
         }
         let changed = tracker.observe(env, allowed, &session);
         if let Some(t) = timeline.as_deref_mut() {
@@ -2524,12 +2742,12 @@ mod tests {
         let trigger = Uuid::new_v4();
         let device_a = Uuid::new_v4();
         let device_b = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a });
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&trigger), Some(&device_a), "first claim wins");
         // A different trigger claims independently.
         let t2 = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&t2), Some(&device_b));
     }
 

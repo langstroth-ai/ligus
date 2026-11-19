@@ -51,6 +51,13 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
             TurnCheckout::NoRepo => {
                 let repo_root = RepoBindings::load(data_dir).resolve(&repos_dir(data_dir), s.id);
                 if let Some(r) = repo_root.as_deref().filter(|r| hive_runtime::git_worktree::is_git_repo(r)) {
+                    // A legacy binding to a checkout another host on this
+                    // machine manages (the desktop) never runs here: its
+                    // chat worktrees and branches are that host's.
+                    let me = lock(svc).device_id();
+                    if let Some(label) = rr::marker::managed_elsewhere(r, me) {
+                        return Err(format!("{} on {host_label} is managed by {label}; give this chat a workspace repository and clone it separately here", r.display()));
+                    }
                     crate::repos::ensure_chat_base(r);
                 }
                 return Ok(RepoTurn { repo_root, context: crate::repos::turn_context(data_dir, s.id), base: None });
@@ -95,7 +102,7 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
         return Ok(0);
     }
     let dir = repos_dir(data_dir);
-    let aliases = svc.store().ssh_host_aliases()?;
+    let aliases = rr::aliases(svc.store(), workspace_id, Some(&roster));
     let mut n = 0;
     let known = svc.store().repo_mappings(workspace_id)?;
     let mut map = |raw: &str| -> Option<(Uuid, PathBuf)> {
@@ -163,7 +170,13 @@ fn abs(p: &str) -> Result<PathBuf> {
 }
 
 /// `ligus repos [list | add | remove | rename | bind | unbind | confirm |
-/// takeover | scan | roots | alias | chat | coverage]`.
+/// takeover | scan | roots | alias | aliases | repo-alias | host-alias |
+/// accept | chat | coverage]`.
+///
+/// `alias` is this host's own SSH host alias (never synced); `repo-alias`
+/// and `host-alias` are the workspace-synced ones (design
+/// repos-and-checkouts 12: Admin with a passkey, names only), which this
+/// host uses only after `accept`.
 pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     let entries = || -> Result<Vec<RepoEntry>> { svc_entries(svc, ws) };
     match pos.first().copied() {
@@ -289,6 +302,55 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
                 Ok(())
             }
         },
+        Some("aliases") => {
+            let roster = svc.workspace_roster(ws)?;
+            let accepted = svc.store().accepted_aliases(ws)?;
+            let used = |kind: &str, a: &str, t: &str| if accepted.iter().any(|(k, x, y)| k == kind && x == a && y == t) { "accepted here" } else { "not accepted here (ligus repos accept <alias>)" };
+            for (id, list) in &roster.repo_aliases {
+                let name = roster.repos.get(id).map(|e| e.repo.display_name.clone()).unwrap_or_default();
+                for a in list {
+                    println!("{a}  is {name}  ({})", used("repo", a, &id.to_string()));
+                }
+            }
+            for (a, h) in &roster.host_aliases {
+                println!("{a}  means {h}  ({})", used("host", a, h));
+            }
+            if roster.repo_aliases.is_empty() && roster.host_aliases.is_empty() {
+                println!("This workspace has no synced aliases. This host's own SSH aliases: ligus repos alias");
+            }
+            Ok(())
+        }
+        Some("repo-alias") => {
+            let r = find_repo(&entries()?, pos.get(1).ok_or_else(|| anyhow!("usage: ligus repos repo-alias <repo> [names…]   (no names clears the list)"))?)?;
+            let names: Vec<String> = pos[2..].iter().map(|s| s.to_string()).collect();
+            let set = svc.set_repo_aliases(ws, r.id, &names)?;
+            if set.is_empty() {
+                println!("{} has no aliases now (sync to share).", r.display_name);
+            } else {
+                println!("{} is also known as {} (sync to share; each host uses them after `ligus repos accept`).", r.display_name, set.join(", "));
+            }
+            Ok(())
+        }
+        Some("host-alias") => match (pos.get(1), pos.get(2)) {
+            (Some(a), Some(h)) => {
+                svc.set_host_alias(ws, a, h)?;
+                println!("{a} means {h} for this workspace (identity only; sync to share; each host uses it after `ligus repos accept {a}`).");
+                Ok(())
+            }
+            (Some(a), None) if flag("--remove").is_some() => {
+                svc.set_host_alias(ws, a, "")?;
+                println!("removed the host alias {a} (sync to share).");
+                Ok(())
+            }
+            _ => bail!("usage: ligus repos host-alias <alias-host> <repository-host> | <alias-host> --remove"),
+        },
+        Some("accept") => {
+            let a = pos.get(1).ok_or_else(|| anyhow!("usage: ligus repos accept <alias> [--revoke]"))?;
+            let revoke = flag("--revoke").is_some();
+            let what = svc.accept_alias(ws, a, !revoke)?;
+            println!("{} on this host: {what} (identity only; git still connects where it did).", if revoke { "no longer used" } else { "accepted" });
+            Ok(())
+        }
         Some("chat") => {
             let (Some(chat), Some(sel)) = (pos.get(1), pos.get(2)) else { bail!("usage: ligus repos chat <chat-id> <repo | none> [--branch B]") };
             let chat = Uuid::parse_str(chat)?;

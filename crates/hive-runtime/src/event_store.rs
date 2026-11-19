@@ -245,11 +245,11 @@ impl EventStore {
                 check_json  TEXT NOT NULL
             );
 
-            -- Review P-A2c: a verified envelope that arrived under an event id
-            -- this store already holds, on the same log, with different
-            -- signed content (an equivocation). Kept as evidence and folded
-            -- with the log, so both copies are denied whichever came first.
-            -- Never pushed.
+            -- Another copy under an event id this store already holds, on
+            -- the same log, with different signed content. Kept whichever
+            -- arrived first and folded with the log: the fold decides which
+            -- copies count (hive_core::copies; only the same signer's second
+            -- copy is an equivocation, review P-A2c). Never pushed.
             -- Device-local, never synced: the apply requests this host
             -- started (Phase B). Claimed before any git work, so a request is
             -- applied at most once here even across a crash or a restart.
@@ -721,10 +721,14 @@ impl EventStore {
         }))
     }
 
-    /// Whether an envelope with this `event_id` is already stored (dedup).
-    /// Keep `env` as evidence when the stored envelope under its id, on the
-    /// same log, is a different event (review P-A2c). A copy that only
-    /// travelled or was re-sealed is not one.
+    /// Keep `env` beside the stored envelope under its id when it is a
+    /// different copy on the same log (one that only travelled or was
+    /// re-sealed is not). Which copies count is the fold's decision
+    /// (`hive_core::copies`): only a verified copy counts against a verified
+    /// one, and only the same signer's second copy is an equivocation (review
+    /// P-A2c). An unsigned copy of a signed event can never count, so it is
+    /// refused here and kept only as a lamport witness (ingest refuses
+    /// unsigned envelopes anyway; this covers every other path in).
     fn note_equivocation(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
         let stored: Option<String> = self
             .conn
@@ -733,6 +737,9 @@ impl EventStore {
         let Some(stored) = stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok()) else { return Ok(()) };
         if !hive_core::events::equivocates(&stored, env) {
             return Ok(());
+        }
+        if env.signature.is_none() && stored.signature.is_some() {
+            return self.note_lamport_witness(env);
         }
         self.conn.execute(
             "INSERT OR IGNORE INTO equivocations (event_id, session_id, workspace_id, kind, envelope_json, sealed_epoch) \
@@ -746,7 +753,7 @@ impl EventStore {
                 sealed_epoch.map(i64::from),
             ],
         )?;
-        tracing::warn!(event_id = %env.event_id, "two different envelopes under one event id: both are denied");
+        tracing::warn!(event_id = %env.event_id, "another copy under a stored event id: kept beside it; the fold decides which counts");
         Ok(())
     }
 
@@ -808,8 +815,12 @@ impl EventStore {
     }
 
     /// [`EventStore::ingest`], recording the key epoch the body arrived sealed
-    /// under (B1). The first copy of an event wins: a re-seal by an old-key
-    /// holder only repeats its `event_id`.
+    /// under (B1). The first arrival of one copy keeps its epoch: a re-seal
+    /// by an old-key holder only repeats it.
+    ///
+    /// Another copy under an id this store holds is kept beside it (the
+    /// `equivocations` table), whichever arrived first: the fold decides
+    /// which copies count (`hive_core::copies`), so arrival order never does.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
         if self.has_event(env.event_id)? {
             self.note_equivocation(env, sealed_epoch)?;
@@ -855,6 +866,20 @@ impl EventStore {
         )?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Every copy this device holds of a session's events: its log in
+    /// sequence order, then the other copies of ids it holds (the
+    /// `equivocations` table: copies under an id it already held, kept
+    /// whichever arrived first, see `hive_core::copies`). For a reader that
+    /// verifies what it relies on and must not be blinded by a forged copy
+    /// that happened to arrive first.
+    pub fn list_copies(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+        self.query_envelopes(
+            "SELECT envelope_json FROM (SELECT 0 AS t, sequence AS o, envelope_json FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
+            [session_id.to_string()],
+        )
     }
 
     /// All envelopes for a session in sequence order.
@@ -1072,13 +1097,15 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Hard-delete every event for a session (irreversible). Returns the
-    /// number of rows removed.
+    /// Hard-delete every event for a session (irreversible), and every
+    /// other copy held under its ids (left alone, one would fold as the
+    /// session). Returns the number of log rows removed.
     pub fn delete_session(&self, session_id: Uuid) -> Result<usize> {
         let n = self.conn.execute(
             "DELETE FROM events WHERE session_id = ?1",
             [session_id.to_string()],
         )?;
+        self.conn.execute("DELETE FROM equivocations WHERE session_id = ?1", [session_id.to_string()])?;
         self.delete_compaction(session_id, None)?;
         Ok(n)
     }
@@ -1544,7 +1571,7 @@ impl EventStore {
     /// DM never has one.
     pub fn config_founded_at(&self, workspace_id: Uuid) -> Result<Option<hive_core::Timestamp>> {
         let Some(pin) = self.workspace_pin(workspace_id)? else { return Ok(None) };
-        let envs = self.list(hive_core::workspace_config_session_id(workspace_id))?;
+        let envs = self.list_copies(hive_core::workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).map(|e| e.timestamp))
     }
 
@@ -1561,7 +1588,9 @@ impl EventStore {
         signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
     ) -> Result<Option<String>> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
+            "SELECT envelope_json FROM (SELECT row_id, workspace_id, envelope_json FROM events \
+             UNION ALL SELECT row_id + 9000000000000, workspace_id, envelope_json FROM equivocations) \
+             WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
              ORDER BY row_id DESC LIMIT 200",
             [workspace_id.to_string()],
         )?;
@@ -1767,6 +1796,7 @@ impl EventStore {
                 [&ws_s],
             )?;
             tx.execute("DELETE FROM events WHERE workspace_id = ?1", [&ws_s])?;
+            tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1", [&ws_s])?;
             for room in rooms.iter().filter(|r| hive_core::room_workspace_id(r) == *ws) {
                 tx.execute("DELETE FROM sync_cursor WHERE workspace = ?1", [room])?;
                 tx.execute("DELETE FROM pushed WHERE workspace = ?1", [room])?;
@@ -1830,6 +1860,13 @@ impl EventStore {
             }
         }
 
+        // Every other copy held under a pruned id goes with it (left alone,
+        // one would fold in the pruned chunk's place), a witness like it.
+        for event_id in &doomed {
+            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1", [event_id])? {
+                witnesses.push(env);
+            }
+        }
         for env in &witnesses {
             self.note_lamport_witness(env)?;
         }
@@ -1837,6 +1874,7 @@ impl EventStore {
         let mut removed = 0;
         for event_id in &doomed {
             removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
+            tx.execute("DELETE FROM equivocations WHERE event_id = ?1", [event_id])?;
         }
         tx.commit()?;
         Ok(removed)
@@ -1869,6 +1907,17 @@ pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<hive_cor
         });
     }
     hive_core::lamport::stamp_next(&mut env, log_head);
+    let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
+    hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
+    env
+}
+
+/// Tests only: `env` signed as the fixture device, as is (a genuine event is
+/// always signed; ingest refuses an unsigned one).
+#[cfg(test)]
+pub(crate) fn fixture_signed(env: &SessionEventEnvelope) -> SessionEventEnvelope {
+    let mut env = env.clone();
+    env.clear_raw();
     let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
     hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
     env
@@ -2424,6 +2473,41 @@ mod tests {
         assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
         // idempotent
         assert_eq!(store.prune_superseded_chunks().unwrap(), 0);
+    }
+
+    /// Another copy held under a pruned chunk's id goes with it (as a
+    /// witness), and a deleted session leaves no copy behind to fold as it.
+    #[test]
+    fn copies_follow_their_event_out_of_the_store() {
+        let (mut store, sid, wid) = seeded_store();
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
+        placeholder.is_streaming = true;
+        let mid = placeholder.id;
+        store.append(sid, wid, SessionEvent::MessageAppended { message: placeholder }).unwrap();
+        let chunk = store.append(sid, wid, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "Hel".into() }).unwrap();
+        // Another signer's copy under the chunk's id, kept beside it.
+        let mut other = chunk.clone();
+        other.payload = SessionEvent::MessageChunkReceived { message_id: mid, chunk: "lo, forged".into() };
+        other.clear_raw();
+        let kp = hive_core::SigningKeypair::generate().unwrap();
+        hive_core::sign_envelope(&mut other, Uuid::new_v4(), &kp);
+        store.ingest(&other).unwrap();
+        assert_eq!(store.list_copies(sid).unwrap().iter().filter(|e| e.event_id == chunk.event_id).count(), 2);
+        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        assert!(store.prune_superseded_chunks().unwrap() >= 1);
+        assert!(store.list_copies(sid).unwrap().iter().all(|e| e.event_id != chunk.event_id), "a copy outlived its pruned chunk");
+        let s = store.load_session(sid).unwrap().unwrap();
+        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
+
+        // A copy of the seed outliving a deleted session would fold as it.
+        let seed = store.list(sid).unwrap().remove(0);
+        let mut copy = seed.clone();
+        copy.clear_raw();
+        hive_core::sign_envelope(&mut copy, Uuid::new_v4(), &kp);
+        store.ingest(&copy).unwrap();
+        store.delete_session(sid).unwrap();
+        assert!(store.list_copies(sid).unwrap().is_empty());
+        assert!(store.load_session(sid).unwrap().is_none(), "the deleted session came back");
     }
 
     /// A pruned chunk stays a lamport witness: another device may have held

@@ -245,18 +245,18 @@ async fn harness_with(
 
 impl Harness {
     async fn get(&self, path: &str) -> Value {
-        let r = self.client.get(format!("{}{path}", self.base)).bearer_auth(&self.token).send().await.unwrap();
+        let r = self.client.get(format!("{}{path}", self.base)).bearer_auth(&self.token).timeout(REQ).send().await.unwrap_or_else(|e| panic!("GET {path}: {e}"));
         assert!(r.status().is_success(), "GET {path}: {}", r.status());
         r.json().await.unwrap()
     }
 
     async fn send(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
         // The live token: a phone revocation rotates it.
-        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.handle.shared.token());
+        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.handle.shared.token()).timeout(REQ);
         if let Some(b) = body {
             req = req.json(&b);
         }
-        let r = req.send().await.unwrap();
+        let r = req.send().await.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
         let status = r.status();
         let v: Value = r.json().await.unwrap_or(Value::Null);
         assert!(status.is_success(), "{method} {path}: {status} {v}");
@@ -269,7 +269,8 @@ impl Harness {
         if let Some(id) = last_id {
             req = req.header("Last-Event-ID", id.to_string());
         }
-        let resp = req.send().await.unwrap();
+        // The stream is long-lived (no request timeout), its headers aren't.
+        let resp = tokio::time::timeout(REQ, req.send()).await.expect("GET /v1/events: no response headers in time").unwrap();
         assert!(resp.status().is_success());
         assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
         let (tx, rx) = mpsc::unbounded_channel();
@@ -331,9 +332,10 @@ async fn this_host(h: &Harness) -> String {
 async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
     let ws = h.handle.shared.ws;
     let mut done = false;
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
         h.handle.shared.sync_kick.notify_one();
-        sync_once(&h.desktop).await.unwrap();
+        desktop_sync(h).await;
         let mut desk = open_service(&h.desktop).unwrap();
         if desk.list_hosts(ws).unwrap().iter().any(|x| x.id == host) {
             for id in agents {
@@ -344,9 +346,10 @@ async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(done, "the box's host never reached the desktop");
-    sync_once(&h.desktop).await.unwrap();
-    for _ in 0..200 {
+    assert!(done, "the box's host never reached the desktop in 120 s");
+    desktop_sync(h).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
         h.handle.shared.sync_kick.notify_one();
         let cfg = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap();
         if cfg.is_some_and(|c| agents.iter().all(|id| c.workspace_agents.iter().any(|a| a.id == *id && a.host_id == host))) {
@@ -354,7 +357,64 @@ async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("the box never saw its agents bound to it");
+    panic!("the box never saw its agents bound to it in 120 s");
+}
+
+/// One request's bound in these tests (the SSE stream excepted): under load
+/// a request that never answers fails by name instead of hanging.
+const REQ: Duration = Duration::from_secs(60);
+
+/// The desktop's sync round with the relay, bounded (the relay client has
+/// no per-request timeout).
+async fn desktop_sync(h: &Harness) {
+    match tokio::time::timeout(REQ, sync_once(&h.desktop)).await {
+        Ok(r) => {
+            r.unwrap();
+        }
+        Err(_) => panic!("the desktop's sync round with the relay didn't finish in {REQ:?}"),
+    }
+}
+
+/// A hard bound on a whole test that doesn't depend on its runtime: when
+/// every worker thread is stuck (in a synchronous lock or SQLite wait),
+/// tokio timers stop firing and a test can wait until the runner kills it
+/// (40 minutes under the nightly profile). After `secs` this thread prints
+/// the stage the test last named and aborts the process. Dropped (the test
+/// done), it stands down.
+struct Watchdog {
+    done: Arc<std::sync::atomic::AtomicBool>,
+    stage: Arc<Mutex<&'static str>>,
+}
+
+impl Watchdog {
+    fn new(test: &'static str, secs: u64) -> Self {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stage = Arc::new(Mutex::new("start"));
+        let (d, st) = (done.clone(), stage.clone());
+        std::thread::spawn(move || {
+            let end = std::time::Instant::now() + Duration::from_secs(secs);
+            while std::time::Instant::now() < end {
+                if d.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let at = *st.lock().unwrap_or_else(|p| p.into_inner());
+            eprintln!("{test}: still running after {secs} s, waiting on: {at}");
+            std::process::abort();
+        });
+        Self { done, stage }
+    }
+
+    fn stage(&self, s: &'static str) {
+        *self.stage.lock().unwrap_or_else(|p| p.into_inner()) = s;
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// The phone's view of agent `id`.
@@ -1087,11 +1147,11 @@ async fn assert_gone(h: &Harness, path: &str, body: Option<Value>, kind: &str) {
 }
 
 async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
-    let mut req = h.client.request(method, format!("{}{path}", h.base)).bearer_auth(&h.token);
+    let mut req = h.client.request(method.clone(), format!("{}{path}", h.base)).bearer_auth(&h.token).timeout(REQ);
     if let Some(b) = body {
         req = req.json(&b);
     }
-    let r = req.send().await.unwrap();
+    let r = req.send().await.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
     let code = r.status().as_u16();
     (code, r.json().await.unwrap_or(Value::Null))
 }
@@ -3065,15 +3125,18 @@ async fn phone_vote_attribution() {
 /// duplicates an MCP effect is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
+    // Declared first, so it outlives the harness and covers its teardown.
+    let wd = Watchdog::new("hosted_agent_uses_ligus_tools_asks_and_hands_off", 600);
     let rounds = vec![
         streamed_call("c1", "ligus_propose", r#"{"kind":"decision","title":"Use sqlite","body":"smaller footprint"}"#),
-        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":600}"#),
+        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":240}"#),
         streamed_call("c3", "ligus_flow", r#"{"op":"handoff","to":"reviewer","keyFiles":["README.md"],"notes":"check it"}"#),
         vec![delta(json!({"content": "Asked and handed off.\n[[propose: {\"title\": \"Use sqlite\", \"kind\": \"decision\"}]]\n[[mark: {\"kind\": \"claim\", \"path\": \"README.md\"}]]"}))],
         vec![delta(json!({"content": "Reviewed."}))],
     ];
     let (endpoint, model) = spawn_model(rounds).await;
     // A person's box: only a person answers an agent's question.
+    wd.stage("harness");
     let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
     let ws = h.handle.shared.ws;
     // A second agent on the same runtime.
@@ -3085,12 +3148,18 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         desk.add_agent(ws, ws, a).unwrap();
         id
     };
-    sync_once(&h.desktop).await.unwrap();
+    wd.stage("desktop sync");
+    desktop_sync(&h).await;
+    wd.stage("this host");
     let host = this_host(&h).await;
+    wd.stage("bind agents here");
     bind_here(&h, &host, &[h.agent_id, reviewer_id]).await;
     // The phone that answers, certified up front: nothing slow happens while
-    // the agent's question waits (its 600 s timeout is never what decides).
+    // the agent's question waits (its 240 s timeout, above both 180 s
+    // waits below, is never what decides).
+    wd.stage("certify the phone");
     let (phone, account) = certified_phone(&h).await;
+    wd.stage("post the message");
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let mut rx = h.events(None).await;
@@ -3098,6 +3167,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
 
     // The question reaches the phone; answer it there. Each wait ends on its
     // event; the bound only catches a hang (a loaded CI box ran past 30 s).
+    wd.stage("ask.pending");
     let seen = collect_until(&mut rx, 180, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
     let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
     assert_eq!(ask["question"], "Which database?");
@@ -3114,12 +3184,14 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         answer: "postgres".into(),
         option_index: Some(1),
     };
+    wd.stage("the phone answers");
     let (code, v) = phone_act(&h, &phone, account, &answer).await;
     assert_eq!(code, 200, "{v}");
     let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
     assert_eq!(listed["asks"][0]["answer"], "postgres", "{listed}");
 
     // The receiver's turn starts on this host and answers once.
+    wd.stage("the reviewer's message.done");
     let seen = collect_until(&mut rx, 180, |evs| {
         evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed.")
     })
@@ -3137,6 +3209,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         // No directive teaching with the tools on.
         assert!(!bodies[0].to_string().contains("[[propose:"), "directives aren't taught when the Ligus tools are offered");
     }
+    wd.stage("checks");
     // A few more drain passes: still exactly one reviewer reply.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let cid = Uuid::parse_str(&chat_id).unwrap();
@@ -3156,6 +3229,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let p = h.get(&format!("/v1/proposals/{}", sqlite[0].id)).await;
     assert_eq!(p["proposal"]["authorKind"], "agent");
     assert_eq!(p["proposal"]["implementPlan"]["targetAgentId"], json!(h.agent_id));
+    wd.stage("teardown");
     h.handle.shutdown();
 }
 
@@ -3490,8 +3564,11 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
 /// the relay holds.
 async fn desktop_beats(h: &Harness) -> (Vec<hive_runtime::human_presence::HumanBeat>, String) {
     let relay = crate::relay_client(&h.desktop).unwrap();
-    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
+    // The keyring first: building it (key derivation, a config fold) is slow
+    // on a loaded machine, and the beats' age is judged from the moment
+    // they're read, so that time must not count against their TTL.
     let ring = crate::box_ring(&h.desktop).unwrap();
+    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
     let beats = hive_runtime::human_presence::open_human_beats(&raw, &ring, hive_runtime::human_presence::now_ms());
     (beats, serde_json::to_string(&raw).unwrap())
 }
@@ -3508,6 +3585,9 @@ async fn phone_typing_is_published_sealed_and_expires() {
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let box_actor = h.handle.shared.lock().author().clone();
     let path = format!("/v1/chats/{chat_id}/typing");
+    // The throttle and the expiry go by a clock the test moves, not by how
+    // fast a loaded machine gets from one request to the next.
+    h.handle.shared.typing.freeze_clock(std::time::Instant::now());
 
     let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
     assert_eq!(r["published"], json!(true));
@@ -3533,14 +3613,28 @@ async fn phone_typing_is_published_sealed_and_expires() {
     let (beats, _) = desktop_beats(&h).await;
     assert!(beats.iter().any(|b| b.typing && b.actor_id == owner.id && b.session_id == chat_id));
 
-    // The phone goes quiet: the box publishes "stopped" on its own.
-    let deadline = tokio::time::Instant::now() + super::typing_api::EXPIRE_AFTER + Duration::from_secs(4);
+    // The phone goes quiet: the box publishes "stopped" on its own, once the
+    // (test) clock passes EXPIRE_AFTER since the last ping, and not before.
+    let typing = &h.handle.shared.typing;
+    typing.advance(super::typing_api::EXPIRE_AFTER - Duration::from_millis(1));
+    assert!(typing.expire(typing.now()).is_empty(), "expired before EXPIRE_AFTER");
+    typing.advance(Duration::from_millis(1));
+    let chat_uuid = Uuid::parse_str(&chat_id).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while typing.is_typing(chat_uuid) {
+        assert!(tokio::time::Instant::now() < deadline, "the box never expired the quiet typing");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // A fresh "stopped" beat from the box (not the typing beat ageing out on
+    // the reader's side).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if !desktop_beats(&h).await.0.iter().any(|b| b.typing) {
+        let (beats, _) = desktop_beats(&h).await;
+        if !beats.iter().any(|b| b.typing) && beats.iter().any(|b| !b.typing && b.actor_id == owner.id && b.session_id == chat_id) {
             break;
         }
         assert!(tokio::time::Instant::now() < deadline, "quiet typing never expired");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     h.handle.shutdown();
 }
@@ -3973,8 +4067,9 @@ async fn certified_phone(h: &Harness) -> (hive_core::testkit::Phone, Uuid) {
         desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
         desk.author().account_id.unwrap()
     };
-    sync_once(&h.desktop).await.unwrap();
-    for _ in 0..200 {
+    desktop_sync(h).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
         h.handle.shared.sync_kick.notify_one();
         let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
         if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
@@ -3982,7 +4077,7 @@ async fn certified_phone(h: &Harness) -> (hive_core::testkit::Phone, Uuid) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("the box never saw the phone's certificate");
+    panic!("the box never saw the phone's certificate in 120 s");
 }
 
 fn b64d(s: &str) -> Vec<u8> {
@@ -4457,4 +4552,31 @@ async fn add_repo_on_desktop(h: &Harness, input: &str, name: &str) -> Uuid {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("the box never saw the repo");
+}
+
+/// Repos review residual 2: the `serve.token` bearer counts as the owner
+/// only on a loopback listener (every paired phone can fetch the token, and
+/// over the network it is any of them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/workspace-repos/rescan".to_string(), json!({})),
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        (reqwest::Method::PATCH, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/workspace-repo"), json!({ "repoId": null })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/repo"), json!({})),
+    ] {
+        let (c, v) = status_of(&h, m.clone(), &p, Some(b)).await;
+        assert_eq!(c, 403, "{m} {p}: {v}");
+        assert!(v.to_string().contains("owner_required"), "{v}");
+    }
+    // The same box on loopback: the operator.
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 200, "{v}");
 }

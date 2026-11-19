@@ -96,8 +96,11 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
         E::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
         E::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+        E::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+        E::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
         E::ChatRepoSet { .. } => "chatRepoSet",
         E::ChatBasePinned { .. } => "chatBasePinned",
+        E::ChatBaseRepinned { .. } => "chatBaseRepinned",
         E::AttachmentPolicySet { .. } => "attachmentPolicySet",
         E::AttachmentHashBlocked { .. } => "attachmentHashBlocked",
         E::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
@@ -125,8 +128,8 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "proposalApplyWithdrawn", "workspaceSandboxSet", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked",
-    "attachmentShared", "attachmentDeleted",
+    "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
+    "attachmentDeleted",
 ];
 
 #[test]
@@ -278,7 +281,9 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
             proof: None,
         }),
         ("deviceCertificateAdded/phone-p256", cfg, SessionEvent::DeviceCertificateAdded {
-            certificate: DeviceCertificate::issue_p256(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
+            // The frozen line's synthetic device id (a wire-shape vector; the
+            // id a key derives is pinned by `golden/device_id_v1.jsonl`).
+            certificate: DeviceCertificate::issue_p256_for_id(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
         }),
         ("memberRemoved/watermark-gaps", cfg, SessionEvent::MemberRemoved { member_id: u(9).to_string(), watermark: wm_gaps }),
     ]
@@ -461,6 +466,90 @@ fn lamport_bounds_goldens() {
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }
     std::fs::write(path, out).unwrap();
+}
+
+/// Writes the repos v2 lines (design repos-and-checkouts 11 and 12): a
+/// dispatcher hand-over claim (`epoch`, `supersedes`, `repoId`) and the two
+/// workspace-synced alias kinds. Run with `LIGUS_GOLDEN_OUT=<path>
+/// --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn repos_v2_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let wefit = repo_id("github.com/zazulam/wefit");
+    let cases = [
+        ("turnClaimed/dispatch", 0u64, chat, SessionEvent::TurnClaimed { trigger_id: u(0x6001), device_id: u(1), epoch: 2, supersedes: Some(u(0x6002)), repo_id: Some(wefit) }),
+        ("workspaceRepoAliasesSet", 1, cfg, SessionEvent::WorkspaceRepoAliasesSet { repo_id: wefit, aliases: vec!["github.com/old-org/wefit".into()] }),
+        ("workspaceHostAliasSet", 2, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: "git.example.com".into() }),
+        ("workspaceHostAliasSet/clear", 3, cfg, SessionEvent::WorkspaceHostAliasSet { alias: "ssh.git.example.com".into(), host: String::new() }),
+    ];
+    let mut out = String::new();
+    for (label, i, sid, payload) in cases {
+        let mut e = SessionEventEnvelope::new(sid, ws, 601 + i as i64, payload);
+        e.id = u(0x6010 + 2 * i as u128);
+        e.event_id = u(0x6011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6003) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x6004)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the re-pin line (review residual 3): `chatBaseRepinned`, a
+/// chat's pinned base moved from the pin in force to another commit. Run
+/// with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn repin_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let payload = SessionEvent::ChatBaseRepinned {
+        repo_id: repo_id("github.com/zazulam/wefit"),
+        commit: "89abcdef0123456789abcdef0123456789abcdef".into(),
+        previous: "0123456789abcdef0123456789abcdef01234567".into(),
+    };
+    let mut e = SessionEventEnvelope::new(chat, ws, 501, payload);
+    e.id = u(0x6010);
+    e.event_id = u(0x6011);
+    e.lamport = 901;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x6002)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
 }
 
 /// Writes the file-attachment lines (issue #118): the policy, the blocklist,

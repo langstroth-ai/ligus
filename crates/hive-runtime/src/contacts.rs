@@ -757,8 +757,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = uuid::Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = uuid::Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, account_id, device_id, &device.public_key_bytes(), now());
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
         let ka = KeyAgreementKeypair::generate().unwrap().public_key_bytes();
         let ws = contact_workspace_id(cid);
         let mut env = hive_core::SessionEventEnvelope::new(
@@ -852,8 +852,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = uuid::Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = uuid::Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, account_id, device_id, &device.public_key_bytes(), now());
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), now());
         let mut ka = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: vec![1; 32] });
         hive_core::crypto::sign_envelope(&mut ka, device_id, &device);
         let mut rec = build_record(&cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: ka }], now());

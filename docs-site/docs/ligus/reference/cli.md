@@ -171,7 +171,11 @@ it stops with a migration error. See
 | `ligus repos remove <repo>` / `rename <repo> <name> [--branch B]` | removes (Admin, with presence) or renames a workspace repository |
 | `ligus repos bind <repo> <path>` / `confirm <repo> <path>` / `unbind <repo> [path]` | this host's checkout of a repository (never synced) |
 | `ligus repos scan` / `roots [add\|remove <path>]` | finds checkouts under the repos dir and the scan roots; found ones need `confirm` |
-| `ligus repos alias <ssh-host> <host> [--remove]` | an SSH host alias, for identity only |
+| `ligus repos alias <ssh-host> <host> [--remove]` | this host's own SSH host alias, for identity only (never synced) |
+| `ligus repos aliases` | the workspace's synced repository and host aliases, and which this host accepted |
+| `ligus repos repo-alias <repo> [name…]` | replaces a repository's synced aliases; no names clears them (Admin, with presence) |
+| `ligus repos host-alias <alias-host> <repository-host>` / `host-alias <alias-host> --remove` | a synced host alias (Admin, with presence) |
+| `ligus repos accept <alias> [--revoke]` | uses a synced alias for identity on this host (device-local) |
 | `ligus repos chat <chat-id> <repo\|none> [--branch B]` | sets a chat's repository |
 | `ligus repos coverage on\|off\|default` | whether this host tells members which repositories it has checked out |
 | `ligus repos takeover <path>` | manages a checkout whose managing host is gone |
