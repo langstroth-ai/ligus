@@ -516,6 +516,21 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // Phase C: the sandbox grants live on the config log, are well formed,
+    // and only the Owner turns an agent's shell grant on or off (the shell
+    // is the Owner's; path grants are an Admin's). Presence below.
+    if let SessionEvent::WorkspaceSandboxSet { grants } = &env.payload {
+        if !on_config {
+            return Decision::deny("the sandbox grants are set on the workspace config log");
+        }
+        if let Err(e) = grants.well_formed() {
+            return Decision::deny(format!("sandbox grants: {}", e.0));
+        }
+        if !grants.shell_changes(&fold.guards.sandbox_grants).is_empty() && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner grants or withdraws an agent's shell");
+        }
+    }
+
     // B3: human presence. A stamped assertion must verify, and the events of
     // the presence table need one. Passkey registrations prove themselves
     // below. Rules: every workspace is on version 2 from its seed; a version

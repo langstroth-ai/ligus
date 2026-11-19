@@ -20,8 +20,17 @@
 //!    egress proxy ([`crate::egress`]), creates the turn's scratch dir, and
 //!    returns the confined command plus a guard that tears it all down.
 //!
+//! Phase C: the user's home dir is default-deny for every child. Each one
+//! runs with a per-turn home (its scratch dir's `home`), and under the real
+//! home it reaches only its worktree, the turn's dirs, the runtime's
+//! allow-list ([`runtime_home_read`]), this host's toolchain install dirs
+//! ([`toolchain_allow`], read-only) and the workspace's signed grants
+//! ([`hive_core::sandbox::SandboxGrants`]); [`effective_policy`] lists it all
+//! with reasons.
+//!
 //! The sandbox is one control among several (authorization, the author gate,
-//! the MCP role gate, the human gate); none of them relies on it alone.
+//! the owner-only shell, the MCP role gate, the human gate); none of them
+//! relies on it alone.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -84,6 +93,16 @@ pub struct EnforcementPlan {
     /// Paths readable even inside a denied one (a repository checked out
     /// under the data dir).
     pub allow_read: Vec<PathBuf>,
+    /// The user's home dir, unreadable and unwritable by default (Phase C):
+    /// only the worktree, the turn's own dirs, `write_extra` and
+    /// [`EnforcementPlan::home_read`] are reachable under it. `None` when
+    /// the host has no home.
+    pub home: Option<PathBuf>,
+    /// Paths under the home dir the child may read (never write): the
+    /// runtime's allow-list ([`runtime_home_read`]), this host's toolchains
+    /// ([`HostPaths::toolchain_read`]) and the read-only grants. Paths in
+    /// [`EnforcementPlan::deny_read`] stay denied inside them.
+    pub home_read: Vec<PathBuf>,
     /// Extra writable paths: the runtime's own state dirs and the turn's
     /// scratch dir.
     pub write_extra: Vec<PathBuf>,
@@ -155,8 +174,28 @@ pub struct HostPaths {
     /// Device-local extra writable paths (`LIGUS_SANDBOX_WRITE_ALLOW`).
     pub extra_write: Vec<PathBuf>,
     /// Paths under `~` the user lets agents read (`LIGUS_SANDBOX_READ_ALLOW`,
-    /// e.g. `~/.aws` for a runtime that needs it).
+    /// e.g. `~/.aws` for a runtime that needs it). Device-local, so unlike a
+    /// signed grant it may open a credential dir.
     pub home_read_allow: Vec<PathBuf>,
+    /// Toolchain install dirs under `~` on this host, read-only to every
+    /// child (Phase C; [`toolchain_allow`]): what the tools a turn runs need
+    /// to start, never a credential store.
+    pub toolchain_read: Vec<PathBuf>,
+    /// Toolchain root variables (`RUSTUP_HOME`, `PYENV_ROOT`, ...) pointing at
+    /// the real dirs, set for children whose `HOME` is a per-turn home.
+    pub toolchain_env: Vec<(String, PathBuf)>,
+    /// Every absolute `PATH` entry of this host: a signed read-write grant
+    /// never makes one writable (a planted `git` there runs as the user).
+    pub path_dirs: Vec<PathBuf>,
+    /// Dirs outside the fixed list whose contents run as the user: git's
+    /// global `core.hooksPath` and `init.templateDir` (a hook planted there
+    /// runs on the user's next commit in any repository). A signed
+    /// read-write grant is read-only there too.
+    pub exec_dirs: Vec<PathBuf>,
+    /// The user's home from the password database when `HOME` names another
+    /// dir (or none): denied as a whole too, with its credential dirs, so a
+    /// wrong or unset `HOME` never leaves the real home open.
+    pub other_homes: Vec<PathBuf>,
     /// The binary that carries the Linux pre-exec helper (default: this
     /// executable).
     pub helper_exe: Option<PathBuf>,
@@ -205,8 +244,292 @@ impl HostPaths {
         h.egress_presets = EgressPreset::parse_list(list("LIGUS_SANDBOX_EGRESS_PRESETS").iter().map(String::as_str));
         h.extra_write = list("LIGUS_SANDBOX_WRITE_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
         h.home_read_allow = list("LIGUS_SANDBOX_READ_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
+        if let Some(home) = home_dir() {
+            let t = toolchain_allow(&home, std::env::var_os("PATH").as_deref(), &|k| std::env::var_os(k), &|p| p.exists());
+            h.toolchain_read = t.read.into_iter().map(|(p, _)| p).collect();
+            h.toolchain_env = t.env;
+        }
+        h.path_dirs = std::env::var_os("PATH").map(|v| std::env::split_paths(&v).filter(|d| d.is_absolute()).collect()).unwrap_or_default();
+        h.other_homes = other_homes(home_dir().as_deref(), passwd_home().as_deref());
+        if let Some(home) = home_dir() {
+            h.exec_dirs = cli_home::git_exec_dirs(&home);
+        }
         h
     }
+}
+
+/// Toolchain dirs under the home that every child may read, with why.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolchainAllow {
+    /// (path, reason) for `ligus doctor --sandbox` and the UI.
+    pub read: Vec<(PathBuf, String)>,
+    /// Root variables a per-turn home would otherwise point into itself.
+    pub env: Vec<(String, PathBuf)>,
+}
+
+/// The fixed toolchain allow-list (relative to the home), each with the
+/// reason it is safe to read. Install dirs only: binaries, libraries and
+/// version files, never a tool's config or credentials (`~/.cargo` itself
+/// holds `credentials.toml`, so only `~/.cargo/bin` is here; `~/.npmrc`,
+/// `~/.gitconfig`, `~/.config/*` are not).
+pub const TOOLCHAIN_DIRS: &[(&str, &str)] = &[
+    (".cargo/bin", "rustup proxies and cargo-installed tools (binaries only; ~/.cargo holds registry credentials and stays denied)"),
+    (".rustup", "Rust toolchains (rustc, cargo, std) and the default-toolchain setting; no credentials"),
+    (".local/bin", "user-level launchers (pipx, uv tool, pip --user, the Claude Code installer)"),
+    (".local/share/claude", "Claude Code's native install (the versions ~/.local/bin/claude points to)"),
+    (".claude/local", "Claude Code's local npm install"),
+    (".nvm/versions", "nvm's Node versions and their global packages (codex, copilot, pi)"),
+    (".volta", "Volta's Node toolchains and shims"),
+    (".local/share/fnm", "fnm's Node versions"),
+    (".fnm", "fnm's Node versions (older layout)"),
+    (".npm-global", "a user npm prefix for global packages (npm i -g without sudo)"),
+    (".bun/bin", "Bun"),
+    (".deno/bin", "Deno"),
+    (".pyenv", "pyenv's Python versions, shims and version file"),
+    (".local/share/uv/python", "Python builds uv manages (a venv links to its interpreter)"),
+    (".local/share/uv/tools", "tools installed with uv tool (aider)"),
+    (".local/pipx/venvs", "pipx's app venvs (aider), older layout"),
+    (".local/share/pipx/venvs", "pipx's app venvs (aider)"),
+    (".asdf", "asdf's installs and shims"),
+    (".local/share/mise", "mise's installs and shims"),
+    (".sdkman/candidates", "SDKMAN's JDKs and build tools"),
+    ("Library/pnpm", "pnpm's home on macOS"),
+    (".local/share/pnpm", "pnpm's home on Linux"),
+    ("go/bin", "Go tools installed with go install"),
+];
+
+/// Toolchain root variables: (variable, default dir under the home). Set to
+/// the real dir when the child's `HOME` is a per-turn home, so the shims and
+/// proxies find their toolchains (read-only); a value the user set is kept.
+pub const TOOLCHAIN_VARS: &[(&str, &str)] = &[
+    ("RUSTUP_HOME", ".rustup"),
+    ("PYENV_ROOT", ".pyenv"),
+    ("VOLTA_HOME", ".volta"),
+    ("NVM_DIR", ".nvm"),
+    ("ASDF_DATA_DIR", ".asdf"),
+    ("MISE_DATA_DIR", ".local/share/mise"),
+    ("UV_PYTHON_INSTALL_DIR", ".local/share/uv/python"),
+    ("SDKMAN_DIR", ".sdkman"),
+    ("PNPM_HOME", if cfg!(target_os = "macos") { "Library/pnpm" } else { ".local/share/pnpm" }),
+];
+
+/// This host's toolchain allow-list: [`TOOLCHAIN_DIRS`] that exist, every
+/// `PATH` entry under the home (the user put its binaries on `PATH`), and
+/// the dirs [`TOOLCHAIN_VARS`] name. Never the home itself or anything in a
+/// credential dir ([`home_secret_dirs`]). A pure function of its inputs.
+pub fn toolchain_allow(home: &Path, path_var: Option<&OsStr>, env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -> bool) -> ToolchainAllow {
+    let mut t = ToolchainAllow::default();
+    let secrets = home_secret_dirs(home, Purpose::Tool);
+    let ok = |p: &Path| p.starts_with(home) && p != home && !secrets.iter().any(|s| p.starts_with(s) || s.starts_with(p));
+    let push = |t: &mut ToolchainAllow, p: PathBuf, why: String| {
+        if ok(&p) && exists(&p) && !t.read.iter().any(|(x, _)| *x == p) {
+            t.read.push((p, why));
+        }
+    };
+    for (rel, why) in TOOLCHAIN_DIRS {
+        push(&mut t, home.join(rel), (*why).to_string());
+    }
+    if let Some(pv) = path_var {
+        for d in std::env::split_paths(pv) {
+            if d.is_absolute() {
+                push(&mut t, d, "on PATH".into());
+            }
+        }
+    }
+    for (var, rel) in TOOLCHAIN_VARS {
+        let set = env(var).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute());
+        let dir = set.clone().unwrap_or_else(|| home.join(rel));
+        if exists(&dir) && (set.is_some() || ok(&dir)) {
+            if dir.starts_with(home) {
+                push(&mut t, dir.clone(), (*var).to_string());
+            }
+            t.env.push((var.to_string(), dir));
+        }
+    }
+    t
+}
+
+/// Paths under the home whose contents run as the user outside the sandbox:
+/// shell startup files, login items and autostart entries, and the config of
+/// tools that run commands from it (git aliases and hooks, npm's
+/// `script-shell`, cargo's `rustc-wrapper`, editors). A signed read-write
+/// grant that names one, or a dir holding one, is read-only
+/// ([`EnvelopeEnforcer::plan`]); so are the toolchain and `PATH` dirs.
+pub fn home_exec_paths(home: &Path) -> Vec<PathBuf> {
+    [
+        ".profile",
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".bash_logout",
+        ".zshrc",
+        ".zshenv",
+        ".zprofile",
+        ".zlogin",
+        ".zlogout",
+        ".config/fish",
+        ".config/nushell",
+        ".config/powershell",
+        ".config/autostart",
+        ".config/systemd",
+        ".config/environment.d",
+        ".config/git",
+        ".config/direnv",
+        ".config/nvim",
+        ".config/pip",
+        ".gitconfig",
+        ".npmrc",
+        ".cargo/config",
+        ".cargo/config.toml",
+        ".envrc",
+        ".pam_environment",
+        ".xprofile",
+        ".xinitrc",
+        ".xsession",
+        ".vimrc",
+        ".vim",
+        ".emacs",
+        ".emacs.d",
+        ".tmux.conf",
+        ".local/share/applications",
+        "Library/LaunchAgents",
+        // More shell startup: aliases, drop-in dirs, frameworks and prompts.
+        ".bash_aliases",
+        ".bashrc.d",
+        ".zsh",
+        ".config/zsh",
+        ".oh-my-zsh",
+        ".config/starship.toml",
+        ".config/tmux",
+        ".inputrc",
+        // Interpreters' startup and user site dirs (a `.pth` file runs on
+        // every Python start; `~/.local/lib` is the user site on Linux,
+        // `~/Library/Python` on macOS).
+        ".local/lib",
+        "Library/Python",
+        ".pythonrc",
+        ".pythonrc.py",
+        ".pdbrc",
+        ".ipython",
+        ".irbrc",
+        ".pryrc",
+        ".gemrc",
+        ".gem",
+        ".bundle",
+        ".node_modules",
+        ".node_libraries",
+        "perl5",
+        // User bin dirs that aren't on this process's `PATH` but are on the
+        // user's shell's.
+        "bin",
+        ".bin",
+        "Applications",
+        // Package managers' config, and caches a build compiles or installs
+        // from (`~/.cargo/registry/src/*/build.rs` runs on the next build).
+        ".cargo",
+        ".pip",
+        ".pydistutils.cfg",
+        ".config/npm",
+        ".config/pnpm",
+        ".config/yarn",
+        ".yarnrc",
+        ".yarnrc.yml",
+        ".m2",
+        ".gradle",
+        ".ivy2",
+        ".sbt",
+        "go/pkg",
+        ".deno",
+        ".bun",
+        // Tool plugins: docker CLI plugins, gh extensions, Terraform
+        // providers, version control hooks.
+        ".docker/cli-plugins",
+        ".local/share/gh",
+        ".terraform.d",
+        ".terraformrc",
+        ".hgrc",
+        ".config/hg",
+        // Editors and terminals that run commands from their config (VS Code
+        // and Cursor tasks and extensions, Zed tasks, terminal startup
+        // commands), and macOS automation.
+        ".vscode",
+        ".vscode-server",
+        ".cursor",
+        ".config/Code",
+        ".config/Cursor",
+        ".config/VSCodium",
+        "Library/Application Support/Code",
+        "Library/Application Support/Cursor",
+        "Library/Application Support/VSCodium",
+        ".config/zed",
+        "Library/Application Support/Zed",
+        ".config/kitty",
+        ".config/wezterm",
+        ".wezterm.lua",
+        ".config/alacritty",
+        ".config/ghostty",
+        "Library/Application Support/com.mitchellh.ghostty",
+        ".hammerspoon",
+        "Library/Services",
+        "Library/Scripts",
+        "Library/Application Scripts",
+        "Library/Preferences",
+        ".ssh",
+    ]
+    .iter()
+    .map(|r| home.join(r))
+    .collect()
+}
+
+/// Absolute install prefixes the user can often write (Homebrew, MacPorts,
+/// `/Applications` for an admin): a read-write grant of one, or of a dir in
+/// it, is read-only too.
+pub const EXEC_PREFIXES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/local", "/Applications"];
+
+/// Whether `p` is `base` or under it. On macOS and Windows, whose default
+/// file systems ignore case, the comparison does too (`~/.SSH` is `~/.ssh`,
+/// even before either exists).
+pub fn path_under(p: &Path, base: &Path) -> bool {
+    if !cfg!(any(target_os = "macos", target_os = "windows")) {
+        return p.starts_with(base);
+    }
+    let fold = |x: &Path| x.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect::<Vec<_>>();
+    let (p, b) = (fold(p), fold(base));
+    p.len() >= b.len() && p[..b.len()] == b[..]
+}
+
+/// The paths under the home a runtime reads on top of the toolchains, with
+/// why (read-only). With a per-turn home a CLI's own config is copied in, so
+/// this is only what can't be copied: its install dir, its keychain sign-in
+/// (macOS), and with the workspace's opt-in the user's own Claude Code
+/// plugins, skills, agents and commands.
+pub fn runtime_home_read(purpose: Purpose, home: &Path, user_config: bool) -> Vec<(PathBuf, &'static str)> {
+    let mut v: Vec<(PathBuf, &'static str)> = Vec::new();
+    let Purpose::Agent(k) = purpose else { return v };
+    #[cfg(target_os = "macos")]
+    if matches!(k, ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Copilot | ModelProviderKind::Antigravity) {
+        // The login keychain (denied again for a turn signed in by file or
+        // by a hosted key: `EnvelopeEnforcer::plan`).
+        v.push((home.join("Library/Keychains"), "the login keychain, where this CLI keeps its sign-in"));
+        v.push((home.join("Library/Preferences/com.apple.security.plist"), "the keychain search list"));
+        v.push((home.join("Library/Preferences/com.apple.security.KCN.plist"), "the keychain search list"));
+    }
+    if k == ModelProviderKind::ClaudeCode && user_config {
+        for d in cli_home::CLAUDE_USER_DIRS {
+            v.push((home.join(".claude").join(d), "your own Claude Code setup (the workspace opted in)"));
+        }
+    }
+    let _ = (k, home);
+    v
+}
+
+/// Expand a grant path (`~/rel` or `/abs`) against `home`.
+pub fn expand_grant(p: &str, home: &Path) -> Option<PathBuf> {
+    hive_core::sandbox::grant_path_ok(p).ok()?;
+    Some(match p.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(p),
+    })
 }
 
 fn expand_home(p: &str) -> PathBuf {
@@ -256,8 +579,59 @@ pub fn host_paths() -> HostPaths {
     host_slot().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// The home dir: `HOME` (`USERPROFILE` on Windows), else the user's entry
+/// in the password database.
 pub fn home_dir() -> Option<PathBuf> {
+    env_home().or_else(passwd_home)
+}
+
+fn env_home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+}
+
+/// This user's home from the password database (`getpwuid_r`), whatever
+/// `HOME` says.
+#[cfg(unix)]
+pub fn passwd_home() -> Option<PathBuf> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: `getpwuid_r` writes only into `pwd` and `buf`, both owned
+    // here and sized as passed; `result` points at `pwd` or is null, and the
+    // strings it holds live in `buf`, read before it goes out of scope.
+    unsafe {
+        let uid = libc::getuid();
+        let mut size = 4096usize;
+        loop {
+            let mut buf = vec![0 as libc::c_char; size];
+            let mut pwd: libc::passwd = std::mem::zeroed();
+            let mut result: *mut libc::passwd = std::ptr::null_mut();
+            let rc = libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result);
+            if rc == libc::ERANGE && size < 1 << 20 {
+                size *= 4;
+                continue;
+            }
+            if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+                return None;
+            }
+            let dir = CStr::from_ptr(pwd.pw_dir).to_bytes();
+            return (!dir.is_empty() && dir != b"/").then(|| PathBuf::from(std::ffi::OsStr::from_bytes(dir)));
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn passwd_home() -> Option<PathBuf> {
+    None
+}
+
+/// The password database's home when it isn't `home` (what the plan
+/// denies as the home): denied on top.
+pub fn other_homes(home: Option<&Path>, passwd: Option<&Path>) -> Vec<PathBuf> {
+    match (home, passwd) {
+        (Some(h), Some(p)) if canonical(h) != canonical(p) => vec![p.to_path_buf()],
+        (None, Some(p)) => vec![p.to_path_buf()],
+        _ => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +692,17 @@ pub struct PlanInputs<'a> {
     /// The model gateway the agent's model traffic goes through (name and
     /// wire). Its vendor endpoints and key are then left out.
     pub gateway: Option<(&'a str, crate::model_gateway::Api)>,
+    /// The per-turn home of a child that isn't a CLI agent (a command, a
+    /// pre-flight test, a stdio MCP server): `HOME` and the XDG dirs point
+    /// here, so caches and config it writes stay the turn's (Phase C).
+    pub turn_home: Option<&'a Path>,
+    /// The signed path grants for this agent (workspace and per agent).
+    pub grants: &'a hive_core::sandbox::PathGrants,
+    /// More read-only paths the spawn site found (the program's own install
+    /// dir under the home).
+    pub extra_home_read: &'a [PathBuf],
+    /// The workspace opted its CLI agents into the user's own CLI setup.
+    pub user_config: bool,
 }
 
 /// Model endpoints each subscription CLI must reach (its API, its sign-in
@@ -373,8 +758,44 @@ pub fn runtime_state_dirs(kind: ModelProviderKind, home: &Path) -> Vec<PathBuf> 
 /// (checked with `security list-keychains` under the profile). Ligus's own
 /// keychain items are protected by their item ACLs, not by the profile.
 pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = [".ssh", ".gnupg", ".aws", ".config/gcloud", ".kube", ".docker/config.json", ".netrc", ".git-credentials"]
-        .iter()
+    let mut v: Vec<PathBuf> = [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".config/gcloud",
+        ".kube",
+        ".docker/config.json",
+        ".netrc",
+        ".git-credentials",
+        ".config/git/credentials",
+        // Package registry tokens, in files beside config a grant may name
+        // (a grant of `~/.cargo` or `~/.m2` never opens these).
+        ".cargo/credentials.toml",
+        ".cargo/credentials",
+        ".npmrc",
+        ".yarnrc.yml",
+        ".pypirc",
+        ".gem/credentials",
+        ".m2/settings.xml",
+        ".m2/settings-security.xml",
+        ".gradle/gradle.properties",
+        ".composer/auth.json",
+        ".config/composer/auth.json",
+        ".terraform.d/credentials.tfrc.json",
+        // Cloud CLIs, password stores and database logins.
+        ".azure",
+        ".oci",
+        ".config/doctl",
+        ".config/op",
+        ".password-store",
+        ".vault-token",
+        ".config/rclone",
+        ".s3cfg",
+        ".pgpass",
+        ".my.cnf",
+        ".config/sops",
+    ]
+    .iter()
         .map(|r| home.join(r))
         .collect();
     let keychain_login = matches!(
@@ -460,6 +881,12 @@ impl EnvelopeEnforcer {
         let mut deny_read: Vec<PathBuf> = host_paths.data_dirs.clone();
         deny_read.extend(host_paths.secret_files.iter().cloned());
         deny_read.extend(home_secret_dirs(i.home, i.purpose).into_iter().filter(|p| !host_paths.home_read_allow.contains(p)));
+        // `HOME` isn't the password database's home: that one is denied as a
+        // whole (a worktree inside it stays reachable, as inside a data dir).
+        for other in host_paths.other_homes.iter().filter(|o| o.as_path() != i.home) {
+            deny_read.push(other.clone());
+            deny_read.extend(home_secret_dirs(other, i.purpose));
+        }
         // macOS: a subscription CLI keeps the login keychain only while its
         // sign-in lives there. Anything that can run `/usr/bin/security`
         // reads every item that trusts it (the gh token, git's osxkeychain
@@ -478,8 +905,76 @@ impl EnvelopeEnforcer {
         }
         let mut allow_read = host_paths.allow_read.clone();
         allow_read.push(i.worktree.to_path_buf());
-        // Never write where reading is denied.
-        write_extra.retain(|w| !deny_read.iter().any(|d| w.starts_with(d)));
+
+        // Phase C: the home dir is denied as a whole. Readable under it: the
+        // runtime's allow-list, this host's toolchains, the device-local
+        // read allow-list and the signed read-only grants; writable on top
+        // of the turn's own dirs: the signed read-write grants. A signed
+        // grant never opens a denied path (Ligus's data, secret files, the
+        // credential dirs): only the device-local list may open a credential
+        // dir, and nothing opens the data dir.
+        //
+        // Each path is judged where it resolves too (the executors bind and
+        // allow the resolved path): one that resolves to the home or above
+        // it, or into a denied path, opens nothing (a symlinked
+        // `~/.local/bin` pointing at the home, a grant through a link into
+        // `~/.ssh`, a grant of `/home`). And a signed read-write grant never
+        // makes writable what runs as the user outside the sandbox
+        // ([`home_exec_paths`], the toolchain and `PATH` dirs): it is
+        // read-only there.
+        let in_denied = |p: &Path| deny_read.iter().any(|d| path_under(p, d));
+        // Resolved through the file system only when the home is on this
+        // disk (a plan for another host's paths has nothing to resolve).
+        // What the plan lets in is the resolved path: the Linux executors
+        // drop an entry that resolves elsewhere by the time they bind it (a
+        // grant swapped for a symlink after the plan).
+        let on_disk = i.home.is_dir();
+        let resolve = |p: &Path| if on_disk { canonical(p) } else { p.to_path_buf() };
+        let real_home = resolve(i.home);
+        let denied_real: Vec<PathBuf> = if on_disk { deny_read.iter().map(|d| resolve(d)).collect() } else { Vec::new() };
+        let resolves_ok = |p: &Path| {
+            let c = resolve(p);
+            !path_under(i.home, p) && !path_under(&real_home, &c) && !denied_real.iter().any(|d| path_under(&c, d))
+        };
+        let mut home_read: Vec<PathBuf> = Vec::new();
+        for (p, _) in runtime_home_read(i.purpose, i.home, i.user_config) {
+            home_read.push(p);
+        }
+        home_read.extend(host_paths.toolchain_read.iter().cloned());
+        home_read.extend(i.extra_home_read.iter().cloned());
+        let granted = |l: &[String]| -> Vec<PathBuf> {
+            l.iter().filter_map(|g| expand_grant(g, i.home)).filter(|p| !in_denied(p) && !path_under(i.home, p)).collect()
+        };
+        home_read.extend(granted(&i.grants.read_only));
+        let rw_granted = granted(&i.grants.read_write);
+        let mut exec: Vec<PathBuf> = Vec::new();
+        if !rw_granted.is_empty() {
+            exec.extend(home_exec_paths(i.home));
+            exec.extend(EXEC_PREFIXES.iter().map(PathBuf::from));
+            exec.extend(host_paths.toolchain_read.iter().chain(host_paths.path_dirs.iter()).chain(host_paths.exec_dirs.iter()).cloned());
+            if on_disk {
+                let real: Vec<PathBuf> = exec.iter().map(|x| resolve(x)).collect();
+                exec.extend(real);
+            }
+        }
+        let runs_outside = |p: &Path| {
+            let c = resolve(p);
+            exec.iter().any(|x| path_under(p, x) || path_under(x, p) || path_under(&c, x) || path_under(x, &c))
+        };
+        let (rw_code, rw_ok): (Vec<PathBuf>, Vec<PathBuf>) = rw_granted.into_iter().partition(|p| runs_outside(p));
+        home_read.extend(rw_code);
+        home_read.retain(|p| !in_denied(p) && resolves_ok(p));
+        // The device-local list is the user's own: it may open a credential dir.
+        home_read.extend(host_paths.home_read_allow.iter().cloned());
+        let mut home_read: Vec<PathBuf> = home_read.iter().map(|p| resolve(p)).collect();
+        home_read.sort();
+        home_read.dedup();
+        write_extra.extend(rw_ok.into_iter().filter(|p| resolves_ok(p)).map(|p| resolve(&p)));
+        // Never write where reading is denied; what is left, as resolved.
+        write_extra.retain(|w| !deny_read.iter().any(|d| path_under(w, d)));
+        let mut write_extra: Vec<PathBuf> = write_extra.iter().map(|w| resolve(w)).collect();
+        write_extra.sort();
+        write_extra.dedup();
 
         // Egress: provider endpoints plus the chat's MCP hosts; lockdown
         // keeps only the provider (the model must be reachable for the turn
@@ -576,6 +1071,23 @@ impl EnvelopeEnforcer {
                 env.push((key, val));
             }
             env.sort();
+        } else if let Some(home) = i.turn_home {
+            for (key, val) in cli_home::home_env(home) {
+                env.retain(|(x, _)| *x != key);
+                env.push((key, val));
+            }
+            env.sort();
+        }
+        // A per-turn home would hide the toolchains from their own shims
+        // (rustup looks for `$HOME/.rustup`): point their root variables at
+        // the real, read-only dirs.
+        {
+            for (var, dir) in &host_paths.toolchain_env {
+                if !env.iter().any(|(k, _)| k == var.as_str()) {
+                    env.push((var.into(), dir.as_os_str().to_os_string()));
+                }
+            }
+            env.sort();
         }
         // Claude Code mkdirs its own scratch under `/tmp/claude-<uid>`, which
         // the sandbox doesn't let it write; point it at the turn's scratch dir.
@@ -604,6 +1116,8 @@ impl EnvelopeEnforcer {
             read_only,
             deny_read,
             allow_read,
+            home: Some(i.home.to_path_buf()).filter(|h| h.is_absolute() && h.parent().is_some()),
+            home_read,
             write_extra,
             tmp: i.tmp.to_path_buf(),
             egress: egress_plan,
@@ -831,11 +1345,33 @@ pub struct TurnPolicy {
     /// default; ignored while egress isn't open. See
     /// `provider::claude_code::confine`.
     pub cli_user_config: bool,
+    /// The signed path grants for the turn's agent (the workspace's and the
+    /// agent's own, `WorkspaceSandboxSet`).
+    pub grants: hive_core::sandbox::PathGrants,
+    /// Whether the turn may use a shell (`run_command`, a CLI's Bash or
+    /// shell tool, an ACP `execute` request): only when the person who
+    /// started it is the workspace Owner (the device owner in the local
+    /// workspace), or an Owner granted it to the agent. See
+    /// [`crate::author_gate::shell_allowed`].
+    pub shell_allowed: bool,
 }
 
 impl TurnPolicy {
+    /// A turn's policy. The shell starts off (fail closed): the host turns it
+    /// on with [`crate::author_gate::shell_allowed`].
     pub fn new(host: HostKind, envelope: SandboxEnvelope, gate: GatePlan) -> Self {
-        Self { envelope, gate, ..Self::baseline(host) }
+        Self { envelope, gate, shell_allowed: false, ..Self::baseline(host) }
+    }
+
+    /// An agent CLI started outside any turn (the chat summarizer and
+    /// compaction, a chat title, a runtime's Test): its prompt carries other
+    /// members' words, and it only has to answer in text. Read-only, no
+    /// shell, and no egress but its model, whatever tier its runtime args
+    /// name.
+    pub fn outside_turn(host: HostKind) -> Self {
+        let mut envelope = SandboxEnvelope::workspace_default();
+        envelope.egress = hive_core::sandbox::EgressPolicy::Closed;
+        Self { envelope, gate: GatePlan::ReadOnly, ..Self::baseline(host) }
     }
 
     /// Endpoints refused so far in this turn.
@@ -857,6 +1393,13 @@ impl TurnPolicy {
             egress_presets: Vec::new(),
             denials: Default::default(),
             cli_user_config: false,
+            grants: Default::default(),
+            // No turn in scope, no shell: an agent CLI spawned outside a turn
+            // (the chat summarizer, a title, a runtime ping) reads prompts
+            // other members wrote. A command or pre-flight test doesn't read
+            // this; the host sets it per turn, and the person's own approved
+            // command sets it itself.
+            shell_allowed: false,
         }
     }
 }
@@ -905,6 +1448,18 @@ pub fn with_turn_sync<R>(policy: TurnPolicy, f: impl FnOnce() -> R) -> R {
 /// The current turn scope, if any.
 pub fn current_turn() -> Option<Arc<TurnPolicy>> {
     TURN.try_with(Arc::clone).ok()
+}
+
+/// Whether the turn in scope may use a shell; none in scope, none (fail
+/// closed: an agent spawned outside a turn has no Owner behind it).
+pub fn turn_shell_allowed() -> bool {
+    agent_policy().shell_allowed
+}
+
+/// The policy an agent CLI runs under: the turn's, or with no turn in scope
+/// [`TurnPolicy::outside_turn`].
+pub fn agent_policy() -> Arc<TurnPolicy> {
+    current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::outside_turn(HostKind::Desktop)))
 }
 
 /// What a spawn site asks for.
@@ -1088,7 +1643,59 @@ impl Drop for TurnTmp {
 }
 
 fn make_turn_tmp() -> io::Result<TurnTmp> {
-    make_turn_tmp_in(&std::env::temp_dir())
+    make_turn_tmp_in(&turn_root()?)
+}
+
+/// Prefix of the dir that holds this user's turn dirs, under the system
+/// temp dir.
+pub const TURN_ROOT_PREFIX: &str = "ligus-turns-";
+
+/// The dir every turn's scratch dir is made in (`$TMPDIR/ligus-turns-<uid>`,
+/// 0700): one dir the executors deny as a whole, the turn's own scratch dir
+/// excepted, so a turn never reads another's (a concurrent turn's home holds
+/// its CLI's sign-in). Refused when it isn't a real dir this user owns
+/// (someone else made it first in a shared `/tmp`).
+pub fn turn_root() -> io::Result<PathBuf> {
+    // SAFETY: `getuid` has no preconditions and can't fail.
+    #[cfg(unix)]
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
+    let root = canonical(&std::env::temp_dir()).join(format!("{TURN_ROOT_PREFIX}{uid}"));
+    #[cfg(unix)]
+    let b = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut b = std::fs::DirBuilder::new();
+        b.mode(0o700);
+        b
+    };
+    #[cfg(not(unix))]
+    let b = std::fs::DirBuilder::new();
+    match b.create(&root) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+            return Err(refuse(format!("{} isn't a private dir of this user: refusing to make turn dirs in it", root.display())));
+        }
+    }
+    #[cfg(not(unix))]
+    if !meta.is_dir() {
+        return Err(refuse(format!("{} isn't a dir", root.display())));
+    }
+    Ok(root)
+}
+
+/// The dir holding the turn dirs, when `tmp` is a turn dir in one: what the
+/// executors deny besides `tmp` itself.
+pub fn sibling_turns_root(tmp: &Path) -> Option<PathBuf> {
+    let parent = canonical(tmp).parent()?.to_path_buf();
+    parent.file_name().is_some_and(|n| n.to_string_lossy().starts_with(TURN_ROOT_PREFIX)).then_some(parent)
 }
 
 fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
@@ -1158,7 +1765,12 @@ fn pid_alive(pid: u32) -> bool {
 /// otherwise leave its scratch dir, with any CLI config copied into its
 /// per-turn home, behind. Returns how many were removed.
 pub fn sweep_stale_turn_dirs(older_than: std::time::Duration) -> usize {
-    sweep_stale_turn_dirs_in(&std::env::temp_dir(), older_than)
+    // The turn root, and the temp dir itself (turn dirs made before it).
+    let mut n = sweep_stale_turn_dirs_in(&std::env::temp_dir(), older_than);
+    if let Ok(root) = turn_root() {
+        n += sweep_stale_turn_dirs_in(&root, older_than);
+    }
+    n
 }
 
 /// [`sweep_stale_turn_dirs`] under `parent` (tests).
@@ -1227,6 +1839,14 @@ pub fn prepare(spec: SpawnSpec<'_>) -> io::Result<Prepared> {
 
 /// [`prepare`] with an explicit executor (tests).
 pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Result<Prepared> {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    prepare_in(executor, spec, &home, host_paths())
+}
+
+/// [`prepare_with`] for a given home dir and host paths: tests run against a
+/// decoy home, never the user's own files.
+#[doc(hidden)]
+pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path, host: HostPaths) -> io::Result<Prepared> {
     // No OS sandbox: nothing a model drives is spawned here, at any tier. A
     // read-only CLI turn's read tools would reach everything the user can
     // read (hive.db has no at-rest encryption, keys and tokens too), and a
@@ -1241,7 +1861,13 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         };
         return Err(refuse(no_sandbox_refusal(&what)));
     }
-    let policy = current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop)));
+    // No turn in scope: an agent CLI runs read-only with only its model
+    // (`TurnPolicy::outside_turn`); a command or pre-flight test, which a
+    // person started, runs under the baseline.
+    let policy = match spec.purpose {
+        Purpose::Agent(_) => agent_policy(),
+        _ => current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop))),
+    };
     let rt = current_runtime().unwrap_or_default();
     let agent = matches!(spec.purpose, Purpose::Agent(_));
     let provider_key = spec.provider_key.or(rt.provider_key.as_deref().filter(|_| agent));
@@ -1253,8 +1879,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         Purpose::Agent(k) => crate::model_gateway::host().route(k, "", rt.gateway.as_ref()).map_err(refuse)?,
         _ => None,
     };
-    let host = host_paths();
-    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let home = home.to_path_buf();
     // Removed on every early return below, and with the guard when the
     // turn ends or its future is dropped.
     let turn_tmp = make_turn_tmp()?;
@@ -1267,15 +1892,30 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         _ => tmp.clone(),
     };
     // C-9: a CLI agent runs with a throwaway home (its real config read-only).
+    let user_config = policy.cli_user_config && policy.envelope.egress.is_open();
     let cli_home_dir = match spec.purpose {
         Purpose::Agent(k) if k.is_cli_agent() && cli_home::enabled() => {
             let h = tmp.join("home");
-            let user_config = current_turn().is_some_and(|p| p.cli_user_config && p.envelope.egress.is_open());
             cli_home::populate_with(k, &home, &h, user_config)?;
             Some((k, h))
         }
         _ => None,
     };
+    // Phase C: every other child gets a throwaway home too, so the caches
+    // and config it writes (`~/.npm`, `~/.cache/pip`, `~/.cargo/registry`)
+    // are the turn's and the real home stays denied.
+    let turn_home = match (&cli_home_dir, spec.purpose) {
+        (None, Purpose::Agent(k)) if k.is_cli_agent() => None,
+        (None, _) => {
+            let h = tmp.join("home");
+            cli_home::populate_plain(&home, &h)?;
+            Some(h)
+        }
+        _ => None,
+    };
+    // The program's own install dir, when it lives under the home (a binary
+    // the user configured by path, or a PATH launcher that links into one).
+    let extra_home_read: Vec<PathBuf> = program_install_dir(spec.program, &home).into_iter().collect();
     let envelope_args: Vec<String> = Vec::new();
     let arg_strings: Vec<String> = spec.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     let write_capable = match spec.purpose {
@@ -1307,8 +1947,13 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         egress_presets: &policy.egress_presets,
         cli_home: cli_home_dir.as_ref().map(|(_, h)| h.as_path()),
         gateway: gateway.as_ref().map(|g| (g.gateway.name(), g.gateway.api())),
+        turn_home: turn_home.as_deref(),
+        grants: &policy.grants,
+        extra_home_read: &extra_home_read,
+        user_config,
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
+    protected_links_refusal(&plan).map_err(refuse)?;
     let kind = executor.kind();
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
@@ -1320,6 +1965,63 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref())?;
     let cli_home = cli_home_dir.map(|(k, h)| (k, home.clone(), h));
     Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(turn_tmp), kind, plan } })
+}
+
+/// Whether `p` still resolves to itself (the plan holds resolved paths;
+/// the Linux executors skip one swapped for a symlink since).
+pub fn unmoved(p: &Path) -> bool {
+    canonical(p) == p
+}
+
+/// A writable worktree whose protected path (`.git`, a protected dir,
+/// `ligus.config.toml`, `.envrc`) is a symbolic link can't be confined: the
+/// executors keep the path read-only by binding or naming what it resolves
+/// to, so a link out of the worktree (committed to the repo, or in a
+/// checkout an agent wrote before) would bring its target into the turn
+/// (bubblewrap bound `~/.ssh` back that way), and the link itself could be
+/// replaced. Such a turn is refused, saying which path to fix.
+pub fn protected_links_refusal(plan: &EnforcementPlan) -> Result<(), String> {
+    if !plan.worktree_writable {
+        return Ok(());
+    }
+    let links: Vec<String> = plan
+        .read_only
+        .iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+        .map(|p| p.display().to_string())
+        .collect();
+    if links.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing a turn that may write this checkout: its protected path {} is a symbolic link, which the sandbox can't keep \
+         read-only (it would follow the link). Replace the link with the file or directory itself.",
+        links.join(", ")
+    ))
+}
+
+/// Where `program` is installed, when that is under `home`: the directory
+/// of the file it resolves to (through `PATH` and symlinks), or the prefix
+/// above it when that directory is a `bin` (a venv, an npm package). Never
+/// the home itself, and never a dir directly in it: `~/.cargo/bin` stays
+/// `~/.cargo/bin` (`~/.cargo` holds `credentials.toml`), `~/.local/bin`
+/// stays `~/.local/bin`.
+pub fn program_install_dir(program: &OsStr, home: &Path) -> Option<PathBuf> {
+    let p = Path::new(program);
+    let found = if p.components().count() > 1 {
+        Some(p.to_path_buf())
+    } else {
+        std::env::var_os("PATH").and_then(|pv| std::env::split_paths(&pv).map(|d| d.join(p)).find(|c| c.is_file()))
+    }?;
+    let real = std::fs::canonicalize(&found).ok()?;
+    let home = canonical(home);
+    let dir = real.parent()?;
+    let tool_home = |p: &Path| p.parent() == Some(home.as_path());
+    let root = match dir.parent() {
+        Some(up) if dir.file_name().is_some_and(|n| n == "bin") && !tool_home(up) => up,
+        _ => dir,
+    };
+    (root.starts_with(&home) && root != home && !tool_home(root)).then(|| root.to_path_buf())
 }
 
 /// A tokio command for `spec`, confined; the caller sets stdio. Hold the
@@ -1383,6 +2085,156 @@ pub fn sandbox_status() -> SandboxStatus {
     STATUS.get().cloned().unwrap_or_else(|| SandboxStatus::unconfined("not probed".into(), Vec::new()))
 }
 
+/// One line of a turn's effective filesystem policy (`ligus doctor
+/// --sandbox`, Settings, Sandbox).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyEntry {
+    pub path: String,
+    /// `denied`, `read` or `read-write`.
+    pub access: &'static str,
+    pub why: String,
+}
+
+/// What an agent turn of `runtime` may reach on this host, and why.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectivePolicy {
+    pub runtime: String,
+    pub tier: String,
+    pub home: Option<String>,
+    pub entries: Vec<PolicyEntry>,
+    /// The shell rule for this agent's turns.
+    pub shell: String,
+}
+
+/// The effective policy for an agent turn of `kind` (a CLI or an HTTP model
+/// with Ligus's tools, `None` = a command/pre-flight), with this agent's
+/// signed `grants` and shell grant, on this host. Built from the same plan
+/// the executors enforce.
+pub fn effective_policy(kind: Option<ModelProviderKind>, grants: &hive_core::sandbox::PathGrants, shell_granted: bool) -> EffectivePolicy {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let host = host_paths();
+    effective_policy_in(kind, grants, shell_granted, &home, &host, std::env::var_os("PATH").as_deref(), &|k| std::env::var_os(k))
+}
+
+/// [`effective_policy`] for a given home and host (tests).
+pub fn effective_policy_in(
+    kind: Option<ModelProviderKind>,
+    grants: &hive_core::sandbox::PathGrants,
+    shell_granted: bool,
+    home: &Path,
+    host: &HostPaths,
+    path_var: Option<&OsStr>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> EffectivePolicy {
+    let purpose = match kind {
+        Some(k) if k.is_cli_agent() => Purpose::Agent(k),
+        _ => Purpose::Tool,
+    };
+    let wt = PathBuf::from("<the turn's worktree>");
+    let tmp = PathBuf::from("<the turn's scratch dir>");
+    // A CLI that will be signed in by a file in its turn home loses the
+    // login keychain (`EnvelopeEnforcer::plan`): a scratch stand-in holding
+    // just that file's name shows it so. No keychain item is read.
+    let stand_in = match purpose {
+        Purpose::Agent(k) if cli_home::expects_file_sign_in(k, home) => cli_home::sign_in_file(k).and_then(|f| {
+            let d = make_turn_tmp().ok()?;
+            let p = d.path().join(f);
+            std::fs::create_dir_all(p.parent()?).ok()?;
+            std::fs::write(&p, b"").ok()?;
+            Some(d)
+        }),
+        _ => None,
+    };
+    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| stand_in.as_ref().map(|d| d.path().to_path_buf()).unwrap_or_else(|| tmp.join("home")));
+    let plan = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &SandboxEnvelope::workspace_default(),
+        purpose,
+        gate: &GatePlan::Full,
+        worktree: &wt,
+        worktree_is_isolated: true,
+        write_capable: true,
+        tmp: &tmp,
+        home,
+        host_paths: host,
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: &[],
+        cli_home: cli_home.as_deref(),
+        gateway: None,
+        turn_home: if cli_home.is_none() { Some(&tmp) } else { None },
+        grants,
+        extra_home_read: &[],
+        user_config: false,
+    });
+    let runtime_reasons = runtime_home_read(purpose, home, false);
+    let toolchain = toolchain_allow(home, path_var, env, &|p| p.exists());
+    let granted = |l: &[String], p: &Path| l.iter().filter_map(|g| expand_grant(g, home)).any(|x| x == p);
+    let why_read = |p: &Path| -> String {
+        if let Some((_, w)) = runtime_reasons.iter().find(|(x, _)| x == p) {
+            return format!("runtime: {w}");
+        }
+        if let Some((_, w)) = toolchain.read.iter().find(|(x, _)| x == p) {
+            return format!("toolchain: {w}");
+        }
+        if host.home_read_allow.iter().any(|x| x == p) {
+            return "this device's LIGUS_SANDBOX_READ_ALLOW".into();
+        }
+        if granted(&grants.read_only, p) {
+            return "signed grant (read-only)".into();
+        }
+        "toolchain".into()
+    };
+    let mut entries = Vec::new();
+    entries.push(PolicyEntry { path: "<the turn's worktree>".into(), access: "read-write", why: "the turn's own checkout (.git and the protected config read-only)".into() });
+    entries.push(PolicyEntry { path: "<the turn's scratch dir and home>".into(), access: "read-write", why: "TMPDIR and HOME for this turn; removed when it ends".into() });
+    for w in plan.write_extra.iter().filter(|w| **w != tmp) {
+        let why = if granted(&grants.read_write, w) { "signed grant (read-write)" } else { "this device's LIGUS_SANDBOX_WRITE_ALLOW, or the runtime's own state (LIGUS_CLI_HOME=shared)" };
+        entries.push(PolicyEntry { path: w.display().to_string(), access: "read-write", why: why.into() });
+    }
+    for r in &plan.home_read {
+        entries.push(PolicyEntry { path: r.display().to_string(), access: "read", why: why_read(r) });
+    }
+    if let Some(h) = &plan.home {
+        entries.push(PolicyEntry { path: h.display().to_string(), access: "denied", why: "your home dir: everything not listed above".into() });
+    }
+    for d in &plan.deny_read {
+        let why = if host.data_dirs.contains(d) {
+            "Ligus's data (keys, settings, the event log)"
+        } else if d.ends_with("Library/Keychains") && kind.is_some_and(|k| runtime_home_read(Purpose::Agent(k), home, false).iter().any(|(p, _)| p == d)) {
+            "the login keychain: this CLI is signed in by a file in its turn home, so its turns run without it"
+        } else if host.secret_files.contains(d) {
+            "a Ligus secret file"
+        } else {
+            "credentials (never opened by a signed grant)"
+        };
+        entries.push(PolicyEntry { path: d.display().to_string(), access: "denied", why: why.into() });
+    }
+    let shell = if shell_granted {
+        "on: an Owner granted this agent the shell, for every member's turns".to_string()
+    } else if kind.is_some_and(|k| matches!(k, ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Hermes)) {
+        "the workspace Owner's turns only (the device owner's in the local workspace); this runtime can't run without one, so other members' turns are refused".to_string()
+    } else {
+        "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it".to_string()
+    };
+    let status = sandbox_status();
+    EffectivePolicy {
+        runtime: kind.map(|k| format!("{k:?}")).unwrap_or_else(|| "commands and pre-flight tests".into()),
+        tier: status.tier().into(),
+        home: plan.home.as_ref().map(|h| h.display().to_string()),
+        entries,
+        shell,
+    }
+}
+
 /// For tests that need a real sandbox: `true` (skip) when this host has
 /// none, after printing a `SKIPPED` line that the test harness doesn't
 /// capture. With `LIGUS_REQUIRE_SANDBOX=1` (CI on a sandbox-capable runner)
@@ -1403,3 +2255,7 @@ pub fn skip_without_sandbox(test: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod home_tests;
+#[cfg(test)]
+mod review2_tests;

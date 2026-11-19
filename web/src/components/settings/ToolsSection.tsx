@@ -6,6 +6,7 @@ import {
   authorizeMcpServer,
   setMcpOauthClient,
   listMcpServers,
+  inspectMcpServer,
   removeMcpServer,
   setMcpEnabled,
   setMcpBearerToken,
@@ -20,6 +21,11 @@ import { promptDialog } from "@/components/Dialog";
 export function ToolsSection() {
   const qc = useQueryClient();
   const servers = useQuery({ queryKey: ["mcp"], queryFn: listMcpServers });
+  const inspect = useMutation({
+    mutationFn: (id: string) => inspectMcpServer(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["mcp"] }),
+    onError: (e) => toast.error(`Couldn't list the server's tools: ${errMsg(e)}`),
+  });
   const [source, setSource] = useState("");
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => setMcpEnabled(id, enabled),
@@ -199,6 +205,23 @@ export function ToolsSection() {
             {!s.hasBearerToken && s.oauthConnected && (
               <span className="ml-2 text-xs text-ink-soft">· connected</span>
             )}
+            {s.shellTools && s.shellTools.length > 0 && (
+              <span
+                className="ml-2 text-xs font-medium"
+                style={{ color: "var(--hive-danger-ink)" }}
+                title="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
+              >
+                · offers a shell ({s.shellTools.join(", ")}): Owner turns only
+              </span>
+            )}
+            {s.enabled && s.shellTools === null && (
+              <span
+                className="ml-2 text-xs text-ink-soft"
+                title="Until this device has listed the server's tools, turns without the shell don't get it."
+              >
+                · tools not checked yet
+              </span>
+            )}
             {s.secretForOtherUrl && (
               <span
                 className="ml-2 text-xs text-ink-soft"
@@ -231,6 +254,16 @@ export function ToolsSection() {
                 title="Authorize this server in your browser (OAuth)"
               >
                 Connect
+              </button>
+            )}
+            {s.enabled && (
+              <button
+                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                disabled={inspect.isPending}
+                onClick={() => inspect.mutate(s.id)}
+                title="List this server's tools now and flag any that run shell commands"
+              >
+                Check tools
               </button>
             )}
             <Switch

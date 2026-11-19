@@ -83,6 +83,38 @@ function handle(cmd: string, args: Args): unknown {
     case "set_workspace_trust":
     case "trust_workspace":
       return { root: "/mock/repo", items: [] };
+    case "get_sandbox_policy":
+      return {
+        policies: [
+          {
+            runtime: "ClaudeCode",
+            tier: "seatbelt",
+            home: "/Users/mock",
+            entries: [
+              { path: "<the turn's worktree>", access: "read-write", why: "the turn's own checkout (.git and the protected config read-only)" },
+              { path: "<the turn's scratch dir and home>", access: "read-write", why: "TMPDIR and HOME for this turn; removed when it ends" },
+              { path: "/Users/mock/.cargo/bin", access: "read", why: "toolchain: rustup proxies and cargo-installed tools" },
+              { path: "/Users/mock", access: "denied", why: "your home dir: everything not listed above" },
+              { path: "/Users/mock/.ssh", access: "denied", why: "credentials (never opened by a signed grant)" },
+            ],
+            shell: "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it",
+          },
+        ],
+        grants: {},
+        agents: [{ id: "00000000-0000-4000-8000-0000000000a1", name: "coder", runtime: "ClaudeCode" }],
+        canEditPaths: true,
+        canEditShell: true,
+        local: false,
+        appliesHere: true,
+        appliesByDefault: true,
+        appliesSetting: null,
+        appliesWhy: "applied: this device is the workspace Owner's (the default)",
+        changed: false,
+      };
+    case "set_sandbox_grants":
+    case "set_sandbox_grants_here":
+    case "ack_sandbox_grants":
+      return null;
     case "get_dearth_state":
       return fx.dearth(flags.dearth);
     case "get_egress_presets":

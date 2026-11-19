@@ -172,6 +172,14 @@ struct AppState {
     /// button fires it; `send_message` races the turn against it and breaks,
     /// dropping the turn future — which kills any CLI subprocess (kill_on_drop).
     turn_stops: Mutex<HashMap<Uuid, Arc<tokio::sync::Notify>>>,
+    /// Per MCP server id: the tools it listed that run shell commands, as of
+    /// the last time this device listed its tools (no entry: not yet). A
+    /// server with one is offered only to turns that have the shell.
+    mcp_shell_tools: Mutex<HashMap<String, Vec<String>>>,
+    /// MCP servers whose tools couldn't be listed, and when: not listed
+    /// again before a turn for ten minutes (they stay out of turns without
+    /// the shell meanwhile).
+    mcp_probe_failed: Mutex<HashMap<String, std::time::Instant>>,
     /// Live relay connection health, updated by the background sync loop's
     /// error/success arms so the UI can distinguish "Live" from a dead relay /
     /// expired token / wrong key instead of showing "Live" forever.
@@ -459,6 +467,18 @@ struct LiveSettings {
     /// like the presets above, and ignored while egress is restricted.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     cli_user_config_workspaces: std::collections::BTreeSet<String>,
+    /// Per workspace (UUID string): whether this device applies the
+    /// workspace's signed sandbox grants (Settings, Sandbox). No entry = the
+    /// default: on for the workspace Owner's own devices, off for every
+    /// other member's (`hive_runtime::sandbox::grants_here`). Device-local:
+    /// a grant reaches the host of every member that runs the agent.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    sandbox_grants_here: std::collections::HashMap<String, bool>,
+    /// Per workspace: the digest of the signed grants this device's user
+    /// last saw (`hive_runtime::sandbox::grants_fingerprint`), so a change
+    /// shows a notice until they look.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    sandbox_grants_seen: std::collections::HashMap<String, String>,
     /// First-run onboarding finished on this data dir. Lives here, not in the
     /// webview's localStorage, so a fresh (or factory-reset) data dir always
     /// gets the first-run flow, whatever the webview remembers.
@@ -612,6 +632,8 @@ impl Default for LiveSettings {
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
+        sandbox_grants_here: Default::default(),
+        sandbox_grants_seen: Default::default(),
             onboarded: false,
             tour_seen: false,
             passkey_policy: None,
@@ -4991,9 +5013,34 @@ fn list_mcp_servers(state: State<AppState>) -> Result<Vec<McpServerDto>, String>
                 has_bearer_token: settings.mcp_bearer_tokens.contains_key(&s.id),
                 oauth_connected: bound_oauth(s, &settings).is_some_and(|e| !e.access_token.is_empty()),
                 secret_for_other_url: mcp_secret_for_other_url(s, &settings),
+                shell_tools: state.mcp_shell_tools.lock().unwrap().get(&s.id).cloned(),
             }
         })
         .collect())
+}
+
+/// List an enabled MCP server's tools now and return the ones that run shell
+/// commands (Settings → MCP shows them; such a server is offered only to
+/// turns that have the shell).
+#[tauri::command]
+async fn inspect_mcp_server(state: State<'_, AppState>, server_id: String) -> Result<Vec<String>, String> {
+    state.ensure_fresh_mcp_tokens().await;
+    let spec = state.combined_mcp_servers().into_iter().find(|s| s.id == server_id).ok_or_else(|| format!("unknown server {server_id}"))?;
+    if !spec.enabled {
+        return Err("enable the server first: a disabled server is never started".into());
+    }
+    let registry = McpRegistry::new(vec![spec]);
+    let tools = tokio::time::timeout(std::time::Duration::from_secs(20), registry.list_tools(&server_id))
+        .await
+        .map_err(|_| "the server didn't list its tools in time".to_string())?
+        .map_err(|e| e.to_string())?;
+    let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (server_id.clone(), t)).collect();
+    if tagged.is_empty() {
+        state.mcp_shell_tools.lock().unwrap().insert(server_id.clone(), Vec::new());
+    }
+    crate::guards::record_mcp_tools(&state, &tagged);
+    state.mcp_probe_failed.lock().unwrap().remove(&server_id);
+    Ok(state.mcp_shell_tools.lock().unwrap().get(&server_id).cloned().unwrap_or_default())
 }
 
 /// Toggle a server's enabled flag. Enabling is what would launch/connect it;
@@ -6126,6 +6173,9 @@ async fn implement_proposal_targeted(
         let envelope = hive_core::sandbox::envelope_for_session(&session);
         let mut policy = crate::guards::turn_sandbox_policy(&state, &session, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated);
         policy.mcp_ids.clear();
+        // The person's own click on their own device runs exactly the
+        // approved argv; no agent drives it.
+        policy.shell_allowed = true;
         let cmd = cmd.clone();
         let run = tokio::task::spawn_blocking(move || {
             hive_runtime::executor::with_turn_sync(policy, || hive_runtime::review::run_command(&dir, &cmd, std::time::Duration::from_secs(1800)))
@@ -7290,7 +7340,7 @@ async fn summarize(
         .map(|m| format!("{}: {}\n", m.author, m.body))
         .collect();
     let budget = summary_input_budget(runtime.context_window(), token_estimator::estimate_text(instruction));
-    let workspace_root = state.workspace_root.lock().unwrap().clone();
+    let _ = state;
     let mut summary = prior.map(str::to_string);
     for batch in summary_batches(lines, budget) {
         let mut body = String::new();
@@ -7301,11 +7351,14 @@ async fn summarize(
         }
         body.push_str(&batch);
         let turns = vec![ChatTurn::user(body)];
+        // No working dir: a CLI summarizer runs in its own scratch dir, not
+        // the checkout. Its prompt is other members' words, and it only has
+        // to answer in text (`TurnPolicy::outside_turn`).
         let next = dispatch::stream(
             runtime,
             Some(instruction),
             &turns,
-            Some(&workspace_root),
+            None,
             &[],
             SUMMARY_OUTPUT_TOKENS,
             |_| {},
@@ -7615,10 +7668,14 @@ async fn generate_title(
 Reply with ONLY the title — no quotes, no surrounding punctuation, no trailing period, in \
 Title Case.";
     let turns = vec![ChatTurn::user(body)];
-    let workspace_root = state.workspace_root.lock().unwrap().clone();
-    let (turns, workspace_root) = (&turns, &workspace_root);
+    let _ = state;
+    let turns = &turns;
+    // No working dir: a CLI titler runs in its own scratch dir, not the
+    // checkout. A title syncs to every member, and the message it is made
+    // from may be another member's, so it must not be able to read a file
+    // there into it.
     with_utility_fallback(utility, runtime.clone(), UTILITY_JOB_TIMEOUT, |rt: ResolvedRuntime| async move {
-        let raw = dispatch::stream(&rt, Some(system), turns, Some(workspace_root), &[], 32, |_| {}, |_| {})
+        let raw = dispatch::stream(&rt, Some(system), turns, None, &[], 32, |_| {}, |_| {})
             .await
             .ok()?;
         let title = sanitize_title(&raw);
@@ -7756,6 +7813,7 @@ fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 async fn mcp_tool_set(
     state: &State<'_, AppState>,
     egress: &hive_core::sandbox::EgressPolicy,
+    shell: bool,
 ) -> Option<(Vec<Value>, McpToolExecutor)> {
     // Renew any near-expiry remote-server tokens before we build the registry.
     state.ensure_fresh_mcp_tokens().await;
@@ -7765,6 +7823,10 @@ async fn mcp_tool_set(
     registry.enabled().next()?;
 
     let tagged = registry.list_all_tools().await;
+    crate::guards::record_mcp_tools(state, &tagged);
+    // A tool that runs shell commands is a shell: a turn without the shell
+    // (Phase C, the Owner's) doesn't get it.
+    let tagged: Vec<_> = tagged.into_iter().filter(|(_, t)| shell || !hive_runtime::is_shell_tool(&t.name)).collect();
     if tagged.is_empty() {
         return None;
     }
@@ -7870,11 +7932,12 @@ async fn try_tool_loop(
     turns: &[ChatTurn],
     reply_to: Option<Uuid>,
     egress: &hive_core::sandbox::EgressPolicy,
+    shell: bool,
 ) -> Result<Option<TurnOutcome>, String> {
     let Some(api_key) = responder.runtime.api_key.clone() else {
         return Ok(None);
     };
-    let mcp = mcp_tool_set(state, egress).await;
+    let mcp = mcp_tool_set(state, egress, shell).await;
     // The Ligus tools ride the same loop (D.3.3), with or without MCP servers.
     let ligus_offered = hive_runtime::ligus_mcp::offered_for(&responder.runtime, !egress.is_open());
     if mcp.is_none() && !ligus_offered {
@@ -8181,7 +8244,7 @@ async fn run_prepared_turn_inner(
     // The workspace's sandbox envelope for this turn (isolation, egress,
     // redaction, human gate), enforced below for whatever runtime answers.
     let envelope = crate::guards::turn_envelope(session);
-    let enforcement = crate::guards::enforcement_for(state, responder.runtime.provider, &envelope);
+    let enforcement = crate::guards::enforcement_for(state, responder.runtime.provider, &envelope, true);
     if let Some(reason) = &enforcement.refuse {
         crate::guards::record_egress_refusal(state, workspace_id, session_id, responder.runtime.provider);
         return Err(reason.clone());
@@ -8196,24 +8259,42 @@ async fn run_prepared_turn_inner(
     // An agent's message (a hand-off, an @mention cascade) has no role of its
     // own: it resolves to the lowest of the humans behind its chain, and a
     // workflow stage to the lower of its poster and the run's initiator.
-    let gate_plan = {
+    // Phase C: the shell is the Owner's. On when every person behind the turn
+    // is the workspace Owner (the device owner in the local workspace), or an
+    // Owner granted it to this agent (signed sandbox grants); otherwise the
+    // CLI runs without its shell tool, HTTP models get no `run_command`, and
+    // a CLI that can't drop its shell is refused.
+    let (gate_plan, shell_allowed, grants) = {
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
-        let author_role = {
+        // The signed grants apply only where this device chose to (by
+        // default on the workspace Owner's own devices; Settings, Sandbox).
+        let grants_setting = crate::guards::grants_setting(state, workspace_id);
+        let (author_role, shell_role, grants) = {
             let svc = state.service.lock().unwrap();
             // This device's own user is recognized from the signed envelopes,
             // never from the payload's self-asserted `actor_identity`.
-            match trigger {
-                Some(m) => svc.trigger_author_role(session_id, m.id).ok().flatten(),
-                None => None,
-            }
+            let (a, s) = match trigger {
+                Some(m) => (svc.trigger_author_role(session_id, m.id).ok().flatten(), svc.trigger_shell_role(session_id, m.id).ok().flatten()),
+                None => (None, None),
+            };
+            (a, s, svc.sandbox_grants_here(workspace_id, grants_setting).0)
         };
         let mut args = responder.runtime.args.clone();
-        hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role)
+        let plan = hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role);
+        let shell = hive_runtime::author_gate::shell_allowed(shell_role, responder.agent_id.is_some_and(|id| grants.shell_granted(id)));
+        (plan, shell, grants)
     };
     if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
         let mut svc = state.service.lock().unwrap();
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason.clone());
+    }
+    if !shell_allowed {
+        if let Err(reason) = hive_runtime::author_gate::shell_free_args(responder.runtime.provider, &responder.runtime.args) {
+            let mut svc = state.service.lock().unwrap();
+            let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
+            return Err(reason);
+        }
     }
     // No OS sandbox on this host: a CLI agent turn is refused at any tier
     // (its own tools would read this device's data unconfined).
@@ -8222,6 +8303,15 @@ async fn run_prepared_turn_inner(
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason);
     }
+    // An MCP server that offers a shell (`bash`, `exec`, `run_command`, ...)
+    // is a shell: a turn without the shell gets only servers this device has
+    // seen list no such tool (it lists the others' tools first).
+    let enforcement = if shell_allowed || !responder.runtime.provider.is_cli_agent() {
+        enforcement
+    } else {
+        crate::guards::probe_mcp_shells(state, &envelope.egress).await;
+        crate::guards::enforcement_for(state, responder.runtime.provider, &envelope, false)
+    };
     let tools_allowed = gate_plan.allows_tools();
 
     // If MCP tools are enabled and the responder runs on Anthropic, take the
@@ -8229,7 +8319,7 @@ async fn run_prepared_turn_inner(
     // failure we fall through to streaming.
     if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, shell_allowed)
                 .await?
         {
             return Ok(outcome);
@@ -8245,7 +8335,7 @@ async fn run_prepared_turn_inner(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state, &envelope.egress).await
+        mcp_tool_set(state, &envelope.egress, shell_allowed).await
     } else {
         None
     };
@@ -8255,7 +8345,7 @@ async fn run_prepared_turn_inner(
     let (builtin_on, builtin_write_in_place, builtin_run_command) = {
         let s = state.settings.lock().unwrap();
         // `run_command` is a shell: off whenever the envelope closes egress.
-        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
+        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command && shell_allowed)
     };
     // Built-in file tools (and run_command) need this host's OS sandbox:
     // without one an HTTP model gets no local tools, only chat (stdio MCP
@@ -8554,12 +8644,20 @@ async fn run_prepared_turn_inner(
         let mut rt = responder.runtime.clone();
         // Below the floor: the CLI's read-only tier (Refuse returned above).
         let _ = hive_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
+        // Without the shell: capped at accepting edits, the shell tool denied
+        // (a CLI that can't drop it was refused above).
+        let _ = hive_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed);
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
     let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    sandbox_policy.shell_allowed = shell_allowed;
+    if !shell_allowed {
+        sandbox_policy.mcp_ids.retain(|id| crate::guards::mcp_known_shell_free(state, id));
+    }
+    sandbox_policy.grants = grants.paths_for(responder.agent_id);
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
@@ -11534,6 +11632,8 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
+        sandbox_grants_here: Default::default(),
+        sandbox_grants_seen: Default::default(),
         onboarded: false,
         tour_seen: false,
         passkey_policy: None,
@@ -11699,6 +11799,8 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         canceled_runs: Mutex::new(std::collections::HashSet::new()),
         ollama_pulls: Mutex::new(HashMap::new()),
         turn_stops: Mutex::new(HashMap::new()),
+        mcp_shell_tools: Mutex::new(HashMap::new()),
+        mcp_probe_failed: Mutex::new(HashMap::new()),
         conn_health: Mutex::new(ConnHealth::default()),
         active_membership: Mutex::new(None),
         app_handle: app.clone(),
@@ -14654,6 +14756,11 @@ pub fn run() {
             guards::list_guard_signals,
             guards::get_dearth_state,
             guards::get_egress_presets,
+            guards::get_sandbox_policy,
+            guards::set_sandbox_grants,
+            guards::set_sandbox_grants_here,
+            guards::ack_sandbox_grants,
+            inspect_mcp_server,
             guards::set_workspace_egress_presets,
             guards::get_workspace_cli_user_config,
             guards::set_workspace_cli_user_config,

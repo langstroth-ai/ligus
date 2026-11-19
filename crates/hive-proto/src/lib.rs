@@ -616,6 +616,12 @@ pub struct McpServerDto {
     /// token again or reconnect to use it here.
     #[serde(default)]
     pub secret_for_other_url: bool,
+    /// The tools this server listed that run shell commands (`bash`, `exec`,
+    /// `run_command`, ...), from the last time this device listed its tools;
+    /// `None` until it has. Such a server is offered only to turns that have
+    /// the shell (the workspace Owner's, or an agent the Owner granted it).
+    #[serde(default)]
+    pub shell_tools: Option<Vec<String>>,
 }
 
 /// A reference-material vault source mounted in the workspace.

@@ -39,7 +39,7 @@ doesn't allow is blocked.
 
 - **default** — read-only; edits and commands are blocked.
 - **acceptEdits** — file edits are allowed; commands are blocked.
-- **runCommands** — edits plus shell commands (build, test, git).
+- **runCommands** — edits plus shell commands (build, test, git). The shell is only used in turns the workspace Owner starts, or by an agent an Owner granted it ([the shell is the Owner's](security.md#owner-only-shell)); other members' turns run at most at accept edits.
 - **bypassPermissions** — everything, without asking (use only in a
   sandbox you trust).
 

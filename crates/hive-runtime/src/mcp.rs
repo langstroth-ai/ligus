@@ -155,6 +155,44 @@ pub fn parse_tools(result: &Value) -> Vec<McpTool> {
         .unwrap_or_default()
 }
 
+/// Whether an MCP tool, by its name, runs shell commands (`bash`, `shell`,
+/// `exec`, `run_command`, `terminal`, ...). A server offering one is a shell
+/// as much as `run_command` is, so a turn without the shell (Phase C, the
+/// Owner's) doesn't get it. Names only: a server can always call a shell
+/// something else, so this flags the common ones, it doesn't prove absence.
+pub fn is_shell_tool(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    let words: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    const WORDS: &[&str] = &["bash", "sh", "zsh", "fish", "shell", "powershell", "pwsh", "cmd", "terminal", "exec", "subprocess", "repl"];
+    if words.iter().any(|w| WORDS.contains(w)) {
+        return true;
+    }
+    // Joined forms (`runcommand`, `executecommand`, `runshell`, `shellexec`).
+    let joined: String = words.concat();
+    [
+        "runcommand",
+        "runcmd",
+        "executecommand",
+        "execcommand",
+        "runshell",
+        "shellexec",
+        "runterminal",
+        "terminalcommand",
+        "runscript",
+        "runprocess",
+        "startprocess",
+    ]
+    .iter()
+    .any(|f| joined == *f || joined.starts_with(f) || joined.ends_with(f))
+        || joined == "execute"
+        || ["bash", "shell", "terminal", "powershell"].iter().any(|f| joined.contains(f))
+}
+
+/// The tools in `tools` that run shell commands ([`is_shell_tool`]).
+pub fn shell_tool_names(tools: &[McpTool]) -> Vec<String> {
+    tools.iter().filter(|t| is_shell_tool(&t.name)).map(|t| t.name.clone()).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Registry + gate
 // ---------------------------------------------------------------------------
@@ -675,5 +713,26 @@ mod tests {
         ]);
         let ids: Vec<_> = reg.enabled().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["a"]);
+    }
+}
+
+#[cfg(test)]
+mod shell_tool_tests {
+    use super::is_shell_tool;
+
+    /// Review: an MCP server whose tool runs shell commands is a shell, and
+    /// a turn without the shell must not get it. Flag the common names.
+    #[test]
+    fn shell_tools_are_flagged_by_name() {
+        for n in [
+            "bash", "Bash", "shell", "run_shell", "exec", "exec_command", "execute_command", "run_command", "runCommand", "terminal",
+            "run_in_terminal", "terminal_execute", "powershell", "cmd", "shell_exec", "start_process", "run_script", "subprocess_run",
+            "execute",
+        ] {
+            assert!(is_shell_tool(n), "{n}");
+        }
+        for n in ["read_file", "list_issues", "search", "create_issue", "get_weather", "fetch", "query_db", "write_file", "commit", "execute_query", "spawn_agent"] {
+            assert!(!is_shell_tool(n), "{n}");
+        }
     }
 }
