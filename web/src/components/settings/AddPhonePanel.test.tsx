@@ -17,7 +17,7 @@ vi.mock("@/components/Toast", () => ({
 const fresh = {
   deviceId: "11111111-2222-3333-4444-555555555555",
   label: "Ana's iPhone",
-  fingerprint: "ABCD-EF01-2345",
+  fingerprint: "ABCD-EF01-2345-6789-ABCD",
   standing: "new" as const,
   problem: null,
   workspaceId: "ws",
@@ -33,13 +33,13 @@ describe("Add this phone", () => {
     const box = screen.getByLabelText("Phone code");
     await userEvent.click(box);
     await userEvent.paste("ligusphone1:abc");
-    expect(await screen.findByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345");
+    expect(await screen.findByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345-6789-ABCD");
     const add = screen.getByRole("button", { name: "Add this phone" });
     expect(add).toBeDisabled();
     await userEvent.click(screen.getByLabelText(/same fingerprint/));
     expect(add).toBeEnabled();
     await userEvent.click(add);
-    await waitFor(() => expect(ipc.certifyPhoneCode).toHaveBeenCalledWith("ligusphone1:abc", "ABCD-EF01-2345"));
+    await waitFor(() => expect(ipc.certifyPhoneCode).toHaveBeenCalledWith("ligusphone1:abc", "ABCD-EF01-2345-6789-ABCD", "ws"));
     expect(onDone).toHaveBeenCalled();
   });
 
@@ -60,7 +60,7 @@ describe("Add this phone", () => {
   it("never shows (or certifies against) the answer for a code that was replaced", async () => {
     // The first paste's check answers late, after a second code was pasted.
     let late: (v: typeof fresh) => void = () => {};
-    const other = { ...fresh, label: "Mallory's phone", fingerprint: "9999-9999-9999", deviceId: "99999999-9999-9999-9999-999999999999" };
+    const other = { ...fresh, label: "Mallory's phone", fingerprint: "9999-9999-9999-9999-9999", deviceId: "99999999-9999-9999-9999-999999999999" };
     vi.mocked(ipc.inspectPhoneCode)
       .mockImplementationOnce(() => new Promise((r) => (late = r)))
       .mockResolvedValueOnce(fresh);
@@ -70,10 +70,10 @@ describe("Add this phone", () => {
     await userEvent.paste("ligusphone1:first");
     await userEvent.clear(box);
     await userEvent.paste("ligusphone1:second");
-    expect(await screen.findByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345");
+    expect(await screen.findByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345-6789-ABCD");
     late(other);
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.getByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345");
+    expect(screen.getByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345-6789-ABCD");
     expect(screen.queryByText("Mallory's phone")).toBeNull();
   });
 });

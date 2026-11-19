@@ -64,18 +64,68 @@ pub(crate) fn inspect_phone_code(state: State<AppState>, code: String) -> Result
     })
 }
 
-/// Certify the phone in the active workspace. Blocks on the person's passkey
-/// (the presence sheet); refused without it.
-#[tauri::command(async)]
-pub(crate) fn certify_phone_code(state: State<AppState>, code: String, fingerprint: String) -> Result<String, String> {
-    let c = decode(&code)?;
-    // The sheet showed a fingerprint; certify only the key it showed.
+/// Refuse to certify anything but what the sheet showed: the key whose
+/// fingerprint the person compared, into the workspace the preview was for
+/// (the active one can change between the preview and the passkey).
+fn confirm_matches_preview(
+    c: &PhoneCode,
+    fingerprint: &str,
+    previewed_ws: &str,
+    active_ws: uuid::Uuid,
+) -> Result<(), String> {
     if !fingerprint.trim().eq_ignore_ascii_case(&c.fingerprint()) {
         return Err("The code changed since you compared its fingerprint. Check it again.".into());
     }
+    if uuid::Uuid::parse_str(previewed_ws.trim()).ok() != Some(active_ws) {
+        return Err("The workspace changed since you checked this code. Check it again in the workspace you want the phone in.".into());
+    }
+    Ok(())
+}
+
+/// Certify the phone in the workspace its preview was for, which must still
+/// be the active one. Blocks on the person's passkey (the presence sheet);
+/// refused without it.
+#[tauri::command(async)]
+pub(crate) fn certify_phone_code(
+    state: State<AppState>,
+    code: String,
+    fingerprint: String,
+    workspace_id: String,
+) -> Result<String, String> {
+    let c = decode(&code)?;
     let ws = state.active_workspace_id();
+    confirm_matches_preview(&c, &fingerprint, &workspace_id, ws)?;
     let mut svc = state.service.lock().unwrap();
     let id = svc.certify_phone_code(ws, &c).map_err(|e| e.to_string())?;
     tracing::info!(target: "identity", device = %id, label = %c.label, "certified a phone as this account's");
     Ok(id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Only the key's fingerprint matters here, not the signature.
+    fn code() -> PhoneCode {
+        let key: Vec<u8> = std::iter::once(4u8).chain((0..64).map(|i| i as u8)).collect();
+        PhoneCode::new_signed(uuid::Uuid::new_v4(), key, "Ana's iPhone", |_| [0u8; 64])
+    }
+
+    #[test]
+    fn certify_refuses_another_workspace_than_the_preview() {
+        let c = code();
+        let (shown, active) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        assert!(confirm_matches_preview(&c, &c.fingerprint(), &shown.to_string(), shown).is_ok());
+        let err = confirm_matches_preview(&c, &c.fingerprint(), &shown.to_string(), active).unwrap_err();
+        assert!(err.contains("workspace changed"), "{err}");
+        assert!(confirm_matches_preview(&c, &c.fingerprint(), "not-a-uuid", active).is_err());
+    }
+
+    #[test]
+    fn certify_refuses_another_fingerprint() {
+        let c = code();
+        let ws = uuid::Uuid::new_v4();
+        assert!(confirm_matches_preview(&c, &c.fingerprint().to_lowercase(), &ws.to_string(), ws).is_ok());
+        assert!(confirm_matches_preview(&c, "0000-0000-0000-0000-0000", &ws.to_string(), ws).is_err());
+    }
 }

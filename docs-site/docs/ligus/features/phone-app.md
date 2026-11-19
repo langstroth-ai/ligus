@@ -32,14 +32,16 @@ one of **your** devices:
 
 1. In the app, open **Settings > This phone**. It shows the phone's code
    (`ligusphone1:…`, as a QR code and as text to copy) and its fingerprint
-   (`XXXX-XXXX-XXXX`).
+   (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four).
 2. On your desktop, open **Settings > Profile > My devices > Add this phone**
    and paste the code (copy it on the phone and paste on the Mac with the
    shared clipboard, or scan the QR code with the phone's camera app and
    paste what it reads).
 3. Check that the fingerprint the desktop shows is the one on the phone,
    tick the box, and choose **Add this phone**. Your passkey confirms it;
-   the passkey sheet names the same fingerprint.
+   the passkey sheet names the same fingerprint. The phone is added to the
+   workspace you checked the code in: if you switch workspaces before
+   confirming, the desktop refuses and asks you to check the code again.
 
 A phone code can't take over a device: a code naming a device id that is
 already one of the workspace's desktops or boxes, or a phone with another

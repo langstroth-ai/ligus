@@ -1107,8 +1107,8 @@ export const inspectPhoneCode = (code: string) => invoke<PhoneCodeDto>("inspect_
 /// "Add this phone": certify the phone as one of your devices (the phone
 /// tier). Opens the passkey sheet; refused without your passkey. Returns the
 /// certified device id.
-export const certifyPhoneCode = (code: string, fingerprint: string) =>
-  invoke<string>("certify_phone_code", { code, fingerprint });
+export const certifyPhoneCode = (code: string, fingerprint: string, workspaceId: string) =>
+  invoke<string>("certify_phone_code", { code, fingerprint, workspaceId });
 /// Hosts naming you as their owner that you haven't approved yet.
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.

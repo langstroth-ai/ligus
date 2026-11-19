@@ -36,7 +36,9 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
     if (!preview) return;
     setBusy(true);
     try {
-      await certifyPhoneCode(code, preview.fingerprint);
+      // Certify only the key whose fingerprint was compared, into the
+      // workspace the preview was for (refused if the active one changed).
+      await certifyPhoneCode(code, preview.fingerprint, preview.workspaceId);
       toast.success(`${preview.label || "Your phone"} is now one of your devices. Pair it with your box from the app.`);
       onDone();
     } catch (e) {
