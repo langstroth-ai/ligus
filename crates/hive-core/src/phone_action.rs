@@ -350,7 +350,8 @@ pub struct CheckedPhoneAction {
 /// * `withdrawApply`: of `requestId` for `proposalId`;
 /// * `proposeMemory`: a memory proposal of exactly `op` and `rationale`, as
 ///   the person (no agent proposer), sourced from `chatId` (the proposal id
-///   is the box's).
+///   is the box's; a create's new entry is named by it, whatever entry id
+///   the phone sent; the box may record the chat's egress).
 ///
 /// Anything else (another kind, workspace, chat, person or device, a field
 /// the phone didn't ask for) is refused.
@@ -436,14 +437,25 @@ pub fn check_phone_action_preimage(
             PhoneAction::ProposeMemory { chat_id, op, rationale },
             SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(mp) },
         ) => {
-            let source = crate::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None };
+            use crate::memory::MemoryOp;
             // The proposal is known by the event that files it
             // (`memory::bound_event_id`); a draft that isn't would be denied.
             if mp.proposal_id != p.event_id {
                 return Err(mismatch);
             }
             let p = mp;
-            if p.op != *op || p.rationale != *rationale || !p.proposer.is_empty() || p.source != source {
+            // A new entry is named by the proposal (the box picks both): the
+            // phone's own entry id for a create is not used.
+            let same_op = match (op, &p.op) {
+                (MemoryOp::Create { title, body, tags, .. }, MemoryOp::Create { entry_id, title: t, body: b, tags: g }) => {
+                    *entry_id == p.proposal_id && (title, body, tags) == (t, b, g)
+                }
+                (asked, drafted) => asked == drafted,
+            };
+            // The source is the phone's chat. The box may record that chat's
+            // egress: it can only narrow which turns read the note.
+            let source_ok = p.source.chat_id == Some(*chat_id) && p.source.message_id.is_none() && p.source.turn_id.is_none();
+            if !same_op || p.rationale != *rationale || !p.proposer.is_empty() || !source_ok {
                 return Err(mismatch);
             }
             out.memory_proposal_id = Some(p.proposal_id);

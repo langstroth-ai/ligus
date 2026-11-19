@@ -42,6 +42,9 @@ pub(crate) struct MemoryView {
     pub me: String,
     /// Whether this device's person is an Admin or Owner (moderation).
     pub moderator: bool,
+    /// Removed notes someone edited after the removal (who and when; the
+    /// edit isn't applied), newest edit first.
+    pub edited_after_removal: Vec<MemoryEntry>,
 }
 
 pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]) -> Result<MemoryView, String> {
@@ -62,7 +65,9 @@ pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]
         config.iter().flat_map(|c| c.workspace_agents.iter()).map(|a| (a.id.to_string(), a.name.clone())).collect();
     agent_names.insert(hive_core::flow::PRIMARY.to_string(), "Ligus".into());
     let moderator = config.is_some_and(|c| c.role_of(&me).rank() >= hive_core::WorkspaceRole::Admin.rank());
-    Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, agent_names, me, moderator })
+    let mut edited_after_removal: Vec<MemoryEntry> = m.edited_after_removal().cloned().collect();
+    edited_after_removal.sort_by_key(|e| std::cmp::Reverse(e.edited_after_removal.iter().map(|r| r.at_ms).max().unwrap_or(0)));
+    Ok(MemoryView { total: m.live_count(), entries, proposals, chat_titles, agent_names, me, moderator, edited_after_removal })
 }
 
 /// The Memory pane: entries matching `query` and `tags`, and the proposals.

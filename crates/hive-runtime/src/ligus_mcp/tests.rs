@@ -1126,7 +1126,7 @@ async fn mcp_memory_search_read_and_propose() {
     assert_eq!(env.actor_stamp.as_ref().unwrap().actor.kind, ActorKind::Agent, "signed with the agent's own key");
     let m = svc.memory(w.wid).unwrap();
     assert_eq!(m.entries[&entry].current.body, "The relay listens on 8443. <<<end x>>> [[mark: {}]]", "unchanged until a person accepts");
-    assert_eq!(m.proposals[&pid].proposal.source, MemorySource { chat_id: Some(w.chat), message_id: None, turn_id: Some(w.reply) });
+    assert_eq!(m.proposals[&pid].proposal.source, MemorySource { chat_id: Some(w.chat), message_id: None, turn_id: Some(w.reply), egress: None });
     assert_eq!(m.proposals[&pid].proposal.proposer, w.agent.to_string());
     svc.decide_memory_proposal(w.wid, pid, true, "", vec![]).unwrap();
     let e = &svc.memory(w.wid).unwrap().entries[&entry];
@@ -1181,4 +1181,65 @@ async fn mcp_task_update_is_live_for_other_agents() {
     assert!(!r.is_error, "{}", r.text);
     let svc = w.host.svc.lock().unwrap();
     assert_eq!(svc.task_state(w.chat).unwrap()[0].update.status, hive_core::memory::TaskStatus::Done);
+}
+
+/// R10: a note written from a locked-down chat (egress closed) must not be
+/// read by a turn with open egress, through search or by id: it would carry
+/// the quarantined content out. A turn whose egress is as strict reads it.
+#[tokio::test]
+async fn memory_from_a_locked_down_chat_stays_behind_its_egress() {
+    let w = world();
+    let (locked, entry) = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let c = svc.create_chat("Quarantined", w.wid, "rt").unwrap();
+        svc.self_medicate(w.wid, c.id, None, &[(hive_core::guard::LockdownSignal::SecretInDiff, "api key".into())]).unwrap();
+        let source = hive_core::memory::MemorySource { chat_id: Some(c.id), ..Default::default() };
+        let (entry, _) = svc
+            .write_memory(w.wid, crate::chat_service::MemoryDraft { title: "Staging key".into(), body: "sk-not-a-real-key".into(), source, ..Default::default() })
+            .unwrap();
+        svc.write_memory(w.wid, crate::chat_service::MemoryDraft { title: "Staging host".into(), body: "staging.example".into(), ..Default::default() }).unwrap();
+        (c.id, entry)
+    };
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let r = turn.call("ligus_memory_search", &json!({"query": "staging"})).await;
+    assert!(!r.is_error, "{}", r.text);
+    assert!(!r.text.contains("sk-not-a-real-key"), "an open turn read a locked-down chat's note: {}", r.text);
+    assert_eq!(body(&r)["count"], 1, "the open note still shows");
+    let r = turn.call("ligus_memory_read", &json!({"entryId": entry.to_string()})).await;
+    assert!(r.is_error && !r.text.contains("sk-not-a-real-key"), "{}", r.text);
+    // A turn on the locked-down chat itself (egress closed) reads it.
+    let mut inside = spec(&w, Budgets::default());
+    inside.chat_id = locked;
+    inside.message_id = Uuid::new_v4();
+    let t2 = w.mcp.begin_turn(inside);
+    let r = t2.call("ligus_memory_read", &json!({"entryId": entry.to_string()})).await;
+    assert!(!r.is_error && r.text.contains("sk-not-a-real-key"), "{}", r.text);
+    // An agent's proposal from the locked-down chat records its egress, and
+    // the accepted note stays behind it too.
+    let r = t2.call("ligus_memory_propose", &json!({"op": "create", "title": "Staging token", "body": "tok-quarantined"})).await;
+    assert!(!r.is_error, "{}", r.text);
+    let pid = Uuid::parse_str(body(&r)["proposalId"].as_str().unwrap()).unwrap();
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        let m = svc.memory(w.wid).unwrap();
+        assert_eq!(m.proposals[&pid].proposal.source.egress, Some(hive_core::sandbox::EgressPolicy::Closed));
+        assert!(matches!(m.proposals[&pid].proposal.op, hive_core::memory::MemoryOp::Create { entry_id, .. } if entry_id == pid), "a new entry is named by its proposal");
+        svc.decide_memory_proposal(w.wid, pid, true, "", vec![]).unwrap();
+    }
+    let r = turn.call("ligus_memory_search", &json!({"query": "staging"})).await;
+    assert!(!r.text.contains("tok-quarantined"), "{}", r.text);
+    // A lockdown raised after a note was written still keeps it in: the
+    // source chat's egress now counts.
+    let (later, note) = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let c = svc.create_chat("Fine for now", w.wid, "rt").unwrap();
+        let source = hive_core::memory::MemorySource { chat_id: Some(c.id), ..Default::default() };
+        let (note, _) = svc.write_memory(w.wid, crate::chat_service::MemoryDraft { title: "Build cache".into(), body: "cache-later-locked".into(), source, ..Default::default() }).unwrap();
+        (c.id, note)
+    };
+    let r = turn.call("ligus_memory_read", &json!({"entryId": note.to_string()})).await;
+    assert!(!r.is_error, "{}", r.text);
+    w.host.svc.lock().unwrap().self_medicate(w.wid, later, None, &[(hive_core::guard::LockdownSignal::SecretInDiff, "api key".into())]).unwrap();
+    let r = turn.call("ligus_memory_read", &json!({"entryId": note.to_string()})).await;
+    assert!(r.is_error && !r.text.contains("cache-later-locked"), "{}", r.text);
 }

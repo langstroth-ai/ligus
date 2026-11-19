@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use crate::flow::{FlowRecord, FlowState};
 use crate::identity::ActorKind;
+use crate::sandbox::EgressPolicy;
 
 /// Bounds (fold rules; see the design, section 3).
 pub const MAX_TITLE_CHARS: usize = 120;
@@ -34,6 +35,19 @@ pub const MAX_TAGS: usize = 8;
 pub const MAX_TAG_CHARS: usize = 32;
 pub const MAX_LIVE_ENTRIES: usize = 1000;
 pub const MAX_ENTRY_IDS: usize = 10_000;
+/// Entry ids one person may ever use (creates, theirs or accepted by them),
+/// so no one person can use up [`MAX_ENTRY_IDS`] for the workspace.
+pub const MAX_ENTRY_IDS_PER_AUTHOR: usize = 2_000;
+/// Edits kept on a tombstone (made from a version their author saw, sorting
+/// after the removal); a fifth is refused.
+pub const MAX_EDITS_AFTER_REMOVAL: usize = 4;
+/// A recorded egress allow-list: at most this many MCP server ids of at most
+/// this many characters.
+pub const MAX_EGRESS_SERVERS: usize = 32;
+pub const MAX_EGRESS_ID_CHARS: usize = 128;
+/// A task-state slot signed further than this ahead of the reader's clock is
+/// not active (read time; a forward-dated slot would otherwise never expire).
+pub const MAX_TASK_CLOCK_SKEW_MS: i64 = 5 * 60_000;
 pub const MAX_REVISIONS_REMEMBERED: usize = 32;
 pub const MAX_CONFLICTS: usize = 4;
 pub const MAX_OPEN_PROPOSALS: usize = 256;
@@ -70,6 +84,11 @@ pub struct MemorySource {
     pub message_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<Uuid>,
+    /// The source chat's egress policy when the note was written (the
+    /// writer's record; left out when open). A note is shown to a turn only
+    /// when that turn's egress is at least as strict ([`egress_allows`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<EgressPolicy>,
 }
 
 impl MemorySource {
@@ -307,6 +326,15 @@ pub struct MemoryEntry {
     /// The tombstone, once removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<MemoryRevision>,
+    /// Edits that sorted after the removal (who, when, from which version;
+    /// never their text, which stays in the log): shown as "edited after
+    /// removal" instead of being refused silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edited_after_removal: Vec<MemoryRevision>,
+    /// The strictest egress any of its revisions was written under (`None`:
+    /// the workspace default). Only ever tightens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<EgressPolicy>,
 }
 
 impl MemoryEntry {
@@ -362,11 +390,18 @@ pub struct MemoryState {
     pub entries: BTreeMap<Uuid, MemoryEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub proposals: BTreeMap<Uuid, ProposalState>,
+    /// Entry ids each person has used ([`MAX_ENTRY_IDS_PER_AUTHOR`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ids_by_author: BTreeMap<String, u32>,
 }
 
 impl MemoryState {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.proposals.is_empty()
+    }
+    /// Tombstones carrying edits that sorted after their removal.
+    pub fn edited_after_removal(&self) -> impl Iterator<Item = &MemoryEntry> {
+        self.entries.values().filter(|e| !e.live() && !e.edited_after_removal.is_empty())
     }
     pub fn live(&self) -> impl Iterator<Item = &MemoryEntry> {
         self.entries.values().filter(|e| e.live())
@@ -397,13 +432,19 @@ impl TaskSlot {
     pub fn expires_at_ms(&self) -> i64 {
         self.at_ms.saturating_add(self.update.ttl())
     }
-    /// Working, blocked or waiting, and not past its lifetime.
-    pub fn active(&self, now_ms: i64) -> bool {
-        !self.update.status.is_final() && now_ms < self.expires_at_ms()
+    /// Signed further ahead of `now_ms` than clocks drift: such a slot
+    /// would otherwise stay active for as long as it was forward-dated.
+    pub fn from_the_future(&self, now_ms: i64) -> bool {
+        self.at_ms > now_ms.saturating_add(MAX_TASK_CLOCK_SKEW_MS)
     }
-    /// Past its lifetime (whatever its status).
+    /// Working, blocked or waiting, not past its lifetime, and not dated
+    /// ahead of the reader's clock.
+    pub fn active(&self, now_ms: i64) -> bool {
+        !self.update.status.is_final() && !self.stale(now_ms)
+    }
+    /// Past its lifetime (whatever its status), or forward-dated.
     pub fn stale(&self, now_ms: i64) -> bool {
-        now_ms >= self.expires_at_ms()
+        now_ms >= self.expires_at_ms() || self.from_the_future(now_ms)
     }
 }
 
@@ -421,8 +462,85 @@ fn text_ok(s: &str, max: usize, newlines: bool) -> bool {
 /// mark, word joiners and the direction overrides and isolates. A title
 /// with one could read differently from what it holds (a reversed span, a
 /// word that doesn't match a search) in every surface that shows it.
+///
+/// Also the characters that carry text a person can't see but a model reads:
+/// Unicode tag characters (U+E0000 to U+E007F, "ASCII smuggling"),
+/// variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF), the combining
+/// grapheme joiner, Hangul and Mongolian fillers, interlinear annotation
+/// marks and musical formatting characters.
 pub fn is_invisible(c: char) -> bool {
-    matches!(c, '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{034f}'
+            | '\u{061c}'
+            | '\u{115f}'
+            | '\u{1160}'
+            | '\u{17b4}'
+            | '\u{17b5}'
+            | '\u{180b}'..='\u{180f}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{feff}'
+            | '\u{ffa0}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0000}'..='\u{e007f}'
+            | '\u{e0100}'..='\u{e01ef}'
+    )
+}
+
+/// A character a title refuses: an invisible one (an emoji's own
+/// presentation selector excepted) or a line or paragraph separator.
+fn title_refuses(c: char) -> bool {
+    (is_invisible(c) && !matches!(c, '\u{fe0e}' | '\u{fe0f}')) || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// Whether a reader whose egress is `reader` may see content written under
+/// `tier`: the reader's reach is within the tier's (the rule cross-chat reads
+/// use). A closed reader sees everything; an open one only open content.
+pub fn egress_allows(reader: &EgressPolicy, tier: &EgressPolicy) -> bool {
+    reader.stricter(tier) == *reader
+}
+
+/// The stricter of two recorded tiers (`None` is the workspace default,
+/// open), in a canonical form: open as `None`, an allow-list sorted.
+pub fn tighten(a: Option<&EgressPolicy>, b: Option<&EgressPolicy>) -> Option<EgressPolicy> {
+    let open = EgressPolicy::Open;
+    match a.unwrap_or(&open).stricter(b.unwrap_or(&open)) {
+        EgressPolicy::Open => None,
+        EgressPolicy::AllowList { mut mcp_servers } => {
+            mcp_servers.sort();
+            mcp_servers.dedup();
+            Some(EgressPolicy::AllowList { mcp_servers })
+        }
+        closed => Some(closed),
+    }
+}
+
+/// Whether `e` may be shown to a turn whose egress is `reader`, by its
+/// recorded tier (callers may tighten it further, e.g. with the source
+/// chat's egress now).
+pub fn readable_under(e: &MemoryEntry, reader: &EgressPolicy) -> bool {
+    egress_allows(reader, e.egress.as_ref().unwrap_or(&EgressPolicy::Open))
+}
+
+/// The chats an entry's shown text came from (its head and its conflicts).
+pub fn source_chats(e: &MemoryEntry) -> impl Iterator<Item = Uuid> + '_ {
+    std::iter::once(&e.current).chain(e.conflicts.iter()).filter_map(|r| r.source.chat_id)
+}
+
+fn source_ok(s: &MemorySource) -> Result<(), &'static str> {
+    if let Some(EgressPolicy::AllowList { mcp_servers }) = &s.egress {
+        if mcp_servers.len() > MAX_EGRESS_SERVERS || !mcp_servers.iter().all(|x| text_ok(x, MAX_EGRESS_ID_CHARS, false)) {
+            return Err("a recorded egress allow-list names at most 32 servers");
+        }
+    }
+    Ok(())
 }
 
 fn tag_ok(t: &str) -> bool {
@@ -446,7 +564,7 @@ pub fn content_ok(title: &str, body: &str, tags: &[String]) -> Result<(), &'stat
     if !text_ok(title, MAX_TITLE_CHARS, false) {
         return Err("a memory title is 1 to 120 characters, on one line");
     }
-    if title.chars().any(is_invisible) {
+    if title.chars().any(title_refuses) {
         return Err("a memory title has no invisible or direction-changing characters");
     }
     if !text_ok(body, MAX_BODY_CHARS, true) {
@@ -488,12 +606,17 @@ pub enum Outcome {
     /// Kept as a conflict (its base isn't the head).
     Conflict,
     Removed,
+    /// An edit from a version its author saw, sorting after the removal:
+    /// kept on the tombstone (who and when), never applied.
+    AfterRemoval,
 }
 
 /// Judge one operation against `m` (fold rule): a create on an id never used,
 /// an edit or removal of a live entry from a remembered revision, conflicts
 /// within bounds, and `resolves` naming only conflicts it may settle.
-pub fn judge_op(m: &MemoryState, op: &MemoryOp, resolves: &[Uuid]) -> Result<Outcome, &'static str> {
+/// `author` is who makes it happen (the writer, or the decider of an
+/// accepted proposal).
+pub fn judge_op(m: &MemoryState, op: &MemoryOp, resolves: &[Uuid], author: &str) -> Result<Outcome, &'static str> {
     if !unique(resolves, MAX_CONFLICTS) {
         return Err("resolves names each conflict once, at most 4");
     }
@@ -512,6 +635,9 @@ pub fn judge_op(m: &MemoryState, op: &MemoryOp, resolves: &[Uuid]) -> Result<Out
             if m.entries.len() >= MAX_ENTRY_IDS {
                 return Err("the workspace memory has used every entry id it may");
             }
+            if m.ids_by_author.get(author).is_some_and(|n| *n as usize >= MAX_ENTRY_IDS_PER_AUTHOR) {
+                return Err("this person has used every memory entry id one person may (2000)");
+            }
             Ok(Outcome::Created)
         }
         MemoryOp::Edit { entry_id, base, title, body, tags } => {
@@ -525,7 +651,16 @@ pub fn judge_op(m: &MemoryState, op: &MemoryOp, resolves: &[Uuid]) -> Result<Out
 fn judge_change(m: &MemoryState, entry_id: Uuid, base: Uuid, resolves: &[Uuid], removal: bool) -> Result<Outcome, &'static str> {
     let Some(e) = m.entries.get(&entry_id) else { return Err("no such memory entry") };
     if !e.live() {
-        return Err("that memory entry was removed");
+        // An edit made from a version its author saw (the removal raced
+        // it) is kept on the tombstone, never applied (no resurrection) and
+        // never refused silently. A second removal changes nothing.
+        if removal || !e.revisions.contains(&base) {
+            return Err("that memory entry was removed");
+        }
+        if e.edited_after_removal.len() >= MAX_EDITS_AFTER_REMOVAL {
+            return Err("that memory entry was removed (and edited after its removal too often)");
+        }
+        return Ok(Outcome::AfterRemoval);
     }
     if !e.revisions.contains(&base) {
         return Err("edited from a version too old or unknown; reload the entry");
@@ -614,14 +749,17 @@ fn evictable(tasks: &[TaskSlot]) -> Option<usize> {
 
 /// The fold rule for a memory or task-state record (None for any other
 /// record): bounds and semantics that need only the fold so far, the
-/// signer and the author. Role and identity rules live in `authz`.
-pub fn validate(flow: &FlowState, record: &FlowRecord, signer: Option<Uuid>) -> Option<Result<(), &'static str>> {
+/// signer and the author (the stamp's actor id). Role and identity rules
+/// live in `authz`.
+pub fn validate(flow: &FlowState, record: &FlowRecord, signer: Option<Uuid>, author: &str) -> Option<Result<(), &'static str>> {
     let m = &flow.memory;
     Some(match record {
-        FlowRecord::MemoryWritten(w) => judge_op(m, &write_op(w), &w.resolves).map(|_| ()),
-        FlowRecord::MemoryRemoved(r) => judge_op(m, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves).map(|_| ()),
+        FlowRecord::MemoryWritten(w) => source_ok(&w.source).and_then(|_| judge_op(m, &write_op(w), &w.resolves, author)).map(|_| ()),
+        FlowRecord::MemoryRemoved(r) => source_ok(&r.source)
+            .and_then(|_| judge_op(m, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves, author))
+            .map(|_| ()),
         FlowRecord::MemoryProposed(p) => validate_proposal(m, p, signer),
-        FlowRecord::MemoryProposalDecided(d) => validate_decision(m, d),
+        FlowRecord::MemoryProposalDecided(d) => validate_decision(m, d, author),
         FlowRecord::TaskState(t) => validate_task(&flow.tasks, t, signer),
         _ => return None,
     })
@@ -664,8 +802,15 @@ fn validate_proposal(m: &MemoryState, p: &MemoryProposal, signer: Option<Uuid>) 
     if m.proposals.contains_key(&p.proposal_id) {
         return Err("that memory proposal id is already used");
     }
+    source_ok(&p.source)?;
     match &p.op {
         MemoryOp::Create { entry_id, title, body, tags } => {
+            // The entry an accepted create makes is known by the proposal
+            // (itself known by its event): an id of the proposer's choice
+            // could be taken first, and the person's acceptance refused.
+            if *entry_id != p.proposal_id {
+                return Err("a proposed new entry's id is the proposal's id");
+            }
             content_ok(title, body, tags)?;
             if m.entries.contains_key(entry_id) {
                 return Err("that memory entry id is already used");
@@ -695,7 +840,7 @@ fn validate_proposal(m: &MemoryState, p: &MemoryProposal, signer: Option<Uuid>) 
     Ok(())
 }
 
-fn validate_decision(m: &MemoryState, d: &MemoryDecision) -> Result<(), &'static str> {
+fn validate_decision(m: &MemoryState, d: &MemoryDecision, author: &str) -> Result<(), &'static str> {
     if d.note.chars().count() > MAX_NOTE_CHARS || bad_chars(&d.note, true) {
         return Err("a decision note is at most 500 characters");
     }
@@ -704,7 +849,7 @@ fn validate_decision(m: &MemoryState, d: &MemoryDecision) -> Result<(), &'static
         return Err("that memory proposal is already decided");
     }
     if d.accepted {
-        judge_op(m, &p.proposal.op, &d.resolves)?;
+        judge_op(m, &p.proposal.op, &d.resolves, author)?;
     } else if !d.resolves.is_empty() {
         return Err("a rejection resolves nothing");
     }
@@ -764,14 +909,14 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
             }
         }
         FlowRecord::MemoryProposalDecided(d) => {
-            if validate_decision(&flow.memory, d).is_err() {
+            if validate_decision(&flow.memory, d, &ctx.author.id).is_err() {
                 return true;
             }
             let Some(p) = flow.memory.proposals.get(&d.proposal_id).cloned() else { return true };
             let mut conflicted = false;
             if d.accepted {
                 let outcome = apply_op(&mut flow.memory, &p.proposal.op, &d.resolves, ctx, &p.proposal.source, Some(d.proposal_id), &p.proposal.proposer);
-                conflicted = outcome == Some(Outcome::Conflict);
+                conflicted = matches!(outcome, Some(Outcome::Conflict | Outcome::AfterRemoval));
             }
             if let Some(st) = flow.memory.proposals.get_mut(&d.proposal_id) {
                 st.decision = Some(DecisionState { accepted: d.accepted, by: ctx.author.clone(), at_ms: ctx.at_ms, note: d.note.clone(), rev: ctx.event_id, conflicted });
@@ -840,7 +985,7 @@ fn apply_op(
     via: Option<Uuid>,
     proposer: &str,
 ) -> Option<Outcome> {
-    let outcome = judge_op(m, op, resolves).ok()?;
+    let outcome = judge_op(m, op, resolves, &ctx.author.id).ok()?;
     let rev = |base: Option<Uuid>, title: &str, body: &str, tags: &[String], removal: bool| MemoryRevision {
         rev: ctx.event_id,
         base,
@@ -863,17 +1008,26 @@ fn apply_op(
                 created_at_ms: ctx.at_ms,
                 ..Default::default()
             };
+            e.egress = tighten(None, source.egress.as_ref());
             remember(&mut e, ctx.event_id);
             m.entries.insert(*entry_id, e);
+            *m.ids_by_author.entry(ctx.author.id.clone()).or_default() += 1;
+        }
+        (MemoryOp::Edit { entry_id, base, .. }, Outcome::AfterRemoval) => {
+            let e = m.entries.get_mut(entry_id)?;
+            // Who and when, never the text (the removal dropped the content).
+            e.edited_after_removal.push(rev(Some(*base), "", "", &[], false));
         }
         (MemoryOp::Edit { entry_id, base, title, body, tags }, Outcome::Head) => {
             let e = m.entries.get_mut(entry_id)?;
+            e.egress = tighten(e.egress.as_ref(), source.egress.as_ref());
             e.current = rev(Some(*base), title, body, tags, false);
             e.conflicts.retain(|c| !resolves.contains(&c.rev));
             remember(e, ctx.event_id);
         }
         (MemoryOp::Edit { entry_id, base, title, body, tags }, Outcome::Conflict) => {
             let e = m.entries.get_mut(entry_id)?;
+            e.egress = tighten(e.egress.as_ref(), source.egress.as_ref());
             e.conflicts.retain(|c| !resolves.contains(&c.rev));
             e.conflicts.push(rev(Some(*base), title, body, tags, false));
             remember(e, ctx.event_id);
@@ -957,10 +1111,17 @@ pub struct Hit<'a> {
 /// ties by newest revision, then id. An empty query lists newest first.
 /// Callers cap `limit` (the MCP tools at [`MAX_SEARCH_RESULTS`]).
 pub fn search<'a>(m: &'a MemoryState, query: &str, tags: &[String], limit: usize) -> Vec<Hit<'a>> {
+    search_where(m, query, tags, limit, |_| true)
+}
+
+/// [`search`] over the live entries `keep` admits (before the limit), e.g.
+/// the ones a turn's egress may see.
+pub fn search_where<'a>(m: &'a MemoryState, query: &str, tags: &[String], limit: usize, keep: impl Fn(&MemoryEntry) -> bool) -> Vec<Hit<'a>> {
     let terms = terms(query);
     let want: Vec<String> = tags.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).collect();
     let mut hits: Vec<Hit<'a>> = m
         .live()
+        .filter(|e| keep(e))
         .filter(|e| want.iter().all(|t| e.current.tags.iter().any(|x| x == t)))
         .filter_map(|e| {
             let title = e.current.title.to_lowercase();
@@ -1008,10 +1169,16 @@ pub fn neutralize(s: &str, nonce: &str) -> String {
             c => c,
         })
         .collect();
+    // The nonce is replaced only when it is ASCII letters and digits (every
+    // nonce [`fresh_nonce`] makes), and by text with none, so no
+    // replacement can make a new one: each pass lowers (nonces, `<<<` and
+    // `>>>` runs, adjacent `[[` and `]]`), and the loop ends. Content can't
+    // close a block without `<<<` anyway; the nonce is defence in depth.
+    let nonce = if !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_alphanumeric()) { nonce } else { "" };
     // To a fixed point: one pass over `[[[` leaves `[ [[`.
     loop {
         let next = out.replace("<<<", "‹‹‹").replace(">>>", "›››").replace("[[", "[ [").replace("]]", "] ]");
-        let next = if nonce.is_empty() { next } else { next.replace(nonce, "[nonce]") };
+        let next = if nonce.is_empty() { next } else { next.replace(nonce, "[·]") };
         if next == out {
             return out;
         }
@@ -1029,7 +1196,7 @@ fn kind_word(k: ActorKind) -> &'static str {
 }
 
 fn one_line(s: &str, nonce: &str) -> String {
-    neutralize(s, nonce).replace(['\n', '\r', '"'], " ")
+    neutralize(s, nonce).replace(['\n', '\r', '"', '\u{2028}', '\u{2029}'], " ")
 }
 
 /// The header every memory tool result starts with.

@@ -11,10 +11,15 @@ export interface MemoryAuthor {
   kind: ActorKind;
 }
 
+/// A chat's sandbox egress (hive_core::sandbox::EgressPolicy).
+export type EgressPolicy = { mode: "open" } | { mode: "allowList"; mcpServers: string[] } | { mode: "closed" };
+
 export interface MemorySource {
   chatId?: string;
   messageId?: string;
   turnId?: string;
+  /// The source chat's egress when the note was written (left out when open).
+  egress?: EgressPolicy;
 }
 
 export interface MemoryRevision {
@@ -40,6 +45,10 @@ export interface MemoryEntry {
   revisionCount: number;
   conflicts?: MemoryRevision[];
   removed?: MemoryRevision;
+  /// Edits that sorted after the removal: who and when, never their text.
+  editedAfterRemoval?: MemoryRevision[];
+  /// The strictest egress it was written under (absent: the workspace default).
+  egress?: EgressPolicy;
 }
 
 export type MemoryOp =
@@ -63,6 +72,9 @@ export interface MemoryView {
   agentNames: Record<string, string>;
   me: string;
   moderator: boolean;
+  /// Removed notes someone edited after the removal (not applied; shown so
+  /// the edit isn't lost silently).
+  editedAfterRemoval?: MemoryEntry[];
 }
 
 export type TaskStatus = "working" | "blocked" | "waiting" | "done" | "abandoned";
@@ -180,6 +192,19 @@ export function proposedBy(p: MemoryProposalState, agentNames: Record<string, st
   if (!proposer) return signer;
   const agent = agentNames[proposer] ?? (proposer === "primary" ? "Ligus" : "an agent");
   return p.by.kind === "human" ? `${agent} (an agent), on ${signer}'s device` : `${agent} (an agent)`;
+}
+
+/// Which agent turns read a note, from the egress it was written under, or
+/// null when every turn does (the workspace default).
+export function egressNote(e: MemoryEntry): string | null {
+  switch (e.egress?.mode) {
+    case "closed":
+      return "Written from a chat with egress closed: only agent turns with egress closed read it.";
+    case "allowList":
+      return `Written from a chat with restricted egress: only agent turns limited to ${e.egress.mcpServers.length ? e.egress.mcpServers.join(", ") : "no servers"} (or stricter) read it.`;
+    default:
+      return null;
+  }
 }
 
 /// Whether this person may change `e` directly: its creator or a moderator.
