@@ -281,3 +281,43 @@ proptest! {
         }
     }
 }
+
+/// Adversarial review: the chat's ledger replays an applied proposal's
+/// diff on every device that hasn't applied it yet, so that diff must stay
+/// the approved one. A re-upsert that changes an applied proposal's
+/// content (its author's, an agent's own, anyone's) is refused, and the
+/// ledger keeps the approved bytes.
+#[test]
+fn an_applied_proposals_content_never_changes_under_the_ledger() {
+    let mut w = world();
+    let (chat, pid) = chat_on_wefit(&mut w);
+    let d = diff_digest(&w.state(chat).proposals[0]);
+    let vote = ProposalApproval { actor_id: "ada".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d.clone()) };
+    w.say(chat, "ada", SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote });
+    let mara_dev = w.people["mara"].device_id;
+    let mut ev = applied(pid, &d, Some(mara_dev), Some(SHA), None);
+    if let SessionEvent::ProposalApplied { repo_id: r, .. } = &mut ev {
+        *r = Some(repo_id(WEFIT));
+    }
+    let ok = w.say(chat, "mara", ev);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+    let approved_diff = w.state(chat).proposals[0].diff.clone();
+    let mut swapped = w.state(chat).proposals[0].clone();
+    swapped.diff = Some("diff --git a/g b/g\n+evil\n".into());
+    swapped.status = ProposalStatus::Open;
+    swapped.approvals.clear();
+    let e = w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: swapped });
+    assert_eq!(w.verdict(e), Verdict::Denied, "an applied proposal's content is fixed");
+    let s = w.state(chat);
+    let ledger = hive_core::workspace_repo::ledger(&s, repo_id(WEFIT));
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(Some(ledger[0].diff.clone()), approved_diff, "the ledger replays the approved bytes");
+    // A title edit (same content) is still fine.
+    let mut retitled = s.proposals[0].clone();
+    retitled.title = "renamed".into();
+    retitled.status = ProposalStatus::Open;
+    retitled.approvals.clear();
+    let t = w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: retitled });
+    assert_eq!(w.verdict(t), Verdict::Allowed);
+    assert_eq!(w.state(chat).proposals[0].status, ProposalStatus::Applied);
+}
