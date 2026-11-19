@@ -1,5 +1,5 @@
 //! P0.8: nothing that decides which events fold, or how, reads the
-//! environment. Every `compat` environment read in ligus-core and ligus-runtime
+//! environment. Every `names` environment read in ligus-core and ligus-runtime
 //! is listed below and reviewed by hand; the test fails when a new one
 //! appears, and checks that setting every listed variable to a non-default
 //! value leaves the fold, the trust roster and ingest unchanged.
@@ -79,7 +79,7 @@ fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// The argument text of every `compat::{var,var_os,env_opt,is_set}(…)` call.
+/// The argument text of every `names::{var,var_os,env_opt,is_set}(…)` call.
 fn env_reads() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut files = Vec::new();
@@ -87,11 +87,11 @@ fn env_reads() -> Vec<(String, String)> {
     rs_files(&root.join("ligus-runtime/src"), &mut files);
     let mut out = Vec::new();
     for f in files {
-        if f.ends_with("compat.rs") {
+        if f.ends_with("names.rs") {
             continue; // the accessors themselves
         }
         let src = std::fs::read_to_string(&f).unwrap();
-        for call in ["compat::var(", "compat::var_os(", "compat::env_opt(", "compat::is_set("] {
+        for call in ["names::var(", "names::var_os(", "names::env_opt(", "names::is_set("] {
             for (i, _) in src.match_indices(call) {
                 let rest = &src[i + call.len()..];
                 // Up to the matching close paren.
@@ -229,8 +229,6 @@ fn fold_ignores_env() {
     for (_, var, _) in FOLD_ENV_DENYLIST {
         for value in ["github-signing-keys", "1", "0", "garbage"] {
             std::env::set_var(var, value);
-            // The legacy spelling too (compat reads both).
-            std::env::set_var(var.replacen("LIGUS_", "LIGUS_", 1), value);
             assert_eq!(decide(), clean, "{var}={value} changed the fold");
         }
     }

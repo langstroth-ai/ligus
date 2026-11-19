@@ -286,11 +286,6 @@ has read project files, MCP calls are refused (the exfiltration guard). See
 - Edits arrive as a proposal; they reach your working tree only after
   **Implement**.
 
-## A `LIGUS_*` setting has no effect
-
-Ligus reads only `LIGUS_*` names. Look for
-`warning: LIGUS_X is set but no longer read; rename it to LIGUS_X`.
-
 ## Tests fail after pulling main
 
 ```bash

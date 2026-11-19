@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { needsOnboarding, shouldAutoTour, clearLegacyFirstRunFlags } from "./firstRun";
+import { needsOnboarding, shouldAutoTour } from "./firstRun";
 
 const settings = (onboarded: boolean, displayName: string) => ({ onboarded, displayName, tourSeen: false });
 
@@ -33,15 +33,5 @@ describe("first-run gate", () => {
     expect(shouldAutoTour({ onboarded: true, tourSeen: true })).toBe(false);
     expect(shouldAutoTour({ onboarded: false, tourSeen: false })).toBe(false);
     expect(shouldAutoTour(undefined)).toBe(false);
-  });
-
-  it("clears the 1.x flags", () => {
-    window.localStorage.setItem("ligus.onboarded", "1");
-    window.localStorage.setItem("ligus.tourSeen", "1");
-    window.localStorage.setItem("ligus.theme", "harbor");
-    clearLegacyFirstRunFlags();
-    expect(window.localStorage.getItem("ligus.onboarded")).toBeNull();
-    expect(window.localStorage.getItem("ligus.tourSeen")).toBeNull();
-    expect(window.localStorage.getItem("ligus.theme")).toBe("harbor");
   });
 });

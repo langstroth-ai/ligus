@@ -35,7 +35,7 @@ fn signer(data_dir: &Path) -> Result<Arc<dyn DeviceSigner>> {
 /// `LIGUS_RELAY_ACCESS_TOKEN` wins and disables it. Never fails the command:
 /// problems are printed and the static token (if any) is used.
 pub fn init(data_dir: &Path) {
-    if ligus_core::compat::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some()
+    if ligus_core::names::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some()
         || ligus_auth::load_session(data_dir).is_none()
     {
         return;
@@ -83,7 +83,7 @@ fn login(data_dir: &Path, url: &str, label: Option<String>) -> Result<()> {
     let (base, tenant) = ligus_auth::parse_auth_url(url).map_err(|e| anyhow!("{e}"))?;
     let signer = signer(data_dir)?;
     let label = label.unwrap_or_else(|| {
-        ligus_core::compat::env_opt("HOSTNAME").unwrap_or_else(|| "ligus CLI".into())
+        ligus_core::names::env_opt("HOSTNAME").unwrap_or_else(|| "ligus CLI".into())
     });
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -126,7 +126,7 @@ fn login(data_dir: &Path, url: &str, label: Option<String>) -> Result<()> {
     };
     // E-5: the token is for the relay this box syncs through, and only that.
     let mut session = session;
-    session.relay_origin = ligus_core::compat::env_opt("LIGUS_RELAY_URL")
+    session.relay_origin = ligus_core::names::env_opt("LIGUS_RELAY_URL")
         .or_else(|| crate::load_file_config(data_dir).relay_url)
         .and_then(|u| ligus_auth::origin_of(&u));
     if session.relay_origin.is_none() {
@@ -141,7 +141,7 @@ fn login(data_dir: &Path, url: &str, label: Option<String>) -> Result<()> {
         session.workspaces.join(", ")
     );
     println!("This gives relay access only. A workspace Admin still has to add this identity as a member.");
-    if ligus_core::compat::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some() {
+    if ligus_core::names::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some() {
         println!("Note: LIGUS_RELAY_ACCESS_TOKEN is set and takes precedence; unset it to use this sign-in.");
     }
     Ok(())
@@ -168,7 +168,7 @@ fn status(data_dir: &Path) -> Result<()> {
     } else {
         println!("  access:     expired; refreshed on the next relay call");
     }
-    if ligus_core::compat::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some() {
+    if ligus_core::names::env_opt("LIGUS_RELAY_ACCESS_TOKEN").is_some() {
         println!("  note:       LIGUS_RELAY_ACCESS_TOKEN is set and takes precedence");
     }
     Ok(())

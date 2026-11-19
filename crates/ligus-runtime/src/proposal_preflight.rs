@@ -49,7 +49,7 @@ pub struct PreflightInputs<'a> {
 /// The configured pre-flight test command, if any: `LIGUS_PREFLIGHT_TEST`
 /// on this device. The repository is never consulted.
 pub fn test_command() -> Option<String> {
-    ligus_core::compat::var(PREFLIGHT_TEST_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    ligus_core::names::var(PREFLIGHT_TEST_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Option<String> {

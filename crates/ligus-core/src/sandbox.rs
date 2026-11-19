@@ -100,7 +100,7 @@ pub struct SandboxEnvelope {
 }
 
 /// Directories no agent writes into (mirrors the built-in tools' list).
-pub const PROTECTED_DIRS: &[&str] = &[".git", ".ligus", ".ligus", ".claude", ".vscode"];
+pub const PROTECTED_DIRS: &[&str] = &[".git", ".ligus", ".claude", ".vscode"];
 
 impl Default for SandboxEnvelope {
     fn default() -> Self {

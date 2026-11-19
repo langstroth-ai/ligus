@@ -115,15 +115,12 @@ follow-ups and **not wired** in the current Rust build — relay forwarding
 
 ## Fixed protocol identifiers
 
-The strings below contain `ligus`. They are protocol and cryptographic
+The strings below contain `hive`. They are protocol and cryptographic
 constants, not branding, so their spelling is fixed: renaming any of them
 would break mixed-version peers, paired
 phones, relays, invites, or (for the cryptographic ones) every existing
 signature and encrypted workspace. Tests pin their exact bytes. If one ever has
 to change, it ships as a new protocol version accepted alongside the old one.
-The phone deep-link scheme is the exception that grows: phones accept both
-`ligus://` and `ligus://`, and `ligus serve` keeps emitting `ligus://` until
-every paired phone runs a build that registers `ligus://`.
 
 | Identifier | Kind | Where |
 |---|---|---|
@@ -141,7 +138,10 @@ every paired phone runs a build that registers `ligus://`.
 | `hivedev1:` | Device enrollment code prefix | `ligus-runtime/src/device_enroll.rs` |
 | `hive_`, `hivepeer1:` | Peer code prefixes | `ligus-runtime/src/peer.rs` |
 | `X-Hive-Github-Token`, `X-Hive-More`, `X-Hive-Next-After`, `X-Hive-Event-Id` | Relay HTTP headers | relay, clients |
-| `ligus://` | Phone deep-link scheme (`ligus://pair`, `ligus://chat/<id>`) | `ligus serve`, phone app |
+| `hiveconfiglogses`, `hiveroomworkspac` | UUIDv5 namespaces (config log, relay room) | `ligus-core/src/channel.rs` |
+| `hivegithaccount\x01`, `hivedmroompair01` | Retired UUIDv5 namespaces, kept unused | `ligus-runtime/src/frozen_ns.rs` |
+| `hive`, `hiveLink` | Keys in the relay's APNs payload that the phone reads | relay, phone app |
+| `hive_relay_requests_*` | Relay Prometheus metric names | relay |
 
 Strings added in 0.1 use the `ligus` spelling. Among them, the SSHSIG
 namespace of a [linked account](../../ligus/features/linked-identities.md),

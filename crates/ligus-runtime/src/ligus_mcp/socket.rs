@@ -78,7 +78,7 @@ pub fn tcp_port_for(socket: &Path) -> Option<u16> {
 /// this executable with the `mcp-bridge` argument (the `ligus` CLI and the
 /// desktop app both handle it).
 pub fn bridge_command() -> (PathBuf, Vec<String>) {
-    if let Some(p) = ligus_core::compat::var("LIGUS_MCP_BRIDGE").ok().filter(|s| !s.trim().is_empty()) {
+    if let Some(p) = ligus_core::names::var("LIGUS_MCP_BRIDGE").ok().filter(|s| !s.trim().is_empty()) {
         return (PathBuf::from(p.trim()), Vec::new());
     }
     if let Ok(me) = std::env::current_exe() {

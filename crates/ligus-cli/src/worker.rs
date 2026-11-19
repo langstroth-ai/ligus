@@ -146,7 +146,7 @@ fn lock(svc: &Mutex<ChatService>) -> MutexGuard<'_, ChatService> {
 /// worker's claude turn actually edit files (and get worktree-isolated + turned
 /// into a review-gated proposal).
 fn worker_claude_args() -> Vec<String> {
-    match ligus_core::compat::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
+    match ligus_core::names::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
         Ok("acceptEdits") => vec!["--permission-mode".into(), "acceptEdits".into()],
         Ok("bypassPermissions") => vec!["--permission-mode".into(), "bypassPermissions".into()],
         _ => Vec::new(),
@@ -157,7 +157,7 @@ fn worker_claude_args() -> Vec<String> {
 /// (`default`) unless raised. Also accepts `runCommands` for the
 /// subscription CLIs.
 fn worker_permission_mode() -> String {
-    match ligus_core::compat::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
+    match ligus_core::names::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
         Ok(m @ ("acceptEdits" | "runCommands" | "bypassPermissions")) => m.to_string(),
         _ => "default".to_string(),
     }
@@ -504,7 +504,7 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
 /// real "wedged" gate), as in the app: `LIGUS_TURN_TIMEOUT_SECS`, default 1 h.
 pub(crate) fn turn_timeout() -> Duration {
     Duration::from_secs(
-        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
+        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)

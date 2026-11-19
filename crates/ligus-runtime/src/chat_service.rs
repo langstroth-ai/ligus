@@ -3446,7 +3446,7 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
 pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String> {
     match cred {
         WorkspaceCredential::SecretRef { secret_ref } => {
-            ligus_core::compat::var(&WorkspaceCredential::env_var(secret_ref))
+            ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref))
                 .ok()
                 .filter(|s| !s.is_empty())
         }

@@ -35,7 +35,7 @@ blocking you, and what you need from the person to continue.";
 
 /// The stall limit from `LIGUS_PATCH_LEAVING_CALLS` (0 disables the rule).
 pub fn stall_limit_from_env() -> usize {
-    ligus_core::compat::var("LIGUS_PATCH_LEAVING_CALLS")
+    ligus_core::names::var("LIGUS_PATCH_LEAVING_CALLS")
         .ok()
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(DEFAULT_STALL_LIMIT)

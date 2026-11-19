@@ -220,7 +220,7 @@ impl TrustStore {
 /// catalogs (the same files the desktop loads).
 pub fn repo_items(root: &Path) -> Vec<TrustItem> {
     let mut out = Vec::new();
-    for candidate in ligus_core::compat::config_candidates(&[root]) {
+    for candidate in ligus_core::names::config_candidates(&[root]) {
         let Ok(text) = std::fs::read_to_string(&candidate) else { continue };
         let Ok(cfg) = ligus_core::config::load_from_str(&text) else { continue };
         let source = rel(root, &candidate);
@@ -251,7 +251,7 @@ pub fn repo_items(root: &Path) -> Vec<TrustItem> {
         #[serde(default)]
         servers: Vec<McpServerSpec>,
     }
-    let Ok(state) = ligus_core::compat::workspace_state_dir(root) else { return out };
+    let Ok(state) = ligus_core::names::workspace_state_dir(root) else { return out };
     let rt_path = state.join("runtimes.json");
     if let Some(c) = std::fs::read_to_string(&rt_path).ok().and_then(|t| serde_json::from_str::<Runtimes>(&t).ok()) {
         let source = rel(root, &rt_path);

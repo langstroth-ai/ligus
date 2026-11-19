@@ -63,7 +63,7 @@ import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { PANES } from "@/lib/panes";
-import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour, clearLegacyFirstRunFlags } from "@/lib/firstRun";
+import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
 import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
@@ -868,7 +868,6 @@ export function App() {
         onComplete={async () => {
           // Throws into Onboarding, which shows the error on its last step.
           await markOnboarded();
-          clearLegacyFirstRunFlags();
           // Onboarding's appearance step persisted the theme + mode to
           // localStorage; sync App's state so its own applyTheme effect doesn't
           // revert to the mount-time default.

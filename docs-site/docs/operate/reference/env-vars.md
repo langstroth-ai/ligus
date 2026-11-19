@@ -3,10 +3,7 @@
 Every `LIGUS_*` variable Ligus 0.1.0 reads, from the code. Variables used
 only by the test suites are left out.
 
-**Spelling.** Only `LIGUS_*` names are read. A former `LIGUS_*` name that is
-still set while the `LIGUS_*` one isn't is ignored, with a one-time
-`warning: LIGUS_X is set but no longer read; rename it to LIGUS_X`. A blank
-value counts as unset. Boolean flags accept `1`/`true`/`on`/`yes` and
+**Spelling.** Only `LIGUS_*` names are read. A blank value counts as unset. Boolean flags accept `1`/`true`/`on`/`yes` and
 `0`/`false`/`off`/`no`, unless noted.
 
 **Desktop or CLI.** The desktop app reads few of these; most configure the

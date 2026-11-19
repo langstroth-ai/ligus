@@ -234,7 +234,7 @@ pub struct CheckoutInfo {
     pub default_branch: Option<String>,
     pub remote: Option<RemoteRef>,
     /// Uncommitted changes to tracked or untracked files (the app's own
-    /// `.ligus/` and `.ligus/` state dirs excluded).
+    /// `.ligus/` state dirs excluded).
     pub dirty: bool,
     /// Set when this checkout is a fork with an `upstream` remote: chat
     /// branches start from upstream's default branch and PRs open upstream.
@@ -451,7 +451,7 @@ pub fn inspect(dir: &Path) -> CheckoutInfo {
                 .map(str::to_string)
         })
         .or_else(|| branch.clone());
-    let dirty = git_out(dir, &["status", "--porcelain", "--", ".", ":(exclude).ligus", ":(exclude).ligus"]).is_some_and(|s| !s.is_empty());
+    let dirty = git_out(dir, &["status", "--porcelain", "--", ".", ":(exclude).ligus"]).is_some_and(|s| !s.is_empty());
     let fork = fork_layout(dir);
     // A fork's base is upstream's default branch, not origin's.
     let default_branch = fork.as_ref().map(|f| f.base_branch.clone()).or(default_branch);

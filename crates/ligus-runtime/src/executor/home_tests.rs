@@ -16,9 +16,9 @@ pub(crate) struct DecoyHome {
 /// The desktop app's data dir under a home, on this OS.
 pub(crate) fn data_dir_rel() -> PathBuf {
     if cfg!(target_os = "macos") {
-        Path::new("Library/Application Support").join(ligus_core::compat::DESKTOP_APP_ID)
+        Path::new("Library/Application Support").join(ligus_core::names::DESKTOP_APP_ID)
     } else {
-        Path::new(".local/share").join(ligus_core::compat::DESKTOP_APP_ID)
+        Path::new(".local/share").join(ligus_core::names::DESKTOP_APP_ID)
     }
 }
 

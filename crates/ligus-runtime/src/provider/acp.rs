@@ -696,7 +696,7 @@ pub fn usage_delta(cost: &Value, last_total: f64) -> Result<(f64, f64), String> 
 /// How long a permission escalation waits for a person.
 pub fn ask_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(
-        ligus_core::compat::var("LIGUS_ACP_ASK_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(600),
+        ligus_core::names::var("LIGUS_ACP_ASK_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(600),
     )
 }
 
@@ -835,7 +835,7 @@ pub async fn stream_reply(
     // A short window for initialize: an agent that doesn't speak ACP (an old
     // CLI without the flag) fails fast and the turn falls back.
     let init_idle = std::time::Duration::from_secs(
-        ligus_core::compat::var("LIGUS_ACP_INIT_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(60),
+        ligus_core::names::var("LIGUS_ACP_INIT_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(60),
     );
     let stderr_of = |task: Option<tokio::task::JoinHandle<String>>| async move {
         match task {

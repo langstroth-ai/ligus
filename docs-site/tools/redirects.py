@@ -6,14 +6,13 @@ There is one docs site, https://docs.langstroth.ai/, built from docs-site/:
   /ligus/    Using Ligus            (docs-site/docs/ligus/)
   /operate/  Operating Langstroth   (docs-site/docs/operate/)
 
-Before it, three sites served pages at other paths:
+Before it, two sites served pages at other paths:
 
-  1x          https://docs.apiaryhq.ai/    the 1.x site (main, v1.18.0)
   ligus       https://docs.ligus.ai/       the 0.1 user site
   langstroth  https://docs.langstroth.ai/  the 0.1 operator site
 
-page-map.tsv lists every old page and where it lives now. docs.ligus.ai and
-docs.apiaryhq.ai are domain aliases of the single Netlify site.
+page-map.tsv lists every old page and where it lives now. docs.ligus.ai is a
+domain alias of the single Netlify site.
 
   python3 docs-site/tools/redirects.py generate
       Rewrite the generated blocks in mkdocs.yml (mkdocs-redirects stub
@@ -22,7 +21,7 @@ docs.apiaryhq.ai are domain aliases of the single Netlify site.
   python3 docs-site/tools/redirects.py check [--refs] [--built]
       Assert every old URL has a working new home. Without --built it checks
       the map and the generated config. --built also checks the built site
-      in docs-site/site and runs every old URL of the three old sites (in
+      in docs-site/site and runs every old URL of the two old sites (in
       the /page/, /page and /page/index.html forms), plus version.json and
       llms.txt on every host, through an emulation of Netlify's rules (first
       match wins, force, shadowing, host-prefixed rules) until it lands on a
@@ -41,15 +40,19 @@ DOCS = os.path.dirname(HERE)  # docs-site/
 SRC = os.path.join(DOCS, "docs")
 SITE = os.path.join(DOCS, "site")
 PRIMARY = "docs.langstroth.ai"
-ALIASES = ("docs.ligus.ai", "docs.apiaryhq.ai")
-HOSTS = {"1x": "docs.apiaryhq.ai", "ligus": "docs.ligus.ai", "langstroth": PRIMARY}
-# The commits the old sites were built from (for --refs).
-REF_1X = "4a51d44b"  # main at v1.18.0: root mkdocs.yml, docs_dir docs-site
+ALIASES = ("docs.ligus.ai",)
+HOSTS = {"ligus": "docs.ligus.ai", "langstroth": PRIMARY}
+# The commit the old sites were built from (for --refs).
 REF_SPLIT = "71e1084c"  # release/v0.1.0 (the 0.1.0 release branch) before the merge: docs-site/{user,operator}
 # Files served on the alias hosts as they are, without a redirect: shipped
-# desktop builds read https://docs.ligus.ai/version.json (and 1.x builds
-# https://docs.apiaryhq.ai/version.json) for their update check.
+# desktop builds read https://docs.ligus.ai/version.json for their update
+# check.
 SERVED_ON_ALIASES = ("/version.json",)
+# Files served under a new name: (old path, new path) on docs.langstroth.ai.
+RENAMED_FILES = (
+    ("/ligus/images/hive-lockup-dark.svg", "/ligus/images/ligus-lockup-dark.svg"),
+    ("/ligus/images/hive-lockup-light.svg", "/ligus/images/ligus-lockup-light.svg"),
+)
 BEGIN = "# BEGIN generated"
 END = "# END generated"
 
@@ -119,6 +122,10 @@ def netlify_rules(rows):
         if old == "index.md":
             continue  # the home page itself
         out += page_rules("", old, url_path(new))
+    out.append("# Files that were renamed, at their old paths (also under /images/).")
+    for old, new in RENAMED_FILES:
+        out.append(rule(old, new))
+        out.append(rule(old.replace("/ligus/images/", "/images/", 1), new))
     out.append("# Old screenshot URLs (/images/...). Not forced: the theme's own files")
     out.append("# under /images/ are served as they are.")
     out.append(rule("/images/*", "/ligus/images/:splat", force=False))
@@ -158,19 +165,13 @@ def git(*args):
 
 
 def old_sites_from_git():
-    """{source: (pages, files)} for the three old sites. pages are page
+    """{source: (pages, files)} for the two old sites. pages are page
     paths (.md) and "url:/path/" for each path the old host answered with a
     redirect; files are the other files it served (images, llms.txt,
     version.json, stylesheets)."""
     import tomllib
 
     out = {}
-    tree = git("ls-tree", "-r", "--name-only", REF_1X, "docs-site/").split()
-    nav = git("show", f"{REF_1X}:mkdocs.yml").split("\nnav:", 1)[1]
-    pages = set(re.findall(r":\s*([\w./-]+\.md)\s*$", nav, re.M))
-    pages |= {f[len("docs-site/"):] for f in tree if f.endswith(".md")}
-    files = {f[len("docs-site/"):] for f in tree if not f.endswith(".md") and not f.endswith("CNAME")}
-    out["1x"] = (pages, files)
     for src, d in (("ligus", "user"), ("langstroth", "operator")):
         pre = f"docs-site/{d}/docs/"
         tree = git("ls-tree", "-r", "--name-only", REF_SPLIT, pre).split()
@@ -366,15 +367,14 @@ def check(refs, built):
                     errors.append(f"https://{HOSTS[src]}/{fpath}: 404 after {hops} at https://{fhost}{final}")
 
     count = lambda s: sum(1 for r in rows if s in r[2])
-    print(f"{len(rows)} old pages: {count('1x')} from docs.apiaryhq.ai, {count('ligus')} from docs.ligus.ai, "
-          f"{count('langstroth')} from docs.langstroth.ai")
+    print(f"{len(rows)} old pages: {count('ligus')} from docs.ligus.ai, {count('langstroth')} from docs.langstroth.ai")
     print(f"netlify.toml: {len(rules)} redirect rules; mkdocs redirect stubs: {len(maps)}")
     if built:
         print(f"emulated {checked} old URLs and files across {1 + len(ALIASES)} hosts")
     if errors:
         print("\n".join("FAIL " + e for e in errors))
         sys.exit(1)
-    print("OK: every old URL on docs.apiaryhq.ai, docs.ligus.ai and docs.langstroth.ai reaches its page")
+    print("OK: every old URL on docs.ligus.ai and docs.langstroth.ai reaches its page")
 
 
 if __name__ == "__main__":

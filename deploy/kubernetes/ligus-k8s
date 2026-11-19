@@ -28,7 +28,7 @@ AC_TOOL=ligus-k8s
 # The relay chart the ligus chart depends on (optional dependency, but Helm
 # needs it present to render). Same pin as .github/workflows/kind-e2e.yml.
 RELAY_REPO_URL=${LIGUS_RELAY_REPO_URL:-https://github.com/langstroth-ai/langstroth-relay.git}
-RELAY_REF=${LIGUS_RELAY_REF:-50451173b28a78c4845a38107429aaf0cc6d02bf}
+RELAY_REF=${LIGUS_RELAY_REF:-c01534a1699fbb9d479bb544f79c70d4737cafc7}
 RELAY_CHART_VERSION=0.3.0
 MANAGED_LABEL=ligus.ai/managed-by
 MANAGED_VALUE=ligus-k8s

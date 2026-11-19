@@ -744,7 +744,7 @@ mod tests {
         assert!(repo_well_formed(&WorkspaceRepo { root_commit: Some("abc".into()), ..r }).is_err());
     }
 
-    /// The beat's wire bytes: a coverage-less beat is exactly the Ligus 1.x/Ligus 0.1
+    /// The beat's wire bytes: a coverage-less beat is exactly the original
     /// beat; coverage adds `seq` and `coverage` (frozen).
     #[test]
     fn host_beat_wire_is_frozen() {

@@ -47,7 +47,7 @@ pub const IDLE_TIMEOUT_ENV: &str = "LIGUS_TURN_IDLE_TIMEOUT_SECS";
 /// 300) governs both. (#100)
 pub fn turn_idle_timeout() -> Duration {
     Duration::from_secs(
-        ligus_core::compat::var(IDLE_TIMEOUT_ENV)
+        ligus_core::names::var(IDLE_TIMEOUT_ENV)
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)

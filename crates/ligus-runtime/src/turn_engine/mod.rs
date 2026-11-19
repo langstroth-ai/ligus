@@ -344,7 +344,7 @@ pub fn wants_builtin_tools(rt: &ResolvedRuntime, tools: &ToolOptions) -> bool {
 /// The turn's wall-clock backstop: `LIGUS_TURN_TIMEOUT_SECS`, default 1 h.
 pub fn turn_timeout() -> Duration {
     Duration::from_secs(
-        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s| s > 0).unwrap_or(3600),
+        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s| s > 0).unwrap_or(3600),
     )
 }
 

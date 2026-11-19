@@ -57,7 +57,7 @@ pub fn ligus_secret_env_names() -> Vec<std::ffi::OsString> {
         .map(|(k, _)| k)
         .filter(|k| {
             let n = k.to_string_lossy().to_ascii_uppercase();
-            (n.starts_with("LIGUS_") || n.starts_with("LIGUS_"))
+            n.starts_with("LIGUS_")
                 && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"].iter().any(|w| n.contains(w))
         })
         .collect()

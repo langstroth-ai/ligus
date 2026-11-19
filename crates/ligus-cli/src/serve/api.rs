@@ -229,7 +229,7 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage, viewer: Viewer) -> Value {
     if let Some(actor) = m.actor_identity.as_ref().filter(|_| m.role == MessageRole::User) {
         v["actorId"] = json!(actor.id);
     }
-    // A primary @ligus turn (an assistant reply by no roster agent): whose ligus
+    // A primary @ligus turn (an assistant reply by no roster agent): whose @ligus
     // answered (`responderName`) and, when it was this box or another of the
     // same person's devices, `responderDevice` "this" / "mine" (absent
     // otherwise: the phone says "<name>'s device").

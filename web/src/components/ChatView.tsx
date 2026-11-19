@@ -1990,7 +1990,7 @@ const Bubble = memo(function Bubble({
   /// The mentionable handle for an agent turn (rendered "@handle"); the human
   /// name (`author`) is shown as-is. Falls back to `author` when absent.
   handle?: string;
-  /// For a primary-@ligus turn: whose ligus answered (shown as "· Alice"), so two
+  /// For a primary-@ligus turn: whose @ligus answered (shown as "· Alice"), so two
   /// same-named default agents are distinguishable.
   responderName?: string;
   responderDevice?: string;

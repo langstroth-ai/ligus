@@ -16,15 +16,3 @@ export function needsOnboarding(settings: Gate): boolean {
 export function shouldAutoTour(settings: { onboarded: boolean; tourSeen: boolean } | null | undefined): boolean {
   return settings != null && settings.onboarded && !settings.tourSeen;
 }
-
-/// The Ligus 1.x webview flags. 0.1 never reads them; drop them on completion so
-/// they can't mislead anyone inspecting storage.
-const LEGACY_KEYS = ["ligus.onboarded", "ligus.tourSeen"];
-
-export function clearLegacyFirstRunFlags(): void {
-  try {
-    for (const k of LEGACY_KEYS) window.localStorage.removeItem(k);
-  } catch {
-    /* storage unavailable: nothing to clear */
-  }
-}

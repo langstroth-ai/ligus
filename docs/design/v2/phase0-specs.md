@@ -949,7 +949,7 @@ The sandbox is one control among several. The others are authz (A), presence (B)
    - New default: **Admin** when the worker's permission tier is write-capable (`LIGUS_WORKER_PERMISSION_MODE` ∈ {acceptEdits, runCommands, bypassPermissions}, `worker.rs:84-110`), and Contributor for read-only.
    - An explicit `LIGUS_MCP_MIN_ROLE` lower than the default logs a warning at startup.
 7. **`protected_dirs` enforced.**
-   - Delete the duplicate `WRITE_PROTECTED_DIRS` (`builtin_tools.rs:433-437`) and read `envelope.protected_dirs` (`ligus-core/src/sandbox.rs:91, 103`). Root files `ligus.config.toml`, `ligus.config.toml` and `.envrc` stay protected.
+   - Delete the duplicate `WRITE_PROTECTED_DIRS` (`builtin_tools.rs:433-437`) and read `envelope.protected_dirs` (`ligus-core/src/sandbox.rs:91, 103`). Root files `ligus.config.toml` and `.envrc` stay protected.
    - The sandbox profiles (C.4) mount these read-only inside the worktree.
    - Add `prop_every_envelope_field_consumed`: an exhaustive destructure of `SandboxEnvelope` in `EnvelopeEnforcer`, so a new field fails to compile until it is handled.
 8. **Fix `clear_lockdown`.** `my_standing` (`crates/ligus-cli/src/serve/api.rs:646`) checks only `is_human_member`, but its doc says Contributor+. Check the role too.
@@ -1499,7 +1499,7 @@ Official docs as of 2026-11: the Agent SDK uses the CLI's credential precedence:
 3. **Badges on every proposal card and set alternative:**
    - **Kind:** FileDiff, Command, Decision, Workflow.
    - **Author:** human name, or agent name + host + "agent-signed" vs "host-signed (legacy)".
-   - **Config impact:** set when the touched paths (`touched_paths`, `guard.rs:271`) or the argv touch any of: `ligus.config.toml`, `ligus.config.toml`, `.ligus/`, `.ligus/`, `.github/workflows/`, `.gitlab-ci.yml`, `package.json` scripts, `Makefile`, `.envrc`, the protected dirs (`ligus-core/src/sandbox.rs:103`), git hooks or MCP config.
+   - **Config impact:** set when the touched paths (`touched_paths`, `guard.rs:271`) or the argv touch any of: `ligus.config.toml`, `.ligus/`, `.github/workflows/`, `.gitlab-ci.yml`, `package.json` scripts, `Makefile`, `.envrc`, the protected dirs (`ligus-core/src/sandbox.rs:103`), git hooks or MCP config.
    - **Human gate:** shown when one applies.
    - **Presence required:** shown under rules v2.
 

@@ -66,7 +66,7 @@ pub enum IdentityMode {
 /// Log once if `LIGUS_IDENTITY_MODE` is set: it no longer has any effect.
 pub fn warn_if_identity_mode_set() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    if ligus_core::compat::var("LIGUS_IDENTITY_MODE").is_ok() {
+    if ligus_core::names::var("LIGUS_IDENTITY_MODE").is_ok() {
         ONCE.call_once(|| {
             tracing::warn!("LIGUS_IDENTITY_MODE is ignored: identity verification no longer depends on the environment");
         });

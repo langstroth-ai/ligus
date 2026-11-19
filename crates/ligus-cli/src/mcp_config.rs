@@ -58,7 +58,7 @@ fn default_true() -> bool {
 /// Load the MCP servers named by `LIGUS_MCP_CONFIG`. Unset or empty → no servers
 /// (an empty vec), so the caller behaves exactly as it did before MCP wiring.
 pub fn load_from_env() -> Result<Vec<McpServerSpec>> {
-    let Some(path) = ligus_core::compat::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) else {
+    let Some(path) = ligus_core::names::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) else {
         return Ok(Vec::new());
     };
     let text = std::fs::read_to_string(&path)

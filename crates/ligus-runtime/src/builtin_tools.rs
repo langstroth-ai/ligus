@@ -439,7 +439,7 @@ fn clip_bytes(s: &str, max: usize) -> &str {
 /// Files at the root a write may never replace: Ligus's workspace config
 /// (declares stdio MCP server commands and runtime endpoints, loaded on
 /// workspace open) and direnv's auto-sourced `.envrc`.
-const WRITE_PROTECTED_ROOT_FILES: &[&str] = &["ligus.config.toml", "ligus.config.toml", ".envrc"];
+const WRITE_PROTECTED_ROOT_FILES: &[&str] = &["ligus.config.toml", ".envrc"];
 
 /// Why a root-relative path may not be written, if it may not. Matched
 /// case-insensitively: macOS volumes usually are, so `.GIT/config` is

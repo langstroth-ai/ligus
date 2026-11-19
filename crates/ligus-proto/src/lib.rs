@@ -83,7 +83,7 @@ pub struct ChatMessageDto {
     pub author_color_hex: Option<String>,
     /// For a primary-`@ligus` turn: the display name of the user whose device
     /// answered (every user's default agent is named "ligus", so this
-    /// disambiguates "Alice's ligus" from "Bob's ligus"). None for human turns and
+    /// disambiguates "Alice's @ligus" from "Bob's @ligus"). None for human turns and
     /// named agents (whose own name is the label).
     #[serde(default)]
     pub responder_name: Option<String>,

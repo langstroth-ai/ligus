@@ -81,9 +81,8 @@ pub enum SweepAction {
 }
 
 /// Decide what to clean. `owned_dir`: the only dir whose worktrees are ours
-/// (`<repo>/.ligus/worktrees`); anything else, e.g. a Ligus 1.x checkout under
-/// `.ligus/worktrees` on a `ligus/chat/*` or `ligus/turn-*` branch, is never
-/// touched. `live_turn_slugs`: turns still streaming (by the slug of their
+/// (`<repo>/.ligus/worktrees`); anything else, e.g. a checkout elsewhere on
+/// a `ligus/chat/*` or `ligus/turn-*` branch, is never touched. `live_turn_slugs`: turns still streaming (by the slug of their
 /// message id); `chats`: the workspace's chats by slug; `in_use`: whether a
 /// turn worktree is in use right now (cut or claimed for a turn and not yet
 /// parked or removed; `git_worktree::is_in_use`).
@@ -94,10 +93,10 @@ pub fn plan_sweep(
     chats: &HashMap<String, ChatStatus>,
     in_use: &dyn Fn(&Path) -> bool,
 ) -> Vec<SweepAction> {
-    let owned = ligus_core::compat::resolve_path(owned_dir);
+    let owned = ligus_core::names::resolve_path(owned_dir);
     let mut out = Vec::new();
     for e in entries {
-        if !ligus_core::compat::resolve_path(&e.path).starts_with(&owned) {
+        if !ligus_core::names::resolve_path(&e.path).starts_with(&owned) {
             continue;
         }
         if in_use(&e.path) {
@@ -301,13 +300,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Ligus 1.x checkouts (`.ligus/worktrees/*` on `ligus/chat/*` and
-    /// `ligus/turn-*` branches) belong to the 1.x install: a 0.1 sweep, which
-    /// knows none of their chats or turns, must leave them and their branches
-    /// exactly as they are.
+    /// Checkouts outside the owned dir (here `elsewhere/*` on `ligus/chat/*`
+    /// and `ligus/turn-*` branches) are not ours: a sweep, which knows none of
+    /// their chats or turns, must leave them and their branches exactly as
+    /// they are.
     #[test]
-    fn ligus1_worktrees_are_never_swept() {
-        let dir = std::env::temp_dir().join(format!("ligus-hygiene-ligus1-{}", uuid::Uuid::new_v4()));
+    fn foreign_worktrees_are_never_swept() {
+        let dir = std::env::temp_dir().join(format!("ligus-hygiene-foreign-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
             let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
@@ -316,12 +315,12 @@ mod tests {
         };
         run(&["init", "-q", "-b", "main"]);
         run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
-        run(&["worktree", "add", "-q", "-b", "ligus/chat/old", ".ligus/worktrees/chat-old"]);
-        run(&["worktree", "add", "-q", "-b", "ligus/turn-old", ".ligus/worktrees/old"]);
-        let pool = format!(".ligus/worktrees/pool-{}-x", uuid::Uuid::new_v4());
+        run(&["worktree", "add", "-q", "-b", "ligus/chat/old", "elsewhere/chat-old"]);
+        run(&["worktree", "add", "-q", "-b", "ligus/turn-old", "elsewhere/old"]);
+        let pool = format!("elsewhere/pool-{}-x", uuid::Uuid::new_v4());
         run(&["worktree", "add", "-q", "--detach", &pool]);
-        std::fs::write(dir.join(".ligus/worktrees/chat-old/work.txt"), "1.x work").unwrap();
-        std::fs::write(dir.join(".ligus/worktrees/old/unsaved.txt"), "1.x turn").unwrap();
+        std::fs::write(dir.join("elsewhere/chat-old/work.txt"), "work").unwrap();
+        std::fs::write(dir.join("elsewhere/old/unsaved.txt"), "turn").unwrap();
         let snap = |p: &Path| {
             let mut v: Vec<(PathBuf, Vec<u8>)> = Vec::new();
             let mut st = vec![p.to_path_buf()];
@@ -338,18 +337,18 @@ mod tests {
             v.sort();
             v
         };
-        let before = snap(&dir.join(".ligus"));
+        let before = snap(&dir.join("elsewhere"));
         let branches = run(&["branch", "--list", "ligus/*"]);
         let entries = list_worktrees(&dir);
-        // Unfiltered (the Ligus 1.x behaviour: everything under the repo) the
+        // Unfiltered (everything under the repo) the
         // sweep would remove all three. (Not `/`: on Windows that is the
         // current drive's root, and the temp dir may be on another drive.)
         assert_eq!(plan_sweep(&dir, &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);
         let plan = plan_sweep(&dir.join(".ligus/worktrees"), &entries, &HashSet::new(), &HashMap::new(), &|_| false);
         assert!(plan.is_empty(), "{plan:?}");
         prune(&dir);
-        assert_eq!(snap(&dir.join(".ligus")), before, "1.x worktrees byte-identical");
-        assert_eq!(run(&["branch", "--list", "ligus/*"]), branches, "1.x branches kept");
+        assert_eq!(snap(&dir.join("elsewhere")), before, "foreign worktrees byte-identical");
+        assert_eq!(run(&["branch", "--list", "ligus/*"]), branches, "their branches kept");
         assert!(!dir.join(".ligus").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

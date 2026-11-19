@@ -13,7 +13,7 @@ pub const MAX_DEPTH: usize = 3;
 /// At most this many directories visited per root.
 pub const MAX_DIRS: usize = 2000;
 
-const SKIP: &[&str] = &["node_modules", "target", ".ligus", ".ligus", ".git", "vendor", "Library", ".cache", ".Trash"];
+const SKIP: &[&str] = &["node_modules", "target", ".ligus", ".git", "vendor", "Library", ".cache", ".Trash"];
 
 /// Whether `p` is too broad or too sensitive to scan or adopt: the file
 /// system root, a top-level or system directory, or a home directory

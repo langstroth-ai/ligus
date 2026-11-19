@@ -83,7 +83,7 @@ impl ToolExecutor for NoTools {
 /// shim instead of the native API (`LIGUS_OLLAMA_WIRE=openai`). Escape hatch
 /// for a proxy that only speaks OpenAI; loses num_ctx/keep_alive/think.
 pub fn ollama_uses_openai_shim() -> bool {
-    ligus_core::compat::var("LIGUS_OLLAMA_WIRE")
+    ligus_core::names::var("LIGUS_OLLAMA_WIRE")
         .map(|v| v.trim().eq_ignore_ascii_case("openai"))
         .unwrap_or(false)
 }
@@ -944,7 +944,7 @@ mod tests {
     fn openai_shim_is_opt_in_via_env() {
         // Default: native. (The env var is process-global; only assert the
         // default here rather than mutating it under parallel tests.)
-        if ligus_core::compat::var("LIGUS_OLLAMA_WIRE").is_err() {
+        if ligus_core::names::var("LIGUS_OLLAMA_WIRE").is_err() {
             assert!(!ollama_uses_openai_shim());
         }
     }
@@ -1160,14 +1160,14 @@ mod live_cli {
     #[tokio::test]
     #[ignore]
     async fn live_cli_smoke() {
-        let provider = match ligus_core::compat::var("LIGUS_LIVE_CLI").as_deref() {
+        let provider = match ligus_core::names::var("LIGUS_LIVE_CLI").as_deref() {
             Ok("antigravity") => ModelProviderKind::Antigravity,
             Ok("copilot") => ModelProviderKind::Copilot,
             Ok("codex") => ModelProviderKind::Codex,
             Ok("claude-code") | Ok("claude") => ModelProviderKind::ClaudeCode,
             _ => return,
         };
-        let driver = ligus_core::Driver::parse(&ligus_core::compat::var("LIGUS_LIVE_DRIVER").unwrap_or_default());
+        let driver = ligus_core::Driver::parse(&ligus_core::names::var("LIGUS_LIVE_DRIVER").unwrap_or_default());
         let args = match provider {
             ModelProviderKind::Antigravity => super::super::antigravity::permission_args("default"),
             ModelProviderKind::Copilot => super::super::copilot::permission_args("default"),
@@ -1180,9 +1180,9 @@ mod live_cli {
         };
         let rt = ResolvedRuntime {
             provider,
-            model: ligus_core::compat::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
+            model: ligus_core::names::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
             endpoint: endpoint.into(),
-            api_key: ligus_core::compat::var("LIGUS_LIVE_KEY").ok().filter(|k| !k.is_empty()),
+            api_key: ligus_core::names::var("LIGUS_LIVE_KEY").ok().filter(|k| !k.is_empty()),
             args,
             model_provider_id: None,
             model_base_url: None,

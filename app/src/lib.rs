@@ -1154,11 +1154,10 @@ fn migrate_catalog_mcp_auth(settings: &mut LiveSettings, managed: &[McpServerSpe
     changed
 }
 
-/// A workspace state file (`.ligus/<name>`; a Ligus 1.x `.ligus/` is never
-/// used, see `ligus_core::compat::workspace_state_path`), with its directory
-/// created.
+/// A workspace state file (`.ligus/<name>`, see
+/// `ligus_core::names::workspace_state_path`), with its directory created.
 fn workspace_state_file(workspace_root: &str, name: &str) -> Result<PathBuf, String> {
-    let path = ligus_core::compat::workspace_state_path(Path::new(workspace_root), name).map_err(map_err)?;
+    let path = ligus_core::names::workspace_state_path(Path::new(workspace_root), name).map_err(map_err)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(map_err)?;
     }
@@ -1237,7 +1236,7 @@ fn is_auto_adoptable_workspace(path: &str) -> bool {
     if is_shallow_or_system_dir(p) {
         return false;
     }
-    p.join(".git").exists() || ligus_core::compat::has_workspace_dir(p)
+    p.join(".git").exists() || ligus_core::names::has_workspace_dir(p)
 }
 
 /// Choose the workspace root at launch. A still-valid persisted root the user
@@ -2154,8 +2153,8 @@ fn load_config_document_for_workspace(
     data_dir: &PathBuf,
     workspace_root: &str,
 ) -> Result<toml::Value, String> {
-    let found = ligus_core::compat::find_config_file(Path::new(workspace_root))
-        .or_else(|| ligus_core::compat::find_config_file(data_dir));
+    let found = ligus_core::names::find_config_file(Path::new(workspace_root))
+        .or_else(|| ligus_core::names::find_config_file(data_dir));
     let Some(source_path) = found else {
         return Ok(toml::Value::Table(Default::default()));
     };
@@ -2168,7 +2167,7 @@ fn save_workspace_config_document(workspace_root: &str, doc: &toml::Value) -> Re
         return Err("workspace root is empty".to_string());
     }
     let text = toml::to_string_pretty(doc).map_err(map_err)?;
-    std::fs::write(ligus_core::compat::config_file_for_write(Path::new(workspace_root)), text).map_err(map_err)
+    std::fs::write(ligus_core::names::config_file_for_write(Path::new(workspace_root)), text).map_err(map_err)
 }
 
 fn managed_runtime_catalog_path(workspace_root: &str) -> Result<PathBuf, String> {
@@ -2234,7 +2233,7 @@ impl CatalogTrust {
         // The base catalog came from the repo when the root's config file
         // parses (it is read first); otherwise from the data dir.
         let base_from_repo = !workspace_root.trim().is_empty()
-            && ligus_core::compat::config_candidates(&[Path::new(workspace_root)])
+            && ligus_core::names::config_candidates(&[Path::new(workspace_root)])
                 .first()
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .is_some_and(|text| ligus_core::config::load_from_str(&text).is_ok());
@@ -2301,7 +2300,7 @@ fn load_config_catalogs(dirs: &[&Path]) -> (Vec<RuntimeTarget>, String, Vec<McpS
     let mut base_runtimes = Vec::new();
     let mut default_runtime_id = "anthropic".to_string();
     let mut base_mcp = Vec::new();
-    for candidate in ligus_core::compat::config_candidates(dirs) {
+    for candidate in ligus_core::names::config_candidates(dirs) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
             if let Ok(cfg) = ligus_core::config::load_from_str(&text) {
                 base_runtimes = cfg.runtimes;
@@ -2430,7 +2429,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         None => (m.actor_identity.as_ref().and_then(|a| a.avatar_url.clone()), None),
     };
     // For a primary-@ligus turn (assistant role, not a named roster agent), surface
-    // the responding user's name so the UI can show whose ligus answered. Skip it
+    // the responding user's name so the UI can show whose @ligus answered. Skip it
     // for human turns and named agents.
     let responder_name = if m.role == MessageRole::Assistant && roster_agent.is_none() {
         m.actor_identity
@@ -3169,7 +3168,7 @@ fn api_key_for(provider: ModelProviderKind) -> Option<String> {
         ModelProviderKind::Anthropic => "ANTHROPIC_API_KEY",
         ModelProviderKind::OpenAI => "OPENAI_API_KEY",
         ModelProviderKind::OpenRouter => "OPENROUTER_API_KEY",
-        _ => return ligus_core::compat::var("LIGUS_PROVIDER_API_KEY").ok(),
+        _ => return ligus_core::names::var("LIGUS_PROVIDER_API_KEY").ok(),
     };
     std::env::var(var).ok()
 }
@@ -8456,7 +8455,7 @@ async fn run_turn_answering(
     // backstop — a margin above the stream's own timeout, so it never pre-empts
     // the finer-grained, better-messaged stream timeout on a legitimately long turn.
     let hard = std::time::Duration::from_secs(
-        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
+        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&s| s > 0)
@@ -10142,7 +10141,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
     let turns = vec![ChatTurn::user("Reply with exactly the token: PINGOK")];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
     let timeout = std::time::Duration::from_secs(
-        ligus_core::compat::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
+        ligus_core::names::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(45),
@@ -11402,25 +11401,8 @@ const RESET_SENTINEL: &str = ".reset-pending";
 
 fn build_state(app: &AppHandle) -> Result<AppState, String> {
     let data_dir: PathBuf = app.path().app_data_dir().map_err(map_err)?;
-    refuse_ligus1_data_dir(&data_dir)?;
     build_state_in(app, data_dir)
 }
-
-/// Ligus 0.1 starts fresh: its data dir must not be, link to, or contain Ligus
-/// 1.x data (`com.ligus.desktop`, `~/.ligus`, ...), which is never read or
-/// changed. On a refusal, show a blocking error and stop before anything is
-/// created or opened.
-fn refuse_ligus1_data_dir(data_dir: &Path) -> Result<(), String> {
-    let home = ligus_core::compat::home_dir();
-    match ligus_core::compat::check_data_dir(data_dir, home.as_deref()) {
-        Ok(()) => Ok(()),
-        // The startup recovery dialog says so ([`InitFailure::DataDir`]).
-        Err(e) => Err(format!("{DATA_DIR_REFUSED}{e}")),
-    }
-}
-
-/// Marks a [`refuse_ligus1_data_dir`] refusal for [`InitFailure::of`].
-const DATA_DIR_REFUSED: &str = "data folder refused: ";
 
 /// Why the backend didn't start, for the startup recovery dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11428,17 +11410,12 @@ enum InitFailure {
     /// The OS keychain (or Secret Service) refused or was cancelled: the
     /// user can allow it and try again.
     Keychain(String),
-    /// A Ligus 1.x data dir: never used, so trying again won't help.
-    DataDir(String),
     /// Anything else.
     Other(String),
 }
 
 impl InitFailure {
     fn of(e: &str) -> Self {
-        if let Some(rest) = e.strip_prefix(DATA_DIR_REFUSED) {
-            return Self::DataDir(rest.to_string());
-        }
         let l = e.to_ascii_lowercase();
         if ["keychain", "key vault", "secret service", "secret store", "user canceled", "user cancelled", "interaction is not allowed"].iter().any(|k| l.contains(k)) {
             return Self::Keychain(e.to_string());
@@ -11458,7 +11435,6 @@ impl InitFailure {
                 ),
                 true,
             ),
-            Self::DataDir(e) => ("Ligus can't use this data folder", format!("{e}\n\nNothing was changed."), false),
             Self::Other(e) => (
                 "Ligus couldn't start",
                 format!("{e}\n\nTry again, or quit and check the log (ligus.log in the app's log folder)."),
@@ -11510,12 +11486,9 @@ fn ask_init_failure(f: &InitFailure) -> InitChoice {
 
 /// [`build_state`] against an explicit data dir. The app uses the OS app-data
 /// dir; the in-app live test (`e2e`) points it at a temp dir.
-/// Before anything opens the data dir: refuse a Ligus 1.x dir (never read or
-/// changed; see `ligus_core::compat::check_data_dir`), create it, run a
-/// pending factory reset, and mark it as a Ligus 0.1 data dir.
+/// Before anything opens the data dir: create it and run a pending factory
+/// reset.
 fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
-    // Never a Ligus 1.x dir (also checked by `build_state`, with a dialog).
-    ligus_core::compat::check_data_dir(data_dir, ligus_core::compat::home_dir().as_deref())?;
     std::fs::create_dir_all(data_dir).map_err(map_err)?;
 
     // A factory reset was requested last run: the previous process wrote the
@@ -11541,8 +11514,6 @@ fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
         }
         let _ = std::fs::remove_file(&reset_marker);
     }
-    // Mark the dir as a Ligus 0.1 data dir (after a reset wipe, too).
-    ligus_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
     Ok(())
 }
 
@@ -11583,7 +11554,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let _ = remember_workspace(&data_dir, &workspace_root);
 
     let mut config_relay_endpoint: Option<String> = None;
-    for candidate in ligus_core::compat::config_candidates(&[Path::new(&workspace_root), &data_dir]) {
+    for candidate in ligus_core::names::config_candidates(&[Path::new(&workspace_root), &data_dir]) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
             if let Ok(cfg) = ligus_core::config::load_from_str(&text) {
                 config_relay_endpoint = cfg
@@ -11601,34 +11572,34 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // Turn scratch dirs a killed turn (or a killed app) left behind are swept
     // now and every ten minutes, once older than the longest turn.
     ligus_runtime::executor::start_turn_dir_sweeper(std::time::Duration::from_secs(
-        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s: &u64| s > 0).unwrap_or(3600),
+        ligus_core::names::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s: &u64| s > 0).unwrap_or(3600),
     ));
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
     let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
 
     let fallback_model =
-        ligus_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        ligus_core::names::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     // Connection settings: a persisted settings.json wins; on first launch we
     // seed it from env/config so existing `LIGUS_*` environments keep working. After
     // that the Settings UI edits the file live and the sync loop polls it.
     let env_seed = LiveSettings {
-        relay_url: ligus_core::compat::var("LIGUS_RELAY_URL")
+        relay_url: ligus_core::names::var("LIGUS_RELAY_URL")
             .ok()
             .filter(|s| !s.is_empty())
             .or(config_relay_endpoint),
-        relay_access_token: ligus_core::compat::var("LIGUS_RELAY_ACCESS_TOKEN")
+        relay_access_token: ligus_core::names::var("LIGUS_RELAY_ACCESS_TOKEN")
             .ok()
             .filter(|s| !s.is_empty()),
-        sync_room: ligus_core::compat::var("LIGUS_WORKSPACE")
+        sync_room: ligus_core::names::var("LIGUS_WORKSPACE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(default_sync_room),
-        workspace_passphrase: ligus_core::compat::var("LIGUS_WORKSPACE_KEY")
+        workspace_passphrase: ligus_core::names::var("LIGUS_WORKSPACE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        relay_issuer_key: ligus_core::compat::var("LIGUS_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
+        relay_issuer_key: ligus_core::names::var("LIGUS_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
         api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
         claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
@@ -14628,10 +14599,9 @@ fn login_shell_path() -> Option<std::ffi::OsString> {
 /// The desktop's daily log file prefix (`ligus.log.<date>`).
 const LOG_FILE_PREFIX: &str = "ligus.log";
 
-/// A desktop log file: `ligus.log*`, or a pre-rename `ligus.log*` still in
-/// the folder (read until the new day's file is newer).
+/// A desktop log file: `ligus.log*`.
 fn is_log_file(name: &str) -> bool {
-    name.starts_with(LOG_FILE_PREFIX) || name.starts_with("ligus.log")
+    name.starts_with(LOG_FILE_PREFIX)
 }
 
 /// The active log directory (set once at startup), so `read_recent_logs` can
@@ -14669,7 +14639,7 @@ fn init_logging(app: &tauri::App) {
     // Keep the flush guard alive for the whole process.
     Box::leak(Box::new(guard));
 
-    let filter = ligus_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+    let filter = ligus_core::names::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
@@ -14839,7 +14809,7 @@ pub fn run() {
             // Skippable via LIGUS_DISABLE_P2P — a perf diagnostic, since iroh does
             // continuous network/interface probing (heavier on Windows via WMI).
             #[cfg(feature = "p2p")]
-            if ligus_core::compat::var("LIGUS_DISABLE_P2P").is_err() {
+            if ligus_core::names::var("LIGUS_DISABLE_P2P").is_err() {
                 let (secret, data_dir, p2p_db) = p2p;
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(run_peer_sync_supervisor(h, data_dir, p2p_db, secret));
@@ -15839,7 +15809,7 @@ mod update_version_tests {
     fn updater_checks_the_ligus_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         // The identifier names the desktop data dir.
-        assert_eq!(conf["identifier"], ligus_core::compat::DESKTOP_APP_ID);
+        assert_eq!(conf["identifier"], ligus_core::names::DESKTOP_APP_ID);
         let updater = &conf["plugins"]["updater"];
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
@@ -17464,7 +17434,7 @@ mod mcp_bearer_tests {
     #[tokio::test]
     async fn live_static_bearer_through_registry() {
         let (Ok(url), Ok(token_file)) =
-            (ligus_core::compat::var("LIGUS_MCP_LIVE_URL"), ligus_core::compat::var("LIGUS_MCP_LIVE_TOKEN_FILE"))
+            (ligus_core::names::var("LIGUS_MCP_LIVE_URL"), ligus_core::names::var("LIGUS_MCP_LIVE_TOKEN_FILE"))
         else {
             eprintln!("skipping: set LIGUS_MCP_LIVE_URL + LIGUS_MCP_LIVE_TOKEN_FILE");
             return;
@@ -17502,8 +17472,8 @@ mod mcp_bearer_tests {
         eprintln!("tools: {names:?}");
         assert!(!tools.is_empty());
 
-        let tool = ligus_core::compat::var("LIGUS_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
-        let args: serde_json::Value = ligus_core::compat::var("LIGUS_MCP_LIVE_ARGS")
+        let tool = ligus_core::names::var("LIGUS_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
+        let args: serde_json::Value = ligus_core::names::var("LIGUS_MCP_LIVE_ARGS")
             .ok()
             .and_then(|a| serde_json::from_str(&a).ok())
             .unwrap_or_else(|| serde_json::json!({ "query": "RDNA wave32 vs wave64" }));
@@ -17773,153 +17743,13 @@ mod settings_secret_tests {
 }
 
 #[cfg(test)]
-mod fresh_start_tests {
-    //! Ligus 0.1 starts fresh: the desktop init path never reads or changes a
-    //! Ligus 1.x app-data dir next to its own, and starts with empty data.
-    use super::*;
-
-    fn fingerprint(dir: &Path) -> Vec<(PathBuf, String)> {
-        use std::hash::{Hash, Hasher};
-        let mut out = Vec::new();
-        let mut stack = vec![dir.to_path_buf()];
-        while let Some(d) = stack.pop() {
-            for e in std::fs::read_dir(&d).unwrap().flatten() {
-                let p = e.path();
-                let rel = p.strip_prefix(dir).unwrap().to_path_buf();
-                let t = e.file_type().unwrap();
-                if t.is_symlink() {
-                    out.push((rel, format!("link:{}", std::fs::read_link(&p).unwrap().display())));
-                } else if t.is_dir() {
-                    out.push((rel, "dir".into()));
-                    stack.push(p);
-                } else {
-                    let bytes = std::fs::read(&p).unwrap();
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    bytes.hash(&mut h);
-                    out.push((rel, format!("{}:{:x}", bytes.len(), h.finish())));
-                }
-            }
-        }
-        out.sort();
-        out
-    }
-
-    struct Tmp(PathBuf);
-    impl Tmp {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// A temp app-data base holding a fake Ligus 1.x `com.ligus.desktop`.
-    fn ligus1_base() -> (Tmp, PathBuf) {
-        let tmp = Tmp(std::env::temp_dir().join(format!("ligus-fresh-{}", Uuid::new_v4())));
-        std::fs::create_dir_all(tmp.path()).unwrap();
-        let legacy = tmp.path().join("com.ligus.desktop");
-        std::fs::create_dir_all(legacy.join("keys")).unwrap();
-        std::fs::write(legacy.join("ligus.db"), b"1.x sqlite bytes").unwrap();
-        std::fs::write(legacy.join("identity.json"), br#"{"deviceId":"d1"}"#).unwrap();
-        std::fs::write(legacy.join("keys/device.key"), b"secret").unwrap();
-        std::fs::write(legacy.join("appearance.json"), br#"{"palette":"harbor"}"#).unwrap();
-        (tmp, legacy)
-    }
-
-    #[test]
-    fn desktop_init_leaves_ligus1_untouched_and_starts_empty() {
-        let (tmp, legacy) = ligus1_base();
-        let before = fingerprint(&legacy);
-        let data_dir = tmp.path().join(ligus_core::compat::DESKTOP_APP_ID);
-
-        prepare_data_dir(&data_dir).unwrap();
-        ligus_runtime::secret_store::set_for_data_dir(&data_dir, std::sync::Arc::new(ligus_runtime::secret_store::File0600::new(&data_dir)));
-        let identity = IdentityStore::new(&data_dir, StoreKeyVault::for_data_dir(&data_dir));
-        let stored = identity.bootstrap("You", "you", "This device").unwrap();
-        let store = EventStore::open(data_dir.join("ligus.db")).unwrap();
-
-        assert!(store.list_session_ids().unwrap().is_empty(), "no 1.x chats");
-        assert_ne!(stored.device.id.to_string(), "d1", "a new device identity, not the 1.x one");
-        assert!(!data_dir.join("MIGRATED_FROM").exists());
-        assert_eq!(fingerprint(&legacy), before, "the 1.x dir is byte-identical");
-        // A second launch is the same.
-        prepare_data_dir(&data_dir).unwrap();
-        assert_eq!(fingerprint(&legacy), before);
-    }
-
-    #[test]
-    fn desktop_init_refuses_a_ligus1_dir_and_writes_nothing() {
-        let (tmp, legacy) = ligus1_base();
-        let before = fingerprint(tmp.path());
-        assert!(prepare_data_dir(&legacy).is_err(), "the 1.x dir itself");
-        #[cfg(unix)]
-        {
-            let link = tmp.path().join("linked");
-            std::os::unix::fs::symlink(&legacy, &link).unwrap();
-            assert!(prepare_data_dir(&link).is_err(), "a Ligus dir that is a symlink to the 1.x dir");
-            std::fs::remove_file(&link).unwrap();
-        }
-        // A pending reset in a 1.x dir must never wipe it.
-        assert_eq!(fingerprint(tmp.path()), before);
-        std::fs::write(legacy.join(RESET_SENTINEL), b"1").unwrap();
-        assert!(prepare_data_dir(&legacy).is_err());
-        assert!(legacy.join("ligus.db").is_file() && legacy.join("keys/device.key").is_file());
-    }
-}
-
-#[cfg(test)]
-mod first_run_tests {
-    use super::*;
-
-    /// Onboarding completion and the tour-seen flag live in this data dir's
-    /// settings.json, so a fresh data dir is always a first run (0.1 never
-    /// reads the webview's old `ligus.onboarded`/`ligus.tourSeen`).
-    #[test]
-    fn first_run_flags_default_off_and_skip_when_false() {
-        let d = LiveSettings::default();
-        assert!(!d.onboarded && !d.tour_seen);
-        let v = serde_json::to_value(&d).unwrap();
-        assert!(v.get("onboarded").is_none(), "false is not written");
-        assert!(v.get("tour_seen").is_none(), "false is not written");
-        // A settings.json that predates the fields is not onboarded.
-        let old: LiveSettings = serde_json::from_str(r#"{"sync_room":"r1"}"#).unwrap();
-        assert!(!old.onboarded && !old.tour_seen);
-    }
-
-    #[test]
-    fn first_run_flags_round_trip_and_factory_reset_clears_them() {
-        let dir = std::env::temp_dir().join(format!("ligus-first-run-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        ligus_runtime::secret_store::set_for_data_dir(
-            &dir,
-            std::sync::Arc::new(ligus_runtime::secret_store::File0600::new(&dir)),
-        );
-        let s = LiveSettings { onboarded: true, tour_seen: true, ..LiveSettings::default() };
-        save_settings(&dir, &s);
-        let back = load_or_seed_settings(&dir, LiveSettings::default());
-        assert!(back.onboarded && back.tour_seen);
-
-        // A factory reset wipes settings.json: the next launch is a first run.
-        std::fs::write(dir.join(RESET_SENTINEL), b"1").unwrap();
-        prepare_data_dir(&dir).unwrap();
-        let after = load_or_seed_settings(&dir, LiveSettings::default());
-        assert!(!after.onboarded && !after.tour_seen, "onboarding shows again after a reset");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-#[cfg(test)]
 mod log_file_tests {
-    /// The desktop writes `ligus.log.<date>`; Settings → Diagnostics still
-    /// finds a pre-rename `ligus.log.<date>` in the same folder.
+    /// The desktop writes `ligus.log.<date>`; Settings → Diagnostics finds
+    /// them in the log folder.
     #[test]
     fn log_files_are_named_ligus() {
         assert_eq!(super::LOG_FILE_PREFIX, "ligus.log");
         assert!(super::is_log_file("ligus.log.2026-11-15"));
-        assert!(super::is_log_file("ligus.log.2026-11-14"));
         assert!(!super::is_log_file("other.txt"));
     }
 }
@@ -17957,9 +17787,6 @@ mod init_recovery_tests {
         let got: Option<()> = init_with_recovery(|| Err("disk full".into()), |_| InitChoice::Quit);
         assert_eq!(got, None);
         assert!(matches!(InitFailure::of("disk full"), InitFailure::Other(_)));
-        let dd = InitFailure::of(&format!("{DATA_DIR_REFUSED}this is a Ligus 1.x folder"));
-        assert_eq!(dd, InitFailure::DataDir("this is a Ligus 1.x folder".into()));
-        assert!(!dd.explain().2, "a refused data folder isn't retried");
     }
 }
 

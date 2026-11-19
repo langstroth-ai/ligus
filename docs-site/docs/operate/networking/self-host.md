@@ -9,16 +9,7 @@ team; every device in a workspace points at the same relay URL and room.
 It lives in its own repository,
 **[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (MIT).
 This page covers relay **v0.3.0**: the binary `langstroth-relay` and settings
-named `LIGUS_RELAY_*`.
-
-!!! note "Older relay builds use older names"
-    Relay builds before v0.2.0 ship the binary as `langstroth-relay`
-    (`./cmd/langstroth-relay`) and read only `LANGSTROTH_RELAY_*` settings. v0.2.0 reads
-    both spellings (the `LIGUS_RELAY_*` name wins, and a legacy name logs a
-    one-time deprecation warning) and keeps `langstroth-relay` as an alias. Builds
-    from before the Langstroth rename call the binary `ligus-relay`
-    (`./cmd/ligus-relay`). If `./cmd/langstroth-relay` doesn't exist in your
-    checkout, use the binary name your checkout has in everything below.
+named `LANGSTROTH_RELAY_*`.
 
 ## What the relay holds
 
@@ -282,8 +273,7 @@ $ langstroth-relay issue --key 3f9c… --sub ligus:6f1c2d3e-8a7b-4c1d-9e0f-11223
 hrt1.eyJzdWIiOiJnaXRodWI6YWxpY2UiLC…
 ```
 
-(`LANGSTROTH_RELAY_TOKEN_PUBKEY` and `LANGSTROTH_RELAY_TOKEN_PUBKEY` are the same
-setting.) `issue` takes `--sub <id>` and optionally `--exp-days N` (no
+`issue` takes `--sub <id>` and optionally `--exp-days N` (no
 expiry if omitted), `--workspace <id>` (see below), `--cap X`, and the
 informational `--plan`, `--max-members N`, `--retention-days N` and `--turn`
 (see the claims table below). `langstroth-relay bootstrap-agent`

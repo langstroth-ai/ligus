@@ -15,9 +15,9 @@
 //!   was never authorized is harmless: every event it opens is still signature-
 //!   and authorization-checked by the fold.
 //!
-//! Unsigned (Ligus 1.x) `WorkspaceKeyRotation` rows from the relay keyring are
-//! ignored entirely: 0.1 starts from scratch, so there is nothing legitimate
-//! to read with them, and nothing is ever sealed under them.
+//! Unsigned `WorkspaceKeyRotation` rows (an older format) from the relay
+//! keyring are ignored entirely: nothing legitimate is read with them, and
+//! nothing is ever sealed under them.
 
 use std::collections::BTreeMap;
 

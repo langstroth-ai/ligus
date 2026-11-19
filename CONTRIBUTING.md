@@ -17,7 +17,7 @@ crates/
   ligus-proto     IPC DTOs shared with the frontend (ts-rs generates web/src/bindings)
   ligus-forge     code hosts (GitHub, GitLab, Forgejo, Gitea)
   ligus-cli       the ligus CLI and ligus serve
-app/       the Tauri shell: commands/events, app wiring
+app/             the Tauri shell (package ligus-desktop): commands/events, app wiring
 web/             React + TypeScript frontend (Vite + Bun)
 docs/            developer/maintainer docs (this audience)
 docs-site/       the published docs (docs.langstroth.ai): docs/ligus/ and docs/operate/
@@ -30,8 +30,12 @@ cargo test --workspace          # Rust crates + the Tauri app
 cd web && bun install           # first time
 cd web && bun run build         # frontend typecheck (tsc) + build
 cargo tauri dev                 # run the app (frontend + backend)
-cargo run -p langstroth-relay         # run the relay locally (:8443)
 ```
+
+To sync against a local relay, run one from
+[langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) in its
+checkout: `go run ./cmd/langstroth-relay` (serves `http://0.0.0.0:8443`, in
+memory).
 
 ## IPC type bindings (ts-rs)
 

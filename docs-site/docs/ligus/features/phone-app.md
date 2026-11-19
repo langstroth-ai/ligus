@@ -72,7 +72,7 @@ both:
 | **Relay** | a Noise session through your relay's tunnel; the relay forwards ciphertext only | the box's host id and public key, the relay URL, and the phone's own key and credential (90 days, renewed daily while used) |
 
 Pair by scanning the QR code `ligus pair` prints (or opening its
-`ligus://pair?…` link; `ligus://` works too). A **v2** link carries the relay
+`ligus://pair?…` link). A **v2** link carries the relay
 details as well as, when there is a usable direct address, the URL and token.
 A box listening only on loopback (`127.0.0.1`) with remote access off prints
 no link, since the phone can't reach it; see

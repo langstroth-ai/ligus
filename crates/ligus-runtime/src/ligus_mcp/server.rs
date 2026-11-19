@@ -75,7 +75,7 @@ impl CascadeBudgets {
     /// (`LIGUS_MCP_MAX_CASCADE_TOOL_CALLS`, `…_PROPOSALS`, `…_HANDOFFS`,
     /// `…_ASKS`).
     pub fn from_env() -> Self {
-        let n = |k: &str, d: u32| ligus_core::compat::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+        let n = |k: &str, d: u32| ligus_core::names::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
         let d = Self::default();
         Self {
             max_tool_calls: n("LIGUS_MCP_MAX_CASCADE_TOOL_CALLS", d.max_tool_calls),
@@ -91,7 +91,7 @@ impl Budgets {
     /// `…_PROPOSALS`, `…_HANDOFFS`, `…_ASKS`, `…_READ_MESSAGES`,
     /// `LIGUS_MCP_MAX_SPEND_USD`).
     pub fn from_env() -> Self {
-        let n = |k: &str, d: u32| ligus_core::compat::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+        let n = |k: &str, d: u32| ligus_core::names::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
         let d = Self::default();
         Self {
             max_tool_calls: n("LIGUS_MCP_MAX_TOOL_CALLS", d.max_tool_calls),
@@ -101,7 +101,7 @@ impl Budgets {
             max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
             max_forge_calls: n("LIGUS_MCP_MAX_FORGE_CALLS", d.max_forge_calls),
             max_memory_proposals: n("LIGUS_MCP_MAX_MEMORY_PROPOSALS", d.max_memory_proposals),
-            max_spend_usd: ligus_core::compat::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
+            max_spend_usd: ligus_core::names::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
             cascade: CascadeBudgets::from_env(),
         }
     }

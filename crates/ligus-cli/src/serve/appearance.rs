@@ -10,7 +10,6 @@
 //!    headless home host with no desktop app;
 //! 2. the desktop app's `appearance.json` on this machine
 //!    (`LIGUS_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`).
-//!    A Ligus 1.x desktop's `com.ligus.desktop` dir is never read.
 //!
 //! Each field resolves on its own, so a box can pin the palette in config and
 //! still follow the desktop's mode. The file is read per request (it is tiny),
@@ -99,10 +98,9 @@ fn default_desktop_dir() -> Option<PathBuf> {
     app_data_base().map(|b| pick_desktop_dir(&b))
 }
 
-/// The desktop data dir under `base`. Only the 0.1 bundle id: Ligus 0.1 starts
-/// fresh and never reads a Ligus 1.x `com.ligus.desktop` dir.
+/// The desktop data dir under `base`.
 pub fn pick_desktop_dir(base: &Path) -> PathBuf {
-    base.join(ligus_core::compat::DESKTOP_APP_ID)
+    base.join(ligus_core::names::DESKTOP_APP_ID)
 }
 
 #[derive(Deserialize, Default)]
@@ -204,9 +202,6 @@ mod tests {
     fn desktop_dir_is_the_ligus_bundle_id() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
-        write(&base.join("com.ligus.desktop"), r#"{"palette":"harbor"}"#);
-        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"), "the 1.x dir is not read");
-        let cfg = AppearanceConfig { desktop_dir: Some(pick_desktop_dir(base)), ..Default::default() };
-        assert_eq!(resolve(&cfg), json!({"palette": null, "mode": null, "source": "none"}), "no fallback to the 1.x theme");
+        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"));
     }
 }

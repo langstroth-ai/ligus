@@ -197,7 +197,7 @@ pub fn dumpable() -> Option<bool> {
 
 /// `LIGUS_REQUIRE_SANDBOX=1`: refuse to run a host without an agent sandbox.
 pub fn sandbox_required() -> bool {
-    require_sandbox_value(ligus_core::compat::env_opt("LIGUS_REQUIRE_SANDBOX").as_deref())
+    require_sandbox_value(ligus_core::names::env_opt("LIGUS_REQUIRE_SANDBOX").as_deref())
 }
 
 /// Fail closed: any value but empty or an explicit off (`0`, `false`, `no`,

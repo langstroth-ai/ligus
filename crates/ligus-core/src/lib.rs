@@ -10,7 +10,7 @@ pub mod authorization;
 pub mod authz;
 pub mod channel;
 pub mod chat;
-pub mod compat;
+pub mod names;
 pub mod config;
 pub mod context_budget;
 pub mod copies;

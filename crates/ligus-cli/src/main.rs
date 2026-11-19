@@ -64,17 +64,15 @@ struct Config {
     epoch_keys: Vec<ligus_runtime::keyring::DeliveredKey>,
 }
 
-/// Env lookup (blank = unset; `LIGUS_*` names only, see `ligus_core::compat`).
+/// Env lookup (blank = unset; `LIGUS_*` names only, see `ligus_core::names`).
 fn env_opt(k: &str) -> Option<String> {
-    ligus_core::compat::env_opt(k)
+    ligus_core::names::env_opt(k)
 }
 
-/// Ligus 0.1 starts fresh: refuse a data dir that is, links to, or holds
-/// Ligus 1.x data (`~/.ligus`, a 1.x serve dir, ...), which is never read or
-/// changed; otherwise create it and mark it as 0.1's. Exits on a refusal.
-fn claim_data_dir_or_exit(data_dir: &std::path::Path) {
-    if let Err(e) = ligus_core::compat::claim_data_dir(data_dir, ligus_core::compat::home_dir().as_deref()) {
-        eprintln!("error: {e}");
+/// Create the data dir. Exits when it can't be created.
+fn create_data_dir_or_exit(data_dir: &std::path::Path) {
+    if let Err(e) = std::fs::create_dir_all(data_dir) {
+        eprintln!("error: could not set up {}: {e}", data_dir.display());
         std::process::exit(1);
     }
 }
@@ -148,9 +146,9 @@ fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
 fn config() -> Config {
     let data_dir = env_opt("LIGUS_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| env_opt("HOME").map(|h| ligus_core::compat::home_data_dir(std::path::Path::new(&h))))
+        .or_else(|| env_opt("HOME").map(|h| ligus_core::names::home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./ligus-data"));
-    claim_data_dir_or_exit(&data_dir);
+    create_data_dir_or_exit(&data_dir);
     // B2: secrets come from the OS secret store from here on.
     ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
     // Env wins; the saved config.toml (from `ligus enroll`) fills the rest.
@@ -261,12 +259,8 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
     }
 }
 
-/// The display name every box got under Ligus 1.x (a rebrand leftover). A box
-/// still carrying it is renamed to its label when it serves.
-pub(crate) const LEGACY_BOX_NAME: &str = "ligus-cli";
-
 /// The name a new box identity starts with: its label (`--label` /
-/// `LIGUS_SERVE_LABEL`), else the machine's host name — never "ligus-cli".
+/// `LIGUS_SERVE_LABEL`), else the machine's host name.
 pub(crate) fn box_name(label: Option<String>, hostname: Option<String>) -> String {
     label
         .map(|l| l.trim().to_string())
@@ -282,14 +276,14 @@ pub(crate) fn bootstrap_identity(identity: &IdentityStore<impl ligus_runtime::Ke
 }
 
 /// Give a box's identity its label `name` when it still carries a name
-/// nobody chose: the Ligus 1.x [`LEGACY_BOX_NAME`], or `auto` (the host name
-/// it was created with before a label was known, e.g. by `ligus enroll`).
+/// nobody chose: `auto` (the host name it was created with before a label was
+/// known, e.g. by `ligus enroll`).
 /// Returns the new name when it changed.
 pub(crate) fn adopt_box_name(identity: &IdentityStore<impl ligus_runtime::KeyVault>, name: &str, auto: Option<&str>) -> Result<Option<String>> {
     let name = name.trim();
     let current = bootstrap_identity(identity)?;
-    let unchosen = current.account.display_name == LEGACY_BOX_NAME || auto.is_some_and(|a| current.account.display_name == a);
-    if !unchosen || name.is_empty() || name == LEGACY_BOX_NAME || name == current.account.display_name {
+    let unchosen = auto.is_some_and(|a| current.account.display_name == a);
+    if !unchosen || name.is_empty() || name == current.account.display_name {
         return Ok(None);
     }
     identity.update_display_name(name)?;
@@ -885,7 +879,7 @@ fn cmd_runtimes(cfg: &Config) -> Result<()> {
     for r in rts {
         let cred = match &r.credential {
             WorkspaceCredential::SecretRef { secret_ref } => {
-                let have = ligus_core::compat::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
+                let have = ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
                 format!("secretRef:{secret_ref}{}", if have { " ✓" } else { " (missing)" })
             }
             WorkspaceCredential::Inline { .. } => "inline".into(),
@@ -948,7 +942,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     // local-dev convenience only — the production daemon is `ligus worker`, which
     // requires a workspace-owned runtime. Refuse to run unattended in production
     // unless explicitly opted in for dev.
-    if ligus_core::compat::var("LIGUS_ALLOW_PERSONAL_AGENT").is_err() {
+    if ligus_core::names::var("LIGUS_ALLOW_PERSONAL_AGENT").is_err() {
         bail!(
             "`ligus agent` runs on a personal credential, which isn't workspace-owned (\u{a7}12.5) — \
              use `ligus worker` for production. For local dev only, set LIGUS_ALLOW_PERSONAL_AGENT=1."
@@ -2127,8 +2121,7 @@ mod cli_tests {
         assert!(workspace_runtime_resolved(&wr).gateway.is_none());
     }
 
-    /// A box enrolled with `ligus enroll` is named after its label or host,
-    /// never the Ligus 1.x "ligus-cli" (which every author line showed).
+    /// A box enrolled with `ligus enroll` is named after its label or host.
     #[test]
     fn a_new_box_is_named_after_its_label_or_host() {
         assert_eq!(box_name(Some("mac-test".into()), Some("zaz-mbp".into())), "mac-test");
@@ -2137,25 +2130,20 @@ mod cli_tests {
         let tmp = tempfile::tempdir().unwrap();
         let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
         let name = bootstrap_identity(&identity).unwrap().account.display_name;
-        assert_ne!(name, LEGACY_BOX_NAME);
         assert!(!name.trim().is_empty());
     }
 
-    /// A box that carries "ligus-cli" (or the host name it got before a label
-    /// was known) takes its label when it serves; a name someone chose is kept.
+    /// A box created under its host name (by `ligus enroll`) takes its label
+    /// when it serves; a name someone chose is kept.
     #[test]
-    fn a_legacy_box_name_is_replaced_once() {
-        let tmp = tempfile::tempdir().unwrap();
-        let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
-        identity.bootstrap(LEGACY_BOX_NAME, LEGACY_BOX_NAME, LEGACY_BOX_NAME).unwrap();
-        assert_eq!(adopt_box_name(&identity, "mac-test", None).unwrap().as_deref(), Some("mac-test"));
-        assert_eq!(bootstrap_identity(&identity).unwrap().account.display_name, "mac-test");
-        assert_eq!(adopt_box_name(&identity, "other", Some("zaz-mbp")).unwrap(), None, "a chosen name stays");
-        // Created under its host name (by `ligus enroll`), then served with a label.
+    fn an_unchosen_box_name_is_replaced_once() {
         let tmp = tempfile::tempdir().unwrap();
         let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
         identity.bootstrap("zaz-mbp", "zaz-mbp", "zaz-mbp").unwrap();
         assert_eq!(adopt_box_name(&identity, "mac-test", Some("zaz-mbp")).unwrap().as_deref(), Some("mac-test"));
+        assert_eq!(bootstrap_identity(&identity).unwrap().account.display_name, "mac-test");
+        assert_eq!(adopt_box_name(&identity, "other", Some("zaz-mbp")).unwrap(), None, "a chosen name stays");
+        assert_eq!(adopt_box_name(&identity, "other", None).unwrap(), None);
     }
 
     /// config.toml holds the workspace E2EE key and relay token.

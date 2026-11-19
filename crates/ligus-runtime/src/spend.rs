@@ -58,7 +58,7 @@ const TABLE: &[(&str, Price)] = &[
 pub const FALLBACK: Price = Price { input: 15.0, output: 75.0 };
 
 fn env_prices() -> Vec<(String, Price)> {
-    let Ok(v) = ligus_core::compat::var("LIGUS_MODEL_PRICES") else { return Vec::new() };
+    let Ok(v) = ligus_core::names::var("LIGUS_MODEL_PRICES") else { return Vec::new() };
     v.split(',')
         .filter_map(|e| {
             let (k, p) = e.split_once('=')?;

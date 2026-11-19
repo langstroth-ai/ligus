@@ -8,11 +8,12 @@ disclosure.
 
 **Please do not open a public issue for security problems.**
 
-Report privately, whichever you prefer:
+Report it privately through GitHub's private vulnerability reporting: open the
+repository's **Security** tab and choose **Report a vulnerability**
+([direct link](https://github.com/langstroth-ai/ligus/security/advisories/new)).
+The discussion stays attached to the fix.
 
-- **GitHub private advisory** — the repo's **Security → Report a vulnerability**
-  tab (preferred; keeps discussion attached to the fix), or
-- **Email** — **m.zazula@gmail.com**. Encrypt if you like; ask for a key.
+If you can't use GitHub, email **support@langstroth.ai** instead.
 
 Please include: affected component (app / relay / crypto / MCP / sync), version
 or commit, reproduction steps or a PoC, and impact. We aim to acknowledge within

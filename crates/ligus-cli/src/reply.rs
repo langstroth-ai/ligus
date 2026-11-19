@@ -92,7 +92,7 @@ impl Default for ToolSettings {
 }
 
 pub fn env_flag(name: &str, default: bool) -> bool {
-    match ligus_core::compat::var(name).ok().map(|v| v.trim().to_ascii_lowercase()) {
+    match ligus_core::names::var(name).ok().map(|v| v.trim().to_ascii_lowercase()) {
         Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes") => true,
         Some(v) if matches!(v.as_str(), "0" | "false" | "off" | "no") => false,
         _ => default,

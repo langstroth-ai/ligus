@@ -208,35 +208,26 @@ fn host_slot() -> &'static RwLock<HostPaths> {
 
 impl HostPaths {
     /// The defaults every host has: `~/.ligus`, the desktop app-data dir, a
-    /// `LIGUS_DATA_DIR`, and the device-local widenings from the env. Ligus 1.x
-    /// data dirs (`~/.ligus`, `com.ligus.desktop`, ...) are denied too: 0.1 never
-    /// reads or changes them, but they still hold a 1.x install's identity
-    /// keys, so no agent child may read them either. Deny-listing only; nothing
-    /// is created, swept or deleted there.
+    /// `LIGUS_DATA_DIR`, and the device-local widenings from the env.
     pub fn from_env() -> Self {
         let mut h = HostPaths::default();
         if let Some(home) = home_dir() {
-            h.data_dirs.push(home.join(ligus_core::compat::HOME_DATA_DIR));
+            h.data_dirs.push(home.join(ligus_core::names::HOME_DATA_DIR));
             #[cfg(target_os = "macos")]
-            h.data_dirs.push(home.join("Library/Application Support").join(ligus_core::compat::DESKTOP_APP_ID));
+            h.data_dirs.push(home.join("Library/Application Support").join(ligus_core::names::DESKTOP_APP_ID));
             #[cfg(target_os = "linux")]
             {
-                h.data_dirs.push(home.join(".local/share").join(ligus_core::compat::DESKTOP_APP_ID));
-                h.data_dirs.push(home.join(".config").join(ligus_core::compat::DESKTOP_APP_ID));
-            }
-            for d in ligus_core::compat::ligus1_locations(Some(&home)) {
-                if !h.data_dirs.contains(&d) {
-                    h.data_dirs.push(d);
-                }
+                h.data_dirs.push(home.join(".local/share").join(ligus_core::names::DESKTOP_APP_ID));
+                h.data_dirs.push(home.join(".config").join(ligus_core::names::DESKTOP_APP_ID));
             }
         }
-        if let Ok(d) = ligus_core::compat::var("LIGUS_DATA_DIR") {
+        if let Ok(d) = ligus_core::names::var("LIGUS_DATA_DIR") {
             if !d.trim().is_empty() {
                 h.data_dirs.push(PathBuf::from(d.trim()));
             }
         }
         let list = |name: &str| -> Vec<String> {
-            ligus_core::compat::var(name)
+            ligus_core::names::var(name)
                 .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
                 .unwrap_or_default()
         };
@@ -860,7 +851,7 @@ impl EnvelopeEnforcer {
             && !matches!(i.purpose, Purpose::McpServer)
             && (i.worktree_is_isolated || !*isolate_writes);
         let mut read_only: Vec<PathBuf> = protected_dirs.iter().map(|d| i.worktree.join(d)).collect();
-        for f in ["ligus.config.toml", "ligus.config.toml", ".envrc"] {
+        for f in ["ligus.config.toml", ".envrc"] {
             read_only.push(i.worktree.join(f));
         }
         if !read_only.contains(&i.worktree.join(".git")) {
@@ -1219,7 +1210,7 @@ pub fn default_executor() -> Arc<dyn TurnExecutor> {
 }
 
 fn select_executor() -> (Arc<dyn TurnExecutor>, SandboxStatus) {
-    if ligus_core::compat::var("LIGUS_SANDBOX").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
+    if ligus_core::names::var("LIGUS_SANDBOX").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
         return (Arc::new(Unconfined), SandboxStatus::unconfined("LIGUS_SANDBOX=off".into(), Vec::new()));
     }
     #[cfg(target_os = "macos")]

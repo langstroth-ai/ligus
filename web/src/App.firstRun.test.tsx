@@ -78,13 +78,11 @@ describe("App first-run gate", () => {
     expect(await screen.findByText("finish onboarding")).toBeInTheDocument();
   });
 
-  it("completing onboarding records it in the backend and clears the old flags", async () => {
-    window.localStorage.setItem("ligus.onboarded", "1");
+  it("completing onboarding records it in the backend", async () => {
     renderApp();
     fireEvent.click(await screen.findByText("finish onboarding"));
     await waitFor(() => expect(screen.queryByText("finish onboarding")).not.toBeInTheDocument());
     expect(calls).toContain("mark_onboarded");
-    expect(window.localStorage.getItem("ligus.onboarded")).toBeNull();
     // The tour auto-runs once, and closing it is recorded in the backend.
     fireEvent.click(await screen.findByText("close tour", {}, { timeout: 3000 }));
     await waitFor(() => expect(calls).toContain("mark_tour_seen"));

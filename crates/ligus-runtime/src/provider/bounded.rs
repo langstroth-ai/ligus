@@ -16,7 +16,7 @@ pub const MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 256 * 1024;
 
 fn env_limit(name: &str, default: usize) -> usize {
-    ligus_core::compat::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n: &usize| *n > 0).unwrap_or(default)
+    ligus_core::names::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n: &usize| *n > 0).unwrap_or(default)
 }
 
 /// The per-line cap in force.

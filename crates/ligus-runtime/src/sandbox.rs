@@ -61,7 +61,7 @@ pub const GRANTS_ENV: &str = "LIGUS_SANDBOX_GRANTS";
 
 /// [`GRANTS_ENV`] as a setting.
 pub fn grants_setting_from_env() -> Option<bool> {
-    let v = ligus_core::compat::var(GRANTS_ENV).ok()?;
+    let v = ligus_core::names::var(GRANTS_ENV).ok()?;
     match v.trim().to_ascii_lowercase().as_str() {
         "apply" | "on" | "1" | "true" | "yes" => Some(true),
         "ignore" | "off" | "0" | "false" | "no" => Some(false),

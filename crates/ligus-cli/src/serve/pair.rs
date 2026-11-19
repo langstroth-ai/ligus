@@ -87,11 +87,11 @@ pub fn token_matches(expected: &str, given: &str) -> bool {
 }
 
 /// `ligus://pair?url=<base64url(serverURL), no padding>&token=<token>`. The
-/// scheme comes from `ligus_core::compat::DEEP_LINK_SCHEME`; phones accept
+/// scheme comes from `ligus_core::names::DEEP_LINK_SCHEME`; phones accept
 /// `ligus://` too.
 pub fn pairing_url(server_url: &str, token: &str) -> String {
     let url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(server_url.trim_end_matches('/').as_bytes());
-    ligus_core::compat::deep_link(&format!("pair?url={url}&token={token}"))
+    ligus_core::names::deep_link(&format!("pair?url={url}&token={token}"))
 }
 
 /// Whether `ip` is an address the API may listen on without an explicit
@@ -204,7 +204,7 @@ mod tests {
     fn pairing_url_has_the_contract_shape() {
         let link = pairing_url("http://100.101.102.104:8787/", "abc123");
         assert!(link.starts_with("ligus://pair?"), "{link}");
-        let rest = ligus_core::compat::strip_deep_link_scheme(&link)
+        let rest = ligus_core::names::strip_deep_link_scheme(&link)
             .and_then(|r| r.strip_prefix("pair?"))
             .expect("pair link");
         let mut url = None;

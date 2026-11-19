@@ -367,7 +367,7 @@ pub fn create_window(dir: &Path, lifetime: u64) -> Result<(PairingSecret, u64)> 
 pub fn pairing_link_v2(direct: Option<(&str, &str)>, keys: &HostKeys, relay: &str, ps: &[u8; 32], exp: u64) -> String {
     let mut link = match direct {
         Some((url, token)) => format!("{}&", super::pair::pairing_url(url, token)),
-        None => ligus_core::compat::deep_link("pair?"),
+        None => ligus_core::names::deep_link("pair?"),
     };
     link.push_str(&format!(
         "v=2&hid={}&hs={}&relay={}&ps={}&exp={exp}",

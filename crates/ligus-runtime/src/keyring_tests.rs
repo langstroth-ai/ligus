@@ -477,7 +477,7 @@ impl Junk {
         let sealed = BTreeMap::from([(owner.device_id.to_string(), blob)]);
         match self {
             Junk::Garbage(s) => json!({ "kind": s, "sealed": s }),
-            // A Ligus 1.x unsigned rotation sealed to us at a higher version.
+            // An unsigned (older format) rotation sealed to us at a higher version.
             Junk::Legacy => json!({ "version": 9, "sealed": sealed }),
             Junk::BadCommitment => {
                 serde_json::to_value(SignedRotation { version: 2, prev_version: 1, sealed, key_commitment: "0".repeat(64) }).unwrap()

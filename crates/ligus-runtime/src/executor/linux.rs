@@ -83,7 +83,7 @@ use crate::ligus_mcp::bridge::SANDBOX_TCP_PORT;
 /// Whether this device lets confined children create unix sockets
 /// (`LIGUS_SANDBOX_UNIX_SOCKETS=allow`; off by default, C-10).
 fn unix_sockets_allowed() -> bool {
-    ligus_core::compat::var("LIGUS_SANDBOX_UNIX_SOCKETS").is_ok_and(|v| v.trim().eq_ignore_ascii_case("allow"))
+    ligus_core::names::var("LIGUS_SANDBOX_UNIX_SOCKETS").is_ok_and(|v| v.trim().eq_ignore_ascii_case("allow"))
 }
 
 /// Host sockets an agent must never reach, masked by path as a second layer.
@@ -261,7 +261,7 @@ impl TurnExecutor for LandlockTier {
 pub fn select_executor() -> (std::sync::Arc<dyn TurnExecutor>, super::SandboxStatus) {
     use super::SandboxStatus;
     use std::sync::Arc;
-    let mode = ligus_core::compat::var("LIGUS_SANDBOX").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+    let mode = ligus_core::names::var("LIGUS_SANDBOX").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
     let bwrap_err = if mode == "landlock" {
         BwrapUnavailable { reason: "LIGUS_SANDBOX=landlock skips bubblewrap".into(), apparmor: false }
     } else {

@@ -1754,11 +1754,11 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
 /// `LIGUS_SERVE_LIVE_ENDPOINT` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_gateway_turn_reads_a_file() {
-    let Some(endpoint) = ligus_core::compat::var("LIGUS_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
+    let Some(endpoint) = ligus_core::names::var("LIGUS_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
         eprintln!("skipping: LIGUS_SERVE_LIVE_ENDPOINT unset");
         return;
     };
-    let models = ligus_core::compat::var("LIGUS_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
+    let models = ligus_core::names::var("LIGUS_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
     for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
         let word = format!("lantern{}", &Uuid::new_v4().simple().to_string()[..6]);
         let note = format!("The secret word is {word}.\n");
@@ -3569,7 +3569,7 @@ async fn gh_default_only_for_exact_github_com() {
 
 /// Who the phone's messages show as. A box that joined with a workspace
 /// invite is its own member: the phone writes as the box (right for a shared
-/// box), under the box's own name, never the Ligus 1.x "ligus-cli". A box
+/// box), under the box's own name. A box
 /// enrolled as its owner's device (`ligus serve enroll`) writes as the owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_messages_show_as_the_box_or_its_owner() {
@@ -3578,7 +3578,6 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
     let box_actor = h.handle.shared.lock().author().clone();
-    assert_ne!(box_actor.display_name, crate::LEGACY_BOX_NAME);
     let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello" }))).await;
     let as_box = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
 

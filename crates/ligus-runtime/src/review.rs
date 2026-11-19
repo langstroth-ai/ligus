@@ -115,8 +115,6 @@ pub fn executed_argv(plan: &ImplementPlan) -> Option<&[String]> {
 /// servers (the config-impact badge).
 const CONFIG_PATTERNS: &[&str] = &[
     "ligus.config.toml",
-    "ligus.config.toml",
-    ".ligus/",
     ".ligus/",
     ".github/workflows/",
     ".gitlab-ci.yml",
@@ -412,7 +410,6 @@ mod tests {
     #[test]
     fn config_impact_badge_paths() {
         let cases: &[(&str, bool)] = &[
-            ("ligus.config.toml", true),
             ("ligus.config.toml", true),
             (".ligus/rules.toml", true),
             (".ligus/worktrees/x", true),

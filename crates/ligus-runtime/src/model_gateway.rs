@@ -592,12 +592,12 @@ impl ModelGateways {
     /// is an error (the host must not run without the gateways its operator
     /// listed). `data_dir` holds the generated attribution key.
     pub fn from_env(data_dir: Option<&Path>) -> Result<Self, GatewayError> {
-        let Some(path) = ligus_core::compat::var(GATEWAYS_FILE_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+        let Some(path) = ligus_core::names::var(GATEWAYS_FILE_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
             return Ok(Self::default());
         };
         let text = std::fs::read_to_string(&path).map_err(|e| GatewayError::Config(format!("{path}: {e}")))?;
         let gateways = Self::parse(&text)?;
-        let exclusive = !gateways.is_empty() && !ligus_core::compat::var(EXCLUSIVE_ENV).is_ok_and(|v| v.trim() == "0" || v.trim().eq_ignore_ascii_case("false"));
+        let exclusive = !gateways.is_empty() && !ligus_core::names::var(EXCLUSIVE_ENV).is_ok_and(|v| v.trim() == "0" || v.trim().eq_ignore_ascii_case("false"));
         let key = if gateways.iter().any(|g| g.attribution()) { Some(attribution_key(data_dir)?) } else { None };
         Ok(Self::new(gateways, exclusive, key))
     }
@@ -626,7 +626,7 @@ impl ModelGateways {
     /// Every credential file (for the sandbox deny list).
     pub fn secret_files(&self) -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = self.gateways.iter().flat_map(|g| g.secret_files()).collect();
-        if let Some(p) = ligus_core::compat::var(ATTRIBUTION_KEY_ENV).ok().filter(|s| !s.trim().is_empty()) {
+        if let Some(p) = ligus_core::names::var(ATTRIBUTION_KEY_ENV).ok().filter(|s| !s.trim().is_empty()) {
             v.push(PathBuf::from(p.trim()));
         }
         v
@@ -771,7 +771,7 @@ pub const CLI_ENV_KEYS: &[&str] = &[
 
 /// The operator's attribution key, else this host's generated one.
 fn attribution_key(data_dir: Option<&Path>) -> Result<Vec<u8>, GatewayError> {
-    if let Some(p) = ligus_core::compat::var(ATTRIBUTION_KEY_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+    if let Some(p) = ligus_core::names::var(ATTRIBUTION_KEY_ENV).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         let k = std::fs::read(&p).map_err(|e| GatewayError::Config(format!("attribution key {p}: {e}")))?;
         if k.len() < 16 {
             return Err(GatewayError::Config("attribution key must be at least 16 bytes".into()));

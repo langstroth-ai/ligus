@@ -22,7 +22,7 @@
 //!   service, not a file the agent can write through the profile).
 //!
 //! `LIGUS_CLI_HOME=shared` (device-local) turns this off and lets the CLIs
-//! write their real state dirs, as under Ligus 1.x.
+//! write their real state dirs.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ pub const MAX_COPY_BYTES: u64 = 1024 * 1024;
 
 /// Whether CLI children get a per-turn home (the default).
 pub fn enabled() -> bool {
-    !ligus_core::compat::var("LIGUS_CLI_HOME").is_ok_and(|v| v.trim().eq_ignore_ascii_case("shared"))
+    !ligus_core::names::var("LIGUS_CLI_HOME").is_ok_and(|v| v.trim().eq_ignore_ascii_case("shared"))
 }
 
 /// Config dirs (relative to home) whose top-level files a CLI needs.

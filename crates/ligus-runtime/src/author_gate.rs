@@ -79,7 +79,7 @@ pub fn min_role_from(explicit: Option<&str>, write_capable: bool) -> WorkspaceRo
 
 /// This host's floor for a turn (reads `LIGUS_MCP_MIN_ROLE`).
 pub fn min_role(write_capable: bool) -> WorkspaceRole {
-    min_role_from(ligus_core::compat::var(MIN_ROLE_ENV).ok().as_deref(), write_capable)
+    min_role_from(ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(), write_capable)
 }
 
 /// The startup warning for an explicit floor below the default, if any.
@@ -98,7 +98,7 @@ pub fn lowered_floor_warning(explicit: Option<&str>, write_capable: bool) -> Opt
 /// Log [`lowered_floor_warning`] for this host's setting. Call once at
 /// startup.
 pub fn warn_if_lowered(write_capable: bool) {
-    if let Some(w) = lowered_floor_warning(ligus_core::compat::var(MIN_ROLE_ENV).ok().as_deref(), write_capable) {
+    if let Some(w) = lowered_floor_warning(ligus_core::names::var(MIN_ROLE_ENV).ok().as_deref(), write_capable) {
         tracing::warn!(target: "gate", "{w}");
         eprintln!("warning: {w}");
     }

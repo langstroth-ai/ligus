@@ -258,8 +258,8 @@ pub fn chat_worktree_at(repo_root: &Path, chat_id: &str, base: &str) -> io::Resu
 
 /// The checkout path of a chat's persistent worktree.
 fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
-    // Always under `.ligus/`; a Ligus 1.x `.ligus/worktrees/` is never used.
-    ligus_core::compat::workspace_state_path(repo_root, format!("worktrees/chat-{}", slug(chat_id)))
+    // Always under `.ligus/`.
+    ligus_core::names::workspace_state_path(repo_root, format!("worktrees/chat-{}", slug(chat_id)))
 }
 
 /// Ensure a chat's **persistent** base worktree exists and return its path.
@@ -366,7 +366,7 @@ impl Worktree {
     pub fn create_from(repo_root: &Path, turn_id: &str, base_ref: &str) -> io::Result<Worktree> {
         let slug = slug(turn_id);
         let branch = format!("ligus/turn-{slug}");
-        let path = ligus_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug))?;
+        let path = ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees").join(&slug))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -488,7 +488,7 @@ impl LazyTurnWorktree {
 
     /// Where a stopped turn's unfinished edits are saved (see `Drop`).
     pub fn stopped_patch_path(repo_root: &Path, turn_id: &str) -> io::Result<PathBuf> {
-        ligus_core::compat::workspace_state_path(repo_root, Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))))
+        ligus_core::names::workspace_state_path(repo_root, Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))))
     }
 
     /// The worktree cut so far, if any (without taking it).
@@ -569,7 +569,7 @@ impl Drop for LazyTurnWorktree {
 pub const POOL_PER_CHAT: usize = 2;
 
 fn pool_dir(repo_root: &Path) -> io::Result<PathBuf> {
-    ligus_core::compat::workspace_state_path(repo_root, Path::new("worktrees"))
+    ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees"))
 }
 
 fn pool_prefix(chat_id: &str) -> String {
@@ -649,7 +649,7 @@ pub fn cut_turn_worktree_reusing(repo_root: &Path, chat_id: &str, turn_id: &str)
     for parked in pooled(repo_root, chat_id) {
         let slug_id = slug(turn_id);
         let branch = format!("ligus/turn-{slug_id}");
-        let Ok(path) = ligus_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id)) else { break };
+        let Ok(path) = ligus_core::names::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id)) else { break };
         // Moving it out of the pool claims it; a concurrent turn that loses
         // the race gets an error and tries the next one.
         if git(repo_root, &["worktree", "move", &parked.to_string_lossy(), &path.to_string_lossy()]).is_err() {
@@ -698,7 +698,7 @@ mod reuse_tests {
         run(&dir, &["config", "user.name", "t"]);
         run(&dir, &["config", "core.autocrlf", "false"]);
         std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
-        std::fs::write(dir.join(".gitignore"), "target/\n.ligus/\n.ligus/\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), "target/\n.ligus/\n").unwrap();
         run(&dir, &["add", "-A"]);
         run(&dir, &["commit", "-qm", "init"]);
         dir

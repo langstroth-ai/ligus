@@ -1015,8 +1015,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
             } else {
-                // A box still called "ligus-cli" (enrolled under Ligus 1.x), or by
-                // the host name `ligus enroll` gave it, takes its label so the
+                // A box still called by the host name `ligus enroll` gave it
+                // takes its label so the
                 // phone's messages show the name the box was given.
                 let identity = ligus_runtime::IdentityStore::new(&cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
                 let was = svc.author().display_name.clone();

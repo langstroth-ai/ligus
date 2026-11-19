@@ -72,7 +72,7 @@ struct Config {
 }
 
 fn env(name: &str) -> Option<String> {
-    ligus_core::compat::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    ligus_core::names::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 impl Config {
@@ -1430,7 +1430,7 @@ pub fn run_live() -> usize {
     };
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            ligus_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+            ligus_core::names::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,dispatch=info,compaction=info,worktree=info")),
         )
         .with_writer(std::io::stderr)

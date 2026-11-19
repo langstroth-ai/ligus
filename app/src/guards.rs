@@ -654,9 +654,8 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportD
     for (root, root_repo) in &roots {
         let root = root.clone();
         let entries = hygiene::list_worktrees(&root);
-        // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
-        // Ligus 1.x `.ligus/worktrees` checkout is never swept.
-        let plan = match ligus_core::compat::workspace_state_path(&root, "worktrees") {
+        // Only worktrees under this workspace's `.ligus/worktrees` are ours.
+        let plan = match ligus_core::names::workspace_state_path(&root, "worktrees") {
             Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &ligus_runtime::git_worktree::is_in_use),
             Err(e) => {
                 tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");

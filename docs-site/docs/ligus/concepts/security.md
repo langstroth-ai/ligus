@@ -110,7 +110,7 @@ an API model calling MCP tools:
   worktree, and its changes come back as a proposal for review. While the
   envelope is tightened (dearth mode, a chat lockdown), a turn that can't get
   a worktree is refused instead of running in place.
-- **Filesystem allow-list.** Agents never write into `.git`, `.ligus`, `.ligus`,
+- **Filesystem allow-list.** Agents never write into `.git`, `.ligus`,
   `.claude`, `.vscode` or the workspace config files. Ligus's built-in file
   tools and the OS sandbox (below) both read this list from the envelope.
 - **Egress policy.** Normally open (each runtime's own permission tier
@@ -166,7 +166,7 @@ turns refused, where neither is available. The table shows the first.
 | Your home dir | **denied** (reads and writes) except what [the home allow-list](#home-default-deny) lets back in | an empty tmpfs over it, with the allow-list bound back in read-only |
 | Writes | the turn's worktree (only when the turn may write), its scratch dir and per-turn home, signed read-write grants | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
 | Never readable | Ligus's data dir (keys, `settings.json`, the database, `serve.token`), a `--token-file` elsewhere, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials`, forge CLI logins (`~/.config/gh`, `glab-cli`, `tea`, `hub`), even inside a granted dir | the same (tmpfs over them, mounted after every bind so a grant of a parent dir can't bring them back), plus `$XDG_RUNTIME_DIR`, so the D-Bus session bus and Secret Service are out of reach |
-| Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `ligus.config.toml`, `.envrc`, matched by name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`) | the same names at the top level (a missing one is pinned by an empty read-only directory); Linux file systems are case-sensitive, so `.CLAUDE/` is a different directory no CLI reads. Nested names are not pinned, but Ligus's own file tools and ACP `fs/*` refuse them |
+| Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `.envrc`, matched by name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`) | the same names at the top level (a missing one is pinned by an empty read-only directory); Linux file systems are case-sensitive, so `.CLAUDE/` is a different directory no CLI reads. Nested names are not pinned, but Ligus's own file tools and ACP `fs/*` refuse them |
 | Network | denied except the turn's egress proxy on loopback | a fresh network namespace; the only way out is the egress proxy through a socket |
 | Other | | seccomp denies `ptrace`, `process_vm_*`, `mount`, `bpf`, `keyctl`, kernel-module and `kexec` calls, new user namespaces, and new unix sockets (`socket(AF_UNIX)`), so `docker.sock`, an ssh-agent or a desktop service can't be reached; `socketpair` still works, and the Ligus MCP server is reached through a loopback forwarder inside the sandbox. Known host sockets (`docker.sock`, `podman.sock`, `containerd.sock`, `$SSH_AUTH_SOCK`) are also masked. `LIGUS_SANDBOX_UNIX_SOCKETS=allow` on the device lifts the unix-socket filter (the masks stay) for tools that need sockets of their own |
 

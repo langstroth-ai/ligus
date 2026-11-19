@@ -920,7 +920,7 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     match choice.as_deref() {
         Some("file") => return Arc::new(File0600::new(data_dir)),
         Some("k8s") => {
-            let mount = ligus_core::compat::var_os("LIGUS_SECRETS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(K8S_SECRETS_DIR_DEFAULT));
+            let mount = ligus_core::names::var_os("LIGUS_SECRETS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(K8S_SECRETS_DIR_DEFAULT));
             return Arc::new(K8sSecretFile::new(mount, data_dir));
         }
         Some("secret-service") => {
@@ -943,7 +943,7 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     }
     #[cfg(target_os = "linux")]
     {
-        if ligus_core::compat::var_os("LIGUS_SECRETS_DIR").is_some() {
+        if ligus_core::names::var_os("LIGUS_SECRETS_DIR").is_some() {
             return open(data_dir, Some("k8s"));
         }
         if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
@@ -1003,7 +1003,7 @@ fn stores() -> &'static Mutex<HashMap<PathBuf, Arc<dyn SecretStore>>> {
 /// it get [`File0600`] from [`for_data_dir`], so no test touches a real
 /// keychain.
 pub fn init_for_data_dir(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
-    let env = ligus_core::compat::var("LIGUS_SECRET_BACKEND").ok();
+    let env = ligus_core::names::var("LIGUS_SECRET_BACKEND").ok();
     let store = open(data_dir, env.as_deref().or(choice));
     if store.backend().is_plain_file() {
         tracing::warn!(target: "secrets", "Ligus's secrets are in owner-only files under {}, not an OS secret store", data_dir.display());
@@ -1720,8 +1720,8 @@ esac"#,
 
     #[test]
     fn plaintext_secrets_left_in_a_file_are_scrubbed_not_imported() {
-        // 0.1 starts from scratch: a settings.json holding plaintext secrets
-        // (hand-edited, or from a Ligus 1.x build) loses them, and the file is
+        // A settings.json holding plaintext secrets (hand-edited, say) loses
+        // them, and the file is
         // rewritten without them.
         let dir = tempfile::tempdir().unwrap();
         let store = File0600::new(dir.path().join("store"));
