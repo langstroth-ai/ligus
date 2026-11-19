@@ -12438,13 +12438,15 @@ async fn run_device_host_loop(app: AppHandle) {
         };
         if due {
             let coverage = crate::repos_ui::beat_coverage(&state, ws);
-            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &host_id, coverage).await {
+            let beat = state.service.lock().unwrap().signed_beat(ws, coverage);
+            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
         if let Ok(beats) = hive_runtime::host_presence::fetch_beats(&relay, &room, &ring).await {
-            state.host_presence.merge_beats(beats);
+            let verified = state.service.lock().unwrap().beat_verifier(ws);
+            state.host_presence.merge_beats(beats, verified);
         }
     }
 }

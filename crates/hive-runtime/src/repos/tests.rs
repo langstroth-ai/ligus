@@ -324,7 +324,8 @@ fn coverage_from_revoked_device_dropped_after_revocation() {
         at: 1,
         seq: 1,
         coverage: vec![hive_core::workspace_repo::CoverageEntry { repo_id: wefit().id, state: "present".into(), code: String::new(), via_fork: false }],
-    });
+        ..Default::default()
+    }, true);
     assert_eq!(host_reports(&r, std::slice::from_ref(&host), &p).len(), 1);
     r.devices.get_mut(&device).unwrap().revoked = true;
     assert!(host_reports(&r, std::slice::from_ref(&host), &p).is_empty(), "a revoked device's coverage is gone");

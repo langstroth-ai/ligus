@@ -1444,6 +1444,26 @@ impl ChatService {
             .unwrap_or(true))
     }
 
+    /// This host's presence beat for `workspace_id` with its repo coverage,
+    /// the coverage signed with this device's own key (repos review residual
+    /// 1: a beat is sealed with the workspace key every member holds, so
+    /// readers use a coverage report only when its host signed it).
+    pub fn signed_beat(&self, workspace_id: Uuid, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> hive_core::workspace_repo::HostBeat {
+        let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
+        if !beat.coverage.is_empty() {
+            beat.sign_coverage(workspace_id, self.device_id, &self.keypair);
+        }
+        beat
+    }
+
+    /// Whether a fetched beat's coverage is its host's own signed report
+    /// that the current roster of `workspace_id` vouches for (certified, not
+    /// revoked, acting for a member). Unsigned or wrongly signed: ignored.
+    pub fn beat_verifier(&self, workspace_id: Uuid) -> impl Fn(&hive_core::workspace_repo::HostBeat) -> bool {
+        let roster = self.workspace_roster(workspace_id).ok();
+        move |b| roster.as_ref().is_some_and(|r| b.coverage_verified(workspace_id, r))
+    }
+
     /// The device-keyed dispatcher's one entry (design repos-and-checkouts
     /// 11; `hive_core::dispatch`): decide what this device does about the
     /// turn `trigger` (for `agent`, a hand-off receiver; `None` for the plain

@@ -1315,13 +1315,15 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(_) => hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
-            if let Err(e) = publish_beat(&relay, &room, &ring, &shared.host_id, coverage).await {
+            let beat = shared.lock().signed_beat(shared.ws, coverage);
+            if let Err(e) = publish_beat(&relay, &room, &ring, &beat).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
             coordinator.tick(&shared, &relay, &room, &ring).await;
         }
         if let Ok(beats) = fetch_beats(&relay, &room, &ring).await {
-            shared.presence.merge_beats(beats);
+            let verified = shared.lock().beat_verifier(shared.ws);
+            shared.presence.merge_beats(beats, verified);
         }
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
