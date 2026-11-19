@@ -150,10 +150,22 @@ impl ApplyTick {
 /// `repo_for(chat)` names (`None`: refused as having no checkout). Never on
 /// this host's own approval: only a person's request names a host. A device
 /// that can't write (revoked, awaiting approval) does nothing.
-pub fn apply_tick(svc: &Mutex<ChatService>, workspace_id: Uuid, repo_for: &dyn Fn(Uuid) -> Option<PathBuf>) -> ApplyTick {
+///
+/// `founder` is `workspace_id`'s trusted founder. The requests are listed,
+/// and each is judged, under that pin, set under the same lock as each
+/// decision: a client that shares one service between several workspaces
+/// (re-pinning it for each) can't have another workspace's pin in force
+/// while this one's requests are authorized. The service's own pin is put
+/// back after.
+pub fn apply_tick(
+    svc: &Mutex<ChatService>,
+    workspace_id: Uuid,
+    founder: Option<&str>,
+    repo_for: &dyn Fn(Uuid) -> Option<PathBuf>,
+) -> ApplyTick {
     let mut tick = ApplyTick::default();
     let jobs = {
-        let s = svc.lock().unwrap_or_else(|e| e.into_inner());
+        let s = crate::apply_host::Pinned::new(svc, founder);
         if s.write_block().is_some() {
             return tick;
         }
@@ -267,9 +279,13 @@ mod tests {
         );
         let svc = Mutex::new(svc);
         let ws = Uuid::new_v4();
-        let tick = apply_tick(&svc, ws, &|_| None);
+        let tick = apply_tick(&svc, ws, None, &|_| None);
         assert!(tick.listing_error.is_none() && tick.results.is_empty() && tick.outcomes().is_empty());
+        // The tick works under the pin it was given and puts the service's back.
+        svc.lock().unwrap().set_trusted_founder(Some("other-workspace-founder".into()));
+        assert!(apply_tick(&svc, ws, Some("this-workspace-founder"), &|_| None).results.is_empty());
+        assert_eq!(svc.lock().unwrap().trusted_founder(), Some("other-workspace-founder"));
         svc.lock().unwrap().set_write_block(Some("revoked".into()));
-        assert!(apply_tick(&svc, ws, &|_| None).results.is_empty());
+        assert!(apply_tick(&svc, ws, None, &|_| None).results.is_empty());
     }
 }

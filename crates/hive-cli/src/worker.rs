@@ -394,7 +394,9 @@ pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, h
         }
         repo
     };
-    let tick = hive_runtime::sync_service::apply_tick(svc, ctx.ws, &repo_for);
+    // This box serves one workspace: its pin is the service's own.
+    let founder = lock(svc).trusted_founder().map(str::to_string);
+    let tick = hive_runtime::sync_service::apply_tick(svc, ctx.ws, founder.as_deref(), &repo_for);
     if let Some(e) = &tick.listing_error {
         eprintln!("apply: listing requests failed: {e}");
     }
