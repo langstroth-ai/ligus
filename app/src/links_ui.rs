@@ -395,7 +395,11 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
 
 /// Your linked accounts, with the cached status of each.
 #[tauri::command]
-pub(crate) fn my_identity_links(state: State<AppState>) -> Vec<LinkDto> {
+pub(crate) async fn my_identity_links(ligus_app: tauri::AppHandle) -> Vec<LinkDto> {
+    crate::off_main(ligus_app, move |ligus_app| my_identity_links_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn my_identity_links_sync(state: State<AppState>) -> Vec<LinkDto> {
     let Some(me) = state.service.lock().unwrap().author().account_id else { return Vec::new() };
     links_of(&state, me).into_iter().map(|(d, ..)| d).collect()
 }

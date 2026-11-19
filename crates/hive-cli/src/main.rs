@@ -1252,6 +1252,9 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         Err(e) => eprintln!("worker: interrupted-turn recovery failed: {e}"),
     }
     let svc = std::sync::Arc::new(std::sync::Mutex::new(svc));
+    // Each turn's own stop signal: a shutdown mid-turn stops it once the
+    // grace runs out.
+    let stops = hive_runtime::turn_engine::TurnStops::new();
     let ctx = worker::WorkerCtx {
         cfg,
         ws,
@@ -1260,6 +1263,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
         presence: None,
+        stops: Some(stops.clone()),
     };
     // Registered, store open, interrupted turns recovered: ready for work.
     ready.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1292,7 +1296,24 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         // A transient store/DB error inside a tick must NOT kill the daemon —
         // log it and retry on the next tick (bare `?` here used to abort the loop).
         worker::apply_tick(&ctx, &svc);
-        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut drain, &worker::NoSink).await {
+        // A shutdown signal mid-turn: give the turn WORKER_STOP_GRACE to
+        // finish, then stop it (it completes its reply and drops its
+        // worktree) and exit.
+        let tick = worker::drain_tick(&ctx, &svc, &mut drain, &worker::NoSink);
+        tokio::pin!(tick);
+        let ticked = tokio::select! {
+            r = &mut tick => r,
+            _ = shutdown_signal() => {
+                println!("worker: shutdown signal received — letting the turn in flight finish.");
+                if tokio::time::timeout(WORKER_STOP_GRACE, &mut tick).await.is_err() {
+                    stops.close();
+                    println!("worker: stopping the turn in flight.");
+                    let _ = tokio::time::timeout(Duration::from_secs(3), &mut tick).await;
+                }
+                return Ok(());
+            }
+        };
+        if let Err(e) = ticked {
             eprintln!("worker: tick failed (retrying): {e}");
         }
         if cfg.relay_url.is_some() {
@@ -1339,6 +1360,10 @@ fn sync_backoff_secs(fails: u32) -> u64 {
 
 /// Resolves when the process receives SIGTERM (orchestrator stop/redeploy) or
 /// SIGINT (Ctrl-C), so the worker loop can exit gracefully.
+/// How long `ligus worker` lets a turn in flight finish on SIGTERM / Ctrl-C
+/// before it stops it (under a systemd unit's default 90 s stop timeout).
+const WORKER_STOP_GRACE: Duration = Duration::from_secs(12);
+
 async fn shutdown_signal() {
     #[cfg(unix)]
     {

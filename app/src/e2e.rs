@@ -500,8 +500,8 @@ impl Ctx {
     }
 
     fn new_chat(&self, runtime_id: &str) -> String {
-        let chat = crate::create_chat(self.state(), String::new()).expect("create_chat");
-        crate::set_chat_runtime(self.state(), chat.id.clone(), runtime_id.into()).expect("set_chat_runtime");
+        let chat = crate::create_chat_sync(self.state(), String::new()).expect("create_chat");
+        crate::set_chat_runtime_sync(self.state(), chat.id.clone(), runtime_id.into()).expect("set_chat_runtime");
         chat.id
     }
 
@@ -514,7 +514,7 @@ impl Ctx {
     }
 
     fn chat(&self, sid: &str) -> hive_proto::ChatSessionDto {
-        crate::get_chat(self.state(), sid.into()).expect("get_chat").expect("chat exists")
+        crate::get_chat_sync(self.state(), sid.into()).expect("get_chat").expect("chat exists")
     }
 
     fn last_reply(&self, sid: &str) -> String {
@@ -533,7 +533,7 @@ impl Ctx {
         let (tx, rx) = std::sync::mpsc::channel();
         let (app, sid) = (self.app.clone(), sid.to_string());
         std::thread::spawn(move || {
-            let _ = tx.send(crate::get_context_telemetry(app.state::<AppState>(), sid));
+            let _ = tx.send(crate::get_context_telemetry_sync(app.state::<AppState>(), sid));
         });
         rx.recv_timeout(Duration::from_secs(20))
             .expect("get_context_telemetry did not return within 20s (deadlock?)")
@@ -589,7 +589,7 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
     c.check(!reply.starts_with("[error]"), "reply is not an error");
     c.check(!reply.trim().is_empty(), "reply is not empty");
 
-    let proposals = crate::list_proposals(ctx.state(), sid.clone()).expect("list_proposals");
+    let proposals = crate::list_proposals_sync(ctx.state(), sid.clone()).expect("list_proposals");
     let diffs: Vec<_> = proposals.iter().filter(|p| p.kind == "fileDiff").collect();
     c.check(
         diffs.len() == 1,
@@ -747,7 +747,7 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
     .expect("set_retrieval_settings");
     ctx.add_runtime("gw-main", &ctx.cfg.model, true, None);
     let sid = ctx.new_chat("gw-main");
-    crate::add_vault(ctx.state(), sid.clone(), "https".into(), format!("{}/vault/runbook.md", ctx.proxy.base), None)
+    crate::add_vault_sync(ctx.state(), sid.clone(), "https".into(), format!("{}/vault/runbook.md", ctx.proxy.base), None)
         .expect("add_vault");
 
     let questions = [
@@ -1032,13 +1032,13 @@ fn run_offline() -> usize {
     let handle = app.handle().clone();
     let mut failed = 0;
 
-    let sid = crate::create_chat(handle.state::<AppState>(), String::new()).expect("create_chat").id;
+    let sid = crate::create_chat_sync(handle.state::<AppState>(), String::new()).expect("create_chat").id;
     // Bounded: a deadlock must fail the run, not hang it.
     let (tx, rx) = std::sync::mpsc::channel();
     {
         let (handle, sid) = (handle.clone(), sid.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(crate::get_context_telemetry(handle.state::<AppState>(), sid));
+            let _ = tx.send(crate::get_context_telemetry_sync(handle.state::<AppState>(), sid));
         });
     }
     match rx.recv_timeout(Duration::from_secs(20)) {
@@ -1053,9 +1053,58 @@ fn run_offline() -> usize {
             std::process::exit(1);
         }
     }
+    failed += reads_while_the_service_is_held(&handle, &sid);
     failed += tauri::async_runtime::block_on(repos_checks(&handle, &root));
     drop(app);
     let _ = std::fs::remove_dir_all(&root);
+    failed
+}
+
+/// A passkey ceremony (or any long write) holds the `service` lock. The
+/// commands that wait on it run off the calling thread, so the window stays
+/// responsive: invoking one returns at once, a settings read completes while
+/// the lock is held, and the chat read completes as soon as it is released.
+fn reads_while_the_service_is_held(handle: &tauri::AppHandle, sid: &str) -> usize {
+    let mut failed = 0;
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let writer = {
+        let handle = handle.clone();
+        std::thread::spawn(move || {
+            let state = handle.state::<AppState>();
+            let _svc = state.service.lock().unwrap();
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
+        })
+    };
+    held_rx.recv_timeout(Duration::from_secs(10)).expect("the writer took the lock");
+    let t0 = Instant::now();
+    let chats = tauri::async_runtime::spawn(crate::list_chats(handle.clone()));
+    let chat = tauri::async_runtime::spawn(crate::get_chat(handle.clone(), sid.to_string()));
+    let settings = crate::get_app_settings(handle.state::<AppState>());
+    let quick = t0.elapsed() < Duration::from_secs(2);
+    std::thread::sleep(Duration::from_millis(300));
+    let waited = !chats.inner().is_finished() && !chat.inner().is_finished();
+    if quick && settings.is_ok() && waited {
+        eprintln!("PASS a settings read completes, and chat reads wait off the caller, while a write holds the service lock");
+    } else {
+        eprintln!("FAIL reads under a held service lock: quick={quick} settings_ok={} waited={waited}", settings.is_ok());
+        failed += 1;
+    }
+    release_tx.send(()).unwrap();
+    writer.join().unwrap();
+    let done = tauri::async_runtime::block_on(async {
+        tokio::time::timeout(Duration::from_secs(20), async { (chats.await, chat.await) }).await
+    });
+    match done {
+        Ok((Ok(Ok(list)), Ok(Ok(Some(_))))) if list.iter().any(|c| c.id == sid) => {
+            eprintln!("PASS the chat reads complete once the lock is released")
+        }
+        other => {
+            eprintln!("FAIL chat reads after the lock was released: {other:?}");
+            failed += 1;
+        }
+    }
     failed
 }
 
@@ -1178,12 +1227,12 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     trust(&data_dir, &bound, &["bound-mcp"]);
 
     let add = |input: &str, name: &str, path: Option<&Path>| {
-        crate::repos_ui::add_workspace_repo(state(), input.into(), Some(name.into()), Some("github".into()), Some("main".into()), path.map(|p| p.to_string_lossy().into_owned()))
+        crate::repos_ui::add_workspace_repo_sync(state(), input.into(), Some(name.into()), Some("github".into()), Some("main".into()), path.map(|p| p.to_string_lossy().into_owned()))
     };
     let (a_id, b_id, g_id) = match (
         add("github.com/e2e/alpha", "Alpha", Some(&alpha)),
         add("github.com/e2e/beta", "Beta", Some(&beta)),
-        crate::repos_ui::add_workspace_repo(state(), "git.e2e.invalid/e2e/gamma".into(), Some("Gamma".into()), None, Some("main".into()), None),
+        crate::repos_ui::add_workspace_repo_sync(state(), "git.e2e.invalid/e2e/gamma".into(), Some("Gamma".into()), None, Some("main".into()), None),
     ) {
         (Ok(a), Ok(b), Ok(g)) => (a["id"].as_str().unwrap().to_string(), b["id"].as_str().unwrap().to_string(), g["id"].as_str().unwrap().to_string()),
         other => {
@@ -1192,9 +1241,9 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
         }
     };
     let chat = |title: &str, repo: Option<&str>| {
-        let id = crate::create_chat(state(), title.into()).expect("create_chat").id;
+        let id = crate::create_chat_sync(state(), title.into()).expect("create_chat").id;
         if let Some(r) = repo {
-            crate::repos_ui::set_chat_workspace_repo(state(), id.clone(), Some(r.into()), None).expect("set_chat_workspace_repo");
+            crate::repos_ui::set_chat_workspace_repo_sync(state(), id.clone(), Some(r.into()), None).expect("set_chat_workspace_repo");
         }
         Uuid::parse_str(&id).unwrap()
     };
@@ -1209,7 +1258,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
 
     // ---- Per-turn catalogs and trust (F14) ----
     // The window views chat B: the global catalogs follow it.
-    crate::set_active_chat(state(), Some(chat_b.to_string())).unwrap();
+    crate::set_active_chat_sync(state(), Some(chat_b.to_string())).unwrap();
     let viewed = state().workspace_root.lock().unwrap().clone();
     c.check(mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"], format!("the window's catalog follows chat B: {:?}", mcp_ids(&state().combined_mcp_servers())));
     // A turn in chat A sees only A's trusted servers: not B's, not the
@@ -1231,14 +1280,14 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     c.check(*state().workspace_root.lock().unwrap() == viewed, "a turn leaves the window's folder alone");
     c.check(mcp_ids(&state().combined_mcp_servers()) == ["b-mcp", "shared"], "a turn leaves the window's catalog alone");
     // Viewing chat A swaps the window (and its watcher) to A's folder.
-    crate::set_active_chat(state(), Some(chat_a.to_string())).unwrap();
+    crate::set_active_chat_sync(state(), Some(chat_a.to_string())).unwrap();
     c.check(mcp_ids(&state().combined_mcp_servers()) == ["a-mcp"], format!("viewing chat A shows A's catalog: {:?}", mcp_ids(&state().combined_mcp_servers())));
     c.check(state().workspace_root.lock().unwrap().contains("Alpha"), "the window's folder (and watcher) follow the viewed chat's checkout");
 
     // ---- The turn gate (5.3) ----
     let gated = crate::turn_scope(&state(), &load(chat_g));
     c.check(gated.as_ref().is_err(), format!("a chat whose repo isn't here never runs a turn: {:?}", gated.as_ref().err()));
-    let chip = crate::repos_ui::chat_workspace_repo(state(), chat_g.to_string()).unwrap();
+    let chip = crate::repos_ui::chat_workspace_repo_sync(state(), chat_g.to_string()).unwrap();
     c.check(chip["here"]["state"] != "present", format!("the chip says Gamma isn't here: {chip}"));
     let pinned = load(chat_a).repo.and_then(|r| r.base_commit).is_some();
     c.check(pinned, "the first turn pins chat A's base");
@@ -1252,7 +1301,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
         p.required_approvals = 1;
         let id = p.id;
         state().service.lock().unwrap().upsert_proposal(chat_a, ws, p).expect("upsert_proposal");
-        crate::vote_proposal(state(), chat_a.to_string(), id.to_string(), true).expect("vote");
+        crate::vote_proposal_sync(state(), chat_a.to_string(), id.to_string(), true).expect("vote");
         id
     };
     let add_file = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n";
@@ -1305,11 +1354,11 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
         let o = opened.clone();
         crate::repos_ui::set_open_hook(Some(Box::new(move |p: &Path| o.lock().unwrap().push(p.to_path_buf()))));
     }
-    let r = crate::repos_ui::open_chat_checkout(state(), chat_a.to_string());
+    let r = crate::repos_ui::open_chat_checkout_sync(state(), chat_a.to_string());
     crate::repos_ui::set_open_hook(None);
     let seen: Vec<PathBuf> = opened.lock().unwrap().iter().map(|p| canon(p)).collect();
     c.check(r.is_ok() && seen == [canon(&chat_wt)], format!("open in editor opens chat A's folder: {r:?} {seen:?}"));
-    c.check(crate::repos_ui::open_chat_checkout(state(), chat_c.to_string()).is_err(), "a chat without a repo checkout has nothing to open");
+    c.check(crate::repos_ui::open_chat_checkout_sync(state(), chat_c.to_string()).is_err(), "a chat without a repo checkout has nothing to open");
 
     // ---- Re-pinning the chat's base (review residual 3) ----
     // Upstream moves on; the chat's creator re-pins. The chat branch carries
@@ -1320,7 +1369,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     git(&alpha, &["add", "upstream.txt"]);
     git(&alpha, &["commit", "-qm", "upstream"]);
     let upstream = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
-    let r = crate::repos_ui::repin_chat_base(state(), chat_a.to_string(), Some(upstream.clone()));
+    let r = crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
     c.check(r.as_deref() == Ok(upstream.as_str()), format!("the chat's creator re-pins its base: {r:?}"));
     let folded = load(chat_a);
     c.check(
@@ -1328,7 +1377,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
             && folded.repo_bases.values().next().is_some_and(|h| h.first() == Some(&pin_before)),
         "the fold keeps the first pin and moves to the new one",
     );
-    let r = crate::repos_ui::repin_chat_base(state(), chat_a.to_string(), Some(upstream.clone()));
+    let r = crate::repos_ui::repin_chat_base_sync(state(), chat_a.to_string(), Some(upstream.clone()));
     c.check(r.is_err(), "re-pinning onto the pin in force is refused");
     let refused = crate::turn_scope(&state(), &load(chat_a));
     c.check(refused.as_ref().is_err_and(|e| e.contains("re-pinned") && e.contains("isn't from the chat's ledger")), format!("a branch with someone's own commit refuses to follow, visibly: {:?}", refused.as_ref().err()));
@@ -1362,7 +1411,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
         r.as_ref().ok().and_then(|v| v["path"].as_str().map(PathBuf::from)).is_some_and(|p| canon(&p) == p && p.parent() == Some(canon(&parent).as_path())),
         "the bound clone path is the normalised one every later match compares",
     );
-    let chip = crate::repos_ui::chat_workspace_repo(state(), chat_g.to_string()).unwrap();
+    let chip = crate::repos_ui::chat_workspace_repo_sync(state(), chat_g.to_string()).unwrap();
     c.check(chip["here"]["state"] == "present", format!("the clone is bound: chat G can run here now: {chip}"));
     c.check(crate::turn_scope(&state(), &load(chat_g)).is_ok(), "and its turn gate passes");
 

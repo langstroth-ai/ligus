@@ -185,6 +185,9 @@ pub fn run(cmd: Command, timeout: Duration) -> Result<RunOut, String> {
 
 /// `git -C dir [auth] <args>`, failing with git's own message.
 fn git(dir: &FsPath, auth: &[String], args: &[&str], timeout: Duration) -> Result<String, String> {
+    // A branch it creates or moves (tracking, fast-forwarding the base)
+    // waits for the repo's worktree and branch mutations, like a turn's cut.
+    let _lock = hive_runtime::git_worktree::lock_if_mutating(dir, args);
     let mut c = quiet("git");
     hive_core::process_util::harden_git(&mut c);
     c.arg("-C").arg(dir).args(auth).args(args);

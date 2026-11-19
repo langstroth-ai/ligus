@@ -95,12 +95,12 @@ fn real_path(kind: ModelProviderKind, real_home: &Path, rel: &str) -> PathBuf {
 }
 
 /// Whether this is a test binary: this crate's unit tests, a run under
-/// nextest, or anything cargo built into a `deps` dir (every test harness;
-/// never a shipped binary).
+/// nextest, or anything cargo built for a test run (every test harness, in
+/// the classic `deps` layout and the newer `build/<pkg>/<hash>/out/` one;
+/// never a shipped binary). Another crate's tests and the integration tests
+/// count too: they reach this crate with `cfg(test)` off.
 pub fn in_test_binary() -> bool {
-    cfg!(test)
-        || std::env::var_os("NEXTEST").is_some()
-        || std::env::current_exe().ok().is_some_and(|e| e.parent().and_then(Path::file_name).is_some_and(|n| n == "deps"))
+    cfg!(test) || std::env::var_os("NEXTEST").is_some() || std::env::current_exe().ok().is_some_and(|e| hive_forge::http::is_cargo_test_binary(&e))
 }
 
 /// Whether turn homes may carry the real user's sign-ins (a CLI's

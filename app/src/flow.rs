@@ -530,7 +530,11 @@ pub(crate) fn roster_report(state: &AppState, workspace_id: Uuid) -> RosterRepor
 
 /// Careers, track records and roster diversity (Flow → Roster).
 #[tauri::command]
-pub(crate) fn flow_roster(state: State<'_, AppState>) -> RosterReport {
+pub(crate) async fn flow_roster(ligus_app: tauri::AppHandle) -> RosterReport {
+    crate::off_main(ligus_app, move |ligus_app| flow_roster_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_roster_sync(state: State<'_, AppState>) -> RosterReport {
     let wid = state.active_workspace_id();
     roster_report(&state, wid)
 }
@@ -651,7 +655,11 @@ pub(crate) fn board(view: &WorkspaceView, now: i64) -> Vec<BoardRow> {
 
 /// Open, unassigned work (Flow → Board).
 #[tauri::command]
-pub(crate) fn flow_board(state: State<'_, AppState>) -> Vec<BoardRow> {
+pub(crate) async fn flow_board(ligus_app: tauri::AppHandle) -> Vec<BoardRow> {
+    crate::off_main(ligus_app, move |ligus_app| flow_board_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_board_sync(state: State<'_, AppState>) -> Vec<BoardRow> {
     let wid = state.active_workspace_id();
     board(&workspace_view(&state, wid), flow::now_ms())
 }
@@ -869,7 +877,11 @@ pub(crate) fn home_report(state: &AppState, workspace_id: Uuid) -> HomeReport {
 
 /// The workspace's home record and how this device compares (Flow → Home).
 #[tauri::command]
-pub(crate) fn flow_home(state: State<'_, AppState>) -> HomeReport {
+pub(crate) async fn flow_home(ligus_app: tauri::AppHandle) -> HomeReport {
+    crate::off_main(ligus_app, move |ligus_app| flow_home_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_home_sync(state: State<'_, AppState>) -> HomeReport {
     let wid = state.active_workspace_id();
     home_report(&state, wid)
 }
@@ -877,7 +889,11 @@ pub(crate) fn flow_home(state: State<'_, AppState>) -> HomeReport {
 /// Publish this device's relay, base branch and host as the workspace's home
 /// (admins only). Never carries a token or passphrase.
 #[tauri::command(async)]
-pub(crate) fn flow_publish_beacon(state: State<'_, AppState>, note: String, coordinator: bool) -> Result<(), String> {
+pub(crate) async fn flow_publish_beacon(ligus_app: tauri::AppHandle, note: String, coordinator: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_publish_beacon_sync(tauri::Manager::state::<AppState>(ligus_app), note, coordinator)).await
+}
+
+pub(crate) fn flow_publish_beacon_sync(state: State<'_, AppState>, note: String, coordinator: bool) -> Result<(), String> {
     let wid = state.active_workspace_id();
     let previous = state.service.lock().unwrap().flow_config(wid).map_err(map_err)?.beacon;
     let beacon = flow::HomeBeacon {
@@ -1481,7 +1497,11 @@ pub(crate) fn queue_report(state: &AppState, workspace_id: Uuid) -> QueueReport 
 
 /// The review queue and hand-off waits for the active workspace (Flow → Queue).
 #[tauri::command]
-pub(crate) fn flow_queue_report(state: State<'_, AppState>) -> QueueReport {
+pub(crate) async fn flow_queue_report(ligus_app: tauri::AppHandle) -> QueueReport {
+    crate::off_main(ligus_app, move |ligus_app| flow_queue_report_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_queue_report_sync(state: State<'_, AppState>) -> QueueReport {
     let wid = state.active_workspace_id();
     queue_report(&state, wid)
 }
@@ -1644,7 +1664,11 @@ pub(crate) struct MarkRow {
 
 /// Active workspace marks (Flow → Marks).
 #[tauri::command]
-pub(crate) fn flow_marks(state: State<'_, AppState>) -> Vec<MarkRow> {
+pub(crate) async fn flow_marks(ligus_app: tauri::AppHandle) -> Vec<MarkRow> {
+    crate::off_main(ligus_app, move |ligus_app| flow_marks_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_marks_sync(state: State<'_, AppState>) -> Vec<MarkRow> {
     let wid = state.active_workspace_id();
     let view = workspace_view(&state, wid);
     let now = flow::now_ms();
@@ -1663,7 +1687,11 @@ pub(crate) fn flow_marks(state: State<'_, AppState>) -> Vec<MarkRow> {
 
 /// Leave a mark as the local user.
 #[tauri::command]
-pub(crate) fn flow_add_mark(
+pub(crate) async fn flow_add_mark(ligus_app: tauri::AppHandle, kind: String, path: String, note: String, session_id: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_add_mark_sync(tauri::Manager::state::<AppState>(ligus_app), kind, path, note, session_id)).await
+}
+
+pub(crate) fn flow_add_mark_sync(
     state: State<'_, AppState>,
     kind: String,
     path: String,
@@ -1713,7 +1741,11 @@ pub(crate) fn flow_clear_mark(state: State<'_, AppState>, mark_id: String) -> Re
 
 /// Path zones (Flow → Zones).
 #[tauri::command]
-pub(crate) fn flow_zones(state: State<'_, AppState>) -> Result<Vec<flow::PathZone>, String> {
+pub(crate) async fn flow_zones(ligus_app: tauri::AppHandle) -> Result<Vec<flow::PathZone>, String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_zones_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn flow_zones_sync(state: State<'_, AppState>) -> Result<Vec<flow::PathZone>, String> {
     let wid = state.active_workspace_id();
     Ok(state.service.lock().unwrap().flow_config(wid).map_err(map_err)?.zones)
 }
@@ -1935,7 +1967,11 @@ fn handoff_views(flow: &FlowState) -> Vec<HandoffCardView> {
 
 /// Hand-off cards recorded in a chat, for the transcript.
 #[tauri::command]
-pub(crate) fn flow_handoffs(state: State<'_, AppState>, session_id: String) -> Result<Vec<HandoffCardView>, String> {
+pub(crate) async fn flow_handoffs(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<HandoffCardView>, String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_handoffs_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn flow_handoffs_sync(state: State<'_, AppState>, session_id: String) -> Result<Vec<HandoffCardView>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc.load(sid).map_err(map_err)?.map(|s| handoff_views(&s.flow)).unwrap_or_default())
@@ -2226,7 +2262,11 @@ pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) ->
 
 /// Put a stopped route back into rotation now.
 #[tauri::command]
-pub(crate) fn flow_clear_route_stop(state: State<'_, AppState>, route: String) -> Result<(), String> {
+pub(crate) async fn flow_clear_route_stop(ligus_app: tauri::AppHandle, route: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| flow_clear_route_stop_sync(tauri::Manager::state::<AppState>(ligus_app), route)).await
+}
+
+pub(crate) fn flow_clear_route_stop_sync(state: State<'_, AppState>, route: String) -> Result<(), String> {
     let wid = state.active_workspace_id();
     let now = flow::now_ms();
     let current = workspace_view(&state, wid).config.route_stops.get(&route).cloned();
@@ -2243,7 +2283,11 @@ pub(crate) fn flow_clear_route_stop(state: State<'_, AppState>, route: String) -
 
 /// The routing report for the active workspace (Flow pane → Routing).
 #[tauri::command]
-pub(crate) fn flow_routing_report(state: State<'_, AppState>, days: Option<u32>) -> RoutingReport {
+pub(crate) async fn flow_routing_report(ligus_app: tauri::AppHandle, days: Option<u32>) -> RoutingReport {
+    crate::off_main(ligus_app, move |ligus_app| flow_routing_report_sync(tauri::Manager::state::<AppState>(ligus_app), days)).await
+}
+
+pub(crate) fn flow_routing_report_sync(state: State<'_, AppState>, days: Option<u32>) -> RoutingReport {
     let wid = state.active_workspace_id();
     routing_report(&state, wid, days.unwrap_or(14))
 }

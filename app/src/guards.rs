@@ -371,7 +371,11 @@ pub(crate) fn run_lease_dto(state: &AppState, session: &hive_core::ChatSession, 
 /// successor; the local driver stops at its next transition, and the
 /// successor's lease loop picks the run up straight away.
 #[tauri::command]
-pub(crate) fn hand_over_workflow_run(
+pub(crate) async fn hand_over_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String, successor: Option<String>) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| hand_over_workflow_run_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, run_id, successor)).await
+}
+
+pub(crate) fn hand_over_workflow_run_sync(
     state: State<AppState>,
     session_id: String,
     run_id: String,
@@ -752,7 +756,11 @@ pub(crate) fn get_hygiene_report(state: State<AppState>) -> hive_proto::HygieneR
 /// heartbeats and receipts, boundary decisions, hygiene catches, throttles),
 /// oldest first after `after_row`. Never synced.
 #[tauri::command]
-pub(crate) fn list_guard_signals(
+pub(crate) async fn list_guard_signals(ligus_app: tauri::AppHandle, after_row: Option<i64>, kind: Option<String>, limit: Option<u32>) -> Result<Vec<hive_proto::GuardSignalDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_guard_signals_sync(tauri::Manager::state::<AppState>(ligus_app), after_row, kind, limit)).await
+}
+
+pub(crate) fn list_guard_signals_sync(
     state: State<AppState>,
     after_row: Option<i64>,
     kind: Option<String>,
@@ -1005,7 +1013,11 @@ fn preset_names(presets: &[hive_runtime::egress::EgressPreset]) -> Vec<String> {
 /// workspace and (optionally) one chat have on, and whether a guard is
 /// overriding them right now.
 #[tauri::command]
-pub(crate) fn get_egress_presets(state: State<AppState>, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
+pub(crate) async fn get_egress_presets(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_egress_presets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
     let ws = state.active_workspace_id();
     let sid = session_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
     let session = match sid {
@@ -1214,7 +1226,11 @@ pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool
 /// The user has seen the active workspace's signed grants as they are now
 /// (the change notice goes away until they change again).
 #[tauri::command]
-pub(crate) fn ack_sandbox_grants(state: State<AppState>) -> Result<(), String> {
+pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| ack_sandbox_grants_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>) -> Result<(), String> {
     let ws = state.active_workspace_id();
     let fp = hive_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
     let mut s = state.settings.lock().unwrap();
@@ -1226,7 +1242,11 @@ pub(crate) fn ack_sandbox_grants(state: State<AppState>) -> Result<(), String> {
 /// The effective sandbox policy and the signed grants for the active
 /// workspace; `agent_id` narrows it to one agent (its runtime, its grants).
 #[tauri::command]
-pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
+pub(crate) async fn get_sandbox_policy(ligus_app: tauri::AppHandle, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_sandbox_policy_sync(tauri::Manager::state::<AppState>(ligus_app), agent_id)).await
+}
+
+pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
     let ws = state.active_workspace_id();
     let setting = grants_setting(&state, ws);
     let (grants, here, agents_cfg, my_role, local) = {
@@ -1281,7 +1301,11 @@ pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String
 /// the passkey sheet confirms it). Admin + presence; changing an agent's
 /// shell grant is the Owner's.
 #[tauri::command(async)]
-pub(crate) fn set_sandbox_grants(app: AppHandle, state: State<AppState>, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), grants)).await
+}
+
+pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
     let ws = state.active_workspace_id();
     let clean = |v: Vec<String>| -> Vec<String> {
         let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
@@ -1317,7 +1341,11 @@ pub(crate) fn set_sandbox_grants(app: AppHandle, state: State<AppState>, grants:
 /// Dearth mode for the active workspace, with pending joins and what it does
 /// to each entrance.
 #[tauri::command]
-pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::DearthStateDto, String> {
+pub(crate) async fn get_dearth_state(ligus_app: tauri::AppHandle) -> Result<hive_proto::DearthStateDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_dearth_state_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<hive_proto::DearthStateDto, String> {
     let ws = state.active_workspace_id();
     let servers = state.combined_mcp_servers();
     let runtimes = state.combined_runtimes();
@@ -1400,7 +1428,11 @@ pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::Dea
 
 /// Switch dearth mode on or off for the active workspace (Admin+).
 #[tauri::command(async)]
-pub(crate) fn set_dearth_mode(
+pub(crate) async fn set_dearth_mode(ligus_app: tauri::AppHandle, enabled: bool, reason: String, brood_paths: Vec<String>, allowed_mcp_servers: Vec<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_dearth_mode_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), enabled, reason, brood_paths, allowed_mcp_servers)).await
+}
+
+pub(crate) fn set_dearth_mode_sync(
     app: AppHandle,
     state: State<AppState>,
     enabled: bool,
@@ -1428,7 +1460,11 @@ pub(crate) fn set_dearth_mode(
 
 /// Approve a member or device waiting on dearth mode's second approval.
 #[tauri::command(async)]
-pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
+pub(crate) async fn approve_join(ligus_app: tauri::AppHandle, subject: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| approve_join_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), subject)).await
+}
+
+pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
     let ws = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
     svc.approve_join(ws, subject.trim()).map_err(map_err)?;
@@ -1454,7 +1490,11 @@ pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: Stri
 
 /// A chat's lockdown as the chat header shows it.
 #[tauri::command]
-pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
+pub(crate) async fn get_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| get_chat_lockdown_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
@@ -1482,7 +1522,11 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
 /// by its `raiseEventId` (a human member, Contributor+; re-checked on every
 /// device's ingest). A signal raised since, which they weren't shown, stays.
 #[tauri::command(async)]
-pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
+pub(crate) async fn clear_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| clear_chat_lockdown_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, raise_ids)).await
+}
+
+pub(crate) fn clear_chat_lockdown_sync(app: AppHandle, state: State<AppState>, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let raises = raise_ids.iter().map(|r| Uuid::parse_str(r)).collect::<Result<Vec<_>, _>>().map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -1495,7 +1539,11 @@ pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, sessio
 
 /// Lock this chat down by hand (anyone may tighten).
 #[tauri::command]
-pub(crate) fn lock_chat(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
+pub(crate) async fn lock_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| lock_chat_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn lock_chat_sync(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
@@ -1895,7 +1943,11 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
 
 /// Growth suggestions for the active workspace (nuc workspaces start small).
 #[tauri::command]
-pub(crate) fn growth_suggestions(state: State<AppState>) -> Vec<hive_proto::GrowthSuggestionDto> {
+pub(crate) async fn growth_suggestions(ligus_app: tauri::AppHandle) -> Vec<hive_proto::GrowthSuggestionDto> {
+    crate::off_main(ligus_app, move |ligus_app| growth_suggestions_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn growth_suggestions_sync(state: State<AppState>) -> Vec<hive_proto::GrowthSuggestionDto> {
     suggest_growth(&gather_occupancy(&state))
 }
 

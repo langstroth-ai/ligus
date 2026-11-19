@@ -108,7 +108,11 @@ pub(crate) fn ask_dtos(session: &hive_core::ChatSession) -> Vec<AskDto> {
 
 /// The agents' questions in a chat, newest first.
 #[tauri::command]
-pub(crate) fn list_asks(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<AskDto>, String> {
+pub(crate) async fn list_asks(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<AskDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_asks_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_asks_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<AskDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
     let svc = state.service.lock().unwrap();
     Ok(svc.load(sid).map_err(|e| e.to_string())?.map(|s| ask_dtos(&s)).unwrap_or_default())
@@ -117,7 +121,11 @@ pub(crate) fn list_asks(state: tauri::State<'_, AppState>, session_id: String) -
 /// Answer an agent's question as this device's person. Answering grants
 /// nothing by itself; the first answer in canonical order wins.
 #[tauri::command]
-pub(crate) fn answer_ask(
+pub(crate) async fn answer_ask(ligus_app: tauri::AppHandle, session_id: String, ask_id: String, answer: String, option_index: Option<u32>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| answer_ask_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, ask_id, answer, option_index)).await
+}
+
+pub(crate) fn answer_ask_sync(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     session_id: String,

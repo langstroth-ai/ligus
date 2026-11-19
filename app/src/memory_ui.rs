@@ -72,7 +72,11 @@ pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]
 
 /// The Memory pane: entries matching `query` and `tags`, and the proposals.
 #[tauri::command]
-pub(crate) fn memory_view(state: tauri::State<'_, AppState>, query: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryView, String> {
+pub(crate) async fn memory_view(ligus_app: tauri::AppHandle, query: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryView, String> {
+    crate::off_main(ligus_app, move |ligus_app| memory_view_sync(tauri::Manager::state::<AppState>(ligus_app), query, tags)).await
+}
+
+pub(crate) fn memory_view_sync(state: tauri::State<'_, AppState>, query: Option<String>, tags: Option<Vec<String>>) -> Result<MemoryView, String> {
     let wid = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     view_in(&svc, wid, query.as_deref().unwrap_or(""), &tags.unwrap_or_default())
@@ -89,7 +93,12 @@ pub(crate) struct Written {
 /// resolving conflicts. `sourceChatId` records the chat it was written from.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn memory_write(
+pub(crate) async fn memory_write(ligus_app: tauri::AppHandle, entry_id: Option<String>, base: Option<String>, title: String, body: String, tags: Vec<String>, resolves: Option<Vec<String>>, source_chat_id: Option<String>) -> Result<Written, String> {
+    crate::off_main(ligus_app, move |ligus_app| memory_write_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), entry_id, base, title, body, tags, resolves, source_chat_id)).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn memory_write_sync(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     entry_id: Option<String>,
@@ -220,7 +229,11 @@ pub(crate) fn task_dtos(session: &hive_core::ChatSession, agents: &[hive_core::W
 
 /// The chat's live task state, current first.
 #[tauri::command]
-pub(crate) fn task_state(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
+pub(crate) async fn task_state(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| task_state_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn task_state_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
     let sid = id(&session_id)?;
     let svc = state.service.lock().unwrap();
     let Some(session) = svc.load(sid).map_err(|e| e.to_string())? else { return Ok(vec![]) };

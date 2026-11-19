@@ -911,6 +911,12 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
         tracing::warn!(target: "secrets", "{why}; keeping Ligus's secrets in owner-only files under the data dir (run `ligus doctor`)");
         Arc::new(File0600::new(data_dir))
     };
+    // A test never reaches an OS secret store on its own: on macOS the Ligus
+    // keychain's unlock password goes in the login keychain. Only
+    // `LIGUS_TEST_KEYCHAIN=1` lets one through (the k8s mount is a file).
+    if crate::executor::cli_home::in_test_binary() && !crate::executor::cli_home::test_keychain_opt_in() && choice.as_deref() != Some("k8s") {
+        return Arc::new(File0600::new(data_dir));
+    }
     match choice.as_deref() {
         Some("file") => return Arc::new(File0600::new(data_dir)),
         Some("k8s") => {
@@ -1596,6 +1602,23 @@ esac"#,
         assert!(store.delete(&id).is_err());
         assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none(), "something was written under the data dir");
         assert_eq!(open(dir.path(), Some("file")).backend(), Backend::File0600, "the explicit opt-in");
+    }
+
+    /// Tests never open an OS secret store on their own (on macOS the Ligus
+    /// keychain's unlock password lives in the login keychain): the default
+    /// choice, and any OS backend named, give owner-only files unless
+    /// `LIGUS_TEST_KEYCHAIN=1`.
+    #[test]
+    fn a_test_binary_never_opens_an_os_secret_store_without_the_opt_in() {
+        if crate::executor::cli_home::test_keychain_opt_in() {
+            eprintln!("skipped: LIGUS_TEST_KEYCHAIN=1 lets tests reach the keychain");
+            return;
+        }
+        for choice in [None, Some("keychain"), Some("secret-service"), Some("systemd-creds"), Some("")] {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(open(dir.path(), choice).backend(), Backend::File0600, "{choice:?}");
+            assert!(!dir.path().join("secrets").join("ligus.keychain-db").exists(), "{choice:?}");
+        }
     }
 
     /// An in-memory store (property tests; the file and CLI backends have

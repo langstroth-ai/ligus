@@ -166,6 +166,7 @@ fn pinned<'a>(svc: &'a Mutex<ChatService>, job: &ApplyJob) -> Pinned<'a> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::result::Result<String, String> {
+    let _lock = crate::git_worktree::lock_if_mutating(dir, args);
     let out = hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map_err(|e| format!("git {}: {e}", args[0]))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())

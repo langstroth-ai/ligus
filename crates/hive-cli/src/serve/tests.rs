@@ -41,6 +41,9 @@ async fn spawn(router: Router) -> String {
 
 // ── Fake model server ──────────────────────────────────────────────────────
 
+/// A round that makes the fake model stall (shutdown tests).
+const HANG: &str = "HANG";
+
 #[derive(Clone, Default)]
 struct FakeModel {
     bodies: Arc<Mutex<Vec<Value>>>,
@@ -68,6 +71,9 @@ async fn fake_chat(State(f): State<FakeModel>, body: String) -> axum::response::
         b.len() - 1
     };
     let lines = f.rounds.get(n).or_else(|| f.rounds.last()).cloned().unwrap_or_default();
+    if lines.first().map(String::as_str) == Some(HANG) {
+        tokio::time::sleep(Duration::from_secs(120)).await;
+    }
     let mut out: String = lines.iter().map(|l| format!("{l}\n\n")).collect();
     out.push_str("data: [DONE]\n\n");
     axum::response::Response::builder().header("content-type", "text/event-stream").body(Body::from(out)).unwrap()
@@ -1476,6 +1482,35 @@ async fn approving_a_set_alternative_never_applies_it() {
     let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
     assert!(!wt.join("alt.txt").exists(), "a set alternative was applied without its pre-flight");
     h.handle.shutdown();
+}
+
+/// A stop whose grace runs out mid-turn stops the turn (its own stop
+/// signal), so the worker ends cleanly: the reply is no longer streaming and
+/// the asker is told to ask again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_past_its_grace_stops_the_turn_in_flight() {
+    let (endpoint, model) = spawn_model(vec![vec![HANG.to_string()]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    // Wait until the turn is streaming against the stalled model.
+    for _ in 0..1200 {
+        if !model.bodies.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!model.bodies.lock().unwrap().is_empty(), "the turn reached the model");
+    assert_eq!(h.handle.shared.turn_stops.running(chat_id), 1);
+    let started = std::time::Instant::now();
+    assert!(h.handle.stop(Duration::from_millis(300)).await, "the stopped turn lets the worker finish");
+    assert!(started.elapsed() < Duration::from_secs(20));
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder: {:?}", s.messages);
+    assert!(s.messages.iter().any(|m| m.body.contains("shutting down")), "the asker is told: {:?}", s.messages);
 }
 
 /// A turn cut off by a restart (placeholder still streaming, stamped as the

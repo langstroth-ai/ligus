@@ -374,3 +374,80 @@ class ReleaseConfig < Minitest::Test
     refute ok
   end
 end
+
+# The native-passkeys signing checks (scripts/check-macos-signing.sh): the
+# profile is checked before the build, the signed app's entitlements after.
+class MacosSigning < Minitest::Test
+  SCRIPT = File.expand_path("check-macos-signing.sh", __dir__)
+
+  def build_steps
+    steps(RELEASE, "build")
+  end
+
+  def index_of(&blk)
+    build_steps.index(&blk)
+  end
+
+  def test_profile_is_checked_before_the_build_and_entitlements_after
+    configure = index_of { |s| s["name"] == "Configure macOS signing" }
+    build = index_of { |s| s["uses"].to_s.start_with?("tauri-apps/tauri-action@") }
+    check = index_of { |s| s["run"].to_s.include?("check-macos-signing.sh entitlements") }
+    run = build_steps[configure]["run"]
+    assert_operator run.index("base64 --decode"), :<, run.index("check-macos-signing.sh profile")
+    assert_operator run.index("check-macos-signing.sh profile"), :<, run.index("tauri.passkeys.conf.json"),
+                    "the passkeys overlay is enabled only after the profile passed"
+    assert_operator configure, :<, build
+    refute_nil check, "no entitlement check after signing"
+    assert_operator build, :<, check
+    assert_includes build_steps[check]["if"], "LIGUS_MACOS_SIGNED", "an unsigned build has nothing to check"
+  end
+
+  def test_without_the_secret_there_is_no_overlay
+    run = build_steps.find { |s| s["name"] == "Configure macOS signing" }["run"]
+    guarded = run[/if \[ -n "\$APPLE_PROVISIONING_PROFILE" \]; then(.*?)\nfi/m, 1]
+    refute_nil guarded
+    assert_includes guarded, "tauri.passkeys.conf.json"
+    refute_includes run.sub(guarded, ""), "tauri.passkeys.conf.json"
+  end
+
+  def profile(dir, app_id: "H5H3NNR456.ai.ligus.desktop", team: "H5H3NNR456", domains: true, expires: "2099-01-01T00:00:00Z")
+    path = File.join(dir, "profile.plist")
+    File.write(path, <<~PLIST)
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0"><dict>
+      <key>Entitlements</key><dict>
+      <key>com.apple.application-identifier</key><string>#{app_id}</string>
+      <key>com.apple.developer.team-identifier</key><string>#{team}</string>
+      #{domains ? "<key>com.apple.developer.associated-domains</key><string>*</string>" : ""}
+      </dict>
+      <key>TeamIdentifier</key><array><string>#{team}</string></array>
+      <key>ExpirationDate</key><date>#{expires}</date>
+      </dict></plist>
+    PLIST
+    path
+  end
+
+  def check(path)
+    out, err, status = Open3.capture3(SCRIPT, "profile", "--decoded", path)
+    [status.success?, out + err]
+  end
+
+  def test_profile_checks
+    skip "PlistBuddy and plutil are macOS tools" unless RUBY_PLATFORM.include?("darwin")
+    Dir.mktmpdir do |dir|
+      ok, out = check(profile(dir))
+      assert ok, out
+      [
+        [{ app_id: "H5H3NNR456.ai.other.app" }, "app id"],
+        [{ team: "AAAAAAAAAA" }, "team"],
+        [{ domains: false }, "Associated Domains"],
+        [{ expires: "2020-01-01T00:00:00Z" }, "expired"],
+      ].each do |opts, why|
+        ok, out = check(profile(dir, **opts))
+        refute ok, "#{opts} passed"
+        assert_includes out, why
+      end
+    end
+  end
+end
