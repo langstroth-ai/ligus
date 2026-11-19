@@ -253,6 +253,7 @@ impl ChatService {
         hive_core::crypto::verify_envelope(&env, &key).map_err(|_| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.ingest(&env)?;
+        self.changes.local(&env);
         Ok(env)
     }
 }
