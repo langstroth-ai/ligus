@@ -379,16 +379,144 @@ export const exportChat = (sessionId: string) =>
 export const saveAttachment = (name: string, dataBase64: string) =>
   invoke<string>("save_attachment", { name, dataBase64 });
 
-/// Turn a composer attachment into the marker to embed. Relay upload is off in
-/// this release (a code-only guard in the backend, no setting), so this returns
-/// a device-local `[Attached: <path>]` marker (only this device can open it).
+/// Turn a composer attachment into the marker to embed (issue #118). In a
+/// synced workspace whose attachment policy lets this person share, the file
+/// is checked, sealed, uploaded and bound to a signed share, and this resolves
+/// to `[Attachment: <id>]`. Otherwise (policy off, the default; no relay; your
+/// own workspace) it is a device-local `[Attached: <path>]` marker that only
+/// this device can open.
 export const shareAttachment = (sessionId: string, path: string) =>
   invoke<string>("share_attachment", { sessionId, path });
 
-/// Resolve a received blob reference to a local file path (cache hit, or download
-/// + decrypt). Rejects when it can't be fetched (no relay, aged out, wrong key).
-export const resolveAttachmentBlob = (id: string, name: string) =>
-  invoke<string>("resolve_attachment_blob", { id, name });
+export type TypeClass =
+  | "text" | "image" | "audio" | "video" | "document" | "macroDocument" | "archive"
+  | "diskImage" | "installer" | "executable" | "script" | "markup" | "unknown";
+
+/// A shared file as the chat shows it (mirrors `AttachmentView`).
+export interface SharedAttachmentView {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  sha256: string;
+  author: string;
+  sender: string;
+  authorKind: string;
+  deleted: boolean;
+  blocked: boolean;
+  mine: boolean;
+  canDelete: boolean;
+  nameClass: TypeClass;
+  riskyByName: boolean;
+  fromAgentOffer: boolean;
+  /// The sharer's own messages that place it (the only ones that show it).
+  messageIds: string[];
+}
+
+export interface ChatAttachments {
+  shared: SharedAttachmentView[];
+  /// `[Attached: <path>]` markers in this person's own messages.
+  ownLocalPaths: string[];
+}
+
+export const listAttachments = (sessionId: string) =>
+  invoke<ChatAttachments>("list_attachments", { sessionId });
+
+export type ScanResult =
+  | { verdict: "notConfigured" }
+  | { verdict: "clean"; scanner: string }
+  | { verdict: "infected"; scanner: string; detail: string }
+  | { verdict: "failed"; scanner: string; detail: string };
+
+export interface AttachmentCheck {
+  id: string;
+  sha256: string;
+  name: string;
+  size: number;
+  sender: string;
+  assessment: {
+    detected: { ext: string; mime: string; class: TypeClass };
+    nameExt: string;
+    nameClass: TypeClass;
+    mismatch: boolean;
+    doubleExtension: boolean;
+    risky: boolean;
+    warnings: string[];
+    preview: "image" | "text" | null;
+  };
+  archive: {
+    entries: number;
+    totalUncompressed: number;
+    unsafeNames: string[];
+    nestedArchives: number;
+    riskyEntries: number;
+    bomb: string | null;
+    /// Entries Ligus couldn't open (encrypted, or an unsupported
+    /// compression) and inner archives it couldn't list: their types weren't
+    /// checked.
+    opaqueEntries?: number;
+  } | null;
+  scan: ScanResult;
+  blockedType: string | null;
+  refused: string | null;
+  needsConfirmation: boolean;
+}
+
+/// Download, verify against the signed reference and inspect (an explicit
+/// action; nothing is opened or saved).
+export const checkAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentCheck>("check_attachment", { sessionId, attachmentId });
+
+/// Save a checked file via a save dialog, quarantine-marked. `confirmed` is
+/// the second confirmation for risky files. Resolves to the path, or null if
+/// cancelled.
+export const saveReceivedAttachment = (sessionId: string, attachmentId: string, confirmed: boolean) =>
+  invoke<string | null>("save_received_attachment", { sessionId, attachmentId, confirmed });
+
+export interface AttachmentPreview {
+  kind: "image" | "text";
+  mime: string;
+  dataBase64: string;
+}
+
+/// An inert preview (raster image or plain text) of a checked file.
+export const previewAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentPreview>("preview_attachment", { sessionId, attachmentId });
+
+export const deleteAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<void>("delete_attachment", { sessionId, attachmentId });
+
+export const deleteMemberAttachments = (memberId: string) =>
+  invoke<number>("delete_member_attachments", { memberId });
+
+export interface AttachmentPolicy {
+  enabled: boolean;
+  minRole: "owner" | "admin" | "contributor" | "viewer";
+  agents: boolean;
+  services: boolean;
+  maxBytes: number;
+  allowedTypes?: string[];
+  blockedTypes?: string[];
+}
+
+export interface AttachmentRulesView {
+  policy: AttachmentPolicy;
+  recommended: AttachmentPolicy;
+  blocked: string[];
+  canEdit: boolean;
+  canShare: boolean;
+  relay: boolean;
+  localOnly: boolean;
+  hardMaxBytes: number;
+}
+
+export const attachmentRules = () => invoke<AttachmentRulesView>("attachment_rules");
+export const setAttachmentPolicy = (policy: AttachmentPolicy) =>
+  invoke<void>("set_attachment_policy", { policy });
+export const blockAttachmentHash = (sha256: string) =>
+  invoke<void>("block_attachment_hash", { sha256 });
+export const unblockAttachmentHash = (sha256: string) =>
+  invoke<void>("unblock_attachment_hash", { sha256 });
 
 /// Read a local image attachment as a data: URL for inline preview. Rejects when
 /// the file isn't present on this device (e.g. an attachment synced from another

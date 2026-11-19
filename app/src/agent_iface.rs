@@ -40,6 +40,11 @@ impl LigusHost for AppHost {
         let _ = self.app.emit("workspace://synced", 1);
     }
 
+    fn stage_attachment(&self, proposal_id: Uuid, sha256: &str, bytes: &[u8]) -> Result<(), String> {
+        let state = self.app.state::<AppState>();
+        crate::attachments::stage(&state.data_dir, proposal_id, sha256, bytes)
+    }
+
     fn forge_for(&self, _chat_id: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
         let state = self.app.state::<AppState>();
         let root = state.workspace_root.lock().unwrap_or_else(|e| e.into_inner()).clone();

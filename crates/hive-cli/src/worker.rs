@@ -520,7 +520,11 @@ async fn run_turn(
         }
     };
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
-    crate::materialize_turns(ctx.cfg, &mut turns).await;
+    let (head, me) = {
+        let g = lock(svc);
+        (g.attachment_rules(s.workspace_id).unwrap_or_default(), g.author().id.clone())
+    };
+    crate::materialize_turns(ctx.cfg, &s, &head, &me, &mut turns).await;
     let system = format!(
         "You are @{}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
         agent.name,

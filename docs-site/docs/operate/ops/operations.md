@@ -66,7 +66,7 @@ any events it hadn't synced yet.
 | `tunnel/` | | serve | host keys, paired phones, relay settings |
 | `repo-bindings.toml`, `repos/` | | serve/worker | bound checkouts |
 | `dashboard.toml` | | serve | dashboard config |
-| `attachments/` | yes | yes | attachment blobs |
+| `attachments/` | yes | yes | composer files, verified copies of shared files (`verified/`, private), agents' offered files waiting for approval (`staged/`) |
 
 Backups contain keys: encrypt them and keep them private.
 

@@ -117,6 +117,9 @@ pub struct RosterState {
     pub founder: String,
     /// The workspace's repositories by id (a removed one is a tombstone).
     pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
+    /// The attachment policy and the blocklist of content hashes in force
+    /// (issue #118).
+    pub attachments: crate::attachment::AttachmentRules,
 }
 
 impl RosterState {
@@ -357,6 +360,15 @@ impl RosterTracker {
                         self.state.links.remove(account_id);
                     }
                 }
+            }
+            SessionEvent::AttachmentPolicySet { policy } if allowed => {
+                self.state.attachments.policy = policy.clone();
+            }
+            SessionEvent::AttachmentHashBlocked { sha256 } if allowed => {
+                self.state.attachments.blocked.insert(sha256.clone());
+            }
+            SessionEvent::AttachmentHashUnblocked { sha256 } if allowed => {
+                self.state.attachments.blocked.remove(sha256);
             }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}

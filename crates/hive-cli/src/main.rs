@@ -454,29 +454,29 @@ async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(
     Ok(hive_runtime::sync_service::sync_round(engine, store).await?)
 }
 
-/// Resolve any `[Attached-blob: …]` references in agent turns to local files
-/// (downloading + decrypting from the relay's blob channel and caching them), so
-/// a headless agent can read attachments other members shared. No-op when no
-/// relay/workspace key is configured or no turn carries a blob marker.
-async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
-    let (Some(relay_url), Some(_)) = (cfg.relay_url.clone(), cfg.key.as_ref()) else {
-        return;
-    };
-    if !turns.iter().any(|t| t.content.contains("[Attached-blob:")) {
+/// Files shared over the relay reach a headless agent only as delimited
+/// untrusted data (issue #118): a text file's verified content, anything else
+/// its description, never a path. No-op when no turn carries a marker.
+async fn materialize_turns(cfg: &Config, session: &hive_core::ChatSession, head: &hive_core::attachment::AttachmentRules, me: &str, turns: &mut [ChatTurn]) {
+    // A local path resolves only from this box's own author's messages.
+    let own = hive_runtime::attachment_blob::own_path_markers(session, me);
+    for t in turns.iter_mut() {
+        t.content = hive_runtime::attachment_blob::defuse_foreign_path_markers(&t.content, &own);
+    }
+    if !turns.iter().any(|t| t.content.contains("[Attachment: ")) {
         return;
     }
-    let relay = RelayClient::new(&relay_url)
-        .with_auth(cfg.token.clone())
-        .with_auth_cell(auth::cell());
+    let placed = hive_runtime::attachment_blob::placed_attachments(session);
+    let relay = match (cfg.relay_url.clone(), cfg.key.as_ref()) {
+        (Some(url), Some(_)) => Some(RelayClient::new(&url).with_auth(cfg.token.clone()).with_auth_cell(auth::cell())),
+        _ => None,
+    };
     // The one keyring (B1): blobs sealed at any epoch this box holds open.
-    let Some(ring) = box_ring(cfg) else { return };
-    let cache = cfg.data_dir.join("attachments").join("blobs");
+    let ring = box_ring(cfg).unwrap_or_default();
+    let cache = hive_runtime::attachment_blob::verified_cache_dir(&cfg.data_dir);
     for t in turns.iter_mut() {
-        if t.content.contains("[Attached-blob:") {
-            t.content = hive_runtime::attachment_blob::materialize_body(
-                &t.content, &relay, &cfg.room, &ring, &cache,
-            )
-            .await;
+        if t.content.contains("[Attachment: ") {
+            t.content = hive_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, head, relay.as_ref(), &cfg.room, &ring, &cache).await;
         }
     }
 }
@@ -1011,7 +1011,9 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // Non-Send store is held across .await — cmd_agent runs on a
                 // current-thread runtime (see run()), so this is allowed.
                 let mut turns = turns_for(&worker::through_trigger(&s, last.id), None, &name);
-                materialize_turns(cfg, &mut turns).await;
+                let head = svc.attachment_rules(s.workspace_id).unwrap_or_default();
+                let me = svc.author().id.clone();
+                materialize_turns(cfg, &s, &head, &me, &mut turns).await;
                 print!("↳ @{name} replying in {} … ", s.id);
                 // H1 gate, the same as the worker's: at or above this host's
                 // floor (Admin when the runtime can write, Contributor when

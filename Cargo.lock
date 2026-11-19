@@ -2589,6 +2589,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.23.1",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "hive-core",

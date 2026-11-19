@@ -8,8 +8,9 @@ use serde_json::{json, Value};
 /// and `ligus_read` gained the matching `forge.*` reads; the memory and
 /// task-state tools joined it, with `ligus_propose` kind `memory`,
 /// `ligus_flow` op `taskUpdate` and `ligus_read` `memory`, `memoryEntry`
-/// and `taskState`.
-pub const TOOLS: [(&str, &str); 27] = [
+/// and `taskState`; `ligus_offer_file` joined it with secure attachments
+/// (issue #118).
+pub const TOOLS: [(&str, &str); 28] = [
     ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),
     ("ligus_propose_decision", include_str!("schema/ligus_propose_decision.json")),
     ("ligus_propose_command", include_str!("schema/ligus_propose_command.json")),
@@ -40,6 +41,9 @@ pub const TOOLS: [(&str, &str); 27] = [
     ("ligus_forge_read_issue", include_str!("schema/ligus_forge_read_issue.json")),
     ("ligus_forge_ci_status", include_str!("schema/ligus_forge_ci_status.json")),
     ("ligus_forge_read_file", include_str!("schema/ligus_forge_read_file.json")),
+    // Issue #118: an agent's file offer, filed as a proposal a person
+    // approves before anything is shared.
+    ("ligus_offer_file", include_str!("schema/ligus_offer_file.json")),
 ];
 
 /// The same capabilities folded into four tools, for in-process tool loops
@@ -151,12 +155,12 @@ mod tests {
         }
         let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, GOLDEN, "a frozen Ligus tool schema changed");
-        assert_eq!(TOOLS.len(), 27);
+        assert_eq!(TOOLS.len(), 28);
         assert_eq!(FOLDED.len(), 4, "the folded set fits the reserved MCP slots");
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
-    const GOLDEN: &str = "80b26b8bf7cbbf3a1232654df2fe050cb34e5cb8e40da03628232df0f2ecd938";
+    const GOLDEN: &str = "5edb7914ccd7eedfc7f7bd637b60de24b16b948710783205821c66e8a506d129";
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {

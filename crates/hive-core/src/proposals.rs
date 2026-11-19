@@ -169,6 +169,12 @@ pub struct ActionProposal {
     /// authoritative).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produced_on: Option<Uuid>,
+    /// A file an agent offers to share (issue #118), on a `Decision`
+    /// proposal like `workflow` (older peers still decode the event). Bound
+    /// into the vote digest; once a person approves it, the producing host
+    /// uploads it and signs the `AttachmentShared`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<Box<crate::attachment::AttachmentRef>>,
 }
 
 /// A structured command proposal (Track D4).
@@ -257,6 +263,7 @@ impl ActionProposal {
             base_commit: None,
             base_ref: String::new(),
             produced_on: None,
+            attachment: None,
         }
     }
 
