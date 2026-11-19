@@ -815,3 +815,60 @@ async fn codex_request_shape_through_the_route() {
     assert!(header(&head, "user-agent")[0].starts_with("codex_exec/"), "{head}");
     assert!(header(&head, "x-codex-turn-metadata").is_empty() && header(&head, "session-id").is_empty() && header(&head, "originator").is_empty());
 }
+
+/// Review: the allow-list holds against header tricks a sandboxed agent
+/// can send the route: odd case, a space before the colon, an obs-fold
+/// continuation line, a `Connection:`-listed header, an HTTP/2 pseudo
+/// header, `TE: trailers` with a trailer, a request smuggled in a chunked
+/// body next to a conflicting `Content-Length`, and a bare LF inside an
+/// allowed header's value. The gateway sees only allowed headers and the
+/// decoded body, framed by the proxy itself, in one request.
+#[tokio::test]
+async fn allow_list_survives_header_tricks() {
+    let (port, seen) = fake_gateway();
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("api-key");
+    std::fs::write(&key, "sk-REAL-GATEWAY-KEY").unwrap();
+    let mut g = api_key_gateway(port, &key, true);
+    g.cfg.api = Api::Anthropic;
+    let attr = Attribution::new(&[3u8; 32], Some(Uuid::from_u128(9)), Some(Uuid::from_u128(10)));
+    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: Arc::new(g), attribution: Some(attr.clone()) }]).unwrap();
+    let pp = proxy.port();
+    let path = proxy.gateway_url("test-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let smuggled = "POST /key/generate HTTP/1.1\r\nHost: gw\r\nContent-Length: 0\r\n\r\n";
+    let chunk = format!("{{\"model\":\"m\"}}{smuggled}");
+    let raw = format!(
+        "POST {path}/v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         X-LiteLLM-API-Key: EVIL-case\r\n\
+         x-litellm-tags : EVIL-space\r\n\
+         User-Agent: agent/1\r\n x-litellm-customer-id: EVIL-fold\r\n\tx-envoy-original-path: EVIL-tab\r\n\
+         Connection: keep-alive, x-forwarded-for\r\nx-forwarded-for: EVIL-conn\r\n\
+         :authority: EVIL-pseudo\r\n\
+         TE: trailers\r\nTrailer: x-litellm-api-key\r\n\
+         Content-Type: application/json\r\nanthropic-version: 2023-06-01\r\n\
+         Content-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n\
+         {:x}\r\n{chunk}\r\n0\r\nx-litellm-api-key: EVIL-trailer\r\n\r\n",
+        chunk.len()
+    );
+    let resp = raw_request(pp, raw).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    {
+        let s = seen.lock().unwrap();
+        assert_eq!(s.heads.len(), 1, "one request reaches the gateway");
+        let head = &s.heads[0];
+        assert!(!head.contains("EVIL"), "{head}");
+        assert_clean(head, &attr);
+        assert!(header(head, "transfer-encoding").is_empty() && header(head, "te").is_empty() && header(head, "trailer").is_empty(), "{head}");
+        assert_eq!(header(head, "content-length"), vec![chunk.len().to_string().as_str()], "{head}");
+        assert_eq!(header(head, "user-agent"), vec!["agent/1"]);
+        assert_eq!(header(head, "anthropic-version"), vec!["2023-06-01"]);
+        assert_eq!(s.bodies[0], chunk.as_bytes(), "the smuggled request is only body bytes");
+    }
+    // A bare LF can't split an allowed header into a second one: the proxy
+    // refuses to build the request rather than forward it.
+    let raw = format!("POST {path}/v1/messages HTTP/1.1\r\nHost: x\r\nUser-Agent: a\nx-litellm-api-key: EVIL-lf\r\nContent-Length: 2\r\n\r\n{{}}");
+    let resp = raw_request(pp, raw).await;
+    assert!(!resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let s = seen.lock().unwrap();
+    assert!(s.heads.iter().all(|h| !h.contains("EVIL")), "{:?}", s.heads);
+}

@@ -193,7 +193,12 @@ route on the turn's own egress proxy. On each request the proxy:
    (`X-LiteLLM-Customer-Id`, `X-Envoy-*`, `X-Forwarded-*`, `Forwarded`,
    `X-Request-Id`, `OpenAI-Organization`, ...). Gateways that key budgets or
    routing on a header should derive it from the credential or the
-   attribution ids, not trust a client value;
+   attribution ids, not trust a client value. The proxy frames the request
+   itself: it reads the whole body (decoding a chunked one) and sends it with
+   its own `Content-Length`, so `Transfer-Encoding`, `TE`, trailers and the
+   headers a `Connection` header names never pass. The list isn't
+   configurable per gateway, and a compressed request body isn't supported
+   (`Content-Encoding` is dropped);
 4. adds the gateway's credential and, if enabled, the attribution headers;
 5. sends the request over its own TLS client (client certificate and pinned
    CA where configured) to an address it resolved and checked itself (never
