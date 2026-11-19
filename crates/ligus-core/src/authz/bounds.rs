@@ -19,19 +19,17 @@ pub const MAX_ZONE_PATTERN_SEGMENTS: usize = 16;
 pub const MAX_ZONE_PATTERN_GLOBSTARS: usize = 4;
 
 /// Whether a `ChatLockdownRaised` by `raiser` on `chat` stays within S5.
-/// `raisers` maps each active lockdown id to the signed author who raised it.
-pub fn lockdown_within_bounds(fold: &ChatSession, chat: uuid::Uuid, lockdown_id: uuid::Uuid, raiser: &str) -> bool {
-    let active = fold.guards.lockdowns_of(chat);
-    if active.iter().any(|l| l.id == lockdown_id) {
-        return true; // idempotent re-raise
-    }
-    if active.len() >= MAX_LOCKDOWNS_PER_CHAT {
+/// Lockdowns count by the event that raised them (copies of one raise under
+/// several signers count once), against the signed author who raised it
+/// (`AuthzState::lockdown_raisers`). Every raise is a new lockdown: one
+/// reusing an active lockdown's id is no re-raise of it.
+pub fn lockdown_within_bounds(fold: &ChatSession, chat: uuid::Uuid, raiser: &str) -> bool {
+    let raises: std::collections::BTreeSet<uuid::Uuid> =
+        fold.guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id.unwrap_or(l.id)).collect();
+    if raises.len() >= MAX_LOCKDOWNS_PER_CHAT {
         return false;
     }
-    let mine = active
-        .iter()
-        .filter(|l| fold.authz.lockdown_raisers.get(&l.id).is_some_and(|r| r == raiser))
-        .count();
+    let mine = raises.iter().filter(|r| fold.authz.lockdown_raisers.get(r).is_some_and(|a| a == raiser)).count();
     mine < MAX_LOCKDOWNS_PER_RAISER
 }
 

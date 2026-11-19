@@ -3086,6 +3086,14 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let ws = h.handle.shared.ws;
     let (chat_id, pid) = chat_with_proposal(&h).await;
+    // A lockdown to (not) clear, raised while the box is still itself: a
+    // box stamped as the owner without being certified for them signs
+    // nothing as them (every fold refuses it).
+    h.handle
+        .shared
+        .lock()
+        .self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+        .unwrap();
     let owner = open_service(&h.desktop).unwrap().author().clone();
     h.handle.shared.lock().act_as_owner_device(owner.clone());
 
@@ -3098,11 +3106,6 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
     assert_eq!(p.status, ligus_core::ProposalStatus::Open, "the human gate is still unmet");
 
     // Nor a lockdown clear, nor their passkey-confirmed forms.
-    h.handle
-        .shared
-        .lock()
-        .self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
-        .unwrap();
     assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
     assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
     for (action, kind) in [("approve", "vote"), ("reject", "vote"), ("lockdown_clear", "clearLockdown")] {
@@ -3569,8 +3572,8 @@ async fn gh_default_only_for_exact_github_com() {
 
 /// Who the phone's messages show as. A box that joined with a workspace
 /// invite is its own member: the phone writes as the box (right for a shared
-/// box), under the box's own name. A box
-/// enrolled as its owner's device (`ligus serve enroll`) writes as the owner.
+/// box), under the box's own name. A box that only stamps its owner's
+/// identity writes nothing as them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_messages_show_as_the_box_or_its_owner() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))], vec![delta(json!({"content": "hi"}))]]).await;
@@ -3581,17 +3584,20 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
     let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello" }))).await;
     let as_box = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
 
+    // Stamped as the owner without a certificate for the owner's account
+    // (since 0.1 a box is its own member; one certified as a person's device
+    // is write-blocked), it writes nothing as them: every fold refuses an
+    // event from a device that isn't certified for its stamped account.
     let owner = open_service(&h.desktop).unwrap().author().clone();
     h.handle.shared.lock().act_as_owner_device(owner.clone());
-    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello again" }))).await;
-    let as_owner = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello again" }))).await;
+    assert!(!(200..300).contains(&code), "a box wrote as the owner without their certificate: {code}");
 
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
     let m = |id| s.messages.iter().find(|m| m.id == id).unwrap();
     assert_eq!(m(as_box).author, box_actor.display_name);
     assert_eq!(m(as_box).actor_identity.as_ref().map(|a| a.id.clone()), Some(box_actor.id.clone()));
-    assert_eq!(m(as_owner).author, owner.display_name, "a delegated box writes as its owner");
-    assert_eq!(m(as_owner).actor_identity.as_ref().map(|a| a.id.clone()), Some(owner.id.clone()));
+    assert!(!s.messages.iter().any(|m| m.body == "Hello again"), "nothing as the owner reached the log");
     h.handle.shutdown();
 }
 
