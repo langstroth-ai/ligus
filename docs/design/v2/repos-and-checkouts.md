@@ -865,7 +865,7 @@ claim, so an older claim folds exactly as before):
 |---|---|
 | `epoch: u32` | The claim generation for the key. Absent = 1. |
 | `supersedes: Option<Uuid>` | The holder this claim takes the turn from (a hand-over). Required for `epoch > 1`. |
-| `repoId: Option<Uuid>` | Signed coverage: "this device has a confirmed checkout of this repo, which is the chat's". The claim is signed by the device it names, so the attestation is the host's own. |
+| `repo_id: Option<Uuid>` | Signed coverage: "this device has a confirmed checkout of this repo, which is the chat's". The claim is signed by the device it names, so the attestation is the host's own. |
 
 Coverage on the presence beat stays advisory (it is unsigned and differs per
 reader), so it never decides anything; it only tells a waiting device
@@ -890,7 +890,7 @@ existing reader uses).
    predecessor isn't folded yet is ignored until it is (the full re-fold
    applies it then).
 3. Same epoch, different device: the first wins, **except** that a covering
-   claim (`repoId` equals the chat's repo at that point) displaces a
+   claim (`repo_id` equals the chat's repo at that point) displaces a
    non-covering holder. Once the holder covers, nothing displaces it at that
    epoch.
 4. Hand-over: `epoch == current + 1` and `supersedes == current holder`
@@ -905,8 +905,9 @@ existing reader uses).
    key nobody claimed (a local cascade, a relay-less device) commits under
    the trigger and under `(trigger, responder)`, so a late claim can't run
    it again.
-6. Removing the committed answer (regenerate) clears it; the holder may
-   answer again.
+6. Removing the committed answer (regenerate, on any device) starts the
+   turn over: its slot and claim are dropped, so the next answer commits
+   whoever writes it.
 
 Because every rule reads only the folded state at the event's position,
 the result is a function of the event set: any arrival order converges.
@@ -941,8 +942,8 @@ longer a member, in the current roster).
 | holder is me | run |
 | no holder, not eligible | stand down (the deferred fallback below may still claim) |
 | no holder, repo chat, I don't cover, waited < 8 s | wait (covering devices claim first) |
-| no holder | claim epoch 1, with `repoId` when I cover |
-| other holder that doesn't cover, I cover | claim the same epoch with `repoId` (displaces it) |
+| no holder | claim epoch 1, with `repo_id` when I cover |
+| other holder that doesn't cover, I cover | claim the same epoch with `repo_id` (displaces it) |
 | other holder gone | claim `epoch + 1`, `supersedes` it, now |
 | other holder silent for `CLAIM_TIMEOUT` (25 s) and not live, trigger younger than 15 min | claim `epoch + 1`, `supersedes` it |
 | otherwise | wait and look again |
@@ -981,6 +982,8 @@ is live, so no takeover fires (review F8's race).
   can therefore leave an older device showing the original holder; if that
   older device is the original holder and comes back, it may answer, and
   the newer devices hide its answer while the older ones show both.
+- The field names follow the existing `turnClaimed` payload (snake case:
+  `trigger_id`, `device_id`, `epoch`, `supersedes`, `repo_id`).
 - A holder that dies mid-stream has committed; its partial answer stays
   (as today, until its own stale-stream sweep).
 - Side effects of a fenced execution (a proposal it filed, a workflow it
@@ -1001,12 +1004,12 @@ two gates.
 
 Status: designed 2026-11-18 for Ligus 0.1.0.
 
-Device-local SSH host aliases (`ligus repos ssh-alias`) stay as they are.
+Device-local SSH host aliases (`ligus repos alias`) stay as they are.
 Two synced kinds join them, on the workspace config log:
 
 | Event | Payload | Floor |
 |---|---|---|
-| `workspaceRepoAliasesSet` | `repoId`, `aliases: [canonical]` (replaces the list; at most 8) | Admin, presence (rules v2), never an agent |
+| `workspaceRepoAliasesSet` | `repo_id`, `aliases: [canonical]` (replaces the list; at most 8) | Admin, presence (rules v2), never an agent |
 | `workspaceHostAliasSet` | `alias` (a host), `host` (a host; `""` clears) | Admin, presence (rules v2), never an agent |
 
 **Names only.** An alias is a normal-form canonical (`host/owner/name`,

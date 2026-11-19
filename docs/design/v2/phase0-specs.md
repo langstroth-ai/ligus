@@ -68,6 +68,8 @@ New `FlowRecord` kinds:
 
 Phase A (2026-11-16) adds these `SessionEvent` kinds: `proposalApplyRequested`, `workspaceRepoAdded`, `workspaceRepoUpdated`, `workspaceRepoRemoved`, `chatRepoSet`, `chatBasePinned`. It adds **no** domain string. `ligus-proposal-digest-v1\0` is redefined before its first release (section 0.2). A P-256 device certificate appends `\0alg=p256` to the frozen `hive-device-cert-v1` preimage; that is an algorithm tag inside the existing context, not a new context, and the Ed25519 preimage is unchanged. `LIGUS_REPO_NS` (`crates/hive-core/src/workspace_repo.rs`) is a UUIDv5 namespace for repo ids, not a domain string, and joins the frozen namespaces of rule 1.
 
+Repos v2 (2026-11-18, [repos-and-checkouts](repos-and-checkouts.md) sections 11 and 12) adds the `SessionEvent` kinds `workspaceRepoAliasesSet` and `workspaceHostAliasSet` (config log; Admin with presence under rules v2; never an agent or a phone) and three optional fields on `turnClaimed`: `epoch`, `supersedes` and `repo_id` (absent on a plain first claim, which then folds exactly as before). `ChatMessage.superseded` is fold state, never read from an author. It adds no domain string and no namespace; golden vectors `turnClaimed/dispatch`, `workspaceRepoAliasesSet`, `workspaceHostAliasSet` and `workspaceHostAliasSet/clear` pin the shapes.
+
 ### 0.2 The 2.0 wire freeze (Phase A, 2026-11-16)
 
 Everything that changes signed or wire semantics before 2.0 landed in Phase A (branch `phaseA/protocol`). From here, the 2.0 wire is frozen: rule 1 applies to every kind, field and preimage below, and later changes are additive only (rule 3).

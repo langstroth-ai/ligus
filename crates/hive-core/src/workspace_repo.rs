@@ -463,6 +463,137 @@ fn confusable_skeleton(canonical: &str) -> String {
     folded.replace("rn", "m").replace("vv", "w")
 }
 
+// ── Workspace-synced aliases (design 12; review F6, R2) ──────────────────
+
+/// At most this many aliases per repo.
+pub const MAX_REPO_ALIASES: usize = 8;
+/// At most this many host aliases per workspace.
+pub const MAX_HOST_ALIASES: usize = 16;
+
+/// A look-alike skeleton for alias and host names: the same fold as the
+/// repos' look-alike flags (`confusable_skeleton`), so an alias can't pass a
+/// check the repo list would flag. `local:` names compare exactly.
+pub fn skeleton(s: &str) -> String {
+    confusable_skeleton(s)
+}
+
+/// Every live name a repo alias or a new canonical could collide with:
+/// (name, the repo it belongs to), canonicals and aliases alike.
+fn live_names(roster: &crate::authz::RosterState) -> Vec<(String, Uuid)> {
+    let mut out = Vec::new();
+    for (id, e) in roster.repos.iter().filter(|(_, e)| !e.removed) {
+        out.push((e.repo.canonical.clone(), *id));
+        for a in roster.repo_aliases.get(id).into_iter().flatten() {
+            out.push((a.clone(), *id));
+        }
+    }
+    out
+}
+
+/// The canonical host of a forge canonical.
+fn host_of(canonical: &str) -> Option<&str> {
+    split_canonical(canonical).map(|(h, _)| h)
+}
+
+/// Whether `aliases` may become `repo_id`'s list at this position (design
+/// 12): a live forge repo; at most 8, distinct; each a normal-form forge
+/// canonical (never `local:`) that isn't a live repo's canonical or another
+/// live repo's alias, isn't on an aliased host, and isn't a look-alike of a
+/// live canonical or another repo's alias (an alias that differs from its
+/// own repo's canonical only in ASCII case is the case-split fix, allowed).
+pub fn repo_aliases_ok(roster: &crate::authz::RosterState, repo_id: Uuid, aliases: &[String]) -> Result<(), String> {
+    let Some(entry) = roster.repos.get(&repo_id).filter(|e| !e.removed) else {
+        return Err("no such repository".into());
+    };
+    if entry.repo.canonical.starts_with("local:") {
+        return Err("a local-only repository has no aliases".into());
+    }
+    if aliases.len() > MAX_REPO_ALIASES {
+        return Err("too many aliases".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let others: Vec<(String, Uuid)> = live_names(roster).into_iter().filter(|(n, id)| *id != repo_id || *n == entry.repo.canonical).collect();
+    for a in aliases {
+        if !seen.insert(skeleton(a)) {
+            return Err(format!("{a} is listed twice (or as a look-alike of another alias)"));
+        }
+        if a.starts_with("local:") || !canonical_is_normal(a, &entry.repo.forge_kind) {
+            return Err(format!("{a} isn't a normal-form repository name"));
+        }
+        if host_of(a).is_some_and(|h| roster.host_aliases.contains_key(h)) {
+            return Err(format!("{a} is on an aliased host"));
+        }
+        for (name, owner) in &others {
+            if a == name {
+                return Err(format!("{a} is already a repository name in this workspace"));
+            }
+            let case_split = *owner == repo_id && a.eq_ignore_ascii_case(name);
+            if !case_split && skeleton(a) == skeleton(name) {
+                return Err(format!("{a} looks like {name}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `alias` may map to `host` at this position (design 12): both
+/// valid hosts; `host` the canonical host of a live forge repo; `alias` not
+/// itself a live repo's host nor a look-alike of one; at most 16. An empty
+/// `host` clears an existing alias.
+pub fn host_alias_ok(roster: &crate::authz::RosterState, alias: &str, host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return if roster.host_aliases.contains_key(alias) { Ok(()) } else { Err("no such host alias".into()) };
+    }
+    if !valid_host(alias) || !valid_host(host) {
+        return Err("not a host name".into());
+    }
+    if alias == host {
+        return Err("a host can't alias itself".into());
+    }
+    let live_hosts: std::collections::BTreeSet<&str> =
+        roster.repos.values().filter(|e| !e.removed).filter_map(|e| host_of(&e.repo.canonical)).collect();
+    if !live_hosts.contains(host) {
+        return Err(format!("{host} isn't the host of a repository in this workspace"));
+    }
+    for h in &live_hosts {
+        if *h == alias {
+            return Err(format!("{alias} is a repository host here; aliasing it would shadow it"));
+        }
+        if skeleton(h) == skeleton(alias) {
+            return Err(format!("{alias} looks like {h}"));
+        }
+    }
+    if roster.repo_aliases.iter().filter(|(id, _)| roster.repo_live(**id)).flat_map(|(_, l)| l).any(|a| host_of(a) == Some(alias)) {
+        return Err(format!("a repository alias is on {alias}"));
+    }
+    if roster.host_aliases.values().any(|t| t == alias) {
+        return Err(format!("{alias} is already an alias target"));
+    }
+    if !roster.host_aliases.contains_key(alias) && roster.host_aliases.len() >= MAX_HOST_ALIASES {
+        return Err("too many host aliases".into());
+    }
+    Ok(())
+}
+
+/// Whether a new repo's canonical is shadowed by a live alias (design 12):
+/// it is one, looks like one, or sits on an aliased host.
+pub fn shadowed_by_alias(roster: &crate::authz::RosterState, canonical: &str) -> Option<String> {
+    if host_of(canonical).is_some_and(|h| roster.host_aliases.contains_key(h)) {
+        return Some(format!("{canonical} is on an aliased host"));
+    }
+    for (id, list) in &roster.repo_aliases {
+        if !roster.repo_live(*id) {
+            continue;
+        }
+        for a in list {
+            if a == canonical || skeleton(a) == skeleton(canonical) {
+                return Some(format!("{canonical} is (or looks like) an alias of another repository"));
+            }
+        }
+    }
+    None
+}
+
 // ── The chat ledger (repos review F3) ────────────────────────────────────
 
 /// One applied proposal in a chat's ledger for a repo.

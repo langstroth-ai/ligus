@@ -455,6 +455,27 @@ pub enum SessionEvent {
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.
     WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Name other spellings of a live repo (config log; Admin, presence;
+    /// never an agent): normal-form canonicals the same repo also goes by
+    /// (an old owner, a case split on a case-sensitive forge). Replaces the
+    /// repo's list; at most 8; disjoint from every live canonical and alias
+    /// and no look-alike of one (`workspace_repo::repo_aliases_ok`). Names
+    /// only: identity matching on a device that accepted them, never where a
+    /// clone connects (design repos-and-checkouts 12).
+    WorkspaceRepoAliasesSet {
+        repo_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
+    },
+    /// Map a host name (an SSH host a forge serves from, say) to a live
+    /// repo's canonical host for identity matching (config log; Admin,
+    /// presence; never an agent). `host` empty clears the alias. At most 16;
+    /// never shadows a live repo's host (`workspace_repo::host_alias_ok`).
+    WorkspaceHostAliasSet {
+        alias: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host: String,
+    },
     /// Pick this chat's repository (chat log; Contributor; never an agent).
     /// `None` = no repo. Must name a live repo at the author's position.
     ChatRepoSet {
@@ -585,6 +606,8 @@ impl SessionEvent {
             SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
             SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+            SessionEvent::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
             SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
             SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
             SessionEvent::Unknown => "unknown",
@@ -627,7 +650,9 @@ impl SessionEvent {
             | SessionEvent::IdentityLinkRemoved { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -909,7 +934,9 @@ impl ChatSession {
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }

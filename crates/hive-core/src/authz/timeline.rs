@@ -117,6 +117,13 @@ pub struct RosterState {
     pub founder: String,
     /// The workspace's repositories by id (a removed one is a tombstone).
     pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
+    /// Each live repo's synced aliases (`WorkspaceRepoAliasesSet`; design
+    /// 12). Names only; a device uses one only after a person there accepts
+    /// it.
+    pub repo_aliases: BTreeMap<Uuid, Vec<String>>,
+    /// Synced host aliases, alias host → a live repo's canonical host
+    /// (`WorkspaceHostAliasSet`).
+    pub host_aliases: BTreeMap<String, String>,
 }
 
 impl RosterState {
@@ -343,6 +350,22 @@ impl RosterTracker {
             SessionEvent::WorkspaceRepoRemoved { repo_id } if allowed => {
                 if let Some(r) = self.state.repos.get_mut(repo_id) {
                     r.removed = true;
+                }
+                // Its aliases go with it (a later add starts clean).
+                self.state.repo_aliases.remove(repo_id);
+            }
+            SessionEvent::WorkspaceRepoAliasesSet { repo_id, aliases } if allowed => {
+                if aliases.is_empty() {
+                    self.state.repo_aliases.remove(repo_id);
+                } else {
+                    self.state.repo_aliases.insert(*repo_id, aliases.clone());
+                }
+            }
+            SessionEvent::WorkspaceHostAliasSet { alias, host } if allowed => {
+                if host.is_empty() {
+                    self.state.host_aliases.remove(alias);
+                } else {
+                    self.state.host_aliases.insert(alias.clone(), host.clone());
                 }
             }
             SessionEvent::IdentityLinkPublished { link } if allowed => {
