@@ -3599,6 +3599,9 @@ mod tests {
         let trigger = svc.post_user_message(chat.id, wid, "@hive go").unwrap().id;
         let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
         let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+        // A claimed the turn half a minute ago (a hand-over signed sooner
+        // after the claim than the timeout allows is ignored by the fold).
+        env.timestamp = hive_core::Timestamp::from_unix_seconds(hive_core::Timestamp::now().inner().unix_timestamp() - 30);
         hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
         assert!(svc.store.ingest(&env).unwrap());
         fn live(_: Uuid) -> bool {
