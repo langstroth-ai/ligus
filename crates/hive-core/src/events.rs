@@ -1803,6 +1803,12 @@ struct LeftOut<'a> {
     copies: &'a crate::copies::Copies,
 }
 
+/// Whether `payload` is a record its event id names
+/// ([`crate::memory::bound_event_id`]).
+fn id_bound_record(payload: &SessionEvent, event_id: Uuid) -> bool {
+    matches!(payload, SessionEvent::FlowRecorded { record } if crate::memory::bound_event_id(record) == Some(event_id))
+}
+
 fn fold_pass(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
@@ -1910,6 +1916,15 @@ fn fold_pass(
         let mut held = false;
         'judge: {
             if cut_denied.contains(&copy) {
+                break 'judge;
+            }
+            // A record known by the event that made it (a new memory entry
+            // or a memory proposal, `crate::memory::bound_event_id`) under an
+            // id more than one signer holds: every copy is denied, as two
+            // events under one id were before copies were told apart. One
+            // signer can't take another's new entry or proposal (and its
+            // acceptance) by signing under its id.
+            if copy.1 != 0 && id_bound_record(&env.payload, env.event_id) {
                 break 'judge;
             }
             // Its log head isn't here yet: held until it arrives.

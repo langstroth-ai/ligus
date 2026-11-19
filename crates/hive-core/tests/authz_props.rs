@@ -1270,6 +1270,8 @@ fn a_chat_founded_by_a_non_member_does_not_exist() {
 struct AgentSetup {
     agent_id: Uuid,
     key_id: Uuid,
+    /// The device that certified the agent key (its id derived from its key).
+    host: Uuid,
 }
 
 /// `owner_name` owns an agent bound to their device `host`, which certifies a
@@ -1292,7 +1294,7 @@ fn agent_world(owner_name: &str) -> (World, AgentSetup) {
     let key_id = acert.key_id;
     let id = w.cfg_push(owner_name, SessionEvent::AgentKeyCertified { cert: acert });
     w.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(host);
-    (w, AgentSetup { agent_id, key_id })
+    (w, AgentSetup { agent_id, key_id, host })
 }
 
 impl World {
@@ -2161,7 +2163,7 @@ fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
 #[test]
 fn an_agent_key_answer_commits_for_its_certifying_host() {
     let (mut w, a) = agent_world("mara");
-    let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"mara-device");
+    let host = a.host;
     let trigger = hive_core::ChatMessage::new(hive_core::MessageRole::User, "mara", "@coder go");
     let t = trigger.id;
     w.chat_push("mara", SessionEvent::MessageAppended { message: trigger });
