@@ -1588,7 +1588,9 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
 /// Where `program` is installed, when that is under `home`: the directory
 /// of the file it resolves to (through `PATH` and symlinks), or the prefix
 /// above it when that directory is a `bin` (a venv, an npm package). Never
-/// the home itself.
+/// the home itself, and never a dir directly in it: `~/.cargo/bin` stays
+/// `~/.cargo/bin` (`~/.cargo` holds `credentials.toml`), `~/.local/bin`
+/// stays `~/.local/bin`.
 pub fn program_install_dir(program: &OsStr, home: &Path) -> Option<PathBuf> {
     let p = Path::new(program);
     let found = if p.components().count() > 1 {
@@ -1599,8 +1601,12 @@ pub fn program_install_dir(program: &OsStr, home: &Path) -> Option<PathBuf> {
     let real = std::fs::canonicalize(&found).ok()?;
     let home = canonical(home);
     let dir = real.parent()?;
-    let root = if dir.file_name().is_some_and(|n| n == "bin") { dir.parent().unwrap_or(dir) } else { dir };
-    (root.starts_with(&home) && root != home).then(|| root.to_path_buf())
+    let tool_home = |p: &Path| p.parent() == Some(home.as_path());
+    let root = match dir.parent() {
+        Some(up) if dir.file_name().is_some_and(|n| n == "bin") && !tool_home(up) => up,
+        _ => dir,
+    };
+    (root.starts_with(&home) && root != home && !tool_home(root)).then(|| root.to_path_buf())
 }
 
 /// A tokio command for `spec`, confined; the caller sets stdio. Hold the
