@@ -14,10 +14,13 @@ Full release notes are on the
   reason) and paths a workspace grants. Only your git name and email are
   carried into the turn. An Admin grants extra read-only or read-write
   paths, for every agent or one, in **Settings → Sandbox** with a passkey;
-  a grant never opens Ligus's data or a credential dir. A shell (a CLI's
+  a grant never opens Ligus's data or a credential dir, and a read-write
+  grant stays read-only on `PATH` dirs, shell startup files and login
+  items. A shell (a CLI's
   Bash or shell tool, ACP `execute`, `run_command`) is used only in turns
   the workspace Owner starts (the device owner in the local workspace),
-  unless an Owner grants it to an agent; other members' turns run without
+  unless an Owner grants it to an agent; other members' turns, and a CLI
+  Ligus starts outside a turn (the summarizer, chat titles), run without
   one, and Codex, aider and Hermes, which can't, are refused with a note.
   `ligus doctor --sandbox` and Settings → Sandbox show the effective policy.
   See [Your home dir is default-deny](../concepts/security.md#home-default-deny)

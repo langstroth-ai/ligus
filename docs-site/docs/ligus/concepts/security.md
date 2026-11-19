@@ -203,8 +203,19 @@ turns refused, where neither is available. The table shows the first.
   Codex signs in from `auth.json`, so those turns (and any turn that runs on
   a key configured in Ligus) lose the keychain: anything that can run
   `/usr/bin/security` reads every item that trusts it without a prompt.
+  That holds for Copilot and Antigravity turns too: the profile can't pick
+  items, so a turn with a shell (an Owner's) can read every item whose
+  access list trusts `/usr/bin/security` (the gh token go-keyring stores,
+  Claude Code's own item, other CLIs' logins), not only its own sign-in.
   Every other agent process can't read the keychain files. Ligus's own
-  keychain items are protected by their access lists, not by the profile.
+  secrets are protected by their access list and by the data-dir deny, not
+  by the keychain allowance: the login-keychain item that unlocks them
+  trusts only the Ligus binary, so a read through `security` from a turn
+  makes macOS ask you (answer **Deny** to a keychain prompt you didn't
+  expect), and the keychain it unlocks lives in Ligus's data dir, which no
+  turn can read.
+  `ligus doctor --sandbox` and Settings → Sandbox show the keychain as
+  denied for a CLI that is signed in by file.
 - **Codex** runs its commands inside Ligus's sandbox instead of its own
   (Seatbelt and bubblewrap sandboxes can't nest).
 - **No sandbox, no local agents.** Where no sandbox is available
@@ -313,7 +324,7 @@ a credential dir. Install dirs only: binaries, libraries and version files.
 | `Library/pnpm`, `.local/share/pnpm` | every process | pnpm's home (macOS, Linux) |
 | `go/bin` | every process | Go tools installed with `go install` |
 | every `PATH` entry under your home | every process | you put its binaries on `PATH`; the home itself and anything in or above a credential dir are left out |
-| the program's own install dir | that process | when the program (or the `PATH` launcher that links to it) lives under your home: the directory it resolves to, or the prefix above it when that is a `bin` (Codex's standalone install under `~/.codex/packages/…`, a venv, an npm package). Never the home itself |
+| the program's own install dir | that process | when the program (or the `PATH` launcher that links to it) lives under your home: the directory it resolves to, or the prefix above it when that is a `bin` (Codex's standalone install under `~/.codex/packages/…`, a venv, an npm package). Never the home itself and never a dir directly in it: `cargo` in `~/.cargo/bin` gets `~/.cargo/bin`, not `~/.cargo` (which holds `credentials.toml`), and a launcher in `~/.local/bin` gets that dir, not `~/.local` |
 | `Library/Keychains`, `Library/Preferences/com.apple.security*.plist` (macOS) | Claude Code, Codex, Copilot, Antigravity | the login keychain their sign-in may live in; taken away again when the turn's sign-in is a file (Claude Code, Codex) or a key configured in Ligus |
 | `.claude/plugins`, `skills`, `agents`, `commands` | Claude Code, with the workspace's opt-in to your own setup | your own Claude Code setup, linked into the turn home read-only |
 | `LIGUS_SANDBOX_READ_ALLOW` | every process on that device | your device-local choice; the only way to open a credential dir such as `~/.aws` |
@@ -346,6 +357,19 @@ every device judges them the same way:
   phone key, sets grants.
 - **A grant never opens Ligus's data dir, a secret file or a credential
   dir**, even one naming it or a dir above it: those stay denied inside it.
+  Every path that opens part of the home (a grant, an allow-list entry, a
+  `PATH` dir) is judged where it resolves, too: one that is a symlink to
+  your home, to a dir above it or into a denied path opens nothing, and a
+  grant of a dir above your home (`/home`, `/Users`) opens nothing in it.
+- **A read-write grant never makes writable what runs as you outside the
+  sandbox**: a `PATH` or toolchain dir (a planted `git` there would run
+  unconfined the next time you type it), your shell startup files
+  (`.zshrc`, `.bashrc`, `.profile`, fish and nushell config), login items
+  and autostart entries (`~/Library/LaunchAgents`, `~/.config/autostart`,
+  `~/.config/systemd`), and the config of tools that run commands from it
+  (`~/.gitconfig`, `~/.config/git`, `~/.npmrc`, `~/.cargo/config.toml`,
+  editor config). A grant that names one of them, or a dir that holds one
+  (`~/.config`, `~/.cargo`), is applied read-only.
   `LIGUS_SANDBOX_READ_ALLOW` and `LIGUS_SANDBOX_WRITE_ALLOW` stay
   device-local, and only the read list may open a credential dir.
 
@@ -603,7 +627,10 @@ person behind the turn is the workspace Owner** (followed through the same
 chain as the author gate), or, in the device-local workspace, the device
 owner. For agents acting for any other member it is off, unless an Owner
 granted that agent the shell in Settings → Sandbox (signed, with a passkey).
-A person who can't be resolved means no shell.
+A person who can't be resolved means no shell, and so does a CLI Ligus
+starts outside any turn (the chat summarizer and compaction, a chat title,
+a runtime's Test button): their prompts carry other members' words and no
+Owner stands behind them.
 
 It is a second gate next to the author gate, and stricter on purpose: your
 own message on your own device always clears the tool floor, but in a
