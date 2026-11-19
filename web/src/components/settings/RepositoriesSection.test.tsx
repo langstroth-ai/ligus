@@ -43,6 +43,7 @@ vi.mock("@/lib/ipc", () => ({
   cloneWorkspaceRepo: vi.fn(async () => ({ path: "/Users/me/code/wefit-1a2b3c4d", rootMatches: true })),
   chatWorkspaceRepo: vi.fn(),
   setChatWorkspaceRepo: vi.fn(async () => undefined),
+  repinChatBase: vi.fn(async () => "89abcdef0123456789abcdef0123456789abcdef"),
 }));
 
 function wrap(ui: React.ReactNode) {
@@ -130,6 +131,31 @@ describe("ChatRepoChip", () => {
     await userEvent.click(screen.getByLabelText("Chat repository"));
     await userEvent.click(screen.getByText("No repository"));
     expect(ipc.setChatWorkspaceRepo).toHaveBeenCalledWith("s1", null);
+  });
+
+  it("offers moving the pinned base only to an Admin or the chat's creator", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
+    const dto = (canRepin: boolean): ipc.ChatWorkspaceRepoDto => ({
+      id: "r1",
+      name: "WeFit",
+      canonical: "github.com/zazulam/wefit",
+      removed: false,
+      baseBranch: "main",
+      basePinned: true,
+      baseCommit: "0123456789abcdef0123456789abcdef01234567",
+      canRepin,
+      here: { state: "present", reason: "" },
+    });
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(dto(false));
+    const first = wrap(<ChatRepoChip sessionId="s1" />);
+    await userEvent.click(await screen.findByLabelText("Chat repository"));
+    expect(screen.queryByText(/Move the base/)).toBeNull();
+    first.unmount();
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(dto(true));
+    wrap(<ChatRepoChip sessionId="s2" />);
+    await userEvent.click(await screen.findByLabelText("Chat repository"));
+    await userEvent.click(screen.getByText("Move the base to the latest main"));
+    expect(ipc.repinChatBase).toHaveBeenCalledWith("s2");
   });
 
   it("is hidden while there are no repos", async () => {

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   chatWorkspaceRepo,
   listWorkspaceRepos,
+  repinChatBase,
   setChatWorkspaceRepo,
   type ChatWorkspaceRepoDto,
   type PinnedElsewhere,
@@ -47,6 +48,16 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
       toast.error(`Couldn't change the chat's repository: ${errMsg(e)}`);
     }
   };
+  const repin = async () => {
+    setOpen(false);
+    try {
+      const to = await repinChatBase(sessionId);
+      toast.info(`Moved this chat's base to ${to.slice(0, 12)}. Each host rebuilds the chat's branch there on its next turn.`);
+      await qc.invalidateQueries({ queryKey: ["chat-repo", sessionId] });
+    } catch (e) {
+      toast.error(`Couldn't move the chat's base: ${errMsg(e)}`);
+    }
+  };
   const label = current ? `${current.name ?? "Unknown repository"}${current.baseBranch ? ` · ${current.baseBranch}` : ""}` : "No repository";
   return (
     <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
@@ -75,6 +86,18 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
           <button role="menuitem" type="button" className="block w-full rounded-lg px-2 py-1 text-left hover:bg-black/5" onClick={() => void pick(null)}>
             No repository
           </button>
+          {current?.canRepin && !current.removed && (
+            <button
+              role="menuitem"
+              type="button"
+              className="mt-1 block w-full rounded-lg border-t px-2 py-1 text-left hover:bg-black/5"
+              style={{ borderColor: "var(--hive-line)" }}
+              title={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
+              onClick={() => void repin()}
+            >
+              Move the base to the latest {current.baseBranch || "default branch"}
+            </button>
+          )}
         </div>
       )}
     </div>

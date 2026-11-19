@@ -123,6 +123,22 @@ pub(crate) fn chat_checkout(state: &AppState, session_id: Uuid) -> Option<PathBu
     svc.store().chat_checkout(session_id, repo).ok().flatten().or_else(|| svc.store().primary_checkout(s.workspace_id, repo).ok().flatten().map(|m| m.path))
 }
 
+/// This device's checkout of `session`'s repo when it passes the turn gate
+/// (still that repo by its remote, managed by this host), without cutting
+/// or preparing the chat branch: for read-only probes such as "Ask the
+/// agent to rebase".
+pub(crate) fn gated_checkout(state: &AppState, session: &ChatSession) -> Result<PathBuf, String> {
+    let label = host_label();
+    let svc = state.service.lock().unwrap();
+    let roster = svc.workspace_roster(session.workspace_id).map_err(map_err)?;
+    match rr::turn_checkout(svc.store(), svc.device_id(), &label, session, &roster, &rr::cloning()) {
+        TurnCheckout::Ready(r) => Ok(r.path),
+        TurnCheckout::NoRepo => Err("this chat has no repository".into()),
+        TurnCheckout::Cloning { repo_name } => Err(format!("{repo_name} is still cloning on {label}")),
+        TurnCheckout::Refused { reason, .. } => Err(reason),
+    }
+}
+
 /// The folder the window shows for a repo chat with `checkout` here: its
 /// chat worktree once its branch exists (a turn cuts it from the pinned
 /// base), else the checkout itself. Viewing never cuts a chat branch: one
@@ -355,6 +371,9 @@ pub fn chat_workspace_repo(state: State<AppState>, session_id: String) -> Result
     let here_ok = st == "present";
     let me = svc.device_id().to_string();
     let my_actor = svc.author().id.clone();
+    // Re-pinning (review residual 3): an Admin's, or the chat's creator's.
+    let admin = roster.role_of(&my_actor).is_some_and(|r| r.rank() >= hive_core::WorkspaceRole::Admin.rank());
+    let can_repin = cr.base_commit.is_some() && (admin || (!s.creator_actor_id.is_empty() && s.creator_actor_id == my_actor));
     drop(svc);
     let pinned = pinned_elsewhere(&state, &s, id, &me, &my_actor, here_ok);
     Ok(json!({
@@ -364,6 +383,8 @@ pub fn chat_workspace_repo(state: State<AppState>, session_id: String) -> Result
         "removed": entry.is_some_and(|e| e.removed),
         "baseBranch": cr.base_branch,
         "basePinned": cr.base_commit.is_some(),
+        "baseCommit": cr.base_commit,
+        "canRepin": can_repin,
         "here": { "state": st, "reason": reason },
         "pinnedElsewhere": pinned,
     }))
@@ -397,6 +418,40 @@ pub fn set_chat_workspace_repo(state: State<AppState>, session_id: String, repo_
     svc.set_chat_repo(sid, ws, repo, base_branch.as_deref().unwrap_or("")).map_err(map_err)
 }
 
+/// Move a chat's pinned base (`ChatBaseRepinned`, review residual 3): to
+/// `commit`, or with none to the tip of the chat's base branch (else the
+/// repo's default) as this device's checkout has it. An Admin's or the
+/// chat's creator's, with passkey presence; every host with the chat's
+/// branch rebuilds it on the new base from the chat's ledger on its next
+/// turn, or refuses that turn and says why. Returns the new base.
+#[tauri::command]
+pub fn repin_chat_base(state: State<AppState>, session_id: String, commit: Option<String>) -> Result<String, String> {
+    let sid = parse(&session_id)?;
+    let (s, roster) = {
+        let svc = state.service.lock().unwrap();
+        let s = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
+        let roster = svc.workspace_roster(s.workspace_id).map_err(map_err)?;
+        (s, roster)
+    };
+    let repo = s.repo.as_ref().and_then(|r| r.repo_id).ok_or("this chat has no repository")?;
+    let commit = match commit.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty()) {
+        Some(c) => c,
+        None => {
+            let gate = {
+                let svc = state.service.lock().unwrap();
+                rr::turn_checkout(svc.store(), svc.device_id(), &host_label(), &s, &roster, &rr::cloning())
+            };
+            let TurnCheckout::Ready(ready) = gate else {
+                return Err("this chat's repository isn't ready on this device; name a commit to pin instead".into());
+            };
+            let branch = s.repo.as_ref().map(|r| r.base_branch.clone()).unwrap_or_default();
+            rr::resolve_base(&ready.path, &branch, &ready.repo, ready.via_fork).ok_or("no commit to pin on this device")?
+        }
+    };
+    let mut svc = state.service.lock().unwrap();
+    svc.repin_chat_base(sid, s.workspace_id, repo, &commit).map_err(map_err)?;
+    Ok(commit)
+}
 
 /// Desktop "Clone into…" (4.3): clone workspace repo `repo_id` into
 /// `parent/<name>-<id8>` through this device's connection to its host, on
@@ -441,18 +496,63 @@ pub(crate) async fn clone_repo_into(
 
 /// "Open in editor" after an apply conflict: the chat's folder for this
 /// repo on this device (its chat worktree, else the checkout), opened with
-/// the OS default handler for folders. No shell, no editor command line.
+/// the OS default handler for folders. No shell, no editor command line,
+/// and only a real folder inside the checkout ([`openable_dir`]).
 #[tauri::command]
 pub fn open_chat_checkout(state: State<AppState>, session_id: String) -> Result<String, String> {
     let sid = parse(&session_id)?;
     let checkout = chat_checkout(&state, sid).ok_or("this chat has no repository checkout on this device")?;
-    let dir = hive_runtime::git_worktree::chat_worktree_path_of(&checkout, &sid.to_string()).filter(|p| p.is_dir()).unwrap_or(checkout);
+    let wt = hive_runtime::git_worktree::chat_worktree_path_of(&checkout, &sid.to_string()).filter(|p| std::fs::symlink_metadata(p).is_ok());
+    let dir = openable_dir(&checkout, wt.as_deref())?;
     open_folder(&dir)?;
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// The folder "Open in editor" may hand to the OS opener: the chat's
+/// worktree when there is one, else the checkout. The worktree must be a
+/// real directory (never a link: a hostile repo can track a symlink at
+/// `.ligus/worktrees/chat-<id>` pointing at an app) that resolves inside
+/// the checkout. On macOS a package (an app, a workflow, anything with
+/// `Contents/Info.plist`) is refused: `open` would launch it, not show it.
+pub(crate) fn openable_dir(checkout: &Path, worktree: Option<&Path>) -> Result<PathBuf, String> {
+    let root = rr::git::canonical(checkout);
+    let dir = match worktree {
+        Some(wt) => {
+            let meta = std::fs::symlink_metadata(wt).map_err(|_| "that folder isn't there".to_string())?;
+            if !meta.is_dir() {
+                return Err("the chat's folder isn't a plain folder; open the checkout yourself".into());
+            }
+            let real = rr::git::canonical(wt);
+            if !real.starts_with(&root) {
+                return Err("the chat's folder isn't inside the checkout".into());
+            }
+            real
+        }
+        None => root,
+    };
+    if !dir.is_absolute() || !dir.is_dir() {
+        return Err("that folder isn't there".into());
+    }
+    if looks_like_package(&dir) {
+        return Err("that folder is an app or package; open it yourself".into());
+    }
+    Ok(dir)
+}
+
+/// A directory the macOS opener would launch or install rather than show.
+fn looks_like_package(dir: &Path) -> bool {
+    const LAUNCHABLE: &[&str] = &[
+        "app", "bundle", "framework", "plugin", "kext", "appex", "prefpane", "saver", "workflow", "action", "mpkg", "pkg",
+        "qlgenerator", "mdimporter", "service", "wdgt", "xpc", "systemextension", "dext",
+    ];
+    let ext = dir.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+    ext.is_some_and(|e| LAUNCHABLE.contains(&e.as_str())) || dir.join("Contents").join("Info.plist").exists() || dir.join("Contents").join("MacOS").exists()
+}
+
 /// The OS's "open this folder" program and its one argument: the path,
-/// never a shell string.
+/// never a shell string. On Windows the path is passed quoted as one raw
+/// argument: `explorer` parses its own command line, where an unquoted
+/// comma separates switches (`/root,`, `/select,`).
 pub(crate) fn open_folder_command(dir: &Path) -> std::process::Command {
     #[cfg(target_os = "macos")]
     let program = "open";
@@ -461,6 +561,13 @@ pub(crate) fn open_folder_command(dir: &Path) -> std::process::Command {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let program = "xdg-open";
     let mut c = hive_core::process_util::command(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let p = rr::git::simplify(dir.to_path_buf());
+        c.raw_arg(format!("\"{}\"", p.to_string_lossy()));
+    }
+    #[cfg(not(target_os = "windows"))]
     c.arg(dir);
     c
 }
@@ -478,6 +585,12 @@ fn open_folder(dir: &Path) -> Result<(), String> {
     if !dir.is_absolute() || !dir.is_dir() {
         return Err("that folder isn't there".into());
     }
+    // An absolute path never reads as an option or a URL to the opener;
+    // a quote never belongs in a folder name we open.
+    let s = dir.to_string_lossy();
+    if s.starts_with('-') || s.contains('"') || s.chars().any(char::is_control) {
+        return Err("that folder's name can't be opened safely".into());
+    }
     if let Some(hook) = OPEN_HOOK.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
         hook(dir);
         return Ok(());
@@ -494,10 +607,49 @@ mod tests {
         let dir = std::env::temp_dir();
         let c = open_folder_command(&dir);
         let args: Vec<_> = c.get_args().collect();
+        #[cfg(not(windows))]
         assert_eq!(args, vec![dir.as_os_str()]);
+        #[cfg(windows)]
+        assert!(args.is_empty(), "the path rides one quoted raw argument");
         let program = c.get_program().to_string_lossy().into_owned();
         assert!(["open", "explorer", "xdg-open"].contains(&program.as_str()), "{program}");
         assert!(!["sh", "bash", "cmd", "zsh"].contains(&program.as_str()));
+    }
+
+    /// Only a real folder inside the checkout opens: never a link (a hostile
+    /// repo can track one at the chat worktree's path), never somewhere
+    /// else, never an app or package the opener would launch.
+    #[test]
+    fn openable_dir_refuses_links_escapes_and_packages() {
+        let t = std::env::temp_dir().join(format!("ligus-openable-{}", Uuid::new_v4().simple()));
+        let checkout = t.join("co");
+        let wt = checkout.join(".ligus/worktrees/chat-x");
+        std::fs::create_dir_all(&wt).unwrap();
+        assert_eq!(openable_dir(&checkout, Some(&wt)).unwrap(), rr::git::canonical(&wt));
+        assert_eq!(openable_dir(&checkout, None).unwrap(), rr::git::canonical(&checkout));
+        // A package inside the checkout.
+        let app = checkout.join(".ligus/worktrees/chat-y");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), "x").unwrap();
+        assert!(openable_dir(&checkout, Some(&app)).is_err());
+        let named = checkout.join(".ligus/worktrees/Evil.app");
+        std::fs::create_dir_all(&named).unwrap();
+        assert!(openable_dir(&checkout, Some(&named)).is_err());
+        #[cfg(unix)]
+        {
+            let outside = t.join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            let link = checkout.join(".ligus/worktrees/chat-z");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(openable_dir(&checkout, Some(&link)).is_err(), "a link is never opened");
+            let inner = checkout.join(".ligus/worktrees/chat-w");
+            std::os::unix::fs::symlink(&wt, &inner).unwrap();
+            assert!(openable_dir(&checkout, Some(&inner)).is_err(), "not even one pointing inside");
+        }
+        let file = checkout.join("f");
+        std::fs::write(&file, "x").unwrap();
+        assert!(openable_dir(&checkout, Some(&file)).is_err());
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     #[test]

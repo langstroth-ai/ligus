@@ -1063,6 +1063,44 @@ fn run_offline() -> usize {
 // Workspace repos through the command layer (offline, local temp repos)
 // ---------------------------------------------------------------------------
 
+/// A local HTTP server that answers every request with a redirect to a
+/// second local port, and whether anything reached that second port; call
+/// the returned closure to stop both. Loopback only.
+fn redirecting_server() -> (String, Arc<std::sync::atomic::AtomicBool>, impl FnOnce()) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let elsewhere = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let b = elsewhere.local_addr().unwrap().port();
+    elsewhere.set_nonblocking(true).unwrap();
+    let pinned = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let a = pinned.local_addr().unwrap().port();
+    pinned.set_nonblocking(true).unwrap();
+    let hit = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (hit2, stop2) = (hit.clone(), stop.clone());
+    let t = std::thread::spawn(move || {
+        while !stop2.load(Ordering::SeqCst) {
+            if let Ok((mut c, _)) = elsewhere.accept() {
+                hit2.store(true, Ordering::SeqCst);
+                let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+            if let Ok((mut c, _)) = pinned.accept() {
+                let _ = c.set_nonblocking(false);
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                let resp = format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{b}/e2e/gamma.git/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = c.write_all(resp.as_bytes());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let stopper = move || {
+        stop.store(true, Ordering::SeqCst);
+        let _ = t.join();
+    };
+    (format!("http://127.0.0.1:{a}/e2e/gamma.git"), hit, stopper)
+}
+
 const CONFIG_MCP: &str = "[[mcp_servers]]\nid = \"{id}\"\ntransport = \"stdio\"\ncommand = \"{cmd}\"\nenabled = true\n";
 
 fn mcp_entry(id: &str, cmd: &str) -> String {
@@ -1166,6 +1204,9 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let chat_g = chat("on gamma", Some(&g_id));
     let load = |sid: Uuid| state().service.lock().unwrap().load(sid).unwrap().unwrap();
 
+    // Paths as Ligus compares them (links resolved, no Windows verbatim prefix).
+    let canon = |p: &Path| hive_runtime::repos::git::canonical(p);
+
     // ---- Per-turn catalogs and trust (F14) ----
     // The window views chat B: the global catalogs follow it.
     crate::set_active_chat(state(), Some(chat_b.to_string())).unwrap();
@@ -1176,8 +1217,8 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     match crate::turn_scope(&state(), &load(chat_a)) {
         Ok(scope) => {
             c.check(mcp_ids(&scope.catalog.mcp) == ["a-mcp"], format!("chat A's turn sees only A's trusted servers: {:?}", mcp_ids(&scope.catalog.mcp)));
-            c.check(scope.dir.contains(&alpha.to_string_lossy().into_owned()) || std::fs::canonicalize(&scope.dir).is_ok_and(|d| d.starts_with(std::fs::canonicalize(&alpha).unwrap())), format!("chat A's turn runs in Alpha's chat worktree: {}", scope.dir));
-            c.check(scope.repo.as_ref().is_some_and(|r| std::fs::canonicalize(&r.checkout).ok() == std::fs::canonicalize(&alpha).ok()), "chat A's turn is gated on Alpha's checkout");
+            c.check(canon(Path::new(&scope.dir)).starts_with(canon(&alpha)), format!("chat A's turn runs in Alpha's chat worktree: {}", scope.dir));
+            c.check(scope.repo.as_ref().is_some_and(|r| canon(&r.checkout) == canon(&alpha)), "chat A's turn is gated on Alpha's checkout");
         }
         Err(e) => c.check(false, format!("chat A's turn scope: {e}")),
     }
@@ -1222,6 +1263,27 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     c.check(chat_wt.join("new.txt").exists(), "it landed on chat A's branch, in Alpha's checkout");
     c.check(!bound.join("new.txt").exists() && !alpha.join("new.txt").exists(), "never in the bound folder or Alpha's own worktree");
     c.check(load(chat_a).proposals.iter().find(|p| p.id == p1).is_some_and(|p| p.status == hive_core::ProposalStatus::Applied), "the proposal is applied");
+    // The apply passes the turn's checkout gate: never into a checkout whose
+    // remote moved, or one another host on this machine manages.
+    let p_gate = file_diff("add gate.txt", "diff --git a/gate.txt b/gate.txt\nnew file mode 100644\n--- /dev/null\n+++ b/gate.txt\n@@ -0,0 +1 @@\n+g\n");
+    git(&alpha, &["remote", "set-url", "origin", "https://github.com/e2e/evil.git"]);
+    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p_gate.to_string(), None).await;
+    c.check(r.as_ref().is_err_and(|e| e.contains("no longer points")), format!("an apply into a checkout whose remote moved is refused: {r:?}"));
+    git(&alpha, &["remote", "set-url", "origin", "https://github.com/e2e/alpha.git"]);
+    let me = state().service.lock().unwrap().device_id();
+    hive_runtime::repos::marker::take_over(&alpha, Uuid::new_v4(), "e2e-box").unwrap();
+    let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p_gate.to_string(), None).await;
+    c.check(r.as_ref().is_err_and(|e| e.contains("managed by e2e-box")), format!("an apply into a checkout another host manages is refused: {r:?}"));
+    // Hygiene and legacy turns leave such a checkout alone too.
+    let bound_before = git(&bound, &["worktree", "list"]);
+    hive_runtime::repos::marker::take_over(&bound, Uuid::new_v4(), "e2e-box").unwrap();
+    c.check(crate::turn_scope(&state(), &load(chat_c)).is_err_and(|e| e.contains("managed by e2e-box")), "a chat without a repo never runs in a bound folder another host manages");
+    let swept = crate::guards::run_hygiene_sweep(&state());
+    c.check(git(&bound, &["worktree", "list"]) == bound_before && swept.chat_checkouts_removed == 0, "hygiene never sweeps a checkout another host manages");
+    hive_runtime::repos::marker::take_over(&bound, me, "e2e").unwrap();
+    hive_runtime::repos::marker::take_over(&alpha, me, "e2e").unwrap();
+    c.check(!chat_wt.join("gate.txt").exists() && !alpha.join("gate.txt").exists(), "nothing landed while refused");
+
     // Something else lands on the branch; a proposal made before it conflicts.
     std::fs::write(chat_wt.join("README.md"), "# mine\n").unwrap();
     git(&chat_wt, &["commit", "-qam", "mine"]);
@@ -1245,10 +1307,37 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     }
     let r = crate::repos_ui::open_chat_checkout(state(), chat_a.to_string());
     crate::repos_ui::set_open_hook(None);
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let seen: Vec<PathBuf> = opened.lock().unwrap().iter().map(|p| canon(p)).collect();
     c.check(r.is_ok() && seen == [canon(&chat_wt)], format!("open in editor opens chat A's folder: {r:?} {seen:?}"));
     c.check(crate::repos_ui::open_chat_checkout(state(), chat_c.to_string()).is_err(), "a chat without a repo checkout has nothing to open");
+
+    // ---- Re-pinning the chat's base (review residual 3) ----
+    // Upstream moves on; the chat's creator re-pins. The chat branch carries
+    // someone's own commit ("mine"), so this host refuses to follow and
+    // says why; without it, the branch is rebuilt on the new base.
+    let pin_before = load(chat_a).repo.and_then(|r| r.base_commit).unwrap_or_default();
+    std::fs::write(alpha.join("upstream.txt"), "u\n").unwrap();
+    git(&alpha, &["add", "upstream.txt"]);
+    git(&alpha, &["commit", "-qm", "upstream"]);
+    let upstream = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+    let r = crate::repos_ui::repin_chat_base(state(), chat_a.to_string(), Some(upstream.clone()));
+    c.check(r.as_deref() == Ok(upstream.as_str()), format!("the chat's creator re-pins its base: {r:?}"));
+    let folded = load(chat_a);
+    c.check(
+        folded.repo.as_ref().and_then(|r| r.base_commit.clone()) == Some(upstream.clone())
+            && folded.repo_bases.values().next().is_some_and(|h| h.first() == Some(&pin_before)),
+        "the fold keeps the first pin and moves to the new one",
+    );
+    let r = crate::repos_ui::repin_chat_base(state(), chat_a.to_string(), Some(upstream.clone()));
+    c.check(r.is_err(), "re-pinning onto the pin in force is refused");
+    let refused = crate::turn_scope(&state(), &load(chat_a));
+    c.check(refused.as_ref().is_err_and(|e| e.contains("re-pinned") && e.contains("isn't from the chat's ledger")), format!("a branch with someone's own commit refuses to follow, visibly: {:?}", refused.as_ref().err()));
+    c.check(git(&chat_wt, &["rev-parse", "HEAD"]) == tip, "and changes nothing");
+    git(&chat_wt, &["reset", "-q", "--hard", "HEAD~1"]);
+    match crate::turn_scope(&state(), &load(chat_a)) {
+        Ok(_) => c.check(chat_wt.join("upstream.txt").exists() && chat_wt.join("new.txt").exists(), "the branch is rebuilt on the new base with the chat's ledger"),
+        Err(e) => c.check(false, format!("following the re-pin: {e}")),
+    }
 
     // ---- Clone into… (4.3) ----
     let parent = base.join("clones");
@@ -1260,8 +1349,19 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let gamma = state().service.lock().unwrap().workspace_roster(ws).unwrap().repos.get(&Uuid::parse_str(&g_id).unwrap()).unwrap().repo.clone();
     let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &gamma_forge.to_string_lossy(), Path::new("relative"), None, &[]).await;
     c.check(r.is_err(), "a relative parent is refused");
+    // Never a redirect (review F12), with or without a DNS pin: a server
+    // at the repo's address that answers 302 to another one is not followed.
+    let (redirect_url, elsewhere_hit, stop) = redirecting_server();
+    let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &redirect_url, &parent, None, &[]).await;
+    stop();
+    c.check(r.is_err() && !elsewhere_hit.load(std::sync::atomic::Ordering::SeqCst), format!("a clone by id never follows a redirect: {r:?}"));
+    c.check(std::fs::read_dir(&parent).map(|d| d.count()).unwrap_or(0) == 0, "and leaves nothing behind");
     let r = crate::repos_ui::clone_repo_into(&state(), ws, &gamma, &gamma_forge.to_string_lossy(), &parent, None, &[]).await;
     c.check(r.as_ref().is_ok_and(|v| v["path"].as_str().is_some_and(|p| p.contains("gamma-"))), format!("Gamma clones into the chosen folder: {r:?}"));
+    c.check(
+        r.as_ref().ok().and_then(|v| v["path"].as_str().map(PathBuf::from)).is_some_and(|p| canon(&p) == p && p.parent() == Some(canon(&parent).as_path())),
+        "the bound clone path is the normalised one every later match compares",
+    );
     let chip = crate::repos_ui::chat_workspace_repo(state(), chat_g.to_string()).unwrap();
     c.check(chip["here"]["state"] == "present", format!("the clone is bound: chat G can run here now: {chip}"));
     c.check(crate::turn_scope(&state(), &load(chat_g)).is_ok(), "and its turn gate passes");

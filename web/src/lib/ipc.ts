@@ -1977,6 +1977,10 @@ export interface ChatWorkspaceRepoDto {
   removed: boolean;
   baseBranch: string;
   basePinned: boolean;
+  /// The pinned base in force (40 or 64 hex), when one is pinned.
+  baseCommit?: string | null;
+  /// This person may move the pinned base (an Admin, or the chat's creator).
+  canRepin?: boolean;
   /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
   here: { state: string; reason: string };
   /// The chat's agents pinned to another host that says it has no checkout
@@ -2016,6 +2020,10 @@ export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, b
 /// device's connection to its host, and bind it here.
 export const cloneWorkspaceRepo = (repoId: string, parent: string) =>
   invoke<{ path: string; rootMatches: boolean | null }>("clone_workspace_repo", { repoId, parent });
+/// Move the chat's pinned base (Admin or the chat's creator, with presence):
+/// to `commit`, or with none to the latest of its base branch on this device.
+export const repinChatBase = (sessionId: string, commit?: string) =>
+  invoke<string>("repin_chat_base", commit ? { sessionId, commit } : { sessionId });
 /// Open the chat's folder for its repository with the OS's default handler.
 export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat_checkout", { sessionId });
 /// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.

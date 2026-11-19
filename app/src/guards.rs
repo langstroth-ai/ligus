@@ -592,6 +592,17 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
         roots.push((bound, None));
     }
+    // Never a checkout another host on this machine manages (its marker,
+    // review residual 6): its chat worktrees and branches are that host's,
+    // and sweeping them would remove its live trees.
+    let me = state.service.lock().unwrap().device_id();
+    roots.retain(|(p, _)| match hive_runtime::repos::marker::managed_elsewhere(p, me) {
+        Some(label) => {
+            tracing::info!(target: "worktree", "hygiene skips {}: managed by {label}", p.display());
+            false
+        }
+        None => true,
+    });
     if roots.is_empty() {
         *state.guards.hygiene.lock().unwrap() = report.clone();
         return report;
@@ -849,18 +860,8 @@ pub(crate) fn enforcement_for_servers(
 
 /// The OS-sandbox policy for one turn on this desktop: the envelope, the
 /// author gate's plan, and the endpoints of the MCP servers the envelope
-/// lets this chat reach (their hosts join the egress allow-list).
-pub(crate) fn turn_sandbox_policy(
-    state: &AppState,
-    session: &hive_core::ChatSession,
-    envelope: &hive_core::sandbox::SandboxEnvelope,
-    gate: &hive_runtime::author_gate::GatePlan,
-    isolated: bool,
-) -> hive_runtime::executor::TurnPolicy {
-    turn_sandbox_policy_with(state, session, envelope, gate, isolated, &state.combined_mcp_servers())
-}
-
-/// [`turn_sandbox_policy`] with a turn's own MCP catalog (review F14).
+/// lets this chat reach (their hosts join the egress allow-list), from the
+/// turn's own MCP catalog (review F14), never the window's.
 pub(crate) fn turn_sandbox_policy_with(
     state: &AppState,
     session: &hive_core::ChatSession,
