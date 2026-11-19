@@ -1604,6 +1604,37 @@ export const setDearthMode = (
 /// Approve a member or device waiting on dearth mode's second approval.
 export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
 
+// ── Sandbox (Phase C): effective policy and signed grants ──
+
+/// One line of a turn's effective filesystem policy.
+export type SandboxPolicyEntry = { path: string; access: "denied" | "read" | "read-write"; why: string };
+/// What an agent turn of one runtime may reach on this device, and why.
+export type EffectivePolicy = { runtime: string; tier: string; home: string | null; entries: SandboxPolicyEntry[]; shell: string };
+/// Extra paths (`~/...` or absolute). Empty lists are omitted on the wire.
+export type PathGrants = { readOnly?: string[]; readWrite?: string[] };
+/// One agent's grants: paths, and the shell for other members' turns.
+export type AgentGrant = PathGrants & { shell?: boolean };
+/// The signed sandbox grants in force (workspace config log).
+export type SandboxGrants = { workspace?: PathGrants; agents?: Record<string, AgentGrant> };
+export type SandboxAgent = { id: string; name: string; runtime: string };
+export type SandboxPolicyDto = {
+  policies: EffectivePolicy[];
+  grants: SandboxGrants;
+  agents: SandboxAgent[];
+  canEditPaths: boolean;
+  canEditShell: boolean;
+  local: boolean;
+};
+
+/// The effective sandbox policy on this device (for one agent, or every
+/// runtime the workspace's agents use) and the signed grants in force.
+export const getSandboxPolicy = (agentId?: string | null) =>
+  invoke<SandboxPolicyDto>("get_sandbox_policy", { agentId: agentId ?? null });
+
+/// Replace the workspace's sandbox grants (signed; the desktop asks for a
+/// passkey). Admin to change paths; only the Owner changes a shell grant.
+export const setSandboxGrants = (grants: SandboxGrants) => invoke<void>("set_sandbox_grants", { grants });
+
 // ── Egress presets (device-local, off by default) ──
 export type { EgressPresetsDto } from "@/bindings/EgressPresetsDto";
 export type { EgressPresetDto } from "@/bindings/EgressPresetDto";
