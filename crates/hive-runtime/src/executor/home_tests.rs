@@ -295,3 +295,24 @@ fn program_install_dir_is_the_prefix_under_the_home() {
     std::fs::write(home.join("tool"), "").unwrap();
     assert_eq!(program_install_dir(home.join("tool").as_os_str(), &home), None);
 }
+
+#[test]
+fn effective_policy_names_every_path_with_a_reason() {
+    let d = DecoyHome::new();
+    let host = d.host();
+    let grants = PathGrants { read_only: vec!["~/granted/ro".into(), "~/.ssh".into()], read_write: vec!["~/granted/rw".into()] };
+    let p = effective_policy_in(Some(ModelProviderKind::ClaudeCode), &grants, false, &d.home, &host, None, &|_| None);
+    let find = |path: &Path, access: &str| p.entries.iter().find(|e| e.path == path.display().to_string() && e.access == access).cloned();
+    assert!(find(&d.home, "denied").is_some(), "{p:?}");
+    assert!(find(&d.home.join(".cargo/bin"), "read").is_some_and(|e| e.why.starts_with("toolchain")), "{p:?}");
+    assert!(find(&d.home.join("granted/ro"), "read").is_some_and(|e| e.why.contains("signed")), "{p:?}");
+    assert!(find(&d.home.join("granted/rw"), "read-write").is_some_and(|e| e.why.contains("signed")), "{p:?}");
+    assert!(find(&d.home.join(".ssh"), "denied").is_some() && find(&d.home.join(".ssh"), "read").is_none(), "{p:?}");
+    assert!(find(&d.home.join(".ligus"), "denied").is_some_and(|e| e.why.contains("Ligus's data")), "{p:?}");
+    assert!(p.entries.iter().all(|e| !e.why.is_empty()));
+    assert!(p.shell.contains("Owner"));
+    let codex = effective_policy_in(Some(ModelProviderKind::Codex), &PathGrants::default(), false, &d.home, &host, None, &|_| None);
+    assert!(codex.shell.contains("refused"));
+    let granted = effective_policy_in(Some(ModelProviderKind::Codex), &PathGrants::default(), true, &d.home, &host, None, &|_| None);
+    assert!(granted.shell.starts_with("on"));
+}

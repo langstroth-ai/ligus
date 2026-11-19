@@ -471,6 +471,11 @@ impl ChatService {
         self.local_workspace_id = Some(id);
     }
 
+    /// Whether `id` is this device's local workspace (solo, never synced).
+    pub fn is_local_workspace(&self, id: Uuid) -> bool {
+        self.local_workspace_id == Some(id)
+    }
+
     /// Pin (or clear, with `None`/empty) the trusted founder for the active
     /// workspace — the account id the `hivews1:` invite names as its founder. The
     /// caller sets this every time the active workspace changes (creation pins the
@@ -2755,6 +2760,26 @@ impl ChatService {
     ///
     /// Anything unresolved fails closed (`None`).
     pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        self.trigger_role(session_id, message_id, false)
+    }
+
+    /// The role the shell gate (Phase C, `author_gate::shell_allowed`) reads:
+    /// the same walk as [`Self::trigger_author_role`], except that this
+    /// device's own user counts as the Owner only in the device-local
+    /// workspace (the device owner). In a shared workspace their workspace
+    /// role at the message's position is used, so the shell is on only when
+    /// every person behind the turn is a workspace Owner.
+    pub fn trigger_shell_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        self.trigger_role(session_id, message_id, true)
+    }
+
+    /// The signed sandbox grants in force for `workspace_id`
+    /// (`WorkspaceSandboxSet` on its config log; none when it has none).
+    pub fn sandbox_grants(&self, workspace_id: Uuid) -> hive_core::sandbox::SandboxGrants {
+        self.workspace_guards(workspace_id).map(|g| g.sandbox_grants).unwrap_or_default()
+    }
+
+    fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
         // Every event on the chain is judged against this chat's own
@@ -2809,11 +2834,11 @@ impl ChatService {
                 continue;
             }
             humans += 1;
-            let Some(role) = self.human_message_role(session_id, &touching, &mut cx)? else { return Ok(None) };
+            let Some(role) = self.human_message_role(session_id, &touching, &mut cx, shell)? else { return Ok(None) };
             lowest = Some(min_role(lowest, role));
             let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
             for run_id in runs {
-                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx)? else { return Ok(None) };
+                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx, shell)? else { return Ok(None) };
                 lowest = Some(min_role(lowest, role));
             }
         }
@@ -2822,8 +2847,8 @@ impl ChatService {
 
     /// A human's message: Owner when every event shaping it was signed by
     /// this device as its own user, else the lowest role of its authors.
-    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
-        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) {
+    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx, shell: bool) -> Result<Option<WorkspaceRole>> {
+        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) && self.own_user_is_owner(touching[0].workspace_id, shell) {
             return Ok(Some(WorkspaceRole::Owner));
         }
         let mut lowest = None;
@@ -2890,6 +2915,7 @@ impl ChatService {
         chat_workspace: Uuid,
         run_id: Uuid,
         cx: &mut RoleCx,
+        shell: bool,
     ) -> Result<Option<WorkspaceRole>> {
         let Some(first) = envs
             .iter()
@@ -2903,10 +2929,18 @@ impl ChatService {
         {
             return Ok(None);
         }
-        if self.signed_by_own_user(first) {
+        if self.signed_by_own_user(first) && self.own_user_is_owner(first.workspace_id, shell) {
             return Ok(Some(WorkspaceRole::Owner));
         }
         self.envelope_author_role(session_id, first, cx)
+    }
+
+    /// Whether this device's own user counts as the Owner for a gate: always
+    /// for the tool gate (their own tools on their own device); for the shell
+    /// gate only in the device-local workspace, where they are the device
+    /// owner and the only person.
+    fn own_user_is_owner(&self, workspace_id: Uuid, shell: bool) -> bool {
+        !shell || self.local_workspace_id == Some(workspace_id)
     }
 
     /// The role one event's stamped author held at its position (`None` when
@@ -2931,6 +2965,11 @@ impl ChatService {
         // The stamped member must be the signer's: a member with an account
         // is speaking only when the stamp names that account and the signing
         // device is certified for it (and not revoked) at this position.
+        // This device's own user, signed by this device, is known without
+        // the roster's certificate (the shell gate reads their role here).
+        if self.signed_by_own_user(env) {
+            return Ok(Some(member.role));
+        }
         if let Some(account) = member.account_id {
             let signer_acts_for = env
                 .signer_device_id
@@ -4404,6 +4443,53 @@ mod tests {
         // The host's own message clears the gate as the device's user.
         let own = host.post_user_message(chat_id, wid, "@hive go").unwrap().id;
         assert_eq!(host.trigger_author_role(chat_id, own).unwrap(), Some(WorkspaceRole::Owner));
+    }
+
+    /// Phase C: the shell gate's role. The tool gate lets this device's own
+    /// user clear every floor; the shell gate counts them as the Owner only
+    /// in the device-local workspace. In a shared workspace an Admin's own
+    /// message, on the Admin's own device, is an Admin's: no shell.
+    #[test]
+    fn shell_role_is_the_workspace_role_outside_the_local_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let chat_id = {
+            let mut a = svc_on(&path, "u1", "Ana");
+            let chat = a.create_chat("A", wid, "anthropic").unwrap();
+            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            chat.id
+        };
+        let mut owner = svc_on(&path, "u1", "Ana");
+        let mut adm = svc_on(&path, "adm", "Adm");
+        let mut con = svc_on(&path, "con", "Con");
+        let o = owner.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        let a = adm.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        let c = con.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        // The Owner's message: the shell. (Another device judges it by the
+        // Owner's device certificate, which this fixture doesn't publish.)
+        assert_eq!(owner.trigger_shell_role(chat_id, o).unwrap(), Some(WorkspaceRole::Owner));
+        // The Admin's own message on the Admin's own device: the tool gate
+        // says Owner (their own tools), the shell gate says Admin.
+        assert_eq!(adm.trigger_author_role(chat_id, a).unwrap(), Some(WorkspaceRole::Owner));
+        assert_eq!(adm.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
+        assert_eq!(owner.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
+        assert_eq!(owner.trigger_shell_role(chat_id, c).unwrap(), Some(WorkspaceRole::Contributor));
+        // An agent's reply to the Contributor stays the Contributor's.
+        let r = agent_reply(&mut owner, chat_id, wid, Some(Uuid::new_v4()), Some(c), "@other run it");
+        assert_eq!(owner.trigger_shell_role(chat_id, r).unwrap(), Some(WorkspaceRole::Contributor));
+        for (role, want) in [(owner.trigger_shell_role(chat_id, o).unwrap(), true), (owner.trigger_shell_role(chat_id, a).unwrap(), false), (owner.trigger_shell_role(chat_id, r).unwrap(), false)] {
+            assert_eq!(crate::author_gate::shell_allowed(role, false), want, "{role:?}");
+        }
+        // The device-local workspace: its only person is the device owner.
+        let (mut solo, _) = service();
+        let local = Uuid::new_v4();
+        solo.set_local_workspace(local);
+        let lc = solo.create_chat("solo", local, "rt").unwrap();
+        let m = solo.post_user_message(lc.id, local, "@coder go").unwrap().id;
+        assert_eq!(solo.trigger_shell_role(lc.id, m).unwrap(), Some(WorkspaceRole::Owner));
+        assert!(solo.sandbox_grants(local).is_empty());
     }
 
     // ── Authority through a trigger chain ──────────────────────────────────

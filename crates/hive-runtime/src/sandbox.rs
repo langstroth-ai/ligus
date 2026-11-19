@@ -150,7 +150,7 @@ mod tests {
         use crate::provider::claude_code::{confine, Confine};
         for egress in [EgressPolicy::Closed, EgressPolicy::AllowList { mcp_servers: vec![] }] {
             let e = enforce(ModelProviderKind::ClaudeCode, &tight(egress.clone()), &Vec::new());
-            let (args, _) = confine(&e.extra_args, Confine { egress_open: egress.is_open(), user_config: true, writes_allowed: true, connectors: true });
+            let (args, _) = confine(&e.extra_args, Confine { egress_open: egress.is_open(), user_config: true, writes_allowed: true, connectors: true, shell: true });
             assert!(args.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{args:?}");
             let i = args.iter().position(|a| a == "--settings").expect("--settings");
             let v: Value = serde_json::from_str(&args[i + 1]).unwrap();

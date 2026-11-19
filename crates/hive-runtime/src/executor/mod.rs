@@ -20,8 +20,17 @@
 //!    egress proxy ([`crate::egress`]), creates the turn's scratch dir, and
 //!    returns the confined command plus a guard that tears it all down.
 //!
+//! Phase C: the user's home dir is default-deny for every child. Each one
+//! runs with a per-turn home (its scratch dir's `home`), and under the real
+//! home it reaches only its worktree, the turn's dirs, the runtime's
+//! allow-list ([`runtime_home_read`]), this host's toolchain install dirs
+//! ([`toolchain_allow`], read-only) and the workspace's signed grants
+//! ([`hive_core::sandbox::SandboxGrants`]); [`effective_policy`] lists it all
+//! with reasons.
+//!
 //! The sandbox is one control among several (authorization, the author gate,
-//! the MCP role gate, the human gate); none of them relies on it alone.
+//! the owner-only shell, the MCP role gate, the human gate); none of them
+//! relies on it alone.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -315,7 +324,7 @@ pub fn toolchain_allow(home: &Path, path_var: Option<&OsStr>, env: &dyn Fn(&str)
         let dir = set.clone().unwrap_or_else(|| home.join(rel));
         if exists(&dir) && (set.is_some() || ok(&dir)) {
             if dir.starts_with(home) {
-                push(&mut t, dir.clone(), format!("{var}"));
+                push(&mut t, dir.clone(), (*var).to_string());
             }
             t.env.push((var.to_string(), dir));
         }
@@ -1047,8 +1056,10 @@ pub struct TurnPolicy {
 }
 
 impl TurnPolicy {
+    /// A turn's policy. The shell starts off (fail closed): the host turns it
+    /// on with [`crate::author_gate::shell_allowed`].
     pub fn new(host: HostKind, envelope: SandboxEnvelope, gate: GatePlan) -> Self {
-        Self { envelope, gate, ..Self::baseline(host) }
+        Self { envelope, gate, shell_allowed: false, ..Self::baseline(host) }
     }
 
     /// Endpoints refused so far in this turn.
@@ -1643,6 +1654,141 @@ impl SandboxStatus {
 pub fn sandbox_status() -> SandboxStatus {
     let _ = default_executor();
     STATUS.get().cloned().unwrap_or_else(|| SandboxStatus::unconfined("not probed".into(), Vec::new()))
+}
+
+/// One line of a turn's effective filesystem policy (`ligus doctor
+/// --sandbox`, Settings, Sandbox).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyEntry {
+    pub path: String,
+    /// `denied`, `read` or `read-write`.
+    pub access: &'static str,
+    pub why: String,
+}
+
+/// What an agent turn of `runtime` may reach on this host, and why.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectivePolicy {
+    pub runtime: String,
+    pub tier: String,
+    pub home: Option<String>,
+    pub entries: Vec<PolicyEntry>,
+    /// The shell rule for this agent's turns.
+    pub shell: String,
+}
+
+/// The effective policy for an agent turn of `kind` (a CLI or an HTTP model
+/// with Ligus's tools, `None` = a command/pre-flight), with this agent's
+/// signed `grants` and shell grant, on this host. Built from the same plan
+/// the executors enforce.
+pub fn effective_policy(kind: Option<ModelProviderKind>, grants: &hive_core::sandbox::PathGrants, shell_granted: bool) -> EffectivePolicy {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let host = host_paths();
+    effective_policy_in(kind, grants, shell_granted, &home, &host, std::env::var_os("PATH").as_deref(), &|k| std::env::var_os(k))
+}
+
+/// [`effective_policy`] for a given home and host (tests).
+pub fn effective_policy_in(
+    kind: Option<ModelProviderKind>,
+    grants: &hive_core::sandbox::PathGrants,
+    shell_granted: bool,
+    home: &Path,
+    host: &HostPaths,
+    path_var: Option<&OsStr>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> EffectivePolicy {
+    let purpose = match kind {
+        Some(k) if k.is_cli_agent() => Purpose::Agent(k),
+        _ => Purpose::Tool,
+    };
+    let wt = PathBuf::from("<the turn's worktree>");
+    let tmp = PathBuf::from("<the turn's scratch dir>");
+    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| tmp.join("home"));
+    let plan = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &SandboxEnvelope::workspace_default(),
+        purpose,
+        gate: &GatePlan::Full,
+        worktree: &wt,
+        worktree_is_isolated: true,
+        write_capable: true,
+        tmp: &tmp,
+        home,
+        host_paths: host,
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: &[],
+        cli_home: cli_home.as_deref(),
+        gateway: None,
+        turn_home: if cli_home.is_none() { Some(&tmp) } else { None },
+        grants,
+        extra_home_read: &[],
+        user_config: false,
+    });
+    let runtime_reasons = runtime_home_read(purpose, home, false);
+    let toolchain = toolchain_allow(home, path_var, env, &|p| p.exists());
+    let granted = |l: &[String], p: &Path| l.iter().filter_map(|g| expand_grant(g, home)).any(|x| x == p);
+    let why_read = |p: &Path| -> String {
+        if let Some((_, w)) = runtime_reasons.iter().find(|(x, _)| x == p) {
+            return format!("runtime: {w}");
+        }
+        if let Some((_, w)) = toolchain.read.iter().find(|(x, _)| x == p) {
+            return format!("toolchain: {w}");
+        }
+        if host.home_read_allow.iter().any(|x| x == p) {
+            return "this device's LIGUS_SANDBOX_READ_ALLOW".into();
+        }
+        if granted(&grants.read_only, p) {
+            return "signed grant (read-only)".into();
+        }
+        "toolchain".into()
+    };
+    let mut entries = Vec::new();
+    entries.push(PolicyEntry { path: "<the turn's worktree>".into(), access: "read-write", why: "the turn's own checkout (.git and the protected config read-only)".into() });
+    entries.push(PolicyEntry { path: "<the turn's scratch dir and home>".into(), access: "read-write", why: "TMPDIR and HOME for this turn; removed when it ends".into() });
+    for w in plan.write_extra.iter().filter(|w| **w != tmp) {
+        let why = if granted(&grants.read_write, w) { "signed grant (read-write)" } else { "this device's LIGUS_SANDBOX_WRITE_ALLOW, or the runtime's own state (LIGUS_CLI_HOME=shared)" };
+        entries.push(PolicyEntry { path: w.display().to_string(), access: "read-write", why: why.into() });
+    }
+    for r in &plan.home_read {
+        entries.push(PolicyEntry { path: r.display().to_string(), access: "read", why: why_read(r) });
+    }
+    if let Some(h) = &plan.home {
+        entries.push(PolicyEntry { path: h.display().to_string(), access: "denied", why: "your home dir: everything not listed above".into() });
+    }
+    for d in &plan.deny_read {
+        let why = if host.data_dirs.contains(d) {
+            "Ligus's data (keys, settings, the event log)"
+        } else if host.secret_files.contains(d) {
+            "a Ligus secret file"
+        } else {
+            "credentials (never opened by a signed grant)"
+        };
+        entries.push(PolicyEntry { path: d.display().to_string(), access: "denied", why: why.into() });
+    }
+    let shell = if shell_granted {
+        "on: an Owner granted this agent the shell, for every member's turns".to_string()
+    } else if kind.is_some_and(|k| matches!(k, ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Hermes)) {
+        "the workspace Owner's turns only (the device owner's in the local workspace); this runtime can't run without one, so other members' turns are refused".to_string()
+    } else {
+        "the workspace Owner's turns only (the device owner's in the local workspace); other members' turns run without it".to_string()
+    };
+    let status = sandbox_status();
+    EffectivePolicy {
+        runtime: kind.map(|k| format!("{k:?}")).unwrap_or_else(|| "commands and pre-flight tests".into()),
+        tier: status.tier().into(),
+        home: plan.home.as_ref().map(|h| h.display().to_string()),
+        entries,
+        shell,
+    }
 }
 
 /// For tests that need a real sandbox: `true` (skip) when this host has

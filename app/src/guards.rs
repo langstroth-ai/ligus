@@ -1017,6 +1017,108 @@ pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, sessio
 }
 
 // ---------------------------------------------------------------------------
+// Sandbox: the effective policy and the signed grants (Phase C)
+// ---------------------------------------------------------------------------
+
+/// One agent of the workspace, for the Sandbox section.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SandboxAgentDto {
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+}
+
+/// Settings, Sandbox: what agent turns may reach on this device and why,
+/// the signed grants in force, and who may change them.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SandboxPolicyDto {
+    /// The effective policy for the chosen agent (or, with none, for every
+    /// runtime the workspace's agents use, plus commands).
+    pub policies: Vec<hive_runtime::executor::EffectivePolicy>,
+    pub grants: hive_core::sandbox::SandboxGrants,
+    pub agents: Vec<SandboxAgentDto>,
+    /// Admin or above: may change the path grants (with a passkey).
+    pub can_edit_paths: bool,
+    /// The Owner: may grant or withdraw an agent's shell (with a passkey).
+    pub can_edit_shell: bool,
+    /// The workspace is the device-local one (its only person is the device
+    /// owner, who always has the shell).
+    pub local: bool,
+}
+
+/// The effective sandbox policy and the signed grants for the active
+/// workspace; `agent_id` narrows it to one agent (its runtime, its grants).
+#[tauri::command]
+pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
+    let ws = state.active_workspace_id();
+    let (grants, agents_cfg, my_role, local) = {
+        let svc = state.service.lock().unwrap();
+        let me = svc.author().id.clone();
+        let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
+        let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
+        let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
+        (svc.sandbox_grants(ws), agents, my_role, svc.is_local_workspace(ws))
+    };
+    let agents: Vec<SandboxAgentDto> = agents_cfg
+        .iter()
+        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
+        .collect();
+    let chosen = agent_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let mut policies = Vec::new();
+    match chosen.and_then(|id| agents_cfg.iter().find(|a| a.id == id)) {
+        Some(a) => {
+            let kind = state.resolve_runtime(&a.runtime_id).provider;
+            policies.push(hive_runtime::executor::effective_policy(Some(kind), &grants.paths_for(Some(a.id)), grants.shell_granted(a.id)));
+        }
+        None => {
+            let mut kinds: Vec<hive_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
+            kinds.sort_by_key(|k| format!("{k:?}"));
+            kinds.dedup();
+            for k in kinds {
+                policies.push(hive_runtime::executor::effective_policy(Some(k), &grants.paths_for(None), false));
+            }
+            policies.push(hive_runtime::executor::effective_policy(None, &grants.paths_for(None), false));
+        }
+    }
+    Ok(SandboxPolicyDto {
+        policies,
+        grants,
+        agents,
+        can_edit_paths: my_role.rank() >= hive_core::WorkspaceRole::Admin.rank(),
+        can_edit_shell: my_role == hive_core::WorkspaceRole::Owner,
+        local,
+    })
+}
+
+/// Replace the active workspace's sandbox grants (signed on the config log;
+/// the passkey sheet confirms it). Admin + presence; changing an agent's
+/// shell grant is the Owner's.
+#[tauri::command(async)]
+pub(crate) fn set_sandbox_grants(app: AppHandle, state: State<AppState>, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let clean = |v: Vec<String>| -> Vec<String> {
+        let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let mut g = hive_core::sandbox::SandboxGrants::default();
+    g.workspace.read_only = clean(grants.workspace.read_only);
+    g.workspace.read_write = clean(grants.workspace.read_write);
+    for (id, a) in grants.agents {
+        let a = hive_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
+        if a != hive_core::sandbox::AgentGrant::default() {
+            g.agents.insert(id, a);
+        }
+    }
+    state.service.lock().unwrap().set_sandbox_grants(ws, g).map_err(map_err)?;
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Dearth mode
 // ---------------------------------------------------------------------------
 

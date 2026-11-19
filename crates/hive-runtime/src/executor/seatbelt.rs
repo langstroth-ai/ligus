@@ -11,6 +11,10 @@
 //! (version 1)(allow default)
 //! (deny file-write*)
 //! (allow file-write* (subpath "<worktree>") (subpath "<turn tmp>") <state dirs> <ttys, /dev/null>)
+//! (deny file-read* file-write* (subpath "<home>"))   ; Phase C: the home is default-deny
+//! (allow file-read* <worktree, turn dirs, write extras, home_read under the home>)
+//! (allow file-write* <worktree and write extras under the home>)
+//! (allow file-read-metadata (literal "<home>") <their ancestors>)  ; stat/realpath, no listing
 //! (deny file-write* (subpath "<worktree>/.git") <protected dirs and files>
 //!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)

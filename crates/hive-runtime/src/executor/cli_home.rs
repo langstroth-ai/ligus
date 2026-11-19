@@ -227,7 +227,8 @@ pub fn git_identity(real_home: &Path) -> Vec<(&'static str, String)> {
 
 /// Write the git identity into a turn home's `.gitconfig`.
 fn write_git_identity(real_home: &Path, home: &Path) {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Vec<(&'static str, String)>>>> = std::sync::OnceLock::new();
+    type Identities = std::collections::HashMap<PathBuf, Vec<(&'static str, String)>>;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Identities>> = std::sync::OnceLock::new();
     let ids = {
         let c = CACHE.get_or_init(Default::default);
         let mut m = c.lock().unwrap_or_else(|e| e.into_inner());

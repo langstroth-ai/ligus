@@ -6201,6 +6201,9 @@ async fn implement_proposal_targeted(
         let envelope = hive_core::sandbox::envelope_for_session(&session);
         let mut policy = crate::guards::turn_sandbox_policy(&state, &session, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated);
         policy.mcp_ids.clear();
+        // The person's own click on their own device runs exactly the
+        // approved argv; no agent drives it.
+        policy.shell_allowed = true;
         let cmd = cmd.clone();
         let run = tokio::task::spawn_blocking(move || {
             hive_runtime::executor::with_turn_sync(policy, || hive_runtime::review::run_command(&dir, &cmd, std::time::Duration::from_secs(1800)))
@@ -8250,24 +8253,39 @@ async fn run_prepared_turn_inner(
     // An agent's message (a hand-off, an @mention cascade) has no role of its
     // own: it resolves to the lowest of the humans behind its chain, and a
     // workflow stage to the lower of its poster and the run's initiator.
-    let gate_plan = {
+    // Phase C: the shell is the Owner's. On when every person behind the turn
+    // is the workspace Owner (the device owner in the local workspace), or an
+    // Owner granted it to this agent (signed sandbox grants); otherwise the
+    // CLI runs without its shell tool, HTTP models get no `run_command`, and
+    // a CLI that can't drop its shell is refused.
+    let (gate_plan, shell_allowed, grants) = {
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
-        let author_role = {
+        let (author_role, shell_role, grants) = {
             let svc = state.service.lock().unwrap();
             // This device's own user is recognized from the signed envelopes,
             // never from the payload's self-asserted `actor_identity`.
-            match trigger {
-                Some(m) => svc.trigger_author_role(session_id, m.id).ok().flatten(),
-                None => None,
-            }
+            let (a, s) = match trigger {
+                Some(m) => (svc.trigger_author_role(session_id, m.id).ok().flatten(), svc.trigger_shell_role(session_id, m.id).ok().flatten()),
+                None => (None, None),
+            };
+            (a, s, svc.sandbox_grants(workspace_id))
         };
         let mut args = responder.runtime.args.clone();
-        hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role)
+        let plan = hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role);
+        let shell = hive_runtime::author_gate::shell_allowed(shell_role, responder.agent_id.is_some_and(|id| grants.shell_granted(id)));
+        (plan, shell, grants)
     };
     if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
         let mut svc = state.service.lock().unwrap();
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason.clone());
+    }
+    if !shell_allowed {
+        if let Err(reason) = hive_runtime::author_gate::shell_free_args(responder.runtime.provider, &responder.runtime.args) {
+            let mut svc = state.service.lock().unwrap();
+            let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
+            return Err(reason);
+        }
     }
     // No OS sandbox on this host: a CLI agent turn is refused at any tier
     // (its own tools would read this device's data unconfined).
@@ -8309,7 +8327,7 @@ async fn run_prepared_turn_inner(
     let (builtin_on, builtin_write_in_place, builtin_run_command) = {
         let s = state.settings.lock().unwrap();
         // `run_command` is a shell: off whenever the envelope closes egress.
-        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
+        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command && shell_allowed)
     };
     // Built-in file tools (and run_command) need this host's OS sandbox:
     // without one an HTTP model gets no local tools, only chat (stdio MCP
@@ -8584,12 +8602,17 @@ async fn run_prepared_turn_inner(
         let mut rt = responder.runtime.clone();
         // Below the floor: the CLI's read-only tier (Refuse returned above).
         let _ = hive_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
+        // Without the shell: capped at accepting edits, the shell tool denied
+        // (a CLI that can't drop it was refused above).
+        let _ = hive_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed);
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
     let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    sandbox_policy.shell_allowed = shell_allowed;
+    sandbox_policy.grants = grants.paths_for(responder.agent_id);
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
@@ -14676,6 +14699,8 @@ pub fn run() {
             guards::list_guard_signals,
             guards::get_dearth_state,
             guards::get_egress_presets,
+            guards::get_sandbox_policy,
+            guards::set_sandbox_grants,
             guards::set_workspace_egress_presets,
             guards::get_workspace_cli_user_config,
             guards::set_workspace_cli_user_config,

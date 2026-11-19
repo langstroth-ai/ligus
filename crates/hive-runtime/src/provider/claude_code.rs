@@ -282,6 +282,9 @@ pub struct Confine {
     /// only): the user's claude.ai connectors load, which Claude Code offers
     /// only without `--strict-mcp-config`.
     pub connectors: bool,
+    /// The turn may use a shell (Phase C: the Owner's, or granted to the
+    /// agent). Without it Bash is off the tool list and denied.
+    pub shell: bool,
 }
 
 impl Confine {
@@ -297,6 +300,7 @@ impl Confine {
                 let c = crate::egress::EgressPreset::ClaudeConnectors;
                 p.as_ref().is_some_and(|p| p.egress_presets.contains(&c)) || crate::executor::host_paths().egress_presets.contains(&c)
             },
+            shell: p.as_ref().is_none_or(|p| p.shell_allowed),
         }
     }
 }
@@ -368,7 +372,8 @@ pub fn confine(args: &[String], c: Confine) -> (Vec<String>, Vec<(String, String
         out.push(serde_json::json!({ "disableAllHooks": true }).to_string());
         out.push("--disable-slash-commands".into());
     }
-    let mut tools: Vec<&str> = TURN_TOOLS.iter().copied().filter(|t| c.egress_open || *t != "Bash").collect();
+    let shell = c.egress_open && c.shell;
+    let mut tools: Vec<&str> = TURN_TOOLS.iter().copied().filter(|t| shell || *t != "Bash").collect();
     if c.egress_open {
         tools.extend(WEB_TOOLS);
     }
@@ -381,6 +386,8 @@ pub fn confine(args: &[String], c: Confine) -> (Vec<String>, Vec<(String, String
     out.extend(OUT_OF_TURN_TOOLS.iter().map(|s| s.to_string()));
     if !c.egress_open {
         out.extend(WEB_TOOLS.iter().map(|s| s.to_string()));
+    }
+    if !shell {
         out.push("Bash".into());
     }
     let mut approve = vec![crate::executor::LIGUS_MCP_ID.to_string()];
@@ -678,7 +685,7 @@ mod tests {
     #[test]
     fn connectors_preset_lifts_strict_mcp_only_when_open() {
         let strict = vec!["--strict-mcp-config".to_string(), "--mcp-config".into(), r#"{"mcpServers":{}}"#.into()];
-        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false };
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
         let (a, env) = confine(&strict, c);
         assert_eq!(a.iter().filter(|x| *x == "--strict-mcp-config").count(), 1);
         assert!(env.contains(&("ENABLE_CLAUDEAI_MCP_SERVERS".to_string(), "false".to_string())));
@@ -688,6 +695,22 @@ mod tests {
         assert!(values_after(&a, "--disallowedTools").contains(&"RemoteTrigger".to_string()));
         let (a, _) = confine(&strict, Confine { connectors: true, egress_open: false, ..c });
         assert!(a.contains(&"--strict-mcp-config".to_string()));
+    }
+
+    /// Phase C: without the shell (a turn the Owner didn't start, no grant)
+    /// Bash is off the tool list and denied, under open egress too.
+    #[test]
+    fn no_shell_takes_bash_away() {
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
+        let (a, _) = confine(&[], c);
+        assert!(values_after(&a, "--tools").iter().any(|t| t.split(',').any(|x| x == "Bash")), "{a:?}");
+        assert!(!values_after(&a, "--disallowedTools").contains(&"Bash".to_string()));
+        let (a, _) = confine(&[], Confine { shell: false, ..c });
+        assert!(!values_after(&a, "--tools").iter().any(|t| t.split(',').any(|x| x == "Bash")), "{a:?}");
+        assert!(values_after(&a, "--disallowedTools").contains(&"Bash".to_string()), "{a:?}");
+        // Restricted egress already took it; it's denied once.
+        let (a, _) = confine(&[], Confine { shell: false, egress_open: false, ..c });
+        assert_eq!(values_after(&a, "--disallowedTools").iter().filter(|t| *t == "Bash").count(), 1);
     }
 
     /// The owner's live test: the Ligus MCP server connected, but every
@@ -710,7 +733,7 @@ mod tests {
         // A read-only author gate (its worktree is read-only, so checked on
         // the constructed args): only Ligus's own server, whose tools Ligus
         // authorizes per call.
-        let (argv, _) = confine(&strict, Confine { egress_open: true, user_config: false, writes_allowed: false, connectors: false });
+        let (argv, _) = confine(&strict, Confine { egress_open: true, user_config: false, writes_allowed: false, connectors: false, shell: true });
         let allowed = values_after(&argv, "--allowedTools");
         assert_eq!(allowed, vec!["mcp__ligus".to_string()], "{argv:?}");
     }
