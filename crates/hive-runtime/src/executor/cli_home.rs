@@ -109,7 +109,15 @@ pub fn in_test_binary() -> bool {
 /// against the real home, and must never read the login keychain or copy a
 /// real token into a temp dir unless asked to.
 pub fn real_sign_ins_allowed() -> bool {
-    !in_test_binary() || std::env::var("LIGUS_TEST_KEYCHAIN").is_ok_and(|v| v.trim() == "1")
+    !in_test_binary() || test_keychain_opt_in()
+}
+
+/// The one opt-in for tests that reach the real keychain or the real user's
+/// sign-ins: `LIGUS_TEST_KEYCHAIN=1` (exactly `1`; unset, empty, `0` or any
+/// other value is off). Every such test and [`real_sign_ins_allowed`] ask
+/// this, so the switch means the same thing everywhere.
+pub fn test_keychain_opt_in() -> bool {
+    std::env::var("LIGUS_TEST_KEYCHAIN").is_ok_and(|v| v.trim() == "1")
 }
 
 /// Whether `dir` is this user's real home (the password database's, or

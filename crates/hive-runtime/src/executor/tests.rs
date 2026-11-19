@@ -908,7 +908,7 @@ fn sandbox_denies_login_keychain_search() {
     // Opt-in only: the probe opens the real login keychain, and the bridging
     // check copies a signed-in Claude Code credential into a temp turn home.
     // Run it deliberately, on a machine where that's acceptable.
-    if std::env::var_os("LIGUS_TEST_KEYCHAIN").is_none() {
+    if !super::cli_home::test_keychain_opt_in() {
         eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to probe the real login keychain");
         return;
     }
@@ -1241,7 +1241,7 @@ fn ligus_secrets_unreachable_by_subscription_cli_agent() {
         assert!(!ok && !out.contains("SECRET") && !out.contains("KEYCHAIN-FILE"), "read {target}: {out}");
     }
     #[cfg(target_os = "macos")]
-    if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() == Some("1") {
+    if super::cli_home::test_keychain_opt_in() {
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = f.data.join("secrets/ligus-sandbox-test.keychain-db");
         let kc = crate::secret_store::MacKeychain::open_with(path.clone(), &service).unwrap();

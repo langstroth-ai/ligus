@@ -287,7 +287,7 @@ fn review2_outside_a_turn_a_cli_has_no_shell() {
 /// against the real home.
 #[test]
 fn review2_tests_never_carry_real_sign_ins() {
-    if std::env::var("LIGUS_TEST_KEYCHAIN").is_ok_and(|v| v.trim() == "1") {
+    if cli_home::test_keychain_opt_in() {
         return;
     }
     assert!(cli_home::in_test_binary());
