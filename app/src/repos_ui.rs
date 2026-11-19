@@ -34,12 +34,20 @@ fn coverage_default(state: &AppState, ws: Uuid) -> bool {
 /// This desktop's coverage of the active workspace's repos, for its beat.
 pub(crate) fn beat_coverage(state: &AppState, ws: Uuid) -> Vec<hive_core::workspace_repo::CoverageEntry> {
     let default_on = coverage_default(state, ws);
-    let svc = state.service.lock().unwrap();
-    if !rr::coverage_reporting(svc.store(), ws, default_on) {
-        return Vec::new();
-    }
-    let Ok(roster) = svc.workspace_roster(ws) else { return Vec::new() };
-    rr::coverage(svc.store(), ws, &rr::live_repos(&roster), &rr::cloning())
+    let (maps, aliases, repos) = {
+        let svc = state.service.lock().unwrap();
+        if !rr::coverage_reporting(svc.store(), ws, default_on) {
+            return Vec::new();
+        }
+        let Ok(roster) = svc.workspace_roster(ws) else { return Vec::new() };
+        let repos = rr::live_repos(&roster);
+        if repos.is_empty() {
+            return Vec::new();
+        }
+        (svc.store().repo_mappings(ws).unwrap_or_default(), svc.store().ssh_host_aliases().unwrap_or_default(), repos)
+    };
+    // Git runs without the service lock.
+    rr::coverage_from(&maps, &aliases, &repos, &rr::cloning())
 }
 
 /// Map the workspace's bound folder onto the workspace repo its remote is

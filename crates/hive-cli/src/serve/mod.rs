@@ -1340,26 +1340,46 @@ fn live_empty(known: &Option<Vec<uuid::Uuid>>) -> bool {
 /// Map legacy bindings and scan the repos dir (and the box's scan roots)
 /// for the workspace's repos. Device-local only: nothing is published.
 pub(crate) fn repos_refresh(shared: &Shared) {
+    // Git runs without the service lock (the revocation watch and the API
+    // keep it); only reads and writes of the store take it.
+    let Ok((roster, roots, aliases)) = ({
+        let svc = shared.lock();
+        svc.workspace_roster(shared.ws).map_err(|e| e.to_string()).and_then(|r| {
+            let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
+            let aliases = svc.store().ssh_host_aliases().map_err(|e| e.to_string())?;
+            Ok((r, roots, aliases))
+        })
+    }) else {
+        return;
+    };
+    let repos = hive_runtime::repos::live_repos(&roster);
+    if repos.is_empty() {
+        return;
+    }
+    let mut all_roots = roots;
+    all_roots.push(crate::repos::repos_dir(&shared.cfg.data_dir));
+    let found = hive_runtime::repos::scan::scan(&all_roots, &repos, &aliases);
     let svc = shared.lock();
+    if let Err(e) = hive_runtime::repos::record_found(svc.store(), shared.ws, &found) {
+        eprintln!("repos: recording found checkouts failed: {e}");
+    }
     if let Err(e) = crate::repos_cmd::migrate_bindings(&shared.cfg.data_dir, &svc, shared.ws, &shared.opts.label) {
         eprintln!("repos: migrating bindings failed: {e}");
-    }
-    if let Ok(roster) = svc.workspace_roster(shared.ws) {
-        if let Err(e) = hive_runtime::repos::detect(svc.store(), shared.ws, &roster, &[crate::repos::repos_dir(&shared.cfg.data_dir)]) {
-            eprintln!("repos: scanning failed: {e}");
-        }
     }
 }
 
 /// This box's coverage of the workspace's repos for its beat (on by
 /// default for a box; `ligus repos coverage off` turns it off).
 pub(crate) fn repo_coverage(shared: &Shared) -> Vec<hive_core::workspace_repo::CoverageEntry> {
-    let svc = shared.lock();
-    if !hive_runtime::repos::coverage_reporting(svc.store(), shared.ws, true) {
-        return Vec::new();
-    }
-    let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
-    hive_runtime::repos::coverage(svc.store(), shared.ws, &hive_runtime::repos::live_repos(&roster), &hive_runtime::repos::cloning())
+    let (maps, aliases, repos) = {
+        let svc = shared.lock();
+        if !hive_runtime::repos::coverage_reporting(svc.store(), shared.ws, true) {
+            return Vec::new();
+        }
+        let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
+        (svc.store().repo_mappings(shared.ws).unwrap_or_default(), svc.store().ssh_host_aliases().unwrap_or_default(), hive_runtime::repos::live_repos(&roster))
+    };
+    hive_runtime::repos::coverage_from(&maps, &aliases, &repos, &hive_runtime::repos::cloning())
 }
 
 /// Publish this box's phone-revocation status for the desktops, and take the

@@ -97,8 +97,14 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
     let dir = repos_dir(data_dir);
     let aliases = svc.store().ssh_host_aliases()?;
     let mut n = 0;
+    let known = svc.store().repo_mappings(workspace_id)?;
     let mut map = |raw: &str| -> Option<(Uuid, PathBuf)> {
         let path = resolve_path(&dir, raw);
+        let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        // Already mapped (the common case after the first run): no git.
+        if let Some(m) = known.iter().find(|m| m.path == canon && m.confirmed) {
+            return Some((m.repo_id, m.path.clone()));
+        }
         let repo = repos.iter().find(|r| rr::checkout_matches(&path, r, &aliases).is_some())?;
         rr::bind(svc.store(), svc.device_id(), host_label, workspace_id, repo, &path, CheckoutSource::Migrated).ok()?;
         n += 1;
@@ -159,7 +165,7 @@ fn abs(p: &str) -> Result<PathBuf> {
 /// `ligus repos [list | add | remove | rename | bind | unbind | confirm |
 /// takeover | scan | roots | alias | chat | coverage]`.
 pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
-    let entries = || -> Result<Vec<RepoEntry>> { Ok(svc_entries(svc, ws)?) };
+    let entries = || -> Result<Vec<RepoEntry>> { svc_entries(svc, ws) };
     match pos.first().copied() {
         None | Some("list") => {
             let es = entries()?;

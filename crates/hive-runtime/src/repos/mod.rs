@@ -164,7 +164,14 @@ pub fn detect(store: &EventStore, workspace_id: Uuid, roster: &RosterState, extr
     roots.extend(extra.iter().cloned());
     let aliases = store.ssh_host_aliases()?;
     let found = scan::scan(&roots, &live_repos(roster), &aliases);
-    for f in &found {
+    record_found(store, workspace_id, &found)?;
+    Ok(found)
+}
+
+/// Record what a scan found (unconfirmed), the store-only half of [`detect`]
+/// for callers that scan without holding a lock.
+pub fn record_found(store: &EventStore, workspace_id: Uuid, found: &[scan::Found]) -> crate::event_store::Result<()> {
+    for f in found {
         let m = RepoMapping {
             workspace_id,
             repo_id: f.repo_id,
@@ -176,7 +183,7 @@ pub fn detect(store: &EventStore, workspace_id: Uuid, roster: &RosterState, extr
         };
         let _ = store.put_repo_mapping(&m)?;
     }
-    Ok(found)
+    Ok(())
 }
 
 /// A clone's folder name for `repo` (review F13): `<display-slug>-<first 8
@@ -257,6 +264,13 @@ pub fn set_coverage_reporting(store: &EventStore, workspace_id: Uuid, on: Option
 pub fn coverage(store: &EventStore, workspace_id: Uuid, repos: &[WorkspaceRepo], cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
     let maps = store.repo_mappings(workspace_id).unwrap_or_default();
     let aliases = store.ssh_host_aliases().unwrap_or_default();
+    coverage_from(&maps, &aliases, repos, cloning)
+}
+
+/// [`coverage`] from mappings already read (runs git; call it without
+/// holding the service lock).
+pub fn coverage_from(maps: &[RepoMapping], aliases: &BTreeMap<String, String>, repos: &[WorkspaceRepo], cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
+    let aliases = aliases.clone();
     let mut out = Vec::new();
     for r in repos.iter().take(hive_core::workspace_repo::MAX_COVERAGE_ENTRIES) {
         let mine: Vec<&RepoMapping> = maps.iter().filter(|m| m.repo_id == r.id).collect();
