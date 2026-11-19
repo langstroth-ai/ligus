@@ -15,13 +15,13 @@ In Dex's config (for Kubeflow, the `dex` ConfigMap or the
 staticClients:
   - id: langstroth-auth
     name: Ligus
-    secretEnv: LIGUS_AUTH_DEX_SECRET
+    secretEnv: LANGSTROTH_AUTH_DEX_SECRET
     redirectURIs:
       - https://auth.example.com/t/acme/callback
 ```
 
 Generate the secret with `langstroth-auth gen-token` and give the same value to
-Dex (as `LIGUS_AUTH_DEX_SECRET`) and to langstroth-auth (as a file).
+Dex (as `LANGSTROTH_AUTH_DEX_SECRET`) and to langstroth-auth (as a file).
 
 ## 2. Groups from your connectors
 
@@ -57,8 +57,8 @@ connectors:
 ```json
 {
   "public_url": "https://auth.example.com",
-  "signing_key_file": "/etc/ligus-auth/secrets/signing-key",
-  "store": {"driver": "file", "path": "/var/lib/ligus-auth/state.json"},
+  "signing_key_file": "/etc/langstroth-auth/secrets/signing-key",
+  "store": {"driver": "file", "path": "/var/lib/langstroth-auth/state.json"},
   "refresh_idle_ttl": "24h",
   "session_max_age": "24h",
   "tenants": [
@@ -67,7 +67,7 @@ connectors:
       "oidc": {
         "issuer": "https://dex.example.com",
         "client_id": "langstroth-auth",
-        "client_secret_file": "/etc/ligus-auth/secrets/dex-client-secret",
+        "client_secret_file": "/etc/langstroth-auth/secrets/dex-client-secret",
         "scopes": ["openid", "email", "profile", "groups"]
       },
       "provisioning": "jit",
@@ -90,18 +90,20 @@ switch them off with the [admin API](ligus-auth.md#operator-api).
 
 ## 4. Run it
 
-**Docker Compose:** `deploy/compose/ligus-auth-dex/` in the relay repository
+**Docker Compose:** `deploy/compose/langstroth-auth-dex/` in the relay repository
 has Dex, langstroth-auth, the relay and Caddy, with this config.
 
 **Kubernetes, next to the langstroth-relay chart:** install the `langstroth-auth`
-chart from the same repository.
+chart from the same repository (`deploy/helm/langstroth-auth` in a relay
+checkout; release builds publish it at
+`oci://ghcr.io/langstroth-ai/charts/langstroth-auth`).
 
 ```sh
 kubectl create secret generic langstroth-auth-signing-key \
   --from-file=signing-key=./signing-key
 kubectl create secret generic langstroth-auth-secrets \
   --from-file=dex-client-secret=./dex-client-secret
-helm install langstroth-auth deploy/helm/ligus-auth -f langstroth-auth-values.yaml
+helm install langstroth-auth deploy/helm/langstroth-auth -f langstroth-auth-values.yaml
 ```
 
 `langstroth-auth-values.yaml`:
@@ -111,12 +113,13 @@ config:
   public_url: https://auth.example.com
   session_max_age: 24h
   refresh_idle_ttl: 24h
+  trusted_proxies: ["192.0.2.10"]   # the exact addresses your ingress controller connects from
   tenants:
     - id: acme
       oidc:
         issuer: https://dex.example.com
         client_id: langstroth-auth
-        client_secret_file: /etc/ligus-auth/secrets/dex-client-secret
+        client_secret_file: /etc/langstroth-auth/secrets/dex-client-secret
         scopes: [openid, email, profile, groups]
       idp_groups: true
       workspaces: ["7f0c2a5e-3d4b-4b8e-9a51-2a6f3c1d9e01"]
@@ -132,7 +135,14 @@ ingress:
   enabled: true
   className: nginx
   host: auth.example.com
+  tls:
+    secretName: auth-example-com-tls   # cert-manager or your own certificate
 ```
+
+The chart refuses an Ingress without TLS (`ingress.tls.secretName`, or
+`ingress.tls.terminatedUpstream: true` when a load balancer in front
+terminates it), an Ingress with no `config.trusted_proxies`, and the file
+store without `persistence.enabled`. It runs exactly one replica.
 
 and in the langstroth-relay chart's values (`config.env`):
 

@@ -50,7 +50,7 @@ langstroth-auth token goes only to the relay the session was signed in for.
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
 Every device verifies and folds by the same rules whatever its environment:
-`LIGUS_IDENTITY_MODE` is ignored since 0.1 (a set value logs a warning).
+`LIGUS_IDENTITY_MODE` is ignored (a set value logs a warning).
 
 ### A network attacker {#network}
 

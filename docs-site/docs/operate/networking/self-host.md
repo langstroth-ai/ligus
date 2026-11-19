@@ -36,24 +36,42 @@ GitHub logins that use the directory, and tunnel timing. See the
 ### Build
 
 ```sh
-git clone https://github.com/langstroth-ai/langstroth-relay.git && cd relay
-go build -o langstroth-relay ./cmd/langstroth-relay       # Go 1.25+ (see go.mod)
+git clone https://github.com/langstroth-ai/langstroth-relay.git && cd langstroth-relay
+git checkout v0.3.0
+go build -o langstroth-relay ./cmd/langstroth-relay       # Go 1.27+ (see go.mod)
 ./langstroth-relay                                   # listens on 0.0.0.0:8443
 curl -s localhost:8443/v1/health                # → ok
 ```
 
 ### Docker
 
+Build the image from the repository:
+
 ```sh
-docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git#v0.3.0
 docker run -d --name langstroth-relay --restart unless-stopped \
-  -p 8443:8443 -v ligus-data:/data -e LANGSTROTH_RELAY_DATA_DIR=/data langstroth-relay
+  -p 8443:8443 -v langstroth-data:/data -e LANGSTROTH_RELAY_DATA_DIR=/data langstroth-relay
 curl -s localhost:8443/v1/health                # → ok
 ```
 
-The root `Dockerfile` is Alpine-based and drops to an unprivileged user; it
-defaults `LANGSTROTH_RELAY_DATA_DIR=/data`. No relay image is published to a
-registry yet: build it yourself.
+The root `Dockerfile` is Alpine-based: it starts as root to `chown` the data
+volume, then drops to the unprivileged `langstroth` user (UID 1000), and it
+defaults `LANGSTROTH_RELAY_DATA_DIR=/data`.
+
+Relay releases also publish images, `ghcr.io/langstroth-ai/langstroth-relay:<version>`
+(linux/amd64 and linux/arm64), built from `deploy/container/Dockerfile`: a
+distroless image with no shell or entrypoint script that runs the binary as
+UID 65532. It doesn't default the data dir and can't `chown` a volume, so
+set `LANGSTROTH_RELAY_DATA_DIR` yourself and make the volume writable by
+65532 (or use `DATABASE_URL`):
+
+```sh
+docker volume create langstroth-data
+docker run --rm -v langstroth-data:/data alpine chown 65532:65532 /data
+docker run -d --name langstroth-relay --restart unless-stopped \
+  -p 8443:8443 -v langstroth-data:/data -e LANGSTROTH_RELAY_DATA_DIR=/data \
+  ghcr.io/langstroth-ai/langstroth-relay:0.3.0
+```
 
 ### Fly.io
 
@@ -63,7 +81,7 @@ health check on `/v1/health`). Its `dockerfile` path is relative to
 
 ```sh
 fly launch --config deploy/fly.toml --copy-config --no-deploy   # pick a name and region
-fly volumes create ligus_data --size 1 --region <region>
+fly volumes create hive_data --size 1 --region <region>   # the name deploy/fly.toml mounts
 fly deploy . --config deploy/fly.toml
 curl -s https://<app>.fly.dev/v1/health          # → ok
 ```
@@ -73,7 +91,7 @@ curl -s https://<app>.fly.dev/v1/health          # → ok
 ```ini
 # /etc/systemd/system/langstroth-relay.service
 [Unit]
-Description=Ligus relay
+Description=Langstroth relay
 After=network-online.target
 Wants=network-online.target
 
@@ -92,7 +110,7 @@ WantedBy=multi-user.target
 
 ```sh
 sudo useradd --system --home /var/lib/langstroth-relay --create-home langstroth-relay
-printf 'LANGSTROTH_RELAY_ADDR=127.0.0.1:8443\nLIGUS_RELAY_DATA_DIR=/var/lib/langstroth-relay\n' | sudo tee /etc/langstroth-relay.env
+printf 'LANGSTROTH_RELAY_ADDR=127.0.0.1:8443\nLANGSTROTH_RELAY_DATA_DIR=/var/lib/langstroth-relay\n' | sudo tee /etc/langstroth-relay.env
 sudo chmod 600 /etc/langstroth-relay.env
 sudo systemctl daemon-reload && sudo systemctl enable --now langstroth-relay
 curl -s localhost:8443/v1/health                # → ok
@@ -100,15 +118,43 @@ curl -s localhost:8443/v1/health                # → ok
 
 ### Kubernetes
 
-Relay v0.3.0 ships Helm charts for the relay and langstroth-auth (`deploy/helm/`); see
+Relay v0.3.0 ships Helm charts for the relay and langstroth-auth
+(`deploy/helm/langstroth-relay`, `deploy/helm/langstroth-auth`, and the
+`langstroth-postgres` library); releases publish them at
+`oci://ghcr.io/langstroth-ai/charts/<name>`. `database.mode` picks the
+Postgres (`external`, `cnpg` or `bundled`). See
 [Kubernetes](../deploy/kubernetes.md#relay).
+
+### With a coding agent
+
+`AGENTS.md` in the relay repository has a decision table (a local binary, an
+in-memory evaluation install, or a team install with bundled, external or
+CloudNativePG Postgres) and non-interactive scripts in `deploy/agent/`
+(`local.sh`, `preflight.sh`, `install.sh`, `verify.sh`, `teardown.sh`) that
+print JSON with `--json`. See also [Deploying with an agent](../deploy/with-an-agent.md).
 
 ## Listen address
 
 `$PORT` (set by most platforms) → `0.0.0.0:$PORT`; else
 `LANGSTROTH_RELAY_ADDR`; else `0.0.0.0:8443`. The server has no command-line
-flags; it is configured entirely through environment variables. On SIGTERM
-it drains for 10 s and flushes its snapshot.
+flags; it is configured entirely through environment variables (the
+`keygen`, `issue` and `bootstrap-agent` subcommands are tools, not server
+options). On SIGTERM it drains for 10 s and flushes its snapshot.
+
+### Settings from files
+
+Any setting `X` (and `DATABASE_URL`) that isn't in the environment is read
+from the file named by `X_FILE` (for example `DATABASE_URL_FILE`), else from
+`$LANGSTROTH_RELAY_SECRETS_DIR/X`, so secrets can be mounted files. The
+environment wins over `X_FILE`, which wins over the directory; one trailing
+newline is trimmed. The relay refuses to start when a file it is pointed at
+can't be read or is empty, since an unreadable `LANGSTROTH_RELAY_TOKEN_PUBKEY`
+would otherwise mean an open relay. (`LANGSTROTH_RELAY_APNS_KEY_FILE` keeps its
+own meaning: the path of the APNs key.)
+
+Settings are read only under `LANGSTROTH_RELAY_*` names. The relay refuses to
+start while a `HIVE_RELAY_*` or `LIGUS_RELAY_*` variable is set (the Ligus
+client's `LIGUS_RELAY_URL` excepted) and names the variable to use instead.
 
 ## TLS
 
@@ -170,27 +216,33 @@ start with idempotent `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT
 EXISTS` statements; there is no separate migration step and no down
 migration.
 
-### Retention
+### Retention {#retention}
 
-The relay is a **cache of recent encrypted traffic**, not the system of
-record: every device keeps its own full copy. A device that was offline
-longer than the retention window catches up from a peer that still has the
-events.
+The relay **never removes envelopes from a workspace it still holds**. A
+Ligus device rebuilds a workspace by folding its whole envelope log from the
+founder's signed first event, so trimming the front of a log would break
+every device that joins afterwards. The per-envelope bounds
+`LANGSTROTH_RELAY_MAX_ENVELOPES` and `LANGSTROTH_RELAY_RETENTION_DAYS` are
+removed: since v0.3.0 the relay **refuses to start** while either is set to
+anything but `0`. Bound storage instead with the quotas in
+[Community limits](#community-limits), which refuse new writes (`507`)
+rather than evict, `LANGSTROTH_RELAY_MAX_STORE_BYTES` on the memory store,
+and whole-room expiry (`LANGSTROTH_RELAY_ROOM_RETENTION_DAYS`).
+
+Other stored data is bounded like this:
 
 | Setting | Default | Applies to |
 |---|---|---|
-| `LANGSTROTH_RELAY_MAX_ENVELOPES` | `50000` per workspace (`0` = no cap) | memory (on write) and Postgres (pruned hourly to the newest N, so a workspace can briefly exceed it) |
-| `LANGSTROTH_RELAY_RETENTION_DAYS` | `0` (off) | memory and Postgres |
-| `LANGSTROTH_RELAY_INBOX_MAX_ROWS` / `LANGSTROTH_RELAY_INBOX_RETENTION_DAYS` | `5000` / `30` | account inbox |
+| `LANGSTROTH_RELAY_INBOX_MAX_ROWS` / `LANGSTROTH_RELAY_INBOX_RETENTION_DAYS` | `5000` / `30` | account inbox (GitHub routes only) |
 | `LANGSTROTH_RELAY_MAX_KEYRING_PER_WS` | `2000` | key rotations per workspace; past it a new rotation gets `507` and stored ones are never evicted |
 | `LANGSTROTH_RELAY_MAX_KEYRING_BYTES_PER_WS` | 16 MiB | keyring bytes per workspace (`507` past it); keep it at or below `LANGSTROTH_RELAY_MAX_LIST_BYTES` |
 | `LANGSTROTH_RELAY_MAX_ROTATION_BYTES` | 256 KiB | one key rotation (`413` past it) |
 | `LANGSTROTH_RELAY_MAX_DEVICE_BLOBS_PER_WS` | `1000` | device blobs |
-| `LANGSTROTH_RELAY_FRIEND_REQ_RETENTION_DAYS` | `30` | friend requests |
-| `LANGSTROTH_RELAY_MAX_PAIRINGS` | `50000` | pending pairing codes |
-
-Postgres does **not** mean unbounded history: set
-`LANGSTROTH_RELAY_MAX_ENVELOPES=0` if that's what you want.
+| `LANGSTROTH_RELAY_FRIEND_REQ_RETENTION_DAYS` | `30` | answered friend requests on Postgres (GitHub routes only) |
+| `LANGSTROTH_RELAY_MAX_PAIRINGS` | `50000` | live pairing codes per instance (`503` past it) |
+| `LANGSTROTH_RELAY_CONTACT_TTL_DAYS` | `30` | a contact record expires this long after its last write |
+| `LANGSTROTH_RELAY_MAX_CONTACTS` | `100000` | live contact records on the memory store (`507` past it) |
+| `LANGSTROTH_RELAY_CONTACTS` | `on` | `off` turns the `/v1/contacts/*` routes off (`404`) |
 
 ## File attachments {#file-attachments}
 
@@ -218,6 +270,9 @@ limits refuse what goes over them (nothing is evicted):
 | `LANGSTROTH_RELAY_BLOB_TOTAL_MAX_BYTES` | off | file bytes across the relay (`507 blob_total_bytes`) |
 | `LANGSTROTH_RELAY_BLOB_RETENTION_DAYS` | `30` | a file expires this long after upload (`0` = kept until deleted) |
 | `LANGSTROTH_RELAY_BLOB_RATE` / `…_BURST` | 1/s, burst 20 | uploads per member per workspace (`429 blob_rate`) |
+| `LANGSTROTH_RELAY_BLOB_MAX_INFLIGHT` / `…_WRITER_INFLIGHT` | `16` / `4` | uploads being received at once, relay-wide and per uploader (`429 blob_inflight`) |
+| `LANGSTROTH_RELAY_BLOB_DOWNLOAD_RATE` / `…_BURST` | 0.5/s, burst 100 | downloads of one file (`429 blob_download_rate`) |
+| `LANGSTROTH_RELAY_BLOB_CLIENT_DOWNLOAD_RATE` / `…_BURST` | 2/s, burst 60 | file downloads per downloader (`429 blob_download_rate`) |
 
 With tenancy, a tenant's `limits` can set `blob_max_bytes` and
 `blob_max_count` (the tenant's total) and `blob_room_max_bytes` and
@@ -252,7 +307,7 @@ Chosen in this order:
 
 | Mode | Set | Behaviour |
 |---|---|---|
-| **Signed tokens** | `LANGSTROTH_RELAY_TOKEN_PUBKEY=<hex or base64 Ed25519 public key>` | requests need `Authorization: Bearer hrt1.<claims>.<sig>` signed by your issuer key; expiry is enforced |
+| **Signed tokens** | `LANGSTROTH_RELAY_TOKEN_PUBKEY=<hex or base64 Ed25519 public key>` | requests need `Authorization: Bearer hrt1.<claims>.<sig>` signed by your issuer key; expiry is enforced. `LANGSTROTH_RELAY_TOKEN_PUBKEY_NEXT` adds a second accepted key while you rotate the issuer |
 | **Static allowlist** | `LANGSTROTH_RELAY_ACCESS_TOKENS=tokA,tokB` | requests need one of those bearer tokens (stored hashed, compared in constant time). Changing the list needs a restart |
 | **Open** (default) | neither | anyone who knows the URL may use it |
 
@@ -388,11 +443,13 @@ APNs push (only with the tunnel on):
 |---|---|
 | `LANGSTROTH_RELAY_APNS_KEY_FILE` or `LANGSTROTH_RELAY_APNS_KEY` | the `.p8` key, as a file or inline PEM (`\n` escapes allowed) |
 | `LANGSTROTH_RELAY_APNS_KEY_ID`, `LANGSTROTH_RELAY_APNS_TEAM_ID` | Key ID and Apple Team ID |
-| `LANGSTROTH_RELAY_APNS_TOPIC` | the app's bundle id |
+| `LANGSTROTH_RELAY_APNS_TOPIC` | the app's bundle id (the default topic) |
+| `LANGSTROTH_RELAY_APNS_TOPICS` | more bundle ids this relay may push to, comma-separated (for example a dev build); either this or `…_APNS_TOPIC` is enough |
 | `LANGSTROTH_RELAY_APNS_ENV` | `auto` (default; what each phone reports), `sandbox`, `production` |
 
-A partial or bad configuration logs an error and leaves push off; the relay
-still starts. What Apple sees: a generic alert ("New activity on your host")
+A partial configuration or a key that doesn't parse logs an error and leaves
+push off; the relay still starts. APNs settings on a relay whose tunnel is
+off stop it at startup: push only goes out through the tunnel. What Apple sees: a generic alert ("New activity on your host")
 plus an encrypted blob only the phone can open. Push only works for an app
 build signed by the same Apple team as the key. Step by step:
 [Remote access → Push through your own relay](remote-access.md#push-through-your-own-relay).
@@ -408,15 +465,15 @@ curl -s https://relay.example.com/v1/tunnel/info
 |---|---|---|
 | `LANGSTROTH_RELAY_MAX_BODY_BYTES` | 4 MiB | request body (413 above) |
 | `LANGSTROTH_RELAY_MAX_LIST_BYTES` | 16 MiB (`0` = unbounded) | one `GET …/keyring`, `…/candidates` or `…/presence` response, by stored bytes; at least one row is always returned |
-| `LANGSTROTH_RELAY_PUSH_RATE` / `LANGSTROTH_RELAY_PUSH_BURST` | 100/s, burst 300 | writes per client |
+| `LANGSTROTH_RELAY_PUSH_RATE` / `LANGSTROTH_RELAY_PUSH_BURST` | 100/s, burst 300 | writes (envelopes, keyring, presence, candidates, pairing) per client |
 | `LANGSTROTH_RELAY_READ_RATE` / `LANGSTROTH_RELAY_READ_BURST` | 100/s, burst 400 | workspace reads and SSE connects per client (429 above) |
-| `LANGSTROTH_RELAY_WS_WRITER_RATE` / `LANGSTROTH_RELAY_WS_WRITER_BURST` | 20/s, burst 200 | writes per workspace |
-| `LANGSTROTH_RELAY_GITHUB_RATE` / `LANGSTROTH_RELAY_GITHUB_BURST` | 30/s, burst 120 | GitHub-verified routes per IP |
-| `LANGSTROTH_RELAY_INVITE_RATE` / `LANGSTROTH_RELAY_INVITE_BURST` | 0.05/s, burst 10 | invite redemption |
-| `LANGSTROTH_RELAY_INVITE_REQUIRE_FRIEND` | off | only friends may redeem invites |
+| `LANGSTROTH_RELAY_WS_WRITER_RATE` / `LANGSTROTH_RELAY_WS_WRITER_BURST` | 20/s, burst 200 | envelope appends per (workspace, writer) |
+| `LANGSTROTH_RELAY_GITHUB_RATE` / `LANGSTROTH_RELAY_GITHUB_BURST` | 30/s, burst 120 | GitHub routes per client (only when they are on) |
+| `LANGSTROTH_RELAY_INVITE_RATE` / `LANGSTROTH_RELAY_INVITE_BURST` | 0.05/s, burst 10 | account invites per (sender, recipient) (GitHub routes only) |
+| `LANGSTROTH_RELAY_INVITE_REQUIRE_FRIEND` | off | account invites only reach existing friends (GitHub routes only) |
 | `LANGSTROTH_RELAY_MAX_SSE` | 2000 | concurrent SSE streams per instance (503 above) |
 | `LANGSTROTH_RELAY_MAX_SSE_PER_CLIENT` | 100 | concurrent SSE streams per client (429 above) |
-| `LANGSTROTH_RELAY_FRIEND_CAP` | unlimited | friends per account |
+| `LANGSTROTH_RELAY_FRIEND_CAP` | unlimited | friends per account (GitHub routes only) |
 | pairing codes | 10 failed lookups per minute per IP, then 429 | fixed |
 | tunnel | 8 sessions per host, 30 connects per IP per minute | fixed |
 
@@ -436,12 +493,41 @@ Pairing codes take only payloads safe for the operator to read (a peer
 friend code or a `sealed1:` payload; a workspace invite gets `422`) and are
 single-use.
 
+### Community limits {#community-limits}
+
+For a relay that people you don't know can use. Every limit here is **off
+by default**. The relay's `deploy/fly.toml` carries a commented profile with
+values for one small VM, and the Helm chart sets them under `limits.*`.
+Quotas refuse new writes (`507`) and never evict, so a full workspace stays
+readable.
+
+| Setting | Limits |
+|---|---|
+| `LANGSTROTH_RELAY_ROOM_MAX_BYTES` | stored bytes per workspace (envelope bodies and key rotations); `507 room_bytes` |
+| `LANGSTROTH_RELAY_ROOM_MAX_ENVELOPES` | stored envelopes per workspace; `507 room_envelopes` |
+| `LANGSTROTH_RELAY_MAX_TOTAL_ROOM_BYTES` | workspace bytes across the relay, on either store; `507 total_bytes` |
+| `LANGSTROTH_RELAY_MAX_ROOMS_PER_CLIENT` | workspaces one client may create (token subject, else address); `429 client_rooms` |
+| `LANGSTROTH_RELAY_MAX_ROOMS` | workspaces across the relay (the bound that holds when clients rotate addresses); `507 total_rooms` |
+| `LANGSTROTH_RELAY_ROOM_RETENTION_DAYS` | delete a workspace's envelopes, key rotations and device blobs once nothing has been appended for N days; its sequence counter and roster stay |
+| `LANGSTROTH_RELAY_IP_RATE` / `…_BURST` | every request per client except `/`, `/v1/health` and `/metrics` (burst defaults to twice the rate); `429 ip_rate` |
+| `LANGSTROTH_RELAY_ROOM_RATE` / `…_BURST` | every request to one workspace, all clients together; `429 room_rate` |
+| `LANGSTROTH_RELAY_TUNNEL_PUSH_RATE` / `…_BURST` / `…_PER_DAY` | pushes per tunnel host (these three default to `1` / `5` / `2000`; `0` = no limit) |
+
+Every `429` and `507` carries a `Retry-After` header and a JSON body with a
+stable code, for example
+`{"error": "room_bytes", "message": "room storage quota reached", "retryAfter": 3600}`.
+A refused write stored nothing, so retrying later is safe. The relay's
+`docs/reference.md` lists every code.
+
+One relay can also serve several organisations that don't trust each other
+(`LANGSTROTH_RELAY_TENANCY`); see [Multi-tenant](../deploy/multi-tenant.md).
+
 ## Monitoring
 
 | Endpoint | Auth | Use |
 |---|---|---|
 | `GET /v1/health` | none | liveness **and** readiness: round-trips the store (cached 1 s); `200 ok` or `503` |
-| `GET /metrics` | open, or bearer `LANGSTROTH_RELAY_METRICS_TOKEN` | Prometheus: `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight` |
+| `GET /metrics` | open, or bearer `LANGSTROTH_RELAY_METRICS_TOKEN` | Prometheus: `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight`, `hive_relay_limit_rejections_total{limit}`, `hive_relay_rooms`, `hive_relay_room_bytes` (and per-tenant series with tenancy) |
 | `GET /` | none | a small HTML status page |
 
 Set `LANGSTROTH_RELAY_METRICS_TOKEN` on any relay reachable from the internet.
@@ -449,11 +535,17 @@ Logs go to stdout/stderr.
 
 ## Scaling
 
-- **Memory or snapshot store: one instance.** Don't scale out.
-- **Postgres:** the sync routes can run on several instances. The tunnel
-  can't: run it on exactly one (the Helm chart's `split` topology does this,
-  routing `/v1/tunnel` to a single tunnel pod).
-- Pairing codes, SSE fan-out and rate limiters are per process.
+The relay is **single-replica by design**: pairing codes, live-push (SSE)
+fan-out, rate limits and the tunnel's control connections live in the
+process. Run one instance.
+
+- **Memory or snapshot store:** one process serving every route.
+- **Postgres:** the Helm chart's `split` topology (the default when a
+  database is configured) runs one `relay-sync` pod for every route except
+  `/v1/tunnel/*` and one `relay-tunnel` pod for the tunnel
+  (`LANGSTROTH_RELAY_ROUTES=tunnel`), both on the same database. The chart
+  refuses more than one sync replica. Postgres gives durability and backups,
+  not horizontal scaling.
 
 ## Backups
 
@@ -496,11 +588,27 @@ up for convenience, not as your only copy.
 To roll back, run the previous binary against a restored backup; schema
 changes have no down migration.
 
+## Point clients at it {#point-clients}
+
+Give the relay an `https://` URL (the base origin, without `/v1`), then:
+
+- **Desktop:** when you create a workspace with no relay set, pick **Your
+  own relay** and enter the URL; or set **Settings → Team sync → Relay URL**
+  on every device that should sync (and **Relay access token** for a gated
+  relay). Check it with `curl -s https://relay.example.com/v1/health`.
+- **CLI, `ligus serve`, `ligus worker`:** `ligus enroll '<invite>' [--token <token>]`
+  saves the relay URL from the invite; `LIGUS_RELAY_URL` and
+  `LIGUS_RELAY_ACCESS_TOKEN` override it.
+- **Everyone else** gets the relay URL inside the workspace invite: only
+  the person who creates a workspace picks a relay. See
+  [The community relay](community-relay.md#the-url-travels-in-the-invite).
+
 ## Checklist for an internet-facing relay
 
 - [ ] TLS in front; `LANGSTROTH_RELAY_TRUSTED_PROXIES` set to your proxy's addresses
 - [ ] `DATABASE_URL` or `LANGSTROTH_RELAY_DATA_DIR` set; `LANGSTROTH_RELAY_REQUIRE_DB=1` with Postgres
 - [ ] `LANGSTROTH_RELAY_MAX_STORE_BYTES` set on a memory or snapshot store
+- [ ] no `LANGSTROTH_RELAY_MAX_ENVELOPES` or `LANGSTROTH_RELAY_RETENTION_DAYS` (the relay won't start); [community limits](#community-limits) if strangers can reach it
 - [ ] an access gate (`LANGSTROTH_RELAY_TOKEN_PUBKEY` or `LANGSTROTH_RELAY_ACCESS_TOKENS`) unless you want a public relay, verified with an unauthenticated request
 - [ ] `LANGSTROTH_RELAY_WORKSPACE_SCOPE=claims` (or `strict`) with workspace-scoped signed tokens
 - [ ] issuer private key kept off the relay host

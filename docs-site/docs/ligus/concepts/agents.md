@@ -108,7 +108,7 @@ See [Headless agents](../../operate/concepts/headless-agents.md).
 ### One turn engine on every host
 
 Whichever host runs a turn (the desktop, a `ligus worker` or `ligus serve`
-box, or the `lt` terminal client), the turn runs through the same engine in
+box, or the [`lt` terminal app](https://github.com/langstroth-ai/ligus-term)), the turn runs through the same engine in
 the Ligus runtime. The host decides the turn's policy first: the author
 gate (the role the trigger's author held when they posted), the shell rule
 (the shell is the workspace Owner's unless an Owner granted it to the

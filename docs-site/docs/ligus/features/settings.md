@@ -43,7 +43,7 @@ the app data dir; the theme is stored locally per device.
 
 - **Mode** — `Auto` (follows your OS light/dark setting, any platform),
   `Light`, or `Dark`.
-- **Theme** — the accent family: **pollen** (the honey-gold default),
+- **Theme** — the accent family: **pollen** (the gold default),
   **studio** (neutral graphite), **harbor** (ocean blue), **meadow**
   (green), **slate** (cool, low-chroma blue-grey), or **obsidian**. Most
   themes have a light and a dark variant and the mode picks which;

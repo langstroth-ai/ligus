@@ -3,9 +3,11 @@
 !!! note "Roadmap — not in the current build"
     The TURN-style fallback described here is not built. Today devices sync
     through the relay's envelope endpoint (see
-    [Self-hosting a relay](self-host.md)), and desktops that are contacts also
-    sync directly over iroh, which falls back to the relay on its own when no
-    direct path exists. This page documents the planned fallback.
+    [Self-hosting a relay](self-host.md)), and desktops that are contacts can
+    also sync directly over iroh, which falls back to iroh's own relay servers
+    when no direct path exists (that path never goes through the Langstroth
+    relay). This page documents the planned fallback; none of the endpoints
+    below exists in relay v0.3.0.
 
 About 20% of real-world NAT pairs defeat UDP hole-punching even
 with STUN. Symmetric NATs on both ends, restrictive corporate
@@ -23,8 +25,8 @@ Two endpoints, in addition to the rendezvous trio:
 
 ### `POST /v1/forward/{workspaceID}/{recipientDeviceID}`
 
-Body: opaque bytes (typically `PeerLinkCodec.encode(frame)`
-output — length-prefixed). The relay appends to the recipient's
+Body: opaque bytes (encoded peer-link frames, each
+length-prefixed). The relay appends to the recipient's
 mailbox. Max body size: 1 MiB.
 
 ### `GET /v1/forward/{workspaceID}/{recipientDeviceID}`
@@ -32,8 +34,7 @@ mailbox. Max body size: 1 MiB.
 Long-poll. Drains the mailbox.
 
 - 204 → mailbox empty.
-- 200 → concatenated queued frames (each still length-prefixed —
-  feed straight into `PeerLinkCodec.decodeOne`).
+- 200 → concatenated queued frames (each still length-prefixed).
 
 Mailboxes evict after 5 minutes idle.
 
@@ -56,13 +57,13 @@ The client only falls back to the forwarding path when direct
 dial fails. The decision tree:
 
 ```
-PrototypeStore.dialPeerDirect(publication)
+dial peer (from its rendezvous publication)
 │
 ├── direct UDP to candidate succeeds
 │     → return PeerIdentity, mode = "direct"
 │
 └── direct dial failed (timeout / connection error)
-      → openForwardedLink(publication)
+      → open a forwarded link through the relay
         → return PeerIdentity, mode = "relay"
 ```
 
@@ -104,7 +105,7 @@ The relay is intentionally simple. Forwarded mode adds:
 
 For chat-cadence workloads (one frame every few seconds) this is
 unnoticeable. For real-time collaborative typing it would feel
-laggy — collaborative typing today happens against a directly
+laggy — collaborative typing would need a directly
 connected peer, not a relay-forwarded one.
 
 ## Threat model recap
@@ -112,11 +113,11 @@ connected peer, not a relay-forwarded one.
 The forwarding path doesn't change the trust story. The relay
 operator:
 
-- ✅ Can see metadata about peer connections.
-- ✅ Can DoS specific peers by refusing their mailboxes.
-- ❌ Cannot read content.
-- ❌ Cannot impersonate a peer.
-- ❌ Cannot inject envelopes into the log (signature verification
+- Can see metadata about peer connections.
+- Can DoS specific peers by refusing their mailboxes.
+- Cannot read content.
+- Cannot impersonate a peer.
+- Cannot inject envelopes into the log (signature verification
   catches forgery).
 
 The threat model is identical to rendezvous-only mode — adding

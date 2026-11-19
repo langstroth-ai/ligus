@@ -24,8 +24,11 @@ Or the one-line installer:
 curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
 ```
 
-Both put the prebuilt `ligus` binary on your `PATH` (the installer honors
-`LIGUS_INSTALL_DIR` / `LIGUS_VERSION`). Or build from source:
+Both put the prebuilt `ligus` binary on your `PATH`. The installer puts it
+in `$HOME/.local/bin` (set `LIGUS_INSTALL_DIR` to change that, or
+`LIGUS_VERSION=v0.1.0` to pin a release) and checks it against the
+release's `ligus-<target>.sha256`, refusing to install on a missing or
+mismatched checksum. Or build from source:
 `cargo install --path crates/ligus-cli`.
 
 The CLI is the **same runtime as the desktop app, without the window** — so it
