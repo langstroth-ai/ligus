@@ -6,6 +6,17 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **Workspace repositories.** A workspace names the repositories it works on;
+  each device keeps its own checkouts of them, private to that device, and
+  hosts report which ones they have (never where). An Admin adds a repository
+  from a bound folder ("Add WeFit to the workspace?"), Settings →
+  Repositories or `ligus repos add`; the phone and a box clone one by id. A
+  chat picks its repository from the chip at its top; a turn runs only on a
+  host with a confirmed checkout of it and otherwise says why. Chat branches
+  start from a pinned base, applied proposals replay on every host, and an
+  apply never half-applies. See
+  [Workspace repositories](../features/repositories.md) and
+  [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
 - **The phone acts as you with its own key; one host applies.** Since the
   box is its own service member, what you do as yourself from the phone
   (post, approve or reject, answer an agent's question, clear a lockdown,

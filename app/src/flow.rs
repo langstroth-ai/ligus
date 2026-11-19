@@ -269,6 +269,13 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: 
         if !host_live(&a.host_id) {
             continue;
         }
+        // An agent whose host says it has no checkout of this chat's repo
+        // is dropped like an offline one (advisory; that host refuses anyway).
+        if let Some(repo) = session.repo.as_ref().and_then(|r| r.repo_id) {
+            if !a.host_id.is_empty() && a.host_id != here && crate::repos_ui::host_lacks_repo(state, &a.host_id, repo) {
+                continue;
+            }
+        }
         let key = flow::agent_key(Some(a.id));
         let provider = state.resolve_runtime(&a.runtime_id).provider;
         if route_block(provider, &envelope, windows.get(&provider), &key, now_secs).is_some() {
@@ -1358,6 +1365,10 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     }
     let agent = session.workspace_agents.iter().find(|a| a.name == agent_name)?.clone();
     if !can_run_here(state, &agent) {
+        return None;
+    }
+    // A chat with a repo: offer only with this device's own checkout of it.
+    if !crate::repos_ui::runs_here(state, &svc, &session) {
         return None;
     }
     let workspace_id = session.workspace_id;

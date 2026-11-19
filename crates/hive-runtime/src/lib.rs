@@ -65,6 +65,7 @@ pub mod phone_enroll;
 pub mod peer_iroh;
 pub mod private_file;
 pub mod prompt;
+pub mod repos;
 pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;

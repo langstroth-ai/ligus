@@ -32,6 +32,8 @@ export function BindWorkspacePrompt() {
         qc.invalidateQueries({ queryKey: ["runtimes"] }),
         qc.invalidateQueries({ queryKey: ["mcp"] }),
         qc.invalidateQueries({ queryKey: ["git-status"] }),
+        // The folder's remote may be a repo to add to the workspace.
+        qc.invalidateQueries({ queryKey: ["workspace-repos"] }),
       ]);
     } catch (e) {
       toast.error(`Couldn't link a folder: ${errMsg(e)}`);

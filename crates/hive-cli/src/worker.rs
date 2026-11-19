@@ -388,6 +388,9 @@ pub async fn drain_tick(
 /// person's `ProposalApplyRequested` names a host.
 pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, hive_runtime::apply_host::Outcome)> {
     let repo_for = |chat: Uuid| {
+        // Only a proposal without a repo applies in the legacy binding; one
+        // with a repo applies only in this box's checkout of that repo
+        // (apply_host::checkout_for, in the apply tick).
         let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
         if let Some(r) = repo.as_deref() {
             crate::repos::ensure_chat_base(r);
@@ -504,6 +507,18 @@ async fn run_turn(
         g.workspace_id = Some(s.workspace_id);
         g.agent_id = Some(agent.id);
     }
+    // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
+    // with a repo runs only in this box's confirmed checkout of it, never
+    // in other code; the turn is already claimed, so waiting on a clone is
+    // safe.
+    let repo_turn = match crate::repos_cmd::repo_for_turn(&ctx.cfg.data_dir, svc, &s, ctx.host_label).await {
+        Ok(r) => r,
+        Err(reason) => {
+            let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+            sink.changed();
+            return Err(anyhow!("refused by the repo gate"));
+        }
+    };
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
     crate::materialize_turns(ctx.cfg, &mut turns).await;
     let system = format!(
@@ -512,7 +527,7 @@ async fn run_turn(
         hive_runtime::prompt::runtime_identity_block(&rt, &format!("worker {}", ctx.host_label)),
         // Which checkout (and branch) this turn's files come from, re-read
         // every turn: the phone can switch a chat's repo between turns.
-        crate::repos::turn_context(&ctx.cfg.data_dir, s.id)
+        repo_turn.context
     );
     // Who the turn answers (what the reply's `@you` means).
     let system = match hive_runtime::prompt::requester_guidance(&s, Some(pm.message_id)) {
@@ -584,12 +599,8 @@ async fn run_turn(
     tool_settings.mcp_egress = envelope.egress.clone();
     tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
-    // The checkout this chat is bound to on this box (see `repos.rs`).
-    let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
-    // A fork checkout's chat branches start from upstream's default branch.
-    if let Some(r) = repo_root.as_deref().filter(|r| hive_runtime::git_worktree::is_git_repo(r)) {
-        crate::repos::ensure_chat_base(r);
-    }
+    // The checkout this chat runs in on this box (the gate above).
+    let repo_root = repo_turn.repo_root.clone();
 
     let mid = lock(svc).begin_assistant_message(
         s.id,
@@ -779,6 +790,12 @@ async fn run_turn(
                     // approve it — the self-approval guard excludes no one.
                     let mut prop = hive_core::ActionProposal::file_diff(title, "", diff, files);
                     prop.producing_agent_id = Some(agent.id);
+                    // What it was made on (the repo itself comes from the chat).
+                    if let Some((_, tip, base_ref)) = &repo_turn.base {
+                        prop.base_commit = Some(tip.clone());
+                        prop.base_ref = base_ref.clone();
+                    }
+                    prop.produced_on = Some(svc.device_id());
                     if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
                         prop.title = t;
                         prop.body = b;

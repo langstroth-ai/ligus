@@ -83,6 +83,61 @@ traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
 
+### Workspace repositories {#repositories}
+
+[Workspace repositories](../../ligus/features/repositories.md) are signed
+config events; checkouts and their paths never leave a device.
+
+- **A malicious Admin, or a compromised one**, can add a look-alike
+  repository (`github.com/zazu1am/wefit`). Adding and removing need the
+  Admin's passkey presence; Settings shows the full canonical name and flags a
+  repository whose name reads the same as another's once common ASCII
+  confusables are folded (`1`/`l`, `rn`/`m`, `0`/`o`, dashes, case), or whose
+  claimed root commit equals another's. A repository entry
+  makes no device fetch anything: a clone is a person's act on one host, from
+  that host's own code-host connection, with the URL rebuilt as `https://`
+  from the canonical (never a string from the event) and the address checked
+  again and pinned right before git runs; git follows no redirect, so the
+  server at the pinned address can't send the clone to another host. An entry can't create a connection
+  or mark one internal.
+- **A member or an agent** can't add, remove or rename a repository, and an
+  agent (or a runtime effect) can't set a chat's repository or pin its base.
+  A proposal's repository comes from the chat when it is filed and never
+  changes; its base commit is in the vote, so re-basing it clears the votes.
+- **A host's coverage** rides its sealed presence beat and isn't signed, so
+  any member could forge one. It is advisory only: the host that runs a turn
+  checks its own confirmed checkout (by remote, without `insteadOf` or
+  includes) before every turn and refuses otherwise. A forged "present" can
+  at most send a turn to a host that then refuses it. Readers drop coverage
+  from a revoked device or a removed member's host.
+- **A hostile repository** found by a scan is never used until a person
+  confirms it on that device; its hooks, `core.fsmonitor`, submodules and
+  file-protocol URLs stay off (every git call runs with those overridden),
+  and its runtimes and MCP servers stay inert until trusted. A marker it ships
+  in its work tree means nothing: the managing-host marker lives in the git
+  directory.
+- **Applying** builds the commit in a scratch index or worktree and moves the
+  chat branch only by compare-and-swap, so a conflict or a moved branch
+  applies nothing.
+- **Ledger replay** reads `Ligus-Proposal` and `Ligus-Revert` only from a
+  commit's trailer block (never its subject, which carries the proposal's
+  agent-written title) and only on commits since the chat's pinned base. A
+  host whose chat branch wasn't cut from the pinned base refuses the chat's
+  turns instead of replaying onto a different base. An applied proposal's
+  content can't change afterwards (a re-upsert that would is refused), so a
+  replay only ever applies the approved bytes. A host fulfilling a person's
+  "Apply on" request uses the same checkout check as a turn.
+- **A remote URL** with `#`, `?` or a backslash has no identity: git connects
+  to the host before them, so `https://evil.example#@github.com/o/n` never
+  reads as github.com's repository.
+- **Limits:** coverage is self-reported and only sealed with the workspace
+  key, so any member can forge any host's coverage (a beat claiming a future
+  sequence number is ignored, so a forgery can't pin it). A forged "missing"
+  drops that host's agents from routing and workflow pre-flight. A person who
+  writes a commit with a real `Ligus-Proposal` trailer in a chat's worktree
+  makes that host's replay skip that proposal there. The repository list is
+  visible to every member, Viewers included.
+
 ### A compromised serve or worker box {#compromised-box}
 
 A `ligus serve` or `ligus worker` box is its own **service member**, never a

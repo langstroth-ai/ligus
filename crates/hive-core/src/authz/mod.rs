@@ -330,6 +330,20 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             SessionEvent::MessageRemoved { message_id } => Some((*message_id, true)),
             _ => None,
         };
+        // An applied proposal's content is what the chat's ledger replays on
+        // every device that hasn't applied it yet
+        // (`workspace_repo::ledger`): it never changes after the apply, or a
+        // re-upsert (its producing agent's own, or anyone's) would have
+        // other devices replay bytes nobody approved. A title edit is fine.
+        if let SessionEvent::ProposalUpserted { proposal } = &env.payload {
+            if let Some(old) = fold.proposals.iter().find(|p| p.id == proposal.id && p.status == crate::proposals::ProposalStatus::Applied) {
+                let mut incoming = proposal.clone();
+                incoming.repo_id = old.repo_id;
+                if votes::diff_digest(old) != votes::diff_digest(&incoming) {
+                    return Decision::deny("an applied proposal's content can't change");
+                }
+            }
+        }
         if let Some((id, removal)) = target {
             if fold.authz.message_authors.get(&id).is_some_and(|orig| orig != author) {
                 let moderator = removal

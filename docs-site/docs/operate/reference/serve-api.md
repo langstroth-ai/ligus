@@ -299,12 +299,29 @@ voter's account, so they never act as the person (see
 |---|---|---|
 | `GET /v1/repos` | `?q=&owner=&page=&perPage=&forge=` | local checkouts and running clone jobs, plus: without `forge`, `github` (the GitHub connection's repos, as before) and `forges` (every connection); with `forge=<id>`, that connection's repos under `forge` |
 | `GET /v1/repos/fork` | `?repo=owner/name&forge=` | the signed-in account's fork, if any. 412 if the connection isn't signed in |
-| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` | Contributor. Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
+| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` or `{repoId}` | Contributor. Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). With `repoId`, a workspace repository: the URL is rebuilt from its canonical for a connected host, the address is re-checked and pinned, and the clone is mapped and reported as this box's checkout (404 for an unknown or removed repository). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
 | `GET /v1/repos/clone/:job` | | job status (last 20 finished kept) |
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
 | `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |
 | `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
+
+### Workspace repositories
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/workspace-repos` | | `{repos, hostId, label}`. Each repo: `id`, `name`, `canonical`, `forgeKind`, `defaultBranch`, `removed`, `lookalikeOf`, `here` (`state`: `present`, `cloning`, `missing`, `error`; `code`; `viaFork`; `checkout`: the folder name; `found`: folder names a scan found), and `hosts` (every other host's `state`, `unknown` when it reports nothing). No paths |
+| `POST /v1/workspace-repos` | `{input, name?, kind?, branch?}` | Admin with presence: a box (Contributor) answers 403 |
+| `PATCH /v1/workspace-repos/{id}` | `{name, branch?}` | Admin |
+| `DELETE /v1/workspace-repos/{id}` | | Admin with presence |
+| `POST /v1/workspace-repos/{id}/confirm` | `{checkout}` | Contributor. Use a found checkout (by folder name) |
+| `POST /v1/workspace-repos/rescan` | | Scan the repos dir and scan roots again |
+| `PUT /v1/chats/{id}/workspace-repo` | `{repoId \| null, baseBranch?}` | Contributor. The chat's repository (a removed one is refused). The answer is the chat's `workspaceRepo` |
+
+`GET /v1/chats/{id}/details` adds `workspaceRepo`: `{id, name, canonical,
+removed, baseBranch, basePinned, here: {state, reason}}`, where `state` is
+`present`, `cloning` or why a turn wouldn't run here (`no_checkout`,
+`remote_mismatch`, `managed_elsewhere`, `repo_removed`, …).
 
 ### Code hosts
 

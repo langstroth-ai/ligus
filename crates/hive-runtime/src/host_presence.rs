@@ -46,8 +46,13 @@ type Beat = hive_core::workspace_repo::HostBeat;
 /// Seal a beat for `host_id` at `at` (unix seconds) under `ring`'s seal key
 /// (none when this device may not seal).
 pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Value> {
+    seal_beat(ring, &Beat { host_id: host_id.to_string(), at, seq: 0, coverage: Vec::new() })
+}
+
+/// Seal a full beat (with this host's repo coverage and its `seq`).
+pub fn seal_beat(ring: &KeyringEngine, beat: &Beat) -> Option<Value> {
     let k = ring.seal_key()?;
-    let plain = serde_json::to_vec(&Beat { host_id: host_id.to_string(), at, seq: 0, coverage: Vec::new() }).ok()?;
+    let plain = serde_json::to_vec(beat).ok()?;
     let sealed = seal_symmetric_kid(&k.key, k.version, &k.kid, &plain).ok()?;
     Some(serde_json::json!({ "hostBeat": sealed }))
 }
@@ -57,7 +62,28 @@ pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Va
 /// authorized head, and a beat whose slot doesn't match the host it names. A
 /// beat from the future is clamped to `now`.
 pub fn open_host_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64) -> HashMap<String, i64> {
-    let mut out = HashMap::new();
+    open_beats(blobs, ring, now).into_iter().map(|(h, b)| (h, b.at)).collect()
+}
+
+/// How far ahead of this device's clock a beat's `seq` (its sender's clock,
+/// in milliseconds) may be.
+const SEQ_SKEW_MS: u64 = 10 * 60 * 1000;
+
+/// Whether a beat's `seq` could be its sender's clock now: a beat sealed
+/// with a `seq` from the far future (by any workspace key holder, or by a
+/// host whose clock jumped ahead) would otherwise win over every genuine
+/// later beat and pin that host's coverage until every reader restarts.
+fn seq_plausible(seq: u64, now_secs: i64) -> bool {
+    let now_ms = u64::try_from(now_secs).unwrap_or(0).saturating_mul(1000);
+    seq <= now_ms.saturating_add(SEQ_SKEW_MS)
+}
+
+/// Like [`open_host_beats`], with each host's whole beat (coverage
+/// included). Of several beats for one host, the highest `seq` wins (ties
+/// by `at`); a beat whose coverage breaks the bounds keeps its liveness and
+/// loses its coverage.
+pub fn open_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64) -> HashMap<String, Beat> {
+    let mut out: HashMap<String, Beat> = HashMap::new();
     let floor = ring.authorized_head();
     for (slot, blob) in blobs {
         let Some(sealed) = blob.get("hostBeat") else { continue };
@@ -73,9 +99,18 @@ pub fn open_host_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now
         if *slot != host_presence_slot(&beat.host_id) {
             continue;
         }
-        let at = beat.at.min(now);
-        let e = out.entry(beat.host_id).or_insert(at);
-        *e = (*e).max(at);
+        let mut beat = beat;
+        beat.at = beat.at.min(now);
+        if !beat.coverage_ok() || !seq_plausible(beat.seq, now) {
+            beat.coverage.clear();
+            beat.seq = 0;
+        }
+        match out.get(&beat.host_id) {
+            Some(old) if (old.seq, old.at) >= (beat.seq, beat.at) => {}
+            _ => {
+                out.insert(beat.host_id.clone(), beat);
+            }
+        }
     }
     out
 }
@@ -87,6 +122,23 @@ pub async fn publish_host_beat(relay: &RelayClient, room: &str, ring: &KeyringEn
     relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
 }
 
+/// Publish this host's beat with its repo coverage (`seq` orders beats from
+/// one host; coverage replaces the host's previous coverage).
+pub async fn publish_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, host_id: &str, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> Result<(), RelayError> {
+    let now = Timestamp::now().inner().unix_timestamp();
+    let seq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let Some(blob) = seal_beat(ring, &Beat { host_id: host_id.to_string(), at: now, seq: if coverage.is_empty() { 0 } else { seq }, coverage }) else {
+        return Ok(());
+    };
+    relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
+}
+
+/// Read every host's whole latest beat in the room.
+pub async fn fetch_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine) -> Result<HashMap<String, Beat>, RelayError> {
+    let blobs = relay.list_presence(room).await?;
+    Ok(open_beats(&blobs, ring, Timestamp::now().inner().unix_timestamp()))
+}
+
 /// Read every host's latest beat in the room (host id → unix seconds).
 pub async fn fetch_host_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine) -> Result<HashMap<String, i64>, RelayError> {
     let blobs = relay.list_presence(room).await?;
@@ -95,9 +147,14 @@ pub async fn fetch_host_beats(relay: &RelayClient, room: &str, ring: &KeyringEng
 
 /// The latest beat seen per host, shared between the task that polls the relay
 /// and everything that asks "is this host online?".
+/// A host's coverage and the `seq` of the beat that carried it.
+type ReportedCoverage = (u64, Vec<hive_core::workspace_repo::CoverageEntry>);
+
 #[derive(Clone, Default)]
 pub struct HostPresence {
     beats: Arc<Mutex<HashMap<String, i64>>>,
+    /// Each host's latest reported repo coverage, with its beat's `seq`.
+    coverage: Arc<Mutex<HashMap<String, ReportedCoverage>>>,
 }
 
 impl HostPresence {
@@ -117,6 +174,36 @@ impl HostPresence {
         for (id, at) in beats {
             self.record(&id, at);
         }
+    }
+
+    /// Record a whole beat: its liveness, and its coverage when its `seq`
+    /// is the highest seen for the host (a coverage-less beat leaves the
+    /// last coverage alone).
+    pub fn record_beat(&self, beat: &Beat) {
+        self.record(&beat.host_id, beat.at);
+        if beat.coverage.is_empty() || !beat.coverage_ok() || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp()) {
+            return;
+        }
+        let mut c = self.coverage.lock().unwrap_or_else(|p| p.into_inner());
+        match c.get(&beat.host_id) {
+            Some((seq, _)) if *seq >= beat.seq => {}
+            _ => {
+                c.insert(beat.host_id.clone(), (beat.seq, beat.coverage.clone()));
+            }
+        }
+    }
+
+    /// Merge fetched whole beats.
+    pub fn merge_beats(&self, beats: HashMap<String, Beat>) {
+        for b in beats.values() {
+            self.record_beat(b);
+        }
+    }
+
+    /// The coverage `host_id` last reported (`None`: it reports nothing, so
+    /// readers show "unknown", never "missing").
+    pub fn coverage_of(&self, host_id: &str) -> Option<Vec<hive_core::workspace_repo::CoverageEntry>> {
+        self.coverage.lock().unwrap_or_else(|p| p.into_inner()).get(host_id).map(|(_, c)| c.clone())
     }
 
     /// The newest beat seen for `host_id`.
@@ -188,6 +275,57 @@ mod tests {
         let mut legacy = WorkspaceHost::new("old", HostKind::Device, "Old");
         legacy.last_seen = Timestamp::from_unix_seconds(t - 5);
         assert!(p.is_online(&legacy, &now));
+    }
+
+    /// Coverage rides the sealed beat; the highest `seq` wins whatever
+    /// order beats arrive in, and an unknown state reads as unknown.
+    #[test]
+    fn coverage_highest_seq_wins_any_order() {
+        use hive_core::workspace_repo::{CoverageEntry, HostBeat};
+        let k = key("room secret");
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let newer = HostBeat { host_id: "box".into(), at: 100, seq: 7, coverage: vec![entry("present")] };
+        let older = HostBeat { host_id: "box".into(), at: 200, seq: 3, coverage: vec![entry("missing")] };
+        for order in [[&newer, &older], [&older, &newer]] {
+            let p = HostPresence::new();
+            for b in order {
+                p.record_beat(b);
+            }
+            assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
+            assert_eq!(p.beat_of("box"), Some(200), "liveness is the newest beat either way");
+        }
+        let mut blobs = HashMap::new();
+        blobs.insert(host_presence_slot("box"), seal_beat(&k, &newer).unwrap());
+        let opened = open_beats(&blobs, &k, 1_000);
+        assert_eq!(opened["box"].coverage, newer.coverage);
+        // Over the bound: liveness kept, coverage dropped.
+        let big = HostBeat { host_id: "big".into(), at: 1, seq: 1, coverage: (0..65).map(|_| entry("present")).collect() };
+        blobs.insert(host_presence_slot("big"), seal_beat(&k, &big).unwrap());
+        let opened = open_beats(&blobs, &k, 1_000);
+        assert!(opened["big"].coverage.is_empty());
+        assert_eq!(HostPresence::new().coverage_of("nobody"), None);
+    }
+
+    /// A beat whose `seq` is from the far future (a forged beat sealed by any
+    /// workspace key holder, or a host whose clock jumped ahead) must not pin
+    /// a host's coverage forever: the host's genuine later beats still win.
+    #[test]
+    fn far_future_seq_never_pins_coverage() {
+        use hive_core::workspace_repo::{CoverageEntry, HostBeat};
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let forged = HostBeat { host_id: "box".into(), at: 1, seq: u64::MAX, coverage: vec![entry("missing")] };
+        let real = HostBeat { host_id: "box".into(), at: 2, seq: now_ms, coverage: vec![entry("present")] };
+        let p = HostPresence::new();
+        p.record_beat(&forged);
+        p.record_beat(&real);
+        assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
+        // Opened from the relay: the same.
+        let k = key("room secret");
+        let mut blobs = HashMap::new();
+        blobs.insert(host_presence_slot("box"), seal_beat(&k, &forged).unwrap());
+        let opened = open_beats(&blobs, &k, (now_ms / 1000) as i64);
+        assert!(opened.get("box").is_none_or(|b| b.coverage.is_empty()), "a far-future seq carries no coverage");
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ import {
 import { AccountSection } from "@/components/settings/AccountSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { FolderGitSection } from "@/components/settings/FolderGitSection";
+import { RepositoriesSection } from "@/components/settings/RepositoriesSection";
 import { CodeHostsSection } from "@/components/settings/CodeHostsSection";
 import { TeamSyncSection } from "@/components/settings/TeamSyncSection";
 import { SchedulesSection } from "@/components/settings/SchedulesSection";
@@ -36,6 +37,7 @@ export type SettingsTab =
   | "account"
   | "appearance"
   | "folder-git"
+  | "repositories"
   | "code-hosts"
   | "team-sync"
   | "guards"
@@ -67,6 +69,7 @@ const NAV_GROUPS: NavGroup[] = [
     cap: "This workspace",
     items: [
       { id: "folder-git", label: "Folder & Git", icon: <IconFile size={16} />, keywords: ["project", "folder", "directory", "path", "git", "branch", "repo"] },
+      { id: "repositories", label: "Repositories", icon: <IconFile size={16} />, keywords: ["repository", "repositories", "repo", "checkout", "clone", "coverage", "fork", "scan", "bind"] },
       { id: "code-hosts", label: "Code hosts", icon: <IconFile size={16} />, keywords: ["forge", "github", "gitlab", "codeberg", "forgejo", "gitea", "token", "clone", "repository", "pull request", "merge request"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
       { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
@@ -114,9 +117,11 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "folder-git":
     case "workspace":
       return "folder-git";
+    case "repositories":
+    case "repos":
+      return "repositories";
     case "code-hosts":
     case "forges":
-    case "repos":
       return "code-hosts";
     case "team-sync":
     case "team":
@@ -273,6 +278,7 @@ export function SettingsView({
             />
           )}
           {tab === "folder-git" && <FolderGitSection />}
+          {tab === "repositories" && <RepositoriesSection />}
           {tab === "code-hosts" && <CodeHostsSection />}
           {tab === "team-sync" && <TeamSyncSection />}
           {tab === "guards" && <GuardsSection chat={activeChat} />}

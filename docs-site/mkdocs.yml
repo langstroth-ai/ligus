@@ -214,6 +214,7 @@ nav:
           - Scheduled agents: ligus/features/scheduling.md
           - Managing context: ligus/features/voice-and-slash.md
           - Git integration: ligus/features/git.md
+          - Workspace repositories: ligus/features/repositories.md
           - Invites & joining: ligus/features/invites.md
           - People, contacts & DMs: ligus/features/collaborators.md
           - Linked accounts: ligus/features/linked-identities.md

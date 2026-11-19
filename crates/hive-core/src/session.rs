@@ -114,6 +114,12 @@ pub struct ChatSession {
     /// request without one is open. Skipped when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub apply_outcomes: BTreeMap<Uuid, crate::workspace_repo::ApplyOutcome>,
+    /// Proposals in the order the fold first saw each applied: the chat's
+    /// ledger (`workspace_repo::ledger`). A second `ProposalApplied` for the
+    /// same proposal (two devices at once) never adds it again. Skipped when
+    /// empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_order: Vec<Uuid>,
     #[serde(default)]
     pub created_at: Timestamp,
     #[serde(default)]
@@ -201,6 +207,7 @@ impl ChatSession {
             repo: None,
             apply_requests: BTreeMap::new(),
             apply_outcomes: BTreeMap::new(),
+            applied_order: Vec::new(),
             created_at: now,
             updated_at: now,
             authz: Default::default(),
