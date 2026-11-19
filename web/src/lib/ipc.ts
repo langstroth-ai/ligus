@@ -2014,7 +2014,10 @@ export const setRepoAliases = (repoId: string, aliases: string[]) => invoke<stri
 /// Admin, with a passkey: map a host alias to a repository host ("" clears it).
 export const setHostAlias = (alias: string, host: string) => invoke<void>("set_host_alias", { alias, host });
 /// This device only: use a synced alias here (or stop using it).
-export const acceptRepoAlias = (alias: string, accept: boolean) => invoke<string>("accept_repo_alias", { alias, accept });
+/// `target`: the repo id or host shown with the alias; the device refuses if
+/// the workspace has since pointed the alias elsewhere.
+export const acceptRepoAlias = (alias: string, accept: boolean, target?: string) =>
+  invoke<string>("accept_repo_alias", { alias, accept, target: target ?? null });
 export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
 export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
 export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });

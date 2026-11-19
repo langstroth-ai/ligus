@@ -85,18 +85,20 @@ impl std::error::Error for BindError {}
 
 /// The aliases this device matches with in `workspace_id` (design 12):
 /// its own SSH host aliases, plus each synced alias a person here accepted,
-/// while the workspace (`roster`, when given) still names it with the same
-/// target.
+/// while the workspace (`roster`) still names it with the same target.
+/// Without a roster only the device's own aliases count: an acceptance is
+/// never used unless the workspace still names that alias for that target.
 pub fn aliases(store: &EventStore, workspace_id: Uuid, roster: Option<&RosterState>) -> Aliases {
     let mut out = Aliases { device: store.ssh_host_aliases().unwrap_or_default(), ..Default::default() };
+    let Some(r) = roster else { return out };
     for (kind, alias, target) in store.accepted_aliases(workspace_id).unwrap_or_default() {
         match kind.as_str() {
-            "host" if roster.is_none_or(|r| r.host_aliases.get(&alias) == Some(&target)) => {
+            "host" if r.host_aliases.get(&alias) == Some(&target) => {
                 out.hosts.insert(alias, target);
             }
             "repo" => {
                 let Ok(repo) = Uuid::parse_str(&target) else { continue };
-                if roster.is_none_or(|r| r.repo_live(repo) && r.repo_aliases.get(&repo).is_some_and(|l| l.contains(&alias))) {
+                if r.repo_live(repo) && r.repo_aliases.get(&repo).is_some_and(|l| l.contains(&alias)) {
                     out.repos.entry(repo).or_default().push(alias);
                 }
             }
@@ -138,6 +140,24 @@ pub fn bind(
     path: &Path,
     source: CheckoutSource,
 ) -> Result<RepoMapping, BindError> {
+    // The workspace as this device folds it now, so an accepted synced alias
+    // counts only while the workspace still names it (design 12).
+    let roster = store.load_config(workspace_id, None, None).ok().map(|(_, t)| t.current().clone());
+    bind_in(store, roster.as_ref(), me, host_label, workspace_id, repo, path, source)
+}
+
+/// [`bind`] against a roster the caller already holds.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_in(
+    store: &EventStore,
+    roster: Option<&RosterState>,
+    me: Uuid,
+    host_label: &str,
+    workspace_id: Uuid,
+    repo: &WorkspaceRepo,
+    path: &Path,
+    source: CheckoutSource,
+) -> Result<RepoMapping, BindError> {
     if !crate::git_worktree::is_git_repo(path) {
         return Err(BindError::NotACheckout);
     }
@@ -145,7 +165,7 @@ pub fn bind(
     if std::fs::symlink_metadata(path.join(".git")).is_ok_and(|m| m.is_file()) {
         return Err(BindError::LinkedWorktree);
     }
-    let aliases = aliases(store, workspace_id, None);
+    let aliases = aliases(store, workspace_id, roster);
     let Some(via) = checkout_matches(&path, repo, &aliases) else {
         return Err(BindError::NotThisRepo { found: git::suggested_canonical(&path, &aliases.all_hosts()).map(|(c, _)| c) });
     };

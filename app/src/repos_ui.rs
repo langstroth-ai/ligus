@@ -329,9 +329,9 @@ pub fn set_host_alias(state: State<AppState>, alias: String, host: String) -> Re
 
 /// Accept a synced alias on this device (or stop using it). Device-local.
 #[tauri::command]
-pub fn accept_repo_alias(state: State<AppState>, alias: String, accept: bool) -> Result<String, String> {
+pub fn accept_repo_alias(state: State<AppState>, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
     let ws = ws_of(&state);
-    state.service.lock().unwrap().accept_alias(ws, &alias, accept).map_err(map_err)
+    state.service.lock().unwrap().accept_alias_for(ws, &alias, target.as_deref(), accept).map_err(map_err)
 }
 
 fn live_repo(state: &AppState, ws: Uuid, id: Uuid) -> Result<hive_core::workspace_repo::WorkspaceRepo, String> {

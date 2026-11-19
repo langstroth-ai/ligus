@@ -64,9 +64,9 @@ describe("RepositoriesSection", () => {
     expect(await screen.findByText(/via alias/)).toBeTruthy();
     expect(screen.getByText("github.com/old-org/wefit")).toBeTruthy();
     await userEvent.click(screen.getByLabelText("Accept github.com/old-org/wefit here"));
-    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("github.com/old-org/wefit", true);
+    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("github.com/old-org/wefit", true, "r1");
     await userEvent.click(screen.getByLabelText("Accept ssh.git.example.com here"));
-    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("ssh.git.example.com", true);
+    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("ssh.git.example.com", true, "git.example.com");
     await userEvent.type(screen.getByLabelText("Alias host"), "ssh2.git.example.com");
     await userEvent.type(screen.getByLabelText("Repository host"), "git.example.com");
     await userEvent.click(screen.getByText("Add alias"));

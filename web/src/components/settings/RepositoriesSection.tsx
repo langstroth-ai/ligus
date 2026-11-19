@@ -241,7 +241,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
               key={a.alias}
               alias={a.alias}
               accepted={a.accepted}
-              onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(a.alias, accept))}
+              onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(a.alias, accept, r.id))}
             />
           ))}
         </div>
@@ -387,7 +387,7 @@ export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto;
       {list.map((h) => (
         <div key={h.alias} className="flex flex-wrap items-center gap-2 py-1 text-sm">
           <code>{h.alias}</code> → <code>{h.host}</code>
-          <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept))} />
+          <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
           {data.canAdmin && (
             <Button size="sm" variant="ghost" onClick={() => void run("Couldn't remove it", () => setHostAlias(h.alias, ""))}>
               Remove

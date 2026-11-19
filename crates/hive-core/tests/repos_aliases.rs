@@ -106,6 +106,27 @@ fn alias_lookalike_refused_and_case_split_allowed() {
     assert_eq!(skeleton("github.com/zazu1am/wefit"), skeleton(WEFIT));
 }
 
+/// Review: the alias skeleton is the repos' look-alike fold, so an alias
+/// can't pass with a confusable the repo list would flag (`5`/`s`, `8`/`b`,
+/// `|`/`l`, or `rn` split by a dropped separator).
+#[test]
+fn alias_skeleton_folds_every_confusable_the_repo_flags_fold() {
+    for (a, b) in [
+        ("github.com/zazulam/wefit5", "github.com/zazulam/wefits"),
+        ("github.com/8ob/x", "github.com/bob/x"),
+        ("github.com/zazu|am/wefit", WEFIT),
+        ("github.com/r-n/x", "github.com/m/x"),
+        ("github.com/r.n/x", "github.com/m/x"),
+    ] {
+        assert_eq!(skeleton(a), skeleton(b), "{a} vs {b}");
+    }
+    let mut w = world();
+    let split_rn = w.push("ada", aliases(INFRA, &["github.com/zazu-lam/wef-it"]));
+    assert_eq!(w.verdict(split_rn), Verdict::Denied, "a separator doesn't hide a look-alike");
+    // A `local:` name compares exactly.
+    assert_ne!(skeleton("local:0a"), skeleton("local:oa"));
+}
+
 #[test]
 fn host_alias_must_target_a_live_repo_host_and_never_shadow_one() {
     let mut w = world();

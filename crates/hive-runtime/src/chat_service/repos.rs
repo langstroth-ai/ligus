@@ -127,14 +127,29 @@ impl ChatService {
     /// Accepting records its current target, so a later change of target
     /// needs a new acceptance. Device-local; nothing is published.
     pub fn accept_alias(&mut self, workspace_id: Uuid, alias: &str, accept: bool) -> Result<String> {
+        self.accept_alias_for(workspace_id, alias, None, accept)
+    }
+
+    /// [`Self::accept_alias`], refused when the workspace now names the alias
+    /// with another target than `shown` (the repo id or host the person saw
+    /// when they chose to accept it), so an Admin's change in between is
+    /// never accepted unseen.
+    pub fn accept_alias_for(&mut self, workspace_id: Uuid, alias: &str, shown: Option<&str>, accept: bool) -> Result<String> {
         let alias = alias.trim();
         let roster = self.workspace_roster(workspace_id)?;
+        let changed = |target: &str| accept && shown.is_some_and(|s| !s.eq_ignore_ascii_case(target));
         if let Some(host) = roster.host_aliases.get(&alias.to_ascii_lowercase()) {
+            if changed(host) {
+                return Err(ChatError::Unauthorized(format!("{alias} now means {host}, not what was shown; look again before accepting")));
+            }
             self.store.set_alias_accepted(workspace_id, "host", &alias.to_ascii_lowercase(), host, accept)?;
             return Ok(format!("{} means {host}", alias.to_ascii_lowercase()));
         }
         for (repo, list) in &roster.repo_aliases {
             if roster.repo_live(*repo) && list.iter().any(|a| a == alias) {
+                if changed(&repo.to_string()) {
+                    return Err(ChatError::Unauthorized(format!("{alias} now names another repository than was shown; look again before accepting")));
+                }
                 self.store.set_alias_accepted(workspace_id, "repo", alias, &repo.to_string(), accept)?;
                 let name = roster.repos.get(repo).map(|e| e.repo.display_name.clone()).unwrap_or_default();
                 return Ok(format!("{alias} is {name}"));
@@ -238,6 +253,9 @@ mod tests {
         assert_eq!(al.repos[&r.id], vec!["github.com/zazulam/wefit".to_string()]);
         assert_eq!(al.hosts["ssh.git.example.com"], "git.example.com");
         assert!(s.accept_alias(ws, "github.com/nobody/x", true).is_err());
+        // Review: what the person saw is what they accept.
+        assert!(s.accept_alias_for(ws, "ssh.git.example.com", Some("git.other.example"), true).is_err());
+        assert!(s.accept_alias_for(ws, "ssh.git.example.com", Some("git.example.com"), true).is_ok());
         s.accept_alias(ws, "ssh.git.example.com", false).unwrap();
         assert!(crate::repos::aliases(s.store(), ws, Some(&roster)).hosts.is_empty());
         // Clearing a host alias.

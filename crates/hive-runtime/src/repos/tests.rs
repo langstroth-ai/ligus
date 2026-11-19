@@ -515,7 +515,12 @@ fn synced_alias_unused_until_accepted() {
     e.store.set_alias_accepted(e.ws, "repo", WEFIT, &moved.id.to_string(), true).unwrap();
     let al = aliases(&e.store, e.ws, Some(&r));
     assert_eq!(checkout_match(&e.checkout, &moved, &al), Some((MatchVia::Origin, true)), "via alias");
-    bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound).unwrap();
+    // Review: an acceptance counts only while the workspace names the alias;
+    // this store's own workspace (no config log here) names none, so a bind
+    // that reads it refuses, and one against the roster that names it binds.
+    assert!(aliases(&e.store, e.ws, None).repos.is_empty(), "no roster: device aliases only");
+    assert!(matches!(bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound), Err(BindError::NotThisRepo { .. })));
+    bind_in(&e.store, Some(&r), e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound).unwrap();
     assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Ready(_)));
     assert_eq!(dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()), hive_core::dispatch::Coverage::Present);
     // The Admin drops the alias: the accepted one no longer counts.
