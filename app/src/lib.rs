@@ -7112,7 +7112,12 @@ impl AppState {
         let dir = match session_id {
             Some(sid) => match crate::repos_ui::chat_checkout(self, sid) {
                 Some(checkout) => crate::repos_ui::view_dir(&checkout, sid),
-                None => legacy_chat_dir(&self.workspace_repo_root(), sid),
+                // Never cutting a chat worktree in a folder another host
+                // manages (review residual 6): show the folder as it is.
+                None => match legacy_folder(self, self.active_workspace_id()) {
+                    Ok(bound) => legacy_chat_dir(&bound, sid),
+                    Err(_) => self.workspace_repo_root(),
+                },
             },
             None => self.workspace_repo_root(),
         };
