@@ -1870,6 +1870,24 @@ fn fold_pass(
                     session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
                 }
             }
+            // The turns a person wrote themselves (see
+            // `AuthzState::person_messages`).
+            if trusted || checked {
+                let personal = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == crate::identity::ActorKind::Human && !s.runtime_effect);
+                let touched = match payload {
+                    SessionEvent::MessageAppended { message } => Some((message.id, message.role == crate::chat::MessageRole::User)),
+                    SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => Some((*message_id, false)),
+                    _ => None,
+                };
+                if let Some((id, user_turn)) = touched {
+                    let first_author = session.authz.message_authors.get(&id).is_none_or(|a| a == author);
+                    if personal && user_turn && first_author && !session.messages.iter().any(|m| m.id == id && !session.authz.person_messages.contains_key(&id)) {
+                        session.authz.person_messages.insert(id, author.to_string());
+                    } else {
+                        session.authz.person_messages.remove(&id);
+                    }
+                }
+            }
             if let SessionEvent::ProposalApplyRequested { request } = payload {
                 session.authz.apply_requesters.entry(request.id).or_insert_with(|| author.to_string());
             }
