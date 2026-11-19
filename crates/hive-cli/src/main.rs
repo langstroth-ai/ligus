@@ -2006,6 +2006,14 @@ mod cli_tests {
             assert!(err.contains("Settings → Team sync"), "{relay:?}: {err}");
             assert!(!cfg.data_dir.exists(), "{relay:?}: enroll wrote {:?}", cfg.data_dir);
         }
+        // An invite with no relay field at all gets the same answer, not a
+        // serde "missing field" error.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"room":"r","key":"k"}"#);
+        let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
+        assert!(err.contains("Settings → Team sync"), "{err}");
+        assert!(!cfg.data_dir.exists());
     }
 
     /// A box enrolled from a relayless invite (older clients wrote

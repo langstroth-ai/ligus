@@ -28,6 +28,10 @@ pub struct WorkspaceConn {
     /// Friendly display name (defaults to the room name).
     #[serde(default)]
     pub name: String,
+    /// The relay. An invite without one decodes to an empty relay, which
+    /// every client then refuses with its own no-relay error
+    /// ([`invite_relay_problem`]), as the CLI's decoder always did.
+    #[serde(default)]
     pub relay_url: String,
     pub room: String,
     /// E2EE passphrase (derives the workspace key); None = plaintext room.
@@ -266,6 +270,18 @@ mod tests {
         assert_eq!(back.signed_by(&|_| false), Some(founder));
         assert_eq!(WorkspaceConn { relay_url: "https://evil.example".into(), ..back.clone() }.signed_by(&|_| false), None);
         assert_eq!(WorkspaceConn { sig: None, ..back }.signed_by(&|_| false), None);
+    }
+
+    /// An invite with no relay field decodes (to an empty relay) so the
+    /// client can say why it can't be used; one with no room doesn't.
+    #[test]
+    fn a_relayless_invite_decodes_to_an_empty_relay() {
+        use base64::Engine;
+        let code = |json: &str| format!("{INVITE_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json));
+        let c = decode_workspace_invite(&code(r#"{"room":"r","key":"k"}"#)).unwrap();
+        assert_eq!((c.relay_url.as_str(), c.room.as_str()), ("", "r"));
+        assert!(invite_relay_problem(&c.relay_url).unwrap().starts_with(NO_RELAY_ERR));
+        assert!(decode_workspace_invite(&code(r#"{"relay_url":"https://relay.example"}"#)).is_err());
     }
 
     #[test]
