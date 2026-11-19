@@ -25,7 +25,7 @@ pub mod git;
 pub mod marker;
 pub mod scan;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use hive_core::authz::RosterState;
@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::event_store::{CheckoutSource, EventStore, RepoMapping};
 
-pub use git::MatchVia;
+pub use git::{Aliases, MatchVia};
 
 /// The workspace's repos as the config roster holds them (removed ones
 /// included, as tombstones), by display name.
@@ -83,13 +83,42 @@ impl std::fmt::Display for BindError {
 
 impl std::error::Error for BindError {}
 
+/// The aliases this device matches with in `workspace_id` (design 12):
+/// its own SSH host aliases, plus each synced alias a person here accepted,
+/// while the workspace (`roster`, when given) still names it with the same
+/// target.
+pub fn aliases(store: &EventStore, workspace_id: Uuid, roster: Option<&RosterState>) -> Aliases {
+    let mut out = Aliases { device: store.ssh_host_aliases().unwrap_or_default(), ..Default::default() };
+    for (kind, alias, target) in store.accepted_aliases(workspace_id).unwrap_or_default() {
+        match kind.as_str() {
+            "host" if roster.is_none_or(|r| r.host_aliases.get(&alias) == Some(&target)) => {
+                out.hosts.insert(alias, target);
+            }
+            "repo" => {
+                let Ok(repo) = Uuid::parse_str(&target) else { continue };
+                if roster.is_none_or(|r| r.repo_live(repo) && r.repo_aliases.get(&repo).is_some_and(|l| l.contains(&alias))) {
+                    out.repos.entry(repo).or_default().push(alias);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Whether the checkout at `dir` is `repo`: by remote, or for a `local:`
 /// repo by its root commit (membership, never recomputed).
-pub fn checkout_matches(dir: &Path, repo: &WorkspaceRepo, aliases: &BTreeMap<String, String>) -> Option<MatchVia> {
+pub fn checkout_matches(dir: &Path, repo: &WorkspaceRepo, aliases: &Aliases) -> Option<MatchVia> {
+    checkout_match(dir, repo, aliases).map(|(v, _)| v)
+}
+
+/// [`checkout_matches`], and whether an accepted synced alias was needed
+/// ("via alias").
+pub fn checkout_match(dir: &Path, repo: &WorkspaceRepo, aliases: &Aliases) -> Option<(MatchVia, bool)> {
     if let Some(root) = repo.canonical.strip_prefix("local:") {
-        return git::has_root(dir, root).then_some(MatchVia::Origin);
+        return git::has_root(dir, root).then_some((MatchVia::Origin, false));
     }
-    git::match_repo(&git::remotes(dir), repo, aliases)
+    git::match_repo_via(&git::remotes(dir), repo, aliases)
 }
 
 fn canon_path(p: &Path) -> PathBuf {
@@ -116,9 +145,9 @@ pub fn bind(
     if std::fs::symlink_metadata(path.join(".git")).is_ok_and(|m| m.is_file()) {
         return Err(BindError::LinkedWorktree);
     }
-    let aliases = store.ssh_host_aliases().map_err(|e| BindError::Store(e.to_string()))?;
+    let aliases = aliases(store, workspace_id, None);
     let Some(via) = checkout_matches(&path, repo, &aliases) else {
-        return Err(BindError::NotThisRepo { found: git::suggested_canonical(&path, &aliases).map(|(c, _)| c) });
+        return Err(BindError::NotThisRepo { found: git::suggested_canonical(&path, &aliases.all_hosts()).map(|(c, _)| c) });
     };
     match marker::claim(&path, me, host_label) {
         Ok(marker::Manager::Me) => {}
@@ -162,7 +191,7 @@ pub fn unbind(store: &EventStore, me: Uuid, workspace_id: Uuid, repo_id: Uuid, p
 pub fn detect(store: &EventStore, workspace_id: Uuid, roster: &RosterState, extra: &[PathBuf]) -> crate::event_store::Result<Vec<scan::Found>> {
     let mut roots = store.scan_roots()?;
     roots.extend(extra.iter().cloned());
-    let aliases = store.ssh_host_aliases()?;
+    let aliases = aliases(store, workspace_id, Some(roster));
     let found = scan::scan(&roots, &live_repos(roster), &aliases);
     record_found(store, workspace_id, &found)?;
     Ok(found)
@@ -263,13 +292,20 @@ pub fn set_coverage_reporting(store: &EventStore, workspace_id: Uuid, on: Option
 /// confirmed yet). Never a path, a remote or a branch.
 pub fn coverage(store: &EventStore, workspace_id: Uuid, repos: &[WorkspaceRepo], cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
     let maps = store.repo_mappings(workspace_id).unwrap_or_default();
-    let aliases = store.ssh_host_aliases().unwrap_or_default();
+    let aliases = aliases(store, workspace_id, None);
     coverage_from(&maps, &aliases, repos, cloning)
+}
+
+/// [`coverage`] of the live repos in `roster`, with the synced aliases this
+/// device accepted that the workspace still names.
+pub fn coverage_in(store: &EventStore, workspace_id: Uuid, roster: &RosterState, cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
+    let maps = store.repo_mappings(workspace_id).unwrap_or_default();
+    coverage_from(&maps, &aliases(store, workspace_id, Some(roster)), &live_repos(roster), cloning)
 }
 
 /// [`coverage`] from mappings already read (runs git; call it without
 /// holding the service lock).
-pub fn coverage_from(maps: &[RepoMapping], aliases: &BTreeMap<String, String>, repos: &[WorkspaceRepo], cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
+pub fn coverage_from(maps: &[RepoMapping], aliases: &Aliases, repos: &[WorkspaceRepo], cloning: &HashSet<Uuid>) -> Vec<CoverageEntry> {
     let aliases = aliases.clone();
     let mut out = Vec::new();
     for r in repos.iter().take(hive_core::workspace_repo::MAX_COVERAGE_ENTRIES) {
@@ -391,7 +427,7 @@ pub fn turn_checkout(
     if !crate::git_worktree::is_git_repo(&path) {
         return TurnCheckout::Refused { code: "checkout_missing", reason: format!("{name}'s checkout on {host_label} is missing") };
     }
-    let aliases = store.ssh_host_aliases().unwrap_or_default();
+    let aliases = aliases(store, session.workspace_id, Some(roster));
     let Some(via) = checkout_matches(&path, &entry.repo, &aliases) else {
         return TurnCheckout::Refused {
             code: "remote_mismatch",
@@ -426,7 +462,7 @@ pub fn dispatch_coverage(store: &EventStore, me: Uuid, session: &ChatSession, ro
     if !crate::git_worktree::is_git_repo(&path) {
         return Coverage::Missing;
     }
-    let aliases = store.ssh_host_aliases().unwrap_or_default();
+    let aliases = aliases(store, session.workspace_id, Some(roster));
     if checkout_matches(&path, &entry.repo, &aliases).is_none() {
         return Coverage::Missing;
     }

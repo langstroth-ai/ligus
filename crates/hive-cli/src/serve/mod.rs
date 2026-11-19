@@ -1346,7 +1346,7 @@ pub(crate) fn repos_refresh(shared: &Shared) {
         let svc = shared.lock();
         svc.workspace_roster(shared.ws).map_err(|e| e.to_string()).and_then(|r| {
             let roots = svc.store().scan_roots().map_err(|e| e.to_string())?;
-            let aliases = svc.store().ssh_host_aliases().map_err(|e| e.to_string())?;
+            let aliases = hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&r));
             Ok((r, roots, aliases))
         })
     }) else {
@@ -1377,7 +1377,11 @@ pub(crate) fn repo_coverage(shared: &Shared) -> Vec<hive_core::workspace_repo::C
             return Vec::new();
         }
         let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
-        (svc.store().repo_mappings(shared.ws).unwrap_or_default(), svc.store().ssh_host_aliases().unwrap_or_default(), hive_runtime::repos::live_repos(&roster))
+        (
+            svc.store().repo_mappings(shared.ws).unwrap_or_default(),
+            hive_runtime::repos::aliases(svc.store(), shared.ws, Some(&roster)),
+            hive_runtime::repos::live_repos(&roster),
+        )
     };
     hive_runtime::repos::coverage_from(&maps, &aliases, &repos, &hive_runtime::repos::cloning())
 }

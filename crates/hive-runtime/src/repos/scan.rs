@@ -4,7 +4,6 @@
 //! worktrees. Matches are recorded unconfirmed: a person says "use it"
 //! before a turn ever runs there.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use hive_core::workspace_repo::WorkspaceRepo;
@@ -94,8 +93,9 @@ pub fn checkouts_under(root: &Path) -> Vec<PathBuf> {
 }
 
 /// The checkouts under `roots` that cover one of `repos` (by `origin`, or
-/// `upstream` for a fork).
-pub fn scan(roots: &[PathBuf], repos: &[WorkspaceRepo], aliases: &BTreeMap<String, String>) -> Vec<Found> {
+/// `upstream` for a fork), with this device's aliases (a match through a
+/// synced alias is recorded unconfirmed like every other).
+pub fn scan(roots: &[PathBuf], repos: &[WorkspaceRepo], aliases: &super::git::Aliases) -> Vec<Found> {
     let mut out = Vec::new();
     for root in roots {
         for dir in checkouts_under(root) {
@@ -104,7 +104,7 @@ pub fn scan(roots: &[PathBuf], repos: &[WorkspaceRepo], aliases: &BTreeMap<Strin
                 continue;
             }
             for r in repos {
-                if let Some(via) = super::git::match_repo(&remotes, r, aliases) {
+                if let Some((via, _)) = super::git::match_repo_via(&remotes, r, aliases) {
                     out.push(Found { path: dir.clone(), repo_id: r.id, via_fork: via == super::git::MatchVia::Upstream });
                     break;
                 }
@@ -132,7 +132,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("WeFit"), root.join("alias")).unwrap();
         let c = "github.com/zazulam/wefit";
         let repo = WorkspaceRepo { id: repo_id(c), canonical: c.into(), display_name: "WeFit".into(), forge_kind: String::new(), default_branch: String::new(), root_commit: None };
-        let found = scan(std::slice::from_ref(&root), &[repo], &BTreeMap::new());
+        let found = scan(std::slice::from_ref(&root), &[repo], &Default::default());
         assert_eq!(found.iter().map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>(), vec!["WeFit"]);
     }
 

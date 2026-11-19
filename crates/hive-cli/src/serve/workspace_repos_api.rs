@@ -50,7 +50,7 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
     let reports = rr::host_reports(&roster, &hosts, &s.presence);
     let entries = rr::workspace_repos(&roster);
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
-    let mine = rr::coverage(svc.store(), s.ws, &live, &rr::cloning());
+    let mine = rr::coverage_in(svc.store(), s.ws, &roster, &rr::cloning());
     let maps = svc.store().repo_mappings(s.ws).map_err(hive_runtime::chat_service::ChatError::from)?;
     let looks = hive_core::workspace_repo::lookalikes(&live);
     let repos: Vec<Value> = entries
@@ -90,10 +90,13 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                 },
                 "hosts": hosts,
                 "lookalikeOf": lookalike_of,
+                // Synced aliases (design 12): names only.
+                "aliases": roster.repo_aliases.get(&r.id).cloned().unwrap_or_default(),
             })
         })
         .collect();
-    Ok(json!({ "repos": repos, "hostId": s.host_id, "label": s.opts.label }))
+    let host_aliases: Vec<Value> = roster.host_aliases.iter().map(|(a, h)| json!({ "alias": a, "host": h })).collect();
+    Ok(json!({ "repos": repos, "hostAliases": host_aliases, "hostId": s.host_id, "label": s.opts.label }))
 }
 
 pub async fn list(State(s): S) -> ApiResult<Json<Value>> {

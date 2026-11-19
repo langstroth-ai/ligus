@@ -1579,6 +1579,9 @@ fn usage() -> ! {
          ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>\n                                       this host's checkout of a repository (device-local)\n  \
          ligus repos scan | roots [add|remove <path>] | alias <ssh-host> <host> [--remove]\n                                       find checkouts under scan roots; SSH host aliases for identity\n  \
          ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default\n  \
+         ligus repos aliases | repo-alias <repo> [names…] | host-alias <alias> <host>|--remove\n                                       \
+         workspace-synced aliases, names only (Admin, passkey)\n  \
+         ligus repos accept <alias> [--revoke]   use a synced alias for identity on this host\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \

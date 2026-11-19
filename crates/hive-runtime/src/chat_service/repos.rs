@@ -88,6 +88,68 @@ impl ChatService {
         Ok(())
     }
 
+    /// Set a repo's synced aliases (design 12; Admin, with presence under
+    /// rules v2): other normal-form spellings of the same repo. Each input
+    /// may be a remote in any git form or a canonical; the list replaces the
+    /// repo's. Names only: no device uses one until a person there accepts it.
+    pub fn set_repo_aliases(&mut self, workspace_id: Uuid, repo: Uuid, inputs: &[String]) -> Result<Vec<String>> {
+        let roster = self.workspace_roster(workspace_id)?;
+        let entry = roster.repos.get(&repo).filter(|e| !e.removed).ok_or_else(|| ChatError::Unauthorized("no such repository".into()))?;
+        let mut aliases = Vec::new();
+        for i in inputs.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            // Never through this device's own SSH aliases: the synced name is
+            // the remote as written.
+            let c = canonical_from_input(i, &entry.repo.forge_kind, &Default::default()).map_err(ChatError::Unauthorized)?;
+            if !aliases.contains(&c) {
+                aliases.push(c);
+            }
+        }
+        hive_core::workspace_repo::repo_aliases_ok(&roster, repo, &aliases).map_err(ChatError::Unauthorized)?;
+        let config = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config, workspace_id, SessionEvent::WorkspaceRepoAliasesSet { repo_id: repo, aliases: aliases.clone() })?;
+        Ok(aliases)
+    }
+
+    /// Map host `alias` to `host` (a live repo's canonical host) for the
+    /// workspace, or clear it with `host` empty (design 12; Admin, with
+    /// presence under rules v2).
+    pub fn set_host_alias(&mut self, workspace_id: Uuid, alias: &str, host: &str) -> Result<()> {
+        let (alias, host) = (alias.trim().to_ascii_lowercase(), host.trim().to_ascii_lowercase());
+        let roster = self.workspace_roster(workspace_id)?;
+        hive_core::workspace_repo::host_alias_ok(&roster, &alias, &host).map_err(ChatError::Unauthorized)?;
+        let config = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config, workspace_id, SessionEvent::WorkspaceHostAliasSet { alias, host })?;
+        Ok(())
+    }
+
+    /// Accept (or take back) a synced alias on this device: `alias` is a
+    /// repo alias (a canonical) or a host alias the workspace names now.
+    /// Accepting records its current target, so a later change of target
+    /// needs a new acceptance. Device-local; nothing is published.
+    pub fn accept_alias(&mut self, workspace_id: Uuid, alias: &str, accept: bool) -> Result<String> {
+        let alias = alias.trim();
+        let roster = self.workspace_roster(workspace_id)?;
+        if let Some(host) = roster.host_aliases.get(&alias.to_ascii_lowercase()) {
+            self.store.set_alias_accepted(workspace_id, "host", &alias.to_ascii_lowercase(), host, accept)?;
+            return Ok(format!("{} means {host}", alias.to_ascii_lowercase()));
+        }
+        for (repo, list) in &roster.repo_aliases {
+            if roster.repo_live(*repo) && list.iter().any(|a| a == alias) {
+                self.store.set_alias_accepted(workspace_id, "repo", alias, &repo.to_string(), accept)?;
+                let name = roster.repos.get(repo).map(|e| e.repo.display_name.clone()).unwrap_or_default();
+                return Ok(format!("{alias} is {name}"));
+            }
+        }
+        if !accept {
+            // Taking back an acceptance the workspace no longer names.
+            for kind in ["host", "repo"] {
+                self.store.set_alias_accepted(workspace_id, kind, alias, "", false)?;
+            }
+            return Ok(format!("{alias} is no longer accepted here"));
+        }
+        Err(ChatError::Unauthorized(format!("the workspace has no alias {alias}")))
+    }
+
     /// Point a chat at a workspace repo (`None`: no repo) on `base_branch`
     /// ("" = the repo's default). A Contributor's act; never an agent's.
     pub fn set_chat_repo(&mut self, chat: Uuid, workspace_id: Uuid, repo: Option<Uuid>, base_branch: &str) -> Result<()> {
@@ -149,6 +211,38 @@ mod tests {
         s.remove_workspace_repo(ws, r.id).unwrap();
         assert!(s.workspace_repos(ws).unwrap()[0].removed);
         assert!(s.set_chat_repo(chat.id, ws, Some(r.id), "").is_err(), "a removed repo can't be chosen");
+    }
+
+    #[test]
+    fn synced_aliases_are_set_checked_and_accepted_here() {
+        let (mut s, ws) = svc();
+        let r = s.add_workspace_repo(ws, "git@github.com:neworg/wefit.git", "WeFit", "github", "main", None).unwrap();
+        let infra = s.add_workspace_repo(ws, "https://git.example.com/Ops/Infra", "Infra", "", "", None).unwrap();
+        // Any git form is read as a canonical; duplicates collapse.
+        let set = s.set_repo_aliases(ws, r.id, &["git@github.com:ZaZulam/WeFit.git".into(), "github.com/zazulam/wefit".into()]).unwrap();
+        assert_eq!(set, vec!["github.com/zazulam/wefit".to_string()]);
+        // Disjointness and look-alikes are refused before anything is signed.
+        assert!(s.set_repo_aliases(ws, infra.id, &["github.com/zazulam/wefit".into()]).is_err());
+        assert!(s.set_repo_aliases(ws, infra.id, &["github.com/neworg/wefit".into()]).is_err());
+        assert!(s.set_repo_aliases(ws, r.id, &["github.com/neworg/wef1t".into()]).is_err());
+        assert!(s.set_host_alias(ws, "github.com", "git.example.com").is_err());
+        s.set_host_alias(ws, "SSH.git.example.com", "git.example.com").unwrap();
+        let roster = s.workspace_roster(ws).unwrap();
+        assert_eq!(roster.host_aliases["ssh.git.example.com"], "git.example.com");
+        assert_eq!(roster.repo_aliases[&r.id], vec!["github.com/zazulam/wefit".to_string()]);
+        // Nothing is used here until accepted; accepting records the target.
+        assert!(crate::repos::aliases(s.store(), ws, Some(&roster)).repos.is_empty());
+        s.accept_alias(ws, "github.com/zazulam/wefit", true).unwrap();
+        s.accept_alias(ws, "ssh.git.example.com", true).unwrap();
+        let al = crate::repos::aliases(s.store(), ws, Some(&roster));
+        assert_eq!(al.repos[&r.id], vec!["github.com/zazulam/wefit".to_string()]);
+        assert_eq!(al.hosts["ssh.git.example.com"], "git.example.com");
+        assert!(s.accept_alias(ws, "github.com/nobody/x", true).is_err());
+        s.accept_alias(ws, "ssh.git.example.com", false).unwrap();
+        assert!(crate::repos::aliases(s.store(), ws, Some(&roster)).hosts.is_empty());
+        // Clearing a host alias.
+        s.set_host_alias(ws, "ssh.git.example.com", "").unwrap();
+        assert!(s.workspace_roster(ws).unwrap().host_aliases.is_empty());
     }
 
     #[test]

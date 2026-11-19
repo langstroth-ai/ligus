@@ -44,7 +44,7 @@ pub(crate) fn beat_coverage(state: &AppState, ws: Uuid) -> Vec<hive_core::worksp
         if repos.is_empty() {
             return Vec::new();
         }
-        (svc.store().repo_mappings(ws).unwrap_or_default(), svc.store().ssh_host_aliases().unwrap_or_default(), repos)
+        (svc.store().repo_mappings(ws).unwrap_or_default(), rr::aliases(svc.store(), ws, Some(&roster)), repos)
     };
     // Git runs without the service lock.
     rr::coverage_from(&maps, &aliases, &repos, &rr::cloning())
@@ -59,7 +59,7 @@ pub(crate) fn migrate_bound_folder(state: &AppState, ws: Uuid) {
     }
     let svc = state.service.lock().unwrap();
     let Ok(roster) = svc.workspace_roster(ws) else { return };
-    let aliases = svc.store().ssh_host_aliases().unwrap_or_default();
+    let aliases = rr::aliases(svc.store(), ws, Some(&roster));
     let path = PathBuf::from(&folder);
     if let Some(repo) = rr::live_repos(&roster).into_iter().find(|r| rr::checkout_matches(&path, r, &aliases).is_some()) {
         if svc.store().repo_mappings(ws).unwrap_or_default().iter().any(|m| m.repo_id == repo.id) {
@@ -175,16 +175,29 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
     let reports = rr::host_reports(&roster, &hosts, &state.host_presence);
     let entries = rr::workspace_repos(&roster);
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
-    let mine = rr::coverage(svc.store(), ws, &live, &rr::cloning());
+    let mine = rr::coverage_in(svc.store(), ws, &roster, &rr::cloning());
     let maps = svc.store().repo_mappings(ws).map_err(map_err)?;
     let looks = hive_core::workspace_repo::lookalikes(&live);
+    let accepted = svc.store().accepted_aliases(ws).unwrap_or_default();
+    let is_accepted = |kind: &str, alias: &str, target: &str| accepted.iter().any(|(k, a, t)| k == kind && a == alias && t == target);
+    let al = rr::aliases(svc.store(), ws, Some(&roster));
     let repos: Vec<Value> = entries
         .iter()
         .map(|e| {
             let r = &e.repo;
             let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| x.display_name.clone());
             let here = mine.iter().find(|c| c.repo_id == r.id);
-            let path = maps.iter().find(|m| m.repo_id == r.id && m.confirmed).map(|m| m.path.to_string_lossy().into_owned());
+            let confirmed = maps.iter().find(|m| m.repo_id == r.id && m.confirmed);
+            let path = confirmed.map(|m| m.path.to_string_lossy().into_owned());
+            // Matched only through an accepted synced alias (design 12).
+            let via_alias = confirmed.and_then(|m| rr::checkout_match(&m.path, r, &al)).is_some_and(|(_, a)| a);
+            let aliases: Vec<Value> = roster
+                .repo_aliases
+                .get(&r.id)
+                .into_iter()
+                .flatten()
+                .map(|a| json!({ "alias": a, "accepted": is_accepted("repo", a, &r.id.to_string()) }))
+                .collect();
             let found: Vec<String> = maps.iter().filter(|m| m.repo_id == r.id && !m.confirmed).map(|m| m.path.to_string_lossy().into_owned()).collect();
             let hosts: Vec<Value> = reports
                 .iter()
@@ -206,10 +219,12 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
                     "state": here.map(|c| c.state.as_str()).unwrap_or(if e.removed { "removed" } else { "missing" }),
                     "code": here.map(|c| c.code.as_str()).unwrap_or(""),
                     "viaFork": here.is_some_and(|c| c.via_fork),
+                    "viaAlias": via_alias,
                     "path": path, "found": found,
                 },
                 "hosts": hosts,
                 "lookalikeOf": lookalike_of,
+                "aliases": aliases,
             })
         })
         .collect();
@@ -219,12 +234,21 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
         .then(|| rr::git::suggested_canonical(Path::new(&folder), &aliases))
         .flatten()
         .filter(|(c, _)| !live.iter().any(|r| r.canonical == *c || r.canonical == c.to_ascii_lowercase()))
+        .filter(|(c, _)| !roster.repo_aliases.values().flatten().any(|a| a == c || *a == c.to_ascii_lowercase()))
         .map(|(c, fork)| {
             let name = Path::new(&folder).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             json!({ "canonical": c, "name": name, "viaFork": fork, "path": folder })
         });
     let coverage_on = rr::coverage_reporting(svc.store(), ws, roster.role_of(&me) == Some(hive_core::WorkspaceRole::Owner));
-    Ok(json!({ "repos": repos, "canAdmin": can_admin, "suggestion": suggestion, "hostLabel": host_label(), "coverageReporting": coverage_on, "scanRoots": svc.store().scan_roots().unwrap_or_default() }))
+    let host_aliases: Vec<Value> = roster
+        .host_aliases
+        .iter()
+        .map(|(a, h)| json!({ "alias": a, "host": h, "accepted": is_accepted("host", a, h) }))
+        .collect();
+    Ok(json!({
+        "repos": repos, "canAdmin": can_admin, "suggestion": suggestion, "hostLabel": host_label(), "coverageReporting": coverage_on,
+        "scanRoots": svc.store().scan_roots().unwrap_or_default(), "hostAliases": host_aliases,
+    }))
 }
 
 /// Add a repo (Admin; the passkey prompt comes from the service). With
@@ -284,6 +308,30 @@ pub fn rename_workspace_repo(state: State<AppState>, repo_id: String, name: Stri
 pub fn remove_workspace_repo(state: State<AppState>, repo_id: String) -> Result<(), String> {
     let ws = ws_of(&state);
     state.service.lock().unwrap().remove_workspace_repo(ws, parse(&repo_id)?).map_err(map_err)
+}
+
+/// Set a repo's synced aliases (design repos-and-checkouts 12; Admin, the
+/// passkey prompt comes from the service): other spellings of the same
+/// repo, names only.
+#[tauri::command]
+pub fn set_repo_aliases(state: State<AppState>, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    let ws = ws_of(&state);
+    state.service.lock().unwrap().set_repo_aliases(ws, parse(&repo_id)?, &aliases).map_err(map_err)
+}
+
+/// Map a host alias to a repository host for the workspace, or clear it
+/// with an empty `host` (Admin, with presence).
+#[tauri::command]
+pub fn set_host_alias(state: State<AppState>, alias: String, host: String) -> Result<(), String> {
+    let ws = ws_of(&state);
+    state.service.lock().unwrap().set_host_alias(ws, &alias, &host).map_err(map_err)
+}
+
+/// Accept a synced alias on this device (or stop using it). Device-local.
+#[tauri::command]
+pub fn accept_repo_alias(state: State<AppState>, alias: String, accept: bool) -> Result<String, String> {
+    let ws = ws_of(&state);
+    state.service.lock().unwrap().accept_alias(ws, &alias, accept).map_err(map_err)
 }
 
 fn live_repo(state: &AppState, ws: Uuid, id: Uuid) -> Result<hive_core::workspace_repo::WorkspaceRepo, String> {

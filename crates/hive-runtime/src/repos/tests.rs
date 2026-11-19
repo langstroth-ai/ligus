@@ -495,3 +495,62 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
     commit(&legacy_apply_message(&title), "two.txt");
     assert!(!branch_has_trailer(&e.checkout, &chat_id, hive_core::workspace_repo::PROPOSAL_TRAILER, victim));
 }
+
+// ── Workspace-synced aliases (design 12) ─────────────────────────────────
+
+/// WeFit moved to `neworg`; the checkout still says `zazulam`. The workspace
+/// names the old spelling as an alias: it counts here only once a person
+/// accepted it, and only while the workspace still names it.
+#[test]
+fn synced_alias_unused_until_accepted() {
+    let e = env();
+    let moved = WorkspaceRepo { id: repo_id("github.com/neworg/wefit"), canonical: "github.com/neworg/wefit".into(), ..wefit() };
+    let mut r = roster(&[moved.clone()]);
+    r.repo_aliases.insert(moved.id, vec![WEFIT.into()]);
+    let s = chat(e.ws, Some(moved.id));
+    let al = aliases(&e.store, e.ws, Some(&r));
+    assert!(checkout_matches(&e.checkout, &moved, &al).is_none());
+    assert!(matches!(bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound), Err(BindError::NotThisRepo { .. })));
+    // Accept it here.
+    e.store.set_alias_accepted(e.ws, "repo", WEFIT, &moved.id.to_string(), true).unwrap();
+    let al = aliases(&e.store, e.ws, Some(&r));
+    assert_eq!(checkout_match(&e.checkout, &moved, &al), Some((MatchVia::Origin, true)), "via alias");
+    bind(&e.store, e.me, "h", e.ws, &moved, &e.checkout, CheckoutSource::Bound).unwrap();
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Ready(_)));
+    assert_eq!(dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()), hive_core::dispatch::Coverage::Present);
+    // The Admin drops the alias: the accepted one no longer counts.
+    r.repo_aliases.clear();
+    assert!(matches!(turn_checkout(&e.store, e.me, "h", &s, &r, &HashSet::new()), TurnCheckout::Refused { code: "remote_mismatch", .. }));
+    assert_eq!(dispatch_coverage(&e.store, e.me, &s, &r, &HashSet::new()), hive_core::dispatch::Coverage::Missing);
+}
+
+/// A self-hosted forge's SSH host: the synced host alias maps it for
+/// identity; a changed target needs a new acceptance; a clone never uses
+/// either.
+#[test]
+fn changed_alias_target_needs_new_acceptance_and_clone_url_never_from_alias() {
+    let e = env();
+    let infra = WorkspaceRepo {
+        id: repo_id("git.example.com/ops/infra"),
+        canonical: "git.example.com/ops/infra".into(),
+        display_name: "Infra".into(),
+        forge_kind: String::new(),
+        default_branch: "main".into(),
+        root_commit: None,
+    };
+    sh(&e.checkout, &["remote", "set-url", "origin", "git@ssh.git.example.com:ops/infra.git"]);
+    let mut r = roster(&[infra.clone()]);
+    r.host_aliases.insert("ssh.git.example.com".into(), "git.example.com".into());
+    assert!(checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none(), "not accepted yet");
+    e.store.set_alias_accepted(e.ws, "host", "ssh.git.example.com", "git.example.com", true).unwrap();
+    assert_eq!(checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))), Some((MatchVia::Origin, true)));
+    // The Admin points the alias elsewhere: the acceptance was for the old target.
+    r.host_aliases.insert("ssh.git.example.com".into(), "git.other.example".into());
+    assert!(checkout_matches(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))).is_none());
+    // This device's own SSH alias for the same host wins over a synced one.
+    e.store.set_ssh_host_alias("ssh.git.example.com", Some("git.example.com")).unwrap();
+    assert_eq!(checkout_match(&e.checkout, &infra, &aliases(&e.store, e.ws, Some(&r))), Some((MatchVia::Origin, false)));
+    // A clone by id reads the canonical only.
+    let (host, rr) = clone::clone_target(&infra).unwrap();
+    assert_eq!((host.as_str(), rr.owner.as_str(), rr.name.as_str()), ("git.example.com", "ops", "infra"));
+}

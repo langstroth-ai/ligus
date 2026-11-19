@@ -36,6 +36,9 @@ vi.mock("@/lib/ipc", () => ({
   bindRepoCheckout: vi.fn(async () => undefined),
   unbindRepoCheckout: vi.fn(async () => undefined),
   removeWorkspaceRepo: vi.fn(async () => undefined),
+  setRepoAliases: vi.fn(async () => []),
+  setHostAlias: vi.fn(async () => undefined),
+  acceptRepoAlias: vi.fn(async () => ""),
   renameWorkspaceRepo: vi.fn(async () => undefined),
   rescanRepos: vi.fn(async () => 0),
   setRepoCoverageReporting: vi.fn(async () => undefined),
@@ -52,6 +55,31 @@ function wrap(ui: React.ReactNode) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("RepositoriesSection", () => {
+  it("shows synced aliases, accepts one on this device, and lets an admin add a host alias", async () => {
+    const d = data({ hostAliases: [{ alias: "ssh.git.example.com", host: "git.example.com", accepted: false }] });
+    d.repos[0].aliases = [{ alias: "github.com/old-org/wefit", accepted: false }];
+    d.repos[0].here = { state: "present", code: "", viaFork: false, viaAlias: true, path: "/Users/me/apps/WeFit", found: [] };
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(d);
+    wrap(<RepositoriesSection />);
+    expect(await screen.findByText(/via alias/)).toBeTruthy();
+    expect(screen.getByText("github.com/old-org/wefit")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("Accept github.com/old-org/wefit here"));
+    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("github.com/old-org/wefit", true);
+    await userEvent.click(screen.getByLabelText("Accept ssh.git.example.com here"));
+    expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("ssh.git.example.com", true);
+    await userEvent.type(screen.getByLabelText("Alias host"), "ssh2.git.example.com");
+    await userEvent.type(screen.getByLabelText("Repository host"), "git.example.com");
+    await userEvent.click(screen.getByText("Add alias"));
+    expect(ipc.setHostAlias).toHaveBeenCalledWith("ssh2.git.example.com", "git.example.com");
+  });
+
+  it("hides host aliases from a member when there are none", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ canAdmin: false }));
+    wrap(<RepositoriesSection />);
+    expect(await screen.findByText("WeFit")).toBeTruthy();
+    expect(screen.queryByText("Host aliases")).toBeNull();
+  });
+
   it("shows other hosts' coverage by label, and confirms a found checkout", async () => {
     vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
     wrap(<RepositoriesSection />);
