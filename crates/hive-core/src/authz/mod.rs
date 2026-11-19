@@ -380,6 +380,18 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // account (certified, not revoked, not delegated, not a phone), with that
     // account's passkey presence (the presence table).
     if let SessionEvent::DeviceCertificateAdded { certificate } = &env.payload {
+        // A phone certificate never takes over a device id this roster
+        // already holds as a desktop or box, or as a phone with another key:
+        // it would replace that device's key (and make it a phone) without
+        // the enrollment below, since "already certified" reads as a
+        // re-publish that needs no presence.
+        if certificate.alg == crate::crypto::SigAlg::P256 {
+            if let Some(d) = ctx.running.devices.get(&certificate.device_id) {
+                if !d.phone || d.public_key != certificate.device_public_key {
+                    return Decision::deny("a phone certificate can't take over a device already certified here with another key, or as a desktop or box");
+                }
+            }
+        }
         if certificate.alg == crate::crypto::SigAlg::P256 && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
             if !on_config {
                 return Decision::deny("a phone is enrolled on the workspace config log");

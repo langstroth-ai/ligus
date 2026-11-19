@@ -429,6 +429,39 @@ mod tests {
         assert!(asked[0].contains(&code.fingerprint()), "{}", asked[0]);
     }
 
+    /// The fold, not only this desktop's check: a P-256 certificate for a
+    /// device id already certified here (as a desktop or box, or as a phone
+    /// with another key) is refused, with or without presence. Before, it
+    /// counted as re-publishing a certificate in force, so it needed no
+    /// passkey, and it turned the device into a phone with the new key: a
+    /// holder of the account key (a copied data dir) could swap a key of
+    /// their own onto another of the person's devices and keep it past the
+    /// copied device's revocation.
+    #[test]
+    fn the_fold_refuses_a_phone_certificate_over_an_existing_device() {
+        let (mut svc, wid) = desktop();
+        let first = hive_core::testkit::Phone::new();
+        svc.certify_phone_code(wid, &PhoneCode::new(first.device_id, &first, "p")).unwrap();
+        let me = svc.device_id();
+        let mallory = hive_core::testkit::Phone::new();
+        let roster = |svc: &ChatService| svc.store().load_config(wid, None, None).unwrap().1.current().devices.clone();
+        let before = roster(&svc);
+        // No passkey at hand.
+        svc.set_presence_provider(Some(std::sync::Arc::new(Cancel)));
+        assert!(svc.certify_phone(wid, me, &mallory.public_key()).is_err(), "this desktop's id, another key, no passkey");
+        assert!(svc.certify_phone(wid, first.device_id, &mallory.public_key()).is_err(), "a phone's id, another key, no passkey");
+        // Even with the person's passkey.
+        svc.set_presence_provider(None);
+        assert!(svc.certify_phone(wid, me, &mallory.public_key()).is_err(), "this desktop's id, with presence");
+        assert!(svc.certify_phone(wid, first.device_id, &mallory.public_key()).is_err(), "a phone's id, with presence");
+        let after = roster(&svc);
+        assert_eq!(after.get(&me).map(|d| (d.phone, d.public_key.clone())), before.get(&me).map(|d| (d.phone, d.public_key.clone())));
+        assert_eq!(after.get(&first.device_id).map(|d| d.public_key.clone()), Some(first.public_key()));
+        // Re-publishing the phone's own certificate still needs nothing.
+        svc.set_presence_provider(Some(std::sync::Arc::new(Cancel)));
+        svc.certify_phone(wid, first.device_id, &first.public_key()).unwrap();
+    }
+
     #[test]
     fn a_box_never_certifies_a_phone() {
         let store = crate::EventStore::open_in_memory().unwrap();

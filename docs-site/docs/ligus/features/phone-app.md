@@ -38,7 +38,12 @@ one of **your** devices:
    shared clipboard, or scan the QR code with the phone's camera app and
    paste what it reads).
 3. Check that the fingerprint the desktop shows is the one on the phone,
-   tick the box, and choose **Add this phone**. Your passkey confirms it.
+   tick the box, and choose **Add this phone**. Your passkey confirms it;
+   the passkey sheet names the same fingerprint.
+
+A phone code can't take over a device: a code naming a device id that is
+already one of the workspace's desktops or boxes, or a phone with another
+key, is refused by the desktop and by every member's fold.
 
 The phone is certified at the **phone tier**: it can post, react, vote,
 answer an agent's question, clear a lockdown and ask a host to apply, as you
