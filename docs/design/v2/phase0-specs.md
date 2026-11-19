@@ -784,9 +784,9 @@ The table is code, a single `fn requires_presence(&SessionEvent, &RosterState, &
 
 This works on Windows (Hello), Linux (security keys and hybrid) and macOS.
 
-**macOS native [2.0 if time allows, else 2.0.x-follow].** `ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: "ligus.ai")` through `objc2` from Tauri. This needs:
+**Desktop native (Phase D, implemented: `app/src/passkey_native/`).** macOS uses `ASAuthorizationPlatformPublicKeyCredentialProvider` through `objc2` for an RP listed in `app/Ligus.entitlements` whose policy accepts origin `https://<rp>`; Windows uses `webauthn.dll` (loaded at run time, the app builds `clientDataJSON` with the page origin) for any RP; Linux keeps the hand-off, which is also the fallback everywhere. Results map onto the same `PresenceAssertion` (`hive_core::presence::native`) and are verified unchanged. Operator docs: docs-site `operate/security/native-passkeys.md`. The macOS path needs:
 - the entitlement `com.apple.developer.associated-domains = ["webcredentials:ligus.ai"]` on `ai.ligus.desktop` (`app/tauri.conf.json:6`);
-- the app signed with the team id.
+- the app signed with the team id (H5H3NNR456) **and** a Developer ID provisioning profile with Associated Domains embedded (the entitlement is restricted); the release signs it only through `app/tauri.passkeys.conf.json` when the profile secret is present.
 
 **iPhone.** `ASAuthorizationPlatformPublicKeyCredentialProvider` with `ASAuthorizationSecurityKeyPublicKeyCredentialProvider` for YubiKey NFC or Lightning.
 - iOS builds `clientDataJSON` itself with origin `https://ligus.ai`.

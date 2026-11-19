@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Native passkeys (Phase D). Signed into the macOS app only by the passkeys
+  build overlay (tauri.passkeys.conf.json), which also embeds the Developer ID
+  provisioning profile: associated domains is a restricted entitlement, and an
+  app that claims it without a matching profile is killed at launch.
+
+  webcredentials: lists the relying parties the app runs native ceremonies
+  for (app/src/passkey_native reads this file). Each domain must serve
+  /.well-known/apple-app-site-association naming H5H3NNR456.ai.ligus.desktop
+  under "webcredentials". Any other workspace RP uses the browser hand-off.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.application-identifier</key>
+	<string>H5H3NNR456.ai.ligus.desktop</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>H5H3NNR456</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:ligus.ai</string>
+	</array>
+</dict>
+</plist>

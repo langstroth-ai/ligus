@@ -1861,8 +1861,16 @@ export type SecurityStatusDto = {
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
 };
-/** What the "Confirm with passkey" sheet shows while the browser is open. */
-export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
+/** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
+ * `browser` (the hand-off page is open), `native` (the system passkey dialog
+ * is up), `dismissed` (the person closed the system dialog). */
+export type PresencePromptDto = {
+  kind: string;
+  summary: string;
+  digestShort: string;
+  op: "get" | "create";
+  via?: "browser" | "native" | "dismissed";
+};
 
 export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
 export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
@@ -1875,8 +1883,11 @@ export const deviceConfirm = () => invoke<boolean>("device_confirm");
 export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
-/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */
-export const presenceUseRecovery = (words: string) => invoke<void>("presence_use_recovery", { words });
+/** Use the browser hand-off instead of the system passkey dialog. */
+export const presenceUseBrowser = () => invoke<void>("presence_use_browser");
+/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored).
+ * `digest` is the short digest the sheet shows: the key answers only that request. */
+export const presenceUseRecovery = (words: string, digest: string) => invoke<void>("presence_use_recovery", { words, digest });
 export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise<UnlistenFn> =>
   listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
 export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>

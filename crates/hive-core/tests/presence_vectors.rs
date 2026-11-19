@@ -169,3 +169,38 @@ fn malformed_attestation_objects_are_refused_not_panicked() {
     assert!(presence::cbor_decode(&deep).is_err());
     assert!(presence::cbor_decode(&[0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).is_err(), "a huge length");
 }
+
+/// Phase D: a native authenticator (macOS AuthenticationServices, Windows
+/// `webauthn.dll`) hands back raw bytes. Mapped with
+/// `presence::native`, every W3C vector (Apple's anonymous attestation
+/// among them) verifies exactly as the hand-off's base64url fields do, and
+/// a tampered field still fails.
+#[test]
+fn native_ceremony_format_vectors() {
+    use presence::native::{RawAssertion, RawRegistration};
+    for (name, alg) in [("none-es256", presence::ES256), ("packed-es256", presence::ES256), ("apple-es256", presence::ES256), ("packed-eddsa", presence::EDDSA)] {
+        let v = load(name);
+        let reg = RawRegistration {
+            credential_id: v.credential_id.clone(),
+            attestation_object: v.attestation.clone(),
+            client_data_json: v.reg_client_data.clone(),
+        }
+        .into_assertion();
+        assert_eq!(reg, v.create(), "{name}: the native registration maps onto the hand-off's");
+        let (id, got_alg, pk) = verify_create(&reg, &v.reg_challenge, &policy()).expect(name);
+        assert_eq!((id, got_alg), (v.credential_id.clone(), alg));
+        let get = RawAssertion {
+            credential_id: v.credential_id.clone(),
+            authenticator_data: v.auth_data.clone(),
+            client_data_json: v.auth_client_data.clone(),
+            signature: v.signature.clone(),
+        }
+        .into_assertion();
+        assert_eq!(get, v.get(), "{name}: the native assertion maps onto the hand-off's");
+        let key = PasskeyKey { alg: got_alg, public_key: pk, recovery: false };
+        verify_get(&get, &key, &v.auth_challenge, &policy()).expect(name);
+        assert_eq!(presence::returned_challenge(&get.client_data_json).unwrap(), v.auth_challenge, "{name}");
+        assert_eq!(presence::returned_challenge(&reg.client_data_json).unwrap(), v.reg_challenge, "{name}");
+        rejects_tampering(&v, &key);
+    }
+}

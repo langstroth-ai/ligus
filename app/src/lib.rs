@@ -46,6 +46,7 @@ mod forges;
 /// git's credential helper entry for this binary (see `forges`).
 pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
+mod passkey_native;
 mod passkey_ui;
 mod people;
 mod links_ui;
@@ -15031,6 +15032,7 @@ pub fn run() {
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
             passkey_ui::presence_use_recovery,
+            passkey_ui::presence_use_browser,
             workflows::list_workflows,
             flow::flow_get_settings,
             flow::flow_set_settings,

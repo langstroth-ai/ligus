@@ -57,11 +57,43 @@ dunce = "1"
 # there's no webview CORS issue). Same features as hive-runtime; already built.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 
+# macOS-only: native platform passkeys (AuthenticationServices), app/src/passkey_native.
+# The objc2 family Tauri already pulls; objc2-authentication-services 0.3.2 is
+# the same generation as the objc2-* 0.3.2 crates in the lockfile.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSError", "NSObject", "NSString"] }
+objc2-authentication-services = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "ASAuthorization",
+    "ASAuthorizationController",
+    "ASAuthorizationCredential",
+    "ASAuthorizationError",
+    "ASAuthorizationPlatformPublicKeyCredentialAssertion",
+    "ASAuthorizationPlatformPublicKeyCredentialAssertionRequest",
+    "ASAuthorizationPlatformPublicKeyCredentialDescriptor",
+    "ASAuthorizationPlatformPublicKeyCredentialProvider",
+    "ASAuthorizationPlatformPublicKeyCredentialRegistration",
+    "ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest",
+    "ASAuthorizationProvider",
+    "ASAuthorizationPublicKeyCredentialAssertion",
+    "ASAuthorizationPublicKeyCredentialAssertionRequest",
+    "ASAuthorizationPublicKeyCredentialConstants",
+    "ASAuthorizationPublicKeyCredentialDescriptor",
+    "ASAuthorizationPublicKeyCredentialRegistration",
+    "ASAuthorizationPublicKeyCredentialRegistrationRequest",
+    "ASAuthorizationRequest",
+    "ASFoundation",
+    "ASPublicKeyCredential",
+] }
+
 # Windows-only: themed native title bar (DWM caption color) so the title bar
 # matches the app background. Version pinned to what Tauri 2.12 already pulls,
 # so this adds no new crate to the build graph.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+# Win32_Networking_WindowsWebServices + Win32_System_LibraryLoader: native
+# passkeys through webauthn.dll, loaded at run time (app/src/passkey_native).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Networking_WindowsWebServices", "Win32_System_LibraryLoader"] }
 
 [features]
 # P2P on by default. Only the Windows cross-compile turns it off, via

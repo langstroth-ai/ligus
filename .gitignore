@@ -47,3 +47,6 @@ app/github_client_id
 
 # The relay chart, packaged for the ligus chart's optional dependency
 deploy/helm/ligus/charts/
+
+# The Developer ID provisioning profile for native passkeys (CI writes it from a secret).
+app/embedded.provisionprofile
