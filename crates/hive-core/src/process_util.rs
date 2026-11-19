@@ -173,8 +173,27 @@ pub fn git() -> Command {
     let mut cmd = command("git");
     harden_git(&mut cmd);
     scrub_ligus_secrets(&mut cmd);
+    // Ligus names the repository with `-C`; an inherited variable that
+    // points git at another repository, index, object store or diff program
+    // (Ligus launched from a git hook or alias) must not redirect it. A
+    // caller that needs one (a scratch `GIT_INDEX_FILE`) sets it afterwards.
+    for k in INHERITED_GIT_REDIRECTS {
+        cmd.env_remove(k);
+    }
     cmd
 }
+
+/// Repository-locating variables [`git`] never inherits.
+const INHERITED_GIT_REDIRECTS: [&str; 8] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_EXTERNAL_DIFF",
+];
 
 /// Apply [`git`]'s overrides to an already-built `git` `Command`.
 pub fn harden_git(cmd: &mut Command) {
@@ -198,6 +217,19 @@ pub fn harden_git(cmd: &mut Command) {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+
+    /// Ligus's own git always works on the repository it names with `-C`:
+    /// a `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, object directory or
+    /// external diff inherited from whatever launched Ligus (a git hook, an
+    /// alias) never redirects it.
+    #[test]
+    fn git_drops_inherited_repo_redirecting_env() {
+        let cmd = super::git();
+        let removed: Vec<String> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+        for k in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_EXTERNAL_DIFF"] {
+            assert!(removed.iter().any(|r| r == k), "{k} not removed: {removed:?}");
+        }
+    }
 
     #[test]
     fn harden_git_sets_file_protocol_and_submodule_overrides() {
