@@ -56,4 +56,24 @@ describe("Add this phone", () => {
     expect(screen.queryByLabelText(/same fingerprint/)).toBeNull();
     expect(screen.getByRole("button", { name: "Add this phone" })).toBeDisabled();
   });
+
+  it("never shows (or certifies against) the answer for a code that was replaced", async () => {
+    // The first paste's check answers late, after a second code was pasted.
+    let late: (v: typeof fresh) => void = () => {};
+    const other = { ...fresh, label: "Mallory's phone", fingerprint: "9999-9999-9999", deviceId: "99999999-9999-9999-9999-999999999999" };
+    vi.mocked(ipc.inspectPhoneCode)
+      .mockImplementationOnce(() => new Promise((r) => (late = r)))
+      .mockResolvedValueOnce(fresh);
+    render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+    const box = screen.getByLabelText("Phone code");
+    await userEvent.click(box);
+    await userEvent.paste("ligusphone1:first");
+    await userEvent.clear(box);
+    await userEvent.paste("ligusphone1:second");
+    expect(await screen.findByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345");
+    late(other);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("phone-fingerprint")).toHaveTextContent("ABCD-EF01-2345");
+    expect(screen.queryByText("Mallory's phone")).toBeNull();
+  });
 });

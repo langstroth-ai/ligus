@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { inspectPhoneCode, certifyPhoneCode, type PhoneCodeDto } from "@/lib/ipc";
 import { Button, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
@@ -14,16 +14,21 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
   const [preview, setPreview] = useState<PhoneCodeDto | null>(null);
   const [matches, setMatches] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The code the textarea holds now: a check that answers after the code
+  // changed is dropped, so the sheet never shows another code's phone.
+  const latest = useRef("");
 
   async function check(next: string) {
+    latest.current = next;
     setCode(next);
     setPreview(null);
     setMatches(false);
     if (!next.trim()) return;
     try {
-      setPreview(await inspectPhoneCode(next));
+      const got = await inspectPhoneCode(next);
+      if (latest.current === next) setPreview(got);
     } catch (e) {
-      if (next.trim().startsWith("ligusphone1:")) toast.error(errMsg(e));
+      if (latest.current === next && next.trim().startsWith("ligusphone1:")) toast.error(errMsg(e));
     }
   }
 
