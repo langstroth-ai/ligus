@@ -54,6 +54,42 @@ impl Default for Timeouts {
     }
 }
 
+/// Why the host refused a pairing at msg1 (E3a), sent to the phone as the
+/// WebSocket close code with the stable `code` as the close reason. The relay
+/// passes a host's 4xxx close through to the phone unchanged (spec §6.5), and
+/// only a phone that knew the pairing secret gets this far (the refusal comes
+/// after msg1 decrypted under the window's psk). Documented in
+/// `docs/relay-tunnel.md` §12, "Host enrollment refusals".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollRefusal {
+    pub close: u16,
+    pub code: &'static str,
+    pub detail: String,
+}
+
+/// The box doesn't know the claimed device as a certified phone yet: certify
+/// it ("Add this phone" on the desktop), let the box sync, pair again.
+pub const DEVICE_NOT_CERTIFIED: (u16, &str) = (4040, "device_not_certified");
+/// The claimed device (or the pairing keys of one) is revoked: don't retry.
+pub const DEVICE_REVOKED: (u16, &str) = (4041, "device_revoked");
+/// No device claim, a bad signature, or a device that isn't a phone: an app
+/// bug or the wrong box; don't retry.
+pub const DEVICE_CLAIM_INVALID: (u16, &str) = (4042, "device_claim_invalid");
+
+impl EnrollRefusal {
+    fn new((close, code): (u16, &'static str), detail: impl Into<String>) -> Self {
+        Self { close, code, detail: detail.into() }
+    }
+}
+
+impl std::fmt::Display for EnrollRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "enrollment refused ({}): {}", self.code, self.detail)
+    }
+}
+
+impl std::error::Error for EnrollRefusal {}
+
 /// An enrollment that becomes a phone record at the first transport message (E4).
 struct PendingEnroll {
     rec: PhoneRecord,
@@ -155,13 +191,17 @@ where
                 // with a claim or with the keys of its revoked pairing.
                 if let Some(why) = host.enroll_refusal(&rs, &pk) {
                     host.window_failed(eid);
-                    bail!("enrollment refused: {why}");
+                    return Err(EnrollRefusal::new(DEVICE_REVOKED, why).into());
                 }
                 // E3a: every pairing proves its phone's workspace device, so
                 // revoking the device can always find (and cut) it.
                 let Some(claim) = &hello.device else {
                     host.window_failed(eid);
-                    bail!("enrollment refused: no workspace device claim (a phone pairs only as one of the workspace's phones)");
+                    return Err(EnrollRefusal::new(
+                        DEVICE_CLAIM_INVALID,
+                        "no workspace device claim (a phone pairs only as one of the workspace's phones)",
+                    )
+                    .into());
                 };
                 let device_id = {
                     use super::device_bind::BindCheck;
@@ -169,15 +209,22 @@ where
                         BindCheck::Bind(d) => d,
                         BindCheck::Unknown => {
                             host.window_failed(eid);
-                            bail!("enrollment refused: this box doesn't know workspace device {} yet (let it sync, then pair again)", claim.id);
+                            return Err(EnrollRefusal::new(
+                                DEVICE_NOT_CERTIFIED,
+                                format!(
+                                    "this box doesn't know workspace device {} as a certified phone yet (certify it on the desktop, let the box sync, then pair again)",
+                                    claim.id
+                                ),
+                            )
+                            .into());
                         }
                         BindCheck::Revoked(d) => {
                             host.window_failed(eid);
-                            bail!("enrollment refused: workspace device {d} is revoked");
+                            return Err(EnrollRefusal::new(DEVICE_REVOKED, format!("workspace device {d} is revoked")).into());
                         }
                         BindCheck::Invalid(why) => {
                             host.window_failed(eid);
-                            bail!("enrollment refused: {why}");
+                            return Err(EnrollRefusal::new(DEVICE_CLAIM_INVALID, why).into());
                         }
                     }
                 };
@@ -218,8 +265,15 @@ where
     let (ts, pid, pending) = match res {
         Ok(v) => v,
         Err(e) => {
-            // Close without msg2 (S1, E1): a normal close, nothing more to say.
-            let _ = tx.send(Message::Close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }))).await;
+            // Close without msg2. An enrollment refused at E3a says why with
+            // its typed close code (the phone shows it); anything else (S1,
+            // E1: a wrong secret, an unknown static) is a normal close with
+            // nothing more to say.
+            let frame = match e.downcast_ref::<EnrollRefusal>() {
+                Some(r) => CloseFrame { code: CloseCode::from(r.close), reason: r.code.into() },
+                None => CloseFrame { code: CloseCode::Normal, reason: "".into() },
+            };
+            let _ = tx.send(Message::Close(Some(frame))).await;
             return Err(e);
         }
     };

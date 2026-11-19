@@ -45,6 +45,7 @@ mod forge_cmd;
 mod gateway_check;
 mod hardening;
 mod mcp_config;
+mod memory_cmd;
 mod selftest;
 mod reply;
 mod repos;
@@ -102,9 +103,9 @@ fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.toml")
 }
 
-fn cli_secret(name: &str) -> hive_runtime::secret_store::SecretId {
-    hive_runtime::secret_store::SecretId::new("cli", name)
-}
+/// The secret-store scope of this CLI's connection secrets.
+const CLI_SCOPE: &str = "cli";
+use hive_runtime::connection_settings::ConnectionSecrets;
 
 impl FileConfig {
     /// `config.toml`, with its secrets from the store. Secrets still written
@@ -125,33 +126,16 @@ impl FileConfig {
             }
         }
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let get = |n: &str| store.get_string(&cli_secret(n)).ok().flatten().map(|z| z.to_string()).filter(|v| !v.is_empty());
-        f.token = get("token");
-        f.key = get("key");
-        f.ek = get("ek").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
-        if let Some(t) = &f.token {
-            hive_runtime::secret_redact::register(t);
-        }
-        if let Some(k) = &f.key {
-            hive_runtime::secret_redact::register(k);
-        }
+        let secrets = ConnectionSecrets::load(store.as_ref(), CLI_SCOPE, "");
+        (f.token, f.key, f.ek) = (secrets.token, secrets.key, secrets.ek);
         f
     }
 
     /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
     fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let store = hive_runtime::secret_store::for_data_dir(data_dir);
-        let put = |n: &str, v: Option<&str>| -> Result<()> {
-            match v.filter(|v| !v.is_empty()) {
-                Some(v) => store.put(&cli_secret(n), v.as_bytes())?,
-                None => store.delete(&cli_secret(n))?,
-            }
-            Ok(())
-        };
-        put("token", self.token.as_deref())?;
-        put("key", self.key.as_deref())?;
-        let ek = (!self.ek.is_empty()).then(|| serde_json::to_string(&self.ek)).transpose()?;
-        put("ek", ek.as_deref())?;
+        let secrets = ConnectionSecrets { token: self.token.clone(), key: self.key.clone(), ek: self.ek.clone() };
+        secrets.save(store.as_ref(), CLI_SCOPE, "")?;
         serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
@@ -182,53 +166,19 @@ fn config() -> Config {
 }
 
 /// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
-/// delivered epoch keys). Mirrors the app's encoder (base64url(json) of the
-/// connection; snake_case fields).
+/// delivered epoch keys, founder pin), with the codec every client shares
+/// (`hive_runtime::workspace_invite`).
 #[allow(clippy::type_complexity)]
 fn decode_hivews_invite_full(
     invite: &str,
 ) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
-    use base64::Engine;
-    #[derive(serde::Deserialize)]
-    struct Conn {
-        #[serde(default)]
-        relay_url: String,
-        #[serde(default)]
-        room: String,
-        #[serde(default)]
-        key: Option<String>,
-        /// The single-use invite an Admin issued with this code.
-        #[serde(default)]
-        inv: Option<String>,
-        /// Every authorized epoch key the inviter held (B1).
-        #[serde(default)]
-        ek: Vec<hive_runtime::keyring::DeliveredKey>,
-        /// The founder and their key fingerprint (the pin keys are decided on).
-        #[serde(default)]
-        founder_actor_id: Option<String>,
-        #[serde(default)]
-        fk: Option<String>,
-    }
-    let body = invite
-        .trim()
-        .strip_prefix("hivews1:")
-        .ok_or_else(|| anyhow!("not a Ligus workspace invite (expected hivews1:…)"))?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(body.trim().as_bytes())
-        .context("invalid invite encoding")?;
-    let c: Conn = serde_json::from_slice(&bytes).context("invalid invite payload")?;
-    if c.room.trim().is_empty() {
-        bail!("invite is missing a room");
-    }
-    let pin = c.founder_actor_id.zip(c.fk);
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
+    let c = hive_runtime::workspace_invite::decode_workspace_invite(invite).map_err(|e| anyhow!(e))?;
+    let (inv, pin) = (c.invite_id(), c.founder_pin());
+    Ok((c.relay_url, c.room, c.key, inv, c.ek, pin))
 }
 
 /// A relay URL a box can sync with: an http(s) address with a host.
-fn usable_relay_url(raw: &str) -> bool {
-    reqwest::Url::parse(raw.trim())
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
-}
+use hive_runtime::workspace_invite::usable_relay_url;
 
 /// Why this box can't sync, named before any HTTP is tried: no relay URL,
 /// or one that isn't an http(s) address (an invite from a relayless
@@ -435,6 +385,11 @@ async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
     if engine.is_behind() {
         pulled += engine.catch_up(&mut store, SYNC_ONCE_MAX_ROUNDS).await?;
     }
+    // Writes the relay refused (workspace full, a quota) or a truncated
+    // room: the sync went through, but say why events still wait.
+    if let Some(att) = engine.attention() {
+        eprintln!("sync: {}", att.message());
+    }
     Ok((pushed, pulled))
 }
 
@@ -496,12 +451,7 @@ fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
 
 /// One push + pull round: (pushed, pulled).
 async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(usize, usize)> {
-    let to_push = engine.take_unpushed(store)?;
-    let pushed = to_push.len();
-    engine.push_envelopes(&to_push).await?;
-    // One bounded round of relay pages; `engine.is_behind()` says another is due.
-    let pulled = engine.pull_round(store).await?;
-    Ok((pushed, pulled))
+    Ok(hive_runtime::sync_service::sync_round(engine, store).await?)
 }
 
 /// Resolve any `[Attached-blob: …]` references in agent turns to local files
@@ -1582,7 +1532,12 @@ fn usage() -> ! {
          phone remote access through a relay tunnel (off by default)\n  \
          ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
+         ligus phones certify <ligusphone1:code> | --code-file PATH --recovery-words-file PATH --fingerprint F\n                                       \
+         certify a phone's key as one of your devices (headless \"Add this phone\")\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
+         ligus memory list | search <words…> | show <id> | add <title> | edit <id> | rm <id> | proposals | accept|reject <id>\n                                       \
+         the workspace memory (shared notes); bodies from --body or stdin, --tag a,b, --json\n  \
+         ligus task-state <chat-id> [--json]   what the agents on a chat report about their work in progress\n  \
          ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
@@ -1702,6 +1657,11 @@ fn run() -> Result<()> {
         "--client-id",
         "--expect-tier",
         "--health-listen",
+        "--tag",
+        "--title",
+        "--body",
+        "--note",
+        "--base",
         "--kind",
         "--branch",
     ];
@@ -1906,6 +1866,18 @@ fn run() -> Result<()> {
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"),
             }
         }
+        "memory" => {
+            let flags = memory_cmd::Flags {
+                tags: hive_core::memory::normalize_tags(&flag_val("--tag").map(|t| t.split(',').map(str::to_string).collect::<Vec<_>>()).unwrap_or_default()),
+                title: flag_val("--title"),
+                body: flag_val("--body"),
+                note: flag_val("--note"),
+                base: flag_val("--base"),
+                json: has("--json"),
+            };
+            memory_cmd::run(&cfg, &positional, flags)
+        }
+        "task-state" => memory_cmd::task_state(&cfg, positional.first().map(|s| s.as_str()), has("--json")),
         "facts" => {
             if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
                 bail!("usage: ligus facts export --jsonl [--since <cursor | unix ms>]");
@@ -1935,7 +1907,22 @@ fn run() -> Result<()> {
                         .unwrap_or_else(|| cfg.data_dir.join("serve.token"));
                     cli::phones_revoke(&cfg.data_dir, positional.get(1).map(|s| s.as_str()), &token_file, has("--keep-token"))
                 }
-                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke"),
+                Some("certify") => {
+                    // Without --fingerprint, only a person at a terminal can
+                    // confirm it; non-interactive use must pass it.
+                    let mut ask = admit::confirm_phone_fingerprint_on_tty;
+                    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    admit::cmd_phones_certify(
+                        &cfg,
+                        positional.get(1).map(|s| s.as_str()),
+                        flag_val("--code-file"),
+                        flag_val("--recovery-words-file"),
+                        flag_val("--fingerprint"),
+                        interactive.then_some(&mut ask as admit::ConfirmFingerprint<'_>),
+                    )
+                    .map(|_| ())
+                }
+                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke|certify"),
             }
         }
         "dashboard" => match positional.first().map(|s| s.as_str()) {
@@ -2076,6 +2063,14 @@ mod cli_tests {
             assert!(err.contains("Settings → Team sync"), "{relay:?}: {err}");
             assert!(!cfg.data_dir.exists(), "{relay:?}: enroll wrote {:?}", cfg.data_dir);
         }
+        // An invite with no relay field at all gets the same answer, not a
+        // serde "missing field" error.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"room":"r","key":"k"}"#);
+        let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
+        assert!(err.contains("Settings → Team sync"), "{err}");
+        assert!(!cfg.data_dir.exists());
     }
 
     /// A box enrolled from a relayless invite (older clients wrote

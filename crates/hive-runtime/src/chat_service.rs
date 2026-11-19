@@ -25,10 +25,14 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod changes;
+pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
 mod keys;
 mod links;
+mod memory;
+pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;
@@ -135,6 +139,8 @@ pub struct ChatService {
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
     stream_hold: std::collections::HashMap<Uuid, String>,
+    /// Where every append is published ([`ChatService::subscribe`]).
+    changes: ChangeFeed,
 }
 
 /// Most bytes of a trailing token held back from the log until more text
@@ -187,6 +193,7 @@ impl ChatService {
             agent_messages: std::collections::HashMap::new(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
+            changes: ChangeFeed::default(),
         }
     }
 
@@ -275,6 +282,7 @@ impl ChatService {
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(Some(env))
     }
 
@@ -722,6 +730,7 @@ impl ChatService {
             }
         }
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(env)
     }
 

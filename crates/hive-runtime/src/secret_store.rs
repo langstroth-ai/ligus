@@ -46,6 +46,31 @@ use zeroize::Zeroizing;
 /// The keychain service (and Secret Service attribute) Ligus's items use.
 pub const SERVICE: &str = "ai.ligus.secrets";
 
+/// The code-signing identifier of a standalone Ligus binary (not the desktop
+/// app bundle), set once at startup with [`set_binary_identifier`].
+static BINARY_IDENTIFIER: OnceLock<String> = OnceLock::new();
+
+/// Name this process's signing identifier (`ai.ligus.term` for the terminal
+/// app), before the secret store is opened. On macOS a release build signed
+/// with Ligus's team then holds the keychain's unlock password under the same
+/// designated requirement check as the desktop app (Apple anchor, this
+/// identifier, the team id) instead of only being pinned by code hash; a
+/// development build (no team id) is unchanged. The first call wins; later
+/// calls with another identifier return `false`. Other platforms keep it but
+/// don't use it.
+pub fn set_binary_identifier(identifier: &str) -> bool {
+    let id = identifier.trim();
+    if id.is_empty() {
+        return false;
+    }
+    BINARY_IDENTIFIER.get_or_init(|| id.to_string()) == id
+}
+
+/// The identifier [`set_binary_identifier`] named, if any.
+pub fn binary_identifier() -> Option<&'static str> {
+    BINARY_IDENTIFIER.get().map(String::as_str)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     #[error("io: {0}")]
@@ -728,16 +753,28 @@ mod mac {
         /// (`LIGUS_APPLE_TEAM_ID` at build time) and runs from an app bundle.
         /// `None` for development builds and the CLI.
         pub fn requirement_for(binary: &Path) -> Option<String> {
-            requirement(option_env!("LIGUS_APPLE_TEAM_ID"), binary)
+            requirement_as(option_env!("LIGUS_APPLE_TEAM_ID"), binary, super::super::binary_identifier())
         }
 
         /// Ligus's designated requirement for team `team`, when `binary` is
         /// an app bundle.
+        #[cfg_attr(not(test), allow(dead_code))]
         pub fn requirement(team: Option<&str>, binary: &Path) -> Option<String> {
+            requirement_as(team, binary, None)
+        }
+
+        /// [`requirement`], or, for a standalone binary that names its
+        /// signing identifier (`identifier`, see
+        /// [`super::super::set_binary_identifier`]), the requirement for
+        /// that identifier whether or not it runs from an app bundle.
+        pub fn requirement_as(team: Option<&str>, binary: &Path, identifier: Option<&str>) -> Option<String> {
             let team = team.map(str::trim).filter(|t| !t.is_empty())?;
-            binary.extension().is_some_and(|e| e == "app").then(|| {
-                format!("anchor apple generic and identifier \"{BUNDLE_ID}\" and certificate leaf[subject.OU] = \"{team}\"")
-            })
+            let id = match identifier.map(str::trim).filter(|i| !i.is_empty()) {
+                Some(id) => id,
+                None if binary.extension().is_some_and(|e| e == "app") => BUNDLE_ID,
+                None => return None,
+            };
+            Some(format!("anchor apple generic and identifier \"{id}\" and certificate leaf[subject.OU] = \"{team}\""))
         }
 
         /// A release app trusts itself with the unlock password only after
@@ -1515,6 +1552,31 @@ esac"#,
         // no requirement, and the access list pins the binary's code hash.
         assert!(mac::acl::requirement(None, app).is_none());
         assert!(mac::acl::requirement(Some("ABCDE12345"), Path::new("/usr/local/bin/ligus")).is_none());
+    }
+
+    /// A standalone binary that names its identifier (the terminal app) gets
+    /// the same requirement as the app, under its own identifier, bundle or
+    /// not; a development build (no team) still gets none. No keychain is
+    /// touched.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_named_standalone_binary_gets_its_own_requirement() {
+        let bin = Path::new("/usr/local/bin/lt");
+        let req = mac::acl::requirement_as(Some("ABCDE12345"), bin, Some("ai.ligus.term")).unwrap();
+        assert_eq!(req, "anchor apple generic and identifier \"ai.ligus.term\" and certificate leaf[subject.OU] = \"ABCDE12345\"");
+        assert!(mac::acl::check_self_against(&req).is_err());
+        assert!(mac::acl::requirement_as(None, bin, Some("ai.ligus.term")).is_none());
+        assert_eq!(mac::acl::requirement_as(Some("T"), bin, Some(" ")), None);
+        assert_eq!(mac::acl::requirement_as(Some("T"), Path::new("/A/Ligus.app"), None), mac::acl::requirement(Some("T"), Path::new("/A/Ligus.app")));
+    }
+
+    #[test]
+    fn the_binary_identifier_is_set_once() {
+        assert!(!set_binary_identifier("  "));
+        let first = binary_identifier().is_none();
+        assert!(set_binary_identifier("ai.ligus.test-binary") || !first);
+        assert!(!set_binary_identifier("ai.ligus.other") || binary_identifier() == Some("ai.ligus.other"));
+        assert!(binary_identifier().is_some());
     }
 
     /// Track B residual 6: on macOS a Ligus keychain that can't be used

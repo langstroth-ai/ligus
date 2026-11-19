@@ -183,9 +183,22 @@ route on the turn's own egress proxy. On each request the proxy:
    `/v1/messages/count_tokens` for `anthropic`; `GET /v1/models`), and
    refuses dot segments and encoded slashes, so the credential never reaches
    the gateway's admin routes;
-3. drops every credential the client sent (`Authorization`,
-   `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `Cookie`, any
-   `X-Ligus-*`);
+3. forwards only the request headers the gateway's wire needs and drops
+   everything else the client sent. The allow-list is `Content-Type`,
+   `Accept`, `Accept-Encoding`, `User-Agent` and `Idempotency-Key`, plus
+   `Anthropic-Version` and `Anthropic-Beta` for `anthropic` or `OpenAI-Beta`
+   for `openai`. So an agent can't send its own credential (`Authorization`,
+   `X-Api-Key`, `Cookie`, ...), set the attribution ids (`X-Ligus-*`), or
+   spoof the gateway's identity, budget or routing headers
+   (`X-LiteLLM-Customer-Id`, `X-Envoy-*`, `X-Forwarded-*`, `Forwarded`,
+   `X-Request-Id`, `OpenAI-Organization`, ...). Gateways that key budgets or
+   routing on a header should derive it from the credential or the
+   attribution ids, not trust a client value. The proxy frames the request
+   itself: it reads the whole body (decoding a chunked one) and sends it with
+   its own `Content-Length`, so `Transfer-Encoding`, `TE`, trailers and the
+   headers a `Connection` header names never pass. The list isn't
+   configurable per gateway, and a compressed request body isn't supported
+   (`Content-Encoding` is dropped);
 4. adds the gateway's credential and, if enabled, the attribution headers;
 5. sends the request over its own TLS client (client certificate and pinned
    CA where configured) to an address it resolved and checked itself (never

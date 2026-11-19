@@ -1,7 +1,11 @@
-//! Desktop passkeys (Phase 0, B3): the system-browser hand-off.
+//! Desktop passkeys (Phase 0, B3; native ceremonies Phase D).
 //!
-//! WebAuthn in the Tauri webview is unreliable, so every OS uses one path:
-//! the desktop listens on `127.0.0.1:<random>` with a one-time nonce and opens
+//! On macOS and Windows a ceremony first runs natively
+//! ([`crate::passkey_native`]: AuthenticationServices, `webauthn.dll`) when
+//! the platform serves the workspace's RP. Everywhere else, and as the
+//! fallback, the system-browser hand-off runs (WebAuthn in the Tauri webview
+//! is unreliable). For the hand-off the desktop listens on
+//! `127.0.0.1:<random>` with a one-time nonce and opens
 //! `<workspace origin>/presence#rp=<rp id>&c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
 //! (`https://ligus.ai/presence` for the owner's deployment), through a
 //! private redirect page under the data dir, so the nonce is never in a
@@ -18,11 +22,10 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hive_core::presence::{self, b64url, unb64url, PasskeyCredential, PresenceAssertion, RecoveryKey};
+use hive_core::presence::{self, b64url, returned_challenge, PasskeyCredential, PresenceAssertion, RecoveryKey};
 use hive_runtime::chat_service::{PresenceProvider, PresenceRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -32,19 +35,15 @@ use crate::AppState;
 /// How long the desktop waits for the browser.
 const WAIT: Duration = Duration::from_secs(180);
 
-static CANCEL: AtomicBool = AtomicBool::new(false);
-/// A recovery key the person entered for the pending `get` (its 24 words),
-/// used once instead of the browser and dropped right after.
-static RECOVERY: std::sync::Mutex<Option<RecoveryKey>> = std::sync::Mutex::new(None);
+/// The confirmation sheet's choices for the pending ceremony (Cancel, the
+/// browser instead of the system dialog, and a recovery key the person
+/// entered for a `get`: its 24 words, used once and dropped right after).
+static SIGNALS: crate::passkey_native::Signals = crate::passkey_native::Signals::new();
 
 /// What answered a ceremony.
 enum Outcome {
     Browser(HandOff),
     Recovery(RecoveryKey),
-}
-
-fn take_recovery() -> Option<RecoveryKey> {
-    RECOVERY.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
 /// What the confirmation sheet shows.
@@ -55,6 +54,10 @@ pub struct PresencePrompt {
     pub summary: String,
     pub digest_short: String,
     pub op: String,
+    /// `browser` (the hand-off page is open), `native` (the system passkey
+    /// dialog is up) or `dismissed` (the person closed it; the sheet offers
+    /// the browser, the recovery key and Cancel).
+    pub via: String,
 }
 
 /// (The page shows the digest short id it computes from `c` itself, never
@@ -103,16 +106,17 @@ fn urldecode(s: &str) -> String {
 
 /// Run one ceremony in the system browser and wait for its result.
 fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
-    let recovery_ok = prompt.op == "get";
+    // A `get` can be answered by the recovery key the person enters for
+    // this request (bound to the digest the sheet shows).
+    let recovery_for = (prompt.op == "get").then(|| prompt.digest_short.clone());
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // A v4 UUID is 122 random bits from the OS generator.
     let nonce = b64url(uuid::Uuid::new_v4().as_bytes());
     let url = format!("{page_url}#{fragment}&p={port}&n={nonce}");
-    CANCEL.store(false, Ordering::SeqCst);
-    let _ = take_recovery();
-    let _ = app.emit("presence://requested", &prompt);
+    SIGNALS.reset();
+    let _ = app.emit("presence://requested", &PresencePrompt { via: "browser".into(), ..prompt });
     // The nonce goes through a private redirect page, never the command line.
     let dir = app.state::<AppState>().data_dir.join("presence");
     let page = redirect_page(&dir, &url).map_err(|e| format!("couldn't prepare the passkey page: {e}"))?;
@@ -123,14 +127,14 @@ fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: S
     }
     let deadline = Instant::now() + WAIT;
     let result = loop {
-        if CANCEL.load(Ordering::SeqCst) {
+        if SIGNALS.cancelled() {
             break Err("cancelled".to_string());
         }
         if Instant::now() > deadline {
             break Err("timed out waiting for the passkey".to_string());
         }
-        if recovery_ok {
-            if let Some(k) = take_recovery() {
+        if let Some(digest) = recovery_for.as_deref() {
+            if let Some(k) = SIGNALS.take_recovery(digest) {
                 break Ok(Outcome::Recovery(k));
             }
         }
@@ -256,15 +260,49 @@ fn redirect_page(dir: &std::path::Path, url: &str) -> std::io::Result<std::path:
     Ok(path)
 }
 
-/// The challenge a returned `clientDataJSON` names.
-fn returned_challenge(client_data_b64: &str) -> Option<Vec<u8>> {
-    let raw = unb64url(client_data_b64).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-    unb64url(v.get("challenge")?.as_str()?).ok()
+/// The sheet's view of a native ceremony.
+struct SheetEvents<'a> {
+    app: &'a AppHandle,
+    prompt: PresencePrompt,
+}
+
+impl crate::passkey_native::Events for SheetEvents<'_> {
+    fn stage(&self, stage: crate::passkey_native::Stage) {
+        let via = match stage {
+            crate::passkey_native::Stage::Native => "native",
+            crate::passkey_native::Stage::Dismissed => "dismissed",
+        };
+        let _ = self.app.emit("presence://requested", &PresencePrompt { via: via.into(), ..self.prompt.clone() });
+    }
+    fn done(&self, ok: bool) {
+        let _ = self.app.emit("presence://done", ok);
+    }
+}
+
+/// A presence `get` over `req.challenge`: natively when this OS serves the
+/// workspace's RP, else (and on any fallback) through the browser.
+pub fn presence_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
+    let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into(), via: String::new() };
+    let events = SheetEvents { app, prompt };
+    crate::passkey_native::run_get(crate::passkey_native::platform(app), req, &SIGNALS, WAIT, &events, || browser_get(app, req))
+}
+
+/// A `create` for a new passkey, natively when this OS serves the
+/// workspace's RP, else through the browser.
+fn presence_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Result<PresenceAssertion, String> {
+    let prompt = PresencePrompt {
+        kind: "passkeyRegistered".into(),
+        summary: "Create a Ligus passkey".into(),
+        digest_short: req.digest_short.clone(),
+        op: "create".into(),
+        via: String::new(),
+    };
+    let events = SheetEvents { app, prompt };
+    crate::passkey_native::run_create(crate::passkey_native::platform(app), req, user_name, &SIGNALS, WAIT, &events, || browser_create(app, req, user_name))
 }
 
 /// `navigator.credentials.get` over `challenge` in the browser.
-pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
+fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
     let fragment = format!(
         "op=get&rp={}&c={}&cred={}&k={}&s={}",
         urlencode(&req.policy.rp_id),
@@ -273,7 +311,7 @@ pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAss
         urlencode(&req.kind),
         urlencode(&req.summary),
     );
-    let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into() };
+    let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into(), via: "browser".into() };
     let r = match hand_off(app, &req.policy.page_url(), prompt, fragment)? {
         Outcome::Browser(r) => r,
         // The recovery key signs the very challenge requested, here.
@@ -306,6 +344,7 @@ fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Re
         summary: "Create a Ligus passkey".into(),
         digest_short: req.digest_short.clone(),
         op: "create".into(),
+        via: "browser".into(),
     };
     let Outcome::Browser(r) = hand_off(app, &req.policy.page_url(), prompt, fragment)? else {
         return Err("a recovery key doesn't create a passkey".into());
@@ -321,12 +360,13 @@ fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Re
     })
 }
 
-/// The desktop's presence provider: the browser hand-off.
+/// The desktop's presence provider: native passkeys where the OS serves the
+/// workspace's RP, the browser hand-off otherwise.
 pub struct DesktopPresence(pub AppHandle);
 
 impl PresenceProvider for DesktopPresence {
     fn assert(&self, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
-        browser_get(&self.0, req)
+        presence_get(&self.0, req)
     }
 }
 
@@ -420,7 +460,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             summary: "Create a Ligus passkey".into(),
             policy: policy.clone(),
         };
-        let att = browser_create(&app, &create_req, &name)?;
+        let att = presence_create(&app, &create_req, &name)?;
         let (id, alg, pk) = policy.with(|p| presence::verify_create(&att, &challenge, p)).map_err(|e| e.0)?;
         let new_id = b64url(&id);
         let credential = PasskeyCredential {
@@ -441,7 +481,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             if first {
                 req.credential_ids = vec![new_id.clone()];
             }
-            browser_get(&app2, &req)
+            presence_get(&app2, &req)
         })
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -464,7 +504,7 @@ pub async fn recovery_key_create(app: AppHandle) -> Result<String, String> {
         }
         let key = RecoveryKey::generate().map_err(|e| e.0)?;
         let app2 = app.clone();
-        svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| browser_get(&app2, req))
+        svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| presence_get(&app2, req))
             .map_err(|e| e.to_string())?;
         Ok(key.words())
     })
@@ -516,25 +556,35 @@ pub async fn passkey_regrant(app: AppHandle, member_id: String) -> Result<(), St
     .map_err(|e| e.to_string())?
 }
 
-/// Stop waiting for the browser.
+/// Stop waiting for the passkey (the system dialog or the browser).
 #[tauri::command]
 pub fn presence_cancel() {
-    CANCEL.store(true, Ordering::SeqCst);
+    SIGNALS.cancel();
+}
+
+/// Use the browser hand-off instead of the system passkey dialog (a
+/// security key or another device the dialog doesn't offer, or after
+/// closing it).
+#[tauri::command]
+pub fn presence_use_browser() {
+    SIGNALS.use_browser();
 }
 
 /// Confirm the pending request with the recovery key's 24 words instead of
 /// a passkey (lost every passkey). The words are parsed here (checksum
 /// verified), used for that one assertion and never stored; the fold accepts
-/// it only if that recovery key is registered to this account.
+/// it only if that recovery key is registered to this account. `digest` is
+/// the short digest the sheet showed: the key answers only that request.
 #[tauri::command]
-pub fn presence_use_recovery(words: String) -> Result<(), String> {
+pub fn presence_use_recovery(words: String, digest: String) -> Result<(), String> {
     let key = RecoveryKey::from_words(&words).map_err(|e| e.0)?;
-    *RECOVERY.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
+    SIGNALS.set_recovery(key, &digest);
     Ok(())
 }
 
-/// Install the browser hand-off as the desktop's presence provider.
+/// Install the desktop's presence provider (native, else the hand-off).
 pub fn install(state: &AppState, app: &AppHandle) {
+    crate::passkey_native::remember_window(app);
     state.service.lock().unwrap().set_presence_provider(Some(Arc::new(DesktopPresence(app.clone()))));
 }
 

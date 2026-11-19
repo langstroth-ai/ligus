@@ -108,6 +108,7 @@ import { FlowPane } from "@/components/flow/FlowPane";
 import { ProposalBadges } from "@/components/ReviewBadges";
 import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
+import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
 
 // Re-exported from the shared pane source so existing
@@ -224,6 +225,7 @@ export function RightRail({
         {pane === "skills" && <SkillsPane sessionId={sessionId} />}
         {pane === "workflows" && <WorkflowsPane sessionId={sessionId} />}
         {pane === "flow" && <FlowPane />}
+        {pane === "memory" && <MemoryPane sessionId={sessionId} />}
         {pane === "context" && <ContextPane sessionId={sessionId} activeRuntimeId={activeRuntimeId} />}
         {pane === "activity" && <ActivityPane />}
       </div>

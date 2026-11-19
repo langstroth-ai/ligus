@@ -45,6 +45,12 @@ pub struct ApplyJob {
     pub workspace_id: Uuid,
     pub request: ApplyRequest,
     pub proposal: ActionProposal,
+    /// The trusted founder the service was pinned to when the job was listed
+    /// ([`ChatService::set_trusted_founder`]). [`fulfil`] judges the job
+    /// under this pin, whatever another workspace's work re-pinned the
+    /// service to meanwhile (a client with several workspaces shares one
+    /// service).
+    pub founder: Option<String>,
 }
 
 /// What [`fulfil`] did.
@@ -65,6 +71,7 @@ pub enum Outcome {
 /// The open apply requests in `workspace_id` that name this host.
 pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
     let me = svc.device_id();
+    let founder = svc.trusted_founder().map(str::to_string);
     let config = workspace_config_session_id(workspace_id);
     let mut out = Vec::new();
     for id in svc.store().list_session_ids()? {
@@ -83,7 +90,7 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
                 continue;
             }
             if let Some(p) = s.proposals.iter().find(|p| p.id == req.proposal_id) {
-                out.push(ApplyJob { chat_id: s.id, workspace_id, request: req.clone(), proposal: p.clone() });
+                out.push(ApplyJob { chat_id: s.id, workspace_id, request: req.clone(), proposal: p.clone(), founder: founder.clone() });
             }
         }
     }
@@ -115,6 +122,47 @@ pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path:
 
 fn lock(svc: &Mutex<ChatService>) -> std::sync::MutexGuard<'_, ChatService> {
     svc.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The service, locked and pinned to `founder` until the guard drops, when
+/// its own pin is put back. Every decision about one job is made under the
+/// pin it was listed under ([`ApplyJob::founder`]).
+pub(crate) struct Pinned<'a> {
+    guard: std::sync::MutexGuard<'a, ChatService>,
+    prev: Option<String>,
+}
+
+impl<'a> Pinned<'a> {
+    pub(crate) fn new(svc: &'a Mutex<ChatService>, founder: Option<&str>) -> Self {
+        let mut guard = lock(svc);
+        let prev = guard.trusted_founder().map(str::to_string);
+        guard.set_trusted_founder(founder.map(str::to_string));
+        Self { guard, prev }
+    }
+}
+
+impl std::ops::Deref for Pinned<'_> {
+    type Target = ChatService;
+    fn deref(&self) -> &ChatService {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for Pinned<'_> {
+    fn deref_mut(&mut self) -> &mut ChatService {
+        &mut self.guard
+    }
+}
+
+impl Drop for Pinned<'_> {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        self.guard.set_trusted_founder(prev);
+    }
+}
+
+fn pinned<'a>(svc: &'a Mutex<ChatService>, job: &ApplyJob) -> Pinned<'a> {
+    Pinned::new(svc, job.founder.as_deref())
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::result::Result<String, String> {
@@ -168,7 +216,7 @@ fn applied_event(job: &ApplyJob, me: Uuid, commit: Option<String>, base: Option<
 
 /// Report `job` failed (when the fold still takes a report), and finish it.
 fn fail(svc: &Mutex<ChatService>, job: &ApplyJob, reason: String) -> Result<Outcome> {
-    let mut s = lock(svc);
+    let mut s = pinned(svc, job);
     if let Err(e) = s.fail_apply_request(job.chat_id, job.workspace_id, job.request.id, &reason) {
         tracing::warn!(target: "apply", request = %job.request.id, "couldn't report the failure: {e}");
     }
@@ -219,13 +267,13 @@ fn is_the_change(worktree: &Path, c: &str, diff: &str, expected_base: Option<&st
 /// Apply `job` on this host, once. `repo` is this host's checkout for the
 /// chat (none: the host can't apply it).
 pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> Result<Outcome> {
-    let me = lock(svc).device_id();
+    let me = pinned(svc, job).device_id();
     if job.request.host_device_id != me {
         return Err(ChatError::Unauthorized("that apply request is for another host".into()));
     }
     // A held vote or decision on it: no side effect until it is decided.
     {
-        let s = lock(svc);
+        let s = pinned(svc, job);
         let Some(session) = s.load(job.chat_id)? else { return Ok(Outcome::Waiting) };
         if session.authz.blocks(job.proposal.id, job.proposal.set_id) {
             return Ok(Outcome::Waiting);
@@ -238,7 +286,7 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
         .filter(|r| crate::git_worktree::is_git_repo(r))
         .and_then(|r| crate::git_worktree::chat_worktree(r, &job.chat_id.to_string()).ok());
     // Claim it before anything touches the checkout.
-    if !lock(svc).store().claim_apply_attempt(job.request.id)? {
+    if !pinned(svc, job).store().claim_apply_attempt(job.request.id)? {
         // An earlier attempt here was interrupted: report what it did.
         let diff = job.proposal.diff.as_deref().filter(|_| job.proposal.kind == ProposalKind::FileDiff).unwrap_or_default();
         let expected = job.request.expected_base_commit.as_deref();
@@ -249,7 +297,7 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
             let wt = worktree.as_deref().unwrap_or(Path::new("."));
             let base = git(wt, &["rev-parse", &format!("{c}^")]).ok();
             let tree = git(wt, &["rev-parse", &format!("{c}^{{tree}}")]).ok();
-            let mut s = lock(svc);
+            let mut s = pinned(svc, job);
             let r = s.fulfil_apply_request(job.chat_id, job.workspace_id, job.request.id, Some(c.clone()), base, tree);
             s.store().finish_apply_attempt(job.request.id)?;
             return match r {
@@ -262,7 +310,10 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     // Would the fold take it? (Withdrawn meanwhile, no longer approved, a
     // human gate, the base the person saw.)
     let probe = applied_event(job, me, None, job.request.expected_base_commit.clone(), None);
-    if let Err(e) = lock(svc).would_allow(job.chat_id, job.workspace_id, probe) {
+    // Bound first: a guard in an `if let` scrutinee would still be held
+    // (edition 2021) when `fail` locks again.
+    let allowed = pinned(svc, job).would_allow(job.chat_id, job.workspace_id, probe);
+    if let Err(e) = allowed {
         return fail(svc, job, format!("not applied: {e}"));
     }
     let diff = match (job.proposal.kind, job.proposal.diff.as_deref()) {
@@ -301,7 +352,7 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     };
     let commit = Some(applied.commit.clone());
     let tree = Some(applied.tree.clone());
-    let mut s = lock(svc);
+    let mut s = pinned(svc, job);
     let written = s.fulfil_apply_request(job.chat_id, job.workspace_id, job.request.id, commit.clone(), Some(base.clone()), tree);
     s.store().finish_apply_attempt(job.request.id)?;
     drop(s);
@@ -334,7 +385,13 @@ mod tests {
     /// A person's device that is also the host it names (a desktop applying
     /// on itself), a repo, an approved file-diff proposal and the request.
     fn setup() -> (Mutex<ChatService>, Uuid, Uuid, ApplyJob, tempfile::TempDir) {
+        setup_in(|_| EventStore::open_in_memory().unwrap())
+    }
+
+    /// [`setup`] with the store `open(tmp)` makes.
+    fn setup_in(open: impl FnOnce(&Path) -> EventStore) -> (Mutex<ChatService>, Uuid, Uuid, ApplyJob, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
+        let store = open(tmp.path());
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         sh(&repo, &["init", "-q", "-b", "main"]);
@@ -346,8 +403,10 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
-        let mut svc = ChatService::new(EventStore::open_in_memory().unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
+        // Pinned to its own founding, as a host pins a workspace's founder.
+        svc.set_trusted_founder(Some(account.to_string()));
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         let chat = svc.create_chat("c", wid, "anthropic").unwrap();
@@ -526,5 +585,50 @@ mod tests {
         let r = fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap();
         assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("restarted")), "{r:?}");
         assert!(matches!(outcome(&svc, chat, &job), Some(ApplyOutcome::Failed { .. })));
+    }
+
+    /// A host serving several workspaces re-pins one `ChatService` to each
+    /// workspace's founder as it works on it. A request listed under its
+    /// workspace's pin is judged under that pin to the end, even when
+    /// another workspace's work re-pinned the service in between: here a
+    /// keyholder (Mallory, founder of another workspace this host is in) has
+    /// put her own self-consistent founding seed on this workspace's config
+    /// log, so under her pin she would be its Owner and Ana no member.
+    #[test]
+    fn a_request_is_judged_under_the_pin_it_was_listed_under() {
+        let (svc, chat, wid, job, tmp) = setup_in(|dir| EventStore::open(dir.join("hive.db")).unwrap());
+        assert_eq!(job.founder.as_deref(), lock(&svc).trusted_founder());
+        let mallory_account = Uuid::new_v4();
+        let mut mallory_actor = ActorIdentity::new(mallory_account.to_string(), "Mallory", ActorKind::Human);
+        mallory_actor.account_id = Some(mallory_account);
+        let mut mallory = ChatService::new(EventStore::open_in_memory().unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), mallory_actor);
+        let config = mallory.ensure_workspace_config(wid).unwrap();
+        let mut second = EventStore::open(tmp.path().join("hive.db")).unwrap();
+        for env in mallory.store().list(config).unwrap() {
+            second.ingest(&env).unwrap();
+        }
+        // Another workspace's write re-pinned the service to Mallory.
+        lock(&svc).set_trusted_founder(Some(mallory_account.to_string()));
+        let r = fulfil(&svc, &job, Some(&tmp.path().join("repo"))).unwrap();
+        assert!(matches!(r, Outcome::Applied { .. }), "judged under another workspace's pin: {r:?}");
+        assert_eq!(lock(&svc).trusted_founder(), Some(mallory_account.to_string().as_str()), "the service's own pin is left as it was");
+        let _ = chat;
+    }
+
+    /// A request the fold refuses at the last check (here: one its log
+    /// doesn't hold) is reported failed. The refusal must not still hold the
+    /// service's lock when the failure is written, or the host hangs.
+    #[test]
+    fn a_request_the_fold_refuses_is_reported_without_hanging() {
+        let (svc, _, _, mut job, tmp) = setup();
+        job.request.id = Uuid::new_v4();
+        let repo = tmp.path().join("repo");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = fulfil(&svc, &job, Some(&repo));
+            let _ = tx.send(format!("{r:?}"));
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("fulfil hung on its own lock");
+        assert!(r.contains("Failed"), "{r}");
     }
 }

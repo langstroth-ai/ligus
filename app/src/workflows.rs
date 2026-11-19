@@ -559,8 +559,9 @@ fn stage_mention_token(agent: Option<&WorkspaceAgent>) -> String {
 /// us) or must be dispatched to its owner. Single source of truth for the
 /// local-vs-remote split — `owns_responder` in `lib.rs` delegates here so the
 /// two can't drift, and this pure form is unit-testable without a `Responder`.
+#[cfg_attr(not(test), allow(dead_code))] // the gate itself is `hive_runtime::turn_dispatch`
 pub(crate) fn stage_owner_runs_here(local_actor_id: &str, owner_actor_id: &str) -> bool {
-    owner_actor_id.is_empty() || owner_actor_id == local_actor_id
+    hive_runtime::turn_dispatch::owner_runs_here(local_actor_id, owner_actor_id)
 }
 
 /// Suspend the driver until a remote-owned stage's reply syncs back, then return

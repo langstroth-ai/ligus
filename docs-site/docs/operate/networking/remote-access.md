@@ -86,6 +86,13 @@ This creates the box's host keys and saves the relay in
 
 ## 3. Pair the phone
 
+Add the phone on your desktop first (**My devices > Add this phone**, with
+the code the app shows; see
+[Add this phone](../../ligus/features/phone-app.md#add-this-phone)). The box
+pairs only phones it knows as certified: an earlier attempt is refused with
+the close code `4040 device_not_certified`, and the phone pairs again once the
+box has synced.
+
 ```sh
 ligus pair
 ```

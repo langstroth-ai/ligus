@@ -259,9 +259,12 @@ what need a **passkey** assertion over the event:
   used (synced passkeys report 0).
 - **Any passkey.** Touch ID and iCloud Keychain, Windows Hello, Google
   Password Manager, phones over QR, YubiKeys. Secure Enclave-only keys aren't
-  required. The desktop runs the ceremony in your browser on the relying
-  party's `/presence` page and checks the result is for its own challenge;
-  the iPhone app uses `ASAuthorization` directly.
+  required. The desktop runs the ceremony in the system passkey dialog on
+  macOS (for a relying party the app is associated with) and Windows, and
+  otherwise in your browser on the relying party's `/presence` page; either
+  way it checks the result is for its own challenge
+  ([Native passkeys](native-passkeys.md)). The iPhone app uses
+  `ASAuthorization` directly.
 - **Registration.** A passkey is registered per workspace on its config log.
   The account's first proves itself (its own assertion over the
   registration); every later one needs an existing passkey. Keep at least

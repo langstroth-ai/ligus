@@ -208,6 +208,7 @@ nav:
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
           - Flow (routing, hand-offs, task board): ligus/features/flow.md
+          - Workspace memory and task state: ligus/features/memory.md
           - Ligus on your phone: ligus/features/phone-app.md
           - Host dashboard: ligus/features/dashboard.md
           - Scheduled agents: ligus/features/scheduling.md
@@ -270,6 +271,7 @@ nav:
       - Security:
           - Security model: operate/security/index.md
           - Threat model: operate/security/threat-model.md
+          - Native passkeys: operate/security/native-passkeys.md
           - Runbooks: operate/security/runbooks.md
       - Reference:
           - Environment variables: operate/reference/env-vars.md

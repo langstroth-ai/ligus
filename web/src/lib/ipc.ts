@@ -1089,6 +1089,26 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+
+/// A phone's `ligusphone1:` code, checked (nothing written).
+export interface PhoneCodeDto {
+  /// The phone's workspace device id, as the phone presents it.
+  deviceId: string;
+  label: string;
+  /// Compare with the phone's screen (Settings > This phone).
+  fingerprint: string;
+  standing: "new" | "alreadyMine" | "revoked" | "conflict";
+  /// Why it can't be certified (revoked, conflict).
+  problem: string | null;
+  workspaceId: string;
+}
+/// Check a phone code: its signature, key and where the device stands here.
+export const inspectPhoneCode = (code: string) => invoke<PhoneCodeDto>("inspect_phone_code", { code });
+/// "Add this phone": certify the phone as one of your devices (the phone
+/// tier). Opens the passkey sheet; refused without your passkey. Returns the
+/// certified device id.
+export const certifyPhoneCode = (code: string, fingerprint: string, workspaceId: string) =>
+  invoke<string>("certify_phone_code", { code, fingerprint, workspaceId });
 /// Hosts naming you as their owner that you haven't approved yet.
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.
@@ -1155,9 +1175,11 @@ export const onChatActivity = (
 export type { ChatActivityEvent };
 
 /// Real connection health for the relay sync loop, updated on every sync
-/// attempt: `live` (last sync ok), `error` (last sync failed — see `lastError`),
-/// or `offline` (not syncing / no relay).
-export type ConnectionState = "live" | "error" | "offline" | "needs_key";
+/// attempt: `live` (last sync ok), `limited` (syncing, but the relay refused
+/// this workspace's writes, e.g. "workspace full", or the room is truncated;
+/// see `lastError`), `error` (last sync failed — see `lastError`), or
+/// `offline` (not syncing / no relay).
+export type ConnectionState = "live" | "limited" | "error" | "offline" | "needs_key";
 
 export interface SyncStatusDto {
   relayConfigured: boolean;
@@ -1861,8 +1883,16 @@ export type SecurityStatusDto = {
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
 };
-/** What the "Confirm with passkey" sheet shows while the browser is open. */
-export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
+/** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
+ * `browser` (the hand-off page is open), `native` (the system passkey dialog
+ * is up), `dismissed` (the person closed the system dialog). */
+export type PresencePromptDto = {
+  kind: string;
+  summary: string;
+  digestShort: string;
+  op: "get" | "create";
+  via?: "browser" | "native" | "dismissed";
+};
 
 export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
 export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
@@ -1875,8 +1905,11 @@ export const deviceConfirm = () => invoke<boolean>("device_confirm");
 export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
-/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */
-export const presenceUseRecovery = (words: string) => invoke<void>("presence_use_recovery", { words });
+/** Use the browser hand-off instead of the system passkey dialog. */
+export const presenceUseBrowser = () => invoke<void>("presence_use_browser");
+/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored).
+ * `digest` is the short digest the sheet shows: the key answers only that request. */
+export const presenceUseRecovery = (words: string, digest: string) => invoke<void>("presence_use_recovery", { words, digest });
 export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise<UnlistenFn> =>
   listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
 export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>

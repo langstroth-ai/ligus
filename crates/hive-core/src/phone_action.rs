@@ -76,6 +76,15 @@ pub enum PhoneAction {
     },
     /// Withdraw an open apply request (`proposalApplyWithdrawn`).
     WithdrawApply { chat_id: Uuid, proposal_id: Uuid, request_id: Uuid },
+    /// Propose a workspace memory change as the person (`flowRecorded` /
+    /// `memoryProposed`, on the workspace config log): a person decides it on
+    /// a desktop. `chat_id` is the chat the phone was in (the source).
+    ProposeMemory {
+        chat_id: Uuid,
+        op: crate::memory::MemoryOp,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        rationale: String,
+    },
 }
 
 impl PhoneAction {
@@ -88,6 +97,7 @@ impl PhoneAction {
             PhoneAction::ClearLockdown { .. } => "clearLockdown",
             PhoneAction::RequestApply { .. } => "requestApply",
             PhoneAction::WithdrawApply { .. } => "withdrawApply",
+            PhoneAction::ProposeMemory { .. } => "proposeMemory",
         }
     }
 
@@ -99,7 +109,8 @@ impl PhoneAction {
             | PhoneAction::Answer { chat_id, .. }
             | PhoneAction::ClearLockdown { chat_id, .. }
             | PhoneAction::RequestApply { chat_id, .. }
-            | PhoneAction::WithdrawApply { chat_id, .. } => *chat_id,
+            | PhoneAction::WithdrawApply { chat_id, .. }
+            | PhoneAction::ProposeMemory { chat_id, .. } => *chat_id,
         }
     }
 
@@ -107,7 +118,9 @@ impl PhoneAction {
     /// workspace config log.
     pub fn session_id(&self, workspace_id: Uuid) -> Uuid {
         match self {
-            PhoneAction::ClearLockdown { .. } => crate::channel::workspace_config_session_id(workspace_id),
+            PhoneAction::ClearLockdown { .. } | PhoneAction::ProposeMemory { .. } => {
+                crate::channel::workspace_config_session_id(workspace_id)
+            }
             other => other.chat_id(),
         }
     }
@@ -121,6 +134,7 @@ impl PhoneAction {
             PhoneAction::ClearLockdown { .. } => "chatLockdownCleared",
             PhoneAction::RequestApply { .. } => "proposalApplyRequested",
             PhoneAction::WithdrawApply { .. } => "proposalApplyWithdrawn",
+            PhoneAction::ProposeMemory { .. } => "flowRecorded",
         }
     }
 
@@ -139,6 +153,18 @@ impl PhoneAction {
                 Some("a base commit is 40 or 64 hex digits")
             }
             PhoneAction::ClearLockdown { raises, .. } => crate::authz::bounds::clear_names_raises(raises).err(),
+            PhoneAction::ProposeMemory { op, rationale, .. } => {
+                use crate::memory::MemoryOp;
+                if rationale.chars().count() > crate::memory::MAX_NOTE_CHARS {
+                    return Some("a rationale is at most 500 characters");
+                }
+                match op {
+                    MemoryOp::Create { title, body, tags, .. } | MemoryOp::Edit { title, body, tags, .. } => {
+                        crate::memory::content_ok(title, body, tags).err()
+                    }
+                    MemoryOp::Remove { .. } => None,
+                }
+            }
             _ => None,
         }
     }
@@ -299,6 +325,8 @@ pub struct CheckedPhoneAction {
     pub message_id: Option<Uuid>,
     /// The new apply request's id (`requestApply`).
     pub request_id: Option<Uuid>,
+    /// The new memory proposal's id (`proposeMemory`).
+    pub memory_proposal_id: Option<Uuid>,
 }
 
 /// What a phone checks before signing the preimage its box drafted for
@@ -319,7 +347,11 @@ pub struct CheckedPhoneAction {
 ///   exactly the `raises` the phone asked to clear;
 /// * `requestApply`: of `proposalId` on `hostDeviceId`, with that digest,
 ///   base and repo (the request id is the box's);
-/// * `withdrawApply`: of `requestId` for `proposalId`.
+/// * `withdrawApply`: of `requestId` for `proposalId`;
+/// * `proposeMemory`: a memory proposal of exactly `op` and `rationale`, as
+///   the person (no agent proposer), sourced from `chatId` (the proposal id
+///   is the box's; a create's new entry is named by it, whatever entry id
+///   the phone sent; the box may record the chat's egress).
 ///
 /// Anything else (another kind, workspace, chat, person or device, a field
 /// the phone didn't ask for) is refused.
@@ -345,6 +377,7 @@ pub fn check_phone_action_preimage(
         actor_id: actor.id.clone(),
         message_id: None,
         request_id: None,
+        memory_proposal_id: None,
     };
     let mismatch = "not the action this phone asked for";
     match (action, &p.event) {
@@ -399,6 +432,33 @@ pub fn check_phone_action_preimage(
             if r != request_id || pid != proposal_id {
                 return Err(mismatch);
             }
+        }
+        (
+            PhoneAction::ProposeMemory { chat_id, op, rationale },
+            SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(mp) },
+        ) => {
+            use crate::memory::MemoryOp;
+            // The proposal is known by the event that files it
+            // (`memory::bound_event_id`); a draft that isn't would be denied.
+            if mp.proposal_id != p.event_id {
+                return Err(mismatch);
+            }
+            let p = mp;
+            // A new entry is named by the proposal (the box picks both): the
+            // phone's own entry id for a create is not used.
+            let same_op = match (op, &p.op) {
+                (MemoryOp::Create { title, body, tags, .. }, MemoryOp::Create { entry_id, title: t, body: b, tags: g }) => {
+                    *entry_id == p.proposal_id && (title, body, tags) == (t, b, g)
+                }
+                (asked, drafted) => asked == drafted,
+            };
+            // The source is the phone's chat. The box may record that chat's
+            // egress: it can only narrow which turns read the note.
+            let source_ok = p.source.chat_id == Some(*chat_id) && p.source.message_id.is_none() && p.source.turn_id.is_none();
+            if !same_op || p.rationale != *rationale || !p.proposer.is_empty() || !source_ok {
+                return Err(mismatch);
+            }
+            out.memory_proposal_id = Some(p.proposal_id);
         }
         _ => return Err(mismatch),
     }

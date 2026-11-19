@@ -150,7 +150,16 @@ function SyncSection() {
       {/* Live status — driven by real connection health (connectionState), not
           just "a relay URL is set", so a dead relay / bad key is visible here. */}
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
-        {s?.connectionState === "error" ? (
+        {s?.connectionState === "limited" ? (
+          <div className="space-y-1">
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-warn-ink)" }}>
+              <IconAlertTriangle size={13} /> Syncing, but writes are waiting
+            </span>
+            <div className="text-xs text-ink-soft">
+              {s.lastError ?? "The relay isn't taking new writes for this workspace right now."}
+            </div>
+          </div>
+        ) : s?.connectionState === "error" ? (
           <div className="space-y-1">
             <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger-ink)" }}>
               <IconAlertTriangle size={13} /> Sync error

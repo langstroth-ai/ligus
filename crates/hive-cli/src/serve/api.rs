@@ -588,6 +588,7 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
 pub fn router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/me", get(super::me_api::me))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
         .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/admissions/prepare", post(super::admissions_api::prepare))
@@ -609,6 +610,10 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/chats/{id}/proposal-sets", get(super::sets::chat_sets))
         .route("/v1/flow", get(super::flow_api::flow_view))
         .route("/v1/chats/{id}/handoffs", get(super::flow_api::chat_handoffs))
+        .route("/v1/memory", get(super::memory_api::list))
+        .route("/v1/memory/proposals", get(super::memory_api::proposals))
+        .route("/v1/memory/{id}", get(super::memory_api::get_entry))
+        .route("/v1/chats/{id}/task-state", get(super::memory_api::task_state))
         .route("/v1/people", get(super::people::list_people))
         .route("/v1/people/{account}/links", get(super::identity_api::person_links))
         .route("/v1/profile", get(super::identity_api::profile))
@@ -1018,7 +1023,7 @@ fn my_standing(s: &Shared, me: &str) -> ApiResult<(WorkspaceRole, bool)> {
 /// The lockdown-clear rule: a human member at Contributor or above. A
 /// Viewer, an agent or an unknown identity never may.
 pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &str, role: WorkspaceRole) -> bool {
-    hive_core::guard::is_human_member(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
+    hive_runtime::lockdown_view::can_clear(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
 }
 
 /// `POST /v1/chats/:id/lockdown/clear`: gone (410). The phone clears a
