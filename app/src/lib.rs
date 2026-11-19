@@ -50,6 +50,7 @@ mod passkey_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
+mod repos_ui;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -6263,6 +6264,32 @@ async fn implement_proposal_targeted(
     // worktree — apply it straight to the workspace root (no re-dispatch). If the
     // tree has drifted from the base the patch was cut against, git apply fails
     // and we surface that rather than half-applying.
+    // A proposal for a workspace repo applies only in this device's checkout
+    // of that repo (never the folder bound to the workspace, review F1), in
+    // a scratch tree with a compare-and-swap of the chat branch (F4).
+    if let (ProposalKind::FileDiff, Some(repo_id), Some(diff)) = (proposal.kind, proposal.repo_id, proposal.diff.clone()) {
+        if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo_id) {
+            return Err("This chat now works in another repository; switch it back to apply this proposal, or apply it on a host.".into());
+        }
+        let prepared = crate::repos_ui::turn_repo(&state, &session)?.ok_or("this chat has no repository on this device")?;
+        let message = hive_runtime::repos::apply::apply_message(&proposal.title, pid, &[]);
+        let checkout = prepared.checkout.clone();
+        let chat = sid.to_string();
+        let applied = tokio::task::spawn_blocking(move || hive_runtime::repos::apply::apply_to_chat_branch(&checkout, &chat, &diff, &message, false, None))
+            .await
+            .map_err(map_err)?
+            .map_err(|e| format!("Not applied: {e}. Nothing changed; ask the agent to rebase it on the chat's branch, or mark it stale."))?;
+        {
+            let mut svc = state.service.lock().unwrap();
+            svc.mark_proposal_applied_on(sid, workspace_id, pid, Some(applied.commit.clone()), Some(applied.base.clone()), None).map_err(map_err)?;
+            if applied.three_way {
+                let _ = svc.post_system_note(sid, workspace_id, format!("Applied \"{}\" on a different base than it was made on (a three-way merge).", proposal.title));
+            }
+        }
+        flow::after_apply(&state, sid, workspace_id, &proposal, &prepared.checkout.to_string_lossy());
+        let _ = app.emit("workspace://synced", 1);
+        return Ok(());
+    }
     if proposal.kind == ProposalKind::FileDiff {
         if let Some(diff) = proposal.diff.clone() {
             // Phase 2a: apply into the proposal's chat base worktree and commit,
@@ -6415,8 +6442,9 @@ fn fulfil_apply_requests(app: &AppHandle) {
         let jobs = hive_runtime::apply_host::pending(&state.service.lock().unwrap(), ws).unwrap_or_default();
         if !jobs.is_empty() {
             let root = state.workspace_repo_root();
-            let repo = (!root.trim().is_empty()).then(|| std::path::PathBuf::from(root));
+            let legacy = (!root.trim().is_empty()).then(|| std::path::PathBuf::from(root));
             for job in jobs {
+                let repo = hive_runtime::apply_host::checkout_for(&state.service.lock().unwrap(), &job, legacy.clone());
                 match hive_runtime::apply_host::fulfil(&state.service, &job, repo.as_deref()) {
                     Ok(o) => tracing::info!(target: "apply", request = %job.request.id, "{o:?}"),
                     Err(e) => tracing::warn!(target: "apply", request = %job.request.id, "{e}"),
@@ -6843,7 +6871,12 @@ impl AppState {
     /// chat still works, just not isolated). Mirrors `apply_workspace_dir`'s
     /// side effects (catalogs + fs watcher, which already guard bad roots).
     fn apply_chat_dir(&self, session_id: Option<Uuid>) {
-        let repo_root = self.workspace_repo_root();
+        // A chat with a workspace repo shows that repo's checkout on this
+        // device (its chat worktree), whatever folder the workspace has.
+        let repo_root = session_id
+            .and_then(|sid| crate::repos_ui::chat_checkout(self, sid))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.workspace_repo_root());
         let dir = match session_id {
             Some(sid) if !repo_root.trim().is_empty()
                 && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root)) =>
@@ -8642,7 +8675,28 @@ async fn run_prepared_turn_inner(
             .map_err(map_err)?
     };
 
-    let workspace_root = state.workspace_root.lock().unwrap().clone();
+    // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
+    // with a repo runs only in this device's checkout of it, on its chat
+    // branch brought up to date; never in other code. The turn is claimed.
+    let repo_turn = match crate::repos_ui::turn_repo(state, session) {
+        Ok(r) => r,
+        Err(reason) => {
+            let mut svc = state.service.lock().unwrap();
+            let note = format!("{} did not run: {reason}", responder.author);
+            let _ = svc.complete_assistant_message(session_id, workspace_id, message_id, &note);
+            return Err(note);
+        }
+    };
+    let system = match &repo_turn {
+        Some(r) => join_system(&system, &r.context),
+        None => system,
+    };
+    // A repo chat reads and runs in its own chat worktree, never the active
+    // chat's folder (review F14).
+    let workspace_root = match &repo_turn {
+        Some(r) => r.chat_worktree.to_string_lossy().into_owned(),
+        None => state.workspace_root.lock().unwrap().clone(),
+    };
 
     // Per-turn isolation (concurrency): a *file-mutating* subprocess agent runs
     // in its own git worktree cut from HEAD, so parallel turns can't clobber each
@@ -8659,7 +8713,10 @@ async fn run_prepared_turn_inner(
         };
     // Worktrees are cut from the workspace's own checkout, not from
     // `workspace_root`, which follows the *active* chat's base worktree.
-    let repo_root = turn_repo_root(&state.workspace_repo_root(), &workspace_root);
+    let repo_root = match &repo_turn {
+        Some(r) => r.checkout.to_string_lossy().into_owned(),
+        None => turn_repo_root(&state.workspace_repo_root(), &workspace_root),
+    };
     let in_repo = !repo_root.trim().is_empty()
         && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root));
     // Unique per turn, so two turns in one chat never share (and remove)
@@ -9052,6 +9109,12 @@ async fn run_prepared_turn_inner(
                         // Record which agent produced it so "Send to agent to
                         // revise" re-dispatches the right one (None = primary @hive).
                         prop.producing_agent_id = responder.agent_id;
+                        // What it was made on (the repo comes from the chat).
+                        if let Some(r) = &repo_turn {
+                            prop.base_commit = Some(r.tip.clone());
+                            prop.base_ref = r.base_branch.clone();
+                        }
+                        prop.produced_on = Some(state.service.lock().unwrap().device_id());
                         // `ligus_propose_diff` named and described it.
                         if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
                             prop.title = t;
@@ -12197,13 +12260,14 @@ async fn run_device_host_loop(app: AppHandle) {
             None => true,
         };
         if due {
-            match hive_runtime::host_presence::publish_host_beat(&relay, &room, &ring, &host_id).await {
+            let coverage = crate::repos_ui::beat_coverage(&state, ws);
+            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &host_id, coverage).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
-        if let Ok(beats) = hive_runtime::host_presence::fetch_host_beats(&relay, &room, &ring).await {
-            state.host_presence.merge(beats);
+        if let Ok(beats) = hive_runtime::host_presence::fetch_beats(&relay, &room, &ring).await {
+            state.host_presence.merge_beats(beats);
         }
     }
 }
@@ -15143,6 +15207,16 @@ pub fn run() {
             remove_runtime,
             set_chat_runtime,
             set_workspace_root,
+            repos_ui::list_workspace_repos,
+            repos_ui::add_workspace_repo,
+            repos_ui::rename_workspace_repo,
+            repos_ui::remove_workspace_repo,
+            repos_ui::bind_repo_checkout,
+            repos_ui::unbind_repo_checkout,
+            repos_ui::rescan_repos,
+            repos_ui::set_repo_coverage_reporting,
+            repos_ui::chat_workspace_repo,
+            repos_ui::set_chat_workspace_repo,
             add_workspace_to_list,
             pick_workspace_folder,
             read_workspace_file,

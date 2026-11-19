@@ -70,6 +70,7 @@ import {
   type EmojiEntry,
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
+import { ChatRepoChip } from "@/components/ChatRepoChip";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import { detectMention, filterMentions } from "@/lib/mentions";
@@ -999,6 +1000,7 @@ export function ChatView({
         style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
       >
         <div className="relative flex min-h-0 flex-1 flex-col">
+        {!embedded && <ChatRepoChip sessionId={sessionId} />}
         <div ref={scrollRef} onScroll={onScroll} className="flex flex-1 flex-col overflow-y-auto px-1 py-2">
           {chat.isLoading && messages.length === 0 && <SkeletonBubbles count={3} />}
           {chat.isError && messages.length === 0 && (

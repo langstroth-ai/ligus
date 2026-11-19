@@ -1930,3 +1930,69 @@ export const forgesDeviceStatus = () => invoke<ForgeDeviceStatus>("forges_device
 export const forgesRepos = (id: string, q?: string, owner?: string, page?: number) =>
   invoke<{ login: string; owners: string[]; repos: ForgeRepo[]; hasMore: boolean }>("forges_repos", { id, q, owner, page });
 export const forgesClone = (id: string, repo: string, parent: string) => invoke<string>("forges_clone", { id, repo, parent });
+
+// ── Workspace repositories (repos-and-checkouts) ─────────────────────────
+
+/// One other host's coverage of a repo (never a path).
+export interface RepoHostCoverage {
+  hostId: string;
+  label: string;
+  kind: "device" | "worker";
+  online: boolean;
+  /// "present" | "cloning" | "missing" | "error" | "unknown"
+  state: string;
+  viaFork: boolean;
+}
+
+export interface WorkspaceRepoDto {
+  id: string;
+  name: string;
+  canonical: string;
+  forgeKind: string;
+  defaultBranch: string;
+  removed: boolean;
+  /// This device: its own checkout path, and folders a scan found.
+  here: { state: string; code: string; viaFork: boolean; path: string | null; found: string[] };
+  hosts: RepoHostCoverage[];
+}
+
+export interface WorkspaceReposDto {
+  repos: WorkspaceRepoDto[];
+  canAdmin: boolean;
+  /// The bound folder's remote, when it isn't a workspace repo yet.
+  suggestion: { canonical: string; name: string; viaFork: boolean; path: string } | null;
+  hostLabel: string;
+  coverageReporting: boolean;
+  scanRoots: string[];
+}
+
+export interface ChatWorkspaceRepoDto {
+  id: string;
+  name: string | null;
+  canonical: string | null;
+  removed: boolean;
+  baseBranch: string;
+  basePinned: boolean;
+  /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
+  here: { state: string; reason: string };
+}
+
+export const listWorkspaceRepos = () => invoke<WorkspaceReposDto>("list_workspace_repos");
+export const addWorkspaceRepo = (input: string, opts: { name?: string; kind?: string; branch?: string; path?: string } = {}) =>
+  invoke<{ id: string; canonical: string; name: string }>("add_workspace_repo", {
+    input,
+    name: opts.name ?? null,
+    kind: opts.kind ?? null,
+    branch: opts.branch ?? null,
+    path: opts.path ?? null,
+  });
+export const renameWorkspaceRepo = (repoId: string, name: string, branch?: string) =>
+  invoke<void>("rename_workspace_repo", { repoId, name, branch: branch ?? null });
+export const removeWorkspaceRepo = (repoId: string) => invoke<void>("remove_workspace_repo", { repoId });
+export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
+export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
+export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });
+export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("set_repo_coverage_reporting", { on });
+export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
+export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
+  invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });
