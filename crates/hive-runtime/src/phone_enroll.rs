@@ -16,11 +16,10 @@
 //!    phone can then pair with the box (an uncertified phone's pairing is
 //!    refused with `device_not_certified`, see `docs/relay-tunnel.md`).
 //!
-//! The device id is whatever the phone presents. A parallel change makes
-//! device ids derived from the device's first signing key; until it lands,
-//! [`check_device_id`] accepts any id. Callers go through
-//! [`PhoneCode::decode_checked`] so the derived-id rule slots in at one place
-//! (and tests can inject it now).
+//! The device id is never chosen: it is the one the phone's key derives
+//! ([`hive_core::crypto::device_id_for`] over `p256` and the 65-byte SEC1
+//! uncompressed key), and a code naming any other id is refused on decode
+//! ([`check_device_id`]), before anything is shown or certified.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -102,12 +101,19 @@ pub fn preimage(device_id: Uuid, public_key: &[u8], label: &str) -> Vec<u8> {
     out
 }
 
-/// The derived-id rule (TODO(fix/forged-equivocation)): once device ids are
-/// derived from the device's first signing key, this must refuse
-/// `device_id != derive(public_key)`. Until that branch merges it accepts
-/// any id: the phone presents its id and that is what gets certified.
+/// The derived-id rule: a phone's device id is the one its P-256 key
+/// derives (`hive_core::crypto::device_id_for(SigAlg::P256, key)`, over the
+/// 65-byte SEC1 uncompressed point, `0x04 ‖ X ‖ Y`). Any other id (chosen,
+/// another device's, the Ed25519 derivation of the same bytes, the id of the
+/// compressed form) is refused: a certificate for it would never verify.
 pub fn check_device_id(device_id: Uuid, public_key: &[u8]) -> Result<(), String> {
-    let _ = (device_id, public_key);
+    if public_key.len() != P256_KEY_LEN || public_key[0] != 0x04 {
+        return Err("a phone's key is a 65-byte uncompressed P-256 point".into());
+    }
+    let derived = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::P256, public_key);
+    if device_id != derived {
+        return Err(format!("{device_id} isn't the id its key derives ({derived})"));
+    }
     Ok(())
 }
 
@@ -138,15 +144,10 @@ impl PhoneCode {
         format!("{CODE_PREFIX}{}", URL_SAFE_NO_PAD.encode(b))
     }
 
-    /// Parse and verify a code with the derived-id rule
-    /// ([`check_device_id`]). Whitespace and line breaks are ignored.
+    /// Parse and verify a code: its signature, its label, and the
+    /// derived-id rule ([`check_device_id`]). Whitespace and line breaks are
+    /// ignored.
     pub fn decode(code: &str) -> Result<Self, PhoneCodeError> {
-        Self::decode_checked(code, check_device_id)
-    }
-
-    /// [`Self::decode`] with the device-id rule given (the test hook for the
-    /// derived-id check).
-    pub fn decode_checked(code: &str, id_check: impl Fn(Uuid, &[u8]) -> Result<(), String>) -> Result<Self, PhoneCodeError> {
         let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
         let body = compact.strip_prefix(CODE_PREFIX).ok_or(PhoneCodeError::NotACode)?;
         let b = URL_SAFE_NO_PAD.decode(body.as_bytes()).map_err(|_| PhoneCodeError::Malformed)?;
@@ -162,7 +163,7 @@ impl PhoneCode {
         }
         let c = Self { device_id, public_key, label, signature };
         c.verify()?;
-        id_check(c.device_id, &c.public_key).map_err(PhoneCodeError::DeviceIdMismatch)?;
+        check_device_id(c.device_id, &c.public_key).map_err(PhoneCodeError::DeviceIdMismatch)?;
         Ok(c)
     }
 
@@ -254,24 +255,43 @@ mod tests {
         assert_eq!(PhoneCode::decode(&format!("{CODE_PREFIX}{}", URL_SAFE_NO_PAD.encode([0u8; 40]))), Err(PhoneCodeError::Malformed));
     }
 
-    /// The hook the derived-id check (fix/forged-equivocation) slots into:
-    /// a checker that refuses the id refuses the code.
+    /// A code's device id is the one its key derives. A chosen id, another
+    /// device's id, the Ed25519 derivation of the same key bytes or the id
+    /// of the key's compressed form: each refused on decode and by
+    /// `certify_phone_code`, even though the phone's signature covers it.
     #[test]
-    fn the_device_id_rule_is_applied_on_decode() {
+    fn a_code_names_only_the_id_its_key_derives() {
+        use hive_core::crypto::{device_id_for, SigAlg};
         let p = hive_core::testkit::Phone::new();
-        let code = PhoneCode::new(p.device_id, &p, "phone").encode();
-        // Today any id passes.
-        assert!(check_device_id(p.device_id, &p.public_key()).is_ok());
-        assert!(PhoneCode::decode(&code).is_ok());
-        // A derived-id rule: the id must be a function of the key.
-        let derive = |key: &[u8]| {
-            use sha2::Digest;
-            Uuid::from_slice(&sha2::Sha256::digest(key)[..16]).unwrap()
+        let key = p.public_key();
+        assert_eq!(p.device_id, device_id_for(SigAlg::P256, &key));
+        assert!(PhoneCode::decode(&PhoneCode::new(p.device_id, &p, "phone").encode()).is_ok());
+        let other = hive_core::testkit::Phone::new();
+        let compressed = {
+            let mut c = vec![if key[64] & 1 == 0 { 2u8 } else { 3u8 }];
+            c.extend_from_slice(&key[1..33]);
+            c
         };
-        let strict = |id: Uuid, key: &[u8]| if id == derive(key) { Ok(()) } else { Err("id != derive(key)".to_string()) };
-        assert!(matches!(PhoneCode::decode_checked(&code, strict), Err(PhoneCodeError::DeviceIdMismatch(_))));
-        let derived = PhoneCode::new(derive(&p.public_key()), &p, "phone").encode();
-        assert!(PhoneCode::decode_checked(&derived, strict).is_ok());
+        for (why, id) in [
+            ("a chosen id", Uuid::new_v4()),
+            ("the nil id", Uuid::nil()),
+            ("another phone's id", other.device_id),
+            ("the Ed25519 derivation of the same bytes", device_id_for(SigAlg::Ed25519, &key)),
+            ("the compressed key's id", device_id_for(SigAlg::P256, &compressed)),
+            ("the derived id with the version cleared", {
+                let mut b = *p.device_id.as_bytes();
+                b[6] &= 0x0f;
+                Uuid::from_bytes(b)
+            }),
+        ] {
+            let code = PhoneCode::new(id, &p, "phone");
+            assert!(code.verify().is_ok(), "{why}: the phone signed it");
+            assert!(matches!(PhoneCode::decode(&code.encode()), Err(PhoneCodeError::DeviceIdMismatch(_))), "{why}");
+            let (mut svc, wid) = desktop();
+            assert!(svc.certify_phone_code(wid, &code).is_err(), "{why}");
+            assert!(certs(&svc, wid).is_empty(), "{why}");
+        }
+        assert!(check_device_id(device_id_for(SigAlg::P256, &compressed), &compressed).is_err(), "a compressed key is refused");
     }
 
     /// A label can't carry bidi overrides, isolates or invisible format
@@ -324,7 +344,7 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         (svc, wid)
@@ -439,14 +459,16 @@ mod tests {
         assert!(asked[0].contains(&code.fingerprint()), "{}", asked[0]);
     }
 
-    /// The fold, not only this desktop's check: a P-256 certificate for a
-    /// device id already certified here (as a desktop or box, or as a phone
-    /// with another key) is refused, with or without presence. Before, it
-    /// counted as re-publishing a certificate in force, so it needed no
-    /// passkey, and it turned the device into a phone with the new key: a
-    /// holder of the account key (a copied data dir) could swap a key of
-    /// their own onto another of the person's devices and keep it past the
-    /// copied device's revocation.
+    /// A P-256 certificate for a device id already certified here (as a
+    /// desktop or box, or as a phone with another key) is refused, with or
+    /// without presence. Before ids were derived it counted as re-publishing
+    /// a certificate in force, so it needed no passkey, and it turned the
+    /// device into a phone with the new key: a holder of the account key (a
+    /// copied data dir) could swap a key of their own onto another of the
+    /// person's devices and keep it past the copied device's revocation. Now
+    /// such a certificate names an id its key doesn't derive, refused here
+    /// and by the fold wherever it sorts (hive-core
+    /// `a_phone_certificate_never_takes_over_a_device_in_the_fold`).
     #[test]
     fn the_fold_refuses_a_phone_certificate_over_an_existing_device() {
         let (mut svc, wid) = desktop();
@@ -478,7 +500,7 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "box", ActorKind::Service);
         author.account_id = Some(account);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         let wid = Uuid::new_v4();
         let phone = hive_core::testkit::Phone::new();
         assert!(svc.certify_phone_code(wid, &PhoneCode::new(phone.device_id, &phone, "p")).is_err());

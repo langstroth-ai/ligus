@@ -272,7 +272,6 @@ mod tests {
         let author = ActorIdentity::new("ana".to_string(), "Ana".to_string(), ActorKind::Human);
         let svc = ChatService::new(
             EventStore::open_in_memory().unwrap(),
-            Uuid::new_v4(),
             SigningKeypair::generate().unwrap(),
             SigningKeypair::generate().unwrap(),
             author,

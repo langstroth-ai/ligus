@@ -549,7 +549,7 @@ mod tests {
         let mallory_account = Uuid::new_v4();
         let mut mallory_actor = ActorIdentity::new(mallory_account.to_string(), "Mallory", ActorKind::Human);
         mallory_actor.account_id = Some(mallory_account);
-        let mut mallory = ChatService::new(EventStore::open_in_memory().unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), mallory_actor);
+        let mut mallory = ChatService::new(EventStore::open_in_memory().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), mallory_actor);
         let config = mallory.ensure_workspace_config(wid).unwrap();
         let mut second = EventStore::open(tmp.path().join("hive.db")).unwrap();
         for env in mallory.store().list(config).unwrap() {

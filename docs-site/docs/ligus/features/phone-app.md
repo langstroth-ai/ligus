@@ -43,9 +43,11 @@ one of **your** devices:
    workspace you checked the code in: if you switch workspaces before
    confirming, the desktop refuses and asks you to check the code again.
 
-A phone code can't take over a device: a code naming a device id that is
-already one of the workspace's desktops or boxes, or a phone with another
-key, is refused by the desktop and by every member's fold.
+A phone code can't take over a device. A phone's device id is derived from
+its key, so a code naming any other id (one of the workspace's desktops or
+boxes, another phone, or an id the phone chose) is refused by the desktop
+before it shows the fingerprint, and a certificate for it by every member's
+fold.
 
 The phone is certified at the **phone tier**: it can post, react, vote,
 answer an agent's question, clear a lockdown and ask a host to apply, as you
