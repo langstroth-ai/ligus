@@ -93,7 +93,7 @@ pub fn checkout_matches(dir: &Path, repo: &WorkspaceRepo, aliases: &BTreeMap<Str
 }
 
 fn canon_path(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    git::canonical(p)
 }
 
 /// Map the checkout at `path` to `repo` on this device (a person picked it,

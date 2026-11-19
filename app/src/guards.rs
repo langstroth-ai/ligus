@@ -588,7 +588,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
         }
     }
     let bound = std::path::PathBuf::from(&repo);
-    let bound_canon = std::fs::canonicalize(&bound).unwrap_or_else(|_| bound.clone());
+    let bound_canon = hive_runtime::repos::git::canonical(&bound);
     if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
         roots.push((bound, None));
     }

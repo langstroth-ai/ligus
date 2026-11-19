@@ -100,7 +100,7 @@ pub fn migrate_bindings(data_dir: &Path, svc: &ChatService, workspace_id: Uuid, 
     let known = svc.store().repo_mappings(workspace_id)?;
     let mut map = |raw: &str| -> Option<(Uuid, PathBuf)> {
         let path = resolve_path(&dir, raw);
-        let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canon = rr::git::canonical(&path);
         // Already mapped (the common case after the first run): no git.
         if let Some(m) = known.iter().find(|m| m.path == canon && m.confirmed) {
             return Some((m.repo_id, m.path.clone()));
@@ -159,7 +159,7 @@ pub fn find_repo(entries: &[RepoEntry], sel: &str) -> Result<WorkspaceRepo> {
 fn abs(p: &str) -> Result<PathBuf> {
     let p = PathBuf::from(p);
     let p = if p.is_absolute() { p } else { std::env::current_dir()?.join(p) };
-    Ok(std::fs::canonicalize(&p).unwrap_or(p))
+    Ok(rr::git::canonical(&p))
 }
 
 /// `ligus repos [list | add | remove | rename | bind | unbind | confirm |

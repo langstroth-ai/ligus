@@ -20,14 +20,16 @@ const SKIP: &[&str] = &["node_modules", "target", ".ligus", ".hive", ".git", "ve
 /// system root, a top-level or system directory, or a home directory
 /// itself (the v1.10.2 launch-hang guard, shared).
 pub fn is_shallow_or_system_dir(p: &Path) -> bool {
-    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let p = super::git::canonical(p);
     let comps = p.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count();
     if comps <= 1 {
         return true;
     }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if std::fs::canonicalize(&home).unwrap_or(home) == p {
-            return true;
+    for var in ["HOME", "USERPROFILE"] {
+        if let Some(home) = std::env::var_os(var).map(PathBuf::from) {
+            if super::git::canonical(&home) == p {
+                return true;
+            }
         }
     }
     let s = p.to_string_lossy().to_ascii_lowercase();
@@ -140,6 +142,15 @@ mod tests {
         assert!(is_shallow_or_system_dir(Path::new("/usr/local")));
         if let Some(h) = std::env::var_os("HOME") {
             assert!(is_shallow_or_system_dir(Path::new(&h)));
+        }
+        // Windows: canonical paths are verbatim (`\\?\C:\…`), and the home
+        // directory is USERPROFILE.
+        #[cfg(windows)]
+        {
+            assert!(is_shallow_or_system_dir(Path::new(r"C:\Windows\System32")));
+            if let Some(h) = std::env::var_os("USERPROFILE") {
+                assert!(is_shallow_or_system_dir(Path::new(&h)));
+            }
         }
         let t = tempfile::tempdir().unwrap();
         let deep = t.path().join("a/b");

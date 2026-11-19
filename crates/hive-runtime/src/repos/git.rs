@@ -6,11 +6,36 @@ use std::path::{Path, PathBuf};
 
 use hive_core::workspace_repo::{canonical_repo, is_commit_id, WorkspaceRepo};
 
+/// `std::fs::canonicalize`, without the verbatim prefix Windows adds
+/// (`\\?\C:\…`): git for Windows can't open such a path (`git config
+/// --file`, `git -C`), so a checkout mapped by it would never match. The path
+/// itself when it can't be resolved.
+pub fn canonical(p: &Path) -> PathBuf {
+    simplify(std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()))
+}
+
+/// Drop Windows' verbatim prefix from a disk or UNC path (elsewhere, `p`).
+pub fn simplify(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            if rest.as_bytes().get(1) == Some(&b':') {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    p
+}
+
 /// Run hardened git in `dir`; stdout trimmed on success.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = hive_core::process_util::git()
         .arg("-C")
-        .arg(dir)
+        .arg(simplify(dir.to_path_buf()))
         .args(args)
         .output()
         .map_err(|e| format!("git {}: {e}", args.first().copied().unwrap_or("")))?;
@@ -27,7 +52,7 @@ pub fn git_common_dir(dir: &Path) -> Option<PathBuf> {
     let raw = git(dir, &["rev-parse", "--git-common-dir"]).ok()?;
     let p = PathBuf::from(raw);
     let p = if p.is_absolute() { p } else { dir.join(p) };
-    std::fs::canonicalize(&p).ok().or(Some(p))
+    Some(canonical(&p))
 }
 
 /// The main checkout's top level for `dir` (itself, or for a linked
