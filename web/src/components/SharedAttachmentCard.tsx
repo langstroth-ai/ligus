@@ -27,7 +27,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
 
   if (view.deleted) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--hive-line)" }}>
+      <span className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--ligus-line)" }}>
         <IconFile size={13} /> {view.name} (deleted)
       </span>
     );
@@ -98,7 +98,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
     <div
       data-testid="shared-attachment"
       className="flex w-72 max-w-full flex-col gap-1 rounded-lg border px-2 py-1.5 text-xs"
-      style={{ borderColor: risky ? "var(--hive-danger, #c0392b)" : "var(--hive-line)", background: "var(--hive-mist)" }}
+      style={{ borderColor: risky ? "var(--ligus-danger, #c0392b)" : "var(--ligus-line)", background: "var(--ligus-mist)" }}
     >
       <div className="flex items-center gap-1.5">
         <span aria-hidden className="opacity-60">
@@ -114,7 +114,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
         {view.fromAgentOffer ? " (an agent's file, approved by a person)" : ""}
       </div>
       {risky && (
-        <div role="alert" style={{ color: "var(--hive-danger, #c0392b)" }}>
+        <div role="alert" style={{ color: "var(--ligus-danger, #c0392b)" }}>
           {check ? check.assessment.warnings[0] ?? "This file can run code when opened." : "Its name says it can run code when opened."}
         </div>
       )}
@@ -133,22 +133,22 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
       {error && <div role="alert">{error}</div>}
       <div className="flex flex-wrap gap-1.5">
         {!check && !view.blocked && (
-          <button type="button" disabled={busy} onClick={() => void runCheck()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--hive-line)" }}>
+          <button type="button" disabled={busy} onClick={() => void runCheck()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--ligus-line)" }}>
             {busy ? "Checking…" : "Check"}
           </button>
         )}
         {check && !check.refused && (
-          <button type="button" onClick={() => void save()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--hive-line)" }}>
+          <button type="button" onClick={() => void save()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--ligus-line)" }}>
             Save…
           </button>
         )}
         {check && !check.refused && check.assessment.preview && !preview && (
-          <button type="button" onClick={() => void showPreview()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--hive-line)" }}>
+          <button type="button" onClick={() => void showPreview()} className="rounded border px-1.5 py-0.5" style={{ borderColor: "var(--ligus-line)" }}>
             Preview
           </button>
         )}
         {view.canDelete && (
-          <button type="button" onClick={() => void remove()} className="rounded border px-1.5 py-0.5 opacity-70" style={{ borderColor: "var(--hive-line)" }}>
+          <button type="button" onClick={() => void remove()} className="rounded border px-1.5 py-0.5 opacity-70" style={{ borderColor: "var(--ligus-line)" }}>
             Delete
           </button>
         )}
@@ -163,7 +163,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
           referrerPolicy="no-referrer"
           srcDoc={previewSrcDoc(preview.kind, preview.mime, preview.dataBase64)}
           className="h-48 w-full rounded border"
-          style={{ borderColor: "var(--hive-line)", background: "white" }}
+          style={{ borderColor: "var(--ligus-line)", background: "white" }}
         />
       )}
     </div>

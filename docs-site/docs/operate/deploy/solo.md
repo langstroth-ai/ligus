@@ -74,7 +74,7 @@ and [Git integration](../../ligus/features/git.md).
 
 | What | Where |
 |---|---|
-| Events, chats, proposals | `hive.db` in the app data dir |
+| Events, chats, proposals | `ligus.db` in the app data dir |
 | Identity and keys | `identity.json` in the app data dir; private keys in the OS secret store |
 | Settings | `settings.json` in the app data dir (API keys and tokens in the OS secret store) |
 | Per-chat worktrees, interrupted-turn patches | `<repo>/.ligus/` |

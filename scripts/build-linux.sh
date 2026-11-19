@@ -26,7 +26,7 @@ fi
 
 # Separate registry cache from the Windows build so concurrent runs don't
 # contend on the cargo registry lock.
-cache_vol="hive-linux-cargo-registry"
+cache_vol="ligus-linux-cargo-registry"
 docker volume inspect "$cache_vol" >/dev/null 2>&1 || docker volume create "$cache_vol" >/dev/null
 
 echo "[docker] building Linux .deb (x86_64, full P2P)…"

@@ -107,7 +107,7 @@ after it), and have the redo stage read the reviewer's notes
 (`{{nodes.review.output}}`) so each pass acts on the feedback rather than
 retrying blind. Prefer one loop per workflow and keep the rest linear.
 
-`@hive` knows this pattern: ask it to *"draft, have the reviewer critique,
+`@ligus` knows this pattern: ask it to *"draft, have the reviewer critique,
 and loop until I approve"* and it proposes the gate-routes-back workflow.
 
 ## The definition format

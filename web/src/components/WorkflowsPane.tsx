@@ -32,19 +32,19 @@ import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 export function statusTone(status: string): { color: string; background: string } {
   switch (status) {
     case "running":
-      return { color: "var(--hive-accent-ink)", background: "color-mix(in srgb, var(--hive-accent-cool) 12%, transparent)" };
+      return { color: "var(--ligus-accent-ink)", background: "color-mix(in srgb, var(--ligus-accent-cool) 12%, transparent)" };
     case "awaitingApproval":
     case "awaitingGate":
-      return { color: "var(--hive-warn-ink)", background: "color-mix(in srgb, var(--hive-accent-warm) 14%, transparent)" };
+      return { color: "var(--ligus-warn-ink)", background: "color-mix(in srgb, var(--ligus-accent-warm) 14%, transparent)" };
     case "succeeded":
     case "completed":
-      return { color: "var(--hive-success-ink)", background: "color-mix(in srgb, var(--hive-success) 14%, transparent)" };
+      return { color: "var(--ligus-success-ink)", background: "color-mix(in srgb, var(--ligus-success) 14%, transparent)" };
     case "failed":
     case "rejected":
     case "halted":
-      return { color: "var(--hive-danger-ink)", background: "color-mix(in srgb, var(--hive-danger) 14%, transparent)" };
+      return { color: "var(--ligus-danger-ink)", background: "color-mix(in srgb, var(--ligus-danger) 14%, transparent)" };
     default: // pending, skipped, canceled
-      return { color: "var(--hive-ink)", background: "var(--hive-overlay)" };
+      return { color: "var(--ligus-ink)", background: "var(--ligus-overlay)" };
   }
 }
 
@@ -88,7 +88,7 @@ export function WorkflowStages({
   return (
     <ol className="mt-2 flex flex-col gap-1.5">
       {readingOrder(nodes).map((n, i) => (
-        <li key={n.id} className="rounded-lg border px-2.5 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+        <li key={n.id} className="rounded-lg border px-2.5 py-1.5 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="flex flex-wrap items-baseline gap-x-1.5">
             <span className="text-ink-soft">{i + 1}.</span>
             <span className="font-medium">
@@ -337,7 +337,7 @@ function DefinitionCard({
         <button
           type="button"
           className="mt-2 text-xs font-medium hover:underline"
-          style={{ color: "var(--hive-accent-ink)" }}
+          style={{ color: "var(--ligus-accent-ink)" }}
           onClick={() => toggle("change")}
           disabled={busy}
         >
@@ -395,14 +395,14 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
             <span className="text-ink-soft">“{n.name}” needs your decision:</span>
             <button
               className="rounded-lg px-2.5 py-1 font-medium"
-              style={{ background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success-ink)" }}
+              style={{ background: "color-mix(in srgb, var(--ligus-success) 20%, transparent)", color: "var(--ligus-success-ink)" }}
               onClick={() => act(async () => void (await voteProposal(sessionId, n.proposalId!, true)))}
             >
               Approve
             </button>
             <button
               className="rounded-lg px-2.5 py-1 font-medium"
-              style={{ background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)", color: "var(--hive-danger-ink)" }}
+              style={{ background: "color-mix(in srgb, var(--ligus-danger) 18%, transparent)", color: "var(--ligus-danger-ink)" }}
               onClick={() => act(async () => void (await voteProposal(sessionId, n.proposalId!, false)))}
             >
               Reject
@@ -423,7 +423,7 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
       )}
 
       {run.nodes.some((n) => n.error) && (
-        <div className="mt-2 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+        <div className="mt-2 text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
           {run.nodes.find((n) => n.error)?.error}
         </div>
       )}
@@ -468,14 +468,14 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
       {open && (
         <div
           className="mt-1 max-w-full rounded-lg border p-2 text-[11px] leading-[1.5]"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-overlay)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-overlay)" }}
         >
           <div className="opacity-55">
             {statusLabel(node.status)}
             {node.attempts > 1 ? ` · ${node.attempts} attempts` : ""}
           </div>
           {node.error && (
-            <div className="mt-1 whitespace-pre-wrap break-words" style={{ color: "var(--hive-danger-ink)" }}>
+            <div className="mt-1 whitespace-pre-wrap break-words" style={{ color: "var(--ligus-danger-ink)" }}>
               {node.error}
             </div>
           )}

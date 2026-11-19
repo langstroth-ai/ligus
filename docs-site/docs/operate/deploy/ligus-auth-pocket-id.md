@@ -27,7 +27,7 @@ mkdir -p secrets && chmod 700 secrets
 docker run --rm -v "$PWD/secrets:/out" --user "$(id -u)" \
   ghcr.io/langstroth-ai/langstroth-auth:0.2.0 keygen --out /out/signing-key
 # public_key=3b6a27bc…
-echo "LIGUS_RELAY_TOKEN_PUBKEY=3b6a27bc…" > .env
+echo "LANGSTROTH_RELAY_TOKEN_PUBKEY=3b6a27bc…" > .env
 ```
 
 ## 2. Start Pocket ID and create the client
@@ -78,8 +78,8 @@ docker compose up -d
 docker compose logs langstroth-auth | head
 ```
 
-The relay runs with `LIGUS_RELAY_WORKSPACE_SCOPE=strict` and
-`LIGUS_RELAY_TENANTS=home`, so only tokens from this langstroth-auth reach it.
+The relay runs with `LANGSTROTH_RELAY_WORKSPACE_SCOPE=strict` and
+`LANGSTROTH_RELAY_TENANTS=home`, so only tokens from this langstroth-auth reach it.
 
 ## 5. Sign in
 

@@ -94,7 +94,7 @@ Rendering:
   - `caSecret`: `ca.crt`.
 - `LIGUS_MODEL_GATEWAYS_FILE=/etc/ligus/model-gateways-config/model-gateways.json`.
 
-## 4. The binary's allow-list (`hive_runtime::model_gateway`)
+## 4. The binary's allow-list (`ligus_runtime::model_gateway`)
 
 `ModelGateways::load()` reads `LIGUS_MODEL_GATEWAYS_FILE` once per process
 (a missing variable means no gateways; an unreadable or invalid file is a
@@ -117,7 +117,7 @@ silently runs without them). It validates the same rules as the chart
 | `gateway` names a listed gateway | refused: "this host doesn't offer gateway X" | via that gateway |
 | `gateway` names an unlisted one | refused | refused |
 | no `gateway`, endpoint equals a listed gateway URL (prefix match on the base URL) and its path is the wire's model API (`route_path_allowed`) | direct (unchanged) | via that gateway (credential injected); elsewhere on the gateway: refused |
-| no `gateway`, any other endpoint or a CLI's vendor endpoint | direct (unchanged) | refused when exclusive (except a `hive-daemon` runtime on a loopback endpoint); direct otherwise |
+| no `gateway`, any other endpoint or a CLI's vendor endpoint | direct (unchanged) | refused when exclusive (except a `ligus-daemon` runtime on a loopback endpoint); direct otherwise |
 
 A desktop or a plain custom base URL is unaffected: without a gateways file
 nothing changes.
@@ -234,7 +234,7 @@ env, argv or files. Tests: `gateway_route_injects_and_strips` (a fake
 upstream records headers), `request_header_allow_list`,
 `claude_code_request_shape_through_the_route` and
 `codex_request_shape_through_the_route` (recorded CLI request heads under
-`crates/hive-runtime/src/model_gateway/fixtures/`, replayed with spoofed
+`crates/ligus-runtime/src/model_gateway/fixtures/`, replayed with spoofed
 headers added), `gateway_credential_absent_from_child` (env,
 argv and a scan of the turn's files), `gateway_files_are_denied_to_children`.
 

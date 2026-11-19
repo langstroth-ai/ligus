@@ -71,16 +71,16 @@ export function languageForPath(path: string): string {
 }
 
 const KIND_BADGE: Record<string, { label: string; color: string }> = {
-  added: { label: "added", color: "var(--hive-success-ink)" },
-  untracked: { label: "new", color: "var(--hive-success-ink)" },
-  deleted: { label: "deleted", color: "var(--hive-danger-ink)" },
-  modified: { label: "modified", color: "var(--hive-accent-ink)" },
-  renamed: { label: "renamed", color: "var(--hive-accent-ink)" },
-  conflicted: { label: "conflict", color: "var(--hive-warn-ink)" },
+  added: { label: "added", color: "var(--ligus-success-ink)" },
+  untracked: { label: "new", color: "var(--ligus-success-ink)" },
+  deleted: { label: "deleted", color: "var(--ligus-danger-ink)" },
+  modified: { label: "modified", color: "var(--ligus-accent-ink)" },
+  renamed: { label: "renamed", color: "var(--ligus-accent-ink)" },
+  conflicted: { label: "conflict", color: "var(--ligus-warn-ink)" },
 };
 
-const LIST_WIDTH_KEY = "hive.diff.listWidth";
-const LAST_EDITOR_KEY = "hive.diff.lastEditor";
+const LIST_WIDTH_KEY = "ligus.diff.listWidth";
+const LAST_EDITOR_KEY = "ligus.diff.lastEditor";
 const MIN_LIST_WIDTH = 180;
 const MAX_LIST_WIDTH = 480;
 
@@ -182,7 +182,7 @@ export function DiffView({
     <div className="flex h-full">
       <div
         className="shrink-0 overflow-y-auto border-r p-2 text-sm"
-        style={{ width: listWidth, borderColor: "var(--hive-line)" }}
+        style={{ width: listWidth, borderColor: "var(--ligus-line)" }}
       >
         <div className="flex items-center justify-between px-2 py-1">
           <span className="font-medium text-ink-soft">Changes</span>
@@ -198,13 +198,13 @@ export function DiffView({
             className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left hover:opacity-100 ${
               active?.path === f.path ? "opacity-100" : "opacity-75"
             }`}
-            style={{ background: active?.path === f.path ? "var(--hive-mist)" : "transparent" }}
+            style={{ background: active?.path === f.path ? "var(--ligus-mist)" : "transparent" }}
             title={f.path}
           >
             <span className="truncate font-mono text-xs">{f.path}</span>
             <span className="shrink-0 text-xs">
-              <span style={{ color: "var(--hive-success-ink)" }}>+{f.addedLines}</span>{" "}
-              <span style={{ color: "var(--hive-danger-ink)" }}>−{f.removedLines}</span>
+              <span style={{ color: "var(--ligus-success-ink)" }}>+{f.addedLines}</span>{" "}
+              <span style={{ color: "var(--ligus-danger-ink)" }}>−{f.removedLines}</span>
             </span>
           </button>
         ))}
@@ -215,13 +215,13 @@ export function DiffView({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize changes list"
-        className="relative w-1.5 shrink-0 cursor-col-resize transition-colors hover:bg-[color:var(--hive-overlay)]"
+        className="relative w-1.5 shrink-0 cursor-col-resize transition-colors hover:bg-[color:var(--ligus-overlay)]"
         style={{ touchAction: "none" }}
         onPointerDown={startListResize}
       >
         <span
           className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
-          style={{ background: "var(--hive-line)" }}
+          style={{ background: "var(--ligus-line)" }}
         />
       </div>
 
@@ -230,13 +230,13 @@ export function DiffView({
           <>
             <div
               className="flex items-center gap-2 border-b px-3 py-1.5 text-xs"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
             >
               <span className="truncate font-mono text-ink-soft">{active.path}</span>
               {KIND_BADGE[active.kind] && (
                 <span
                   className="shrink-0 rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
-                  style={{ color: KIND_BADGE[active.kind].color, background: "var(--hive-mist)" }}
+                  style={{ color: KIND_BADGE[active.kind].color, background: "var(--ligus-mist)" }}
                 >
                   {KIND_BADGE[active.kind].label}
                 </span>
@@ -246,7 +246,7 @@ export function DiffView({
               {/* Segmented view toggle — the familiar GitHub/VS Code pattern. */}
               <div
                 className="flex shrink-0 items-center gap-0.5 rounded-xl border p-0.5"
-                style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+                style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
                 role="tablist"
                 aria-label="Diff layout"
               >
@@ -263,9 +263,9 @@ export function DiffView({
                     onClick={() => setSideBySide(t.id)}
                     className="rounded-[9px] px-2.5 py-0.5 font-medium transition-colors"
                     style={{
-                      background: sideBySide === t.id ? "var(--hive-panel)" : "transparent",
+                      background: sideBySide === t.id ? "var(--ligus-panel)" : "transparent",
                       opacity: sideBySide === t.id ? 1 : 0.55,
-                      boxShadow: sideBySide === t.id ? "0 1px 2px color-mix(in srgb, var(--hive-ink) 8%, transparent)" : undefined,
+                      boxShadow: sideBySide === t.id ? "0 1px 2px color-mix(in srgb, var(--ligus-ink) 8%, transparent)" : undefined,
                     }}
                   >
                     {t.label}
@@ -313,15 +313,15 @@ export function DiffView({
                           <div
                             className="absolute right-0 top-full z-50 mt-1 min-w-40 overflow-hidden rounded-xl border p-1 shadow-xl"
                             style={{
-                              borderColor: "var(--hive-line)",
-                              background: "var(--hive-panel)",
+                              borderColor: "var(--ligus-line)",
+                              background: "var(--ligus-panel)",
                             }}
                           >
                             {editorList.map((ed) => (
                               <button
                                 key={ed.id}
                                 onClick={() => void openIn(ed.id)}
-                                className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[color:var(--hive-mist)]"
+                                className="block w-full rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[color:var(--ligus-mist)]"
                               >
                                 Open in {ed.label}
                               </button>

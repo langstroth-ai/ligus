@@ -8,7 +8,7 @@ brew install --cask langstroth-ai/ligus/ligus-app
 ```
 
 The desktop cask is `ligus-app` (a formula and a cask both named `ligus` would
-collide in one tap). If you installed the former `hive` cask or `hive-cli`
+collide in one tap). If you installed the former `ligus` cask or `ligus-cli`
 formula from the old tap, `brew upgrade` moves you to `ligus-app` and `ligus`.
 
 Homebrew asks you to trust a third-party tap before it loads anything from it.
@@ -20,7 +20,7 @@ brew trust --tap langstroth-ai/ligus        # a new install
 brew trust --tap langstroth-ai/ligus     # a tap added before the rename
 ```
 
-A trust entry for the old names (`hive-cli`, `hive`) does not cover the new
+A trust entry for the old names (`ligus-cli`, `ligus`) does not cover the new
 ones (`ligus`, `ligus-app`).
 
 Upgrade later with:

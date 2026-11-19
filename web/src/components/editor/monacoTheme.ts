@@ -1,16 +1,16 @@
-// Derive a Monaco editor theme from Hive's `--hive-*` CSS tokens so the code
+// Derive a Monaco editor theme from Ligus's `--ligus-*` CSS tokens so the code
 // editor's chrome matches whatever palette (incl. Obsidian) is applied to the
 // React shell. Like `DiffView` we can't feed Monaco the CSS custom properties
 // directly — Monaco wants concrete hex colours — so we read the computed tokens
 // off `:root`, convert them to hex, and register/apply a named theme. It is
-// re-applied on the `hive:theme` window event (dispatched by `applyTheme`).
+// re-applied on the `ligus:theme` window event (dispatched by `applyTheme`).
 import * as monacoNs from "monaco-editor";
 import { currentScheme } from "@/lib/theme";
 
 type Monaco = typeof monacoNs;
 
 /// Name to pass to `<Editor theme=… />` / `monaco.editor.setTheme`.
-export const MONACO_THEME = "hive-tokens";
+export const MONACO_THEME = "ligus-tokens";
 
 function readToken(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -37,13 +37,13 @@ function toHex(color: string): string | undefined {
 /// Build the `colors` map for `defineTheme`, dropping any token that didn't
 /// resolve so Monaco never receives an invalid value.
 function buildColors(): Record<string, string> {
-  const canvas = toHex(readToken("--hive-canvas"));
-  const panel = toHex(readToken("--hive-panel"));
-  const ink = toHex(readToken("--hive-ink"));
-  const mist = toHex(readToken("--hive-mist"));
-  const line = toHex(readToken("--hive-line"));
-  const accent = toHex(readToken("--hive-accent-cool")) ?? toHex(readToken("--hive-accent-warm"));
-  const overlay = toHex(readToken("--hive-overlay"));
+  const canvas = toHex(readToken("--ligus-canvas"));
+  const panel = toHex(readToken("--ligus-panel"));
+  const ink = toHex(readToken("--ligus-ink"));
+  const mist = toHex(readToken("--ligus-mist"));
+  const line = toHex(readToken("--ligus-line"));
+  const accent = toHex(readToken("--ligus-accent-cool")) ?? toHex(readToken("--ligus-accent-warm"));
+  const overlay = toHex(readToken("--ligus-overlay"));
 
   const wanted: Record<string, string | undefined> = {
     "editor.background": canvas,
@@ -83,9 +83,9 @@ function buildColors(): Record<string, string> {
   return out;
 }
 
-/// Define + apply the Hive theme. Inherits syntax token colours from the
+/// Define + apply the Ligus theme. Inherits syntax token colours from the
 /// nearest built-in base (vs / vs-dark) and overrides the editor chrome with
-/// Hive tokens. Safe to call repeatedly (idempotent redefine).
+/// Ligus tokens. Safe to call repeatedly (idempotent redefine).
 export function applyMonacoTheme(monaco: Monaco = monacoNs): void {
   const dark = currentScheme() === "dark";
   monaco.editor.defineTheme(MONACO_THEME, {
@@ -101,6 +101,6 @@ export function applyMonacoTheme(monaco: Monaco = monacoNs): void {
 /// unsubscribe.
 export function watchMonacoTheme(monaco: Monaco = monacoNs): () => void {
   const onThemeChange = () => applyMonacoTheme(monaco);
-  window.addEventListener("hive:theme", onThemeChange);
-  return () => window.removeEventListener("hive:theme", onThemeChange);
+  window.addEventListener("ligus:theme", onThemeChange);
+  return () => window.removeEventListener("ligus:theme", onThemeChange);
 }

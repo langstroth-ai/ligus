@@ -2,8 +2,8 @@
 //! behind the [`NativeAuthenticator`] trait): no platform API, no prompt.
 
 use super::*;
-use hive_core::presence::soft::SoftAuthenticator;
-use hive_core::presence::{self, b64url, PasskeyCredential, PasskeyKey};
+use ligus_core::presence::soft::SoftAuthenticator;
+use ligus_core::presence::{self, b64url, PasskeyCredential, PasskeyKey};
 use std::sync::atomic::AtomicUsize;
 use uuid::Uuid;
 
@@ -137,7 +137,7 @@ fn request(cred_ids: Vec<String>) -> PresenceRequest {
         kind: "memberRemoved".into(),
         account_id: Uuid::from_u128(77),
         credential_ids: cred_ids,
-        digest_short: hive_core::keys::hex(&challenge[..8]),
+        digest_short: ligus_core::keys::hex(&challenge[..8]),
         summary: "Remove Bea".into(),
         policy: PresencePolicy::ligus(),
     }
@@ -357,12 +357,12 @@ fn native_create_matches_the_page() {
 /// event digest the fold recomputes.
 #[test]
 fn native_ceremonies_pass_the_fold() {
-    use hive_core::{ActorIdentity, ActorKind, SigningKeypair, Verdict, WorkspaceAuthz};
-    let store = hive_runtime::EventStore::open_in_memory().unwrap();
+    use ligus_core::{ActorIdentity, ActorKind, SigningKeypair, Verdict, WorkspaceAuthz};
+    let store = ligus_runtime::EventStore::open_in_memory().unwrap();
     let account = Uuid::new_v4();
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
-    let mut svc = hive_runtime::chat_service::ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+    let mut svc = ligus_runtime::chat_service::ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
     svc.disable_test_presence();
     let ws = Uuid::new_v4();
     svc.ensure_workspace_config(ws).unwrap();
@@ -387,7 +387,7 @@ fn native_ceremonies_pass_the_fold() {
         public_key,
         label: "Touch ID".into(),
         recovery: false,
-        registered_at: hive_core::Timestamp::now(),
+        registered_at: ligus_core::Timestamp::now(),
     };
     let m2 = m.clone();
     let env = svc
@@ -397,12 +397,12 @@ fn native_ceremonies_pass_the_fold() {
             run_get(as_native(&m2), &req, &Signals::new(), WAIT, &Log::default(), || panic!("no browser"))
         })
         .unwrap();
-    let log = svc.store().list(hive_core::workspace_config_session_id(ws)).unwrap();
-    let verdicts = hive_core::fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked);
+    let log = svc.store().list(ligus_core::workspace_config_session_id(ws)).unwrap();
+    let verdicts = ligus_core::fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked);
     assert_eq!(verdicts[&env.event_id], Verdict::Allowed);
     assert_eq!(svc.passkeys_of(ws, account).unwrap().len(), 1);
     // The digest the native authenticator signed is the event's own.
-    let a = hive_core::presence::presence_of(&env).unwrap().unwrap();
+    let a = ligus_core::presence::presence_of(&env).unwrap().unwrap();
     assert_eq!(presence::returned_challenge(&a.client_data_json).unwrap(), presence::challenge(&env).to_vec());
 }
 

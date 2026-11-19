@@ -61,7 +61,7 @@ interface MdNode {
 }
 
 /// A remark plugin that renders an agent reply's `@you` as `@<requester>`
-/// with mention styling (`hive-mention`, plus `hive-mention-me` when the
+/// with mention styling (`ligus-mention`, plus `ligus-mention-me` when the
 /// viewer is the requester). Display only: the message body is not changed.
 /// Code spans, code blocks and links are left alone.
 export function remarkYouMention(opts: { name: string; me: boolean }) {
@@ -80,7 +80,7 @@ export function remarkYouMention(opts: { name: string; me: boolean }) {
                 data: {
                   hName: "span",
                   hProperties: {
-                    className: opts.me ? ["hive-mention", "hive-mention-me"] : ["hive-mention"],
+                    className: opts.me ? ["ligus-mention", "ligus-mention-me"] : ["ligus-mention"],
                     title: opts.me ? "Mentions you" : `Mentions ${name}`,
                   },
                   hChildren: [{ type: "text", value: `@${name}` }],

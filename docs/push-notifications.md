@@ -1,6 +1,6 @@
 # Push notifications (iPhone)
 
-`hive serve` can wake the Hive iPhone app with a notification when an agent
+`ligus serve` can wake the Ligus iPhone app with a notification when an agent
 finishes a reply, someone mentions you, a change is ready for review, or a
 workflow waits for your approval. The notification content is end-to-end
 encrypted: the relay and Apple see only ciphertext. The wire format is
@@ -9,13 +9,13 @@ page covers what the host sends, when, and how to turn it on for your own
 setup.
 
 Push needs remote access through a relay ([`ios-app.md`](ios-app.md#remote-access-through-a-relay-optional-off-by-default)).
-Without it, `hive serve` can still notify through a self-hosted ntfy server
+Without it, `ligus serve` can still notify through a self-hosted ntfy server
 (`--ntfy-url` / `--ntfy-topic`), which sends no message content at all.
 
 ## How it works
 
 ```
-hive serve ──(control WebSocket)──▶ relay ──(HTTP/2, APNs key)──▶ APNs ──▶ iPhone
+ligus serve ──(control WebSocket)──▶ relay ──(HTTP/2, APNs key)──▶ APNs ──▶ iPhone
   encrypts per phone                 forwards ct                       Notification Service
   with that phone's push key         + the phone's APNs token          Extension decrypts and
                                                                        shows title/body
@@ -25,17 +25,17 @@ hive serve ──(control WebSocket)──▶ relay ──(HTTP/2, APNs key)─�
    enrollment handshake. The host keeps it in `tunnel/phones.json`; the app
    keeps it in a Keychain access group shared only with its Notification
    Service Extension.
-2. On an event, `hive serve` builds the plaintext below and seals it for each
+2. On an event, `ligus serve` builds the plaintext below and seals it for each
    phone that wants pushes: `ChaCha20-Poly1305(push_key, nonce, plaintext,
    ctx("push", host_id, pid))`. It sends `{"t":"push","pid","ct","prio","collapse"}`
    on its control connection.
 3. The relay looks up the APNs token the phone registered when it connected,
-   and sends APNs a generic alert ("Hive" / "New activity on your host") with
+   and sends APNs a generic alert ("Ligus" / "New activity on your host") with
    `mutable-content: 1` and the ciphertext.
 4. The app's Notification Service Extension decrypts it with the push key,
    checks `ts` (within 1 h) and `seq` (strictly increasing, so a replay shows
    only the generic text), and replaces the title and body. Tapping it opens
-   `hive://chat/<chatId>`. If anything fails, the generic text stays.
+   `ligus://chat/<chatId>`. If anything fails, the generic text stays.
 
 ## Events and payload
 
@@ -49,7 +49,7 @@ Plaintext (JSON) of every push:
 | `kind` | string | always | see below |
 | `title` | ≤ 64 bytes | always | names the sender and the event, **never** message text |
 | `body` | ≤ 512 bytes | always | the preview, or `""` with previews off |
-| `chatId` | UUID | chat events | deep link `hive://chat/<chatId>`; also the collapse key (HMACed) |
+| `chatId` | UUID | chat events | deep link `ligus://chat/<chatId>`; also the collapse key (HMACed) |
 | `sender` | ≤ 64 bytes | `message.done`, `mention` | the agent or member name alone |
 | `proposalId` | UUID | `proposal.created`, `workflow.approval`, `review.recruit` | the proposal to review |
 | `workflowRunId` | UUID | `workflow.approval` | the run waiting on the gate |
@@ -87,7 +87,7 @@ Rules:
   reply with `@you` carries `requester {name, actorId, isYou}` so the phone
   renders `@you` as `@<name>`.
 - **Only news.** Replies, proposals and gates created more than 10 minutes
-  before `hive serve` started (history that synced in late) don't push, and a
+  before `ligus serve` started (history that synced in late) don't push, and a
   restart never replays.
 
 ## Per-phone settings
@@ -104,7 +104,7 @@ route `PUT /v1/tunnel/push {"enabled": bool, "previews"?: bool}`:
 
 ## Host-side limits
 
-On top of the relay's limits (§11), `hive serve` drops a push to a phone when:
+On top of the relay's limits (§11), `ligus serve` drops a push to a phone when:
 
 | Rule | Limit |
 |---|---|
@@ -163,12 +163,12 @@ Use the open relay ([langstroth-ai/langstroth-relay](https://github.com/langstro
 `cmd/langstroth-relay`) with tunnels on and the APNs settings:
 
 ```sh
-LIGUS_RELAY_TUNNEL=open                      # or allowlist + LIGUS_RELAY_TUNNEL_HOSTS=<host id>
-LIGUS_RELAY_APNS_KEY_FILE=/path/to/AuthKey_KEYID.p8   # or LIGUS_RELAY_APNS_KEY=<inline PEM>
-LIGUS_RELAY_APNS_KEY_ID=<Key ID>
-LIGUS_RELAY_APNS_TEAM_ID=<Team ID>
-LIGUS_RELAY_APNS_TOPIC=<the app's bundle id>
-LIGUS_RELAY_APNS_ENV=auto                    # optional: auto | sandbox | production
+LANGSTROTH_RELAY_TUNNEL=open                      # or allowlist + LANGSTROTH_RELAY_TUNNEL_HOSTS=<host id>
+LANGSTROTH_RELAY_APNS_KEY_FILE=/path/to/AuthKey_KEYID.p8   # or LANGSTROTH_RELAY_APNS_KEY=<inline PEM>
+LANGSTROTH_RELAY_APNS_KEY_ID=<Key ID>
+LANGSTROTH_RELAY_APNS_TEAM_ID=<Team ID>
+LANGSTROTH_RELAY_APNS_TOPIC=<the app's bundle id>
+LANGSTROTH_RELAY_APNS_ENV=auto                    # optional: auto | sandbox | production
 ```
 
 `auto` uses the environment each phone reports: `development` for Xcode
@@ -180,10 +180,10 @@ Check it: `GET /v1/tunnel/info` on the relay reports `"push": true`.
 ### 3. Point the host at the relay and pair
 
 ```sh
-hive remote enable --relay https://<your relay>
-hive serve                  # or restart the service
-hive pair                   # scan with the phone
-hive remote status          # "push available" once connected to a relay with a key
+ligus remote enable --relay https://<your relay>
+ligus serve                  # or restart the service
+ligus pair                   # scan with the phone
+ligus remote status          # "push available" once connected to a relay with a key
 ```
 
 ### 4. Build the app with push on
@@ -207,16 +207,16 @@ host. **Settings → Notifications** in the app toggles previews.
 - **`DeviceTokenNotForTopic`** in the relay log: the topic used isn't the
   bundle id of the build on the phone. Current apps report their bundle id
   (`apns.topic`) and a v0.3 relay pushes with it when it is allow-listed
-  (`LIGUS_RELAY_APNS_TOPIC` / `LIGUS_RELAY_APNS_TOPICS`); `topic not allowed`
+  (`LANGSTROTH_RELAY_APNS_TOPIC` / `LANGSTROTH_RELAY_APNS_TOPICS`); `topic not allowed`
   means add it there. For an older app (no topic) the relay keeps the token;
   fix the default topic.
 - **`BadDeviceToken`**: sandbox vs production mismatch, e.g. an Xcode build
-  sent to the production endpoint. Use `LIGUS_RELAY_APNS_ENV=auto`, or match it
+  sent to the production endpoint. Use `LANGSTROTH_RELAY_APNS_ENV=auto`, or match it
   to the build.
 - Nothing arrives while the app is open: expected, the foreground stream
   suppresses pushes. Background the app and try again.
 - Nothing arrives at all: check that the phone is paired and active
-  (`hive phones list`), that notifications are allowed for the app in iOS
+  (`ligus phones list`), that notifications are allowed for the app in iOS
   Settings, and run `ligus remote push-test`; the `push:` lines in the serve
   log show every decision and relay refusal.
 

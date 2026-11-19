@@ -17,9 +17,9 @@ export function shouldAutoTour(settings: { onboarded: boolean; tourSeen: boolean
   return settings != null && settings.onboarded && !settings.tourSeen;
 }
 
-/// The Hive 1.x webview flags. 0.1 never reads them; drop them on completion so
+/// The Ligus 1.x webview flags. 0.1 never reads them; drop them on completion so
 /// they can't mislead anyone inspecting storage.
-const LEGACY_KEYS = ["hive.onboarded", "hive.tourSeen"];
+const LEGACY_KEYS = ["ligus.onboarded", "ligus.tourSeen"];
 
 export function clearLegacyFirstRunFlags(): void {
   try {

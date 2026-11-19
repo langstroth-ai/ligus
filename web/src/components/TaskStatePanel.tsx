@@ -30,7 +30,7 @@ export function TaskStateView({ slots }: { slots: TaskSlotDto[] }) {
   return (
     <div className="mb-2 flex flex-col gap-1.5" data-testid="task-state" aria-label="Task state" role="status" aria-live="polite">
       {shown.map((s) => (
-        <div key={`${s.writer}/${s.update.taskId}/${s.update.agentKey}`} className="rounded-xl border px-3 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)", opacity: s.active ? 1 : 0.7 }}>
+        <div key={`${s.writer}/${s.update.taskId}/${s.update.agentKey}`} className="rounded-xl border px-3 py-1.5 text-xs" style={{ borderColor: "var(--ligus-line)", opacity: s.active ? 1 : 0.7 }}>
           <div className="flex items-center gap-2">
             <span className="font-semibold">
               <bdi>{s.agentName}</bdi>
@@ -38,13 +38,13 @@ export function TaskStateView({ slots }: { slots: TaskSlotDto[] }) {
             <Badge tone={TONE[s.update.status] ?? "neutral"}>{TASK_STATUS_LABEL[s.update.status]}</Badge>
             {s.update.progress != null && (
               <span className="flex items-center gap-1" aria-label={`${s.update.progress}% done`}>
-                <span className="inline-block h-1.5 w-16 overflow-hidden rounded-full" style={{ background: "var(--hive-mist)" }}>
-                  <span className="block h-full" style={{ width: `${s.update.progress}%`, background: "var(--hive-accent-fill)" }} />
+                <span className="inline-block h-1.5 w-16 overflow-hidden rounded-full" style={{ background: "var(--ligus-mist)" }}>
+                  <span className="block h-full" style={{ width: `${s.update.progress}%`, background: "var(--ligus-accent-fill)" }} />
                 </span>
                 {s.update.progress}%
               </span>
             )}
-            <span className="ml-auto" style={{ color: "var(--hive-ink-soft)" }}>
+            <span className="ml-auto" style={{ color: "var(--ligus-ink-soft)" }}>
               {new Date(s.atMs).toLocaleTimeString()}
             </span>
           </div>

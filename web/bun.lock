@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "hive-web",
+      "name": "ligus-web",
       "dependencies": {
         "@monaco-editor/react": "^4.7.0",
         "@tanstack/react-query": "^5.107.1",

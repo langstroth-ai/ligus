@@ -5,7 +5,7 @@ cloud VM, a spare box, or as a background process on your own machine. This page
 covers the ways to wire that up and which one fits your situation.
 
 > The command reference for the CLI lives in
-> [`crates/hive-cli/README.md`](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md).
+> [`crates/ligus-cli/README.md`](https://github.com/langstroth-ai/ligus/blob/main/crates/ligus-cli/README.md).
 > This page is about **topology** — where the agent runs and how it reaches your
 > workspace.
 
@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh
 
 Both put the prebuilt `ligus` binary on your `PATH` (the installer honors
 `LIGUS_INSTALL_DIR` / `LIGUS_VERSION`). Or build from source:
-`cargo install --path crates/hive-cli`.
+`cargo install --path crates/ligus-cli`.
 
 The CLI is the **same runtime as the desktop app, without the window** — so it
 can host agents, drive chats, and sync from a terminal or a background service.
@@ -37,7 +37,7 @@ git hook / CI (setup 1 below).
 ## The one rule that decides your setup
 
 Ligus state is a **per-device, end-to-end-encrypted event log** — a local
-`hive.db`. Anything participating in a workspace must either
+`ligus.db`. Anything participating in a workspace must either
 
 - **share that file** (same machine), or
 - **sync it over a relay** (different machines or processes).
@@ -51,7 +51,7 @@ Everything below follows from that.
 The most common local case: you already run the desktop app and want your agents
 to **keep answering `@mentions` even when the app is closed** — with zero
 infrastructure. Point the CLI at the app's own data dir so both read/write the
-same `hive.db`:
+same `ligus.db`:
 
 ```sh
 # macOS app data dir shown; adjust per-OS. `ligus agent` is a local, personal
@@ -166,7 +166,7 @@ it was down. `ligus queue` shows what's waiting and whether each agent's host is
 online; if a member's device host is offline, `ligus set-agent-host <agent>
 <worker>` reassigns the agent to a worker to drain it ("run on worker instead").
 See the
-[CLI README](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#the-worker-daemon-spec-124)
+[CLI README](https://github.com/langstroth-ai/ligus/blob/main/crates/ligus-cli/README.md#the-worker-daemon-spec-124)
 for the full daemon behaviour.
 
 The **desktop app** surfaces the same queue without the CLI: the **Review**
@@ -179,7 +179,7 @@ to an online worker — the GUI equivalent of `ligus set-agent-host`. See
 like **Linear** or **GitHub** through MCP tools: point `LIGUS_MCP_CONFIG` at a TOML
 listing MCP servers and provision each server's token via the environment (never
 in the file). With no config it runs tool-free, exactly as before. See the
-[CLI README — MCP tools for headless agents](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
+[CLI README — MCP tools for headless agents](https://github.com/langstroth-ai/ligus/blob/main/crates/ligus-cli/README.md#mcp-tools-for-headless-agents).
 
 **Tools are gated on the requester's role.** A synced message only drives the
 worker's tools if its author holds at least `LIGUS_MCP_MIN_ROLE`
@@ -189,7 +189,7 @@ replies, tool-free or at the CLI's read-only tier (Codex, aider, pi and Hermes
 are refused), so a Viewer can't provoke a write to Linear or GitHub through a
 headless agent. The same gate applies to `ligus agent` and the desktop. Every
 agent process also runs in the [OS sandbox](../../ligus/concepts/security.md#os-sandbox). See the
-[CLI README — requester-role gate](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
+[CLI README — requester-role gate](https://github.com/langstroth-ai/ligus/blob/main/crates/ligus-cli/README.md#requester-role-gate-ligus_mcp_min_role).
 
 Do **not** try to substitute a network filesystem (SSHFS/NFS) for the relay —
 SQLite over a network mount is corruption-prone. Use the relay.

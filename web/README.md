@@ -12,8 +12,8 @@ to the Rust backend over IPC.
   subscribes to emitted events. Other `src/lib/` modules cover mentions, slash
   commands, templates, workflow helpers, theme, and attachments.
 - `src/bindings/` — **generated** TypeScript types, mirrored from the Rust DTOs
-  in [`hive-proto`](../crates/hive-proto/README.md). Do not hand-edit; regenerate
-  with `cargo test -p hive-proto export_bindings`.
+  in [`ligus-proto`](../crates/ligus-proto/README.md). Do not hand-edit; regenerate
+  with `cargo test -p ligus-proto export_bindings`.
 - Data fetching uses **TanStack Query**; routing uses TanStack Router.
 
 ## Dev commands

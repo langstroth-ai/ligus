@@ -39,8 +39,8 @@ itself, in Docker:
 docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
 docker run -d --name langstroth-relay --restart unless-stopped \
   -p 127.0.0.1:8443:8443 -v langstroth-relay:/data \
-  -e LIGUS_RELAY_DATA_DIR=/data \
-  -e LIGUS_RELAY_TUNNEL=open \
+  -e LANGSTROTH_RELAY_DATA_DIR=/data \
+  -e LANGSTROTH_RELAY_TUNNEL=open \
   langstroth-relay
 curl -s localhost:8443/v1/health
 # ok
@@ -54,7 +54,7 @@ reach. Two common options:
 - **A public name** with a reverse proxy (Caddy) in front; then also gate the
   relay with tokens. See [Self-hosting a relay](../networking/self-host.md).
 
-`LIGUS_RELAY_TUNNEL=open` is only needed for the phone tunnel (step 6). On a
+`LANGSTROTH_RELAY_TUNNEL=open` is only needed for the phone tunnel (step 6). On a
 relay others can reach, prefer `allowlist` once you know the home server's
 host id.
 

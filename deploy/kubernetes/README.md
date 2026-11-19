@@ -21,7 +21,7 @@ non-interactively with `--json`. See [`AGENTS.md`](../../AGENTS.md).
 | Component | Kubernetes shape | State | Holds E2EE keys? |
 |---|---|---|---|
 | Relay (separate repo, `langstroth-ai/langstroth-relay`) | Deployment + Postgres (external or an in-cluster operator); the tunnel part pinned to one replica | Postgres | **No**, ciphertext only |
-| `ligus serve` (one per workspace) | StatefulSet, 1 replica, PVC for `LIGUS_DATA_DIR` | PVC (identity, `hive.db`, tunnel keys, checkouts) | Yes |
+| `ligus serve` (one per workspace) | StatefulSet, 1 replica, PVC for `LIGUS_DATA_DIR` | PVC (identity, `ligus.db`, tunnel keys, checkouts) | Yes |
 | `ligus worker` | One single-replica StatefulSet per named host (`worker.instances[]`); agents bound by host | PVCs per host | Yes |
 | MCP servers | Deployment + Service (or ToolHive / kagent CRDs); stdio servers run inside the turn | per server | No |
 | Local models | vLLM / KServe / llm-d behind an OpenAI-compatible Service | model cache | No |
@@ -30,7 +30,7 @@ Two rules follow from Ligus's design and shape everything here:
 
 1. **One identity, one writer.** A `ligus serve` or `ligus worker` process is a
    Ligus *device*: its keys and its SQLite event log live in its data dir. Never
-   run two pods on the same data dir, and never put `hive.db` on a network
+   run two pods on the same data dir, and never put `ligus.db` on a network
    filesystem (NFS, SMB, RWX volumes). Use a `ReadWriteOncePod` PVC and a
    StatefulSet.
 2. **Keys stay out of the relay.** The workspace key, device keys and model or

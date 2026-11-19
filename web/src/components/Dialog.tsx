@@ -100,9 +100,9 @@ export function DialogHost() {
     <Modal
       onClose={onCancel}
       overlayClassName="z-[990] flex items-center justify-center p-6"
-      overlayStyle={{ background: "color-mix(in srgb, var(--hive-ink) 45%, transparent)" }}
+      overlayStyle={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)" }}
       panelClassName="w-full max-w-sm rounded-2xl border p-5 shadow-2xl"
-      panelStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       {req.title && <div className="text-base font-semibold">{req.title}</div>}
       <div className={`text-sm ${req.title ? "mt-1 opacity-70" : "font-medium"}`}>{req.message}</div>
@@ -118,7 +118,7 @@ export function DialogHost() {
             if (e.key === "Enter") onAccept();
           }}
           className="mt-3 w-full rounded-lg border px-3 py-2 text-sm outline-none"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)" }}
         />
       )}
 
@@ -128,7 +128,7 @@ export function DialogHost() {
           // For a destructive confirm, focus Cancel — so a reflexive Enter
           // cancels rather than executing the dangerous action.
           autoFocus={req.kind === "confirm" && req.danger}
-          className="rounded-lg px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-[color:var(--hive-hover)] hover:text-ink"
+          className="rounded-lg px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
         >
           Cancel
         </button>
@@ -138,8 +138,8 @@ export function DialogHost() {
           className="rounded-lg px-4 py-1.5 text-sm font-medium hover:brightness-110"
           style={{
             background:
-              req.kind === "confirm" && req.danger ? "var(--hive-danger-fill)" : "var(--hive-accent-fill)",
-            color: "var(--hive-on-accent)",
+              req.kind === "confirm" && req.danger ? "var(--ligus-danger-fill)" : "var(--ligus-accent-fill)",
+            color: "var(--ligus-on-accent)",
           }}
         >
           {req.kind === "prompt" ? "OK" : req.confirmLabel ?? "Confirm"}

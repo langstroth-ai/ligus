@@ -57,13 +57,13 @@ export function MarksView({
         ) : (
           <ul className="space-y-1.5 text-xs">
             {marks.map((m) => (
-              <li key={m.id} className="flex items-start justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={m.id} className="flex items-start justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
                 <div className="min-w-0">
                   <div>
                     <span className="font-semibold">{MARK_LABEL[m.kind]}</span> · <code className="break-all">{m.path || m.taskId}</code>
                     {m.lines && ` :${m.lines[0]}-${m.lines[1]}`}
                   </div>
-                  <div style={{ color: "var(--hive-ink-soft)" }}>
+                  <div style={{ color: "var(--ligus-ink-soft)" }}>
                     by {m.by}
                     {m.chatTitle && ` in “${m.chatTitle}”`}
                     {m.expiresMs != null && ` · ${minutesLeft(m.expiresMs)} min left`}
@@ -88,7 +88,7 @@ export function MarksView({
           aria-label="Path"
           placeholder="src/parser.rs"
           className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
@@ -96,7 +96,7 @@ export function MarksView({
           aria-label="Note"
           placeholder="Note (optional)"
           className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />

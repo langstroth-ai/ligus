@@ -3,7 +3,7 @@
 `ligus serve` exposes a small JSON + Server-Sent Events API under `/v1/`.
 The phone app is its main client, but any client can use it. This page lists
 every route in 0.1.0, checked against the router in
-`crates/hive-cli/src/serve/api.rs`. The contract the phone implements is in
+`crates/ligus-cli/src/serve/api.rs`. The contract the phone implements is in
 [`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md).
 
 ## Reaching the API
@@ -85,8 +85,8 @@ WebSocket code `4040` and reason `device_not_certified` (see
 
 A message object carries `id`, `chatId`, `author`, `role`, `body`,
 `createdAt` and `streaming`; `agentId` on a named agent's reply; `actorId`
-on a person's message; and on a primary `@hive` reply, `responderName` (whose
-hive answered) and, when it was this box or another device of the account the
+on a person's message; and on a primary `@ligus` reply, `responderName` (whose
+ligus answered) and, when it was this box or another device of the account the
 box writes as, `responderDevice`: `this` or `mine` (absent otherwise; the
 phone then says "<name>'s device"). Both are left out when unset.
 
@@ -166,7 +166,7 @@ only (the answer carries the admission code). See
 | Method + path | Request | Notes |
 |---|---|---|
 | `POST /v1/admissions/prepare` | `{deviceId, request?, ttlMinutes?}` | `deviceId` is the phone's workspace device id; `request` the box's join request (`ligusjoin1:…`; absent: a bearer code). Drafts the box admission as the phone's person, signed by that phone, and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, origins, allowCredentials, boxFingerprint?, boxLabel?, sealed}}`. 403 when `deviceId` isn't an enrolled phone of a member. `prepareId` is single use and lasts 5 minutes |
-| `POST /v1/admissions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | puts the passkey assertion over `challenge` into the stamp: `{preimage}` (base64url), the bytes the phone signs with its P-256 key (ECDSA, SHA-256). **The phone checks them before signing** (`hive_core::admission::check_phone_admission_preimage`): a `hive-envelope-v3` preimage of a `joinApproved` box admission on this workspace's config log, stamped for this phone (P-256) with presence, whose presence digest is the `challenge` the passkey just signed. The box drafted it, so anything else (a vote or a post as the person, another admission) is refused, and the phone shows the terms it read from the bytes, not the `preview` |
+| `POST /v1/admissions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | puts the passkey assertion over `challenge` into the stamp: `{preimage}` (base64url), the bytes the phone signs with its P-256 key (ECDSA, SHA-256). **The phone checks them before signing** (`ligus_core::admission::check_phone_admission_preimage`): a `hive-envelope-v3` preimage of a `joinApproved` box admission on this workspace's config log, stamped for this phone (P-256) with presence, whose presence digest is the `challenge` the passkey just signed. The box drafted it, so anything else (a vote or a post as the person, another admission) is refused, and the phone shows the terms it read from the bytes, not the `preview` |
 | `POST /v1/admissions/commit` | `{prepareId, signature}` | `signature`: 64 bytes, base64url. Appends and syncs the admission: `{committed, eventId, code, sealed, expiresInMinutes}`. 403 when the signature doesn't verify against the phone's certificate, the person isn't an Admin or the presence doesn't verify; 409 before `presence` |
 
 ### Phone actions {#phone-actions}
@@ -174,7 +174,7 @@ only (the answer carries the admission code). See
 The box never posts, votes, answers, clears a lockdown or asks for an apply
 as the person: it is its own service member. The phone does, with **its own
 P-256 device key**, through a typed, allow-listed set of actions
-(`hive_core::phone_action::PhoneAction`). The box drafts the exact event as
+(`ligus_core::phone_action::PhoneAction`). The box drafts the exact event as
 the phone's person, stamped for that phone; the phone reads the preimage,
 confirms with the person's passkey when the rules need it, and signs; the box
 checks the signature against the phone's certificate, judges the event as
@@ -208,7 +208,7 @@ actions (desktop only); admitting a box has its own flow
 ([Admissions](#admissions)).
 
 **What a client MUST verify before signing** (the reference implementation is
-`hive_core::phone_action::check_phone_action_preimage`, sharing its parser
+`ligus_core::phone_action::check_phone_action_preimage`, sharing its parser
 `parse_phone_preimage` with the admission check). The preimage is the box's
 word until the phone has read it; refuse to sign unless all of these hold:
 
@@ -304,7 +304,7 @@ voter's account, so they never act as the person (see
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
 | `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor, owner. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |
-| `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
+| `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `ligus/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
 
 ### Workspace repositories
 

@@ -2,7 +2,7 @@
 
 The open-source relay can keep a roster for a workspace and refuse reads and
 writes from callers who aren't on it. It is off unless the operator turns it
-on with `LIGUS_RELAY_MEMBERSHIP=1`, and even then it only applies to
+on with `LANGSTROTH_RELAY_MEMBERSHIP=1`, and even then it only applies to
 workspaces someone has **claimed**.
 
 ## Why a relay-side roster
@@ -22,8 +22,8 @@ roles), never content.
 
 **Identity.** The relay keys the roster on the caller's token subject (`sub`),
 so it needs a signed `hrt1` token to know who is calling: either the relay's
-access gate uses signed tokens (`LIGUS_RELAY_TOKEN_PUBKEY`), or
-`LIGUS_RELAY_MEMBERSHIP_PUBKEY` names an issuer key whose tokens identify
+access gate uses signed tokens (`LANGSTROTH_RELAY_TOKEN_PUBKEY`), or
+`LANGSTROTH_RELAY_MEMBERSHIP_PUBKEY` names an issuer key whose tokens identify
 callers while access to the relay itself stays open. A caller with no
 identity can't claim or change a roster.
 

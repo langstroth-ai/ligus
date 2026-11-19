@@ -21,9 +21,9 @@ export function leaseSummary(lease: RunLeaseDto): { text: string; tone: "ok" | "
 }
 
 const TONE: Record<string, string> = {
-  ok: "var(--hive-success)",
-  warn: "var(--hive-warning, #b7791f)",
-  bad: "var(--hive-danger)",
+  ok: "var(--ligus-success)",
+  warn: "var(--ligus-warning, #b7791f)",
+  bad: "var(--ligus-danger)",
 };
 
 export function RunLeaseLine({
@@ -46,7 +46,7 @@ export function RunLeaseLine({
       {lease.fencedClaims > 0 && (
         <span
           className="rounded px-1.5 py-0.5"
-          style={{ color: "var(--hive-danger-ink)", background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)" }}
+          style={{ color: "var(--ligus-danger-ink)", background: "color-mix(in srgb, var(--ligus-danger) 12%, transparent)" }}
           title="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
         >
           {lease.fencedClaims} competing claim{lease.fencedClaims === 1 ? "" : "s"} fenced

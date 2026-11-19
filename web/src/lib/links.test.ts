@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import vectors from "../../../crates/hive-proto/tests/vectors/display-names.json";
+import vectors from "../../../crates/ligus-proto/tests/vectors/display-names.json";
 import { stripBidi } from "./links";
 
-// The shared display-name vectors (hive_proto::names, the iOS
+// The shared display-name vectors (ligus_proto::names, the iOS
 // NameSanitizer): stripBidi removes every character names.rs hides, so a
 // handle shown on the web reads as the box and the phone show it.
 const clean = (s: string) => stripBidi(s).replace(/\s+/gu, " ").trim();

@@ -18,7 +18,7 @@
 #
 # ── Usage ─────────────────────────────────────────────────────────────────────
 #   WIN_HOST=you@192.168.1.50 \
-#   WIN_REPO='C:/Users/you/hive' \
+#   WIN_REPO='C:/Users/you/ligus' \
 #   ./scripts/build-windows-remote.sh
 #
 #   WIN_SYNC controls how the source reaches the Windows box:
@@ -33,7 +33,7 @@
 set -euo pipefail
 
 : "${WIN_HOST:?set WIN_HOST=user@host (the Windows box)}"
-: "${WIN_REPO:?set WIN_REPO=repo path on the Windows box, e.g. C:/Users/you/hive}"
+: "${WIN_REPO:?set WIN_REPO=repo path on the Windows box, e.g. C:/Users/you/ligus}"
 WIN_SYNC="${WIN_SYNC:-rsync}"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"

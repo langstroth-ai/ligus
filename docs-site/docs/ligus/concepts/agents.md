@@ -76,7 +76,7 @@ Different runtimes expose different capabilities:
 | Google Antigravity (`agy`) / GitHub Copilot (`copilot`) | The CLI's own tools, with Ligus's Claude Code permission setting mapped to the CLI's flags (read-only by default). Uses your Google AI Pro / Ultra or Copilot subscription; see [Subscription CLIs](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot). |
 | aider / pi          | The agent's own internal tools. Ligus captures stdout as the reply. |
 | Ollama / local OpenAI-compatible (`custom`) | Ligus's built-in file tools (on a local or private endpoint) plus enabled MCP tools when the runtime's **Supports tools** switch is on (for Ollama, also when the model's capability probe reports tools); text only otherwise. At most 16 tools a turn, see [MCP servers](../addons/mcp.md#local-models-at-most-16-tools-a-turn). |
-| hive-daemon         | Text only (no tool calls in either direction yet). |
+| ligus-daemon         | Text only (no tool calls in either direction yet). |
 
 MCP servers are inert until you enable them, so an API runtime starts with no
 tools until you turn some on in the Tools pane.

@@ -43,7 +43,7 @@ export function LogsView() {
     term.loadAddon(fit);
     term.open(host);
     fit.fit();
-    term.writeln("\x1b[2mhive runtime log — recent activity + live chat stream\x1b[0m");
+    term.writeln("\x1b[2mligus runtime log — recent activity + live chat stream\x1b[0m");
 
     const ro = new ResizeObserver(() => fit.fit());
     ro.observe(host);

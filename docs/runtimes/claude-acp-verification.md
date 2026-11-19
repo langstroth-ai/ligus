@@ -4,7 +4,7 @@ Phase 0 Track D (D.2.3). This is the owner-run record that decides whether
 ACP may become the default for Claude Code with a claude.ai subscription.
 Until V2 below is confirmed, Claude Code goes over ACP **only with an API key
 (or a cloud provider) configured in Ligus**. Subscription users stay on
-`claude -p`. The code enforces this in `hive_runtime::provider::acp::resolve`
+`claude -p`. The code enforces this in `ligus_runtime::provider::acp::resolve`
 (`LegacyReason::ClaudeSubscription`).
 
 Don't name the integration "Claude Code ..." in product copy (SDK naming
@@ -21,7 +21,7 @@ candidate. Record the CLI version, the date and the result.
    `CLAUDE_CODE_OAUTH_TOKEN` and every cloud-provider variable. Run only
    `claude /login` (Pro or Max).
 2. `npm install -g @agentclientprotocol/claude-agent-acp@0.107.0`.
-3. `LIGUS_LIVE_CLI=claude-code LIGUS_LIVE_DRIVER=acp cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`.
+3. `LIGUS_LIVE_CLI=claude-code LIGUS_LIVE_DRIVER=acp cargo test -p ligus-runtime --lib live_cli_smoke -- --ignored --nocapture`.
    Expected **today**: refused with `ClaudeSubscription` (no key). That is
    the policy gate working.
 4. For the technical check only: temporarily allow it in a scratch build

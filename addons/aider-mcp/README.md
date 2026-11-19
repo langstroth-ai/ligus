@@ -67,11 +67,11 @@ In a chat with `provider = "anthropic"` and the `aider` MCP server
 loaded:
 
 > **You:** add a regression test for the off-by-one in
-> `Sources/HiveCore/PeerLink.swift`'s `canonicalChallenge`.
+> `Sources/LigusCore/PeerLink.swift`'s `canonicalChallenge`.
 
 > **Claude:** calls `aider_edit` with
-> `files = ["Sources/HiveCore/PeerLink.swift",
-> "Tests/HiveCoreTests/HiveCoreTests.swift"]` and your prompt.
+> `files = ["Sources/LigusCore/PeerLink.swift",
+> "Tests/LigusCoreTests/LigusCoreTests.swift"]` and your prompt.
 
 > **Ligus:** prompts you to approve the call.
 
@@ -83,7 +83,7 @@ loaded:
 ## Splitting to its own repo
 
 When this addon stabilizes, it moves to a sibling repo
-(`hive-aider-mcp`). The interface is just MCP — no Ligus-specific
+(`ligus-aider-mcp`). The interface is just MCP — no Ligus-specific
 imports — so the move is mechanical.
 
 The same template fits other CLI agents: copy this directory,

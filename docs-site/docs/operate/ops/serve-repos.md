@@ -169,7 +169,7 @@ fork layout for you:
 - **Pull latest** fetches `upstream` and fast-forwards the base branch from
   it.
 - **Open pull request** pushes the chat's branch to your fork with a readable
-  name, `hive/<chat-title>-<chat-id-prefix>`, and opens a draft pull request
+  name, `ligus/<chat-title>-<chat-id-prefix>`, and opens a draft pull request
   against the parent's default branch. Later pushes from the same chat update
   the same branch and pull request, and they are never forced. A push whose
   remote points at the parent project is refused.
@@ -189,7 +189,7 @@ git branch -u upstream/master master
 
 ## Branches: one per chat, per repo
 
-Every chat has its own branch, `hive/chat/<chat-id>`, in each repo it works
+Every chat has its own branch, `ligus/chat/<chat-id>`, in each repo it works
 in. An agent's edits come back as a proposal, applied to that branch by the
 desktop's **Implement**, or by one host a person asks with **Apply on
 ‹host›**; a box never applies on its own approval (see

@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, LazyLock, Mutex, Once};
 
-use hive_runtime::ligus_auth::{self, DeviceKey, DeviceSigner, Poll, TokenCell};
+use ligus_runtime::ligus_auth::{self, DeviceKey, DeviceSigner, Poll, TokenCell};
 use tauri::State;
 
 use crate::AppState;

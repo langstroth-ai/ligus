@@ -27,7 +27,7 @@ fi
 
 # Cache cargo's registry/git across runs (NOT the toolchain dir — mounting over
 # /usr/local/cargo would hide the image's rustup/cargo).
-cache_vol="hive-win-cargo-registry"
+cache_vol="ligus-win-cargo-registry"
 docker volume inspect "$cache_vol" >/dev/null 2>&1 || docker volume create "$cache_vol" >/dev/null
 
 echo "[docker] cross-building Windows NSIS installer…"
@@ -56,7 +56,7 @@ docker run --rm \
         export CARGO_TARGET_DIR=/work/target/cross-windows
         # --no-default-features drops the (default-on) `p2p` feature so iroh —
         # whose `wmi` crate (Windows COM) can't cross-compile via cargo-xwin —
-        # is excluded. Works because the workspace root declares hive-runtime
+        # is excluded. Works because the workspace root declares ligus-runtime
         # with default-features = false. The Windows installer therefore ships
         # WITHOUT direct P2P; build natively on Windows (or via CI) to include
         # it. The relay-based multiuser path still works.

@@ -31,7 +31,7 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
   return (
     <div className="space-y-4">
       {b ? (
-        <div className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
+        <div className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
           <div>
             <span className="text-ink-soft">Relay </span>
             {b.relayUrl || "none (local only)"}
@@ -54,7 +54,7 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
         <Muted>No home beacon yet. An admin can publish this device's setup as the workspace's home.</Muted>
       )}
       {r.mismatches.length > 0 && (
-        <div role="alert" className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-warn)" }}>
+        <div role="alert" className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-warn)" }}>
           {r.mismatches.map((m) => (
             <div key={m}>{m}</div>
           ))}
@@ -66,7 +66,7 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
           aria-label="Home note"
           placeholder="Note (optional)"
           className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={{ borderColor: "var(--hive-line)", backgroundColor: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", backgroundColor: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />

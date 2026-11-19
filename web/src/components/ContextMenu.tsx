@@ -116,14 +116,14 @@ function ContextMenuView({ x, y, items, onClose }: OpenState & { onClose: () => 
           left: pos?.left ?? x,
           top: pos?.top ?? y,
           visibility: pos ? "visible" : "hidden",
-          borderColor: "var(--hive-line)",
-          background: "var(--hive-panel)",
-          color: "var(--hive-ink)",
+          borderColor: "var(--ligus-line)",
+          background: "var(--ligus-panel)",
+          color: "var(--ligus-ink)",
         }}
       >
         {items.map((it, i) =>
           isSep(it) ? (
-            <div key={i} className="my-1 h-px" style={{ background: "var(--hive-line)" }} />
+            <div key={i} className="my-1 h-px" style={{ background: "var(--ligus-line)" }} />
           ) : (
             <button
               key={i}
@@ -137,8 +137,8 @@ function ContextMenuView({ x, y, items, onClose }: OpenState & { onClose: () => 
               }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors disabled:opacity-40"
               style={{
-                background: active === i ? "var(--hive-overlay)" : "transparent",
-                color: it.danger ? "var(--hive-danger-ink)" : "var(--hive-ink)",
+                background: active === i ? "var(--ligus-overlay)" : "transparent",
+                color: it.danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
               }}
             >
               {it.icon && (

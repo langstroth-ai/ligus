@@ -165,9 +165,9 @@ export function Sidebar({
   const isCollapsed = (id: string): boolean =>
     id in collapsed
       ? collapsed[id]
-      : window.localStorage.getItem(`hive.sidebar.channel.${id}`) === "1";
+      : window.localStorage.getItem(`ligus.sidebar.channel.${id}`) === "1";
   const setChannelCollapsed = (id: string, next: boolean) => {
-    window.localStorage.setItem(`hive.sidebar.channel.${id}`, next ? "1" : "0");
+    window.localStorage.setItem(`ligus.sidebar.channel.${id}`, next ? "1" : "0");
     setCollapsed((prev) => ({ ...prev, [id]: next }));
   };
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
@@ -190,14 +190,14 @@ export function Sidebar({
 
   // ── Unread @-mention highlights ────────────────────────────────────────────
   // Read state is per-device UI state, not workspace data — it lives in
-  // localStorage (`hive.read.<sessionId>` = the message count when the chat was
+  // localStorage (`ligus.read.<sessionId>` = the message count when the chat was
   // last opened), mirrored into React state so updates re-render. A mention at
   // `lastMentionOrdinal` is unread when it sits past that cursor.
   const [readCursors, setReadCursors] = useState<Record<string, number>>({});
   const cursorOf = (id: string): number =>
     id in readCursors
       ? readCursors[id]
-      : Number(window.localStorage.getItem(`hive.read.${id}`)) || 0;
+      : Number(window.localStorage.getItem(`ligus.read.${id}`)) || 0;
 
   // Opening a chat (and any new message while it's open) marks it read.
   const selectedCount = useMemo(
@@ -207,11 +207,11 @@ export function Sidebar({
   useEffect(() => {
     if (!selectedId || selectedCount == null) return;
     if (selectedCount > cursorOf(selectedId)) {
-      window.localStorage.setItem(`hive.read.${selectedId}`, String(selectedCount));
+      window.localStorage.setItem(`ligus.read.${selectedId}`, String(selectedCount));
       setReadCursors((prev) => ({ ...prev, [selectedId]: selectedCount }));
       // Nudge sibling views (WorkspaceRail's cross-workspace mention badge) that
-      // read a `hive.read.*` cursor but don't share our React state.
-      window.dispatchEvent(new CustomEvent("hive:read-cursor"));
+      // read a `ligus.read.*` cursor but don't share our React state.
+      window.dispatchEvent(new CustomEvent("ligus:read-cursor"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, selectedCount, readCursors]);
@@ -222,7 +222,7 @@ export function Sidebar({
     const cur = (id: string) =>
       id in readCursors
         ? readCursors[id]
-        : Number(window.localStorage.getItem(`hive.read.${id}`)) || 0;
+        : Number(window.localStorage.getItem(`ligus.read.${id}`)) || 0;
     const sessions = new Set<string>();
     const chans = new Set<string>();
     for (const m of mentionStates.data ?? []) {
@@ -277,7 +277,7 @@ export function Sidebar({
   // (Review/Context/Workflows/Activity) simply omit the badge.
   const paneCounts: Partial<Record<UtilityPane, number>> = {
     people: memberCount,
-    // +1 for the always-present default agent (@hive) so it never reads 0.
+    // +1 for the always-present default agent (@ligus) so it never reads 0.
     tools: (agents.data ?? []).length + 1,
     review: reviewCount || undefined,
     skills: (skills.data ?? []).length,
@@ -425,16 +425,16 @@ export function Sidebar({
 
   // Inside the sidebar, text rides the dedicated sidebar-ink tokens (spec §2)
   // and hover is a light overlay — so the shared primitives (which reference
-  // --hive-ink/--hive-overlay) render correctly on the dark sidebar without
+  // --ligus-ink/--ligus-overlay) render correctly on the dark sidebar without
   // being parameterized.
   const asideStyle: Record<string, string | number> = {
     width,
-    background: "var(--hive-sidebar-top)",
-    color: "var(--hive-sidebar-ink)",
-    borderColor: "var(--hive-line)",
-    "--hive-ink": "var(--hive-sidebar-ink)",
-    "--hive-ink-soft": "var(--hive-sidebar-ink-muted)",
-    "--hive-overlay": "color-mix(in srgb, var(--hive-sidebar-ink) 10%, transparent)",
+    background: "var(--ligus-sidebar-top)",
+    color: "var(--ligus-sidebar-ink)",
+    borderColor: "var(--ligus-line)",
+    "--ligus-ink": "var(--ligus-sidebar-ink)",
+    "--ligus-ink-soft": "var(--ligus-sidebar-ink-muted)",
+    "--ligus-overlay": "color-mix(in srgb, var(--ligus-sidebar-ink) 10%, transparent)",
   };
 
   return (
@@ -445,13 +445,13 @@ export function Sidebar({
           ref={wsAnchor}
           onClick={() => setShowWorkspaceMenu((v) => !v)}
           title="Change project folder (for the Diff canvas + git)"
-          className="flex w-full items-center gap-2.5 rounded-xl px-1.5 py-1.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
+          className="flex w-full items-center gap-2.5 rounded-xl px-1.5 py-1.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
         >
           <span
             className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg border"
             style={{
-              borderColor: "var(--hive-line)",
-              background: "color-mix(in srgb, var(--hive-sidebar-ink) 8%, transparent)",
+              borderColor: "var(--ligus-line)",
+              background: "color-mix(in srgb, var(--ligus-sidebar-ink) 8%, transparent)",
             }}
             aria-hidden
           >
@@ -465,7 +465,7 @@ export function Sidebar({
             </span>
             <span
               className="block truncate font-mono text-[11px]"
-              style={{ color: "var(--hive-sidebar-ink-muted)" }}
+              style={{ color: "var(--ligus-sidebar-ink-muted)" }}
             >
               {/* Line 2 is the repo state, not a second copy of the name (F14):
                   "<repo> · <branch>" when on a git repo, else the folder or a
@@ -477,13 +477,13 @@ export function Sidebar({
                 : "No project folder"}
             </span>
           </span>
-          <span style={{ color: "var(--hive-sidebar-ink-muted)" }} aria-hidden>
+          <span style={{ color: "var(--ligus-sidebar-ink-muted)" }} aria-hidden>
             <IconChevronDownGlyph />
           </span>
         </button>
         <div
           className="mt-0.5 flex items-center gap-1.5 px-1.5 text-[11px]"
-          style={{ color: "var(--hive-sidebar-ink-muted)" }}
+          style={{ color: "var(--ligus-sidebar-ink-muted)" }}
         >
           <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" aria-hidden />
           <span className="truncate">Runs on this device</span>
@@ -503,14 +503,14 @@ export function Sidebar({
                 }}
               />
             ))}
-            <div className="my-1 h-px" style={{ background: "var(--hive-line)" }} />
+            <div className="my-1 h-px" style={{ background: "var(--ligus-line)" }} />
             <PopoverItem label={workspaceBusy ? "Adding…" : "Add project folder…"} onSelect={handleWorkspaceAdd} />
             {canRemoveCurrentWorkspace && (
               <PopoverItem label="Remove current folder" onSelect={handleWorkspaceRemove} />
             )}
             <PopoverItem label="Workspace settings…" onSelect={() => { setShowWorkspaceMenu(false); onOpenSettings(); }} />
             {workspaceError && (
-              <div className="px-2 pt-1 text-[11px]" style={{ color: "var(--hive-danger-ink)" }}>{workspaceError}</div>
+              <div className="px-2 pt-1 text-[11px]" style={{ color: "var(--ligus-danger-ink)" }}>{workspaceError}</div>
             )}
           </Popover>
         )}
@@ -522,11 +522,11 @@ export function Sidebar({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search chats"
-          className="w-full rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none placeholder:opacity-60 focus:border-[color:var(--hive-accent-cool)]"
+          className="w-full rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none placeholder:opacity-60 focus:border-[color:var(--ligus-accent-cool)]"
           style={{
-            borderColor: "var(--hive-line)",
-            background: "color-mix(in srgb, var(--hive-sidebar-ink) 8%, transparent)",
-            color: "var(--hive-sidebar-ink)",
+            borderColor: "var(--ligus-line)",
+            background: "color-mix(in srgb, var(--ligus-sidebar-ink) 8%, transparent)",
+            color: "var(--ligus-sidebar-ink)",
           }}
         />
       </div>
@@ -586,7 +586,7 @@ export function Sidebar({
                     </button>
                     <button
                       onClick={handleNew}
-                      className="grid h-5 w-5 place-items-center rounded-md opacity-80 hover:bg-[color:var(--hive-overlay)] hover:opacity-100"
+                      className="grid h-5 w-5 place-items-center rounded-md opacity-80 hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
                       title="New chat"
                       aria-label="New chat"
                     >
@@ -632,7 +632,7 @@ export function Sidebar({
                     <button
                       onClick={handleNew}
                       className="rounded-lg px-3 py-1.5 text-xs font-medium"
-                      style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+                      style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
                     >
                       Start a chat
                     </button>
@@ -640,7 +640,7 @@ export function Sidebar({
                 />
               )}
               {visible.length === 0 && !search.trim() && showArchived && (
-                <div className="px-2.5 py-2 text-[12px]" style={{ color: "var(--hive-sidebar-ink-muted)" }}>
+                <div className="px-2.5 py-2 text-[12px]" style={{ color: "var(--ligus-sidebar-ink-muted)" }}>
                   Nothing archived.
                 </div>
               )}
@@ -677,13 +677,13 @@ export function Sidebar({
                     {/* Header: chevron collapses; the name opens the default chat
                         (which IS this conversation — no child row, §11 rule 1). */}
                     <div
-                      className="group/chan relative flex items-center rounded-xl pr-1 transition-colors hover:bg-[color:var(--hive-overlay)]"
+                      className="group/chan relative flex items-center rounded-xl pr-1 transition-colors hover:bg-[color:var(--ligus-overlay)]"
                       style={active ? { background: SELECT_TINT } : undefined}
                     >
                       <button
                         onClick={() => setChannelCollapsed(ch.id, !collapsedNow)}
                         className="grid h-[30px] w-6 shrink-0 place-items-center rounded-lg"
-                        style={{ color: "var(--hive-ink-soft)" }}
+                        style={{ color: "var(--ligus-ink-soft)" }}
                         title={collapsedNow ? "Expand" : "Collapse"}
                         aria-label={collapsedNow ? `Expand #${ch.name}` : `Collapse #${ch.name}`}
                       >
@@ -697,7 +697,7 @@ export function Sidebar({
                         {hasMention && (
                           <span
                             className="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ background: "var(--hive-accent-cool)" }}
+                            style={{ background: "var(--ligus-accent-cool)" }}
                             aria-label="unread mention"
                           />
                         )}
@@ -706,22 +706,22 @@ export function Sidebar({
                           style={{
                             fontWeight: active || hasMention ? 700 : 590,
                             letterSpacing: "-0.01em",
-                            color: "var(--hive-ink)",
+                            color: "var(--ligus-ink)",
                             // Channels read as slugs (the "#" prefix implies it),
                             // so render lowercase regardless of stored casing —
                             // "#General" → "#general" (F15).
                             textTransform: "lowercase",
                           }}
                         >
-                          <span style={{ color: "var(--hive-ink-soft)" }}>#</span>
+                          <span style={{ color: "var(--ligus-ink-soft)" }}>#</span>
                           {ch.name}
                         </span>
                       </button>
                       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/chan:opacity-100">
                         <button
                           onClick={() => handleNewChatIn(ch)}
-                          className="grid h-[22px] w-[22px] place-items-center rounded-md hover:bg-[color:var(--hive-overlay)]"
-                          style={{ color: "var(--hive-ink-soft)" }}
+                          className="grid h-[22px] w-[22px] place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
+                          style={{ color: "var(--ligus-ink-soft)" }}
                           title="New chat in channel"
                           aria-label={`New chat in #${ch.name}`}
                         >
@@ -732,8 +732,8 @@ export function Sidebar({
                             channelMenuAnchor.current = e.currentTarget;
                             setChannelMenuFor(ch.id);
                           }}
-                          className="grid h-[22px] w-[22px] place-items-center rounded-md hover:bg-[color:var(--hive-overlay)]"
-                          style={{ color: "var(--hive-ink-soft)" }}
+                          className="grid h-[22px] w-[22px] place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
+                          style={{ color: "var(--ligus-ink-soft)" }}
                           title="Channel options"
                           aria-label={`#${ch.name} options`}
                         >
@@ -743,7 +743,7 @@ export function Sidebar({
                     </div>
 
                     {!collapsedNow && (
-                      <div className="ml-3 border-l pl-1" style={{ borderColor: "var(--hive-line)" }}>
+                      <div className="ml-3 border-l pl-1" style={{ borderColor: "var(--ligus-line)" }}>
                         {focused.map((c) => (
                           <ChatRow
                             key={c.id}
@@ -760,7 +760,7 @@ export function Sidebar({
                           />
                         ))}
                         {focused.length === 0 && (
-                          <div className="px-2.5 py-1 text-[11px]" style={{ color: "var(--hive-sidebar-ink-muted)" }}>
+                          <div className="px-2.5 py-1 text-[11px]" style={{ color: "var(--ligus-sidebar-ink-muted)" }}>
                             {showArchived ? "Nothing archived" : "No focused chats"}
                           </div>
                         )}
@@ -839,18 +839,18 @@ export function Sidebar({
       {/* 6 — Account row. */}
       <button
         onClick={onOpenSettings}
-        className="flex items-center gap-2.5 border-t px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
-        style={{ borderColor: "var(--hive-line)" }}
+        className="flex items-center gap-2.5 border-t px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+        style={{ borderColor: "var(--ligus-line)" }}
         title="Open settings"
       >
         <Avatar name={displayName} url={settings.data?.avatarUrl} kind="human" size={26} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[12.5px] font-semibold">{displayName}</span>
-          <span className="block truncate text-[11px]" style={{ color: "var(--hive-sidebar-ink-muted)" }}>
+          <span className="block truncate text-[11px]" style={{ color: "var(--ligus-sidebar-ink-muted)" }}>
             {deviceName || "This device"}
           </span>
         </span>
-        <span style={{ color: "var(--hive-sidebar-ink-muted)" }} aria-hidden>
+        <span style={{ color: "var(--ligus-sidebar-ink-muted)" }} aria-hidden>
           <IconGear size={15} />
         </span>
       </button>
@@ -864,8 +864,8 @@ function NewChannelRow({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--hive-overlay)]"
-      style={{ color: "var(--hive-sidebar-ink-muted)" }}
+      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--ligus-overlay)]"
+      style={{ color: "var(--ligus-sidebar-ink-muted)" }}
     >
       <span className="grid h-4 w-4 shrink-0 place-items-center" aria-hidden>
         <IconPlus size={15} />

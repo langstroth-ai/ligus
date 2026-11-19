@@ -177,7 +177,7 @@ Full release notes are on the
   See [Phone app](../features/phone-app.md#chats),
   [Serve API: typing](../../operate/reference/serve-api.md#typing) and
   [Security](../../operate/security/index.md#encryption).
-- **Phone shows which device answered** a primary `@hive` reply ("This
+- **Phone shows which device answered** a primary `@ligus` reply ("This
   device", "Your other device", "<name>'s device").
 - **Claude Code turns get only what the turn needs.** Ligus starts Claude
   Code without cloud routines, remote triggers, scheduled tasks, background

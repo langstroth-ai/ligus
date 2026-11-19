@@ -1,4 +1,4 @@
-//! Tauri v2 desktop shell. Owns the `hive-runtime` services, registers IPC
+//! Tauri v2 desktop shell. Owns the `ligus-runtime` services, registers IPC
 //! commands, and pushes streaming chat updates as Tauri events.
 //!
 //! Chat path (Phases 3–5 + follow-ups): create a chat, post a user message,
@@ -13,20 +13,20 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hive_core::context_budget::token_estimator;
-use hive_core::{
+use ligus_core::context_budget::token_estimator;
+use ligus_core::{
     ActionProposal, ChatMessage, ChatSession, GitContextReader, MessageRole, ModelProviderKind,
     ProposalKind, ProposalStatus, RuntimeTarget, SkillProfile, WorkspaceAgent, WorkspaceRole,
 };
-use hive_core::{ActorIdentity, ActorKind, MountedVault, VaultSource, WorkspaceMember};
-use hive_proto::{
+use ligus_core::{ActorIdentity, ActorKind, MountedVault, VaultSource, WorkspaceMember};
+use ligus_proto::{
     ApprovalDto, AppInfo, AppSettingsDto, ChannelDto, ChatMessageDto, ChatSessionDto,
     ChatSummaryDto, ContextTelemetryDto, FsEntryDto, GitFileDiffDto, LspServerDto, McpServerDto, ProposalDto,
     MentionStateDto, QueuedWorkDto, ReactionDto,
     RuntimeSummaryDto, SkillDto, VaultSourceDto, WorkspaceAgentDto, WorkspaceHostDto,
     WorkspaceInfoDto, WorkspaceMemberDto,
 };
-use hive_runtime::{
+use ligus_runtime::{
     chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault,
     pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, ChatTurn,
     EventStore, IdentityStore, McpRegistry, McpServerSpec, ResolvedRuntime,
@@ -70,8 +70,8 @@ const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const OUTPUT_RESERVE_TOKENS: i64 = 4096;
 const SUMMARY_RESERVE_TOKENS: i64 = 700;
 /// Max chained agent turns from one user message (loop guard for cascades).
-/// Shared with the worker via hive-core so the bound holds across devices.
-use hive_core::MAX_CASCADE_DEPTH;
+/// Shared with the worker via ligus-core so the bound holds across devices.
+use ligus_core::MAX_CASCADE_DEPTH;
 
 /// Upper bound on remembered "already notified" mention ids (see `AppState::notified`).
 const NOTIFIED_CAP: usize = 1024;
@@ -106,8 +106,8 @@ impl BoundedIdSet {
 struct AppState {
     service: Mutex<ChatService>,
     /// Host liveness from the connected room's relay presence channel (see
-    /// `hive_runtime::host_presence`), refreshed by `run_device_host_loop`.
-    host_presence: hive_runtime::HostPresence,
+    /// `ligus_runtime::host_presence`), refreshed by `run_device_host_loop`.
+    host_presence: ligus_runtime::HostPresence,
     /// Workspace guards kept in memory (leases held, heartbeats seen).
     guards: crate::guards::GuardRuntime,
     identity: IdentityStore<StoreKeyVault>,
@@ -133,20 +133,20 @@ struct AppState {
     summary_cache: Mutex<HashMap<SummaryKey, SummaryCacheEntry>>,
     /// Per-session, per-runtime backoff for a failing summarizer (in memory
     /// only; a restart retries).
-    summary_backoff: Mutex<HashMap<SummaryKey, hive_core::context_budget::SummaryBackoff>>,
+    summary_backoff: Mutex<HashMap<SummaryKey, ligus_core::context_budget::SummaryBackoff>>,
     /// Fetched vault content, keyed by raw URL, with the fetch time so a stale
     /// entry (older than `VAULT_CACHE_TTL`) is re-fetched instead of served for
     /// the whole app run. Within the TTL it avoids a per-message round-trip.
     vault_cache: Mutex<HashMap<String, (std::time::Instant, String)>>,
     /// Vault retrieval (embed → rerank → top passages); holds the per-run
     /// chunk-embedding cache. Only used when retrieval is configured.
-    retriever: hive_runtime::retrieval::Retriever,
-    /// MCP servers from `hive.config.toml`; shell-managed installs live in the
+    retriever: ligus_runtime::retrieval::Retriever,
+    /// MCP servers from `ligus.config.toml`; shell-managed installs live in the
     /// workspace catalog and are merged at read time.
     base_mcp: Mutex<Vec<McpServerSpec>>,
     managed_mcp: Mutex<Vec<McpServerSpec>>,
     /// S1: which repo-supplied runtimes and MCP servers this device trusts
-    /// (see `hive_runtime::workspace_trust`). Untrusted ones stay inert.
+    /// (see `ligus_runtime::workspace_trust`). Untrusted ones stay inert.
     catalog_trust: Mutex<CatalogTrust>,
     /// SQLite path — the background sync task opens its own connection here.
     db_path: PathBuf,
@@ -171,7 +171,7 @@ struct AppState {
     /// with its own sticky stop signal. The composer's Stop button stops a
     /// chat's turns (or one, by its reply); the engine sees a Stop pressed at
     /// any point of the turn, and `send_message` breaks its cascade.
-    turn_stops: Arc<hive_runtime::turn_engine::TurnStops>,
+    turn_stops: Arc<ligus_runtime::turn_engine::TurnStops>,
     /// Per MCP server id: the tools it listed that run shell commands, as of
     /// the last time this device listed its tools (no entry: not yet). A
     /// server with one is offered only to turns that have the shell.
@@ -300,7 +300,7 @@ struct LiveSettings {
     /// for compaction summaries, which need a strong model.
     #[serde(default)]
     utility_runtime_id: Option<String>,
-    /// Offer Hive's built-in file tools (read/list/search, and edits when
+    /// Offer Ligus's built-in file tools (read/list/search, and edits when
     /// allowed) to HTTP model runtimes that have "Supports tools" on.
     #[serde(default = "default_true")]
     builtin_tools: bool,
@@ -415,15 +415,15 @@ struct LiveSettings {
     mcp_oauth: std::collections::HashMap<String, McpOAuthEntry>,
     /// Static bearer tokens for HTTP MCP servers, keyed by server id (Settings
     /// → Tools). Device-local like `provider_keys`: lives only in settings.json,
-    /// NEVER in hive.config.toml / `.hive/mcp-servers.json` / portable exports /
+    /// NEVER in ligus.config.toml / `.ligus/mcp-servers.json` / portable exports /
     /// the relay, and never sent back to the UI (only a "set" flag). Wins over
-    /// an OAuth token for the same server (see `hive_runtime::resolve_bearer`).
+    /// an OAuth token for the same server (see `ligus_runtime::resolve_bearer`).
     #[serde(default)]
     mcp_bearer_tokens: std::collections::HashMap<String, String>,
     /// The URL origin (`scheme://host:port`) each static bearer token above
     /// was saved for, keyed by server id. A token is attached only while the
     /// server's configured URL still has that origin: server ids come from
-    /// workspace config (a committed `hive.config.toml` among them), so a
+    /// workspace config (a committed `ligus.config.toml` among them), so a
     /// repo or teammate that reuses an id with another URL must not receive
     /// this device's secret. A token with no recorded origin is never sent.
     #[serde(default)]
@@ -470,12 +470,12 @@ struct LiveSettings {
     /// Per workspace (UUID string): whether this device applies the
     /// workspace's signed sandbox grants (Settings, Sandbox). No entry = the
     /// default: on for the workspace Owner's own devices, off for every
-    /// other member's (`hive_runtime::sandbox::grants_here`). Device-local:
+    /// other member's (`ligus_runtime::sandbox::grants_here`). Device-local:
     /// a grant reaches the host of every member that runs the agent.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     sandbox_grants_here: std::collections::HashMap<String, bool>,
     /// Per workspace: the digest of the signed grants this device's user
-    /// last saw (`hive_runtime::sandbox::grants_fingerprint`), so a change
+    /// last saw (`ligus_runtime::sandbox::grants_fingerprint`), so a change
     /// shows a notice until they look.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     sandbox_grants_seen: std::collections::HashMap<String, String>,
@@ -491,7 +491,7 @@ struct LiveSettings {
     /// into the genesis rules of every workspace this device founds. Absent =
     /// `ligus.ai`. Authoring only: the fold reads each workspace's own rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    passkey_policy: Option<hive_core::presence::PresencePolicy>,
+    passkey_policy: Option<ligus_core::presence::PresencePolicy>,
 }
 
 /// Persisted OAuth state for one remote MCP server (see [`mcp_oauth`] +
@@ -545,10 +545,10 @@ struct ScheduledAgentConfig {
     #[serde(default)]
     runtime_id: String,
     prompt: String,
-    trigger: hive_core::ScheduleTrigger,
+    trigger: ligus_core::ScheduleTrigger,
     /// When it last fired; `None` = never. Stamped by the scheduler.
     #[serde(default)]
-    last_run: Option<hive_core::Timestamp>,
+    last_run: Option<ligus_core::Timestamp>,
 }
 
 fn default_true() -> bool {
@@ -576,10 +576,10 @@ fn default_permission_mode() -> String {
     "default".to_string()
 }
 fn default_retrieval_top_k() -> usize {
-    hive_runtime::retrieval::DEFAULT_TOP_K
+    ligus_runtime::retrieval::DEFAULT_TOP_K
 }
 fn default_retrieval_candidates() -> usize {
-    hive_runtime::retrieval::DEFAULT_CANDIDATES
+    ligus_runtime::retrieval::DEFAULT_CANDIDATES
 }
 
 impl Default for LiveSettings {
@@ -651,15 +651,15 @@ impl Default for LiveSettings {
 /// human-name rooms in older settings keep resolving to the exact same id
 /// (back-compat: we never rewrite an existing `room`).
 fn room_workspace_id(room: &str) -> Uuid {
-    hive_core::room_workspace_id(room)
+    ligus_core::room_workspace_id(room)
 }
 
 /// A joined/created team workspace (relay room + E2EE key) and its
-/// `hivews1:` invite codec live in `hive_runtime::workspace_invite`, shared
+/// `hivews1:` invite codec live in `ligus_runtime::workspace_invite`, shared
 /// with the `ligus` CLI and other clients. Stored as a list so the rail can
 /// show several at once; switching to one points the live sync fields
 /// (relay/room/key) at it.
-use hive_runtime::workspace_invite::{decode_workspace_invite, encode_workspace_invite, WorkspaceConn};
+use ligus_runtime::workspace_invite::{decode_workspace_invite, encode_workspace_invite, WorkspaceConn};
 
 #[cfg(test)]
 mod workspace_invite_tests {
@@ -670,12 +670,12 @@ mod workspace_invite_tests {
     /// key: a relabelled copy is no longer the founder's.
     #[test]
     fn invite_signature_survives_encoding_and_binds_fields() {
-        use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+        use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), hive_core::Timestamp::epoch());
-        let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), ligus_core::Timestamp::epoch());
+        let fk = ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         for name in ["", "Team"] {
             let mut conn = WorkspaceConn {
                 name: name.into(),
@@ -691,7 +691,7 @@ mod workspace_invite_tests {
                 sig: None,
             };
             let (n, ek) = (conn.display_name(), conn.ek_json());
-            conn.sig = Some(hive_runtime::invite_sig::sign(&conn.sig_claims(&n, &ek), 1, &device, &cert, &account.public_key_bytes()));
+            conn.sig = Some(ligus_runtime::invite_sig::sign(&conn.sig_claims(&n, &ek), 1, &device, &cert, &account.public_key_bytes()));
             let back = decode_workspace_invite(&encode_workspace_invite(&conn)).unwrap();
             assert_eq!(back.signed_by(&|_| false), Some(founder));
             let moved = WorkspaceConn { relay_url: "https://evil.example".into(), ..back.clone() };
@@ -893,11 +893,11 @@ impl LiveSettings {
         self.workspace_passphrase
             .as_ref()
             .filter(|p| !p.is_empty())
-            .map(|p| hive_core::derive_workspace_key(p))
+            .map(|p| ligus_core::derive_workspace_key(p))
     }
     /// Claude Code extra args for the configured permission mode (empty for
     /// "default" — read-only).
-    /// Extra args for a subscription CLI runtime (agy / copilot): Hive's
+    /// Extra args for a subscription CLI runtime (agy / copilot): Ligus's
     /// permission tier (the same setting as Claude Code), mapped to that
     /// CLI's flags. Empty for every other provider.
     fn cli_permission_args(&self, provider: ModelProviderKind) -> Vec<String> {
@@ -930,11 +930,11 @@ impl LiveSettings {
 }
 
 /// The permission-tier flags for a subscription CLI runtime (see
-/// `hive_runtime::provider::{antigravity, copilot}::permission_args`).
+/// `ligus_runtime::provider::{antigravity, copilot}::permission_args`).
 fn cli_permission_args(provider: ModelProviderKind, mode: &str) -> Vec<String> {
     match provider {
-        ModelProviderKind::Antigravity => hive_runtime::provider::antigravity::permission_args(mode),
-        ModelProviderKind::Copilot => hive_runtime::provider::copilot::permission_args(mode),
+        ModelProviderKind::Antigravity => ligus_runtime::provider::antigravity::permission_args(mode),
+        ModelProviderKind::Copilot => ligus_runtime::provider::copilot::permission_args(mode),
         _ => Vec::new(),
     }
 }
@@ -947,7 +947,7 @@ fn settings_file(data_dir: &std::path::Path) -> PathBuf {
 /// and written atomically, so a crash never leaves it truncated.
 /// Where `LiveSettings` keeps secrets (B2): these go to the OS secret store,
 /// and `settings.json` holds `{"set": true}` in their place.
-const SETTINGS_SECRETS: hive_runtime::secret_store::SecretPaths = &[
+const SETTINGS_SECRETS: ligus_runtime::secret_store::SecretPaths = &[
     "relay_access_token",
     "workspace_passphrase",
     "relay_issuer_key",
@@ -966,10 +966,10 @@ const SETTINGS_SECRETS: hive_runtime::secret_store::SecretPaths = &[
 
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
     let Ok(v) = serde_json::to_value(settings) else { return };
-    hive_runtime::secret_redact::register_json_secrets(&v);
-    let store = hive_runtime::secret_store::for_data_dir(data_dir);
+    ligus_runtime::secret_redact::register_json_secrets(&v);
+    let store = ligus_runtime::secret_store::for_data_dir(data_dir);
     if let Err(e) =
-        hive_runtime::secret_store::save_settings_json(&settings_file(data_dir), &*store, "settings", v, SETTINGS_SECRETS)
+        ligus_runtime::secret_store::save_settings_json(&settings_file(data_dir), &*store, "settings", v, SETTINGS_SECRETS)
     {
         tracing::warn!(target: "settings", "couldn't save settings: {e}");
     }
@@ -978,15 +978,15 @@ fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
 /// Load persisted settings (secrets from the OS secret store), or seed the
 /// file from `env_seed` on first launch.
 fn load_or_seed_settings(data_dir: &std::path::Path, env_seed: LiveSettings) -> LiveSettings {
-    hive_runtime::secret_redact::register_env_secrets();
+    ligus_runtime::secret_redact::register_env_secrets();
     if !settings_file(data_dir).exists() {
         save_settings(data_dir, &env_seed);
         return env_seed;
     }
-    let store = hive_runtime::secret_store::for_data_dir(data_dir);
-    match hive_runtime::secret_store::load_settings_json(&settings_file(data_dir), &*store, "settings", SETTINGS_SECRETS) {
+    let store = ligus_runtime::secret_store::for_data_dir(data_dir);
+    match ligus_runtime::secret_store::load_settings_json(&settings_file(data_dir), &*store, "settings", SETTINGS_SECRETS) {
         Some(v) => {
-            hive_runtime::secret_redact::register_json_secrets(&v);
+            ligus_runtime::secret_redact::register_json_secrets(&v);
             serde_json::from_value(v).unwrap_or(env_seed)
         }
         None => env_seed,
@@ -1091,7 +1091,7 @@ fn mcp_secret_for_other_url(spec: &McpServerSpec, settings: &LiveSettings) -> bo
 
 /// Resolve each HTTP server's bearer from this device's secrets so the
 /// registry authenticates: a saved static token, else the spec's own `auth`,
-/// else a stored OAuth token (see `hive_runtime::resolve_bearer`). A saved
+/// else a stored OAuth token (see `ligus_runtime::resolve_bearer`). A saved
 /// secret is attached only when the server's URL has the origin it was saved
 /// for. Stdio servers never carry a bearer.
 fn apply_mcp_auth(servers: &mut [McpServerSpec], settings: &LiveSettings) {
@@ -1100,7 +1100,7 @@ fn apply_mcp_auth(servers: &mut [McpServerSpec], settings: &LiveSettings) {
             spec.auth = None;
             continue;
         }
-        let resolved = hive_runtime::resolve_bearer(
+        let resolved = ligus_runtime::resolve_bearer(
             bound_static_token(spec, settings),
             spec.auth.as_deref(),
             bound_oauth(spec, settings).map(|e| e.access_token.as_str()),
@@ -1118,7 +1118,7 @@ fn store_mcp_bearer_token(
     url: &str,
     raw: &str,
 ) -> Result<bool, String> {
-    match hive_runtime::normalize_bearer_token(raw)? {
+    match ligus_runtime::normalize_bearer_token(raw)? {
         Some(token) => {
             let origin = mcp_url_origin(url).ok_or("MCP server url must be http(s)")?;
             settings.mcp_bearer_tokens.insert(server_id.to_string(), token);
@@ -1154,11 +1154,11 @@ fn migrate_catalog_mcp_auth(settings: &mut LiveSettings, managed: &[McpServerSpe
     changed
 }
 
-/// A workspace state file (`.ligus/<name>`; a Hive 1.x `.hive/` is never
-/// used, see `hive_core::compat::workspace_state_path`), with its directory
+/// A workspace state file (`.ligus/<name>`; a Ligus 1.x `.ligus/` is never
+/// used, see `ligus_core::compat::workspace_state_path`), with its directory
 /// created.
 fn workspace_state_file(workspace_root: &str, name: &str) -> Result<PathBuf, String> {
-    let path = hive_core::compat::workspace_state_path(Path::new(workspace_root), name).map_err(map_err)?;
+    let path = ligus_core::compat::workspace_state_path(Path::new(workspace_root), name).map_err(map_err)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(map_err)?;
     }
@@ -1237,7 +1237,7 @@ fn is_auto_adoptable_workspace(path: &str) -> bool {
     if is_shallow_or_system_dir(p) {
         return false;
     }
-    p.join(".git").exists() || hive_core::compat::has_workspace_dir(p)
+    p.join(".git").exists() || ligus_core::compat::has_workspace_dir(p)
 }
 
 /// Choose the workspace root at launch. A still-valid persisted root the user
@@ -1255,7 +1255,7 @@ fn initial_workspace_root(persisted: Option<&str>, cwd_candidate: Option<&str>) 
             }
         }
     }
-    // (b) Auto-adopt the cwd for a dev launch (cwd = a repo with a `.git`/`.hive`).
+    // (b) Auto-adopt the cwd for a dev launch (cwd = a repo with a `.git`/`.ligus`).
     if let Some(cwd) = cwd_candidate {
         if is_auto_adoptable_workspace(cwd) {
             if let Ok(resolved) = resolve_workspace_root(cwd) {
@@ -1353,7 +1353,7 @@ fn list_workspace_files(state: State<AppState>) -> Vec<String> {
     if root.trim().is_empty() {
         return Vec::new();
     }
-    let out = hive_core::process_util::git()
+    let out = ligus_core::process_util::git()
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(&root)
         .output();
@@ -2154,8 +2154,8 @@ fn load_config_document_for_workspace(
     data_dir: &PathBuf,
     workspace_root: &str,
 ) -> Result<toml::Value, String> {
-    let found = hive_core::compat::find_config_file(Path::new(workspace_root))
-        .or_else(|| hive_core::compat::find_config_file(data_dir));
+    let found = ligus_core::compat::find_config_file(Path::new(workspace_root))
+        .or_else(|| ligus_core::compat::find_config_file(data_dir));
     let Some(source_path) = found else {
         return Ok(toml::Value::Table(Default::default()));
     };
@@ -2168,7 +2168,7 @@ fn save_workspace_config_document(workspace_root: &str, doc: &toml::Value) -> Re
         return Err("workspace root is empty".to_string());
     }
     let text = toml::to_string_pretty(doc).map_err(map_err)?;
-    std::fs::write(hive_core::compat::config_file_for_write(Path::new(workspace_root)), text).map_err(map_err)
+    std::fs::write(ligus_core::compat::config_file_for_write(Path::new(workspace_root)), text).map_err(map_err)
 }
 
 fn managed_runtime_catalog_path(workspace_root: &str) -> Result<PathBuf, String> {
@@ -2229,15 +2229,15 @@ struct CatalogTrust {
 
 impl CatalogTrust {
     fn compute(workspace_root: &str, data_dir: &Path, base_runtimes: &[RuntimeTarget], base_mcp: &[McpServerSpec]) -> Self {
-        use hive_runtime::workspace_trust as wt;
+        use ligus_runtime::workspace_trust as wt;
         let mut t = CatalogTrust::default();
         // The base catalog came from the repo when the root's config file
         // parses (it is read first); otherwise from the data dir.
         let base_from_repo = !workspace_root.trim().is_empty()
-            && hive_core::compat::config_candidates(&[Path::new(workspace_root)])
+            && ligus_core::compat::config_candidates(&[Path::new(workspace_root)])
                 .first()
                 .and_then(|p| std::fs::read_to_string(p).ok())
-                .is_some_and(|text| hive_core::config::load_from_str(&text).is_ok());
+                .is_some_and(|text| ligus_core::config::load_from_str(&text).is_ok());
         if !base_from_repo {
             t.implicit.extend(base_runtimes.iter().map(|r| wt::runtime_item(r, "").digest));
             t.implicit.extend(base_mcp.iter().map(|s| wt::mcp_item(s, "").digest));
@@ -2259,20 +2259,20 @@ impl CatalogTrust {
     }
 
     fn retain_runtimes(&self, rts: &mut Vec<RuntimeTarget>) {
-        rts.retain(|r| self.allows(&hive_runtime::workspace_trust::runtime_item(r, "").digest));
+        rts.retain(|r| self.allows(&ligus_runtime::workspace_trust::runtime_item(r, "").digest));
     }
 
     fn retain_mcp(&self, servers: &mut Vec<McpServerSpec>) {
-        servers.retain(|s| self.allows(&hive_runtime::workspace_trust::mcp_item(s, "").digest));
+        servers.retain(|s| self.allows(&ligus_runtime::workspace_trust::mcp_item(s, "").digest));
     }
 }
 
 /// Trust an item the user just added or edited on this device (it is theirs,
 /// not the repo's).
-fn trust_own_item(state: &AppState, kind: hive_runtime::workspace_trust::ItemKind, digest: String) {
+fn trust_own_item(state: &AppState, kind: ligus_runtime::workspace_trust::ItemKind, digest: String) {
     let mut t = state.catalog_trust.lock().unwrap();
     if !t.root_id.is_empty() {
-        if let Ok(store) = hive_runtime::workspace_trust::TrustStore::open(&state.data_dir) {
+        if let Ok(store) = ligus_runtime::workspace_trust::TrustStore::open(&state.data_dir) {
             let _ = store.enable(&t.root_id, kind, &digest, "");
         }
     }
@@ -2301,9 +2301,9 @@ fn load_config_catalogs(dirs: &[&Path]) -> (Vec<RuntimeTarget>, String, Vec<McpS
     let mut base_runtimes = Vec::new();
     let mut default_runtime_id = "anthropic".to_string();
     let mut base_mcp = Vec::new();
-    for candidate in hive_core::compat::config_candidates(dirs) {
+    for candidate in ligus_core::compat::config_candidates(dirs) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
-            if let Ok(cfg) = hive_core::config::load_from_str(&text) {
+            if let Ok(cfg) = ligus_core::config::load_from_str(&text) {
                 base_runtimes = cfg.runtimes;
                 if !cfg.app.default_runtime.is_empty() {
                     default_runtime_id = cfg.app.default_runtime;
@@ -2314,10 +2314,10 @@ fn load_config_catalogs(dirs: &[&Path]) -> (Vec<RuntimeTarget>, String, Vec<McpS
                     .map(|m| McpServerSpec {
                         id: m.id,
                         transport: match m.transport {
-                            hive_core::config::McpServerTransportKind::Http => McpTransport::Http {
+                            ligus_core::config::McpServerTransportKind::Http => McpTransport::Http {
                                 url: m.url.unwrap_or_default(),
                             },
-                            hive_core::config::McpServerTransportKind::Stdio => {
+                            ligus_core::config::McpServerTransportKind::Stdio => {
                                 McpTransport::Stdio {
                                     command: m.command.unwrap_or_default(),
                                     args: m.args,
@@ -2350,7 +2350,7 @@ fn map_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-fn rfc3339(ts: hive_core::Timestamp) -> String {
+fn rfc3339(ts: ligus_core::Timestamp) -> String {
     serde_json::to_value(ts)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -2366,8 +2366,8 @@ fn role_str(role: MessageRole) -> &'static str {
     }
 }
 
-fn git_kind_str(kind: hive_core::git_context::GitChangeKind) -> &'static str {
-    use hive_core::git_context::GitChangeKind::*;
+fn git_kind_str(kind: ligus_core::git_context::GitChangeKind) -> &'static str {
+    use ligus_core::git_context::GitChangeKind::*;
     match kind {
         Modified => "modified",
         Added => "added",
@@ -2410,7 +2410,7 @@ impl Viewer {
     /// "Your other device". The device only counts when the account matches
     /// too: `origin_device_id` is the writer's claim, and another person's
     /// reply naming this device must not read as "This device".
-    fn place_of(&self, m: &ChatMessage, actor: &hive_core::ActorIdentity) -> Option<String> {
+    fn place_of(&self, m: &ChatMessage, actor: &ligus_core::ActorIdentity) -> Option<String> {
         let mine = actor.account_id.is_some() && actor.account_id == self.account;
         let ran_on = m.origin_device_id.or(actor.device_id);
         if mine && ran_on.is_some() && ran_on == self.device {
@@ -2422,15 +2422,15 @@ impl Viewer {
 
 fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> ChatMessageDto {
     // Resolve the author's avatar. A named agent (in the roster) uses its roster
-    // avatar/color. Otherwise — a human, or the primary "hive" (not a roster
+    // avatar/color. Otherwise — a human, or the primary "ligus" (not a roster
     // entry) — use the stamped actor identity's avatar (the generating user's).
     let roster_agent = agents.iter().find(|ag| ag.name == m.author);
     let (author_avatar_url, author_color_hex) = match roster_agent {
         Some(ag) => (ag.avatar_url.clone(), ag.avatar_color_hex.clone()),
         None => (m.actor_identity.as_ref().and_then(|a| a.avatar_url.clone()), None),
     };
-    // For a primary-@hive turn (assistant role, not a named roster agent), surface
-    // the responding user's name so the UI can show whose hive answered. Skip it
+    // For a primary-@ligus turn (assistant role, not a named roster agent), surface
+    // the responding user's name so the UI can show whose ligus answered. Skip it
     // for human turns and named agents.
     let responder_name = if m.role == MessageRole::Assistant && roster_agent.is_none() {
         m.actor_identity
@@ -2460,7 +2460,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         tool_calls: m
             .tool_calls
             .iter()
-            .map(|c| hive_proto::ToolCallDto {
+            .map(|c| ligus_proto::ToolCallDto {
                 id: c.id.clone(),
                 name: c.name.clone(),
                 input_json: c.input_json.clone(),
@@ -2470,7 +2470,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         tool_results: m
             .tool_results
             .iter()
-            .map(|r| hive_proto::ToolResultDto {
+            .map(|r| ligus_proto::ToolResultDto {
                 call_id: r.call_id.clone(),
                 content: r.content.clone(),
                 is_error: r.is_error,
@@ -2491,8 +2491,8 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
 /// `@you` names its requester, and says whether that's the viewer.
 fn message_dto_in(s: &ChatSession, m: &ChatMessage, viewer: Viewer, me: &str) -> ChatMessageDto {
     let mut dto = message_dto(m, &s.workspace_agents, viewer);
-    if let Some(r) = hive_runtime::parse_mentions(&m.body, s).you.then(|| hive_runtime::requester_of(s, m)).flatten() {
-        let name = hive_proto::names::clean_display_name(&r.display_name);
+    if let Some(r) = ligus_runtime::parse_mentions(&m.body, s).you.then(|| ligus_runtime::requester_of(s, m)).flatten() {
+        let name = ligus_proto::names::clean_display_name(&r.display_name);
         if !name.is_empty() {
             dto.requester_is_viewer = r.is(me) || (r.account_id.is_some() && r.account_id == viewer.account);
             dto.requester_name = Some(name);
@@ -2501,7 +2501,7 @@ fn message_dto_in(s: &ChatSession, m: &ChatMessage, viewer: Viewer, me: &str) ->
     dto
 }
 
-fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMember]) -> ProposalDto {
+fn proposal_dto(p: &ActionProposal, members: &[ligus_core::identity::WorkspaceMember]) -> ProposalDto {
     // Resolve a voter's actor id to a human-readable name from the roster, so the
     // Review pane can tag who approved/rejected. Falls back to a short id.
     let name_of = |actor_id: &str| -> String {
@@ -2553,7 +2553,7 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
         refinements: p
             .refinements
             .iter()
-            .map(|r| hive_proto::RefinementDto {
+            .map(|r| ligus_proto::RefinementDto {
                 id: r.id.to_string(),
                 actor_id: r.actor_id.clone(),
                 display_name: name_of(&r.actor_id),
@@ -2572,13 +2572,13 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
         argv: p.command.as_ref().map(|c| c.argv.clone()),
         producing_agent_id: p.producing_agent_id.map(|id| id.to_string()),
         offered_file: p.attachment.as_deref().map(|a| {
-            let class = hive_core::attachment::class_of_extension(&hive_core::attachment::extension(&a.name));
-            hive_proto::OfferedFileDto {
+            let class = ligus_core::attachment::class_of_extension(&ligus_core::attachment::extension(&a.name));
+            ligus_proto::OfferedFileDto {
                 name: a.name.clone(),
                 size: a.size,
                 content_type: a.content_type.clone(),
                 sha256: a.sha256.clone(),
-                risky: class.risky() || class == hive_core::attachment::TypeClass::Unknown || hive_core::attachment::double_extension(&a.name),
+                risky: class.risky() || class == ligus_core::attachment::TypeClass::Unknown || ligus_core::attachment::double_extension(&a.name),
             }
         }),
         ..Default::default()
@@ -2590,19 +2590,19 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
 /// config impact, human gate, presence, and a legacy command's warning.
 fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService) -> ProposalDto {
     let mut dto = proposal_dto(p, &s.members);
-    let (kind, name) = hive_runtime::review::author_of(s, p);
-    let agent = kind == hive_runtime::review::AuthorKind::Agent;
+    let (kind, name) = ligus_runtime::review::author_of(s, p);
+    let agent = kind == ligus_runtime::review::AuthorKind::Agent;
     dto.author_kind = if agent { "agent".into() } else { "human".into() };
     dto.author_name = name;
     dto.signed_by = match svc.proposal_signer(s.id, p.id, agent) {
-        Some(hive_runtime::review::SignedBy::Agent) => "agent".into(),
-        Some(hive_runtime::review::SignedBy::Host) => "host".into(),
-        Some(hive_runtime::review::SignedBy::Human) => "human".into(),
+        Some(ligus_runtime::review::SignedBy::Agent) => "agent".into(),
+        Some(ligus_runtime::review::SignedBy::Host) => "host".into(),
+        Some(ligus_runtime::review::SignedBy::Human) => "human".into(),
         None => String::new(),
     };
-    let protected = hive_core::sandbox::envelope_for_session(s).protected_dirs;
-    dto.config_impact = hive_runtime::review::config_impact(p, &protected);
-    dto.human_gate = hive_core::guard::human_gate_reason(s, p).is_some();
+    let protected = ligus_core::sandbox::envelope_for_session(s).protected_dirs;
+    dto.config_impact = ligus_runtime::review::config_impact(p, &protected);
+    dto.human_gate = ligus_core::guard::human_gate_reason(s, p).is_some();
     dto.presence_required = s.authz.rules >= 2;
     dto.legacy_command = p.kind == ProposalKind::Command && p.command.is_none();
     // Apply on a host (Phase B): the requests and how they ended.
@@ -2614,7 +2614,7 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
         .filter(|r| r.proposal_id == p.id)
         .map(|r| {
             let host = r.host_device_id.to_string();
-            let mut d = hive_proto::ApplyRequestDto {
+            let mut d = ligus_proto::ApplyRequestDto {
                 id: r.id.to_string(),
                 host_label: hosts.iter().find(|h| h.id == host).map(|h| h.label.clone()),
                 host_device_id: host,
@@ -2623,15 +2623,15 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
                 ..Default::default()
             };
             match s.apply_outcomes.get(&r.id) {
-                Some(hive_core::workspace_repo::ApplyOutcome::Applied { commit }) => {
+                Some(ligus_core::workspace_repo::ApplyOutcome::Applied { commit }) => {
                     d.state = "applied".into();
                     d.commit = commit.clone();
                 }
-                Some(hive_core::workspace_repo::ApplyOutcome::Failed { reason }) => {
+                Some(ligus_core::workspace_repo::ApplyOutcome::Failed { reason }) => {
                     d.state = "failed".into();
                     d.reason = Some(reason.clone());
                 }
-                Some(hive_core::workspace_repo::ApplyOutcome::Withdrawn) => d.state = "withdrawn".into(),
+                Some(ligus_core::workspace_repo::ApplyOutcome::Withdrawn) => d.state = "withdrawn".into(),
                 None => {}
             }
             d
@@ -2672,7 +2672,7 @@ fn provider_name(kind: ModelProviderKind) -> &'static str {
         ModelProviderKind::Ollama => "ollama",
         ModelProviderKind::Azure => "azure",
         ModelProviderKind::Custom => "custom",
-        ModelProviderKind::HiveDaemon => "hive-daemon",
+        ModelProviderKind::LigusDaemon => "ligus-daemon",
         ModelProviderKind::Aider => "aider",
         ModelProviderKind::Pi => "pi",
         ModelProviderKind::ClaudeCode => "claude-code",
@@ -2691,7 +2691,7 @@ fn parse_provider_kind(input: &str) -> Result<ModelProviderKind, String> {
         "ollama" => Ok(ModelProviderKind::Ollama),
         "azure" | "azureopenai" => Ok(ModelProviderKind::Azure),
         "custom" => Ok(ModelProviderKind::Custom),
-        "hivedaemon" => Ok(ModelProviderKind::HiveDaemon),
+        "ligusdaemon" => Ok(ModelProviderKind::LigusDaemon),
         "aider" => Ok(ModelProviderKind::Aider),
         "pi" => Ok(ModelProviderKind::Pi),
         "claudecode" => Ok(ModelProviderKind::ClaudeCode),
@@ -2703,10 +2703,10 @@ fn parse_provider_kind(input: &str) -> Result<ModelProviderKind, String> {
     }
 }
 
-fn parse_runtime_location(input: &str) -> Result<hive_core::RuntimeLocation, String> {
+fn parse_runtime_location(input: &str) -> Result<ligus_core::RuntimeLocation, String> {
     match input.to_lowercase().as_str() {
-        "local" => Ok(hive_core::RuntimeLocation::Local),
-        "remote" => Ok(hive_core::RuntimeLocation::Remote),
+        "local" => Ok(ligus_core::RuntimeLocation::Local),
+        "remote" => Ok(ligus_core::RuntimeLocation::Remote),
         other => Err(format!("unknown runtime location {other}")),
     }
 }
@@ -2739,7 +2739,7 @@ fn provider_config_name(kind: ModelProviderKind) -> &'static str {
         ModelProviderKind::Ollama => "ollama",
         ModelProviderKind::Azure => "azure",
         ModelProviderKind::Custom => "custom",
-        ModelProviderKind::HiveDaemon => "hive-daemon",
+        ModelProviderKind::LigusDaemon => "ligus-daemon",
         ModelProviderKind::Aider => "aider",
         ModelProviderKind::Pi => "pi",
         ModelProviderKind::ClaudeCode => "claude-code",
@@ -2750,10 +2750,10 @@ fn provider_config_name(kind: ModelProviderKind) -> &'static str {
     }
 }
 
-fn location_config_name(location: hive_core::RuntimeLocation) -> &'static str {
+fn location_config_name(location: ligus_core::RuntimeLocation) -> &'static str {
     match location {
-        hive_core::RuntimeLocation::Local => "local",
-        hive_core::RuntimeLocation::Remote => "remote",
+        ligus_core::RuntimeLocation::Local => "local",
+        ligus_core::RuntimeLocation::Remote => "remote",
     }
 }
 
@@ -3068,8 +3068,8 @@ fn runtime_dto(rt: &RuntimeTarget, is_default: bool) -> RuntimeSummaryDto {
         label: rt.display_label(),
         provider: provider_name(rt.provider_kind).to_string(),
         location: match rt.location {
-            hive_core::RuntimeLocation::Local => "local".to_string(),
-            hive_core::RuntimeLocation::Remote => "remote".to_string(),
+            ligus_core::RuntimeLocation::Local => "local".to_string(),
+            ligus_core::RuntimeLocation::Remote => "remote".to_string(),
         },
         model: rt.model_id.clone(),
         endpoint: rt.endpoint.clone(),
@@ -3122,10 +3122,10 @@ fn member_dto(m: &WorkspaceMember, self_actor_id: &str) -> WorkspaceMemberDto {
 }
 
 /// What the local person may do to `dto`'s member, by the fold's own rules
-/// (`hive_core::authz::member_action_refusal`): the People pane hides or
+/// (`ligus_core::authz::member_action_refusal`): the People pane hides or
 /// disables what the fold would refuse and says why.
-fn gate_member_actions(dto: &mut WorkspaceMemberDto, me: &str, roster: &hive_core::authz::RosterState, config: &ChatSession) {
-    use hive_core::authz::{member_action_refusal, MemberAction};
+fn gate_member_actions(dto: &mut WorkspaceMemberDto, me: &str, roster: &ligus_core::authz::RosterState, config: &ChatSession) {
+    use ligus_core::authz::{member_action_refusal, MemberAction};
     dto.is_founder = !roster.founder.is_empty() && roster.founder == dto.id;
     if dto.is_self {
         return;
@@ -3133,7 +3133,7 @@ fn gate_member_actions(dto: &mut WorkspaceMemberDto, me: &str, roster: &hive_cor
     dto.remove_refusal = member_action_refusal(roster, config, me, &MemberAction::Remove { member_id: dto.id.clone() });
     dto.role_options = [WorkspaceRole::Owner, WorkspaceRole::Admin, WorkspaceRole::Contributor, WorkspaceRole::Viewer]
         .into_iter()
-        .map(|role| hive_proto::MemberRoleOptionDto {
+        .map(|role| ligus_proto::MemberRoleOptionDto {
             role: role_name(role).to_string(),
             refusal: if role_name(role) == dto.role {
                 None
@@ -3169,7 +3169,7 @@ fn api_key_for(provider: ModelProviderKind) -> Option<String> {
         ModelProviderKind::Anthropic => "ANTHROPIC_API_KEY",
         ModelProviderKind::OpenAI => "OPENAI_API_KEY",
         ModelProviderKind::OpenRouter => "OPENROUTER_API_KEY",
-        _ => return hive_core::compat::var("LIGUS_PROVIDER_API_KEY").ok(),
+        _ => return ligus_core::compat::var("LIGUS_PROVIDER_API_KEY").ok(),
     };
     std::env::var(var).ok()
 }
@@ -3220,8 +3220,8 @@ impl AppState {
         let trust = if root.is_empty() {
             // Only this device's own config: nothing to trust.
             let mut t = CatalogTrust::default();
-            t.implicit.extend(base_runtimes.iter().map(|r| hive_runtime::workspace_trust::runtime_item(r, "").digest));
-            t.implicit.extend(base_mcp.iter().map(|s| hive_runtime::workspace_trust::mcp_item(s, "").digest));
+            t.implicit.extend(base_runtimes.iter().map(|r| ligus_runtime::workspace_trust::runtime_item(r, "").digest));
+            t.implicit.extend(base_mcp.iter().map(|s| ligus_runtime::workspace_trust::mcp_item(s, "").digest));
             t
         } else {
             CatalogTrust::compute(root, &self.data_dir, &base_runtimes, &base_mcp)
@@ -3252,7 +3252,7 @@ impl AppState {
     /// than reacting to them. Best-effort: a failed refresh leaves the old token
     /// (the server then 401s and the user re-authorizes).
     async fn ensure_fresh_mcp_tokens(&self) {
-        let now = hive_core::Timestamp::now().inner().unix_timestamp();
+        let now = ligus_core::Timestamp::now().inner().unix_timestamp();
         #[allow(clippy::type_complexity)]
         let due: Vec<(String, String, String, Option<String>, String)> = {
             let s = self.settings.lock().unwrap();
@@ -3271,7 +3271,7 @@ impl AppState {
                 .collect()
         };
         for (id, token_endpoint, client_id, client_secret, refresh_token) in due {
-            if let Ok(tok) = hive_runtime::mcp_oauth::refresh(
+            if let Ok(tok) = ligus_runtime::mcp_oauth::refresh(
                 &token_endpoint,
                 &client_id,
                 client_secret.as_deref(),
@@ -3456,7 +3456,7 @@ impl AppState {
                 provider_key.or(settings_key).or_else(|| api_key_for(provider))
             };
             // A hosted-API provider with no key would dispatch and fail (401) — the
-            // classic "fresh install, no API key, @hive won't answer" case, since
+            // classic "fresh install, no API key, @ligus won't answer" case, since
             // the compiled default runtime is `anthropic`. Fall back to the
             // bring-your-own Claude Code CLI (a subscription, no key) so the agent
             // actually responds. A configured key (per-provider/global/env) is
@@ -3501,7 +3501,7 @@ impl AppState {
                     // A device-local runtime may name a model gateway this
                     // device's operator lists (LIGUS_MODEL_GATEWAYS_FILE);
                     // dispatch refuses it when this device offers none.
-                    gateway: rt.gateway.clone().filter(|g| !g.is_empty()).map(hive_runtime::model_gateway::GatewaySelection::named),
+                    gateway: rt.gateway.clone().filter(|g| !g.is_empty()).map(ligus_runtime::model_gateway::GatewaySelection::named),
                 };
             }
         }
@@ -3534,7 +3534,7 @@ impl AppState {
 
 #[tauri::command]
 fn get_app_info() -> AppInfo {
-    hive_runtime::app_info()
+    ligus_runtime::app_info()
 }
 
 #[tauri::command]
@@ -3549,7 +3549,7 @@ pub(crate) fn list_chats_sync(state: State<AppState>) -> Result<Vec<ChatSummaryD
     let svc = state.service.lock().unwrap();
     let ids = svc.store().list_session_ids().map_err(map_err)?;
     // The workspace-config log is a session too, but it's not a chat — never list it.
-    let config_id = hive_core::workspace_config_session_id(active);
+    let config_id = ligus_core::workspace_config_session_id(active);
     // Chats that are a channel's drop-in default (not independently movable).
     let default_chat_ids: std::collections::HashSet<String> = svc
         .list_channels(active)
@@ -3616,7 +3616,7 @@ fn export_filename(title: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
     let stem = stem.trim_matches('-').to_lowercase();
-    let stem = if stem.is_empty() { "hive-chat".to_string() } else { stem };
+    let stem = if stem.is_empty() { "ligus-chat".to_string() } else { stem };
     format!("{stem}.md")
 }
 
@@ -3722,7 +3722,7 @@ fn read_image_data_url(path: String) -> Result<String, String> {
 /// no relay is configured or no workspace key is held → attachments stay
 /// local-only. Blobs seal under the ring's seal key (the authorized head, B1)
 /// and open with whichever key the ring holds for their epoch.
-fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::keyring::KeyringEngine)> {
+fn blob_transport(state: &AppState) -> Option<(String, String, ligus_runtime::keyring::KeyringEngine)> {
     let (url, room, conn) = {
         let s = state.settings.lock().unwrap();
         let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
@@ -3740,10 +3740,10 @@ fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::key
 
 /// This device's keyring for `room` (B1), from the pinned config fold: what
 /// blobs and liveness beats seal under and open with.
-pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
+pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> ligus_runtime::keyring::KeyringEngine {
     let src = key_source_for(state, conn);
     let svc = state.service.lock().unwrap();
-    hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
+    ligus_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
 }
 
 /// Read the tail of today's app log for the in-app Diagnostics view — the
@@ -3784,7 +3784,7 @@ pub(crate) fn create_chat_sync(state: State<AppState>, title: String) -> Result<
     Ok(session_dto(&session, Viewer::of(&svc), &svc.author().id))
 }
 
-fn channel_dto(c: &hive_core::Channel) -> ChannelDto {
+fn channel_dto(c: &ligus_core::Channel) -> ChannelDto {
     ChannelDto {
         id: c.id.clone(),
         name: c.name.clone(),
@@ -3933,7 +3933,7 @@ pub(crate) fn get_chat_sync(state: State<AppState>, session_id: String) -> Resul
 /// Show messages a person's other identity wrote — the separate member their
 /// `ligus serve` box used before it was enrolled as their device — as theirs:
 /// "Alex via sff". Display only; the log is unchanged.
-fn attribute_linked_devices(session: &mut ChatSession, links: &hive_core::DeviceLinks) {
+fn attribute_linked_devices(session: &mut ChatSession, links: &ligus_core::DeviceLinks) {
     if links.is_empty() {
         return;
     }
@@ -4048,13 +4048,13 @@ pub(crate) fn delete_chat_sync(state: State<AppState>, session_id: String) -> Re
         svc.delete_chat(id).map_err(map_err)?;
     }
     // Phase 2a: best-effort teardown of the chat's persistent base worktree and
-    // its `hive/chat/<id>` branch. Only meaningful in a git workspace; a failure
+    // its `ligus/chat/<id>` branch. Only meaningful in a git workspace; a failure
     // (or non-git root) just leaves a stale entry a later same-id ensure clears.
     let repo_root = state.workspace_repo_root();
     if !repo_root.trim().is_empty()
-        && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root))
+        && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root))
     {
-        if let Err(e) = hive_runtime::git_worktree::remove_chat_worktree(
+        if let Err(e) = ligus_runtime::git_worktree::remove_chat_worktree(
             std::path::Path::new(&repo_root),
             &id.to_string(),
         ) {
@@ -4099,7 +4099,7 @@ pub(crate) fn add_agent_sync(
     // Reserved mention words would hijack routing (an agent named "primary"
     // shadows the primary runtime; "you"/"all" shadow broadcast).
     const RESERVED: &[&str] =
-        &["primary", "hive", "you", "all", "everyone", "owners", "admins", "contributors", "viewers"];
+        &["primary", "ligus", "you", "all", "everyone", "owners", "admins", "contributors", "viewers"];
     if RESERVED.contains(&name.to_lowercase().as_str()) {
         return Err(format!("\u{201c}{name}\u{201d} is a reserved mention name — pick another."));
     }
@@ -4161,9 +4161,9 @@ pub(crate) fn list_queued_work_sync(state: State<AppState>) -> Result<Vec<Queued
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
     let svc = state.service.lock().unwrap();
-    let config_id = hive_core::workspace_config_session_id(active);
+    let config_id = ligus_core::workspace_config_session_id(active);
     let hosts = svc.list_hosts(active).map_err(map_err)?;
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     let ids = svc.store().list_session_ids().map_err(map_err)?;
     let mut out = Vec::new();
     for id in ids {
@@ -4214,7 +4214,7 @@ async fn list_workspace_hosts(ligus_app: tauri::AppHandle) -> Result<Vec<Workspa
 pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>, String> {
     let active = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     Ok(svc
         .list_hosts(active)
         .map_err(map_err)?
@@ -4222,8 +4222,8 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
         .map(|h| WorkspaceHostDto {
             id: h.id.clone(),
             kind: match h.kind {
-                hive_core::HostKind::Device => "device",
-                hive_core::HostKind::Worker => "worker",
+                ligus_core::HostKind::Device => "device",
+                ligus_core::HostKind::Worker => "worker",
             }
             .to_string(),
             label: h.label.clone(),
@@ -4231,7 +4231,7 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
             last_seen: rfc3339(state.host_presence.last_seen(h)),
             model_gateways: h
                 .offered_gateways()
-                .map(|g| hive_proto::HostModelGatewayDto { name: g.name.clone(), api: g.api.clone() })
+                .map(|g| ligus_proto::HostModelGatewayDto { name: g.name.clone(), api: g.api.clone() })
                 .collect(),
         })
         .collect())
@@ -4256,22 +4256,22 @@ pub(crate) fn set_agent_host_sync(state: State<AppState>, agent_id: String, host
 /// the sidebar's channel highlights.
 fn message_mentions_me(
     m: &ChatMessage,
-    session: &hive_core::ChatSession,
+    session: &ligus_core::ChatSession,
     me: &str,
-    my_role: Option<hive_core::WorkspaceRole>,
+    my_role: Option<ligus_core::WorkspaceRole>,
 ) -> bool {
     let mine = session.members.iter().find(|x| x.actor.id == me);
     let my_member = mine.map(|x| x.id.as_str());
     let my_name = mine.map(|x| x.actor.display_name.as_str()).unwrap_or("");
     let roles: Vec<_> = my_role.into_iter().collect();
-    hive_runtime::message_mentions(m, session).reaches(|id| id == me || Some(id) == my_member, &roles, my_name)
+    ligus_runtime::message_mentions(m, session).reaches(|id| id == me || Some(id) == my_member, &roles, my_name)
 }
 
 #[cfg(test)]
 mod at_you_desktop_tests {
     use super::*;
 
-    fn person(id: &str, name: &str, role: hive_core::WorkspaceRole, index: u32) -> WorkspaceMember {
+    fn person(id: &str, name: &str, role: ligus_core::WorkspaceRole, index: u32) -> WorkspaceMember {
         WorkspaceMember {
             id: id.into(),
             actor: ActorIdentity::new(id, name, ActorKind::Human),
@@ -4287,9 +4287,9 @@ mod at_you_desktop_tests {
     fn trio() -> ChatSession {
         let mut s = ChatSession::new("Release", Uuid::new_v4(), "rt");
         s.members = vec![
-            person("olu", "Olu", hive_core::WorkspaceRole::Owner, 1),
-            person("ana", "Ana", hive_core::WorkspaceRole::Contributor, 2),
-            person("ben", "Ben", hive_core::WorkspaceRole::Contributor, 3),
+            person("olu", "Olu", ligus_core::WorkspaceRole::Owner, 1),
+            person("ana", "Ana", ligus_core::WorkspaceRole::Contributor, 2),
+            person("ben", "Ben", ligus_core::WorkspaceRole::Contributor, 3),
         ];
         s
     }
@@ -4303,7 +4303,7 @@ mod at_you_desktop_tests {
     }
 
     fn agent_reply(s: &mut ChatSession, to: &ChatMessage, body: &str) -> ChatMessage {
-        let mut r = ChatMessage::new(MessageRole::Assistant, "Hive", body);
+        let mut r = ChatMessage::new(MessageRole::Assistant, "Ligus", body);
         r.reply_to_message_id = Some(to.id);
         s.messages.push(r.clone());
         r
@@ -4324,7 +4324,7 @@ mod at_you_desktop_tests {
     #[test]
     fn agent_at_you_reaches_only_the_requesters_desktop() {
         let mut s = trio();
-        let ask = post(&mut s, "ana", "@hive what broke?");
+        let ask = post(&mut s, "ana", "@ligus what broke?");
         let r = agent_reply(&mut s, &ask, "The cache. @you want me to fix it?");
         assert_eq!(pinged(&s, &r), vec!["ana"]);
         // The sidebar highlight follows the same rule.
@@ -4336,7 +4336,7 @@ mod at_you_desktop_tests {
     #[test]
     fn agent_at_all_reaches_every_desktop() {
         let mut s = trio();
-        let ask = post(&mut s, "ana", "@hive ship");
+        let ask = post(&mut s, "ana", "@ligus ship");
         let r = agent_reply(&mut s, &ask, "@all shipped");
         assert_eq!(pinged(&s, &r), vec!["ana", "ben", "olu"]);
     }
@@ -4347,7 +4347,7 @@ mod at_you_desktop_tests {
         // the reply in the chat they're in; a desktop notifies only for a
         // mention, so a reply to Ana that names no one reaches no desktop.
         let mut s = trio();
-        let ask = post(&mut s, "ana", "@hive fix it");
+        let ask = post(&mut s, "ana", "@ligus fix it");
         let r = agent_reply(&mut s, &ask, "Fixed.");
         assert!(pinged(&s, &r).is_empty());
         let cc = agent_reply(&mut s, &ask, "Fixed. @Ben FYI");
@@ -4364,7 +4364,7 @@ mod at_you_desktop_tests {
     #[test]
     fn at_you_renders_as_the_requester_for_every_viewer_highlighted_only_for_them() {
         let mut s = trio();
-        let ask = post(&mut s, "ana", "@hive check");
+        let ask = post(&mut s, "ana", "@ligus check");
         let r = agent_reply(&mut s, &ask, "@you done");
         for me in ["ana", "ben", "olu"] {
             let dto = message_dto_in(&s, &r, Viewer::default(), me);
@@ -4385,10 +4385,10 @@ mod at_you_desktop_tests {
     #[test]
     fn solo_owner_still_gets_at_you() {
         let mut s = ChatSession::new("Solo", Uuid::new_v4(), "rt");
-        s.members = vec![person("me", "Zaz", hive_core::WorkspaceRole::Owner, 1)];
+        s.members = vec![person("me", "Zaz", ligus_core::WorkspaceRole::Owner, 1)];
         let ask = post(&mut s, "me", "status?");
         let r = agent_reply(&mut s, &ask, "@you all green");
-        assert!(message_mentions_me(&r, &s, "me", Some(hive_core::WorkspaceRole::Owner)));
+        assert!(message_mentions_me(&r, &s, "me", Some(ligus_core::WorkspaceRole::Owner)));
     }
 }
 
@@ -4407,7 +4407,7 @@ pub(crate) fn list_mention_states_sync(state: State<AppState>) -> Result<Vec<Men
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
     let svc = state.service.lock().unwrap();
-    let config_id = hive_core::workspace_config_session_id(active);
+    let config_id = ligus_core::workspace_config_session_id(active);
     let ids = svc.store().list_session_ids().map_err(map_err)?;
     let mut out = Vec::new();
     for id in ids {
@@ -4436,7 +4436,7 @@ pub(crate) fn list_mention_states_sync(state: State<AppState>) -> Result<Vec<Men
 /// The position of the local user's last unread-relevant `@`-mention in `session`
 /// and the session's message count, or `None` if they're never mentioned. Shared
 /// by the active-workspace scan and the cross-workspace scan.
-fn mention_state_for(session: &hive_core::ChatSession, me: &str) -> Option<(u32, u32)> {
+fn mention_state_for(session: &ligus_core::ChatSession, me: &str) -> Option<(u32, u32)> {
     let my_role = session.members.iter().find(|m| m.actor.id == me).map(|m| m.role);
     let mut last_ordinal = 0u32;
     let mut count = 0u32;
@@ -4500,7 +4500,7 @@ pub(crate) fn list_all_mention_states_sync(state: State<AppState>) -> Result<Vec
             continue;
         };
         // Each workspace's config log is a pseudo-session, not a chat.
-        if id == hive_core::workspace_config_session_id(wid) {
+        if id == ligus_core::workspace_config_session_id(wid) {
             continue;
         }
         if let Some((last_ordinal, count)) = mention_state_for(&s, &me) {
@@ -4544,7 +4544,7 @@ pub(crate) fn list_members_sync(state: State<AppState>, session_id: String) -> R
     // chats it made. It's the owner now: don't list it as another person.
     let links = device_links_of(&svc, s.workspace_id);
     let roster: std::collections::HashSet<String> = svc
-        .load(hive_core::workspace_config_session_id(s.workspace_id))
+        .load(ligus_core::workspace_config_session_id(s.workspace_id))
         .ok()
         .flatten()
         .map(|c| c.members.into_iter().map(|m| m.id).collect())
@@ -4601,13 +4601,13 @@ async fn list_membership_audit(ligus_app: tauri::AppHandle) -> Result<Vec<Member
 
 pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<MembershipAuditDto>, String> {
     let active = state.active_workspace_id();
-    let config_id = hive_core::workspace_config_session_id(active);
+    let config_id = ligus_core::workspace_config_session_id(active);
     let svc = state.service.lock().unwrap();
     // What the log decided, copy by copy: a refused event (or another
     // signer's copy under a real event's id) never shows as a change.
     let all = svc.store().list_copies(config_id).map_err(map_err)?;
-    let verdicts = hive_core::fold_copy_decisions(&all, svc.trusted_founder(), None, hive_core::WorkspaceAuthz::Unchecked);
-    let mut envs: Vec<_> = all.iter().filter(|e| verdicts.get(e) == Some(hive_core::Verdict::Allowed)).cloned().collect();
+    let verdicts = ligus_core::fold_copy_decisions(&all, svc.trusted_founder(), None, ligus_core::WorkspaceAuthz::Unchecked);
+    let mut envs: Vec<_> = all.iter().filter(|e| verdicts.get(e) == Some(ligus_core::Verdict::Allowed)).cloned().collect();
     envs.sort_by_key(|e| e.canonical_key());
     // Resolve MemberRemoved's id → name from the adds seen earlier in the log.
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -4621,7 +4621,7 @@ pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<M
             .unwrap_or_else(|| "unknown".to_string());
         let at = rfc3339(env.timestamp);
         match &env.payload {
-            hive_core::SessionEvent::MemberAdded { member, .. } => {
+            ligus_core::SessionEvent::MemberAdded { member, .. } => {
                 names.insert(member.id.clone(), member.actor.display_name.clone());
                 out.push(MembershipAuditDto {
                     action: "added".into(),
@@ -4631,7 +4631,7 @@ pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<M
                     at,
                 });
             }
-            hive_core::SessionEvent::MemberRemoved { member_id, .. } => {
+            ligus_core::SessionEvent::MemberRemoved { member_id, .. } => {
                 let member = names.get(member_id).cloned().unwrap_or_else(|| member_id.clone());
                 out.push(MembershipAuditDto { action: "removed".into(), member, role: None, by, at });
             }
@@ -4668,7 +4668,7 @@ pub(crate) fn add_member_sync(
         role: parse_role(&role),
         title,
         index: next_index,
-        joined_at: hive_core::Timestamp::now(),
+        joined_at: ligus_core::Timestamp::now(),
     };
     svc.add_member(id, state.active_workspace_id(), member).map_err(map_err)
 }
@@ -4688,7 +4688,7 @@ pub(crate) fn remove_member_sync(state: State<AppState>, session_id: String, mem
 // The box prints an enrollment code (`ligus serve enroll`); approving it here
 // signs a certificate for its device key with this desktop's account key, so
 // everything the box (and the phone behind it) does is authored as you. See
-// `hive_runtime::device_enroll`.
+// `ligus_runtime::device_enroll`.
 
 /// What an enrollment code asks for, shown before the owner approves it.
 #[derive(serde::Serialize)]
@@ -4746,8 +4746,8 @@ struct ApproveDeviceDto {
     retire_error: Option<String>,
 }
 
-fn decode_device_code(code: &str) -> Result<hive_runtime::device_enroll::DeviceEnrollment, String> {
-    hive_runtime::device_enroll::DeviceEnrollment::decode(code).map_err(|e| e.to_string())
+fn decode_device_code(code: &str) -> Result<ligus_runtime::device_enroll::DeviceEnrollment, String> {
+    ligus_runtime::device_enroll::DeviceEnrollment::decode(code).map_err(|e| e.to_string())
 }
 
 /// Human members (not you) whose account certified `device`: the box's own
@@ -4755,7 +4755,7 @@ fn decode_device_code(code: &str) -> Result<hive_runtime::device_enroll::DeviceE
 fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid) -> Vec<WorkspaceMember> {
     let accounts = svc.accounts_certifying(ws, device).unwrap_or_default();
     let me = svc.author().id.clone();
-    svc.load(hive_core::workspace_config_session_id(ws))
+    svc.load(ligus_core::workspace_config_session_id(ws))
         .ok()
         .flatten()
         .map(|c| c.members)
@@ -4775,7 +4775,7 @@ pub(crate) fn inspect_device_code_sync(state: State<AppState>, code: String) -> 
     let req = decode_device_code(&code)?;
     let svc = state.service.lock().unwrap();
     let ws = req.workspace_id;
-    let known_workspace = matches!(svc.load(hive_core::workspace_config_session_id(ws)), Ok(Some(_)));
+    let known_workspace = matches!(svc.load(ligus_core::workspace_config_session_id(ws)), Ok(Some(_)));
     let mine = svc.own_devices(ws).unwrap_or_default();
     let entry = mine.iter().find(|d| d.device_id == req.device_id);
     let revoked = entry.is_some_and(|d| d.revoked);
@@ -4804,7 +4804,7 @@ pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_m
     let req = decode_device_code(&code)?;
     let ws = req.workspace_id;
     let mut svc = state.service.lock().unwrap();
-    if !matches!(svc.load(hive_core::workspace_config_session_id(ws)), Ok(Some(_))) {
+    if !matches!(svc.load(ligus_core::workspace_config_session_id(ws)), Ok(Some(_))) {
         return Err("This code is for a workspace this desktop doesn't have.".into());
     }
     if svc.own_devices(ws).unwrap_or_default().iter().any(|d| d.device_id == req.device_id && d.revoked) {
@@ -4814,7 +4814,7 @@ pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_m
     tracing::info!(target: "identity", device = %req.device_id, label = %req.label, "approved a device as this account's");
     let mut out = ApproveDeviceDto { retired: None, retire_error: None };
     if retire_member {
-        let cfg = hive_core::workspace_config_session_id(ws);
+        let cfg = ligus_core::workspace_config_session_id(ws);
         for m in device_own_members(&svc, ws, req.device_id) {
             match svc.remove_member(cfg, ws, m.id.clone()) {
                 Ok(()) => out.retired = Some(m.actor.display_name.clone()),
@@ -4878,7 +4878,7 @@ pub(crate) fn list_device_requests_sync(state: State<AppState>) -> Result<Vec<De
         // A box already acting as you re-registers its host as yours too, but
         // then it IS in `mine`; a stale Device host of this account's other
         // desktop shows here only if it was never certified.
-        .filter(|h| h.kind == hive_core::HostKind::Worker)
+        .filter(|h| h.kind == ligus_core::HostKind::Worker)
         .map(|h| DeviceRequestDto { host_id: h.id, label: h.label })
         .collect())
 }
@@ -4901,14 +4901,14 @@ pub(crate) fn revoke_my_device_sync(state: State<AppState>, device_id: String) -
     if !svc.own_devices(ws).map_err(map_err)?.iter().any(|d| d.device_id == device) {
         return Err("That isn't one of your devices in this workspace.".into());
     }
-    svc.revoke_device(hive_core::workspace_config_session_id(ws), ws, device).map_err(map_err)?;
+    svc.revoke_device(ligus_core::workspace_config_session_id(ws), ws, device).map_err(map_err)?;
     tracing::info!(target: "identity", device = %device, "revoked one of this account's devices");
     Ok(())
 }
 
 /// The active workspace's presence channel: relay client, room and ring
 /// (none without a relay or a workspace key).
-fn active_presence_conn(state: &AppState) -> Option<(hive_runtime::RelayClient, String, hive_runtime::keyring::KeyringEngine)> {
+fn active_presence_conn(state: &AppState) -> Option<(ligus_runtime::RelayClient, String, ligus_runtime::keyring::KeyringEngine)> {
     let (url, room, key, ws_conn) = {
         let s = state.settings.lock().unwrap();
         let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
@@ -4932,7 +4932,7 @@ struct DeviceRevocationDto {
     summary: String,
     complete: bool,
     #[serde(flatten)]
-    status: hive_runtime::revocation_status::DeviceRevocationStatus,
+    status: ligus_runtime::revocation_status::DeviceRevocationStatus,
 }
 
 /// Phone revocation status from every box that paired the phone (their
@@ -4945,7 +4945,7 @@ async fn list_device_revocations(state: State<'_, AppState>) -> Result<Vec<Devic
     let blobs = relay.list_presence(&room).await.map_err(map_err)?;
     let reports = {
         let svc = state.service.lock().unwrap();
-        hive_runtime::revocation_status::open_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten())
+        ligus_runtime::revocation_status::open_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten())
     };
     let hosts = {
         let svc = state.service.lock().unwrap();
@@ -4973,9 +4973,9 @@ async fn retry_device_revocation(state: State<'_, AppState>, device_id: String) 
     // Signed by this device: a box takes a retry only from a member's device.
     let req = {
         let svc = state.service.lock().unwrap();
-        svc.sign_revocation_retry(hive_runtime::revocation_status::retry_request(&device.to_string(), svc.device_id()))
+        svc.sign_revocation_retry(ligus_runtime::revocation_status::retry_request(&device.to_string(), svc.device_id()))
     };
-    hive_runtime::revocation_status::request_retry(&relay, &room, &ring, &req).await.map_err(map_err)
+    ligus_runtime::revocation_status::request_retry(&relay, &room, &ring, &req).await.map_err(map_err)
 }
 
 #[tauri::command(async)]
@@ -5041,7 +5041,7 @@ async fn rotate_active_workspace_key(state: &AppState) -> Result<RevokeResultDto
     };
     if let Some(url) = relay_url {
         let client = state.relay_client(&url);
-        if let Err(e) = hive_runtime::keyring::publish_rotation(&client, &room, &issued.rotation).await {
+        if let Err(e) = ligus_runtime::keyring::publish_rotation(&client, &room, &issued.rotation).await {
             tracing::warn!(target: "sync", "keyring route refused the rotation body ({e}); the config log carries it");
         }
     }
@@ -5058,18 +5058,18 @@ async fn rotate_workspace_key(state: State<'_, AppState>) -> Result<RevokeResult
 /// This device's key source for `conn`'s workspace (B1): its id, its
 /// key-agreement keypair, the passphrase key and the epoch keys an invite
 /// delivered. The same inputs every host's keyring is built from.
-fn key_source_for(state: &AppState, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeySource {
+fn key_source_for(state: &AppState, conn: Option<&WorkspaceConn>) -> ligus_runtime::keyring::KeySource {
     let device_id = state.service.lock().unwrap().device_id();
     let s = state.settings.lock().unwrap();
     let ka = s
         .ka_secret
         .as_deref()
         .and_then(parse_hex32)
-        .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok());
-    hive_runtime::keyring::KeySource {
+        .and_then(|seed| ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok());
+    ligus_runtime::keyring::KeySource {
         device_id: Some(device_id),
         ka,
-        passphrase: conn.and_then(|c| c.key.as_deref()).filter(|k| !k.is_empty()).map(hive_core::derive_workspace_key).or_else(|| s.workspace_key()),
+        passphrase: conn.and_then(|c| c.key.as_deref()).filter(|k| !k.is_empty()).map(ligus_core::derive_workspace_key).or_else(|| s.workspace_key()),
         delivered: conn
             .map(|c| c.ek.iter().filter_map(|d| d.key().map(|k| (d.v, k))).collect())
             .unwrap_or_default(),
@@ -5240,7 +5240,7 @@ async fn inspect_mcp_server(state: State<'_, AppState>, server_id: String) -> Re
         .await
         .map_err(|_| "the server didn't list its tools in time".to_string())?
         .map_err(|e| e.to_string())?;
-    let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (server_id.clone(), t)).collect();
+    let tagged: Vec<(String, ligus_runtime::McpTool)> = tools.into_iter().map(|t| (server_id.clone(), t)).collect();
     if tagged.is_empty() {
         state.mcp_shell_tools.lock().unwrap().insert(server_id.clone(), Vec::new());
     }
@@ -5352,11 +5352,11 @@ fn parse_mcp_manifest(text: &str, fallback_id: &str) -> Result<Vec<McpServerSpec
 #[serde(rename_all = "camelCase")]
 struct WorkspaceTrustDto {
     root: String,
-    items: Vec<hive_runtime::workspace_trust::TrustItem>,
+    items: Vec<ligus_runtime::workspace_trust::TrustItem>,
 }
 
 fn workspace_trust_dto(state: &AppState) -> Result<WorkspaceTrustDto, String> {
-    use hive_runtime::workspace_trust as wt;
+    use ligus_runtime::workspace_trust as wt;
     let root = state.workspace_root.lock().unwrap().clone();
     if root.trim().is_empty() {
         return Ok(WorkspaceTrustDto { root, items: Vec::new() });
@@ -5379,7 +5379,7 @@ async fn set_workspace_trust(ligus_app: tauri::AppHandle, digest: String, enable
 }
 
 pub(crate) fn set_workspace_trust_sync(state: State<AppState>, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
-    use hive_runtime::workspace_trust as wt;
+    use ligus_runtime::workspace_trust as wt;
     let root = state.workspace_root.lock().unwrap().clone();
     let item = wt::repo_items(Path::new(&root)).into_iter().find(|i| i.digest == digest).ok_or("no such item in this workspace")?;
     let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
@@ -5401,7 +5401,7 @@ async fn trust_workspace(ligus_app: tauri::AppHandle) -> Result<WorkspaceTrustDt
 }
 
 pub(crate) fn trust_workspace_sync(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
-    use hive_runtime::workspace_trust as wt;
+    use ligus_runtime::workspace_trust as wt;
     let root = state.workspace_root.lock().unwrap().clone();
     let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
     let rid = wt::root_id(Path::new(&root));
@@ -5422,7 +5422,7 @@ async fn install_mcp_server(state: State<'_, AppState>, source: String) -> Resul
     let root = state.workspace_root.lock().unwrap().clone();
     for server in &parsed {
         upsert_mcp_server_in_config(&state.data_dir, &root, server)?;
-        trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(server, "").digest);
+        trust_own_item(&state, ligus_runtime::workspace_trust::ItemKind::McpServer, ligus_runtime::workspace_trust::mcp_item(server, "").digest);
     }
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
@@ -5495,7 +5495,7 @@ fn add_remote_mcp_server(
     // Validate the token before touching any config, so a bad paste doesn't
     // leave a half-added server.
     let token = match bearer_token.as_deref() {
-        Some(raw) => Some(hive_runtime::normalize_bearer_token(raw)?),
+        Some(raw) => Some(ligus_runtime::normalize_bearer_token(raw)?),
         None => None,
     };
     if let Some(token) = token {
@@ -5511,7 +5511,7 @@ fn add_remote_mcp_server(
     };
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_mcp_server_in_config(&state.data_dir, &root, &server)?;
-    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(&server, "").digest);
+    trust_own_item(&state, ligus_runtime::workspace_trust::ItemKind::McpServer, ligus_runtime::workspace_trust::mcp_item(&server, "").digest);
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
         if let Some(existing) = managed.iter_mut().find(|s| s.id == id) {
@@ -5528,7 +5528,7 @@ fn add_remote_mcp_server(
 
 /// Connect a remote MCP server via OAuth 2.1 + PKCE: opens the browser to the
 /// server's authorization page, captures the loopback redirect, exchanges the
-/// code, and stores the token (refreshable). See `hive_runtime::mcp_oauth`.
+/// code, and stores the token (refreshable). See `ligus_runtime::mcp_oauth`.
 #[tauri::command]
 async fn authorize_mcp_server(
     state: State<'_, AppState>,
@@ -5557,19 +5557,19 @@ async fn authorize_mcp_server(
         }
     };
 
-    let cfg = hive_runtime::mcp_oauth::OAuthConfig {
+    let cfg = ligus_runtime::mcp_oauth::OAuthConfig {
         server_url,
         configured_client_id,
         client_secret: client_secret.clone(),
         scope: scope.unwrap_or_default(),
     };
-    let authd = hive_runtime::mcp_oauth::authorize(&cfg, |u| {
+    let authd = ligus_runtime::mcp_oauth::authorize(&cfg, |u| {
         let _ = open_url_in_browser(u);
     })
     .await
     .map_err(|e| e.to_string())?;
 
-    let now = hive_core::Timestamp::now().inner().unix_timestamp();
+    let now = ligus_core::Timestamp::now().inner().unix_timestamp();
     let expires_at = authd.token.expires_in.map(|s| now + s as i64);
     {
         let mut settings = state.settings.lock().unwrap();
@@ -5593,7 +5593,7 @@ async fn authorize_mcp_server(
 /// Save (or clear, with a blank `token`) a static bearer token for an HTTP MCP
 /// server — for servers protected by a fixed API token instead of OAuth. The
 /// token is stored device-locally in settings.json (like provider API keys),
-/// never in hive.config.toml / the workspace catalog / exports / the relay, and
+/// never in ligus.config.toml / the workspace catalog / exports / the relay, and
 /// is never returned to the UI (`list_mcp_servers` reports only
 /// `hasBearerToken`). It takes precedence over an OAuth token for the server.
 #[tauri::command]
@@ -5792,14 +5792,14 @@ async fn preview_vault(state: State<'_, AppState>, url: String) -> Result<String
 // Commands — review queue (proposals + quorum) and reactions
 // ---------------------------------------------------------------------------
 
-fn local_actor(state: &AppState) -> hive_core::ActorIdentity {
+fn local_actor(state: &AppState) -> ligus_core::ActorIdentity {
     state
         .identity
         .load()
         .ok()
         .flatten()
         .map(|s| s.account.actor())
-        .unwrap_or_else(|| hive_core::ActorIdentity::new("local", "You", hive_core::ActorKind::Human))
+        .unwrap_or_else(|| ligus_core::ActorIdentity::new("local", "You", ligus_core::ActorKind::Human))
 }
 
 #[tauri::command]
@@ -5941,7 +5941,7 @@ async fn request_proposal_changes(
         proposal_sets::ensure_not_frozen(&session, pid)?;
         // Prefer explicit change requests; fall back to all notes so a plain
         // comment thread can still drive a revision.
-        let mut notes: Vec<&hive_core::proposals::ProposalRefinement> =
+        let mut notes: Vec<&ligus_core::proposals::ProposalRefinement> =
             proposal.refinements.iter().filter(|r| r.request_changes).collect();
         if notes.is_empty() {
             notes = proposal.refinements.iter().collect();
@@ -6001,7 +6001,7 @@ async fn run_revision_turn(
     };
 
     // Resolve the responder: the agent that produced the proposal, else the chat
-    // primary (@hive). Then run the revision turn (guarded like any dispatch).
+    // primary (@ligus). Then run the revision turn (guarded like any dispatch).
     let responder = {
         let svc = state.service.lock().unwrap();
         let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
@@ -6017,8 +6017,8 @@ async fn run_revision_turn(
     // other turn: another device that already holds the revision's turn runs
     // it (this one watches its holder).
     match dispatch_here(state, sid, workspace_id, trigger.id, None, true, std::time::Duration::ZERO)? {
-        hive_core::dispatch::Step::Run => {}
-        hive_core::dispatch::Step::Wait(d) => {
+        ligus_core::dispatch::Step::Run => {}
+        ligus_core::dispatch::Step::Wait(d) => {
             drop(_guard);
             arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO);
             return Ok(());
@@ -6166,9 +6166,9 @@ pub(crate) fn rebase_request(state: &AppState, sid: Uuid, pid: Uuid) -> Result<R
     // or another host manages), without preparing the chat branch.
     let checkout = crate::repos_ui::gated_checkout(state, &session)?;
     let chat = sid.to_string();
-    let conflict = hive_runtime::repos::apply::conflict_probe(&checkout, &chat, diff)?
+    let conflict = ligus_runtime::repos::apply::conflict_probe(&checkout, &chat, diff)?
         .ok_or("it applies on this chat's branch now; apply it again")?;
-    let tip = hive_runtime::repos::git::git(&checkout, &["rev-parse", &format!("refs/heads/{}", hive_runtime::git_worktree::chat_branch_name(&chat))]).unwrap_or_default();
+    let tip = ligus_runtime::repos::git::git(&checkout, &["rev-parse", &format!("refs/heads/{}", ligus_runtime::git_worktree::chat_branch_name(&chat))]).unwrap_or_default();
     Ok(RebaseRequest {
         workspace_id: session.workspace_id,
         instruction: rebase_instruction(&proposal.title, &conflict, &tip, &crate::repos_ui::host_label()),
@@ -6228,7 +6228,7 @@ pub(crate) fn dismiss_proposals_sync(
 fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::git()
+    let mut child = ligus_core::process_util::git()
         .arg("-C")
         .arg(workspace_root)
         .args(["apply", "--whitespace=nowarn"])
@@ -6258,7 +6258,7 @@ fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
 /// no-op tree (nothing staged) is treated as success so a re-apply doesn't
 /// error. Errors surface so the caller doesn't leave a half-applied state.
 fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
-    let add = hive_core::process_util::git()
+    let add = ligus_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["add", "-A"])
@@ -6267,7 +6267,7 @@ fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
     if !add.status.success() {
         return Err(format!("git add: {}", String::from_utf8_lossy(&add.stderr).trim()));
     }
-    let out = hive_core::process_util::git()
+    let out = ligus_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["commit", "-m", message])
@@ -6326,9 +6326,9 @@ async fn implement_proposal_inner(
 }
 
 /// The preview of what Implement will do (Track D4): built by the same
-/// `hive_runtime::review::implement_plan` the runner uses.
+/// `ligus_runtime::review::implement_plan` the runner uses.
 #[tauri::command]
-async fn get_implement_plan(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, target_agent_id: Option<String>) -> Result<hive_proto::ImplementPreviewDto, String> {
+async fn get_implement_plan(ligus_app: tauri::AppHandle, session_id: String, proposal_id: String, target_agent_id: Option<String>) -> Result<ligus_proto::ImplementPreviewDto, String> {
     crate::off_main(ligus_app, move |ligus_app| get_implement_plan_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, proposal_id, target_agent_id)).await
 }
 
@@ -6337,7 +6337,7 @@ pub(crate) fn get_implement_plan_sync(
     session_id: String,
     proposal_id: String,
     target_agent_id: Option<String>,
-) -> Result<hive_proto::ImplementPreviewDto, String> {
+) -> Result<ligus_proto::ImplementPreviewDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let target = target_agent_id.as_deref().filter(|t| !t.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
@@ -6346,12 +6346,12 @@ pub(crate) fn get_implement_plan_sync(
     Ok(implement_preview(&state, &session, &p, target))
 }
 
-fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal, target: Option<Uuid>) -> hive_proto::ImplementPreviewDto {
-    use hive_runtime::review::ImplementKind;
-    let plan = hive_runtime::review::implement_plan(session, p, target);
-    let executor = format!("{:?}", hive_runtime::executor::default_executor().kind());
-    let envelope = hive_core::sandbox::envelope_for_session(session);
-    let mut dto = hive_proto::ImplementPreviewDto {
+fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal, target: Option<Uuid>) -> ligus_proto::ImplementPreviewDto {
+    use ligus_runtime::review::ImplementKind;
+    let plan = ligus_runtime::review::implement_plan(session, p, target);
+    let executor = format!("{:?}", ligus_runtime::executor::default_executor().kind());
+    let envelope = ligus_core::sandbox::envelope_for_session(session);
+    let mut dto = ligus_proto::ImplementPreviewDto {
         kind: match plan.kind {
             ImplementKind::Argv => "argv",
             ImplementKind::Instruction => "instruction",
@@ -6367,7 +6367,7 @@ fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal
         targets: session.workspace_agents.iter().map(|a| (a.id.to_string(), format!("@{}", a.name))).collect(),
         executor,
         presence_required: session.authz.rules >= 2,
-        human_gate: hive_core::guard::human_gate_reason(session, p).is_some(),
+        human_gate: ligus_core::guard::human_gate_reason(session, p).is_some(),
         legacy_command: plan.legacy_command,
         ..Default::default()
     };
@@ -6390,7 +6390,7 @@ fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal
             let rt = &responder.runtime;
             dto.runtime = format!("{} ({:?})", responder.runtime_id, rt.provider);
             dto.driver = if rt.provider.is_cli_agent() {
-                match hive_runtime::provider::acp::resolve(rt, !envelope.egress.is_open()) {
+                match ligus_runtime::provider::acp::resolve(rt, !envelope.egress.is_open()) {
                     Ok(_) => "acp".into(),
                     Err(_) => "legacy".into(),
                 }
@@ -6398,11 +6398,11 @@ fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal
                 String::new()
             };
             dto.permission_tier = if rt.provider.is_cli_agent() {
-                hive_runtime::provider::acp::tier_from_args(rt.provider, &rt.args).into()
+                ligus_runtime::provider::acp::tier_from_args(rt.provider, &rt.args).into()
             } else {
                 "tools per runtime".into()
             };
-            let mut egress: Vec<String> = hive_runtime::executor::provider_endpoints(rt.provider).iter().map(|h| h.to_string()).collect();
+            let mut egress: Vec<String> = ligus_runtime::executor::provider_endpoints(rt.provider).iter().map(|h| h.to_string()).collect();
             if !envelope.egress.is_open() {
                 egress.push(format!("({})", envelope.egress.label()));
             } else {
@@ -6463,7 +6463,7 @@ async fn implement_proposal_targeted(
     }
     // Workspace guards: dearth mode (brood paths) and a chat lockdown require
     // a human member's own signed approval, whatever the quorum says.
-    if let Some(reason) = hive_core::guard::human_gate_reason(&session, &proposal) {
+    if let Some(reason) = ligus_core::guard::human_gate_reason(&session, &proposal) {
         return Err(format!("Not applied: {reason}."));
     }
     // A vote or decision this device can't judge yet (its config frontier
@@ -6495,10 +6495,10 @@ async fn implement_proposal_targeted(
             return Err("This chat now works in another repository; switch it back to apply this proposal, or apply it on a host.".into());
         }
         let prepared = crate::repos_ui::turn_repo(&state, &session)?.ok_or("this chat has no repository on this device")?;
-        let message = hive_runtime::repos::apply::apply_message(&proposal.title, pid, &[]);
+        let message = ligus_runtime::repos::apply::apply_message(&proposal.title, pid, &[]);
         let checkout = prepared.checkout.clone();
         let chat = sid.to_string();
-        let applied = tokio::task::spawn_blocking(move || hive_runtime::repos::apply::apply_to_chat_branch(&checkout, &chat, &diff, &message, false, None))
+        let applied = tokio::task::spawn_blocking(move || ligus_runtime::repos::apply::apply_to_chat_branch(&checkout, &chat, &diff, &message, false, None))
             .await
             .map_err(map_err)?
             .map_err(|e| format!("Not applied: {e}. Nothing changed; ask the agent to rebase it on the chat's branch, or mark it stale."))?;
@@ -6516,7 +6516,7 @@ async fn implement_proposal_targeted(
     if proposal.kind == ProposalKind::FileDiff {
         if let Some(diff) = proposal.diff.clone() {
             // Phase 2a: apply into the proposal's chat base worktree and commit,
-            // so the chat branch `hive/chat/<sessionid>` advances (and only that
+            // so the chat branch `ligus/chat/<sessionid>` advances (and only that
             // chat's dir changes). Resolve the chat worktree from the *main* repo
             // root, not the possibly-swapped `workspace_root`. If the root isn't a
             // git repo, or its chat worktree can't be ensured, fall back to
@@ -6527,16 +6527,16 @@ async fn implement_proposal_targeted(
             let repo_root = legacy_folder(&state, session.workspace_id)?;
             let chat_id = sid.to_string();
             let applied_to_chat = if !repo_root.trim().is_empty()
-                && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root))
+                && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root))
             {
-                match hive_runtime::git_worktree::chat_worktree(
+                match ligus_runtime::git_worktree::chat_worktree(
                     std::path::Path::new(&repo_root),
                     &chat_id,
                 ) {
                     Ok(wt_path) => {
                         let wt = wt_path.to_string_lossy().into_owned();
                         apply_patch(&wt, &diff)?;
-                        commit_worktree(&wt, &hive_runtime::repos::apply::legacy_apply_message(&proposal.title))?;
+                        commit_worktree(&wt, &ligus_runtime::repos::apply::legacy_apply_message(&proposal.title))?;
                         true
                     }
                     Err(e) => {
@@ -6567,10 +6567,10 @@ async fn implement_proposal_targeted(
     }
 
     // The one plan the preview showed (Track D4).
-    let plan = hive_runtime::review::implement_plan(&session, &proposal, target);
+    let plan = ligus_runtime::review::implement_plan(&session, &proposal, target);
     // A structured command: run exactly its argv in the chat's worktree,
     // sandboxed, with no model involved.
-    if let (hive_runtime::review::ImplementKind::Argv, Some(cmd)) = (&plan.kind, proposal.command.as_ref()) {
+    if let (ligus_runtime::review::ImplementKind::Argv, Some(cmd)) = (&plan.kind, proposal.command.as_ref()) {
         // The chat's own scope, like any turn of it (review F14): its
         // directory (a repo chat's worktree after the host-side gate), and
         // the policy from its own MCP catalog, never the viewed chat's.
@@ -6580,15 +6580,15 @@ async fn implement_proposal_targeted(
         }
         let isolated = scope.repo.is_some() || scope.dir != scope.repo_root;
         let dir = std::path::PathBuf::from(&scope.dir);
-        let envelope = hive_core::sandbox::envelope_for_session(&session);
-        let mut policy = crate::guards::turn_sandbox_policy_with(&state, &session, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated, &scope.catalog.mcp);
+        let envelope = ligus_core::sandbox::envelope_for_session(&session);
+        let mut policy = crate::guards::turn_sandbox_policy_with(&state, &session, &envelope, &ligus_runtime::author_gate::GatePlan::Full, isolated, &scope.catalog.mcp);
         policy.mcp_ids.clear();
         // The person's own click on their own device runs exactly the
         // approved argv; no agent drives it.
         policy.shell_allowed = true;
         let cmd = cmd.clone();
         let run = tokio::task::spawn_blocking(move || {
-            hive_runtime::executor::with_turn_sync(policy, || hive_runtime::review::run_command(&dir, &cmd, std::time::Duration::from_secs(1800)))
+            ligus_runtime::executor::with_turn_sync(policy, || ligus_runtime::review::run_command(&dir, &cmd, std::time::Duration::from_secs(1800)))
         })
         .await
         .map_err(map_err)??;
@@ -6617,9 +6617,9 @@ async fn implement_proposal_targeted(
     }
     // Dispatch the proposal to its producing agent (or the picked one) as
     // the exact instruction the preview showed.
-    let prompt = hive_runtime::review::executed_instruction(&plan)
+    let prompt = ligus_runtime::review::executed_instruction(&plan)
         .map(str::to_owned)
-        .unwrap_or_else(|| hive_runtime::review::implement_instruction(&proposal));
+        .unwrap_or_else(|| ligus_runtime::review::implement_instruction(&proposal));
     let agent = plan.target_agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id)).cloned();
     let responder = responder_for(&state, &session, agent.as_ref());
     {
@@ -6680,13 +6680,13 @@ fn fulfil_apply_requests(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let ws = state.active_workspace_id();
-        let jobs = hive_runtime::apply_host::pending(&state.service.lock().unwrap(), ws).unwrap_or_default();
+        let jobs = ligus_runtime::apply_host::pending(&state.service.lock().unwrap(), ws).unwrap_or_default();
         if !jobs.is_empty() {
             let root = state.workspace_repo_root();
             let legacy = (!root.trim().is_empty()).then(|| std::path::PathBuf::from(root));
             for job in jobs {
-                let repo = hive_runtime::apply_host::checkout_for(&state.service.lock().unwrap(), &job, legacy.clone());
-                match hive_runtime::apply_host::fulfil(&state.service, &job, repo.as_deref()) {
+                let repo = ligus_runtime::apply_host::checkout_for(&state.service.lock().unwrap(), &job, legacy.clone());
+                match ligus_runtime::apply_host::fulfil(&state.service, &job, repo.as_deref()) {
                     Ok(o) => tracing::info!(target: "apply", request = %job.request.id, "{o:?}"),
                     Err(e) => tracing::warn!(target: "apply", request = %job.request.id, "{e}"),
                 }
@@ -6745,7 +6745,7 @@ struct ContextSnapshot {
     kept_tokens: u32,
     overflow_tokens: u32,
     summary_strategy: &'static str,
-    plan: hive_core::context_budget::ContextWindowPlan,
+    plan: ligus_core::context_budget::ContextWindowPlan,
     /// First kept message once compaction has started; persisted with the
     /// summary so later turns keep the same cut (and a cache-stable prefix).
     boundary: Option<Uuid>,
@@ -6756,7 +6756,7 @@ struct ContextSnapshot {
 /// before the boundary when it was produced). While the boundary holds, the
 /// summary is reused verbatim — no LLM call, and a byte-identical prompt
 /// prefix for the server's prefix cache. `fingerprint` digests the covered
-/// messages ([`hive_core::context_budget::messages_fingerprint`]); the entry
+/// messages ([`ligus_core::context_budget::messages_fingerprint`]); the entry
 /// is only reused while they are unchanged (see [`load_summary_entry`]).
 #[derive(Clone, Debug, PartialEq)]
 struct SummaryCacheEntry {
@@ -6767,12 +6767,12 @@ struct SummaryCacheEntry {
 }
 
 impl SummaryCacheEntry {
-    fn from_stored(s: hive_runtime::StoredCompaction) -> Self {
+    fn from_stored(s: ligus_runtime::StoredCompaction) -> Self {
         Self { boundary: s.boundary, covered: s.covered, fingerprint: s.fingerprint, summary: s.summary }
     }
 
-    fn to_stored(&self) -> hive_runtime::StoredCompaction {
-        hive_runtime::StoredCompaction {
+    fn to_stored(&self) -> ligus_runtime::StoredCompaction {
+        ligus_runtime::StoredCompaction {
             boundary: self.boundary,
             covered: self.covered.clone(),
             fingerprint: self.fingerprint.clone(),
@@ -6788,7 +6788,7 @@ impl SummaryCacheEntry {
         let n = self.covered.len();
         n <= history.len()
             && history[..n].iter().map(|m| m.id).eq(self.covered.iter().copied())
-            && hive_core::context_budget::messages_fingerprint(&history[..n]) == self.fingerprint
+            && ligus_core::context_budget::messages_fingerprint(&history[..n]) == self.fingerprint
     }
 }
 
@@ -6846,7 +6846,7 @@ fn apply_summary_update(state: &AppState, key: &SummaryKey, update: SummaryCache
 /// Whether this turn may call the summarizer for `key`, given its backoff
 /// (none = yes). A turn told no counts as skipped.
 fn summary_attempt_allowed(
-    backoff: &mut HashMap<SummaryKey, hive_core::context_budget::SummaryBackoff>,
+    backoff: &mut HashMap<SummaryKey, ligus_core::context_budget::SummaryBackoff>,
     key: &SummaryKey,
     now: std::time::Instant,
 ) -> bool {
@@ -6854,9 +6854,9 @@ fn summary_attempt_allowed(
 }
 
 /// Record a summarizer attempt: success clears the backoff, a failure
-/// extends it (see [`hive_core::context_budget::SummaryBackoff`]).
+/// extends it (see [`ligus_core::context_budget::SummaryBackoff`]).
 fn record_summary_attempt(
-    backoff: &mut HashMap<SummaryKey, hive_core::context_budget::SummaryBackoff>,
+    backoff: &mut HashMap<SummaryKey, ligus_core::context_budget::SummaryBackoff>,
     key: &SummaryKey,
     succeeded: bool,
     now: std::time::Instant,
@@ -6864,7 +6864,7 @@ fn record_summary_attempt(
     if succeeded {
         backoff.remove(key);
     } else {
-        let next = hive_core::context_budget::SummaryBackoff::after_failure(backoff.get(key), now);
+        let next = ligus_core::context_budget::SummaryBackoff::after_failure(backoff.get(key), now);
         tracing::warn!(
             target: "compaction",
             failures = next.failures(),
@@ -6891,8 +6891,8 @@ fn summary_key(session_id: Uuid, runtime_id: &str) -> SummaryKey {
 /// Batch-compaction watermarks (fractions of the history budget): compact once
 /// the kept history passes HIGH, then cut it back to LOW. Summaries cost tens
 /// of seconds on local models, so they're produced rarely and in batches.
-const COMPACT_HIGH_WATERMARK: f64 = hive_core::context_budget::DEFAULT_HIGH_WATERMARK;
-const COMPACT_LOW_WATERMARK: f64 = hive_core::context_budget::DEFAULT_LOW_WATERMARK;
+const COMPACT_HIGH_WATERMARK: f64 = ligus_core::context_budget::DEFAULT_HIGH_WATERMARK;
+const COMPACT_LOW_WATERMARK: f64 = ligus_core::context_budget::DEFAULT_LOW_WATERMARK;
 
 /// How the overflow summary will be obtained, given the ids the cached summary
 /// covers: "none" (no overflow), "cached" (reuse verbatim), "incremental" (fold
@@ -6952,7 +6952,7 @@ fn summary_strategy(covered: Option<&[Uuid]>, overflow_ids: &[Uuid]) -> &'static
 /// the high watermark makes round 0 go out with no tools. The hysteresis
 /// headroom (history stays ≤ high × budget) absorbs JSON escaping.
 fn history_budget(window: i64, system: i64, tools_reserve: i64, passages_reserve: i64, guarded: bool) -> i64 {
-    use hive_runtime::agent_tools::{ANSWER_RESERVE_TOKENS, CONTEXT_GUARD_FRACTION};
+    use ligus_runtime::agent_tools::{ANSWER_RESERVE_TOKENS, CONTEXT_GUARD_FRACTION};
     let mut room = window - OUTPUT_RESERVE_TOKENS;
     if guarded {
         let guard = (window as f64 * CONTEXT_GUARD_FRACTION).floor() as i64 - i64::from(ANSWER_RESERVE_TOKENS);
@@ -6977,9 +6977,9 @@ fn context_snapshot(
     // tool definitions + guidance on an agent-tools runtime, and the
     // retrieved passages appended to the last turn.
     let rt = &responder.runtime;
-    let builtins = wants_builtin_tools(rt, state.settings.lock().unwrap().builtin_tools) && hive_runtime::executor::local_tools_allowed();
+    let builtins = wants_builtin_tools(rt, state.settings.lock().unwrap().builtin_tools) && ligus_runtime::executor::local_tools_allowed();
     let mcp = rt.runs_agent_tools() && state.combined_mcp_servers().iter().any(|s| s.enabled);
-    let tools_reserve = hive_runtime::agent_tools::tools_prompt_reserve_tokens(builtins, mcp) as i64;
+    let tools_reserve = ligus_runtime::agent_tools::tools_prompt_reserve_tokens(builtins, mcp) as i64;
     let retrieval = retrieval_config(state);
     let passages_reserve = if retrieval.is_configured() && !session.vault_sources.is_empty() {
         retrieval.passages_reserve_tokens() as i64
@@ -6991,9 +6991,9 @@ fn context_snapshot(
         history_budget(window_tokens, system_prompt_tokens, tools_reserve, passages_reserve, guarded);
     // Plan over the visible transcript: a superseded (fenced duplicate)
     // answer is never context.
-    let history: Vec<hive_core::ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
+    let history: Vec<ligus_core::ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
     let cached = load_summary_entry(state, &summary_key(session_id, &responder.runtime_id), &history);
-    let hysteresis = hive_core::context_budget::plan_with_hysteresis(
+    let hysteresis = ligus_core::context_budget::plan_with_hysteresis(
         &history,
         history_budget_tokens,
         cached.as_ref().and_then(|c| c.boundary),
@@ -7045,7 +7045,7 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
             Responder {
                 system_base: with_identity(prompt::primary_system_prompt(session), &runtime),
                 agent_id: None,
-                author: "Hive".to_string(),
+                author: "Ligus".to_string(),
                 runtime_id: session.runtime_id.clone(),
                 runtime,
                 owner_actor_id: session.creator_actor_id.clone(),
@@ -7104,8 +7104,8 @@ impl AppState {
 
     /// A relay client for `url` carrying the access-token bearer. No forge
     /// token ever goes to a relay.
-    fn relay_client(&self, url: &str) -> hive_runtime::RelayClient {
-        hive_runtime::RelayClient::new(url).with_auth(self.relay_token())
+    fn relay_client(&self, url: &str) -> ligus_runtime::RelayClient {
+        ligus_runtime::RelayClient::new(url).with_auth(self.relay_token())
     }
 
     /// The workspace new chats are stamped with / the chat list is scoped to.
@@ -7131,7 +7131,7 @@ impl AppState {
 
     /// The active workspace's bound *main* repo folder — the true repo root, NOT
     /// a chat worktree that `set_active_chat` may have swapped `workspace_root`
-    /// to. Chat worktrees live under this folder's `.hive/worktrees/`, so both
+    /// to. Chat worktrees live under this folder's `.ligus/worktrees/`, so both
     /// ensuring a chat worktree and applying a proposal into one resolve from
     /// here rather than from a possibly-swapped `workspace_root`.
     fn workspace_repo_root(&self) -> String {
@@ -7191,7 +7191,7 @@ impl AppState {
     /// is configured for the user's *rooms*. Without this, setting up a room flips
     /// the global `is_local_only()` to false and pushes the purely-local chats
     /// through the cross-device deferral gate, where identity churn can defer
-    /// `@hive` to an owner no device matches → the chat goes silent. See the two
+    /// `@ligus` to an owner no device matches → the chat goes silent. See the two
     /// dispatch gates (send_message + maybe_respond).
     fn is_local_only_ws(&self, workspace_id: Uuid) -> bool {
         self.is_local_only() || workspace_id == self.local_workspace_id
@@ -7248,11 +7248,11 @@ pub(crate) fn recover_workflow_runs(app: &AppHandle) {
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
-    let config_id = hive_core::workspace_config_session_id(active);
+    let config_id = ligus_core::workspace_config_session_id(active);
     let beats_known = crate::guards::beats_known(&state);
 
     // (session_id, workspace_id, run_id, status) for every run in the workspace.
-    let mut candidates: Vec<(Uuid, Uuid, Uuid, hive_core::workflow::WorkflowRunStatus)> = Vec::new();
+    let mut candidates: Vec<(Uuid, Uuid, Uuid, ligus_core::workflow::WorkflowRunStatus)> = Vec::new();
     {
         let svc = state.service.lock().unwrap();
         let Ok(ids) = svc.store().list_session_ids() else { return };
@@ -7316,10 +7316,10 @@ fn owns_responder(local_actor_id: &str, responder: &Responder) -> bool {
 
 /// The dispatch gates (`turn_runs_here`, `runs_here_linked`, host bindings,
 /// `dispatch_target`, the answered/deferred checks) live in
-/// `hive_runtime::turn_dispatch`, so the local-send gate (`send_message`), the
+/// `ligus_runtime::turn_dispatch`, so the local-send gate (`send_message`), the
 /// relay-sync gate (`maybe_respond`) and every other client decide alike.
 #[allow(unused_imports)]
-use hive_runtime::turn_dispatch::{
+use ligus_runtime::turn_dispatch::{
     deferred_turn_unanswered, dispatch_target, host_binding, human_member_count, runs_here_linked, synced_user_triggers,
     turn_runs_here, turn_still_open, user_turn_answered, DispatchTarget, HostBinding, DEFERRED_CLAIM_TIMEOUT,
 };
@@ -7329,7 +7329,7 @@ use hive_runtime::turn_dispatch::{
 /// Unknown hosts count as offline.
 fn host_online(state: &AppState, workspace_id: Uuid, host_id: &str) -> bool {
     let svc = state.service.lock().unwrap();
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     svc.list_hosts(workspace_id)
         .map(|hosts| hosts.iter().any(|h| h.id == host_id && state.host_presence.is_online(h, &now)))
         .unwrap_or(false)
@@ -7340,14 +7340,14 @@ fn host_online(state: &AppState, workspace_id: Uuid, host_id: &str) -> bool {
 /// provider (Anthropic/OpenAI/OpenRouter/Azure/Custom) with no key would 401 on
 /// dispatch, so `resolve_runtime` falls back to the keyless Claude Code CLI.
 /// Subprocess/local providers (Claude Code, Codex, Aider, Pi, Hermes, Ollama,
-/// HiveDaemon) never need a supplied key.
+/// LigusDaemon) never need a supplied key.
 /// Whether a configured runtime must carry a key to be dispatched to (else
 /// [`AppState::resolve_runtime`] falls back to the Claude Code CLI). A hosted
 /// API needs one; the same wire pointed at loopback, a LAN or the tailnet is
 /// a local server (llama.cpp, LM Studio, a gateway), which is keyless — the
 /// "Local gateway" preset adds exactly that, with no key.
 fn runtime_needs_key(provider: ModelProviderKind, endpoint: &str) -> bool {
-    provider_needs_key(provider) && !hive_core::endpoint::endpoint_is_local_server(endpoint)
+    provider_needs_key(provider) && !ligus_core::endpoint::endpoint_is_local_server(endpoint)
 }
 
 fn provider_needs_key(provider: ModelProviderKind) -> bool {
@@ -7364,13 +7364,13 @@ fn provider_needs_key(provider: ModelProviderKind) -> bool {
 
 /// The workspace's device links, best effort: on a read error nothing is
 /// linked, which is today's behavior.
-fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> hive_core::DeviceLinks {
+fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> ligus_core::DeviceLinks {
     svc.device_links(workspace_id).unwrap_or_default()
 }
 
 
 
-// `cascade_depth` now lives on `hive_core::ChatSession` (shared with the worker
+// `cascade_depth` now lives on `ligus_core::ChatSession` (shared with the worker
 // so the cross-device bound is identical on every device).
 
 /// Window the history to the model budget and, if anything overflows,
@@ -7380,7 +7380,7 @@ fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> hive_core::DeviceLi
 /// caches): the system prompt (base + vaults) is byte-identical on every turn
 /// of a chat, and the summary rides as the FIRST conversation turn after it
 /// rather than inside it. Compaction is batched with hysteresis
-/// ([`hive_core::context_budget::plan_with_hysteresis`]): the boundary stays
+/// ([`ligus_core::context_budget::plan_with_hysteresis`]): the boundary stays
 /// fixed — and the summary is reused with no LLM call — until the kept history
 /// passes the high watermark, so consecutive turns share the whole prefix.
 async fn windowed_context(
@@ -7448,7 +7448,7 @@ async fn windowed_context(
                 std::time::Instant::now(),
             );
         }
-        let fingerprint = hive_core::context_budget::messages_fingerprint(&plan.overflow);
+        let fingerprint = ligus_core::context_budget::messages_fingerprint(&plan.overflow);
         let (summary, update) =
             settle_summary(cached.as_ref(), strategy, snapshot.boundary, overflow_ids, fingerprint, produced);
         apply_summary_update(state, &cache_key, update);
@@ -7465,24 +7465,24 @@ async fn windowed_context(
     // shared file carries, is defused (issue #118).
     {
         let me = state.service.lock().unwrap().author().id.clone();
-        let own = hive_runtime::attachment_blob::own_path_markers(session, &me);
+        let own = ligus_runtime::attachment_blob::own_path_markers(session, &me);
         for t in turns.iter_mut() {
-            t.content = hive_runtime::attachment_blob::defuse_foreign_path_markers(&t.content, &own);
+            t.content = ligus_runtime::attachment_blob::defuse_foreign_path_markers(&t.content, &own);
         }
     }
     if turns.iter().any(|t| t.content.contains("[Attachment: ")) {
-        let placed = hive_runtime::attachment_blob::placed_attachments(session);
+        let placed = ligus_runtime::attachment_blob::placed_attachments(session);
         let head = state.service.lock().unwrap().attachment_rules(session.workspace_id).unwrap_or_default();
         let transport = blob_transport(state).filter(|(_, room, _)| room_workspace_id(room) == session.workspace_id);
-        let cache = hive_runtime::attachment_blob::verified_cache_dir(&state.data_dir);
+        let cache = ligus_runtime::attachment_blob::verified_cache_dir(&state.data_dir);
         let client = transport.as_ref().map(|(url, _, _)| state.relay_client(url));
         let (room, ring) = match &transport {
             Some((_, room, ring)) => (room.clone(), ring.clone()),
-            None => (String::new(), hive_runtime::keyring::KeyringEngine::default()),
+            None => (String::new(), ligus_runtime::keyring::KeyringEngine::default()),
         };
         for t in turns.iter_mut() {
             if t.content.contains("[Attachment: ") {
-                t.content = hive_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, &head, client.as_ref(), &room, &ring, &cache).await;
+                t.content = ligus_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, &head, client.as_ref(), &room, &ring, &cache).await;
             }
         }
     }
@@ -7502,9 +7502,9 @@ const RETRIEVAL_MAX_SOURCES: usize = 16;
 /// the turn falls back to pasting. Embeddings cached so far are kept.
 const RETRIEVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
-fn retrieval_config(state: &AppState) -> hive_runtime::retrieval::RetrievalConfig {
+fn retrieval_config(state: &AppState) -> ligus_runtime::retrieval::RetrievalConfig {
     let s = state.settings.lock().unwrap();
-    hive_runtime::retrieval::RetrievalConfig {
+    ligus_runtime::retrieval::RetrievalConfig {
         embed_url: s.retrieval_embed_url.clone(),
         embed_model: s.retrieval_embed_model.clone(),
         rerank_url: s.retrieval_rerank_url.clone(),
@@ -7518,10 +7518,10 @@ fn retrieval_config(state: &AppState) -> hive_runtime::retrieval::RetrievalConfi
 /// means "fall back to pasting" (no query, nothing fetched, error, timeout).
 async fn retrieve_vault_passages(
     state: &State<'_, AppState>,
-    cfg: &hive_runtime::retrieval::RetrievalConfig,
+    cfg: &ligus_runtime::retrieval::RetrievalConfig,
     entries: &[(String, Option<String>)],
     turns: &[ChatTurn],
-) -> Option<Vec<hive_runtime::retrieval::Passage>> {
+) -> Option<Vec<ligus_runtime::retrieval::Passage>> {
     let sources: Vec<(String, String)> = entries
         .iter()
         .filter_map(|(label, text)| text.as_ref().map(|t| (label.clone(), t.clone())))
@@ -7529,7 +7529,7 @@ async fn retrieve_vault_passages(
     if sources.is_empty() {
         return None;
     }
-    let query = hive_runtime::retrieval::latest_user_query(turns)?;
+    let query = ligus_runtime::retrieval::latest_user_query(turns)?;
     let started = std::time::Instant::now();
     match tokio::time::timeout(RETRIEVAL_TIMEOUT, state.retriever.retrieve(cfg, &sources, query)).await {
         Ok(Ok(passages)) => {
@@ -7560,11 +7560,11 @@ fn place_vault_context(
     system_base: &str,
     entries: &[(String, Option<String>)],
     turns: &mut [ChatTurn],
-    passages: Option<Vec<hive_runtime::retrieval::Passage>>,
+    passages: Option<Vec<ligus_runtime::retrieval::Passage>>,
 ) -> String {
     if let Some(p) = passages {
-        let section = hive_runtime::retrieval::passages_section(&p);
-        if hive_runtime::retrieval::append_to_latest_user(turns, &section) {
+        let section = ligus_runtime::retrieval::passages_section(&p);
+        if ligus_runtime::retrieval::append_to_latest_user(turns, &section) {
             return system_base.to_string();
         }
     }
@@ -7965,7 +7965,7 @@ fn set_retrieval_settings(state: State<AppState>, settings: RetrievalSettings) -
 #[tauri::command]
 async fn test_retrieval_settings(state: State<'_, AppState>, settings: RetrievalSettings) -> Result<String, String> {
     let r = normalize_retrieval_settings(settings);
-    let cfg = hive_runtime::retrieval::RetrievalConfig {
+    let cfg = ligus_runtime::retrieval::RetrievalConfig {
         embed_url: r.embed_url,
         embed_model: r.embed_model,
         rerank_url: r.rerank_url,
@@ -8194,18 +8194,18 @@ where
 // --- MCP tool-call loop wiring (Anthropic) ---
 
 /// Adapter: one non-streaming Anthropic turn for the tool loop.
-/// Whether an HTTP model turn gets Hive's built-in file tools: the runtime
+/// Whether an HTTP model turn gets Ligus's built-in file tools: the runtime
 /// opted into tools ("Supports tools") on a wire that may front a local
-/// server (native Ollama, Custom, HiveDaemon — never a hosted API) and the
+/// server (native Ollama, Custom, LigusDaemon — never a hosted API) and the
 /// app setting is on. The tools send file contents to the endpoint, so they
 /// are offered only when its host is on this machine or a private network
 /// (loopback, RFC 1918, Tailscale, link-local, `*.local`, `*.ts.net` — see
-/// [`hive_core::endpoint::endpoint_is_private`]) unless the runtime's "Allow
+/// [`ligus_core::endpoint::endpoint_is_private`]) unless the runtime's "Allow
 /// workspace file tools for this endpoint" setting is on.
 fn wants_builtin_tools(rt: &ResolvedRuntime, setting_on: bool) -> bool {
     setting_on
         && rt.runs_agent_tools()
-        && (rt.allow_remote_file_tools || hive_core::endpoint::endpoint_is_private(&effective_endpoint(rt)))
+        && (rt.allow_remote_file_tools || ligus_core::endpoint::endpoint_is_private(&effective_endpoint(rt)))
 }
 
 /// The endpoint a runtime actually talks to: native Ollama with no endpoint
@@ -8221,7 +8221,7 @@ fn effective_endpoint(rt: &ResolvedRuntime) -> String {
 /// The origin (`scheme://host:port`) of a runtime endpoint, parsed the way
 /// the HTTP client parses it; `None` when there is no usable URL.
 fn endpoint_origin(endpoint: &str) -> Option<String> {
-    let origin = hive_core::endpoint::endpoint_url(endpoint)?.origin();
+    let origin = ligus_core::endpoint::endpoint_url(endpoint)?.origin();
     origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
@@ -8256,10 +8256,10 @@ fn legacy_chat_dir(bound: &str, session_id: Uuid) -> String {
     if bound.trim().is_empty() {
         return String::new();
     }
-    if !hive_runtime::git_worktree::is_git_repo(Path::new(bound)) {
+    if !ligus_runtime::git_worktree::is_git_repo(Path::new(bound)) {
         return bound.to_string();
     }
-    match hive_runtime::git_worktree::chat_worktree(Path::new(bound), &session_id.to_string()) {
+    match ligus_runtime::git_worktree::chat_worktree(Path::new(bound), &session_id.to_string()) {
         Ok(path) => path.to_string_lossy().into_owned(),
         Err(e) => {
             tracing::warn!(target: "worktree", "chat worktree unavailable, using workspace folder: {e}");
@@ -8274,9 +8274,9 @@ fn legacy_chat_dir(bound: &str, session_id: Uuid) -> String {
 /// apply there would drive that host's chat worktrees and branches.
 pub(crate) fn legacy_folder(state: &AppState, workspace_id: Uuid) -> Result<String, String> {
     let bound = workspace_dir_for(&state.settings.lock().unwrap().workspace_dirs, &workspace_id.to_string());
-    if !bound.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(Path::new(&bound)) {
+    if !bound.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(Path::new(&bound)) {
         let me = state.service.lock().unwrap().device_id();
-        if let Some(label) = hive_runtime::repos::marker::managed_elsewhere(Path::new(&bound), me) {
+        if let Some(label) = ligus_runtime::repos::marker::managed_elsewhere(Path::new(&bound), me) {
             return Err(format!(
                 "the workspace's folder on this device is managed by {label}; give this chat a workspace repository and clone it separately here, or work on it from {label}"
             ));
@@ -8316,7 +8316,7 @@ fn turn_repo_root(bound: &str, workspace_root: &str) -> String {
 }
 
 /// Whether a turn runs in its own per-turn worktree, cut up front from the
-/// chat's `hive/chat/<id>` branch, whose diff comes back as a review-gated
+/// chat's `ligus/chat/<id>` branch, whose diff comes back as a review-gated
 /// proposal: file-mutating subprocess agents, in a repo. HTTP turns with the
 /// built-in file tools isolate too, but lazily ([`isolates_on_write`]).
 #[cfg(test)]
@@ -8345,7 +8345,7 @@ fn isolates_on_write(builtin_tools: bool, in_repo: bool) -> bool {
 /// does, they don't reach the shared log. No-op when the root isn't present.
 #[cfg(test)]
 fn redact_workspace_path(body: &str, workspace_root: &str) -> String {
-    hive_runtime::finalize::redact_workspace_path(body, workspace_root)
+    ligus_runtime::finalize::redact_workspace_path(body, workspace_root)
 }
 
 #[cfg(test)]
@@ -8365,7 +8365,7 @@ fn finalize_reply(
 }
 
 /// The desktop's finalize: the shared one every host runs
-/// (`hive_runtime::finalize`, D.4.3), plus the desktop's own follow-ups:
+/// (`ligus_runtime::finalize`, D.4.3), plus the desktop's own follow-ups:
 /// flow directives kept for the after-turn hook, same-request grouping, and
 /// the pending-scout hints. `mcp` is what the turn's Ligus tools already did
 /// (their effects win over duplicate directives).
@@ -8380,19 +8380,19 @@ fn finalize_reply_with(
     workspace_root: &str,
     full: &str,
     edits_in_review: bool,
-    mcp: Option<&hive_runtime::finalize::McpEffectsLog>,
+    mcp: Option<&ligus_runtime::finalize::McpEffectsLog>,
 ) -> Result<String, String> {
     let base_commit = full.contains("[[alternatives").then(|| proposal_sets::base_commit_for(workspace_root, session_id)).flatten();
-    let out = hive_runtime::finalize::finalize_reply(
+    let out = ligus_runtime::finalize::finalize_reply(
         svc,
-        hive_runtime::finalize::FinalizeInput {
-            ctx: hive_runtime::effects::EffectCtx {
+        ligus_runtime::finalize::FinalizeInput {
+            ctx: ligus_runtime::effects::EffectCtx {
                 session_id,
                 workspace_id,
                 author: author.to_string(),
                 agent_id,
                 message_id: Some(message_id),
-                via: hive_runtime::effects::Via::Directive,
+                via: ligus_runtime::effects::Via::Directive,
             },
             workspace_root,
             full,
@@ -8456,7 +8456,7 @@ async fn run_turn_answering(
     // backstop — a margin above the stream's own timeout, so it never pre-empts
     // the finer-grained, better-messaged stream timeout on a legitimately long turn.
     let hard = std::time::Duration::from_secs(
-        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
+        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&s| s > 0)
@@ -8513,7 +8513,7 @@ async fn run_prepared_turn(
     system: String,
     mut turns: Vec<ChatTurn>,
 ) -> Result<TurnOutcome, String> {
-    let started_ms = hive_core::flow::now_ms();
+    let started_ms = ligus_core::flow::now_ms();
     let primed = flow::prime_turns(state, session, responder, &mut turns);
     let system = flow::with_guidance(state, system);
     let before = {
@@ -8627,17 +8627,17 @@ async fn run_prepared_turn_inner(
             (a, s, svc.sandbox_grants_here(workspace_id, grants_setting).0)
         };
         let mut args = responder.runtime.args.clone();
-        let plan = hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role);
-        let shell = hive_runtime::author_gate::shell_allowed(shell_role, responder.agent_id.is_some_and(|id| grants.shell_granted(id)));
+        let plan = ligus_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role);
+        let shell = ligus_runtime::author_gate::shell_allowed(shell_role, responder.agent_id.is_some_and(|id| grants.shell_granted(id)));
         (plan, shell, grants)
     };
-    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
+    if let ligus_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
         let mut svc = state.service.lock().unwrap();
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason.clone());
     }
     if !shell_allowed {
-        if let Err(reason) = hive_runtime::author_gate::shell_free_args(responder.runtime.provider, &responder.runtime.args) {
+        if let Err(reason) = ligus_runtime::author_gate::shell_free_args(responder.runtime.provider, &responder.runtime.args) {
             let mut svc = state.service.lock().unwrap();
             let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
             return Err(reason);
@@ -8645,7 +8645,7 @@ async fn run_prepared_turn_inner(
     }
     // No OS sandbox on this host: a CLI agent turn is refused at any tier
     // (its own tools would read this device's data unconfined).
-    if let Err(reason) = hive_runtime::executor::turn_allowed(responder.runtime.provider) {
+    if let Err(reason) = ligus_runtime::executor::turn_allowed(responder.runtime.provider) {
         let mut svc = state.service.lock().unwrap();
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason);
@@ -8669,10 +8669,10 @@ async fn run_prepared_turn_inner(
     let enforcement = if shell_allowed || !responder.runtime.provider.is_cli_agent() {
         enforcement
     } else {
-        hive_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
+        ligus_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
         crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, false)
     };
-    // The turn runs in the shared engine (`hive_runtime::turn_engine`), with
+    // The turn runs in the shared engine (`ligus_runtime::turn_engine`), with
     // this device's policy as its input: the gate, the shell rule, the
     // envelope's flags and the base sandbox policy decided above.
     let (builtin_on, builtin_write_in_place, builtin_run_command, claude_mode) = {
@@ -8686,17 +8686,17 @@ async fn run_prepared_turn_inner(
         && match responder.runtime.provider {
             // Read-only at the default tier; any raised tier may write.
             p if p.follows_permission_mode() => claude_mode != "default",
-            p => hive_runtime::author_gate::always_writes(p),
+            p => ligus_runtime::author_gate::always_writes(p),
         };
     // The runtime with the envelope's own flags (no web tools, no foreign MCP,
     // network off) appended for subprocess agents.
     let enforced_runtime = {
         let mut rt = responder.runtime.clone();
         // Below the floor: the CLI's read-only tier (Refuse returned above).
-        let _ = hive_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
+        let _ = ligus_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
         // Without the shell: capped at accepting edits, the shell tool denied
         // (a CLI that can't drop it was refused above).
-        let _ = hive_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed);
+        let _ = ligus_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed);
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };
@@ -8722,7 +8722,7 @@ async fn run_prepared_turn_inner(
         // The turn's own catalog and directory (review F14), resolved above
         // with the repo gate: never the chat or folder the window shows.
         mcp: scope.catalog.mcp.clone(),
-        checkout: hive_runtime::turn_engine::Checkout {
+        checkout: ligus_runtime::turn_engine::Checkout {
             context: scope.repo.as_ref().map(|r| r.context.clone()).unwrap_or_default(),
             workspace_root: Some(scope.dir.clone()),
             // Worktrees are cut from the chat's checkout (the repo's, or the
@@ -8731,12 +8731,12 @@ async fn run_prepared_turn_inner(
             base: scope.repo.as_ref().map(|r| (r.tip.clone(), r.base_branch.clone())),
         },
     };
-    let input = hive_runtime::turn_engine::TurnInput {
+    let input = ligus_runtime::turn_engine::TurnInput {
         workspace_id,
         chat_id: session_id,
         session: session.clone(),
         reply_to,
-        responder: hive_runtime::turn_engine::Responder {
+        responder: ligus_runtime::turn_engine::Responder {
             author: responder.author.clone(),
             effect_author: responder.author.clone(),
             runtime_id: responder.runtime_id.clone(),
@@ -8749,8 +8749,8 @@ async fn run_prepared_turn_inner(
         envelope: envelope.clone(),
         shell_allowed,
         policy: sandbox_policy,
-        executor: hive_runtime::executor::default_executor(),
-        tools: hive_runtime::turn_engine::ToolOptions {
+        executor: ligus_runtime::executor::default_executor(),
+        tools: ligus_runtime::turn_engine::ToolOptions {
             builtin: builtin_on,
             write_in_place: builtin_write_in_place,
             run_command: builtin_run_command,
@@ -8761,15 +8761,15 @@ async fn run_prepared_turn_inner(
         // A tightened envelope never lets a write-capable agent run in place.
         require_isolation: envelope.isolate_writes,
         stop: Some(stop),
-        timeout: hive_runtime::turn_engine::turn_timeout(),
-        options: hive_runtime::turn_engine::EngineOptions {
+        timeout: ligus_runtime::turn_engine::turn_timeout(),
+        options: ligus_runtime::turn_engine::EngineOptions {
             git_attribution: true,
             scan_injections: true,
             detailed_report: true,
             ..Default::default()
         },
     };
-    let result = hive_runtime::turn_engine::run(&host, input).await;
+    let result = ligus_runtime::turn_engine::run(&host, input).await;
     drop(stop_guard);
     match result {
         Ok(o) => Ok(TurnOutcome { message_id: o.message_id, body: o.body }),
@@ -8845,7 +8845,7 @@ pub(crate) fn dispatch_here(
     agent: Option<Uuid>,
     eligible: bool,
     waited: std::time::Duration,
-) -> Result<hive_core::dispatch::Step, String> {
+) -> Result<ligus_core::dispatch::Step, String> {
     let has_repo = {
         let svc = state.service.lock().unwrap();
         svc.load(session_id).ok().flatten().is_some_and(|s| s.repo.as_ref().and_then(|r| r.repo_id).is_some())
@@ -8855,7 +8855,7 @@ pub(crate) fn dispatch_here(
     }
     let online: std::collections::HashSet<Uuid> = {
         let svc = state.service.lock().unwrap();
-        let now = hive_core::Timestamp::now();
+        let now = ligus_core::Timestamp::now();
         svc.list_hosts(workspace_id)
             .unwrap_or_default()
             .iter()
@@ -8866,10 +8866,10 @@ pub(crate) fn dispatch_here(
     let mut svc = state.service.lock().unwrap();
     let coverage = match svc.load(session_id) {
         Ok(Some(session)) => crate::repos_ui::dispatch_coverage(&svc, &session),
-        _ => hive_core::dispatch::Coverage::NoRepo,
+        _ => ligus_core::dispatch::Coverage::NoRepo,
     };
     let live = |d: Uuid| online.contains(&d);
-    let ctx = hive_runtime::DispatchCtx { eligible, coverage, waited, holder_live: &live };
+    let ctx = ligus_runtime::DispatchCtx { eligible, coverage, waited, holder_live: &live };
     svc.dispatch_turn(session_id, workspace_id, trigger_id, agent, ctx).map_err(map_err)
 }
 
@@ -8948,7 +8948,7 @@ async fn run_dispatch_watch(
         let Some(trigger) = session.messages.iter().find(|m| m.id == trigger_id) else {
             return Ok(());
         };
-        let claimed = session.turn_claims.contains_key(&hive_core::turn_claim_key(trigger_id, agent));
+        let claimed = session.turn_claims.contains_key(&ligus_core::turn_claim_key(trigger_id, agent));
         let links = device_links_of(&svc, session.workspace_id);
         let responder = match agent {
             Some(a) => session.workspace_agents.iter().find(|x| x.id == a).cloned().map(|x| responder_for(&state, &session, Some(&x))),
@@ -8989,8 +8989,8 @@ async fn run_dispatch_watch(
     // The service keeps the wait clock per holder (a new holder starts it
     // over), so the time this watcher has run isn't the holder's silence.
     match dispatch_here(&state, session_id, workspace_id, trigger_id, agent, true, std::time::Duration::ZERO)? {
-        hive_core::dispatch::Step::Run => {}
-        hive_core::dispatch::Step::Wait(d) => {
+        ligus_core::dispatch::Step::Run => {}
+        ligus_core::dispatch::Step::Wait(d) => {
             drop(_guard);
             arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited);
             return Ok(());
@@ -9045,7 +9045,7 @@ async fn send_message(
         // Un-addressed messages may be routed (shadow mode logs the pick only).
         let (target, decision) = flow::routed_target(&state, &svc, &session, posted.id, &body, local_only, &links);
         if let Some(d) = decision {
-            let _ = svc.record_flow(sid, workspace_id, hive_core::flow::FlowRecord::RouteDecision(d));
+            let _ = svc.record_flow(sid, workspace_id, ligus_core::flow::FlowRecord::RouteDecision(d));
         }
         (workspace_id, posted.id, target)
     };
@@ -9145,10 +9145,10 @@ async fn send_message(
         // handed over.
         if depth == 0 {
             match dispatch_here(&state, sid, workspace_id, trigger_id, None, true, std::time::Duration::ZERO)? {
-                hive_core::dispatch::Step::Run => {
+                ligus_core::dispatch::Step::Run => {
                     tracing::info!(target: "dispatch", session = %sid, "send_message: claimed turn");
                 }
-                hive_core::dispatch::Step::Wait(d) => {
+                ligus_core::dispatch::Step::Wait(d) => {
                     tracing::info!(target: "dispatch", session = %sid, "send_message: another device holds the turn, or a covering host goes first; watching");
                     if !stop.is_stopped() {
                         arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO);
@@ -9168,7 +9168,7 @@ async fn send_message(
             r = run_turn(&app, &state, sid, workspace_id, &responder) => match r {
                 Ok(r) => r,
                 // That turn alone was stopped (by its reply): the cascade ends.
-                Err(e) if e == hive_runtime::turn_engine::STOPPED => break,
+                Err(e) if e == ligus_runtime::turn_engine::STOPPED => break,
                 Err(e) => return Err(e),
             },
         };
@@ -9215,7 +9215,7 @@ async fn send_message(
             .iter()
             .rev()
             .find(|m| m.role != MessageRole::System && !m.superseded)
-            .and_then(|m| hive_runtime::cascade_target(&reloaded, m))
+            .and_then(|m| ligus_runtime::cascade_target(&reloaded, m))
             .map(|a| a.id)
             .filter(|id| !visited.contains(id))
             .map(DispatchTarget::Agent);
@@ -9324,11 +9324,11 @@ async fn regenerate(
     // repos-and-checkouts 11.2, rule 6): claim it again through the
     // dispatcher, so a host that also sees the turn open again doesn't run
     // it a second time.
-    let trigger = answered.map(|r| hive_core::dispatch::trigger_of(&session, r));
+    let trigger = answered.map(|r| ligus_core::dispatch::trigger_of(&session, r));
     if let Some(t) = trigger {
         match dispatch_here(&state, sid, workspace_id, t, None, true, std::time::Duration::ZERO)? {
-            hive_core::dispatch::Step::Run => {}
-            hive_core::dispatch::Step::Wait(d) => {
+            ligus_core::dispatch::Step::Run => {}
+            ligus_core::dispatch::Step::Wait(d) => {
                 arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO);
                 return Ok(());
             }
@@ -9427,7 +9427,7 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
         // as the replier itself.
         // Exactly one agent is handed the turn (`cascade_target`, the rule
         // every host's queue uses); it runs here only if it's ours.
-        MessageRole::Assistant | MessageRole::Agent => hive_runtime::cascade_target(&session, m).and_then(|a| {
+        MessageRole::Assistant | MessageRole::Agent => ligus_runtime::cascade_target(&session, m).and_then(|a| {
             let responder = responder_for(state, &session, Some(a));
             runs_here(&responder).then_some((session.workspace_id, responder, m.id))
         }),
@@ -9492,8 +9492,8 @@ async fn respond_once(
         if from_agent { responder.agent_id } else { None }
     };
     match dispatch_here(state, sid, workspace_id, trigger_id, receiver, true, std::time::Duration::ZERO)? {
-        hive_core::dispatch::Step::Run => {}
-        hive_core::dispatch::Step::Wait(d) => {
+        ligus_core::dispatch::Step::Run => {}
+        ligus_core::dispatch::Step::Wait(d) => {
             arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO);
             return Ok(());
         }
@@ -9524,7 +9524,7 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
         let local_host_id = state.local_host_id();
         let svc = state.service.lock().unwrap();
         let Some(session) = svc.load(sid).map_err(map_err)? else { return Ok(()) };
-        let pending = hive_runtime::pending_turns(&session).iter().any(|p| p.agent_id == agent_id && p.message_id == trigger);
+        let pending = ligus_runtime::pending_turns(&session).iter().any(|p| p.agent_id == agent_id && p.message_id == trigger);
         let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id).cloned() else { return Ok(()) };
         if !pending {
             return Ok(());
@@ -9543,8 +9543,8 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
     // agents, each of which may run on a different device. The dispatcher
     // claims it or says to watch its holder.
     match dispatch_here(&state, sid, workspace_id, trigger, Some(agent_id), true, std::time::Duration::ZERO)? {
-        hive_core::dispatch::Step::Run => {}
-        hive_core::dispatch::Step::Wait(d) => {
+        ligus_core::dispatch::Step::Run => {}
+        ligus_core::dispatch::Step::Wait(d) => {
             arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO);
             return Ok(());
         }
@@ -9558,7 +9558,7 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
 /// then the chat's trailing message (an agent hand-off). Each chat runs on its
 /// own task; the per-chat busy guard and the turn claim keep a chat the UI is
 /// also dispatching from answering twice. `arrived` is `(chat, message,
-/// signing device)` from [`hive_runtime::EventStore::messages_after`].
+/// signing device)` from [`ligus_runtime::EventStore::messages_after`].
 fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uuid>)>) {
     if arrived.is_empty() {
         return;
@@ -9682,7 +9682,7 @@ struct PresenceDto {
 /// The active workspace's relay, room and keyring, when presence can be
 /// published there: a relay is configured and this device holds a seal key.
 /// Presence is never published in the clear.
-fn presence_transport(state: &AppState) -> Option<(String, String, hive_runtime::keyring::KeyringEngine)> {
+fn presence_transport(state: &AppState) -> Option<(String, String, ligus_runtime::keyring::KeyringEngine)> {
     let (url, room, conn) = {
         let s = state.settings.lock().unwrap();
         let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
@@ -9697,7 +9697,7 @@ fn presence_transport(state: &AppState) -> Option<(String, String, hive_runtime:
 
 /// Heartbeat the local user's ephemeral presence (online + whether they're
 /// typing in `session_id`) to the active workspace's relay, sealed under the
-/// workspace key (`hive_runtime::human_presence`). No-op when relay-less, when
+/// workspace key (`ligus_runtime::human_presence`). No-op when relay-less, when
 /// no seal key is held, or when `session_id` isn't a chat of the active
 /// workspace (a DM's typing goes only to that DM's room). With "Share typing
 /// status" off, only "not typing" is published. Best effort — relay hiccups
@@ -9722,16 +9722,16 @@ async fn presence_ping(
             _ => return Ok(()),
         }
         let a = svc.author();
-        hive_runtime::human_presence::HumanBeat {
+        ligus_runtime::human_presence::HumanBeat {
             actor_id: a.id.clone(),
             name: a.display_name.clone(),
             device_id: svc.device_id().to_string(),
             session_id: sid.to_string(),
             typing: typing && share,
-            ts: hive_runtime::human_presence::now_ms(),
+            ts: ligus_runtime::human_presence::now_ms(),
         }
     };
-    let _ = hive_runtime::human_presence::publish_human_beat(&state.relay_client(&relay), &room, &ring, &beat).await;
+    let _ = ligus_runtime::human_presence::publish_human_beat(&state.relay_client(&relay), &room, &ring, &beat).await;
     Ok(())
 }
 
@@ -9746,11 +9746,11 @@ async fn presence_list(state: State<'_, AppState>) -> Result<Vec<PresenceDto>, S
         return Ok(Vec::new());
     };
     let me = state.local_actor_id();
-    let beats = hive_runtime::human_presence::fetch_human_beats(
+    let beats = ligus_runtime::human_presence::fetch_human_beats(
         &state.relay_client(&relay),
         &room,
         &ring,
-        hive_runtime::human_presence::now_ms(),
+        ligus_runtime::human_presence::now_ms(),
     )
     .await
     .map_err(map_err)?;
@@ -9758,9 +9758,9 @@ async fn presence_list(state: State<'_, AppState>) -> Result<Vec<PresenceDto>, S
 }
 
 /// Fold beats into one [`PresenceDto`] per person, naming them from the roster.
-fn presence_dtos(state: &AppState, beats: Vec<hive_runtime::human_presence::HumanBeat>, me: &str) -> Vec<PresenceDto> {
+fn presence_dtos(state: &AppState, beats: Vec<ligus_runtime::human_presence::HumanBeat>, me: &str) -> Vec<PresenceDto> {
     let svc = state.service.lock().unwrap();
-    let mut sessions: HashMap<String, Option<hive_core::ChatSession>> = HashMap::new();
+    let mut sessions: HashMap<String, Option<ligus_core::ChatSession>> = HashMap::new();
     fold_presence(beats, me, |session_id, actor_id| {
         let session = sessions
             .entry(session_id.to_string())
@@ -9773,11 +9773,11 @@ fn presence_dtos(state: &AppState, beats: Vec<hive_runtime::human_presence::Huma
 /// else their newest beat), named by `roster_name(session, actor)` when the
 /// roster knows them, else by the beat's name; always cleaned.
 fn fold_presence(
-    beats: Vec<hive_runtime::human_presence::HumanBeat>,
+    beats: Vec<ligus_runtime::human_presence::HumanBeat>,
     me: &str,
     mut roster_name: impl FnMut(&str, &str) -> Option<String>,
 ) -> Vec<PresenceDto> {
-    let mut by_actor: std::collections::BTreeMap<String, hive_runtime::human_presence::HumanBeat> = Default::default();
+    let mut by_actor: std::collections::BTreeMap<String, ligus_runtime::human_presence::HumanBeat> = Default::default();
     for b in beats {
         if b.actor_id == me {
             continue;
@@ -9793,7 +9793,7 @@ fn fold_presence(
         .into_values()
         .map(|b| {
             let name = roster_name(&b.session_id, &b.actor_id).unwrap_or(b.name);
-            let name = hive_runtime::human_presence::clean_display_name(&name);
+            let name = ligus_runtime::human_presence::clean_display_name(&name);
             PresenceDto { actor_id: b.actor_id, name, typing: b.typing, session_id: b.session_id }
         })
         .collect()
@@ -9802,7 +9802,7 @@ fn fold_presence(
 #[cfg(test)]
 mod presence_fold_tests {
     use super::fold_presence;
-    use hive_runtime::human_presence::HumanBeat;
+    use ligus_runtime::human_presence::HumanBeat;
 
     fn beat(actor: &str, dev: &str, typing: bool, ts: i64, name: &str) -> HumanBeat {
         HumanBeat { actor_id: actor.into(), name: name.into(), device_id: dev.into(), session_id: "s".into(), typing, ts }
@@ -9886,7 +9886,7 @@ fn get_file_diff_sides(state: State<AppState>, path: String) -> Result<FileDiffS
     if rel.is_empty() || rel.starts_with('/') || rel.contains("..") {
         return Err("invalid path".into());
     }
-    let original = hive_core::process_util::git()
+    let original = ligus_core::process_util::git()
         .args(["show", &format!("HEAD:{rel}")])
         .current_dir(&root)
         .output()
@@ -9975,7 +9975,7 @@ fn open_path_in_editor(
         std::path::Path::new(&root).join(rel)
     };
     if on_path(cli) {
-        return hive_core::process_util::command(cli)
+        return ligus_core::process_util::command(cli)
             .arg(&target)
             .spawn()
             .map(|_| ())
@@ -10142,7 +10142,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
     let turns = vec![ChatTurn::user("Reply with exactly the token: PINGOK")];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
     let timeout = std::time::Duration::from_secs(
-        hive_core::compat::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
+        ligus_core::compat::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(45),
@@ -10165,7 +10165,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
     // the Test result shows whether it can use tools / think and how big its
     // window is (the probe is cached; this is the same call a live turn makes).
     let capabilities = if runtime.provider == ModelProviderKind::Ollama && !dispatch::ollama_uses_openai_shim() {
-        hive_runtime::provider::OllamaClient::new(&runtime.endpoint)
+        ligus_runtime::provider::OllamaClient::new(&runtime.endpoint)
             .capabilities_cached(&runtime.model)
             .await
             .map(|c| c.summary())
@@ -10174,7 +10174,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
         // A local llama-server: report the per-slot window it allocated (the
         // same cached `/props` probe a live turn budgets against).
         dispatch::warm_context_probe(&runtime).await;
-        hive_runtime::provider::openai::cached_context_window(&runtime.endpoint, &runtime.model)
+        ligus_runtime::provider::openai::cached_context_window(&runtime.endpoint, &runtime.model)
             .map(|n| format!("context {n} tokens per slot (server /props)"))
     } else {
         None
@@ -10276,10 +10276,10 @@ impl AppState {
             if rt.provider != ModelProviderKind::Ollama {
                 return Err(format!("Runtime \"{id}\" is not an Ollama runtime."));
             }
-            return Ok(hive_runtime::provider::ollama::base_url(&rt.endpoint));
+            return Ok(ligus_runtime::provider::ollama::base_url(&rt.endpoint));
         }
         if let Some(ep) = endpoint.map(str::trim).filter(|s| !s.is_empty()) {
-            return Ok(hive_runtime::provider::ollama::base_url(ep));
+            return Ok(ligus_runtime::provider::ollama::base_url(ep));
         }
         let saved = self
             .settings
@@ -10289,7 +10289,7 @@ impl AppState {
             .get(provider_config_name(ModelProviderKind::Ollama))
             .cloned()
             .unwrap_or_default();
-        Ok(hive_runtime::provider::ollama::base_url(&saved))
+        Ok(ligus_runtime::provider::ollama::base_url(&saved))
     }
 }
 
@@ -10309,7 +10309,7 @@ async fn ollama_list_models(
     let base = state.ollama_base(runtime_id.as_deref(), endpoint.as_deref())?;
     // A listing answers at once: no reconnect (and no "retrying" warning in
     // the log) when nothing is listening there.
-    let client = hive_runtime::provider::OllamaClient::new(&base).with_connect_retries(0);
+    let client = ligus_runtime::provider::OllamaClient::new(&base).with_connect_retries(0);
     let installed = client.list_models().await.map_err(|e| e.to_string())?;
     // `/api/ps` is decoration; an old server without it must not hide the list.
     let running = client.list_running().await.unwrap_or_default();
@@ -10365,7 +10365,7 @@ async fn ollama_pull_model(
     if state.ollama_pulls.lock().unwrap().contains_key(&key) {
         return Err(format!("Already pulling {model} on {}.", endpoint_host_of(&base)));
     }
-    let client = hive_runtime::provider::OllamaClient::new(&base);
+    let client = ligus_runtime::provider::OllamaClient::new(&base);
     let event = |status: &str| OllamaPullEvent {
         base: base.clone(),
         model: model.clone(),
@@ -10492,7 +10492,7 @@ async fn ollama_delete_model(
     if state.ollama_pulls.lock().unwrap().contains_key(&ollama_pull_key(&base, &model)) {
         return Err(format!("{model} is being pulled; cancel the pull first."));
     }
-    hive_runtime::provider::OllamaClient::new(&base)
+    ligus_runtime::provider::OllamaClient::new(&base)
         .delete(&model)
         .await
         .map_err(|e| e.to_string())
@@ -10500,7 +10500,7 @@ async fn ollama_delete_model(
 
 /// `host[:port]` of a base URL, for messages.
 fn endpoint_host_of(base: &str) -> String {
-    hive_runtime::provider::OllamaClient::new(base).host()
+    ligus_runtime::provider::OllamaClient::new(base).host()
 }
 
 /// Validate a provider's credentials at entry: build a transient runtime for
@@ -10718,7 +10718,7 @@ fn set_default_runtime(state: State<AppState>, runtime_id: String) -> Result<(),
 /// "Allow workspace file tools for this endpoint" warning when it isn't.
 #[tauri::command]
 fn endpoint_is_private(endpoint: String) -> bool {
-    hive_core::endpoint::endpoint_is_private(&endpoint)
+    ligus_core::endpoint::endpoint_is_private(&endpoint)
 }
 
 #[tauri::command(async)]
@@ -10746,7 +10746,7 @@ fn add_runtime(
     // credential stay in that host's operator config.
     let gateway = gateway.map(|g| g.trim().to_string()).filter(|g| !g.is_empty());
     if let Some(g) = &gateway {
-        if !hive_core::HostModelGateway::valid_name(g) {
+        if !ligus_core::HostModelGateway::valid_name(g) {
             return Err(format!("'{g}' is not a model gateway name"));
         }
     }
@@ -10786,7 +10786,7 @@ fn add_runtime(
         // Native-Ollama settings; other providers ignore them.
         request_keep_alive: keep_alive.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         think,
-        // HTTP runtimes' tool-loop round budget; 0/None = Hive's default.
+        // HTTP runtimes' tool-loop round budget; 0/None = Ligus's default.
         max_tool_rounds: max_tool_rounds.filter(|n| *n > 0),
         // Built-in file tools against a non-local endpoint: the explicit
         // opt-in lives in this device's settings (below), never in config.
@@ -10795,7 +10795,7 @@ fn add_runtime(
         gateway,
         estimated_performance_score: 0.0,
         estimated_cost_per_1m_input_tokens_usd: 0.0,
-        capabilities: hive_core::RuntimeCapabilities {
+        capabilities: ligus_core::RuntimeCapabilities {
             supports_embeddings,
             supports_tools,
             supports_streaming: true,
@@ -10813,7 +10813,7 @@ fn add_runtime(
     }
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_runtime_in_config(&state.data_dir, &root, &runtime)?;
-    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::Runtime, hive_runtime::workspace_trust::runtime_item(&runtime, "").digest);
+    trust_own_item(&state, ligus_runtime::workspace_trust::ItemKind::Runtime, ligus_runtime::workspace_trust::runtime_item(&runtime, "").digest);
     let runtimes = {
         let mut managed = state.managed_runtimes.lock().unwrap();
         // Upsert by id: replace an existing entry (edit) or append (add). The
@@ -11007,7 +11007,7 @@ fn set_agent_avatar(
 fn open_in_editor(state: State<AppState>) -> Result<(), String> {
     let root = state.workspace_root.lock().unwrap().clone();
     if let Ok(editor) = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")) {
-        return hive_core::process_util::command(editor)
+        return ligus_core::process_util::command(editor)
             .arg(&root)
             .spawn()
             .map(|_| ())
@@ -11019,7 +11019,7 @@ fn open_in_editor(state: State<AppState>) -> Result<(), String> {
     let program = "explorer";
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let program = "xdg-open";
-    hive_core::process_util::command(program)
+    ligus_core::process_util::command(program)
         .arg(&root)
         .spawn()
         .map(|_| ())
@@ -11047,12 +11047,12 @@ pub(crate) fn open_url_in_browser(url: &str) -> std::io::Result<()> {
     let (program, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", url]);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (program, args): (&str, Vec<&str>) = ("xdg-open", vec![url]);
-    hive_core::process_util::command(program).args(&args).spawn().map(|_| ())
+    ligus_core::process_util::command(program).args(&args).spawn().map(|_| ())
 }
 
-/// macOS launch-health signals that predict silent agent stalls. Hive spawns
+/// macOS launch-health signals that predict silent agent stalls. Ligus spawns
 /// local CLIs (Claude Code, Codex) that read the workspace folder; macOS
-/// attributes that file access to Hive and can put up a consent modal the turn
+/// attributes that file access to Ligus and can put up a consent modal the turn
 /// blocks on. A quarantined or App-Translocated bundle can't durably persist
 /// that grant, so the modal re-appears every turn. The UI uses this to steer the
 /// user to Full Disk Access (and out of a translocated copy) before it bites.
@@ -11098,7 +11098,7 @@ fn launch_health() -> LaunchHealthDto {
     }
 }
 
-/// Open the macOS Full Disk Access pane so the user can grant Hive persistent
+/// Open the macOS Full Disk Access pane so the user can grant Ligus persistent
 /// file access — the fix for agent turns silently blocking on a folder-consent
 /// modal. No-op off macOS.
 #[tauri::command]
@@ -11204,7 +11204,7 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
     if current == "dev" {
         return None;
     }
-    let client = hive_forge::http_client_builder()
+    let client = ligus_forge::http_client_builder()
         .timeout(MANIFEST_TIMEOUT)
         .build()
         .ok()?;
@@ -11300,7 +11300,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 }
 
 /// Tint the native title bar to match the app background. The frontend calls
-/// this with the live `--hive-canvas` color (and whether the active theme is
+/// this with the live `--ligus-canvas` color (and whether the active theme is
 /// dark) on launch and on every theme change, so the OS chrome tracks the UI.
 ///
 /// Windows 11 only (DWM caption color, build 22000+); a no-op everywhere else
@@ -11402,24 +11402,24 @@ const RESET_SENTINEL: &str = ".reset-pending";
 
 fn build_state(app: &AppHandle) -> Result<AppState, String> {
     let data_dir: PathBuf = app.path().app_data_dir().map_err(map_err)?;
-    refuse_hive1_data_dir(&data_dir)?;
+    refuse_ligus1_data_dir(&data_dir)?;
     build_state_in(app, data_dir)
 }
 
-/// Ligus 0.1 starts fresh: its data dir must not be, link to, or contain Hive
-/// 1.x data (`com.hive.desktop`, `~/.hive`, ...), which is never read or
+/// Ligus 0.1 starts fresh: its data dir must not be, link to, or contain Ligus
+/// 1.x data (`com.ligus.desktop`, `~/.ligus`, ...), which is never read or
 /// changed. On a refusal, show a blocking error and stop before anything is
 /// created or opened.
-fn refuse_hive1_data_dir(data_dir: &Path) -> Result<(), String> {
-    let home = hive_core::compat::home_dir();
-    match hive_core::compat::check_data_dir(data_dir, home.as_deref()) {
+fn refuse_ligus1_data_dir(data_dir: &Path) -> Result<(), String> {
+    let home = ligus_core::compat::home_dir();
+    match ligus_core::compat::check_data_dir(data_dir, home.as_deref()) {
         Ok(()) => Ok(()),
         // The startup recovery dialog says so ([`InitFailure::DataDir`]).
         Err(e) => Err(format!("{DATA_DIR_REFUSED}{e}")),
     }
 }
 
-/// Marks a [`refuse_hive1_data_dir`] refusal for [`InitFailure::of`].
+/// Marks a [`refuse_ligus1_data_dir`] refusal for [`InitFailure::of`].
 const DATA_DIR_REFUSED: &str = "data folder refused: ";
 
 /// Why the backend didn't start, for the startup recovery dialog.
@@ -11428,7 +11428,7 @@ enum InitFailure {
     /// The OS keychain (or Secret Service) refused or was cancelled: the
     /// user can allow it and try again.
     Keychain(String),
-    /// A Hive 1.x data dir: never used, so trying again won't help.
+    /// A Ligus 1.x data dir: never used, so trying again won't help.
     DataDir(String),
     /// Anything else.
     Other(String),
@@ -11510,12 +11510,12 @@ fn ask_init_failure(f: &InitFailure) -> InitChoice {
 
 /// [`build_state`] against an explicit data dir. The app uses the OS app-data
 /// dir; the in-app live test (`e2e`) points it at a temp dir.
-/// Before anything opens the data dir: refuse a Hive 1.x dir (never read or
-/// changed; see `hive_core::compat::check_data_dir`), create it, run a
+/// Before anything opens the data dir: refuse a Ligus 1.x dir (never read or
+/// changed; see `ligus_core::compat::check_data_dir`), create it, run a
 /// pending factory reset, and mark it as a Ligus 0.1 data dir.
 fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
-    // Never a Hive 1.x dir (also checked by `build_state`, with a dialog).
-    hive_core::compat::check_data_dir(data_dir, hive_core::compat::home_dir().as_deref())?;
+    // Never a Ligus 1.x dir (also checked by `build_state`, with a dialog).
+    ligus_core::compat::check_data_dir(data_dir, ligus_core::compat::home_dir().as_deref())?;
     std::fs::create_dir_all(data_dir).map_err(map_err)?;
 
     // A factory reset was requested last run: the previous process wrote the
@@ -11542,7 +11542,7 @@ fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(&reset_marker);
     }
     // Mark the dir as a Ligus 0.1 data dir (after a reset wipe, too).
-    hive_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
+    ligus_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
     Ok(())
 }
 
@@ -11552,13 +11552,13 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // B2: Ligus's own secrets (identity seeds, settings secrets) live in the OS
     // secret store from here on: a dedicated keychain on macOS, the Secret
     // Service on Linux, owner-only files elsewhere (with a warning).
-    hive_runtime::secret_store::init_for_data_dir(&data_dir, None);
+    ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
     let identity = IdentityStore::new(&data_dir, StoreKeyVault::for_data_dir(&data_dir));
     let stored = identity.bootstrap("You", "you", "This device").map_err(map_err)?;
     let device_kp = identity.device_keypair(stored.device.id).map_err(map_err)?;
     let account_kp = identity.account_keypair(stored.account.id).map_err(map_err)?;
 
-    let db_path = data_dir.join("hive.db");
+    let db_path = data_dir.join("ligus.db");
     let store = EventStore::open(&db_path).map_err(map_err)?;
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
@@ -11583,9 +11583,9 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let _ = remember_workspace(&data_dir, &workspace_root);
 
     let mut config_relay_endpoint: Option<String> = None;
-    for candidate in hive_core::compat::config_candidates(&[Path::new(&workspace_root), &data_dir]) {
+    for candidate in ligus_core::compat::config_candidates(&[Path::new(&workspace_root), &data_dir]) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
-            if let Ok(cfg) = hive_core::config::load_from_str(&text) {
+            if let Ok(cfg) = ligus_core::config::load_from_str(&text) {
                 config_relay_endpoint = cfg
                     .transport
                     .relay_endpoint
@@ -11597,38 +11597,38 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     // Agent processes never read this device's data dir (keys, settings,
     // the database).
-    hive_runtime::executor::configure_host(&data_dir, &[], &[]);
+    ligus_runtime::executor::configure_host(&data_dir, &[], &[]);
     // Turn scratch dirs a killed turn (or a killed app) left behind are swept
     // now and every ten minutes, once older than the longest turn.
-    hive_runtime::executor::start_turn_dir_sweeper(std::time::Duration::from_secs(
-        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s: &u64| s > 0).unwrap_or(3600),
+    ligus_runtime::executor::start_turn_dir_sweeper(std::time::Duration::from_secs(
+        ligus_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s: &u64| s > 0).unwrap_or(3600),
     ));
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
     let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
 
     let fallback_model =
-        hive_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        ligus_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     // Connection settings: a persisted settings.json wins; on first launch we
     // seed it from env/config so existing `LIGUS_*` environments keep working. After
     // that the Settings UI edits the file live and the sync loop polls it.
     let env_seed = LiveSettings {
-        relay_url: hive_core::compat::var("LIGUS_RELAY_URL")
+        relay_url: ligus_core::compat::var("LIGUS_RELAY_URL")
             .ok()
             .filter(|s| !s.is_empty())
             .or(config_relay_endpoint),
-        relay_access_token: hive_core::compat::var("LIGUS_RELAY_ACCESS_TOKEN")
+        relay_access_token: ligus_core::compat::var("LIGUS_RELAY_ACCESS_TOKEN")
             .ok()
             .filter(|s| !s.is_empty()),
-        sync_room: hive_core::compat::var("LIGUS_WORKSPACE")
+        sync_room: ligus_core::compat::var("LIGUS_WORKSPACE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(default_sync_room),
-        workspace_passphrase: hive_core::compat::var("LIGUS_WORKSPACE_KEY")
+        workspace_passphrase: ligus_core::compat::var("LIGUS_WORKSPACE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        relay_issuer_key: hive_core::compat::var("LIGUS_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
+        relay_issuer_key: ligus_core::compat::var("LIGUS_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
         api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
         claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
@@ -11723,11 +11723,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     {
         let mut s = settings.lock().unwrap();
         let kp = match s.ka_secret.as_deref().and_then(parse_hex32) {
-            Some(seed) => hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok(),
+            Some(seed) => ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok(),
             None => None,
         };
         let kp = kp.unwrap_or_else(|| {
-            let kp = hive_core::e2ee::KeyAgreementKeypair::generate().expect("ka keypair");
+            let kp = ligus_core::e2ee::KeyAgreementKeypair::generate().expect("ka keypair");
             s.ka_secret = Some(hex32(&kp.seed_bytes()));
             save_settings(&data_dir, &s);
             kp
@@ -11810,7 +11810,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     Ok(AppState {
         service: Mutex::new(service),
-        host_presence: hive_runtime::HostPresence::new(),
+        host_presence: ligus_runtime::HostPresence::new(),
         guards: Default::default(),
         identity,
         data_dir,
@@ -11825,7 +11825,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         summary_cache: Mutex::new(HashMap::new()),
         summary_backoff: Mutex::new(HashMap::new()),
         vault_cache: Mutex::new(HashMap::new()),
-        retriever: hive_runtime::retrieval::Retriever::new(),
+        retriever: ligus_runtime::retrieval::Retriever::new(),
         catalog_trust: Mutex::new(catalog_trust),
         base_mcp: Mutex::new(base_mcp),
         managed_mcp: Mutex::new(managed_mcp),
@@ -11837,7 +11837,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         gate_runs: Mutex::new(HashMap::new()),
         canceled_runs: Mutex::new(std::collections::HashSet::new()),
         ollama_pulls: Mutex::new(HashMap::new()),
-        turn_stops: hive_runtime::turn_engine::TurnStops::new(),
+        turn_stops: ligus_runtime::turn_engine::TurnStops::new(),
         mcp_shell_tools: Mutex::new(HashMap::new()),
         mcp_probe_failed: Mutex::new(HashMap::new()),
         conn_health: Mutex::new(ConnHealth::default()),
@@ -11866,7 +11866,7 @@ fn add_schedule(
     prompt: String,
     runtime_id: Option<String>,
     workspace_id: Option<String>,
-    trigger: hive_core::ScheduleTrigger,
+    trigger: ligus_core::ScheduleTrigger,
 ) -> Result<ScheduledAgentConfig, String> {
     trigger.validate()?;
     if prompt.trim().is_empty() {
@@ -11916,7 +11916,7 @@ fn set_schedule_enabled(state: State<AppState>, id: String, enabled: bool) -> Re
 const DEVICE_HOST_TICK: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// The name this computer shows other members (macOS "Computer Name", else the
-/// host name), for the Device host label: "@hive · on <name>" on the phone.
+/// host name), for the Device host label: "@ligus · on <name>" on the phone.
 fn computer_name() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
@@ -11932,7 +11932,7 @@ fn computer_name() -> Option<String> {
 /// Keep this desktop registered as a `Device` host in the synced room's
 /// workspace (spec §12.4: a member's machine, online while its app runs) and
 /// beating on the room's relay presence channel. The phone's `ligus serve`
-/// reads the beat to say whether `@hive` — which only a desktop can run — will
+/// reads the beat to say whether `@ligus` — which only a desktop can run — will
 /// answer now or once the desktop is open.
 ///
 /// Registers only once the room's config log has synced in (never seeds a
@@ -11946,7 +11946,7 @@ async fn run_device_host_loop(app: AppHandle) {
         .ok()
         .flatten()
         .unwrap_or_else(|| "Desktop".to_string());
-    let beat_every = std::time::Duration::from_secs(hive_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
+    let beat_every = std::time::Duration::from_secs(ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
     let mut last_beat: Option<(String, std::time::Instant)> = None;
     let mut tick = tokio::time::interval(DEVICE_HOST_TICK);
     loop {
@@ -11964,15 +11964,15 @@ async fn run_device_host_loop(app: AppHandle) {
         let host_id = state.local_host_id();
         {
             let mut svc = state.service.lock().unwrap();
-            if !matches!(svc.load(hive_core::workspace_config_session_id(ws)), Ok(Some(_))) {
+            if !matches!(svc.load(ligus_core::workspace_config_session_id(ws)), Ok(Some(_))) {
                 continue;
             }
-            let host = hive_core::WorkspaceHost::new(host_id.clone(), hive_core::HostKind::Device, label.clone());
+            let host = ligus_core::WorkspaceHost::new(host_id.clone(), ligus_core::HostKind::Device, label.clone());
             if let Err(e) = svc.ensure_host(ws, host) {
                 tracing::debug!(target: "hosts", "device host registration failed: {e}");
             }
         }
-        state.host_presence.record(&host_id, hive_core::Timestamp::now().inner().unix_timestamp());
+        state.host_presence.record(&host_id, ligus_core::Timestamp::now().inner().unix_timestamp());
         if key.is_none() {
             continue;
         }
@@ -11985,12 +11985,12 @@ async fn run_device_host_loop(app: AppHandle) {
         if due {
             let coverage = crate::repos_ui::beat_coverage(&state, ws);
             let beat = state.service.lock().unwrap().signed_beat(ws, coverage);
-            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
+            match ligus_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
-        if let Ok(beats) = hive_runtime::host_presence::fetch_beats(&relay, &room, &ring).await {
+        if let Ok(beats) = ligus_runtime::host_presence::fetch_beats(&relay, &room, &ring).await {
             let verified = state.service.lock().unwrap().beat_verifier(ws);
             state.host_presence.merge_beats(beats, verified);
         }
@@ -12006,7 +12006,7 @@ async fn run_scheduler_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, 
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
     loop {
         tick.tick().await;
-        let now = hive_core::Timestamp::now().inner();
+        let now = ligus_core::Timestamp::now().inner();
         // Snapshot due schedules; never hold the settings lock across dispatch.
         let due: Vec<ScheduledAgentConfig> = {
             let s = settings.lock().unwrap();
@@ -12031,7 +12031,7 @@ async fn run_scheduler_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, 
             {
                 let mut s = settings.lock().unwrap();
                 if let Some(entry) = s.schedules.iter_mut().find(|x| x.id == sched.id) {
-                    entry.last_run = Some(hive_core::Timestamp::now());
+                    entry.last_run = Some(ligus_core::Timestamp::now());
                 }
                 save_settings(&data_dir, &s);
             }
@@ -12096,7 +12096,7 @@ fn read_local_sync_sig(settings: &Arc<Mutex<LiveSettings>>) -> LocalSyncSig {
 /// unchanged — this only calls it.
 async fn sync_pull_once(
     app: &AppHandle,
-    eng: &mut hive_runtime::SyncEngine,
+    eng: &mut ligus_runtime::SyncEngine,
     store: &mut EventStore,
     last_sync_err: &mut Option<String>,
 ) -> bool {
@@ -12107,7 +12107,7 @@ async fn sync_pull_once(
     }
     // Split steps keep the store's borrow out of any `.await`.
     let before_row = store.max_row_id().unwrap_or(i64::MAX);
-    let outcome: Result<usize, hive_runtime::SyncError> = async {
+    let outcome: Result<usize, ligus_runtime::SyncError> = async {
         let to_push = eng.take_unpushed(store)?;
         eng.push_envelopes(&to_push).await?;
         // One bounded round of relay pages; a room with more history leaves
@@ -12159,7 +12159,7 @@ async fn sync_pull_once(
                 let _ = app.emit("workspace://synced", pulled);
                 // Answer what just arrived in ANY chat, not only the open one:
                 // the frontend asks `maybe_respond` for the selected chat only,
-                // so an @hive in a chat the phone just created (never opened
+                // so an @ligus in a chat the phone just created (never opened
                 // here) went unanswered. `maybe_respond` keeps every gate —
                 // ownership, host binding, busy guard, the cross-device claim.
                 // Every message of the pull, not only each chat's last: two
@@ -12178,7 +12178,7 @@ async fn sync_pull_once(
                 // member→non-member transition within the same workspace, so
                 // initial load and workspace switches don't false-fire.
                 let active = state.active_workspace_id();
-                let config_id = hive_core::workspace_config_session_id(active);
+                let config_id = ligus_core::workspace_config_session_id(active);
                 let me = state.local_actor_id();
                 let current = state
                     .service
@@ -12203,7 +12203,7 @@ async fn sync_pull_once(
             // Log a persistent error only once (until it changes or recovers).
             // Unauthorized gets an actionable line.
             let msg = match &e {
-                hive_runtime::SyncError::Relay(hive_runtime::RelayError::Unauthorized) => {
+                ligus_runtime::SyncError::Relay(ligus_runtime::RelayError::Unauthorized) => {
                     "sync paused: the relay rejected this device's access token \
                      — add yourself in Settings → Team sync (or clear the relay URL \
                      to work local-only)"
@@ -12261,8 +12261,8 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
     // The engine is rebuilt whenever the relay url / room / key inputs change,
     // so the Settings UI can connect, reconnect, or go local-only without a
     // restart. Its keyring follows signed rotations on its own (B1).
-    type ConnSig = (String, String, Option<[u8; 32]>, Vec<hive_runtime::keyring::DeliveredKey>);
-    let mut engine: Option<(hive_runtime::SyncEngine, ConnSig)> = None;
+    type ConnSig = (String, String, Option<[u8; 32]>, Vec<ligus_runtime::keyring::DeliveredKey>);
+    let mut engine: Option<(ligus_runtime::SyncEngine, ConnSig)> = None;
     // Whether this device's key-agreement key was published on the room's
     // config log yet (once per room per run).
     let mut ka_published: Option<String> = None;
@@ -12304,8 +12304,8 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 let changed = engine.as_ref().map(|(_, s)| s != &sig).unwrap_or(true);
                 if changed {
                     let src = key_source_for(&app.state::<AppState>(), conn.as_ref());
-                    let mut e = hive_runtime::SyncEngine::new(
-                        hive_runtime::RelayClient::new(&url).with_auth(access_token.clone()),
+                    let mut e = ligus_runtime::SyncEngine::new(
+                        ligus_runtime::RelayClient::new(&url).with_auth(access_token.clone()),
                         room.clone(),
                     )
                     .with_key_source(src);
@@ -12353,7 +12353,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                         .ka_secret
                         .as_deref()
                         .and_then(parse_hex32)
-                        .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
+                        .and_then(|seed| ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
                         .map(|kp| kp.public_key_bytes());
                     if let Some(ka_pub) = ka_pub {
                         let ws = room_workspace_id(&room);
@@ -12371,9 +12371,9 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 // attempt is gated by the reconnect backoff (`next_sse_attempt`)
                 // and skipped once a config is known to lack the endpoint.
                 let sse_known_unsupported = sse_unsupported.as_ref() == Some(&sig);
-                let mut stream: Option<hive_runtime::SseStream> = None;
+                let mut stream: Option<ligus_runtime::SseStream> = None;
                 if !sse_known_unsupported && std::time::Instant::now() >= next_sse_attempt {
-                    let client = hive_runtime::RelayClient::new(&url).with_auth(access_token.clone());
+                    let client = ligus_runtime::RelayClient::new(&url).with_auth(access_token.clone());
                     match client.open_event_stream(&room).await {
                         Ok(s) => {
                             sse_attempt = 0; // fresh, successful connection
@@ -12382,7 +12382,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                         }
                         // Older relay without the endpoint: degrade to polling and
                         // stop re-attempting the stream for this config (graceful).
-                        Err(hive_runtime::SseConnectError::Unsupported) => {
+                        Err(ligus_runtime::SseConnectError::Unsupported) => {
                             sse_unsupported = Some(sig.clone());
                             eprintln!(
                                 "sync: relay has no live push endpoint (404) — using {}s poll",
@@ -12393,7 +12393,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                         // stream; the pull below still surfaces health and syncs.
                         Err(e) => {
                             // A refusal (`sse_streams`) waits at least its Retry-After.
-                            let delay = hive_runtime::next_backoff(sse_attempt).max(e.retry_after().unwrap_or_default());
+                            let delay = ligus_runtime::next_backoff(sse_attempt).max(e.retry_after().unwrap_or_default());
                             next_sse_attempt = std::time::Instant::now() + delay;
                             sse_attempt = sse_attempt.saturating_add(1);
                             eprintln!(
@@ -12483,7 +12483,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                             sse_attempt = 0;
                             next_sse_attempt = std::time::Instant::now();
                         } else {
-                            let delay = hive_runtime::next_backoff(sse_attempt);
+                            let delay = ligus_runtime::next_backoff(sse_attempt);
                             next_sse_attempt = std::time::Instant::now() + delay;
                             sse_attempt = sse_attempt.saturating_add(1);
                             eprintln!(
@@ -12591,24 +12591,24 @@ async fn probe_relay_inner(
         };
     }
     let workspace = if room.trim().is_empty() { "_probe".to_string() } else { room };
-    let probe = hive_runtime::RelayClient::new(url)
+    let probe = ligus_runtime::RelayClient::new(url)
         .with_auth(token)
         .probe(&workspace)
         .await;
     match probe {
-        hive_runtime::RelayProbe::Ok => RelayProbeDto {
+        ligus_runtime::RelayProbe::Ok => RelayProbeDto {
             status: "ok".into(),
             detail: "Reachable and the access token was accepted.".into(),
         },
-        hive_runtime::RelayProbe::Unauthorized => RelayProbeDto {
+        ligus_runtime::RelayProbe::Unauthorized => RelayProbeDto {
             status: "unauthorized".into(),
             detail: "Reached the relay, but it rejected the access token.".into(),
         },
-        hive_runtime::RelayProbe::HttpStatus(c) => RelayProbeDto {
+        ligus_runtime::RelayProbe::HttpStatus(c) => RelayProbeDto {
             status: "httpError".into(),
             detail: format!("Relay returned HTTP {c}. Check the URL — use the base origin, no /v1."),
         },
-        hive_runtime::RelayProbe::Unreachable(e) => RelayProbeDto {
+        ligus_runtime::RelayProbe::Unreachable(e) => RelayProbeDto {
             status: "unreachable".into(),
             detail: format!("Couldn't reach the relay: {e}"),
         },
@@ -12730,7 +12730,7 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
                 }
             }
             if let Err(e) =
-                svc.ensure_self_member(hive_core::workspace_config_session_id(id), id)
+                svc.ensure_self_member(ligus_core::workspace_config_session_id(id), id)
             {
                 tracing::error!(target: "workspace", "ensure_self_member on activate failed: {e}");
             }
@@ -12754,7 +12754,7 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
 
 /// Phase 2a: make the effective code dir follow the *active chat*. When a chat
 /// is opened, `session_id` is its id and `workspace_root` swaps to that chat's
-/// persistent base worktree (`hive/chat/<sessionid>`), so edits, catalogs, and
+/// persistent base worktree (`ligus/chat/<sessionid>`), so edits, catalogs, and
 /// the file watcher all track the chat's isolated dir. Passing `None` (no chat
 /// selected) reverts to the active workspace's bound folder.
 ///
@@ -12813,7 +12813,7 @@ fn set_workspace_icon(
 
 /// Random hex token (CSPRNG via uuid v4) for a fresh room suffix / workspace
 /// key, so two "Team" workspaces don't collide and rooms aren't guessable.
-use hive_runtime::workspace_invite::random_token;
+use ligus_runtime::workspace_invite::random_token;
 
 /// Create a new team workspace: generates a unique room + E2EE key, adds it to
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
@@ -12842,7 +12842,7 @@ pub(crate) fn create_workspace_sync(state: State<AppState>, name: String, relay_
     let (founder, founder_fk) = {
         let svc = state.service.lock().unwrap();
         let fk = (!svc.is_delegated())
-            .then(|| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
+            .then(|| ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
         (svc.author().id.clone(), fk)
     };
     let conn = {
@@ -12892,7 +12892,7 @@ async fn join_workspace(ligus_app: tauri::AppHandle, invite: String) -> Result<W
 
 pub(crate) fn join_workspace_sync(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&invite)?;
-    let redeem = hive_runtime::box_admission::redeem_key_of(&invite);
+    let redeem = ligus_runtime::box_admission::redeem_key_of(&invite);
     // A relayless invite would add a workspace that never syncs.
     if conn.dm_account.is_none() && invite_relay_problem(&conn.relay_url).is_some() {
         return Err("This invite's workspace has no relay, so it can't be joined. Ask whoever sent it to set a \
@@ -12909,7 +12909,7 @@ pub(crate) fn join_workspace_sync(state: State<AppState>, invite: String) -> Res
 
 /// Join from an already-checked connection. `redeem`: the invite's redeem
 /// key seed (`box_admission::redeem_key_of` of its code), which proves the
-/// redemption (`hive_core::admission`).
+/// redemption (`ligus_core::admission`).
 fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn, redeem: Option<[u8; 32]>) -> Result<WorkspaceInfoDto, String> {
     // The invite's signature was for the reader's check; never kept.
     conn.sig = None;
@@ -12942,10 +12942,10 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn, redeem: 
 /// The typed error `workspace_invite` returns for a workspace with no usable
 /// relay (`NO_RELAY_ERR`), and why an invite for a workspace couldn't be used
 /// (`invite_relay_problem`): shared with every client in
-/// `hive_runtime::workspace_invite`.
-use hive_runtime::workspace_invite::invite_relay_problem;
+/// `ligus_runtime::workspace_invite`.
+use ligus_runtime::workspace_invite::invite_relay_problem;
 #[cfg(test)]
-use hive_runtime::workspace_invite::NO_RELAY_ERR;
+use ligus_runtime::workspace_invite::NO_RELAY_ERR;
 
 /// Settings → Team sync edits the live relay of the room being synced; keep
 /// that room's saved workspace in step, so its invites carry the relay and
@@ -12989,10 +12989,10 @@ pub(crate) fn workspace_invite_sync(state: State<AppState>, workspace_id: String
 
 /// `code` (the `hivews1:` code of person invite `invite` to `ws`) with the
 /// invite's redeem key seed, which this device kept when it issued it: what
-/// lets the code's holder, and only them, redeem it (`hive_core::admission`).
+/// lets the code's holder, and only them, redeem it (`ligus_core::admission`).
 pub(crate) fn with_invite_redeem_key(state: &AppState, ws: Uuid, invite: Uuid, code: String) -> Result<String, String> {
     match state.service.lock().unwrap().take_invite_redeem_seed(ws, invite).map_err(map_err)? {
-        Some(seed) => hive_runtime::box_admission::with_redeem_key(&code, &seed),
+        Some(seed) => ligus_runtime::box_admission::with_redeem_key(&code, &seed),
         None => Ok(code),
     }
 }
@@ -13010,7 +13010,7 @@ struct BoxRequestDto {
 /// request`) so the Admin can compare its fingerprint with the box's.
 #[tauri::command]
 fn inspect_box_request(request: String) -> Result<BoxRequestDto, String> {
-    let r = hive_runtime::box_admission::JoinRequest::decode(&request)?;
+    let r = ligus_runtime::box_admission::JoinRequest::decode(&request)?;
     Ok(BoxRequestDto { fingerprint: r.fingerprint(), label: r.label.clone(), account_id: r.account_id.to_string() })
 }
 
@@ -13039,7 +13039,7 @@ pub(crate) fn admit_box_sync(state: State<AppState>, workspace_id: String, reque
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
     let request = request
         .filter(|r| !r.trim().is_empty())
-        .map(|r| hive_runtime::box_admission::JoinRequest::decode(&r))
+        .map(|r| ligus_runtime::box_admission::JoinRequest::decode(&r))
         .transpose()?;
     let mut conn = {
         let s = state.settings.lock().unwrap();
@@ -13052,9 +13052,9 @@ pub(crate) fn admit_box_sync(state: State<AppState>, workspace_id: String, reque
         return Err(problem);
     }
     let default = if request.is_some() {
-        hive_runtime::box_admission::DEFAULT_TTL_MS
+        ligus_runtime::box_admission::DEFAULT_TTL_MS
     } else {
-        hive_runtime::box_admission::DEFAULT_BEARER_TTL_MS
+        ligus_runtime::box_admission::DEFAULT_BEARER_TTL_MS
     };
     let ttl = ttl_minutes.map(|m| m.saturating_mul(60_000)).unwrap_or(default);
     let (invite, seed) = state
@@ -13064,13 +13064,13 @@ pub(crate) fn admit_box_sync(state: State<AppState>, workspace_id: String, reque
         .issue_box_admission(id, ttl, request.as_ref())
         .map_err(|e| format!("Only a workspace Admin can admit a box ({e})."))?;
     conn.inv = Some(invite.to_string());
-    // The redeem key's seed rides only in the code (`hive_core::admission`).
-    let code = hive_runtime::box_admission::with_redeem_key(&encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))), &seed)?;
+    // The redeem key's seed rides only in the code (`ligus_core::admission`).
+    let code = ligus_runtime::box_admission::with_redeem_key(&encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))), &seed)?;
     let (code, sealed) = match &request {
         Some(r) => (r.seal(&code)?, true),
         None => (code, false),
     };
-    let ttl = ttl.clamp(60_000, hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
+    let ttl = ttl.clamp(60_000, ligus_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
     Ok(BoxAdmissionDto { code, sealed, expires_in_minutes: ttl / 60_000 })
 }
 
@@ -13243,7 +13243,7 @@ struct ClaudeModelOption {
 /// Models to offer for the local `claude` CLI. The base aliases (which the CLI
 /// always understands) merged with `additionalModelOptionsCache` from
 /// `~/.claude.json` — the same account-specific list Claude Code's own `/model`
-/// picker shows, so new models (Fable, …) appear without a Hive release. That
+/// picker shows, so new models (Fable, …) appear without a Ligus release. That
 /// file is an undocumented CLI cache; if it's absent or its shape changes we
 /// just return the base aliases.
 #[tauri::command]
@@ -13339,7 +13339,7 @@ fn build_tray_icon(app: &AppHandle) -> Result<TrayIcon<tauri::Wry>, Box<dyn std:
         true,
     );
 
-    let tray = TrayIconBuilder::with_id("hive-tray")
+    let tray = TrayIconBuilder::with_id("ligus-tray")
         .icon(icon)
         .icon_as_template(as_template)
         .show_menu_on_left_click(false)
@@ -13416,14 +13416,14 @@ fn ensure_p2p_secret(state: &AppState) -> [u8; 32] {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct ContactsFile {
     #[serde(default)]
-    contacts: Vec<hive_runtime::peer::Contact>,
+    contacts: Vec<ligus_runtime::peer::Contact>,
 }
 
 fn contacts_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("contacts.json")
 }
 
-fn load_contacts(data_dir: &std::path::Path) -> Vec<hive_runtime::peer::Contact> {
+fn load_contacts(data_dir: &std::path::Path) -> Vec<ligus_runtime::peer::Contact> {
     std::fs::read_to_string(contacts_path(data_dir))
         .ok()
         .and_then(|t| serde_json::from_str::<ContactsFile>(&t).ok())
@@ -13431,7 +13431,7 @@ fn load_contacts(data_dir: &std::path::Path) -> Vec<hive_runtime::peer::Contact>
         .unwrap_or_default()
 }
 
-fn save_contacts(data_dir: &std::path::Path, contacts: &[hive_runtime::peer::Contact]) {
+fn save_contacts(data_dir: &std::path::Path, contacts: &[ligus_runtime::peer::Contact]) {
     if let Ok(bytes) = serde_json::to_vec_pretty(&ContactsFile { contacts: contacts.to_vec() }) {
         let _ = std::fs::write(contacts_path(data_dir), bytes);
     }
@@ -13450,7 +13450,7 @@ fn p2p_my_code(state: State<AppState>) -> Result<String, String> {
     #[cfg(feature = "p2p")]
     {
         let bytes = ensure_p2p_secret(&state);
-        Ok(hive_runtime::peer_iroh::code_for_secret(bytes))
+        Ok(ligus_runtime::peer_iroh::code_for_secret(bytes))
     }
     #[cfg(not(feature = "p2p"))]
     {
@@ -13469,13 +13469,13 @@ fn p2p_list_contacts(state: State<AppState>) -> Vec<ContactDto> {
 
 #[tauri::command]
 fn p2p_add_contact(state: State<AppState>, code: String, label: String) -> Result<(), String> {
-    let peer_id = hive_runtime::peer::PeerId::from_code(&code)
+    let peer_id = ligus_runtime::peer::PeerId::from_code(&code)
         .ok_or_else(|| "Not a valid Ligus friend code.".to_string())?;
     let mut contacts = load_contacts(&state.data_dir);
     if contacts.iter().any(|c| c.peer_id == peer_id) {
         return Err("That peer is already a contact.".to_string());
     }
-    contacts.push(hive_runtime::peer::Contact { peer_id, label: label.trim().to_string() });
+    contacts.push(ligus_runtime::peer::Contact { peer_id, label: label.trim().to_string() });
     save_contacts(&state.data_dir, &contacts);
     Ok(())
 }
@@ -13540,7 +13540,7 @@ async fn workspace_claim_membership(state: State<'_, AppState>) -> Result<bool, 
 
 /// List the active workspace's server-side members (empty on open relays).
 #[tauri::command]
-async fn workspace_members(state: State<'_, AppState>) -> Result<Vec<hive_runtime::MemberEntry>, String> {
+async fn workspace_members(state: State<'_, AppState>) -> Result<Vec<ligus_runtime::MemberEntry>, String> {
     let relay = configured_relay(&state)?;
     let room = state.settings.lock().unwrap().sync_room.clone();
     Ok(state
@@ -13554,7 +13554,7 @@ async fn workspace_members(state: State<'_, AppState>) -> Result<Vec<hive_runtim
 /// List the active workspace's relay invites (metadata only; empty if
 /// unsupported or the caller isn't an admin).
 #[tauri::command]
-async fn workspace_list_invites(state: State<'_, AppState>) -> Result<Vec<hive_runtime::InviteEntry>, String> {
+async fn workspace_list_invites(state: State<'_, AppState>) -> Result<Vec<ligus_runtime::InviteEntry>, String> {
     let relay = configured_relay(&state)?;
     let room = state.settings.lock().unwrap().sync_room.clone();
     Ok(state
@@ -13573,7 +13573,7 @@ async fn workspace_create_invite(
     role: String,
     ttl_secs: i64,
     max_uses: i64,
-) -> Result<Option<hive_runtime::IssuedInvite>, String> {
+) -> Result<Option<ligus_runtime::IssuedInvite>, String> {
     let relay = configured_relay(&state)?;
     let room = state.settings.lock().unwrap().sync_room.clone();
     state
@@ -13614,7 +13614,7 @@ async fn workspace_join_via_invite(state: State<'_, AppState>, code: String) -> 
 /// langstroth-auth `<tenant>:<user>` subject) names no account this device can
 /// map, and `None` leaves the roster alone. Lets us exclude a relay-removed
 /// member from the E2EE rotation recipient set.
-fn hive_account_id_for(account: &str) -> Option<String> {
+fn ligus_account_id_for(account: &str) -> Option<String> {
     account
         .strip_prefix("ligus:")
         .and_then(|s| Uuid::parse_str(s.trim()).ok())
@@ -13648,11 +13648,11 @@ async fn workspace_remove_member(
 
     // 2. Remove them from the workspace roster too (when they're on it), so
     //    the rotation below doesn't seal to their devices.
-    let removed_id = hive_account_id_for(&account);
+    let removed_id = ligus_account_id_for(&account);
     {
         let mut svc = state.service.lock().unwrap();
         let ws = state.active_workspace_id();
-        let config_id = hive_core::workspace_config_session_id(ws);
+        let config_id = ligus_core::workspace_config_session_id(ws);
         let members: Vec<String> = svc
             .load(config_id)
             .map_err(map_err)?
@@ -13702,7 +13702,7 @@ fn on_path(bin: &str) -> bool {
 }
 
 fn git_config_value(key: &str) -> Option<String> {
-    hive_core::process_util::git()
+    ligus_core::process_util::git()
         .args(["config", "--get", key])
         .output()
         .ok()
@@ -13785,7 +13785,7 @@ struct ProviderPresetDto {
 
 #[tauri::command]
 fn list_provider_presets() -> Vec<ProviderPresetDto> {
-    hive_runtime::dispatch::provider_presets()
+    ligus_runtime::dispatch::provider_presets()
         .into_iter()
         .map(|p| ProviderPresetDto {
             label: p.label.to_string(),
@@ -13797,8 +13797,8 @@ fn list_provider_presets() -> Vec<ProviderPresetDto> {
         .collect()
 }
 
-/// The family profile for a model id (`hive_core::model_profile`), for the
-/// add-runtime form's role hint. `None` for models Hive has no profile for.
+/// The family profile for a model id (`ligus_core::model_profile`), for the
+/// add-runtime form's role hint. `None` for models Ligus has no profile for.
 #[derive(serde::Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ModelProfileDto {
@@ -13815,7 +13815,7 @@ struct ModelProfileDto {
 }
 
 fn model_profile_dto(model: &str) -> Option<ModelProfileDto> {
-    hive_core::model_profile::profile_for(model).map(|p| ModelProfileDto {
+    ligus_core::model_profile::profile_for(model).map(|p| ModelProfileDto {
         family: p.family.to_string(),
         role: p.role.map(|r| r.as_str().to_string()),
         role_label: p.role.map(|r| r.label().to_string()),
@@ -13919,7 +13919,7 @@ fn detect_environment() -> EnvDetectDto {
     }
 }
 
-/// A provider Hive can already reach on this machine (credentials present, or
+/// A provider Ligus can already reach on this machine (credentials present, or
 /// none needed), for one-click "detect & configure" setup.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14010,17 +14010,17 @@ fn detect_providers(state: State<AppState>) -> Vec<DetectedProviderDto> {
 /// `probe` also runs `agy models` (read-only) to confirm the Google sign-in.
 /// Powers Settings → Models → "Subscription CLIs".
 #[tauri::command]
-async fn detect_cli_runtimes(probe: Option<bool>) -> Result<Vec<hive_runtime::cli_detect::DetectedCli>, String> {
+async fn detect_cli_runtimes(probe: Option<bool>) -> Result<Vec<ligus_runtime::cli_detect::DetectedCli>, String> {
     let probe = probe.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        hive_runtime::cli_detect::detect_cli_agents(&hive_runtime::cli_detect::DetectEnv::from_process(), probe)
+        ligus_runtime::cli_detect::detect_cli_agents(&ligus_runtime::cli_detect::DetectEnv::from_process(), probe)
     })
     .await
     .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
-// Declarative config — export/import a portable hive.toml so an architect can
+// Declarative config — export/import a portable ligus.toml so an architect can
 // version-control a runtime/agent/MCP setup and stamp it across machines. API
 // keys and MCP bearer tokens are NEVER exported — a runtime records only the
 // env var its key is read from (`keyEnv`), a reference the importer resolves.
@@ -14140,7 +14140,7 @@ fn export_config(state: State<AppState>) -> Result<String, String> {
         agents,
         mcp_servers,
     };
-    let header = "# Hive portable config. Version-control this to stamp a setup across machines.\n\
+    let header = "# Ligus portable config. Version-control this to stamp a setup across machines.\n\
                   # Secrets are NEVER stored here: a runtime records only `keyEnv` (the env var\n\
                   # its API key is read from). Set those env vars / provider keys on each machine.\n\n";
     toml::to_string_pretty(&cfg)
@@ -14275,7 +14275,7 @@ fn hex_decode_32(h: &str) -> Option<[u8; 32]> {
 
 /// Encode a `hivews1:` connection invite from the active workspace's relay/room/
 /// key (snake_case, matching decode_workspace_invite / the CLI).
-fn encode_hivews_conn(relay_url: &str, room: &str, key: Option<&str>) -> String {
+fn encode_ligusws_conn(relay_url: &str, room: &str, key: Option<&str>) -> String {
     use base64::Engine;
     let mut obj = serde_json::Map::new();
     obj.insert("relay_url".into(), relay_url.into());
@@ -14351,7 +14351,7 @@ async fn generate_agent_bootstrap(
     let enrolled = client.upsert_member(&room, &sub, &label, &role).await.is_ok();
 
     let token = mint_hrt1_token(&issuer, &sub, exp_days)?;
-    let invite = encode_hivews_conn(&relay, &room, key.as_deref());
+    let invite = encode_ligusws_conn(&relay, &room, key.as_deref());
 
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
@@ -14373,7 +14373,7 @@ async fn p2p_share_code(state: State<'_, AppState>) -> Result<ShortCodeDto, Stri
     #[cfg(feature = "p2p")]
     {
         let relay = configured_relay(&state)?;
-        let code = hive_runtime::peer_iroh::code_for_secret(ensure_p2p_secret(&state));
+        let code = ligus_runtime::peer_iroh::code_for_secret(ensure_p2p_secret(&state));
         let (short, ttl) = state
             .relay_client(&relay)
             .publish_pairing(&code, Some(600))
@@ -14436,11 +14436,11 @@ async fn redeem_short_code(
         return Ok(RedeemResultDto { kind: "workspace".into(), label: ws.name });
     }
     // Otherwise treat it as a peer friend code.
-    let peer_id = hive_runtime::peer::PeerId::from_code(&payload)
+    let peer_id = ligus_runtime::peer::PeerId::from_code(&payload)
         .ok_or_else(|| "Code resolved to an unrecognized payload.".to_string())?;
     let mut contacts = load_contacts(&state.data_dir);
     if !contacts.iter().any(|c| c.peer_id == peer_id) {
-        contacts.push(hive_runtime::peer::Contact {
+        contacts.push(ligus_runtime::peer::Contact {
             peer_id: peer_id.clone(),
             label: String::new(),
         });
@@ -14488,8 +14488,8 @@ fn peer_sync_workspaces(app: &AppHandle) -> Vec<Uuid> {
 
 #[cfg(feature = "p2p")]
 async fn run_peer_sync_session(app: AppHandle, data_dir: PathBuf, db_path: PathBuf, secret: [u8; 32]) {
-    use hive_runtime::peer::{PeerLink, PeerSync};
-    use hive_runtime::peer_iroh::{secret_from_bytes, IrohNode};
+    use ligus_runtime::peer::{PeerLink, PeerSync};
+    use ligus_runtime::peer_iroh::{secret_from_bytes, IrohNode};
 
     let node = match IrohNode::bind(secret_from_bytes(secret)).await {
         Ok(n) => std::sync::Arc::new(n),
@@ -14628,10 +14628,10 @@ fn login_shell_path() -> Option<std::ffi::OsString> {
 /// The desktop's daily log file prefix (`ligus.log.<date>`).
 const LOG_FILE_PREFIX: &str = "ligus.log";
 
-/// A desktop log file: `ligus.log*`, or a pre-rename `hive.log*` still in
+/// A desktop log file: `ligus.log*`, or a pre-rename `ligus.log*` still in
 /// the folder (read until the new day's file is newer).
 fn is_log_file(name: &str) -> bool {
-    name.starts_with(LOG_FILE_PREFIX) || name.starts_with("hive.log")
+    name.starts_with(LOG_FILE_PREFIX) || name.starts_with("ligus.log")
 }
 
 /// The active log directory (set once at startup), so `read_recent_logs` can
@@ -14669,7 +14669,7 @@ fn init_logging(app: &tauri::App) {
     // Keep the flush guard alive for the whole process.
     Box::leak(Box::new(guard));
 
-    let filter = hive_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+    let filter = ligus_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
@@ -14695,7 +14695,7 @@ fn init_logging(app: &tauri::App) {
 /// Build and run the Tauri application.
 pub fn run() {
     // reqwest 0.13 / rustls: one process-wide crypto provider (ring).
-    hive_forge::install_tls_provider();
+    ligus_forge::install_tls_provider();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         // Auto-updater (scaffold): registered but inert until tauri.conf.json's
@@ -14739,7 +14739,7 @@ pub fn run() {
             // Deferred one-time DB maintenance (chunk-row shrink). Kept off the
             // launch path entirely: we wait a few seconds so first paint and the
             // frontend's initial queries finish, then prune during idle. This is
-            // why startup no longer stalls on a large carried-over hive.db.
+            // why startup no longer stalls on a large carried-over ligus.db.
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
@@ -14761,7 +14761,7 @@ pub fn run() {
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        let backup = state.data_dir.join(format!("hive.db.bak-foreign-purge-{stamp}"));
+                        let backup = state.data_dir.join(format!("ligus.db.bak-foreign-purge-{stamp}"));
                         if let Ok(mut svc) = state.service.lock() {
                             match svc.purge_foreign_workspaces(&keep, &backup) {
                                 Ok(dropped) if !dropped.is_empty() => {
@@ -14817,7 +14817,7 @@ pub fn run() {
             tauri::async_runtime::spawn(run_sync_loop(handle, settings.clone(), db_path));
 
             // List this desktop as an online Device host in the synced room, so
-            // the phone (via `ligus serve`) can tell whether @hive can answer now.
+            // the phone (via `ligus serve`) can tell whether @ligus can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
             tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
             // DM invites held for a peer whose contact id wasn't known yet.
@@ -14839,7 +14839,7 @@ pub fn run() {
             // Skippable via LIGUS_DISABLE_P2P — a perf diagnostic, since iroh does
             // continuous network/interface probing (heavier on Windows via WMI).
             #[cfg(feature = "p2p")]
-            if hive_core::compat::var("LIGUS_DISABLE_P2P").is_err() {
+            if ligus_core::compat::var("LIGUS_DISABLE_P2P").is_err() {
                 let (secret, data_dir, p2p_db) = p2p;
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(run_peer_sync_supervisor(h, data_dir, p2p_db, secret));
@@ -15227,7 +15227,7 @@ mod workspace_root_guard_tests {
     fn persisted_root_wins_over_cwd() {
         // A valid, non-shallow persisted folder is restored even when the cwd is
         // itself an auto-adoptable project — the user's choice takes precedence.
-        let dir = std::env::temp_dir().join("hive_ws_persist_test");
+        let dir = std::env::temp_dir().join("ligus_ws_persist_test");
         std::fs::create_dir_all(&dir).unwrap();
         let dir = dunce::canonicalize(&dir).unwrap();
         let dir_str = dir.to_string_lossy().to_string();
@@ -15252,9 +15252,9 @@ mod workspace_root_guard_tests {
 
     #[test]
     fn cwd_is_adopted_when_no_valid_persisted_root() {
-        // No persisted root: a cwd that's clearly a project (has `.git`/`.hive`) is
+        // No persisted root: a cwd that's clearly a project (has `.git`/`.ligus`) is
         // adopted, while a non-project/system cwd is not.
-        let repo = std::env::temp_dir().join("hive_ws_cwd_adopt_test");
+        let repo = std::env::temp_dir().join("ligus_ws_cwd_adopt_test");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         let repo = dunce::canonicalize(&repo).unwrap();
         let repo_str = repo.to_string_lossy().to_string();
@@ -15395,8 +15395,8 @@ mod dispatch_ownership_tests {
     // These cover the decision the timeout fallback makes once it fires.
 
     use super::deferred_turn_unanswered;
-    use hive_core::chat::{ChatMessage, MessageRole};
-    use hive_core::session::ChatSession;
+    use ligus_core::chat::{ChatMessage, MessageRole};
+    use ligus_core::session::ChatSession;
     use uuid::Uuid;
 
     /// A chat whose trailing message is an unanswered user turn — what a
@@ -15435,7 +15435,7 @@ mod dispatch_ownership_tests {
         // `reply_to_message_id` ties it to our trigger. Without this guard the
         // fallback would claim and answer alongside a live peer.
         let (mut s, trigger_id) = deferred_session();
-        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Ligus", "");
         placeholder.is_streaming = true;
         placeholder.reply_to_message_id = Some(trigger_id);
         s.messages.push(placeholder);
@@ -15447,7 +15447,7 @@ mod dispatch_ownership_tests {
     fn a_completed_reply_keeps_us_deferred() {
         // The owner's device answered late but before the timeout fired.
         let (mut s, trigger_id) = deferred_session();
-        let mut reply = ChatMessage::new(MessageRole::Assistant, "Hive", "hello");
+        let mut reply = ChatMessage::new(MessageRole::Assistant, "Ligus", "hello");
         reply.reply_to_message_id = Some(trigger_id);
         s.messages.push(reply);
         assert!(!deferred_turn_unanswered(&s, trigger_id));
@@ -15474,7 +15474,7 @@ mod dispatch_ownership_tests {
         s.messages.push(ChatMessage::new(MessageRole::System, "", "joined"));
         // An assistant row answering some *other* message — e.g. a cross-device
         // reply to an earlier turn, or a proposal record.
-        let mut unrelated = ChatMessage::new(MessageRole::Assistant, "Hive", "re: something else");
+        let mut unrelated = ChatMessage::new(MessageRole::Assistant, "Ligus", "re: something else");
         unrelated.reply_to_message_id = Some(Uuid::new_v4());
         s.messages.push(unrelated);
         assert!(deferred_turn_unanswered(&s, trigger_id));
@@ -15494,7 +15494,7 @@ mod dispatch_ownership_tests {
         let system = ChatMessage::new(MessageRole::System, "", "Michael joined");
         let system_id = system.id;
         s.messages.push(system);
-        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Ligus", "");
         placeholder.is_streaming = true;
         placeholder.reply_to_message_id = Some(system_id);
         s.messages.push(placeholder);
@@ -15513,7 +15513,7 @@ mod dispatch_ownership_tests {
         let trigger = ChatMessage::new(MessageRole::User, "Michael", "second");
         let trigger_id = trigger.id;
         s.messages = vec![earlier, trigger];
-        let mut late = ChatMessage::new(MessageRole::Assistant, "Hive", "re: first");
+        let mut late = ChatMessage::new(MessageRole::Assistant, "Ligus", "re: first");
         late.reply_to_message_id = Some(earlier_id);
         s.messages.push(late);
         assert!(deferred_turn_unanswered(&s, trigger_id));
@@ -15526,7 +15526,7 @@ mod dispatch_ownership_tests {
         // must not stand the fallback down, or a compaction mid-wait would
         // restore the silent no-response.
         let (mut s, trigger_id) = deferred_session();
-        let mut summary = ChatMessage::new(MessageRole::Assistant, "Hive", "…summary…");
+        let mut summary = ChatMessage::new(MessageRole::Assistant, "Ligus", "…summary…");
         summary.reply_to_message_id = None;
         s.messages.push(summary);
         assert!(deferred_turn_unanswered(&s, trigger_id));
@@ -15543,8 +15543,8 @@ mod dispatch_ownership_tests {
 #[cfg(test)]
 mod dispatch_target_tests {
     use super::{dispatch_target, DispatchTarget, HostBinding};
-    use hive_core::{session::ChatSession, ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
-    use hive_core::Timestamp;
+    use ligus_core::{session::ChatSession, ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
+    use ligus_core::Timestamp;
     use uuid::Uuid;
 
     fn human(id: &str, name: &str) -> WorkspaceMember {
@@ -15582,9 +15582,9 @@ mod dispatch_target_tests {
         // Relay-backed, two real humans: an unaddressed message is human-to-human.
         let s = two_human_session();
         assert!(dispatch_target("hi", &s, false, &Default::default()).is_none());
-        // …but an explicit @primary/@hive always dispatches.
+        // …but an explicit @primary/@ligus always dispatches.
         assert!(matches!(
-            dispatch_target("@hive hi", &s, false, &Default::default()),
+            dispatch_target("@ligus hi", &s, false, &Default::default()),
             Some(DispatchTarget::Primary)
         ));
     }
@@ -15592,7 +15592,7 @@ mod dispatch_target_tests {
     /// The owner (desktop) plus their phone's `ligus serve` box, which created
     /// the chat. The box's host names the owner, and its device carries a cert
     /// for the box's account; `admin` sets the box's role.
-    fn phone_box_world(admin: bool) -> (ChatSession, hive_core::DeviceLinks) {
+    fn phone_box_world(admin: bool) -> (ChatSession, ligus_core::DeviceLinks) {
         let box_account = Uuid::new_v4();
         let box_device = Uuid::new_v4();
         let mut owner = human("owner", "Alex");
@@ -15602,18 +15602,18 @@ mod dispatch_target_tests {
         phone.role = if admin { WorkspaceRole::Admin } else { WorkspaceRole::Contributor };
         let mut config = ChatSession::new("", Uuid::nil(), "");
         config.members = vec![owner, phone];
-        let mut host = hive_core::WorkspaceHost::new(box_device.to_string(), hive_core::HostKind::Worker, "sff");
+        let mut host = ligus_core::WorkspaceHost::new(box_device.to_string(), ligus_core::HostKind::Worker, "sff");
         host.owner_actor_id = "owner".into();
         config.workspace_hosts = vec![host];
-        let links = hive_core::DeviceLinks::from_config(&config, |d, a| d == box_device && a == box_account);
-        let mut chat = ChatSession::new("phone @hive test", Uuid::nil(), "rt");
+        let links = ligus_core::DeviceLinks::from_config(&config, |d, a| d == box_device && a == box_account);
+        let mut chat = ChatSession::new("phone @ligus test", Uuid::nil(), "rt");
         chat.creator_actor_id = box_account.to_string();
         chat.members = config.members.clone();
         (chat, links)
     }
 
     #[test]
-    fn owner_desktop_answers_hive_in_a_chat_its_phone_box_created() {
+    fn owner_desktop_answers_ligus_in_a_chat_its_phone_box_created() {
         let (chat, links) = phone_box_world(true);
         // Owner + their box are one person: solo, so un-addressed messages
         // reach the primary as they did before the box joined.
@@ -15641,9 +15641,9 @@ mod dispatch_target_tests {
         let mut chat = ChatSession::new("from the phone", Uuid::nil(), "rt");
         chat.creator_actor_id = "owner".into();
         chat.members = vec![owner];
-        let links = hive_core::DeviceLinks::default();
+        let links = ligus_core::DeviceLinks::default();
         assert_eq!(super::human_member_count(&chat, &links), 1);
-        assert!(matches!(dispatch_target("@hive hi", &chat, false, &links), Some(DispatchTarget::Primary)));
+        assert!(matches!(dispatch_target("@ligus hi", &chat, false, &links), Some(DispatchTarget::Primary)));
         assert!(super::runs_here_linked(false, &links, &chat, "owner", &chat.creator_actor_id, HostBinding::Unbound));
     }
 
@@ -15656,7 +15656,7 @@ mod dispatch_target_tests {
         let box_actor = Uuid::new_v4().to_string();
         let mut config = ChatSession::new("", Uuid::nil(), "");
         config.members = vec![owner];
-        let mut links = hive_core::DeviceLinks::default();
+        let mut links = ligus_core::DeviceLinks::default();
         assert!(links.link_retired(&config, &box_actor, "owner"));
         let mut chat = ChatSession::new("old phone chat", Uuid::nil(), "rt");
         chat.creator_actor_id = box_actor.clone();
@@ -15673,11 +15673,11 @@ mod dispatch_target_tests {
         let box_actor = Uuid::new_v4().to_string();
         let mut chat = ChatSession::new("c", Uuid::nil(), "rt");
         chat.members = vec![owner.clone()];
-        let mut links = hive_core::DeviceLinks::default();
+        let mut links = ligus_core::DeviceLinks::default();
         assert!(links.link_retired(&chat, &box_actor, "owner"));
-        let mut from_box = hive_core::ChatMessage::new(hive_core::MessageRole::User, "Phone", "hi");
+        let mut from_box = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Phone", "hi");
         from_box.actor_identity = Some(ActorIdentity::new(box_actor.clone(), "Phone", ActorKind::Human));
-        let mut from_owner = hive_core::ChatMessage::new(hive_core::MessageRole::User, "Alex", "hey");
+        let mut from_owner = ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Alex", "hey");
         from_owner.actor_identity = Some(owner.actor.clone());
         chat.messages = vec![from_box, from_owner];
         super::attribute_linked_devices(&mut chat, &links);
@@ -15700,7 +15700,7 @@ mod dispatch_target_tests {
 #[cfg(test)]
 mod runtime_fallback_tests {
     use super::{cli_permission_args, parse_provider_kind, provider_config_name, provider_name, provider_needs_key};
-    use hive_core::ModelProviderKind as P;
+    use ligus_core::ModelProviderKind as P;
 
     #[test]
     fn hosted_api_providers_need_a_key() {
@@ -15764,7 +15764,7 @@ mod runtime_fallback_tests {
             P::Antigravity,
             P::Copilot,
             P::Ollama,
-            P::HiveDaemon,
+            P::LigusDaemon,
         ] {
             assert!(!provider_needs_key(p), "{p:?} should not require a key");
         }
@@ -15839,7 +15839,7 @@ mod update_version_tests {
     fn updater_checks_the_ligus_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         // The identifier names the desktop data dir.
-        assert_eq!(conf["identifier"], hive_core::compat::DESKTOP_APP_ID);
+        assert_eq!(conf["identifier"], ligus_core::compat::DESKTOP_APP_ID);
         let updater = &conf["plugins"]["updater"];
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
@@ -15918,7 +15918,7 @@ mod update_version_tests {
     /// answering is given up on: the next URL is tried.
     #[tokio::test]
     async fn manifest_is_size_capped_and_timed_out() {
-        let client = hive_forge::new_http_client();
+        let client = ligus_forge::new_http_client();
         let huge: &'static str = Box::leak(format!(r#"{{"tag":"v9.0.0","notes":"{}"}}"#, "x".repeat(super::MAX_MANIFEST_BYTES)).into_boxed_str());
         let ok = r#"{"tag":"v0.1.0"}"#;
         let base = serve(vec![("/huge.json", 200, huge), ("/ok.json", 200, ok)]);
@@ -15948,7 +15948,7 @@ mod update_version_tests {
 
     #[tokio::test]
     async fn manifest_falls_back_to_the_old_url_and_prefers_the_new_one() {
-        let client = hive_forge::new_http_client();
+        let client = ligus_forge::new_http_client();
         let base = serve(vec![
             ("/old.json", 200, r#"{"tag":"v1.19.0","url":"old"}"#),
             ("/new.json", 200, r#"{"tag":"v0.1.0","url":"new"}"#),
@@ -15973,7 +15973,7 @@ mod update_version_tests {
     /// site serves it on docs.ligus.ai without a redirect anyway.)
     #[tokio::test]
     async fn manifest_fetch_follows_a_cross_host_redirect() {
-        let client = hive_forge::http_client_builder().timeout(super::MANIFEST_TIMEOUT).build().unwrap();
+        let client = ligus_forge::http_client_builder().timeout(super::MANIFEST_TIMEOUT).build().unwrap();
         let target = serve(vec![("/version.json", 200, r#"{"tag":"v0.1.0"}"#)]);
         let port = target.rsplit(':').next().unwrap().to_string();
         let location = format!("http://localhost:{port}/version.json");
@@ -16057,7 +16057,7 @@ mod bounded_id_set_tests {
 #[cfg(test)]
 mod export_tests {
     use super::{chat_markdown, export_filename};
-    use hive_core::{ChatMessage, ChatSession, MessageRole};
+    use ligus_core::{ChatMessage, ChatSession, MessageRole};
     use uuid::Uuid;
 
     #[test]
@@ -16081,7 +16081,7 @@ mod export_tests {
     #[test]
     fn filename_is_slugified() {
         assert_eq!(export_filename("Fix the Login Flow!"), "fix-the-login-flow.md");
-        assert_eq!(export_filename("   "), "hive-chat.md");
+        assert_eq!(export_filename("   "), "ligus-chat.md");
         assert_eq!(export_filename("a/b\\c"), "a-b-c.md");
     }
 
@@ -16089,16 +16089,16 @@ mod export_tests {
     fn markdown_has_title_count_and_messages_in_order() {
         let mut s = ChatSession::new("Launch plan", Uuid::nil(), "anthropic");
         s.messages.push(ChatMessage::new(MessageRole::User, "Mara", "Ship it?"));
-        s.messages.push(ChatMessage::new(MessageRole::Assistant, "Hive", "On it."));
+        s.messages.push(ChatMessage::new(MessageRole::Assistant, "Ligus", "On it."));
         s.messages.push(ChatMessage::new(MessageRole::User, "Mara", "   ")); // blank skipped
         let md = chat_markdown(&s);
         assert!(md.starts_with("# Launch plan\n"));
         assert!(md.contains("2 message(s)"));
         let mara = md.find("Ship it?").unwrap();
-        let hive = md.find("On it.").unwrap();
-        assert!(mara < hive, "messages preserve order");
+        let ligus = md.find("On it.").unwrap();
+        assert!(mara < ligus, "messages preserve order");
         assert!(md.contains("**Mara** · _User_"));
-        assert!(md.contains("**Hive** · _Assistant_"));
+        assert!(md.contains("**Ligus** · _Assistant_"));
     }
 
     #[test]
@@ -16111,8 +16111,8 @@ mod export_tests {
 #[cfg(test)]
 mod compaction_tests {
     use super::{summary_strategy, COMPACT_HIGH_WATERMARK, COMPACT_LOW_WATERMARK};
-    use hive_core::context_budget::plan_with_hysteresis;
-    use hive_core::{ChatMessage, MessageRole};
+    use ligus_core::context_budget::plan_with_hysteresis;
+    use ligus_core::{ChatMessage, MessageRole};
     use uuid::Uuid;
 
     fn ids(messages: &[ChatMessage]) -> Vec<Uuid> {
@@ -16228,10 +16228,10 @@ mod compaction_tests {
     #[test]
     fn saved_compaction_state_is_reused_after_restart_until_its_messages_change() {
         use super::SummaryCacheEntry;
-        use hive_core::context_budget::messages_fingerprint;
-        let dir = std::env::temp_dir().join(format!("hive-compaction-restart-{}", Uuid::new_v4()));
+        use ligus_core::context_budget::messages_fingerprint;
+        let dir = std::env::temp_dir().join(format!("ligus-compaction-restart-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let db = dir.join("hive.db");
+        let db = dir.join("ligus.db");
         let history: Vec<ChatMessage> =
             (0..6).map(|i| ChatMessage::new(MessageRole::User, "u", format!("message {i}"))).collect();
         let session = Uuid::new_v4();
@@ -16243,17 +16243,17 @@ mod compaction_tests {
         };
         assert!(entry.matches(&history));
         {
-            let store = hive_runtime::EventStore::open(&db).unwrap();
+            let store = ligus_runtime::EventStore::open(&db).unwrap();
             store.save_compaction(session, "gateway", &entry.to_stored()).unwrap();
         }
         // "Restart": a new store over the same file.
-        let store = hive_runtime::EventStore::open(&db).unwrap();
+        let store = ligus_runtime::EventStore::open(&db).unwrap();
         let loaded = SummaryCacheEntry::from_stored(store.compaction(session, "gateway").unwrap().unwrap());
         assert_eq!(loaded, entry);
         assert!(loaded.matches(&history), "same transcript: reuse, no re-summary");
         // New messages after the boundary don't invalidate it.
         let mut longer = history.clone();
-        longer.push(ChatMessage::new(MessageRole::Assistant, "Hive", "more"));
+        longer.push(ChatMessage::new(MessageRole::Assistant, "Ligus", "more"));
         assert!(loaded.matches(&longer));
         // An edited, removed or inserted covered message does.
         let mut edited = history.clone();
@@ -16273,7 +16273,7 @@ mod compaction_tests {
     #[test]
     fn long_overflow_is_summarized_in_batches_that_fit_the_window() {
         use super::{summary_batches, summary_input_budget};
-        use hive_core::context_budget::token_estimator::estimate_text;
+        use ligus_core::context_budget::token_estimator::estimate_text;
         let budget = summary_input_budget(32_768, 40);
         assert!(budget < 32_768 * 85 / 100 - 1024 && budget > 20_000, "{budget}");
         assert_eq!(summary_input_budget(1024, 40), 512, "never below the floor");
@@ -16302,17 +16302,17 @@ mod compaction_tests {
     #[test]
     fn history_at_the_high_watermark_still_fits_the_tool_guard() {
         use super::history_budget;
-        use hive_runtime::agent_tools::{builtin_policy, tools_fit_context, tools_prompt_reserve_tokens, CompositeTools};
-        use hive_runtime::provider::dispatch::NoTools;
+        use ligus_runtime::agent_tools::{builtin_policy, tools_fit_context, tools_prompt_reserve_tokens, CompositeTools};
+        use ligus_runtime::provider::dispatch::NoTools;
         use serde_json::{json, Value};
 
         let window: i64 = 32_768;
         let system = "s".repeat(1241 * 4);
         let system_tokens = 1241;
         // Real built-ins with writes and run_command, plus 7 MCP tools.
-        let root = std::env::temp_dir().join(format!("hive-guard-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ligus-guard-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        let builtin = hive_runtime::BuiltinTools::new(builtin_policy(&root, true, false, true)).unwrap();
+        let builtin = ligus_runtime::BuiltinTools::new(builtin_policy(&root, true, false, true)).unwrap();
         let mut defs: Vec<Value> = CompositeTools::<NoTools>::new(Some(builtin), None, 16).defs().to_vec();
         defs.extend((0..7).map(|i| {
             json!({ "name": format!("rdnamcp__tool{i}"), "description": "d".repeat(300),
@@ -16341,7 +16341,7 @@ mod compaction_tests {
         };
 
         let reserve = tools_prompt_reserve_tokens(true, true) as i64;
-        assert!(reserve as usize >= hive_runtime::agent_tools::estimate_request_tokens(&[], &defs) as usize);
+        assert!(reserve as usize >= ligus_runtime::agent_tools::estimate_request_tokens(&[], &defs) as usize);
         let budget = history_budget(window, system_tokens, reserve, 0, true);
         let history = fill(budget);
         assert!(tools_fit_context(&request(&history), &defs, window as u32), "budget {budget}");
@@ -16447,8 +16447,8 @@ mod retrieval_placement_tests {
         normalize_retrieval_settings, place_vault_context, LiveSettings, RetrievalSettings,
         VAULT_MAX_SOURCES,
     };
-    use hive_runtime::retrieval::{Passage, PASSAGES_HEADER};
-    use hive_runtime::ChatTurn;
+    use ligus_runtime::retrieval::{Passage, PASSAGES_HEADER};
+    use ligus_runtime::ChatTurn;
 
     fn entries(n: usize) -> Vec<(String, Option<String>)> {
         (0..n).map(|i| (format!("v{i}"), Some(format!("body {i}")))).collect()
@@ -16518,10 +16518,10 @@ mod retrieval_placement_tests {
 #[cfg(test)]
 mod finalize_proposal_tests {
     use super::finalize_reply;
-    use hive_core::crypto::SigningKeypair;
-    use hive_core::{ActorIdentity, ActorKind, ProposalKind, ProposalStatus, WorkspaceAgent};
-    use hive_runtime::chat_service::ChatService;
-    use hive_runtime::EventStore;
+    use ligus_core::crypto::SigningKeypair;
+    use ligus_core::{ActorIdentity, ActorKind, ProposalKind, ProposalStatus, WorkspaceAgent};
+    use ligus_runtime::chat_service::ChatService;
+    use ligus_runtime::EventStore;
     use uuid::Uuid;
 
     fn service() -> ChatService {
@@ -16571,8 +16571,8 @@ mod finalize_proposal_tests {
 
         // Edits captured as a diff proposal: the diff-less fileDiff directive
         // would duplicate it; other kinds still land.
-        let mid = svc.begin_assistant_message(chat.id, wid, "Hive", "gw", None, None).unwrap();
-        let cleaned = finalize_reply(&mut svc, chat.id, wid, mid, "Hive", None, "/tmp/ws", body, true).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, wid, "Ligus", "gw", None, None).unwrap();
+        let cleaned = finalize_reply(&mut svc, chat.id, wid, mid, "Ligus", None, "/tmp/ws", body, true).unwrap();
         assert_eq!(cleaned, "Fixed it.");
         let titles: Vec<String> =
             svc.load(chat.id).unwrap().unwrap().proposals.iter().map(|p| p.title.clone()).collect();
@@ -16581,8 +16581,8 @@ mod finalize_proposal_tests {
         // No edits in review (e.g. a plain chat turn): the directive is the
         // only record of the proposed change, so it is kept.
         let chat2 = svc.create_chat("B", wid, "gw").unwrap();
-        let mid = svc.begin_assistant_message(chat2.id, wid, "Hive", "gw", None, None).unwrap();
-        finalize_reply(&mut svc, chat2.id, wid, mid, "Hive", None, "/tmp/ws", body, false).unwrap();
+        let mid = svc.begin_assistant_message(chat2.id, wid, "Ligus", "gw", None, None).unwrap();
+        finalize_reply(&mut svc, chat2.id, wid, mid, "Ligus", None, "/tmp/ws", body, false).unwrap();
         let session = svc.load(chat2.id).unwrap().unwrap();
         assert_eq!(session.proposals.len(), 2);
         assert!(session.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff));
@@ -16629,12 +16629,12 @@ mod finalize_proposal_tests {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
         svc.ensure_workspace_config(wid).unwrap();
-        let existing = hive_core::workflow::preset_review_gate();
+        let existing = ligus_core::workflow::preset_review_gate();
         svc.save_workflow_definition(chat.id, wid, existing.clone()).unwrap();
 
         let body = "[[workflow: {\"name\": \"Review gate v2\", \"revises\": \"review gate\", \"stages\": [{\"id\": \"do\", \"prompt\": \"{{input}}\"}]}]]";
-        let mid = svc.begin_assistant_message(chat.id, wid, "Hive", "gw", None, None).unwrap();
-        finalize_reply(&mut svc, chat.id, wid, mid, "Hive", None, "/tmp/ws", body, false).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, wid, "Ligus", "gw", None, None).unwrap();
+        finalize_reply(&mut svc, chat.id, wid, mid, "Ligus", None, "/tmp/ws", body, false).unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
         let p = &s.proposals[0];
         assert!(p.title.starts_with("Revise workflow"), "{}", p.title);
@@ -16645,8 +16645,8 @@ mod finalize_proposal_tests {
         assert_eq!(defs[0].name, "Review gate v2");
 
         let bad = "[[workflow: {\"name\": \"X\", \"revises\": \"nope\", \"stages\": [{\"id\": \"a\", \"prompt\": \"x\"}]}]]";
-        let mid = svc.begin_assistant_message(chat.id, wid, "Hive", "gw", None, None).unwrap();
-        finalize_reply(&mut svc, chat.id, wid, mid, "Hive", None, "/tmp/ws", bad, false).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, wid, "Ligus", "gw", None, None).unwrap();
+        finalize_reply(&mut svc, chat.id, wid, mid, "Ligus", None, "/tmp/ws", bad, false).unwrap();
         let s = svc.load(chat.id).unwrap().unwrap();
         assert_eq!(s.proposals.len(), 1, "nothing filed");
         let note = s.messages.iter().rev().find(|m| m.body.contains("couldn't be filed")).expect("a note");
@@ -16675,7 +16675,7 @@ mod finalize_proposal_tests {
             .nodes
             .iter()
             .map(|n| match &n.kind {
-                hive_core::WorkflowNodeKind::Agent { agent_id, .. } => *agent_id,
+                ligus_core::WorkflowNodeKind::Agent { agent_id, .. } => *agent_id,
                 _ => None,
             })
             .collect();
@@ -16688,7 +16688,7 @@ mod finalize_proposal_tests {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "gw").unwrap();
         let session = svc.load(chat.id).unwrap().unwrap();
-        let tool = hive_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
+        let tool = ligus_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
             crate::workflows::definition_from_directive(json, &session).map(|d| d.name)
         }));
         // Unknown agent: the error goes back to the model in-turn.
@@ -16696,9 +16696,9 @@ mod finalize_proposal_tests {
         assert!(err && out.contains("Ghost"), "{out}");
         let (_, err) = tool.call(&serde_json::json!({"name": "T", "stages": [{"id": "a", "prompt": "{{input}}"}]}));
         assert!(!err);
-        let full = hive_runtime::workflow_tool::append_as_directives("Filed it.", &tool.accepted());
-        let mid = svc.begin_assistant_message(chat.id, wid, "Hive", "gw", None, None).unwrap();
-        let cleaned = finalize_reply(&mut svc, chat.id, wid, mid, "Hive", None, "/tmp/ws", &full, false).unwrap();
+        let full = ligus_runtime::workflow_tool::append_as_directives("Filed it.", &tool.accepted());
+        let mid = svc.begin_assistant_message(chat.id, wid, "Ligus", "gw", None, None).unwrap();
+        let cleaned = finalize_reply(&mut svc, chat.id, wid, mid, "Ligus", None, "/tmp/ws", &full, false).unwrap();
         assert_eq!(cleaned, "Filed it.");
         let s = svc.load(chat.id).unwrap().unwrap();
         assert_eq!(s.proposals.len(), 1);
@@ -16813,7 +16813,7 @@ mod editor_fs_tests {
     struct TmpDir(PathBuf);
     impl TmpDir {
         fn new() -> Self {
-            let p = std::env::temp_dir().join(format!("hive-editor-test-{}", Uuid::new_v4()));
+            let p = std::env::temp_dir().join(format!("ligus-editor-test-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&p).unwrap();
             // Canonicalize so comparisons match the command's canonicalized root
             // (macOS /var → /private/var).
@@ -16986,8 +16986,8 @@ mod lsp_frame_tests {
 #[cfg(test)]
 mod utility_runtime_tests {
     use super::{prepare_utility_runtime, utility_runtime_choice, with_utility_fallback};
-    use hive_core::ModelProviderKind;
-    use hive_runtime::provider::dispatch::ResolvedRuntime;
+    use ligus_core::ModelProviderKind;
+    use ligus_runtime::provider::dispatch::ResolvedRuntime;
     use std::time::Duration;
 
     fn rt(provider: ModelProviderKind) -> ResolvedRuntime {
@@ -17081,8 +17081,8 @@ mod agentic_turn_tests {
         apply_remote_file_tools_optins, isolates_on_write, isolates_turn, runtime_to_toml,
         store_remote_file_tools_optin, wants_builtin_tools, AgentToolSettings, LiveSettings,
     };
-    use hive_core::ModelProviderKind;
-    use hive_runtime::provider::dispatch::ResolvedRuntime;
+    use ligus_core::ModelProviderKind;
+    use ligus_runtime::provider::dispatch::ResolvedRuntime;
 
     fn rt(provider: ModelProviderKind, tools: bool) -> ResolvedRuntime {
         ResolvedRuntime {
@@ -17112,7 +17112,7 @@ mod agentic_turn_tests {
         assert!(!wants_builtin_tools(&rt(ModelProviderKind::Custom, true), false), "app setting off");
         assert!(!wants_builtin_tools(&rt(ModelProviderKind::Anthropic, true), true), "Anthropic has its own loop");
         assert!(!wants_builtin_tools(&rt(ModelProviderKind::ClaudeCode, true), true), "CLI agents bring their own tools");
-        assert!(wants_builtin_tools(&rt(ModelProviderKind::HiveDaemon, true), true));
+        assert!(wants_builtin_tools(&rt(ModelProviderKind::LigusDaemon, true), true));
         // Hosted APIs: the old-default "Supports tools" switch is not consent
         // to send workspace files to a third-party cloud.
         for p in [ModelProviderKind::OpenAI, ModelProviderKind::OpenRouter, ModelProviderKind::Azure] {
@@ -17144,7 +17144,7 @@ mod agentic_turn_tests {
         let mut o = rt(ModelProviderKind::Ollama, true);
         o.endpoint = String::new();
         assert!(wants_builtin_tools(&o, true));
-        let mut d = rt(ModelProviderKind::HiveDaemon, true);
+        let mut d = rt(ModelProviderKind::LigusDaemon, true);
         d.endpoint = "https://daemon.example.com".into();
         assert!(!wants_builtin_tools(&d, true));
     }
@@ -17156,7 +17156,7 @@ mod agentic_turn_tests {
     fn remote_file_tools_optin_is_device_local_and_bound_to_the_endpoint() {
         let target = |id: &str, endpoint: &str| {
             let toml = format!("[[runtimes]]\nid = \"{id}\"\nprovider = \"custom\"\nendpoint = \"{endpoint}\"\nsupports_tools = true\n");
-            hive_core::config::load_from_str(&toml).unwrap().runtimes.remove(0)
+            ligus_core::config::load_from_str(&toml).unwrap().runtimes.remove(0)
         };
         let mut s = LiveSettings::default();
         assert!(store_remote_file_tools_optin(&mut s, "hosted", "https://llm.example.com/v1/chat/completions", true));
@@ -17178,7 +17178,7 @@ mod agentic_turn_tests {
         let allowed: Vec<bool> = runtimes.iter().map(|r| r.allow_remote_file_tools).collect();
         assert_eq!(allowed, vec![true, false, false, false]);
 
-        // Never written to the shared hive.config.toml entry.
+        // Never written to the shared ligus.config.toml entry.
         let entry = toml::to_string(&runtime_to_toml(&runtimes[0])).unwrap();
         assert!(!entry.contains("allow_remote_file_tools"), "{entry}");
 
@@ -17223,7 +17223,7 @@ mod mcp_bearer_tests {
         save_managed_mcp, save_settings, store_mcp_bearer_token, LiveSettings, McpOAuthEntry,
         PortableConfig, PortableDefaults,
     };
-    use hive_runtime::{McpRegistry, McpServerSpec, McpTransport};
+    use ligus_runtime::{McpRegistry, McpServerSpec, McpTransport};
 
     const SECRET: &str = "static-s3cret-token-xyz";
 
@@ -17255,7 +17255,7 @@ mod mcp_bearer_tests {
 
     fn tmp(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir()
-            .join(format!("hive-mcp-bearer-{tag}-{}", uuid::Uuid::new_v4()));
+            .join(format!("ligus-mcp-bearer-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -17329,12 +17329,12 @@ mod mcp_bearer_tests {
         apply_mcp_auth(&mut servers, &s);
         assert_eq!(servers[0].auth.as_deref(), Some(SECRET));
 
-        // hive.config.toml entry.
+        // ligus.config.toml entry.
         let entry = toml::to_string(&mcp_spec_to_toml(&servers[0])).unwrap();
         assert!(!entry.contains(SECRET), "{entry}");
         assert!(entry.contains("rdna"));
 
-        // Workspace catalog (.hive/mcp-servers.json).
+        // Workspace catalog (.ligus/mcp-servers.json).
         let root = tmp("catalog");
         save_managed_mcp(root.to_str().unwrap(), &servers).unwrap();
         let catalog =
@@ -17368,7 +17368,7 @@ mod mcp_bearer_tests {
     }
 
     /// A workspace config that reuses a server id with another URL (a cloned
-    /// repo, or a teammate editing the shared hive.config.toml) must not get
+    /// repo, or a teammate editing the shared ligus.config.toml) must not get
     /// this device's token or OAuth connection for that id.
     #[test]
     fn secrets_stay_with_the_url_they_were_saved_for() {
@@ -17464,7 +17464,7 @@ mod mcp_bearer_tests {
     #[tokio::test]
     async fn live_static_bearer_through_registry() {
         let (Ok(url), Ok(token_file)) =
-            (hive_core::compat::var("LIGUS_MCP_LIVE_URL"), hive_core::compat::var("LIGUS_MCP_LIVE_TOKEN_FILE"))
+            (ligus_core::compat::var("LIGUS_MCP_LIVE_URL"), ligus_core::compat::var("LIGUS_MCP_LIVE_TOKEN_FILE"))
         else {
             eprintln!("skipping: set LIGUS_MCP_LIVE_URL + LIGUS_MCP_LIVE_TOKEN_FILE");
             return;
@@ -17502,8 +17502,8 @@ mod mcp_bearer_tests {
         eprintln!("tools: {names:?}");
         assert!(!tools.is_empty());
 
-        let tool = hive_core::compat::var("LIGUS_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
-        let args: serde_json::Value = hive_core::compat::var("LIGUS_MCP_LIVE_ARGS")
+        let tool = ligus_core::compat::var("LIGUS_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
+        let args: serde_json::Value = ligus_core::compat::var("LIGUS_MCP_LIVE_ARGS")
             .ok()
             .and_then(|a| serde_json::from_str(&a).ok())
             .unwrap_or_else(|| serde_json::json!({ "query": "RDNA wave32 vs wave64" }));
@@ -17517,7 +17517,7 @@ mod mcp_bearer_tests {
 #[cfg(test)]
 mod synced_dispatch_tests {
     use super::{synced_user_triggers, user_turn_answered};
-    use hive_core::{session::ChatSession, ChatMessage, MessageRole};
+    use ligus_core::{session::ChatSession, ChatMessage, MessageRole};
     use uuid::Uuid;
 
     fn user(body: &str) -> ChatMessage {
@@ -17530,7 +17530,7 @@ mod synced_dispatch_tests {
         m
     }
 
-    /// The field bug: "@hive …" and "@coder …" posted ~20 ms apart through
+    /// The field bug: "@ligus …" and "@coder …" posted ~20 ms apart through
     /// `ligus serve` arrive in one pull, the box's @coder claims and answers
     /// the second. The first must still be dispatched here.
     #[test]
@@ -17538,35 +17538,35 @@ mod synced_dispatch_tests {
         let (me, the_box) = (Uuid::new_v4(), Uuid::new_v4());
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
         let earlier = user("hi");
-        let earlier_reply = reply("Hive", earlier.id);
-        let hive = user("@hive what's the status?");
+        let earlier_reply = reply("Ligus", earlier.id);
+        let ligus = user("@ligus what's the status?");
         let coder = user("@coder run the tests");
-        let (hive_id, coder_id) = (hive.id, coder.id);
-        s.messages = vec![earlier, earlier_reply, hive, coder];
+        let (ligus_id, coder_id) = (ligus.id, coder.id);
+        s.messages = vec![earlier, earlier_reply, ligus, coder];
 
         // Both arrived, neither answered nor claimed yet: both, in order.
-        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id]), vec![hive_id, coder_id]);
+        assert_eq!(synced_user_triggers(&s, &[ligus_id, coder_id]), vec![ligus_id, coder_id]);
 
         // The box claimed @coder's turn and its reply synced in the same pull:
-        // only @hive is left for this device.
+        // only @ligus is left for this device.
         s.turn_claims.insert(coder_id, the_box);
         s.messages.push(reply("coder", coder_id));
-        assert!(!user_turn_answered(&s, hive_id), "a reply to the later post doesn't answer the earlier one");
+        assert!(!user_turn_answered(&s, ligus_id), "a reply to the later post doesn't answer the earlier one");
         assert!(user_turn_answered(&s, coder_id));
-        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id]), vec![hive_id]);
+        assert_eq!(synced_user_triggers(&s, &[ligus_id, coder_id]), vec![ligus_id]);
 
         // Answered once: never again.
-        s.turn_claims.insert(hive_id, me);
-        s.messages.push(reply("Hive", hive_id));
-        assert!(synced_user_triggers(&s, &[hive_id, coder_id]).is_empty());
+        s.turn_claims.insert(ligus_id, me);
+        s.messages.push(reply("Ligus", ligus_id));
+        assert!(synced_user_triggers(&s, &[ligus_id, coder_id]).is_empty());
     }
 
     #[test]
     fn only_the_pull_and_only_user_turns_are_considered() {
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
         let old = user("an old unanswered message");
-        let new = user("@hive new");
-        let agent = ChatMessage::new(MessageRole::Assistant, "coder", "@hive over to you");
+        let new = user("@ligus new");
+        let agent = ChatMessage::new(MessageRole::Assistant, "coder", "@ligus over to you");
         let (old_id, new_id, agent_id) = (old.id, new.id, agent.id);
         s.messages = vec![old, new, agent];
         // History outside the pull is left alone; agent replies are the
@@ -17579,7 +17579,7 @@ mod synced_dispatch_tests {
     fn claimed_elsewhere_is_watched_not_dropped() {
         let me = Uuid::new_v4();
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
-        let a = user("@hive a");
+        let a = user("@ligus a");
         let a_id = a.id;
         s.messages = vec![a];
         // Another device's claim: the dispatcher watches it (a silent holder
@@ -17589,7 +17589,7 @@ mod synced_dispatch_tests {
         s.turn_claims.insert(a_id, me);
         assert_eq!(synced_user_triggers(&s, &[a_id]), vec![a_id]);
         // A duplicate answer the dispatcher fenced doesn't answer it.
-        let mut dup = reply("Hive", a_id);
+        let mut dup = reply("Ligus", a_id);
         dup.superseded = true;
         s.messages.push(dup);
         assert_eq!(synced_user_triggers(&s, &[a_id]), vec![a_id]);
@@ -17598,10 +17598,10 @@ mod synced_dispatch_tests {
     #[test]
     fn a_legacy_reply_stamped_on_a_trailing_system_row_counts() {
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
-        let a = user("@hive a");
-        let sys = ChatMessage::new(MessageRole::System, "Hive", "joined");
+        let a = user("@ligus a");
+        let sys = ChatMessage::new(MessageRole::System, "Ligus", "joined");
         let a_id = a.id;
-        let r = reply("Hive", sys.id);
+        let r = reply("Ligus", sys.id);
         s.messages = vec![a, sys, r];
         assert!(user_turn_answered(&s, a_id));
         // A deleted trigger has nothing left to answer.
@@ -17631,7 +17631,7 @@ mod settings_secret_tests {
         };
         s.provider_keys.insert("anthropic".into(), secret("anthropic"));
         s.mcp_bearer_tokens.insert("rdna".into(), secret("bearer"));
-        s.contact = Some(people::OwnContact { cid: hive_runtime::contacts::new_cid(), write_key: secret("contact"), ..Default::default() });
+        s.contact = Some(people::OwnContact { cid: ligus_runtime::contacts::new_cid(), write_key: secret("contact"), ..Default::default() });
         s.mcp_oauth.insert(
             "linear".into(),
             McpOAuthEntry {
@@ -17652,7 +17652,7 @@ mod settings_secret_tests {
             founder_actor_id: None,
             fk: None,
             inv: None,
-            ek: vec![hive_runtime::keyring::DeliveredKey::new(1, &[0x5a; 32])],
+            ek: vec![ligus_runtime::keyring::DeliveredKey::new(1, &[0x5a; 32])],
             sig: None,
         });
         save_settings(&dir, &s);
@@ -17698,14 +17698,14 @@ mod settings_secret_tests {
 
     /// S7 `no_forge_token_leaves_device`: forge tokens put in the secret
     /// store (read and write, many random values) appear nowhere else in the
-    /// data dir (settings.json, hive.db), nor in an invite, a contact record
+    /// data dir (settings.json, ligus.db), nor in an invite, a contact record
     /// or a drop blob this device makes.
     #[test]
     fn no_forge_token_leaves_device() {
-        use hive_runtime::forge_secrets::{put_token, TokenPurpose};
+        use ligus_runtime::forge_secrets::{put_token, TokenPurpose};
         let dir = std::env::temp_dir().join(format!("ligus-forge-locality-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let store = hive_runtime::secret_store::File0600::new(&dir);
+        let store = ligus_runtime::secret_store::File0600::new(&dir);
         let mut tokens = Vec::new();
         for i in 0..64 {
             let t = format!("{}{}", ["ghp_", "glpat-", "gto_", ""][i % 4], Uuid::new_v4().simple());
@@ -17731,16 +17731,16 @@ mod settings_secret_tests {
         };
         s.workspaces.push(conn.clone());
         save_settings(&dir, &s);
-        let db = hive_runtime::EventStore::open(dir.join("hive.db")).unwrap();
+        let db = ligus_runtime::EventStore::open(dir.join("ligus.db")).unwrap();
         drop(db);
         let invite = encode_workspace_invite(&conn);
-        let ka = hive_core::e2ee::KeyAgreementKeypair::generate().unwrap();
-        let drop_blob = hive_runtime::contacts::seal_drop(
+        let ka = ligus_core::e2ee::KeyAgreementKeypair::generate().unwrap();
+        let drop_blob = ligus_runtime::contacts::seal_drop(
             invite.as_bytes(),
-            &[hive_runtime::directory_trust::Recipient { device_id: "d".into(), ka_public: ka.public_key_bytes() }],
+            &[ligus_runtime::directory_trust::Recipient { device_id: "d".into(), ka_public: ka.public_key_bytes() }],
         )
         .unwrap();
-        let record = hive_runtime::contacts::build_record(&hive_runtime::contacts::new_cid(), Uuid::new_v4(), &[7u8; 32], Vec::new(), hive_core::Timestamp::now());
+        let record = ligus_runtime::contacts::build_record(&ligus_runtime::contacts::new_cid(), Uuid::new_v4(), &[7u8; 32], Vec::new(), ligus_core::Timestamp::now());
         let mut outside = vec![invite, drop_blob.to_string(), serde_json::to_string(&record).unwrap()];
         fn files(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for e in std::fs::read_dir(d).unwrap().flatten() {
@@ -17775,7 +17775,7 @@ mod settings_secret_tests {
 #[cfg(test)]
 mod fresh_start_tests {
     //! Ligus 0.1 starts fresh: the desktop init path never reads or changes a
-    //! Hive 1.x app-data dir next to its own, and starts with empty data.
+    //! Ligus 1.x app-data dir next to its own, and starts with empty data.
     use super::*;
 
     fn fingerprint(dir: &Path) -> Vec<(PathBuf, String)> {
@@ -17816,13 +17816,13 @@ mod fresh_start_tests {
         }
     }
 
-    /// A temp app-data base holding a fake Hive 1.x `com.hive.desktop`.
-    fn hive1_base() -> (Tmp, PathBuf) {
+    /// A temp app-data base holding a fake Ligus 1.x `com.ligus.desktop`.
+    fn ligus1_base() -> (Tmp, PathBuf) {
         let tmp = Tmp(std::env::temp_dir().join(format!("ligus-fresh-{}", Uuid::new_v4())));
         std::fs::create_dir_all(tmp.path()).unwrap();
-        let legacy = tmp.path().join("com.hive.desktop");
+        let legacy = tmp.path().join("com.ligus.desktop");
         std::fs::create_dir_all(legacy.join("keys")).unwrap();
-        std::fs::write(legacy.join("hive.db"), b"1.x sqlite bytes").unwrap();
+        std::fs::write(legacy.join("ligus.db"), b"1.x sqlite bytes").unwrap();
         std::fs::write(legacy.join("identity.json"), br#"{"deviceId":"d1"}"#).unwrap();
         std::fs::write(legacy.join("keys/device.key"), b"secret").unwrap();
         std::fs::write(legacy.join("appearance.json"), br#"{"palette":"harbor"}"#).unwrap();
@@ -17830,16 +17830,16 @@ mod fresh_start_tests {
     }
 
     #[test]
-    fn desktop_init_leaves_hive1_untouched_and_starts_empty() {
-        let (tmp, legacy) = hive1_base();
+    fn desktop_init_leaves_ligus1_untouched_and_starts_empty() {
+        let (tmp, legacy) = ligus1_base();
         let before = fingerprint(&legacy);
-        let data_dir = tmp.path().join(hive_core::compat::DESKTOP_APP_ID);
+        let data_dir = tmp.path().join(ligus_core::compat::DESKTOP_APP_ID);
 
         prepare_data_dir(&data_dir).unwrap();
-        hive_runtime::secret_store::set_for_data_dir(&data_dir, std::sync::Arc::new(hive_runtime::secret_store::File0600::new(&data_dir)));
+        ligus_runtime::secret_store::set_for_data_dir(&data_dir, std::sync::Arc::new(ligus_runtime::secret_store::File0600::new(&data_dir)));
         let identity = IdentityStore::new(&data_dir, StoreKeyVault::for_data_dir(&data_dir));
         let stored = identity.bootstrap("You", "you", "This device").unwrap();
-        let store = EventStore::open(data_dir.join("hive.db")).unwrap();
+        let store = EventStore::open(data_dir.join("ligus.db")).unwrap();
 
         assert!(store.list_session_ids().unwrap().is_empty(), "no 1.x chats");
         assert_ne!(stored.device.id.to_string(), "d1", "a new device identity, not the 1.x one");
@@ -17851,8 +17851,8 @@ mod fresh_start_tests {
     }
 
     #[test]
-    fn desktop_init_refuses_a_hive1_dir_and_writes_nothing() {
-        let (tmp, legacy) = hive1_base();
+    fn desktop_init_refuses_a_ligus1_dir_and_writes_nothing() {
+        let (tmp, legacy) = ligus1_base();
         let before = fingerprint(tmp.path());
         assert!(prepare_data_dir(&legacy).is_err(), "the 1.x dir itself");
         #[cfg(unix)]
@@ -17866,7 +17866,7 @@ mod fresh_start_tests {
         assert_eq!(fingerprint(tmp.path()), before);
         std::fs::write(legacy.join(RESET_SENTINEL), b"1").unwrap();
         assert!(prepare_data_dir(&legacy).is_err());
-        assert!(legacy.join("hive.db").is_file() && legacy.join("keys/device.key").is_file());
+        assert!(legacy.join("ligus.db").is_file() && legacy.join("keys/device.key").is_file());
     }
 }
 
@@ -17876,7 +17876,7 @@ mod first_run_tests {
 
     /// Onboarding completion and the tour-seen flag live in this data dir's
     /// settings.json, so a fresh data dir is always a first run (0.1 never
-    /// reads the webview's old `hive.onboarded`/`hive.tourSeen`).
+    /// reads the webview's old `ligus.onboarded`/`ligus.tourSeen`).
     #[test]
     fn first_run_flags_default_off_and_skip_when_false() {
         let d = LiveSettings::default();
@@ -17893,9 +17893,9 @@ mod first_run_tests {
     fn first_run_flags_round_trip_and_factory_reset_clears_them() {
         let dir = std::env::temp_dir().join(format!("ligus-first-run-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        hive_runtime::secret_store::set_for_data_dir(
+        ligus_runtime::secret_store::set_for_data_dir(
             &dir,
-            std::sync::Arc::new(hive_runtime::secret_store::File0600::new(&dir)),
+            std::sync::Arc::new(ligus_runtime::secret_store::File0600::new(&dir)),
         );
         let s = LiveSettings { onboarded: true, tour_seen: true, ..LiveSettings::default() };
         save_settings(&dir, &s);
@@ -17914,12 +17914,12 @@ mod first_run_tests {
 #[cfg(test)]
 mod log_file_tests {
     /// The desktop writes `ligus.log.<date>`; Settings → Diagnostics still
-    /// finds a pre-rename `hive.log.<date>` in the same folder.
+    /// finds a pre-rename `ligus.log.<date>` in the same folder.
     #[test]
     fn log_files_are_named_ligus() {
         assert_eq!(super::LOG_FILE_PREFIX, "ligus.log");
         assert!(super::is_log_file("ligus.log.2026-11-15"));
-        assert!(super::is_log_file("hive.log.2026-11-14"));
+        assert!(super::is_log_file("ligus.log.2026-11-14"));
         assert!(!super::is_log_file("other.txt"));
     }
 }
@@ -17957,8 +17957,8 @@ mod init_recovery_tests {
         let got: Option<()> = init_with_recovery(|| Err("disk full".into()), |_| InitChoice::Quit);
         assert_eq!(got, None);
         assert!(matches!(InitFailure::of("disk full"), InitFailure::Other(_)));
-        let dd = InitFailure::of(&format!("{DATA_DIR_REFUSED}this is a Hive 1.x folder"));
-        assert_eq!(dd, InitFailure::DataDir("this is a Hive 1.x folder".into()));
+        let dd = InitFailure::of(&format!("{DATA_DIR_REFUSED}this is a Ligus 1.x folder"));
+        assert_eq!(dd, InitFailure::DataDir("this is a Ligus 1.x folder".into()));
         assert!(!dd.explain().2, "a refused data folder isn't retried");
     }
 }
@@ -17967,24 +17967,24 @@ mod init_recovery_tests {
 mod responder_place_tests {
     use super::*;
 
-    /// A primary `@hive` turn this device answered is labelled by place
+    /// A primary `@ligus` turn this device answered is labelled by place
     /// ("this"), never by the viewer's own display name (a fresh desktop is
     /// called "You", which the UI showed as a "YOU" badge on the agent).
     #[test]
     fn primary_turn_answered_here_is_labelled_by_place() {
         let (device, account) = (Uuid::new_v4(), Uuid::new_v4());
         let viewer = Viewer { device: Some(device), account: Some(account) };
-        let mut me = hive_core::ActorIdentity::new("me", "You", hive_core::ActorKind::Human);
+        let mut me = ligus_core::ActorIdentity::new("me", "You", ligus_core::ActorKind::Human);
         me.account_id = Some(account);
         me.device_id = Some(device);
-        let mut m = ChatMessage::new(MessageRole::Assistant, "Hive", "hi");
+        let mut m = ChatMessage::new(MessageRole::Assistant, "Ligus", "hi");
         m.actor_identity = Some(me.clone());
         let dto = message_dto(&m, &[], viewer);
         assert_eq!(dto.responder_device.as_deref(), Some("this"));
         me.device_id = Some(Uuid::new_v4());
         m.actor_identity = Some(me.clone());
         assert_eq!(message_dto(&m, &[], viewer).responder_device.as_deref(), Some("mine"));
-        let mut other = hive_core::ActorIdentity::new("bob", "Bob", hive_core::ActorKind::Human);
+        let mut other = ligus_core::ActorIdentity::new("bob", "Bob", ligus_core::ActorKind::Human);
         other.account_id = Some(Uuid::new_v4());
         m.actor_identity = Some(other);
         let dto = message_dto(&m, &[], viewer);
@@ -17994,26 +17994,26 @@ mod responder_place_tests {
 
     /// The owner's identity as production stamps it: `HumanAccount::actor()`,
     /// which never carries a device id.
-    fn owner_account() -> hive_core::crypto::HumanAccount {
-        hive_core::crypto::HumanAccount {
+    fn owner_account() -> ligus_core::crypto::HumanAccount {
+        ligus_core::crypto::HumanAccount {
             id: Uuid::new_v4(),
             display_name: "You".into(),
             handle: "you".into(),
             signing_public_key: Vec::new(),
             avatar_url: None,
-            created_at: hive_core::Timestamp::now(),
+            created_at: ligus_core::Timestamp::now(),
         }
     }
 
-    fn device(author: hive_core::ActorIdentity) -> ChatService {
-        use hive_core::crypto::SigningKeypair;
-        let store = hive_runtime::EventStore::open_in_memory().unwrap();
+    fn device(author: ligus_core::ActorIdentity) -> ChatService {
+        use ligus_core::crypto::SigningKeypair;
+        let store = ligus_runtime::EventStore::open_in_memory().unwrap();
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }
 
-    /// The owner's device answers an `@hive` turn in a new chat, in a
+    /// The owner's device answers an `@ligus` turn in a new chat, in a
     /// workspace where the owner also has a `ligus serve` box enrolled as
     /// their device (delegated). The reply reads "This device" on the
     /// desktop and "Your other device" from the box. It read "Your other
@@ -18023,12 +18023,12 @@ mod responder_place_tests {
     fn owner_desktop_turn_is_this_device_there_and_other_device_on_the_box() {
         let account = owner_account();
         let mut desktop = device(account.actor());
-        let mut serve_box = device(hive_core::ActorIdentity::new("box", "Box", hive_core::ActorKind::Human));
+        let mut serve_box = device(ligus_core::ActorIdentity::new("box", "Box", ligus_core::ActorKind::Human));
         serve_box.act_as_owner_device(account.actor());
         let ws = Uuid::new_v4();
         let chat = desktop.create_chat("new chat", ws, "claude-code").unwrap();
-        let ask = desktop.post_user_message(chat.id, ws, "@hive hi").unwrap();
-        let reply = desktop.begin_assistant_message(chat.id, ws, "Hive", "claude-code", None, Some(ask.id)).unwrap();
+        let ask = desktop.post_user_message(chat.id, ws, "@ligus hi").unwrap();
+        let reply = desktop.begin_assistant_message(chat.id, ws, "Ligus", "claude-code", None, Some(ask.id)).unwrap();
         desktop.complete_assistant_message(chat.id, ws, reply, "hello").unwrap();
         let session = desktop.load(chat.id).unwrap().unwrap();
         let m = session.messages.iter().find(|m| m.id == reply).unwrap();
@@ -18042,7 +18042,7 @@ mod responder_place_tests {
         // and "this" there.
         let mut laptop = device(account.actor());
         let chat2 = laptop.create_chat("elsewhere", ws, "claude-code").unwrap();
-        let r2 = laptop.begin_assistant_message(chat2.id, ws, "Hive", "claude-code", None, None).unwrap();
+        let r2 = laptop.begin_assistant_message(chat2.id, ws, "Ligus", "claude-code", None, None).unwrap();
         laptop.complete_assistant_message(chat2.id, ws, r2, "hi").unwrap();
         let s2 = laptop.load(chat2.id).unwrap().unwrap();
         let m2 = s2.messages.iter().find(|m| m.id == r2).unwrap();
@@ -18052,7 +18052,7 @@ mod responder_place_tests {
         // Someone else's reply that names this device as its origin is still
         // theirs, never "This device".
         let mut forged = m.clone();
-        let mut bob = hive_core::ActorIdentity::new("bob", "Bob", hive_core::ActorKind::Human);
+        let mut bob = ligus_core::ActorIdentity::new("bob", "Bob", ligus_core::ActorKind::Human);
         bob.account_id = Some(Uuid::new_v4());
         forged.actor_identity = Some(bob);
         let dto = message_dto(&forged, &[], Viewer::of(&desktop));

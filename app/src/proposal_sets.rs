@@ -1,8 +1,8 @@
 //! Proposal sets in the desktop app: filing an agent's `[[alternatives:]]`,
 //! recording scouts' `[[assess:]]` blind, settling quorum with stop signals,
 //! sending scouts, the quorum dial, and the two-phase commit (pre-flight, then
-//! apply). The process and its rules live in `hive_core::proposal_sets`; the
-//! signed writes in `hive_runtime::chat_service`.
+//! apply). The process and its rules live in `ligus_core::proposal_sets`; the
+//! signed writes in `ligus_runtime::chat_service`.
 //!
 //! Agents reach a set only through their reply directives: they can open one
 //! and score alternatives. Votes, the dial, pre-flight, apply and close are
@@ -11,13 +11,13 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use hive_core::proposal_sets::{
+use ligus_core::proposal_sets::{
     is_self_assessment, CheckOutcome, CheckStatus, PreflightReport, ProposalSet, QuorumDial, QuorumKnobs,
     ScoutAssessment, SetPhase, StopReason,
 };
-use hive_core::{ActionProposal, ChatSession, ProposalKind, ProposalStatus, Timestamp};
-use hive_proto::{PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto};
-use hive_runtime::chat_service::{ChatService, QuorumOutcome};
+use ligus_core::{ActionProposal, ChatSession, ProposalKind, ProposalStatus, Timestamp};
+use ligus_proto::{PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto};
+use ligus_runtime::chat_service::{ChatService, QuorumOutcome};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -249,10 +249,10 @@ pub(crate) fn group_same_trigger(svc: &mut ChatService, sid: Uuid, wid: Uuid, ne
     if new.set_id.is_some() || new.workflow.is_some() || new.parent_id.is_some() {
         return;
     }
-    let Some(trigger) = session.messages.iter().rev().find(|m| m.role == hive_core::MessageRole::User) else {
+    let Some(trigger) = session.messages.iter().rev().find(|m| m.role == ligus_core::MessageRole::User) else {
         return;
     };
-    if !hive_core::proposal_sets::wants_options(&trigger.body) {
+    if !ligus_core::proposal_sets::wants_options(&trigger.body) {
         return;
     }
     let producer = |p: &ActionProposal| {
@@ -357,7 +357,7 @@ pub(crate) fn plan_scouts(set: &ProposalSet, proposals: &[ActionProposal], scout
 }
 
 fn scouts_for(session: &ChatSession) -> Vec<Scout> {
-    let mut agents: Vec<&hive_core::WorkspaceAgent> = session
+    let mut agents: Vec<&ligus_core::WorkspaceAgent> = session
         .workspace_agents
         .iter()
         .filter(|a| session.participant_agent_ids.is_empty() || session.participant_agent_ids.contains(&a.id))
@@ -367,7 +367,7 @@ fn scouts_for(session: &ChatSession) -> Vec<Scout> {
         .into_iter()
         .map(|a| Scout { agent_id: Some(a.id), name: a.name.clone(), runtime: a.runtime_id.clone() })
         .collect();
-    out.push(Scout { agent_id: None, name: "Hive".into(), runtime: session.runtime_id.clone() });
+    out.push(Scout { agent_id: None, name: "Ligus".into(), runtime: session.runtime_id.clone() });
     out
 }
 
@@ -623,7 +623,7 @@ pub(crate) fn close_proposal_set_sync(
 /// the pre-flight and the apply so a guard block is never recorded as a failed
 /// pre-flight (which would send the whole set back to scouting).
 pub(crate) fn guard_block(session: &ChatSession, proposal: &ActionProposal) -> Option<String> {
-    hive_core::guard::human_gate_reason(session, proposal).map(|r| format!("Not yet: {r}."))
+    ligus_core::guard::human_gate_reason(session, proposal).map(|r| format!("Not yet: {r}."))
 }
 
 /// Phase one: run and record the pre-flight for an approved alternative. A
@@ -673,7 +673,7 @@ pub(crate) async fn preflight_proposal_set(
         }
         None => state.workspace_repo_root(),
     };
-    let repo_ok = !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo));
+    let repo_ok = !repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo));
     let mut hosts = Vec::new();
     if proposal.diff.is_some() {
         hosts.push(("this device".to_string(), true));
@@ -687,16 +687,16 @@ pub(crate) async fn preflight_proposal_set(
     let base = set.base_commit.clone();
     let report: PreflightReport = tauri::async_runtime::spawn_blocking(move || {
         let root = repo_ok.then(|| std::path::PathBuf::from(&repo));
-        let inputs = hive_runtime::proposal_preflight::PreflightInputs {
+        let inputs = ligus_runtime::proposal_preflight::PreflightInputs {
             repo_root: root.as_deref(),
             chat_id: &chat_id,
             diff: diff.as_deref(),
             base_commit: base.as_deref(),
-            test_command: hive_runtime::proposal_preflight::test_command(),
+            test_command: ligus_runtime::proposal_preflight::test_command(),
             test_timeout: None,
             hosts,
         };
-        hive_runtime::proposal_preflight::run(&inputs, &format!("preflight-{}", Uuid::new_v4()))
+        ligus_runtime::proposal_preflight::run(&inputs, &format!("preflight-{}", Uuid::new_v4()))
     })
     .await
     .map_err(map_err)?;
@@ -748,8 +748,8 @@ pub(crate) async fn apply_proposal_set(
         }
         // Authorize the decision before touching the code.
         let actor = crate::local_actor(&state);
-        let probe = hive_core::SessionEvent::ProposalSetDecided { set_id, winner: Some(pid), at: Timestamp::now() };
-        let d = hive_core::authorize(&probe, &actor.id, session.role_of(&actor.id), &session);
+        let probe = ligus_core::SessionEvent::ProposalSetDecided { set_id, winner: Some(pid), at: Timestamp::now() };
+        let d = ligus_core::authorize(&probe, &actor.id, session.role_of(&actor.id), &session);
         if !d.allowed {
             return Err(d.summary);
         }
@@ -813,8 +813,8 @@ pub(crate) async fn revert_proposal(
     let title = p.title.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let repo_path = std::path::Path::new(&repo);
-        let chat = (!repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(repo_path))
-            .then(|| hive_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok())
+        let chat = (!repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(repo_path))
+            .then(|| ligus_runtime::git_worktree::chat_worktree(repo_path, &sid.to_string()).ok())
             .flatten();
         match chat {
             Some(wt) => {
@@ -839,7 +839,7 @@ pub(crate) async fn revert_proposal(
 fn reverse_patch(dir: &str, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::git()
+    let mut child = ligus_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(["apply", "-R", "--whitespace=nowarn"])
@@ -860,18 +860,18 @@ fn reverse_patch(dir: &str, diff: &str) -> Result<(), String> {
 /// The chat's current base commit on this device, recorded when a set opens.
 pub(crate) fn base_commit_for(workspace_root: &str, sid: Uuid) -> Option<String> {
     let root = std::path::Path::new(workspace_root);
-    if workspace_root.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(root) {
+    if workspace_root.trim().is_empty() || !ligus_runtime::git_worktree::is_git_repo(root) {
         return None;
     }
-    hive_runtime::proposal_preflight::current_base(root, &sid.to_string())
+    ligus_runtime::proposal_preflight::current_base(root, &sid.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_core::crypto::SigningKeypair;
-    use hive_core::{ActorIdentity, ActorKind, WorkspaceAgent};
-    use hive_runtime::EventStore;
+    use ligus_core::crypto::SigningKeypair;
+    use ligus_core::{ActorIdentity, ActorKind, WorkspaceAgent};
+    use ligus_runtime::EventStore;
 
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
@@ -1005,7 +1005,7 @@ mod tests {
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
-        let mut alt = ActionProposal::file_diff("A", "", "diff".into(), vec!["crates/hive-core/src/crypto.rs".into()]);
+        let mut alt = ActionProposal::file_diff("A", "", "diff".into(), vec!["crates/ligus-core/src/crypto.rs".into()]);
         let agent = Uuid::new_v4();
         alt.producing_agent_id = Some(agent);
         let pid = alt.id;
@@ -1015,14 +1015,14 @@ mod tests {
         let p = s.proposals.iter().find(|p| p.id == pid).cloned().unwrap();
         assert!(guard_block(&s, &p).is_none(), "no guard on: nothing extra");
         // Dearth mode protecting the crypto paths.
-        s.guards.dearth = Some(hive_core::guard::DearthMode {
+        s.guards.dearth = Some(ligus_core::guard::DearthMode {
             enabled: true,
             reason: String::new(),
-            brood_paths: vec!["crates/hive-core/src/crypto*.rs".into()],
+            brood_paths: vec!["crates/ligus-core/src/crypto*.rs".into()],
             allowed_mcp_servers: vec![],
             admitted_devices: vec![],
             set_by: String::new(),
-            set_at: hive_core::Timestamp::now(),
+            set_at: ligus_core::Timestamp::now(),
         });
         assert!(guard_block(&s, &p).unwrap().contains("dearth"));
         // A chat lockdown blocks any alternative, brood path or not.
@@ -1030,19 +1030,19 @@ mod tests {
         s.guards.chat_id = Some(sid);
         s.guards.lockdowns.insert(
             sid,
-            vec![hive_core::guard::ChatLockdown {
+            vec![ligus_core::guard::ChatLockdown {
                 id: Uuid::new_v4(),
-                signal: hive_core::guard::LockdownSignal::Manual,
+                signal: ligus_core::guard::LockdownSignal::Manual,
                 detail: String::new(),
                 raised_by: String::new(),
-                raised_at: hive_core::Timestamp::now(),
+                raised_at: ligus_core::Timestamp::now(),
                 message_id: None,
                 raise_event_id: None,
             }],
         );
         assert!(guard_block(&s, &p).unwrap().contains("locked down"));
         // The producing agent's vote never counts; a human member's does.
-        let me = s.members.iter().find(|m| m.actor.kind == hive_core::ActorKind::Human).unwrap().id.clone();
+        let me = s.members.iter().find(|m| m.actor.kind == ligus_core::ActorKind::Human).unwrap().id.clone();
         s.guards.verified_approvals.entry(pid).or_default().insert(agent.to_string());
         assert!(guard_block(&s, &p).is_some());
         s.guards.verified_approvals.entry(pid).or_default().insert(me);

@@ -64,7 +64,7 @@ two agents that run on different devices, each device runs its own
 receiver exactly once.
 
 The JSON Schemas are in
-`crates/hive-runtime/src/ligus_mcp/schema/` and are frozen per release: a
+`crates/ligus-runtime/src/ligus_mcp/schema/` and are frozen per release: a
 test fails when one changes.
 
 Results from the read tools carry a header that says they are data, not

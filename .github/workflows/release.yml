@@ -2,7 +2,7 @@ name: Release (desktop app)
 
 # Builds the Ligus desktop app for macOS, Linux, and Windows on GitHub runners
 # and attaches the installers to a GitHub Release. Artifacts live as release
-# assets — never committed to source control. The (private) hive-site Netlify
+# assets — never committed to source control. The (private) ligus-site Netlify
 # build pulls the latest assets at deploy time (see that repo's
 # scripts/fetch-downloads.sh).
 #
@@ -177,7 +177,7 @@ jobs:
           fi
           echo "macOS signing + notarization configured."
 
-      # The test-only passkey shortcut (hive-runtime `test-presence`) must
+      # The test-only passkey shortcut (ligus-runtime `test-presence`) must
       # never be in a shipped binary's build graph.
       - name: No test-presence in shipped builds
         shell: bash

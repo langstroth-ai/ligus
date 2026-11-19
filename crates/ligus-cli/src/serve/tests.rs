@@ -1,0 +1,4620 @@
+//! Integration tests for `ligus serve`: a real server against the in-process
+//! test relay (`ligus-runtime/src/test_relay.rs`), a fake OpenAI-compatible
+//! model server and a fake ntfy, driven over HTTP + SSE like the phone.
+//!
+//! The env-gated live test runs the same flow against the lab gateway:
+//!
+//! ```text
+//! LIGUS_SERVE_LIVE_ENDPOINT=http://host:8080/v1/chat/completions \
+//! LIGUS_SERVE_LIVE_MODELS=gpt-oss:20b,gemma4:12b \
+//!   cargo test -p ligus-cli serve::tests::live -- --nocapture
+//! ```
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::routing::post;
+use axum::Router;
+use futures_util::StreamExt;
+use ligus_core::{workspace_config_session_id, ModelProviderKind, WorkspaceAgent, WorkspaceRuntime};
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use super::*;
+use crate::repos::RepoBindings;
+
+#[path = "../../../ligus-runtime/src/test_relay.rs"]
+#[allow(dead_code)]
+mod test_relay;
+
+async fn spawn(router: Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://{addr}")
+}
+
+// ── Fake model server ──────────────────────────────────────────────────────
+
+/// A round that makes the fake model stall (shutdown tests).
+const HANG: &str = "HANG";
+
+#[derive(Clone, Default)]
+struct FakeModel {
+    bodies: Arc<Mutex<Vec<Value>>>,
+    rounds: Arc<Vec<Vec<String>>>,
+}
+
+fn delta(d: Value) -> String {
+    format!("data: {}", json!({"choices": [{"index": 0, "delta": d}]}))
+}
+
+fn streamed_call(id: &str, name: &str, args: &str) -> Vec<String> {
+    let (a, b) = args.split_at(args.len() / 2);
+    vec![
+        delta(json!({"tool_calls": [{"index": 0, "id": id, "type": "function", "function": {"name": name, "arguments": ""}}]})),
+        delta(json!({"tool_calls": [{"index": 0, "function": {"arguments": a}}]})),
+        delta(json!({"tool_calls": [{"index": 0, "function": {"arguments": b}}]})),
+    ]
+}
+
+async fn fake_chat(State(f): State<FakeModel>, body: String) -> axum::response::Response {
+    let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let n = {
+        let mut b = f.bodies.lock().unwrap();
+        b.push(v);
+        b.len() - 1
+    };
+    let lines = f.rounds.get(n).or_else(|| f.rounds.last()).cloned().unwrap_or_default();
+    if lines.first().map(String::as_str) == Some(HANG) {
+        tokio::time::sleep(Duration::from_secs(120)).await;
+    }
+    let mut out: String = lines.iter().map(|l| format!("{l}\n\n")).collect();
+    out.push_str("data: [DONE]\n\n");
+    axum::response::Response::builder().header("content-type", "text/event-stream").body(Body::from(out)).unwrap()
+}
+
+async fn spawn_model(rounds: Vec<Vec<String>>) -> (String, FakeModel) {
+    let f = FakeModel { bodies: Default::default(), rounds: Arc::new(rounds) };
+    let base = spawn(Router::new().route("/v1/chat/completions", post(fake_chat)).with_state(f.clone())).await;
+    (format!("{base}/v1/chat/completions"), f)
+}
+
+// ── Fake ntfy ──────────────────────────────────────────────────────────────
+
+type Pushes = Arc<Mutex<Vec<(HeaderMap, String)>>>;
+
+async fn spawn_ntfy() -> (String, Pushes) {
+    let pushes: Pushes = Default::default();
+    let p = pushes.clone();
+    let router = Router::new().route(
+        "/{topic}",
+        post(move |headers: HeaderMap, body: String| {
+            let p = p.clone();
+            async move {
+                p.lock().unwrap().push((headers, body));
+                "{}"
+            }
+        }),
+    );
+    (spawn(router).await, pushes)
+}
+
+// ── Harness ────────────────────────────────────────────────────────────────
+
+/// Options for a test box (no ntfy; paths to fill in).
+fn box_opts(label: &str) -> ServeOptions {
+    ServeOptions {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        token_file: PathBuf::new(),
+        ntfy: None,
+        public_url: None,
+        label: label.into(),
+        name: Some("Phone".into()),
+        pair: false,
+        prometheus_url: "http://127.0.0.1:9".into(),
+        prometheus_configured: false,
+        dashboard_file: PathBuf::new(),
+        default_agent: None,
+        sync_every: Duration::from_millis(300),
+        remote: None,
+        appearance: Default::default(),
+        test_person: false,
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = ligus_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+fn make_repo(dir: &Path, files: &[(&str, &str)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.email", "t@t"]);
+    git(dir, &["config", "user.name", "t"]);
+    // Byte-exact checkouts whatever the host's git does (Git for Windows
+    // defaults to core.autocrlf=true).
+    git(dir, &["config", "core.autocrlf", "false"]);
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-qm", "init"]);
+}
+
+fn config(dir: &Path, relay: &str, room: &str) -> Config {
+    Config {
+        data_dir: dir.to_path_buf(),
+        relay_url: Some(relay.to_string()),
+        token: None,
+        room: room.to_string(),
+        key: Some("serve-test-passphrase".into()),
+        epoch_keys: Vec::new(),
+    }
+}
+
+// Fields drop in order: the handle (which waits for its tasks under test)
+// goes before the temp dir it writes to.
+struct Harness {
+    desktop: Config,
+    handle: ServeHandle,
+    base: String,
+    token: String,
+    client: reqwest::Client,
+    agent_id: Uuid,
+    ntfy: Pushes,
+    _tmp: tempfile::TempDir,
+}
+
+/// A desktop that owns the workspace (founder) with one agent `@coder` on a
+/// Custom runtime at `endpoint` / `model`, synced through the relay; then a
+/// serve host joined to it with a repo bound.
+async fn harness(endpoint: &str, model: &str, repo_files: &[(&str, &str)]) -> Harness {
+    harness_with(endpoint, model, repo_files, |_| {}).await
+}
+
+async fn harness_with(
+    endpoint: &str,
+    model: &str,
+    repo_files: &[(&str, &str)],
+    tweak: impl FnOnce(&mut ServeOptions),
+) -> Harness {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-test-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let agent_id = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let mut wr = WorkspaceRuntime::new("gw", "Lab gateway", ModelProviderKind::Custom, model);
+        wr.endpoint = endpoint.to_string();
+        svc.add_workspace_runtime(ws, wr).unwrap();
+        let mut agent = WorkspaceAgent::new("coder", "gw");
+        agent.owner_actor_id = svc.author().id.clone();
+        let id = agent.id;
+        svc.add_agent(ws, ws, agent).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        let person = svc.issue_invite(ws).unwrap();
+        (id, crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap(), (person, svc.take_invite_redeem_seed(ws, person).unwrap()))
+    };
+    let (agent_id, admission, (person_invite, person_seed)) = agent_id;
+    sync_once(&desktop).await.unwrap();
+
+    let serve_dir = tmp.path().join("serve");
+    std::fs::create_dir_all(&serve_dir).unwrap();
+    let mut serve_cfg = config(&serve_dir, &relay, &room);
+    let repo = tmp.path().join("repo");
+    make_repo(&repo, repo_files);
+    RepoBindings { workspace: Some(repo.to_string_lossy().into_owned()), ..Default::default() }.save(&serve_dir).unwrap();
+
+    let (ntfy_url, ntfy) = spawn_ntfy().await;
+    let dir_for_dashboard = serve_dir.clone();
+    let opts = ServeOptions {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        token_file: serve_dir.join("serve.token"),
+        ntfy: Some(ntfy::Ntfy { url: ntfy_url, topic: "ligus-test".into(), token: None }),
+        public_url: None,
+        label: "sff".into(),
+        name: Some("Phone".into()),
+        pair: false,
+        prometheus_url: "http://127.0.0.1:9".into(),
+        prometheus_configured: false,
+        dashboard_file: dir_for_dashboard.join("dashboard.toml"),
+        default_agent: None,
+        sync_every: Duration::from_millis(300),
+        remote: None,
+        appearance: Default::default(),
+        test_person: false,
+    };
+    let mut opts = opts;
+    tweak(&mut opts);
+    if opts.test_person {
+        // A person box (tests of person-only flows): a person's invite.
+        let store = ligus_runtime::event_store::EventStore::open(serve_dir.join("ligus.db")).unwrap();
+        store.set_join_invite(ws, person_invite).unwrap();
+        store.set_join_redeem(ws, person_seed.as_ref()).unwrap();
+    } else {
+        // The box joins as its own service member with the desktop's box
+        // admission (Phase B), as `ligus admit redeem` would.
+        crate::admit::redeem(&mut serve_cfg, &admission).unwrap();
+    }
+    let handle = start(serve_cfg, opts).await.unwrap();
+    let base = format!("http://{}", handle.addr);
+    let token = handle.shared.token();
+    Harness { _tmp: tmp, desktop, handle, base, token, client: ligus_forge::new_http_client(), agent_id, ntfy }
+}
+
+impl Harness {
+    async fn get(&self, path: &str) -> Value {
+        let r = self.client.get(format!("{}{path}", self.base)).bearer_auth(&self.token).timeout(REQ).send().await.unwrap_or_else(|e| panic!("GET {path}: {e}"));
+        assert!(r.status().is_success(), "GET {path}: {}", r.status());
+        r.json().await.unwrap()
+    }
+
+    async fn send(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
+        // The live token: a phone revocation rotates it.
+        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.handle.shared.token()).timeout(REQ);
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+        let r = req.send().await.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
+        let status = r.status();
+        let v: Value = r.json().await.unwrap_or(Value::Null);
+        assert!(status.is_success(), "{method} {path}: {status} {v}");
+        v
+    }
+
+    /// Open the SSE stream; events arrive as (name, data, id) on the channel.
+    async fn events(&self, last_id: Option<u64>) -> mpsc::UnboundedReceiver<(String, Value, u64)> {
+        let mut req = self.client.get(format!("{}/v1/events", self.base)).bearer_auth(&self.token);
+        if let Some(id) = last_id {
+            req = req.header("Last-Event-ID", id.to_string());
+        }
+        // The stream is long-lived (no request timeout), its headers aren't.
+        let resp = tokio::time::timeout(REQ, req.send()).await.expect("GET /v1/events: no response headers in time").unwrap();
+        assert!(resp.status().is_success());
+        assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut buf = String::new();
+            let mut stream = resp.bytes_stream();
+            while let Some(Ok(chunk)) = stream.next().await {
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+                while let Some(end) = buf.find("\n\n") {
+                    let frame: String = buf.drain(..end + 2).collect();
+                    let (mut name, mut data, mut id) = (String::new(), String::new(), 0u64);
+                    for line in frame.lines() {
+                        if let Some(v) = line.strip_prefix("event:") {
+                            name = v.trim().to_string();
+                        } else if let Some(v) = line.strip_prefix("data:") {
+                            data.push_str(v.trim_start());
+                        } else if let Some(v) = line.strip_prefix("id:") {
+                            id = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    if !name.is_empty() && tx.send((name, serde_json::from_str(&data).unwrap_or(Value::Null), id)).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        rx
+    }
+}
+
+/// Collect events until `done` says so (or time runs out).
+async fn collect_until(
+    rx: &mut mpsc::UnboundedReceiver<(String, Value, u64)>,
+    secs: u64,
+    mut done: impl FnMut(&[(String, Value, u64)]) -> bool,
+) -> Vec<(String, Value, u64)> {
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    while !done(&seen) {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(ev)) => seen.push(ev),
+            _ => break,
+        }
+    }
+    seen
+}
+
+async fn this_host(h: &Harness) -> String {
+    let hosts = h.get("/v1/hosts").await;
+    let me = hosts["hosts"].as_array().unwrap().iter().find(|x| x["isThis"] == json!(true)).expect("this host listed");
+    assert_eq!(me["label"], "sff");
+    assert_eq!(me["online"], json!(true));
+    me["id"].as_str().unwrap().to_string()
+}
+
+/// Binding an agent to a host is an Admin action (S2), and the box is a
+/// service member capped at Contributor (Phase B): the desktop's Owner binds
+/// `agents` to this box's `host`, and the box syncs the change.
+async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
+    let ws = h.handle.shared.ws;
+    let mut done = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
+        h.handle.shared.sync_kick.notify_one();
+        desktop_sync(h).await;
+        let mut desk = open_service(&h.desktop).unwrap();
+        if desk.list_hosts(ws).unwrap().iter().any(|x| x.id == host) {
+            for id in agents {
+                desk.set_agent_host(ws, *id, host).unwrap();
+            }
+            done = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(done, "the box's host never reached the desktop in 120 s");
+    desktop_sync(h).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
+        h.handle.shared.sync_kick.notify_one();
+        let cfg = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap();
+        if cfg.is_some_and(|c| agents.iter().all(|id| c.workspace_agents.iter().any(|a| a.id == *id && a.host_id == host))) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw its agents bound to it in 120 s");
+}
+
+/// One request's bound in these tests (the SSE stream excepted): under load
+/// a request that never answers fails by name instead of hanging.
+const REQ: Duration = Duration::from_secs(60);
+
+/// The desktop's sync round with the relay, bounded (the relay client has
+/// no per-request timeout).
+async fn desktop_sync(h: &Harness) {
+    match tokio::time::timeout(REQ, sync_once(&h.desktop)).await {
+        Ok(r) => {
+            r.unwrap();
+        }
+        Err(_) => panic!("the desktop's sync round with the relay didn't finish in {REQ:?}"),
+    }
+}
+
+/// A hard bound on a whole test that doesn't depend on its runtime: when
+/// every worker thread is stuck (in a synchronous lock or SQLite wait),
+/// tokio timers stop firing and a test can wait until the runner kills it
+/// (40 minutes under the nightly profile). After `secs` this thread prints
+/// the stage the test last named and aborts the process. Dropped (the test
+/// done), it stands down.
+struct Watchdog {
+    done: Arc<std::sync::atomic::AtomicBool>,
+    stage: Arc<Mutex<&'static str>>,
+}
+
+impl Watchdog {
+    fn new(test: &'static str, secs: u64) -> Self {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stage = Arc::new(Mutex::new("start"));
+        let (d, st) = (done.clone(), stage.clone());
+        std::thread::spawn(move || {
+            let end = std::time::Instant::now() + Duration::from_secs(secs);
+            while std::time::Instant::now() < end {
+                if d.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let at = *st.lock().unwrap_or_else(|p| p.into_inner());
+            eprintln!("{test}: still running after {secs} s, waiting on: {at}");
+            std::process::abort();
+        });
+        Self { done, stage }
+    }
+
+    fn stage(&self, s: &'static str) {
+        *self.stage.lock().unwrap_or_else(|p| p.into_inner()) = s;
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The phone's view of agent `id`.
+async fn agent_json(h: &Harness, id: Uuid) -> Value {
+    let all = h.get("/v1/agents").await;
+    all["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(id.to_string())).cloned().expect("agent listed")
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+/// Phase B: a serve box syncs first and never founds a workspace. On a room
+/// the relay has nothing for, it refuses to start and writes no event (no
+/// config seed naming it founder or Owner).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_without_a_copy_of_the_workspace_refuses_to_start_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-empty-{}", Uuid::new_v4());
+    let dir = tmp.path().join("serve");
+    let opts = ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("sff") };
+    let err = start(config(&dir, &relay, &room), opts).await.err().expect("a box with no workspace copy must not start");
+    assert!(err.to_string().contains("no copy of the workspace"), "{err}");
+    let store = ligus_runtime::event_store::EventStore::open(dir.join("ligus.db")).unwrap();
+    assert!(store.list_session_ids().unwrap().is_empty(), "the box wrote events");
+    assert_eq!(store.max_row_id().unwrap(), 0);
+}
+
+/// A box without an admission joins nothing: it prints its join request and
+/// refuses, and a person's invite never admits it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_joins_only_through_a_box_admission() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-adm-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let person_invite = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        svc.issue_invite(ws).unwrap()
+    };
+    sync_once(&desktop).await.unwrap();
+    let dir = tmp.path().join("serve");
+    let opts = || ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("sff") };
+    // No admission at all.
+    let err = start(config(&dir, &relay, &room), opts()).await.err().expect("no admission");
+    assert!(err.to_string().contains("isn't a member"), "{err}");
+    // A person's invite.
+    ligus_runtime::event_store::EventStore::open(dir.join("ligus.db")).unwrap().set_join_invite(ws, person_invite).unwrap();
+    let err = start(config(&dir, &relay, &room), opts()).await.err().expect("a person's invite");
+    assert!(err.to_string().contains("box admission"), "{err}");
+    // A box admission (the desktop's bearer code): joins as a service.
+    let code = {
+        let mut svc = open_service(&desktop).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
+    };
+    sync_once(&desktop).await.unwrap();
+    let mut cfg = config(&dir, &relay, &room);
+    crate::admit::redeem(&mut cfg, &code).unwrap();
+    let handle = start(cfg, opts()).await.unwrap();
+    let me = handle.shared.lock().author().clone();
+    assert_eq!(me.kind, ligus_core::ActorKind::Service);
+    let config_log = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let m = config_log.members.iter().find(|m| m.id == me.id).expect("the box is a member");
+    assert_eq!((m.actor.kind, m.role), (ligus_core::ActorKind::Service, ligus_core::WorkspaceRole::Contributor));
+    assert_ne!(config_log.creator_actor_id, me.id, "the box never founds");
+    handle.shutdown();
+}
+
+/// The chart's start-up (`LIGUS_SECRET_BACKEND=k8s`): the workspace key is a
+/// read-only mounted Secret file in a read-only dir, and the box redeems its
+/// admission at start-up. Redeeming re-saves the connection (the key the
+/// Secret already holds) and derives the box's own secrets (identity seeds,
+/// key agreement, delivered epoch keys); start-up must succeed, the mount
+/// stays untouched, and everything derived lands 0600 in the data dir.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_starts_from_a_read_only_mounted_secret() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-k8s-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let code = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
+    };
+    sync_once(&desktop).await.unwrap();
+
+    // The kubelet's projection: 0400 files in a dir the box can't write.
+    let mount = tmp.path().join("secrets-store");
+    std::fs::create_dir_all(&mount).unwrap();
+    std::fs::write(mount.join("cli.key"), desktop.key.as_deref().unwrap()).unwrap();
+    std::fs::set_permissions(mount.join("cli.key"), std::fs::Permissions::from_mode(0o400)).unwrap();
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let dir = tmp.path().join("serve");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    ligus_runtime::secret_store::set_for_data_dir(&dir, Arc::new(ligus_runtime::secret_store::K8sSecretFile::new(&mount, &dir)));
+
+    // As `config()` in main does with no LIGUS_WORKSPACE_KEY: the key comes
+    // from the store, i.e. the mount.
+    let f = crate::load_file_config(&dir);
+    assert_eq!(f.key.as_deref(), desktop.key.as_deref(), "the key is read from the mount");
+    let mut cfg = Config { data_dir: dir.clone(), relay_url: Some(relay.clone()), token: None, room: room.clone(), key: f.key, epoch_keys: f.ek };
+    let res = crate::admit::prepare_box(&mut cfg, "k8s", Some("K8s box"), Some(code), |c| async move { sync_once(&c).await }).await;
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (svc, synced) = res.expect("a box starts with a read-only mounted Secret");
+    assert!(synced);
+    let me = svc.author().clone();
+    assert_eq!(me.kind, ligus_core::ActorKind::Service);
+    let log = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    assert!(log.members.iter().any(|m| m.id == me.id), "the box joined");
+    drop(svc);
+    // And serve itself comes up on that store (a restart: already a member).
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let opts = ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("k8s") };
+    let started = start(cfg.clone(), opts).await;
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
+    started.expect("serve starts on the k8s store").shutdown();
+
+    // The mount is untouched.
+    let names: Vec<_> = std::fs::read_dir(&mount).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(names, vec![std::ffi::OsString::from("cli.key")]);
+    // Runtime secrets are owner-only in the data dir, the key isn't copied.
+    let mut secrets = Vec::new();
+    for sub in ["keys", "secrets"] {
+        let root = dir.join(sub);
+        if !root.exists() {
+            continue;
+        }
+        let mut stack = vec![root];
+        while let Some(d) = stack.pop() {
+            assert_eq!(mode(&d), 0o700, "{}", d.display());
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    assert_eq!(mode(&p), 0o600, "{}", p.display());
+                    secrets.push(p);
+                }
+            }
+        }
+    }
+    assert!(secrets.iter().any(|p| p.extension().is_some_and(|x| x == "seed")), "identity seeds in the data dir: {secrets:?}");
+    assert!(!dir.join("secrets/cli/key").exists(), "the mounted key is never copied into the data dir");
+    assert_eq!(mode(&dir.join("config.toml")), 0o600);
+    let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    assert!(!toml.contains(desktop.key.as_deref().unwrap()), "no secret in config.toml");
+}
+
+/// People, channels and chat details: avatars and host kinds ride the roster,
+/// chats carry their channel and recent speakers, and details mirror the
+/// desktop's right-hand panel (agents, people, default responder, context,
+/// workflow runs, skills, vaults).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn people_channels_and_chat_details() {
+    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "gpt-4o", &[("README.md", "# demo\n")]).await;
+    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
+
+    // The desktop files a channel, gives @coder a picture, loads a skill and
+    // runs a workflow in the channel's chat.
+    let avatar = "data:image/png;base64,iVBORw0KGgo=";
+    let (channel_id, chat_id) = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let (ch, chat) = svc.create_channel(ws, "design", Some("UI and UX".into()), "gw").unwrap();
+        svc.set_agent_avatar(chat.id, ws, h.agent_id, Some(avatar.into()), Some("#336699".into())).unwrap();
+        let mut skill = ligus_core::SkillProfile::new("Reviewer", "# Review code\nLook for bugs.");
+        skill.source_url = Some("https://example.com/skill.md".into());
+        svc.add_skill(chat.id, ws, skill).unwrap();
+        let def = ligus_core::WorkflowDefinition {
+            id: Uuid::new_v4(),
+            name: "Ship it".into(),
+            description: String::new(),
+            input_label: None,
+            nodes: vec![ligus_core::workflow::WorkflowNode {
+                id: "draft".into(),
+                name: "Draft".into(),
+                depends_on: vec![],
+                kind: ligus_core::WorkflowNodeKind::Agent { agent_id: None, prompt_template: "go".into() },
+                x: None,
+                y: None,
+            }],
+            created_at: ligus_core::Timestamp::now(),
+            disabled: false,
+        };
+        let me = svc.author().id.clone();
+        svc.upsert_workflow_run(chat.id, ws, ligus_core::workflow::new_run(&def, "now", me)).unwrap();
+        svc.post_user_message(chat.id, ws, "kicking off the design pass").unwrap();
+        (ch.id, chat.id)
+    };
+    sync_once(&h.desktop).await.unwrap();
+
+    // The serve box syncs on its own loop; wait for the channel to arrive.
+    let mut channels = Value::Null;
+    for _ in 0..50 {
+        channels = h.get("/v1/channels").await;
+        if channels["channels"].as_array().is_some_and(|c| c.iter().any(|c| c["id"] == json!(channel_id))) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let design = channels["channels"].as_array().unwrap().iter().find(|c| c["id"] == json!(channel_id)).expect("channel synced");
+    assert_eq!(design["name"], "design");
+    assert_eq!(design["purpose"], "UI and UX");
+    assert_eq!(design["archived"], json!(false));
+    assert_eq!(design["defaultChatId"], json!(chat_id.to_string()));
+
+    // Wait for the avatar edit and the message too.
+    let mut chat = Value::Null;
+    for _ in 0..50 {
+        let chats = h.get("/v1/chats").await;
+        chat = chats["chats"].as_array().unwrap().iter().find(|c| c["id"] == json!(chat_id)).cloned().unwrap_or(Value::Null);
+        if chat["participants"].as_array().is_some_and(|p| !p.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(chat["channelId"], json!(channel_id));
+    let speaker = &chat["participants"][0];
+    assert_eq!(speaker["kind"], "person");
+    assert!(speaker.get("avatarUrl").is_none(), "chat rows never carry avatars");
+    let desktop_actor = speaker["id"].as_str().unwrap().to_string();
+
+    // Messages name a person's actor.
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    let m = msgs["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap();
+    assert_eq!(m["actorId"], json!(desktop_actor));
+
+    // Agents carry the avatar, color and where they run.
+    let agents = h.get("/v1/agents").await;
+    let coder = agents["agents"].as_array().unwrap().iter().find(|a| a["name"] == "coder").unwrap().clone();
+    assert_eq!(coder["avatarUrl"], avatar);
+    assert_eq!(coder["avatarColorHex"], "#336699");
+    assert_eq!(coder["hostKind"], "ownerDevice");
+    // Its owner, so the phone can tell whether its person may answer the
+    // agent's permission requests.
+    assert_eq!(coder["ownerActorId"], json!(desktop_actor));
+    let host = this_host(&h).await;
+    // The box is a service member (Contributor): the phone can't rebind an
+    // agent through it (an Admin's act); the desktop does.
+    let refused = h
+        .client
+        .put(format!("{}/v1/agents/{}/host", h.base, h.agent_id))
+        .bearer_auth(&h.token)
+        .json(&json!({ "hostId": host }))
+        .send()
+        .await
+        .unwrap();
+    assert!(refused.status().is_client_error(), "{}", refused.status());
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let moved = json!({ "agent": agent_json(&h, h.agent_id).await });
+    assert_eq!(moved["agent"]["hostKind"], "thisHost");
+    assert_eq!(moved["agent"]["hostOnline"], json!(true));
+
+    // People: the desktop founder (with role) and this box.
+    let people = h.get("/v1/people").await;
+    let list = people["people"].as_array().unwrap();
+    let founder = list.iter().find(|p| p["actorId"] == json!(desktop_actor)).expect("founder listed");
+    assert_eq!(founder["role"], "owner");
+    assert_eq!(founder["isSelf"], json!(false));
+
+    // Details.
+    let d = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    assert_eq!(d["chat"]["id"], json!(chat_id));
+    assert_eq!(d["channel"]["name"], "design");
+    let coder = d["agents"].as_array().unwrap().iter().find(|a| a["name"] == "coder").unwrap();
+    assert_eq!(coder["inChat"], json!(false));
+    assert_eq!(coder["avatarUrl"], avatar);
+    let founder = d["people"].as_array().unwrap().iter().find(|p| p["actorId"] == json!(desktop_actor)).unwrap();
+    assert_eq!(founder["inChat"], json!(true));
+    assert_eq!(d["defaultResponder"]["kind"], "primary");
+    assert_eq!(d["defaultResponder"]["name"], "ligus");
+    assert_eq!(d["defaultResponder"]["runtimeLabel"], "Lab gateway");
+    assert_eq!(d["defaultResponder"]["model"], "gpt-4o");
+    assert_eq!(d["context"]["estimated"], json!(true));
+    assert_eq!(d["context"]["model"], "gpt-4o");
+    assert!(d["context"]["windowTokens"].as_u64().unwrap() >= 8192);
+    assert!(d["context"]["usedTokens"].as_u64().unwrap() > 0);
+    assert!(d["context"]["skillTokens"].as_u64().unwrap() > 0);
+    let run = &d["workflowRuns"][0];
+    assert_eq!(run["name"], "Ship it");
+    assert_eq!(run["status"], "running");
+    assert_eq!(run["stepsDone"], json!(0));
+    assert_eq!(run["stepsTotal"], json!(1));
+    let skill = &d["skills"][0];
+    assert_eq!(skill["name"], "Reviewer");
+    assert_eq!(skill["summary"], "Review code");
+    assert_eq!(skill["sourceUrl"], "https://example.com/skill.md");
+    assert_eq!(d["vaults"], json!([]));
+
+    // An unknown chat is a 404.
+    let r = h.client.get(format!("{}/v1/chats/{}/details", h.base, Uuid::new_v4())).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    // A phone-made chat lands in the first channel (sidebar order).
+    let made = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "From the phone" }))).await;
+    assert_eq!(made["chat"]["channelId"], json!(channel_id));
+    h.handle.shutdown();
+}
+
+/// The phone's URLSession only returns the response once body bytes arrive, so
+/// a quiet event stream must send something at once — not wait for the 15 s
+/// heartbeat (the app showed "Connecting" that long after every connect).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn event_stream_sends_bytes_immediately() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let resp = h.client.get(format!("{}/v1/events", h.base)).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut body = resp.bytes_stream();
+    let first = tokio::time::timeout(Duration::from_secs(2), body.next())
+        .await
+        .expect("a first frame within 2 s")
+        .expect("stream open")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&first).starts_with(':'), "an SSE comment: {first:?}");
+    h.handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auth_is_required_except_for_bare_health() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+
+    let anon: Value = h.client.get(format!("{}/v1/health", h.base)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(anon["ok"], json!(true));
+    assert!(anon["version"].is_string());
+    assert!(anon.get("workspace").is_none() && anon.get("deviceLabel").is_none(), "{anon}");
+
+    let authed = h.get("/v1/health").await;
+    assert!(authed["workspace"].as_str().unwrap().starts_with("serve-test-"));
+    assert_eq!(authed["deviceLabel"], "sff");
+
+    for path in ["/v1/chats", "/v1/agents", "/v1/hosts", "/v1/proposals", "/v1/lab/status", "/v1/dashboard", "/v1/appearance", "/v1/events"] {
+        let none = h.client.get(format!("{}{path}", h.base)).send().await.unwrap();
+        assert_eq!(none.status(), 401, "{path} without a token");
+        let wrong = h.client.get(format!("{}{path}", h.base)).bearer_auth("nope").send().await.unwrap();
+        assert_eq!(wrong.status(), 401, "{path} with a wrong token");
+    }
+    let post = h.client.post(format!("{}/v1/chats", h.base)).json(&json!({})).send().await.unwrap();
+    assert_eq!(post.status(), 401);
+
+    // Lab status is best-effort: an unreachable Prometheus is an empty snapshot.
+    let lab = h.get("/v1/lab/status").await;
+    assert_eq!(lab["workers"], json!([]));
+    assert!(lab["updatedAt"].is_string());
+    let r = h.client.get(format!("{}/v1/lab/status", h.base)).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(r.headers()["deprecation"], "true", "lab status is deprecated");
+
+    // No dashboard.toml and no LIGUS_PROMETHEUS_URL: the built-in Ligus
+    // section alone.
+    let d = h.get("/v1/dashboard").await;
+    let titles: Vec<&str> = d["sections"].as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, ["Ligus"], "{d}");
+    assert_eq!(d["title"], "Dashboard");
+    assert_eq!(d["source"], "default");
+    let host = d["sections"][0]["panels"].as_array().unwrap().iter().find(|p| p["id"] == "ligus-host").unwrap().clone();
+    let labels: Vec<&str> = host["rows"].as_array().unwrap().iter().map(|r| r["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, ["Ligus serve", "Relay sync", "Push"]);
+    assert_eq!(host["rows"][1]["up"], true, "the start-up sync counts: {host}");
+    assert_eq!(host["rows"][2]["text"], "ntfy");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dashboard_serves_the_hosts_config_with_per_panel_errors() {
+    use axum::routing::get;
+    let json_src = spawn(Router::new().route("/status", get(|| async { axum::Json(json!({"gpu": {"temp": 61.5}, "state": "ok"})) }))).await;
+    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let dashboard_toml = format!(
+        r#"
+title = "Home"
+[[section]]
+title = "Box"
+[[section.panel]]
+id = "gpu-temp"
+title = "GPU temp"
+kind = "gauge"
+unit = "°C"
+url = "{json_src}/status"
+path = "/gpu/temp"
+max = 110
+thresholds = [{{ value = 0, level = "ok" }}, {{ value = 80, level = "critical" }}]
+[[section.panel]]
+title = "Gateway"
+kind = "status"
+url = "{json_src}/status"
+path = "/state"
+[[section.panel]]
+title = "Power"
+query = "sum(power_watts)"
+"#
+    );
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| {
+        std::fs::create_dir_all(o.dashboard_file.parent().unwrap()).unwrap();
+        std::fs::write(&o.dashboard_file, &dashboard_toml).unwrap();
+    })
+    .await;
+    let d = h.get("/v1/dashboard").await;
+    assert_eq!(d["title"], "Home");
+    assert_eq!(d["source"], "config");
+    // The built-in Ligus section comes first (the file has no `builtin` key),
+    // read from this box's own workspace.
+    assert_eq!(d["sections"][0]["title"], "Ligus");
+    let ligus = d["sections"][0]["panels"].as_array().unwrap();
+    assert!(ligus.iter().all(|p| p.get("error").is_none()), "{}", d["sections"][0]);
+    let agents_online = ligus.iter().find(|p| p["id"] == "ligus-agents-online").unwrap();
+    // The harness's one agent runs on its owner's desktop, which never
+    // registered a host here: not counted as online.
+    assert_eq!(agents_online["value"], json!(0.0), "{agents_online}");
+    let open = ligus.iter().find(|p| p["id"] == "ligus-proposals-open").unwrap();
+    assert_eq!(open["value"], json!(0.0));
+    let host = ligus.iter().find(|p| p["id"] == "ligus-host").unwrap();
+    assert_eq!(host["rows"][0], json!({"label": "Ligus serve", "up": true, "text": "Online"}));
+    let panels = d["sections"][1]["panels"].as_array().unwrap();
+    assert_eq!(panels[0]["id"], "gpu-temp");
+    assert_eq!(panels[0]["value"], json!(61.5));
+    assert_eq!(panels[0]["max"], json!(110.0));
+    assert!(panels[0].get("error").is_none(), "{}", panels[0]);
+    assert_eq!(panels[1]["rows"], json!([{"label": "Gateway", "up": true, "text": "ok"}]));
+    // Prometheus at 127.0.0.1:9 is unreachable: that panel errors, the rest stand.
+    assert!(panels[2]["error"].as_str().unwrap().contains("Prometheus"), "{}", panels[2]);
+    assert!(panels[2].get("value").is_none());
+}
+
+/// "Match host" on the phone: `/v1/appearance` reports the desktop app's saved
+/// theme on this machine, live (no restart), and serve config pins a field.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn appearance_follows_the_desktop_file_and_config() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let desk = tempfile::tempdir().unwrap();
+    let dir = desk.path().to_path_buf();
+    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| {
+        o.appearance = appearance::AppearanceConfig { desktop_dir: Some(dir), ..Default::default() };
+    })
+    .await;
+    assert_eq!(h.get("/v1/appearance").await, json!({"palette": null, "mode": null, "source": "none"}));
+
+    std::fs::write(desk.path().join(appearance::FILE_NAME), r#"{"palette":"harbor","mode":"dark"}"#).unwrap();
+    assert_eq!(h.get("/v1/appearance").await, json!({"palette": "harbor", "mode": "dark", "source": "desktop"}));
+    h.handle.shutdown();
+
+    let pinned = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| {
+        o.appearance = appearance::AppearanceConfig { palette: Some("obsidian".into()), mode: None, desktop_dir: None };
+    })
+    .await;
+    assert_eq!(pinned.get("/v1/appearance").await, json!({"palette": "obsidian", "mode": null, "source": "config"}));
+    pinned.handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
+    // The built-in file tools need this host's OS sandbox. A host without one
+    // (Windows) offers the model none: there the hosted agent is chat only,
+    // files no proposal, and this checks that instead.
+    let tools_here = ligus_runtime::executor::local_tools_allowed();
+    let mut rounds = Vec::new();
+    if tools_here {
+        rounds.push(streamed_call("call_1", "write_file", r#"{"path":"hello.txt","content":"hello from the phone\n"}"#));
+    }
+    rounds.push(vec![delta(json!({"content": "Done: "})), delta(json!({"content": "added hello.txt"}))]);
+    let (endpoint, model) = spawn_model(rounds).await;
+    // The phone writes as a person here (write tools need an Admin author;
+    // a real box is a Contributor service member and drives none).
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
+
+    // The desktop's agent is visible, on its owner's device until sent here.
+    let agents = h.get("/v1/agents").await;
+    let coder = agents["agents"].as_array().unwrap().iter().find(|a| a["name"] == "coder").expect("coder listed").clone();
+    assert_eq!(coder["id"], json!(h.agent_id));
+    assert_eq!(coder["runtimeLabel"], "Lab gateway");
+    assert_eq!(coder["model"], "gemma4:12b");
+    assert!(coder.get("hostId").is_none());
+
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let moved = json!({ "agent": agent_json(&h, h.agent_id).await });
+    assert_eq!(moved["agent"]["hostId"], json!(host));
+    assert_eq!(moved["agent"]["hostLabel"], "sff (this host)");
+    // An unknown host is refused.
+    let bad = h
+        .client
+        .put(format!("{}/v1/agents/{}/host", h.base, h.agent_id))
+        .bearer_auth(&h.token)
+        .json(&json!({ "hostId": "not-a-host" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "From the phone" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    assert_eq!(chat["chat"]["title"], "From the phone");
+
+    let mut rx = h.events(None).await;
+    let posted = h
+        .send(
+            reqwest::Method::POST,
+            &format!("/v1/chats/{chat_id}/messages"),
+            Some(json!({ "body": "@coder please add a hello file" })),
+        )
+        .await;
+    assert_eq!(posted["message"]["role"], "user");
+    assert_eq!(posted["message"]["author"], "Phone");
+    assert_eq!(posted["message"]["chatId"], json!(chat_id));
+
+    // A deadline, not a delay: this returns as soon as all three arrive. The
+    // proposal comes from a git diff after the turn, which took over 30s on a
+    // loaded Windows runner.
+    let seen = collect_until(&mut rx, 120, |evs| {
+        (!tools_here || evs.iter().any(|(n, _, _)| n == "proposal.created"))
+            && evs.iter().any(|(n, d, _)| n == "turn.status" && d["state"] == "done")
+            && evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["role"] == "agent")
+    })
+    .await;
+    let names: Vec<&str> = seen.iter().map(|(n, _, _)| n.as_str()).collect();
+    let find = |name: &str| seen.iter().find(|(n, _, _)| n == name).map(|(_, d, _)| d.clone());
+
+    let created = seen
+        .iter()
+        .find(|(n, d, _)| n == "message.created" && d["message"]["role"] == "agent")
+        .map(|(_, d, _)| d.clone())
+        .unwrap_or_else(|| panic!("agent message.created missing: {names:?}"));
+    assert_eq!(created["message"]["streaming"], json!(true));
+    assert_eq!(created["message"]["agentId"], json!(h.agent_id));
+    let reply_id = created["message"]["id"].clone();
+
+    let deltas: String = seen
+        .iter()
+        .filter(|(n, d, _)| n == "message.delta" && d["messageId"] == reply_id)
+        .map(|(_, d, _)| d["text"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(deltas.contains("added hello.txt"), "deltas: {deltas:?} / {names:?} / {:?}", find("message.done"));
+    let delta_ev = find("message.delta").unwrap();
+    assert_eq!(delta_ev["chatId"], json!(chat_id));
+
+    let done = seen
+        .iter()
+        .find(|(n, d, _)| n == "message.done" && d["message"]["id"] == reply_id)
+        .map(|(_, d, _)| d.clone())
+        .unwrap_or_else(|| panic!("message.done missing: {names:?}"));
+    assert_eq!(done["message"]["streaming"], json!(false));
+    assert_eq!(done["message"]["body"], "Done: added hello.txt");
+    assert!(seen.iter().any(|(n, d, _)| n == "turn.status" && d["state"] == "running" && d["agentId"] == json!(h.agent_id)));
+    assert!(names.contains(&"chat.updated"));
+    // Event ids increase.
+    assert!(seen.windows(2).all(|w| w[0].2 < w[1].2));
+
+    if !tools_here {
+        assert!(!names.contains(&"proposal.created"), "{names:?}");
+        {
+            let bodies = model.bodies.lock().unwrap();
+            let offered: Vec<&str> =
+                bodies[0]["tools"].as_array().into_iter().flatten().filter_map(|t| t["function"]["name"].as_str()).collect();
+            assert!(!offered.iter().any(|t| ["write_file", "read_file", "run_command"].contains(t)), "{offered:?}");
+        }
+        assert!(h.get("/v1/proposals").await["proposals"].as_array().unwrap().is_empty());
+        h.handle.shutdown();
+        return;
+    }
+
+    let proposal = find("proposal.created").unwrap()["proposal"].clone();
+    assert_eq!(proposal["kind"], "fileDiff");
+    assert_eq!(proposal["status"], "open");
+    assert_eq!(proposal["chatId"], json!(chat_id));
+    assert_eq!(proposal["author"], "@coder");
+    assert!(proposal["diff"].as_str().unwrap().contains("+hello from the phone"));
+
+    // The model was offered the built-in tools on the first round.
+    {
+        let bodies = model.bodies.lock().unwrap();
+        let tools: Vec<&str> = bodies[0]["tools"]
+            .as_array()
+            .expect("tools offered")
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert!(tools.contains(&"write_file") && tools.contains(&"read_file"), "{tools:?}");
+        assert!(!tools.contains(&"run_command"), "run_command is off by default");
+    }
+
+    // REST views agree.
+    let chats = h.get("/v1/chats").await;
+    let listed = chats["chats"].as_array().unwrap().iter().find(|c| c["id"] == json!(chat_id)).unwrap().clone();
+    assert_eq!(listed["preview"], "Done: added hello.txt");
+    assert_eq!(listed["unread"], json!(1), "the agent's reply is unread until fetched");
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    let roles: Vec<&str> = msgs["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, vec!["user", "agent"]);
+    let after_user = msgs["messages"][0]["id"].as_str().unwrap();
+    let page = h.get(&format!("/v1/chats/{chat_id}/messages?after={after_user}&limit=5")).await;
+    assert_eq!(page["messages"].as_array().unwrap().len(), 1);
+    let chats = h.get("/v1/chats").await;
+    assert_eq!(chats["chats"][0]["unread"], json!(0), "fetching marked it read");
+
+    // The edit lives only in the proposal: the checkout is untouched.
+    let open = h.get("/v1/proposals").await;
+    assert_eq!(open["proposals"].as_array().unwrap().len(), 1);
+    let pid = open["proposals"][0]["id"].as_str().unwrap().to_string();
+    assert_gone(&h, &format!("/v1/proposals/{pid}/approve"), None, "vote").await;
+    let approved = box_vote(&h, &pid, true).await;
+    assert_eq!(approved["proposal"]["status"], "approved");
+    assert!(h.get("/v1/proposals?status=open").await["proposals"].as_array().unwrap().is_empty());
+    assert_eq!(h.get("/v1/proposals?status=all").await["proposals"][0]["status"], "approved");
+
+    // ntfy heard about the reply and the proposal, with a deep link and no content.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    {
+        let pushes = h.ntfy.lock().unwrap();
+        assert!(pushes.len() >= 2, "ntfy pushes: {}", pushes.len());
+        for (headers, body) in pushes.iter() {
+            assert_eq!(headers["click"].to_str().unwrap(), format!("ligus://chat/{chat_id}"));
+            assert!(!body.contains("hello from the phone"));
+        }
+        assert!(pushes.iter().any(|(hd, _)| hd["title"].to_str().unwrap() == "coder replied"));
+        assert!(pushes.iter().any(|(hd, _)| hd["title"].to_str().unwrap() == "Change ready for review"));
+    }
+
+    // The desktop sees the phone's chat, the agent's reply and the approval
+    // through the relay (E2EE, verified on ingest).
+    let chat_uuid = Uuid::parse_str(&chat_id).unwrap();
+    let mut synced = None;
+    for _ in 0..40 {
+        sync_once(&h.desktop).await.unwrap();
+        let svc = open_service(&h.desktop).unwrap();
+        if let Some(s) = svc.load(chat_uuid).unwrap() {
+            let replied = s.messages.iter().any(|m| m.body == "Done: added hello.txt" && !m.is_streaming);
+            let approved = s.proposals.iter().any(|p| p.status == ligus_core::ProposalStatus::Approved);
+            if replied && approved {
+                synced = Some(s);
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(synced.is_some(), "desktop never saw the reply + approval");
+    h.handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reject_with_reason_and_last_event_id_replay() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    assert_eq!(chat["chat"]["title"], "Untitled");
+
+    // A proposal filed the way the worker files one.
+    let pid = {
+        let mut svc = h.handle.shared.lock();
+        let ws = h.handle.shared.ws;
+        let p = ligus_core::ActionProposal::file_diff("@coder proposed changes to 1 file", "", "diff --git a/x b/x\n".into(), vec!["x".into()]);
+        let id = p.id;
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+        id
+    };
+    h.handle.shared.after_write();
+
+    // Gone, with or without a reason, for any id: nothing is written.
+    assert_gone(&h, &format!("/v1/proposals/{pid}/reject"), Some(json!({ "reason": "not like this" })), "vote").await;
+    assert_gone(&h, &format!("/v1/proposals/{}/approve", Uuid::new_v4()), None, "vote").await;
+    {
+        let svc = h.handle.shared.lock();
+        let s = svc.load(chat_id).unwrap().unwrap();
+        let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+        assert!(p.refinements.is_empty() && p.approvals.is_empty());
+    }
+
+    // A reconnecting client replays what it missed after Last-Event-ID 0.
+    let mut rx = h.events(Some(0)).await;
+    let seen = collect_until(&mut rx, 5, |evs| evs.iter().any(|(n, _, _)| n == "proposal.created")).await;
+    let names: Vec<&str> = seen.iter().map(|(n, _, _)| n.as_str()).collect();
+    assert!(names.contains(&"chat.updated"), "{names:?}");
+    let p = seen.iter().find(|(n, _, _)| n == "proposal.created").expect("replayed proposal.created");
+    assert_eq!(p.1["proposal"]["id"], json!(pid));
+    assert!(seen[0].2 >= 1);
+    h.handle.shutdown();
+}
+
+/// File a proposal on a fresh chat the way the worker does (authorless, from
+/// `@coder`), returning (chat, proposal).
+async fn filed_proposal(h: &Harness, producing: Option<Uuid>) -> (Uuid, Uuid) {
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let pid = {
+        let mut svc = h.handle.shared.lock();
+        let mut p = ligus_core::ActionProposal::file_diff(
+            "@coder proposed changes to 1 file",
+            "",
+            "diff --git a/x b/x\n".into(),
+            vec!["x".into()],
+        );
+        p.producing_agent_id = producing;
+        let id = p.id;
+        svc.upsert_proposal(chat_id, h.handle.shared.ws, p).unwrap();
+        id
+    };
+    h.handle.shared.after_write();
+    (chat_id, pid)
+}
+
+/// This box's own vote (a service member's, at its role), cast through the
+/// service: the HTTP vote routes are gone (410), the phone votes with its
+/// own key. Answers `GET /v1/proposals/{id}`.
+async fn box_vote(h: &Harness, pid: &str, approved: bool) -> Value {
+    let id = Uuid::parse_str(pid).unwrap();
+    {
+        let ws = h.handle.shared.ws;
+        let chat = h.handle.shared.workspace_chats().unwrap().into_iter().find(|c| c.proposals.iter().any(|p| p.id == id)).expect("the proposal's chat").id;
+        h.handle.shared.lock().vote_on_proposal(chat, ws, id, approved).unwrap();
+    }
+    h.handle.shared.after_write();
+    h.get(&format!("/v1/proposals/{pid}")).await
+}
+
+/// The legacy person-action routes answer 410 and name the phone action.
+async fn assert_gone(h: &Harness, path: &str, body: Option<Value>, kind: &str) {
+    let (code, v) = status_of(h, reqwest::Method::POST, path, body).await;
+    assert_eq!(code, 410, "{path}: {v}");
+    assert_eq!(v["error"], "gone", "{v}");
+    assert_eq!(v["use"], "POST /v1/phone-actions/prepare", "{v}");
+    assert!(v["message"].as_str().unwrap().contains(kind), "{v}");
+}
+
+async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
+    let mut req = h.client.request(method.clone(), format!("{}{path}", h.base)).bearer_auth(&h.token).timeout(REQ);
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let r = req.send().await.unwrap_or_else(|e| panic!("{method} {path}: {e}"));
+    let code = r.status().as_u16();
+    (code, r.json().await.unwrap_or(Value::Null))
+}
+
+/// The desktop's Review card, from the phone: comments and change requests
+/// land on the proposal's refinement thread, a vote is tagged with the voter's
+/// name and role, and each change reaches the stream as `proposal.updated`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn comments_and_votes_show_who_and_stream_updates() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (_, pid) = filed_proposal(&h, Some(h.agent_id)).await;
+    let mut rx = h.events(None).await;
+
+    let listed = h.get("/v1/proposals").await["proposals"][0].clone();
+    assert_eq!(listed["commentCount"], 0);
+    assert_eq!(listed["requiredApprovals"], 1);
+    assert_eq!(listed["qualifyingApprovals"], 0);
+    assert_eq!(listed["votes"], json!([]));
+    assert_eq!(listed["myVote"], Value::Null);
+    assert_eq!(listed["canVote"], true);
+
+    let empty = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "  " }))).await;
+    assert_eq!(empty.0, 400);
+
+    let c = h
+        .send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "Looks close" })))
+        .await;
+    assert_eq!(c["comment"]["text"], "Looks close");
+    assert_eq!(c["comment"]["requestChanges"], false);
+    assert_eq!(c["comment"]["author"], "Phone");
+    assert_eq!(c["proposal"]["commentCount"], 1);
+    let cr = h
+        .send(
+            reqwest::Method::POST,
+            &format!("/v1/proposals/{pid}/comments"),
+            Some(json!({ "text": "Rename the helper", "requestChanges": true })),
+        )
+        .await;
+    assert_eq!(cr["proposal"]["changeRequestCount"], 1);
+    let thread = h.get(&format!("/v1/proposals/{pid}/comments")).await;
+    let texts: Vec<&str> = thread["comments"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
+    assert_eq!(texts, vec!["Looks close", "Rename the helper"]);
+
+    let approved = box_vote(&h, &pid.to_string(), true).await;
+    let p = &approved["proposal"];
+    assert_eq!(p["status"], "approved");
+    assert_eq!(p["myVote"], "approve");
+    assert_eq!(p["qualifyingApprovals"], 1);
+    assert_eq!(p["quorumMet"], true);
+    assert_eq!(p["votes"][0]["voter"], "Phone");
+    assert_eq!(p["votes"][0]["approved"], true);
+    assert!(["owner", "admin", "contributor"].contains(&p["votes"][0]["role"].as_str().unwrap()), "{p}");
+    // A later reject replaces this voter's vote (latest wins), as on the desktop.
+    let rejected = box_vote(&h, &pid.to_string(), false).await;
+    assert_eq!(rejected["proposal"]["myVote"], "reject");
+    assert_eq!(rejected["proposal"]["votes"].as_array().unwrap().len(), 1);
+
+    let one = h.get(&format!("/v1/proposals/{pid}")).await;
+    assert_eq!(one["proposal"]["status"], "rejected");
+    assert_eq!(one["proposal"]["comments"].as_array().unwrap().len(), 2);
+
+    let seen = collect_until(&mut rx, 5, |evs| {
+        evs.iter().filter(|(n, d, _)| n == "proposal.updated" && d["proposal"]["id"] == json!(pid)).count() >= 4
+    })
+    .await;
+    let updates: Vec<&Value> = seen.iter().filter(|(n, _, _)| n == "proposal.updated").map(|(_, d, _)| &d["proposal"]).collect();
+    assert!(updates.len() >= 4, "{seen:?}");
+    assert_eq!(updates.last().unwrap()["status"], "rejected");
+
+    // And it synced: the desktop sees the thread and the vote.
+    sync_once(&h.desktop).await.unwrap();
+    let mut desktop_seen = false;
+    for _ in 0..30 {
+        sync_once(&h.desktop).await.unwrap();
+        let svc = open_service(&h.desktop).unwrap();
+        let found = svc
+            .store()
+            .list_session_ids()
+            .unwrap()
+            .into_iter()
+            .filter_map(|id| svc.load(id).ok().flatten())
+            .flat_map(|s| s.proposals)
+            .find(|p| p.id == pid);
+        if found.as_ref().is_some_and(|p| p.refinements.len() == 2 && p.approvals.len() == 1) {
+            desktop_seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(desktop_seen, "the desktop never saw the phone's notes and vote");
+    h.handle.shutdown();
+}
+
+/// "Send to agent to revise" from the phone: the change request rides the
+/// thread, the instruction is posted to the producing agent as a mention, and
+/// the revision that agent files comes back linked to the original.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_changes_asks_the_agent_and_links_the_revision() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
+
+    // Nothing on the thread yet: nothing to forward.
+    let bare = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), None).await;
+    assert_eq!(bare.0, 400, "{}", bare.1);
+
+    let res = h
+        .send(
+            reqwest::Method::POST,
+            &format!("/v1/proposals/{pid}/request-changes"),
+            Some(json!({ "note": "Use a constant, not a literal" })),
+        )
+        .await;
+    let body = res["message"]["body"].as_str().unwrap();
+    assert!(body.starts_with("@coder Please revise your proposal"), "{body}");
+    assert!(body.contains("- Use a constant, not a literal"), "{body}");
+    let thread: Vec<&str> =
+        res["proposal"]["comments"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
+    assert_eq!(thread, vec!["Use a constant, not a literal", "Sent to the agent to revise."]);
+    assert!(res["proposal"]["comments"].as_array().unwrap().iter().all(|c| c["requestChanges"] == true));
+    {
+        let svc = h.handle.shared.lock();
+        let s = svc.load(chat_id).unwrap().unwrap();
+        let pending = ligus_runtime::chat_service::pending_mentions(&s);
+        assert!(pending.iter().any(|m| m.agent_id == h.agent_id), "the revision request is queued work for @coder");
+    }
+
+    // The agent's turn files a new version (wherever it ran).
+    let mut rx = h.events(None).await;
+    let child = {
+        let mut svc = h.handle.shared.lock();
+        let mut p = ligus_core::ActionProposal::file_diff(
+            "@coder proposed changes to 1 file",
+            "",
+            "diff --git a/y b/y\n".into(),
+            vec!["y".into()],
+        );
+        p.producing_agent_id = Some(h.agent_id);
+        let id = p.id;
+        svc.upsert_proposal(chat_id, h.handle.shared.ws, p).unwrap();
+        id
+    };
+    h.handle.shared.after_write();
+    let all = h.get("/v1/proposals?status=all").await;
+    let find = |id: Uuid| all["proposals"].as_array().unwrap().iter().find(|p| p["id"] == json!(id)).unwrap().clone();
+    assert_eq!(find(child)["parentId"], json!(pid));
+    assert_eq!(find(pid)["supersededBy"], json!(child));
+    let open: Vec<Value> = h.get("/v1/proposals").await["proposals"].as_array().unwrap().clone();
+    assert_eq!(open.len(), 1, "the superseded version left the inbox");
+    assert_eq!(open[0]["id"], json!(child));
+    let seen = collect_until(&mut rx, 5, |evs| {
+        evs.iter().any(|(n, d, _)| n == "proposal.updated" && d["proposal"]["supersededBy"] == json!(child))
+    })
+    .await;
+    assert!(seen.iter().any(|(n, _, _)| n == "proposal.created"), "{seen:?}");
+
+    // A revised proposal can't be sent back again.
+    let again = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "x" }))).await;
+    assert_eq!(again.0, 409);
+
+    // One from the chat's primary runtime has no agent the phone can address.
+    let (_, primary) = filed_proposal(&h, None).await;
+    let res = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{primary}/request-changes"), Some(json!({ "note": "x" }))).await;
+    assert_eq!(res.0, 409, "{}", res.1);
+    h.handle.shutdown();
+}
+
+/// Role gates hold exactly as on the desktop: a viewer can't vote, comment or
+/// send a proposal back — the core's authz refuses the event and the phone
+/// gets 403 — and the proposal JSON says so up front (`canVote: false`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_viewer_cannot_vote_comment_or_request_changes() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, pid) = filed_proposal(&h, Some(h.agent_id)).await;
+    let me = h.handle.shared.my_actor_id();
+    let ws = h.handle.shared.ws;
+
+    // Wait for the box's own membership to reach the desktop, then the owner
+    // demotes it to viewer.
+    let mut demoted = false;
+    for _ in 0..50 {
+        sync_once(&h.desktop).await.unwrap();
+        let mut svc = open_service(&h.desktop).unwrap();
+        let cfg = workspace_config_session_id(ws);
+        let known = svc.load(cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me));
+        if known {
+            svc.set_member_role(cfg, ws, me.clone(), ligus_core::WorkspaceRole::Viewer).unwrap();
+            drop(svc);
+            sync_once(&h.desktop).await.unwrap();
+            demoted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(demoted, "the box never joined the desktop's roster");
+    let mut is_viewer = false;
+    for _ in 0..50 {
+        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        if s.role_of(&me) == ligus_core::WorkspaceRole::Viewer {
+            is_viewer = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(is_viewer, "the demotion never synced to the box");
+
+    let p = h.get(&format!("/v1/proposals/{pid}")).await;
+    assert_eq!(p["proposal"]["canVote"], false);
+    assert_eq!(p["proposal"]["myRole"], "viewer");
+    for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
+        assert_gone(&h, &path, None, "vote").await;
+    }
+    for (path, body) in [
+        (format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "hi" }))),
+        (format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))),
+    ] {
+        let (code, v) = status_of(&h, reqwest::Method::POST, &path, body).await;
+        assert_eq!(code, 403, "{path}: {v}");
+    }
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty() && p.refinements.is_empty(), "a denied write left a trace");
+    assert_eq!(p.status, ligus_core::ProposalStatus::Open);
+    drop(s);
+    h.handle.shutdown();
+}
+
+/// Approving from the phone never applies anything (auto-apply is cut in
+/// 0.1), and never turns a proposal a qualifying reviewer already rejected
+/// into anything else: quorum stays met after a reject, but the folded status
+/// is Rejected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approving_never_applies_and_never_overrides_a_rejection() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let diff = |name: &str| {
+        format!("diff --git a/{name} b/{name}\nnew file mode 100644\n--- /dev/null\n+++ b/{name}\n@@ -0,0 +1 @@\n+hi\n")
+    };
+    let file = |name: &str| {
+        let mut p = ligus_core::ActionProposal::file_diff(format!("add {name}"), "", diff(name), vec![name.into()]);
+        p.producing_agent_id = Some(h.agent_id);
+        p
+    };
+    let (rejected, control) = (file("rejected.txt"), file("approved.txt"));
+    let (rid, cid) = (rejected.id, control.id);
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.upsert_proposal(chat_id, ws, rejected).unwrap();
+        svc.upsert_proposal(chat_id, ws, control).unwrap();
+    }
+    h.handle.shared.after_write();
+    // The desktop founder (Owner) rejected it, and that vote synced in.
+    for _ in 0..100 {
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == rid)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    open_service(&h.desktop).unwrap().vote_on_proposal(chat_id, ws, rid, false).unwrap().expect("desktop sees the proposal");
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        let seen = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        if seen.proposals.iter().find(|p| p.id == rid).is_some_and(|p| p.status == ligus_core::ProposalStatus::Rejected) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let res = box_vote(&h, &rid.to_string(), true).await;
+    assert_eq!(res["proposal"]["status"], "rejected", "{res}");
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
+    assert!(!wt.join("rejected.txt").exists(), "a rejected proposal was applied");
+    {
+        let svc = h.handle.shared.lock();
+        let s = svc.load(chat_id).unwrap().unwrap();
+        let p = s.proposals.iter().find(|p| p.id == rid).unwrap();
+        assert_eq!(p.status, ligus_core::ProposalStatus::Rejected);
+    }
+
+    // Control: without a rejection the box votes, but a service member
+    // never applies on its own (Phase B): only to fulfil a person's request.
+    let res = box_vote(&h, &cid.to_string(), true).await;
+    assert_ne!(res["proposal"]["status"], "applied", "{res}");
+    assert!(!wt.join("approved.txt").exists(), "a service box applied on its own");
+    assert!(!wt.join("rejected.txt").exists());
+    h.handle.shutdown();
+}
+
+/// An alternative in an open proposal set is never applied on approval (the
+/// desktop applies it only after the set's pre-flight). The phone sees which
+/// set it belongs to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approving_a_set_alternative_never_applies_it() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let diff = "diff --git a/alt.txt b/alt.txt\nnew file mode 100644\n--- /dev/null\n+++ b/alt.txt\n@@ -0,0 +1 @@\n+hi\n";
+    let mut a = ligus_core::ActionProposal::file_diff("alt A", "", diff.into(), vec!["alt.txt".into()]);
+    a.producing_agent_id = Some(h.agent_id);
+    let b = ligus_core::ActionProposal::new("alt B", ligus_core::ProposalKind::Decision, "planner");
+    let aid = a.id;
+    let set_id = {
+        let mut svc = h.handle.shared.lock();
+        let set = ligus_core::ProposalSet::new("Which?", "planner", vec![]);
+        svc.open_proposal_set(chat_id, ws, set, vec![a, b]).unwrap().id
+    };
+    h.handle.shared.after_write();
+    let res = box_vote(&h, &aid.to_string(), true).await;
+    assert_eq!(res["proposal"]["status"], "approved", "{res}");
+    assert_eq!(res["proposal"]["setId"], json!(set_id));
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
+    assert!(!wt.join("alt.txt").exists(), "a set alternative was applied without its pre-flight");
+    h.handle.shutdown();
+}
+
+/// A stop whose grace runs out mid-turn stops the turn (its own stop
+/// signal), so the worker ends cleanly: the reply is no longer streaming and
+/// the asker is told to ask again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_past_its_grace_stops_the_turn_in_flight() {
+    let (endpoint, model) = spawn_model(vec![vec![HANG.to_string()]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    // Wait until the turn is streaming against the stalled model.
+    for _ in 0..1200 {
+        if !model.bodies.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!model.bodies.lock().unwrap().is_empty(), "the turn reached the model");
+    assert_eq!(h.handle.shared.turn_stops.running(chat_id), 1);
+    let started = std::time::Instant::now();
+    assert!(h.handle.stop(Duration::from_millis(300)).await, "the stopped turn lets the worker finish");
+    assert!(started.elapsed() < Duration::from_secs(20));
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder: {:?}", s.messages);
+    assert!(s.messages.iter().any(|m| m.body.contains("shutting down")), "the asker is told: {:?}", s.messages);
+}
+
+/// A turn cut off by a restart (placeholder still streaming, stamped as the
+/// mention's reply) is finished as interrupted on the next start instead of
+/// staying "streaming" forever and never being answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_finishes_a_reply_cut_off_mid_stream() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mention = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let reply = {
+        let mut svc = h.handle.shared.lock();
+        let mid = svc
+            .begin_assistant_message(chat_id, ws, "coder".to_string(), "gw".to_string(), Some(h.agent_id), Some(mention))
+            .unwrap();
+        // Trailing space: a trailing token is held back from the log until
+        // text follows it (a split secret is never streamed in halves).
+        svc.append_chunk(chat_id, ws, mid, "partial answer ".to_string()).unwrap();
+        mid
+    };
+    assert!(h.handle.stop(Duration::from_secs(5)).await, "an idle worker stops at once");
+
+    // Same box, same data dir: start again.
+    let serve_cfg = config(&h._tmp.path().join("serve"), h.desktop.relay_url.as_deref().unwrap(), &h.desktop.room);
+    let mut opts = ServeOptions::from_flags(&serve_cfg, Some("127.0.0.1:0".into()), None, None, None, None, Some("sff".into()), None, false)
+        .unwrap();
+    opts.prometheus_url = "http://127.0.0.1:9".into();
+    let again = start(serve_cfg, opts).await.unwrap();
+    {
+        let svc = again.shared.lock();
+        let s = svc.load(chat_id).unwrap().unwrap();
+        let m = s.messages.iter().find(|m| m.id == reply).unwrap();
+        assert!(!m.is_streaming, "still streaming after a restart");
+        assert!(m.body.starts_with("partial answer"), "{}", m.body);
+        assert!(m.body.ends_with(crate::worker::INTERRUPTED_NOTE), "{}", m.body);
+    }
+    let base = format!("http://{}", again.addr);
+    let msgs: Value = h
+        .client
+        .get(format!("{base}/v1/chats/{chat_id}/messages"))
+        .bearer_auth(again.shared.token())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let m = msgs["messages"].as_array().unwrap().iter().find(|m| m["id"] == json!(reply)).unwrap().clone();
+    assert_eq!(m["streaming"], json!(false));
+    again.shutdown();
+}
+
+/// Regression (an untagged "Hello" in a chat): the desktop's @ligus greeting
+/// listed the box's agents by handle, and each of them answered it with an
+/// empty reply. Exactly one agent is woken, the greeting reaches its model as
+/// the user's turn, and a model that returns nothing posts a notice instead
+/// of an empty message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice() {
+    let (endpoint, model) = spawn_model(vec![vec![]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let host = this_host(&h).await;
+    let chat_agent = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let mut agent = WorkspaceAgent::new("chat", "gw");
+        agent.owner_actor_id = svc.author().id.clone();
+        let id = agent.id;
+        svc.add_agent(ws, ws, agent).unwrap();
+        id
+    };
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..50 {
+        if h.get("/v1/agents").await["agents"].as_array().unwrap().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bind_here(&h, &host, &[h.agent_id, chat_agent]).await;
+    h.handle.shared.sync_kick.notify_one();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sync_once(&h.desktop).await.unwrap();
+
+    // On the desktop: Alex says hello; @ligus greets and lists the agents.
+    let chat_id = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let chat = svc.create_chat("general", ws, "gw").unwrap();
+        svc.post_user_message(chat.id, ws, "Hello").unwrap();
+        let m = svc.begin_assistant_message(chat.id, ws, "Ligus", "gw", None, None).unwrap();
+        svc.complete_assistant_message(chat.id, ws, m, "Hi Alex! I can take something myself, or hand it to @chat or @coder.")
+            .unwrap();
+        chat.id
+    };
+    sync_once(&h.desktop).await.unwrap();
+
+    let replies = || {
+        let svc = h.handle.shared.lock();
+        svc.load(chat_id)
+            .unwrap()
+            .map(|s| s.messages.into_iter().filter(|m| m.responder_id.is_some()).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    for _ in 0..100 {
+        if replies().iter().any(|m| !m.is_streaming) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // Give a second (wrong) responder time to show up, then check.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let got = replies();
+    assert_eq!(got.len(), 1, "exactly one agent answers: {got:?}");
+    assert_eq!(got[0].author, "chat", "the agent named first");
+    assert!(!got[0].is_streaming);
+    assert!(got[0].body.starts_with("[error]") && got[0].body.contains("empty reply"), "{}", got[0].body);
+
+    // The model saw the greeting as the user's turn, not an assistant turn to continue.
+    let bodies = model.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 1, "one model call");
+    let last = bodies[0]["messages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["role"], "user", "{last}");
+    assert!(last["content"].as_str().unwrap().contains("Ligus: Hi Alex!"), "{last}");
+    h.handle.shutdown();
+}
+
+/// refresh() runs at once from the sync loop, the worker and API handlers. A
+/// refresh that loaded its projection before a newer one was diffed must not
+/// roll the differ back, or the next refresh re-emits message.done (and a
+/// second ntfy push). Deterministic: the test holds the differ lock while a
+/// refresh is in flight and advances the differ itself in between.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_refresh_never_rolls_the_differ_back() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let shared = h.handle.shared.clone();
+    let ws = shared.ws;
+    let mid = shared
+        .lock()
+        .begin_assistant_message(chat_id, ws, "coder".to_string(), "gw".to_string(), Some(h.agent_id), None)
+        .unwrap();
+    shared.refresh(); // the differ knows the reply is streaming
+
+    let (_, mut rx) = shared.hub.subscribe(None);
+    let guard = shared.differ.lock().unwrap();
+    // A: a refresh that starts while the reply is still streaming.
+    let slow = {
+        let shared = shared.clone();
+        std::thread::spawn(move || shared.refresh())
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    // The reply completes and a newer refresh diffs it first.
+    shared.lock().complete_assistant_message(chat_id, ws, mid, "done").unwrap();
+    let mut differ = guard;
+    let changes = differ.diff(&shared.workspace_chats().unwrap());
+    assert!(changes.contains(&hub::Change::MessageDone { chat: chat_id, message: mid }));
+    drop(differ);
+    slow.join().unwrap();
+    shared.refresh();
+
+    let mut repeats = 0;
+    while let Ok(ev) = rx.try_recv() {
+        if ev.name == "message.done" && ev.data["message"]["id"] == json!(mid) {
+            repeats += 1;
+        }
+    }
+    assert_eq!(repeats, 0, "message.done was emitted again after the differ had seen it");
+    h.handle.shutdown();
+}
+
+/// A fresh box whose first sync fails must not seed its own workspace config
+/// log (naming itself Owner); it refuses to start until the relay answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_box_with_unreachable_relay_refuses_to_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("serve");
+    let room = format!("serve-offline-{}", Uuid::new_v4());
+    let cfg = config(&dir, "http://127.0.0.1:9", &room);
+    let mut opts = ServeOptions::from_flags(&cfg, Some("127.0.0.1:0".into()), None, None, None, None, Some("sff".into()), None, false)
+        .unwrap();
+    opts.prometheus_url = "http://127.0.0.1:9".into();
+    let err = start(cfg.clone(), opts).await.err().expect("must not start");
+    assert!(err.to_string().contains("no copy of the workspace"), "{err}");
+    let ws = crate::uuid_of_room(&room);
+    assert!(open_service(&cfg).unwrap().load(workspace_config_session_id(ws)).unwrap().is_none(), "no config log seeded");
+}
+
+/// A box enrolled from a relayless invite (relay_url = "") is told it has
+/// no relay URL, before any HTTP, never reqwest's "builder error".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn box_without_a_relay_url_says_so_by_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("serve");
+    let cfg = config(&dir, "", &format!("serve-relayless-{}", Uuid::new_v4()));
+    let mut opts = ServeOptions::from_flags(&cfg, Some("127.0.0.1:0".into()), None, None, None, None, Some("mac-test".into()), None, false)
+        .unwrap();
+    opts.prometheus_url = "http://127.0.0.1:9".into();
+    let err = start(cfg, opts).await.err().expect("must not start").to_string();
+    assert!(err.contains("no relay URL") && err.contains("re-enroll"), "{err}");
+    assert!(!err.contains("builder error"), "{err}");
+}
+
+#[test]
+fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
+    let cfg = Config {
+        data_dir: PathBuf::from("/tmp/x"),
+        relay_url: None,
+        token: None,
+        room: "r".into(),
+        key: None,
+        epoch_keys: Vec::new(),
+    };
+    let opts = |listen: &str, url: Option<&str>, topic: Option<&str>| {
+        ServeOptions::from_flags(
+            &cfg,
+            Some(listen.into()),
+            None,
+            url.map(Into::into),
+            topic.map(Into::into),
+            None,
+            Some("sff".into()),
+            None,
+            false,
+        )
+    };
+    assert!(opts("0.0.0.0:8787", None, None).is_err());
+    assert!(opts("100.101.102.104:8787", Some("http://n"), None).is_err());
+    let ok = opts("100.101.102.104:8787", Some("http://n:8095"), Some("t")).unwrap();
+    assert_eq!(ok.server_url(), "http://100.101.102.104:8787");
+    assert_eq!(ok.token_file, PathBuf::from("/tmp/x/serve.token"));
+    assert_eq!(ok.ntfy.unwrap().endpoint(), "http://n:8095/t");
+}
+
+/// Live: one agent turn end to end against the lab gateway with a built-in
+/// tool call (`read_file` of a planted note). Skipped unless
+/// `LIGUS_SERVE_LIVE_ENDPOINT` is set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_gateway_turn_reads_a_file() {
+    let Some(endpoint) = ligus_core::compat::var("LIGUS_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
+        eprintln!("skipping: LIGUS_SERVE_LIVE_ENDPOINT unset");
+        return;
+    };
+    let models = ligus_core::compat::var("LIGUS_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
+    for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+        let word = format!("lantern{}", &Uuid::new_v4().simple().to_string()[..6]);
+        let note = format!("The secret word is {word}.\n");
+        let h = harness(&endpoint, model, &[("NOTE.txt", note.as_str()), ("README.md", "# notes\n")]).await;
+        let host = this_host(&h).await;
+        bind_here(&h, &host, &[h.agent_id]).await;
+        let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "live" }))).await;
+        let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+        let mut rx = h.events(None).await;
+        let started = std::time::Instant::now();
+        h.send(
+            reqwest::Method::POST,
+            &format!("/v1/chats/{chat_id}/messages"),
+            Some(json!({ "body": "@coder Use the read_file tool to read NOTE.txt, then reply with only the secret word it contains." })),
+        )
+        .await;
+        let seen = collect_until(&mut rx, 300, |evs| {
+            evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["role"] == "agent")
+        })
+        .await;
+        let done = seen
+            .iter()
+            .find(|(n, d, _)| n == "message.done" && d["message"]["role"] == "agent")
+            .unwrap_or_else(|| panic!("{model}: no reply within the timeout"));
+        let body = done.1["message"]["body"].as_str().unwrap_or("");
+        let deltas = seen.iter().filter(|(n, _, _)| n == "message.delta").count();
+        eprintln!("{model}: {:.1}s, {deltas} deltas, reply: {body:?}", started.elapsed().as_secs_f64());
+        assert!(body.contains(&word), "{model}: the reply should carry the word read from the file: {body:?}");
+        h.handle.shutdown();
+    }
+}
+
+#[path = "tunnel/e2e_tests.rs"]
+mod tunnel_e2e;
+
+/// A message the box wrote as its own (since retired) member reads on the
+/// phone as the owner's, via the box.
+#[test]
+fn retired_box_messages_read_as_the_owner_via_the_box() {
+    use ligus_core::{ActorIdentity, ActorKind, ChatMessage, ChatSession, MessageRole, WorkspaceMember, WorkspaceRole};
+    let owner = ActorIdentity::new("owner-1", "Alex", ActorKind::Human);
+    let mut chat = ChatSession::new("c", Uuid::new_v4(), "rt");
+    chat.members = vec![WorkspaceMember {
+        id: owner.id.clone(),
+        actor: owner.clone(),
+        role: WorkspaceRole::Owner,
+        title: String::new(),
+        index: 1,
+        joined_at: Default::default(),
+    }];
+    let mut links = ligus_core::DeviceLinks::default();
+    assert!(links.link_retired(&chat, "box-1", "owner-1"));
+    let mut old = ChatMessage::new(MessageRole::User, "Phone", "from the box");
+    old.actor_identity = Some(ActorIdentity::new("box-1", "Phone", ActorKind::Human));
+    let v = api::linked_message_dto(&chat, &old, &links, api::Viewer::default());
+    assert_eq!((v["author"].as_str(), v["via"].as_str(), v["actorId"].as_str()), (Some("Alex via Phone"), Some("Phone"), Some("owner-1")));
+    let mut mine = ChatMessage::new(MessageRole::User, "Alex", "from the desktop");
+    mine.actor_identity = Some(owner);
+    let v = api::linked_message_dto(&chat, &mine, &links, api::Viewer::default());
+    assert_eq!(v["author"], "Alex");
+    assert!(v.get("via").is_none());
+}
+
+/// `sync_once` (a daemon's first sync, `ligus sync`, a worker tick) pages
+/// through a room bigger than one relay page until it is caught up, instead
+/// of stopping after the first page.
+#[tokio::test]
+async fn sync_once_pages_through_a_large_room() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router_with_page_cap(2)).await;
+    let room = format!("serve-test-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let chat_id = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let chat = svc.create_chat("general", ws, "gw").unwrap();
+        for i in 0..60 {
+            svc.post_user_message(chat.id, ws, format!("message {i}")).unwrap();
+        }
+        chat.id
+    };
+    let (pushed, _) = sync_once(&desktop).await.unwrap();
+    assert!(pushed > 60, "pushed {pushed}");
+
+    // Far more envelopes than one round (PULL_PAGES_PER_ROUND pages of 2).
+    let fresh = config(&tmp.path().join("fresh"), &relay, &room);
+    std::fs::create_dir_all(&fresh.data_dir).unwrap();
+    let (_, pulled) = sync_once(&fresh).await.unwrap();
+    assert_eq!(pulled, pushed, "the whole room in one sync_once");
+    let svc = open_service(&fresh).unwrap();
+    let chat = svc.load(chat_id).unwrap().expect("chat synced");
+    assert_eq!(chat.messages.len(), 60);
+}
+
+// ── Repos from the phone (`repos_api.rs`) ──────────────────────────────────
+
+/// GitHub stand-in: "repos" are bare repos under `remotes/<owner>/<name>.git`,
+/// change requests are recorded instead of opened.
+struct FakeGitHub {
+    remotes: PathBuf,
+    available: bool,
+    prs: Mutex<Vec<ligus_forge::ChangeRequestDraft>>,
+    /// "owner/name" of a fork → its parent (owner, name, default branch).
+    parents: std::collections::HashMap<String, (String, String, String)>,
+    creds: Arc<dyn ligus_forge::CredentialSource>,
+    id: ligus_forge::ForgeId,
+}
+
+/// The fake's credentials: the box's gh login, signed in or not.
+struct FakeCreds(bool);
+
+#[async_trait::async_trait]
+impl ligus_forge::CredentialSource for FakeCreds {
+    fn source(&self) -> ligus_forge::AuthSource {
+        ligus_forge::AuthSource::Gh
+    }
+    async fn token(&self, _: ligus_forge::Purpose) -> ligus_forge::Result<Option<ligus_forge::Secret>> {
+        Ok(self.0.then(|| ligus_forge::Secret::new("fake")))
+    }
+    fn has_write(&self) -> bool {
+        self.0
+    }
+    fn signed_out_reason(&self) -> Option<String> {
+        (!self.0).then(|| "Run gh auth login on the host".into())
+    }
+    fn git_helper(&self) -> Option<String> {
+        None
+    }
+}
+
+impl FakeGitHub {
+    fn new(remotes: &Path, available: bool) -> Self {
+        Self {
+            remotes: remotes.to_path_buf(),
+            available,
+            prs: Mutex::new(Vec::new()),
+            parents: Default::default(),
+            creds: Arc::new(FakeCreds(available)),
+            id: ligus_forge::ForgeId::github_com(),
+        }
+    }
+}
+
+fn unsupported<T>() -> ligus_forge::Result<T> {
+    Err(ligus_forge::ForgeError::Unsupported("fake".into()))
+}
+
+#[async_trait::async_trait]
+impl ligus_forge::ForgeReader for FakeGitHub {
+    fn kind(&self) -> ligus_forge::ForgeKind {
+        ligus_forge::ForgeKind::GitHub
+    }
+    fn id(&self) -> &ligus_forge::ForgeId {
+        &self.id
+    }
+    async fn list_change_requests(&self, _: &ligus_forge::RepoRef, _: ligus_forge::StateFilter, _: u32) -> ligus_forge::Result<Vec<ligus_forge::ChangeRequest>> {
+        unsupported()
+    }
+    async fn change_request(&self, _: &ligus_forge::RepoRef, _: &str) -> ligus_forge::Result<ligus_forge::ChangeRequest> {
+        unsupported()
+    }
+    async fn review_comments(&self, _: &ligus_forge::RepoRef, _: &str) -> ligus_forge::Result<Vec<ligus_forge::ReviewComment>> {
+        unsupported()
+    }
+    async fn issues(&self, _: &ligus_forge::RepoRef, _: ligus_forge::StateFilter, _: u32) -> ligus_forge::Result<Vec<ligus_forge::Issue>> {
+        unsupported()
+    }
+    async fn issue(&self, _: &ligus_forge::RepoRef, _: &str) -> ligus_forge::Result<ligus_forge::Issue> {
+        unsupported()
+    }
+    async fn ci_status(&self, _: &ligus_forge::RepoRef, _: &str) -> ligus_forge::Result<ligus_forge::CiStatus> {
+        unsupported()
+    }
+    async fn file_at(&self, _: &ligus_forge::RepoRef, _: &str, _: &str) -> ligus_forge::Result<ligus_forge::FileAtRef> {
+        unsupported()
+    }
+}
+
+#[async_trait::async_trait]
+impl ligus_forge::Forge for FakeGitHub {
+    fn web_base(&self) -> &str {
+        "https://github.com"
+    }
+    fn capabilities(&self) -> ligus_forge::ForgeCaps {
+        ligus_forge::ForgeCaps { draft_cr: true, fork_api: true, ci_status: true, review_threads: true, issues: true, api_open_cr: true, device_flow: true }
+    }
+    fn creds(&self) -> &Arc<dyn ligus_forge::CredentialSource> {
+        &self.creds
+    }
+    async fn whoami(&self) -> ligus_forge::Result<Option<ligus_forge::ForgeUser>> {
+        Ok(self.available.then(|| ligus_forge::ForgeUser { id: "1".into(), login: "acme".into(), name: String::new() }))
+    }
+    async fn list_repos(&self, q: &ligus_forge::RepoQuery, _login: &str) -> ligus_forge::Result<Vec<ligus_forge::RepoSummary>> {
+        let mut out = Vec::new();
+        for owner in std::fs::read_dir(&self.remotes).unwrap().flatten() {
+            for repo in std::fs::read_dir(owner.path()).unwrap().flatten() {
+                let name = repo.file_name().to_string_lossy().trim_end_matches(".git").to_string();
+                if q.q.as_deref().is_some_and(|t| !name.contains(t)) {
+                    continue;
+                }
+                out.push(ligus_forge::RepoSummary {
+                    repo: ligus_forge::RepoRef::new(owner.file_name().to_string_lossy(), name),
+                    description: String::new(),
+                    private: false,
+                    default_branch: "main".into(),
+                    updated_at: String::new(),
+                    web_url: String::new(),
+                    fork: false,
+                });
+            }
+        }
+        Ok(out)
+    }
+    async fn owners(&self, login: &str) -> ligus_forge::Result<Vec<String>> {
+        Ok(vec![login.to_string(), "acme-org".into()])
+    }
+    async fn repo(&self, r: &ligus_forge::RepoRef) -> ligus_forge::Result<Option<ligus_forge::RepoMeta>> {
+        if !self.remotes.join(&r.owner).join(format!("{}.git", r.name)).exists() {
+            return Ok(None);
+        }
+        Ok(Some(ligus_forge::RepoMeta {
+            repo: r.clone(),
+            default_branch: "main".into(),
+            parent: self.parents.get(&r.full_name()).map(|(o, n, b)| (ligus_forge::RepoRef::new(o.clone(), n.clone()), b.clone())),
+            private: false,
+            web_url: String::new(),
+            can_push: Some(true),
+        }))
+    }
+    async fn create_fork(&self, _: &ligus_forge::RepoRef) -> ligus_forge::Result<ligus_forge::RepoRef> {
+        panic!("this host never creates forks")
+    }
+    async fn open_change_request(&self, d: &ligus_forge::ChangeRequestDraft) -> ligus_forge::Result<ligus_forge::ChangeRequestOutcome> {
+        let mut prs = self.prs.lock().unwrap();
+        let existing = prs.iter().any(|p| p.base == d.base && p.head == d.head && p.head_branch == d.head_branch);
+        prs.push(d.clone());
+        Ok(ligus_forge::ChangeRequestOutcome::Opened { number: "1".into(), url: format!("https://github.com/{}/pull/1", d.base.full_name()), draft_supported: true, existing })
+    }
+    fn clone_url(&self, r: &ligus_forge::RepoRef, _: ligus_forge::Transport) -> String {
+        format!("file://{}/{}/{}.git", self.remotes.display(), r.owner, r.name)
+    }
+    fn repo_of_remote(&self, url: &str) -> Option<ligus_forge::RepoRef> {
+        url.starts_with("file://").then(|| crate::repos::parse_remote(url)).flatten().map(|r| ligus_forge::RepoRef::new(r.owner, r.name))
+    }
+    fn git_auth_args(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// Make `fake` this box's only code host (the github.com connection).
+fn use_fake(h: &Harness, fake: Arc<FakeGitHub>) {
+    h.handle.shared.repos.set_forges(vec![super::repos_api::ForgeHandle { conn: ligus_forge::Connection::github_gh(), forge: fake }]);
+}
+
+/// A bare "GitHub" repo `owner/name` with one commit on `main`; returns a
+/// working clone to push more commits from.
+fn fake_remote(remotes: &Path, owner: &str, name: &str) -> PathBuf {
+    let bare = remotes.join(owner).join(format!("{name}.git"));
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    let work = remotes.parent().unwrap().join(format!("work-{owner}-{name}"));
+    make_repo(&work, &[("README.md", "hello\n")]);
+    git(&work, &["branch", "-M", "main"]);
+    git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(&work, &["push", "-q", "origin", "main"]);
+    work
+}
+
+async fn wait_job(h: &Harness, id: &str) -> Value {
+    for _ in 0..100 {
+        let j = h.get(&format!("/v1/repos/clone/{id}")).await["job"].clone();
+        if j["state"] != "running" {
+            return j;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("clone job {id} never finished");
+}
+
+/// A plain (non-fork) checkout opens its PR on origin's repository, so the
+/// push must land there too: a pushurl or a pushInsteadOf rewrite that
+/// sends it to another repository is refused, and nothing is pushed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_fork_push_target_must_equal_origin_fetch_repo() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "acme", "widget");
+    fake_remote(&remotes, "mallory", "widget");
+    let fake = Arc::new(FakeGitHub::new(&remotes, true));
+    use_fake(&h, fake.clone());
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let checkout = h.handle.shared.cfg.data_dir.join("repos").join("acme__widget");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "push target" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme/widget" }))).await;
+    let wt = ligus_runtime::git_worktree::chat_worktree(&checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("THING.md"), "thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "thing"]);
+    let mallory = format!("file://{}/mallory/widget.git", remotes.display());
+    let mallory_bare = remotes.join("mallory").join("widget.git");
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    for (key, value) in [
+        ("remote.origin.pushurl".to_string(), mallory.clone()),
+        (format!("url.file://{}/mallory/.pushInsteadOf", remotes.display()), format!("file://{}/acme/", remotes.display())),
+    ] {
+        git(&checkout, &["config", &key, &value]);
+        let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+        assert_eq!(c, 409, "{key}: {v}");
+        let o = std::process::Command::new("git").arg("-C").arg(&mallory_bare).args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/ligus/chat/{chat_id}")]).output().unwrap();
+        assert!(!o.status.success(), "{key}: the chat branch was pushed to mallory/widget");
+        git(&checkout, &["config", "--unset-all", &key]);
+    }
+    assert!(fake.prs.lock().unwrap().is_empty(), "no PR opened");
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+    assert_eq!(pr["url"], "https://github.com/acme/widget/pull/1", "{pr}");
+}
+
+/// The phone lists repos, clones one, switches a chat onto it (and back),
+/// pulls, and opens a PR from the chat's branch; the agent's turn is told
+/// which repo and branch it works in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repos_clone_switch_pull_and_pr() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    let work = fake_remote(&remotes, "acme", "widget");
+    let fake = Arc::new(FakeGitHub::new(&remotes, true));
+    use_fake(&h, fake.clone());
+
+    // Listing: no local checkouts yet; GitHub lists the fake remote.
+    let v = h.get("/v1/repos").await;
+    assert_eq!(v["local"], json!([]));
+    assert_eq!(v["workspaceDefault"], "repo", "an absolute workspace binding shows only its last component");
+    assert!(!v.to_string().contains(h._tmp.path().to_str().unwrap()), "no host paths: {v}");
+    assert_eq!(v["github"]["available"], true);
+    assert_eq!(v["github"]["owners"], json!(["acme", "acme-org"]));
+    assert_eq!(v["github"]["repos"][0]["fullName"], "acme/widget");
+    assert_eq!(v["github"]["repos"][0]["cloned"], false);
+
+    // Strict input.
+    for bad in ["../etc", "a/b/c", "https://gitlab.com/a/b", "file:///etc", "git@github.com:a/b.git"] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": bad }))).await;
+        assert_eq!(code, 400, "{bad}");
+    }
+
+    // Clone (a job), then again = fetch.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "https://github.com/acme/widget" }))).await;
+    assert_eq!(job["job"]["action"], "clone");
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let checkout = h.handle.shared.cfg.data_dir.join("repos").join("acme__widget");
+    assert!(checkout.join("README.md").exists());
+    let again = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(again["job"]["action"], "fetch");
+    assert_eq!(wait_job(&h, again["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let v = h.get("/v1/repos?q=widg").await;
+    assert_eq!(v["local"][0]["name"], "acme__widget");
+    assert_eq!(v["local"][0]["defaultBranch"], "main");
+    assert_eq!(v["local"][0]["dirty"], false);
+    assert_eq!(v["github"]["repos"][0]["cloned"], true);
+    assert_eq!(v["github"]["repos"][0]["checkout"], "acme__widget");
+
+    // Switch a chat onto it.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "repo picker" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.get(&format!("/v1/chats/{chat_id}/repo")).await;
+    assert_eq!(r["repo"]["source"], "workspace");
+    for (bad, code) in [("../etc", 400), ("nope", 404), ("/abs", 400)] {
+        let (c, _) = status_of(&h, reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": bad }))).await;
+        assert_eq!(c, code, "{bad}");
+    }
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(r["repo"]["name"], "acme__widget");
+    assert_eq!(r["repo"]["source"], "chat");
+    assert_eq!(r["chatBranch"], format!("ligus/chat/{chat_id}"));
+    let b = RepoBindings::load(&h.handle.shared.cfg.data_dir);
+    assert_eq!(b.chats.get(&chat_id).map(String::as_str), Some("acme__widget"));
+    let d = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    assert_eq!(d["repo"]["repo"]["name"], "acme__widget");
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    assert!(msgs.to_string().contains("now works in acme__widget"), "{msgs}");
+
+    // The agent's turn (hosted here) is told the repo and branch.
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut system = String::new();
+    for _ in 0..300 {
+        if let Some(b) = model.bodies.lock().unwrap().first() {
+            system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(system.contains("`acme__widget`") && system.contains(&format!("ligus/chat/{chat_id}")), "{system}");
+
+    // Pull fast-forwards a clean checkout.
+    std::fs::write(work.join("NEW.md"), "new\n").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-qm", "upstream"]);
+    git(&work, &["push", "-q", "origin", "main"]);
+    let p = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(p["updated"], true, "{p}");
+    assert!(checkout.join("NEW.md").exists());
+    std::fs::write(checkout.join("README.md"), "local edit\n").unwrap();
+    let (c, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(c, 409, "dirty checkout: {v}");
+    git(&checkout, &["checkout", "--", "README.md"]);
+
+    // PR: nothing on the chat branch yet → 409; then a commit there → pushed + PR.
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    let (c, _) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+    assert_eq!(c, 409);
+    let wt = ligus_runtime::git_worktree::chat_worktree(&checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("THING.md"), "thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "thing"]);
+    let r = h.get(&format!("/v1/chats/{chat_id}/repo")).await;
+    assert_eq!((r["chatBranchExists"].clone(), r["ahead"].clone()), (json!(true), json!(1)));
+    let (c, _) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "  " }))).await;
+    assert_eq!(c, 400);
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing", "body": "from the phone", "draft": true }))).await;
+    assert_eq!(pr["url"], "https://github.com/acme/widget/pull/1");
+    assert_eq!(pr["base"], "main");
+    let rec = fake.prs.lock().unwrap().clone();
+    assert_eq!(rec.len(), 1);
+    assert_eq!((rec[0].head_branch.as_str(), rec[0].base_branch.as_str(), rec[0].draft), (format!("ligus/chat/{chat_id}").as_str(), "main", true));
+    assert_eq!((rec[0].base.full_name(), rec[0].head.full_name()), ("acme/widget".into(), "acme/widget".into()));
+    assert_eq!((pr["kind"].as_str(), pr["forge"].as_str()), (Some("pr"), Some("github:github.com")));
+    let bare = remotes.join("acme").join("widget.git");
+    git(&bare, &["rev-parse", "--verify", &format!("refs/heads/ligus/chat/{chat_id}")]);
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    assert!(msgs.to_string().contains("Opened pull request: https://github.com/acme/widget/pull/1"));
+
+    // Switch back to the workspace default; the chat branch in acme__widget stays.
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": null }))).await;
+    assert_eq!(r["repo"]["source"], "workspace");
+    git(&checkout, &["rev-parse", "--verify", &format!("refs/heads/ligus/chat/{chat_id}")]);
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme__widget" }))).await;
+    assert_eq!(r["ahead"], 1, "switching back resumes the chat's branch");
+
+    // Signed out: listing says so, PRs are refused clearly, public clones still work.
+    let signed_out = Arc::new(FakeGitHub::new(&remotes, false));
+    use_fake(&h, signed_out);
+    let v = h.get("/v1/repos").await;
+    assert_eq!(v["github"], json!({ "available": false, "reason": "Run gh auth login on the host" }));
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 412, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("gh auth login"));
+    fake_remote(&remotes, "pub", "lib");
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "pub/lib" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+
+    // A clone that fails cleans up after itself.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "ghost/missing" }))).await;
+    let j = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(j["state"], "error");
+    let leftovers: Vec<_> = std::fs::read_dir(h.handle.shared.cfg.data_dir.join("repos"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(leftovers.iter().all(|n| !n.starts_with(".clone-") && n != "ghost__missing"), "{leftovers:?}");
+}
+
+fn rev(dir: &Path, r: &str) -> String {
+    let out = ligus_core::process_util::command("git").arg("-C").arg(dir).args(["rev-parse", r]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    ligus_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success()
+}
+
+/// A fork, end to end with bare repos: clone the parent "via my fork" (gets
+/// `upstream`, fetch-only, base tracking upstream), chat branches start from
+/// upstream, pull fast-forwards from upstream, and a PR pushes a readable
+/// branch to the fork (same branch on later pushes, never forced) and opens
+/// upstream as a draft. Nothing is ever pushed to the upstream repo.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    // Upstream project, and the owner's fork of it (a copy that then falls behind).
+    let up_work = fake_remote(&remotes, "kubeflow", "pipelines");
+    fake_remote(&remotes, "kubeflow", "other");
+    let fork_bare = remotes.join("acme").join("pipelines.git");
+    std::fs::create_dir_all(fork_bare.parent().unwrap()).unwrap();
+    git(h._tmp.path(), &["clone", "-q", "--bare", remotes.join("kubeflow/pipelines.git").to_str().unwrap(), fork_bare.to_str().unwrap()]);
+    let commit = |work: &Path, file: &str| {
+        std::fs::write(work.join(file), format!("{file}\n")).unwrap();
+        git(work, &["add", "-A"]);
+        git(work, &["commit", "-qm", file]);
+        git(work, &["push", "-q", "origin", "main"]);
+    };
+    commit(&up_work, "UPSTREAM1.md");
+    let up_bare = remotes.join("kubeflow/pipelines.git");
+    let mut fake = FakeGitHub::new(&remotes, true);
+    fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
+    let fake = Arc::new(fake);
+    use_fake(&h, fake.clone());
+
+    // Does the account have a fork? Yes for pipelines, no for other.
+    let f = h.get("/v1/repos/fork?repo=kubeflow/pipelines").await;
+    assert_eq!(f["fork"]["fullName"], "acme/pipelines", "{f}");
+    assert_eq!(f["fork"]["cloned"], false);
+    assert_eq!(h.get("/v1/repos/fork?repo=kubeflow/other").await["fork"], Value::Null);
+    // viaFork without a fork: 404, and nothing is created.
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "kubeflow/other", "viaFork": true }))).await;
+    assert_eq!(c, 404, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("doesn't create forks"), "{v}");
+    assert!(!remotes.join("acme/other.git").exists());
+
+    // Clone the parent via the fork.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "kubeflow/pipelines", "viaFork": true }))).await;
+    assert_eq!(job["job"]["checkout"], "acme__pipelines");
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let co = h.handle.shared.cfg.data_dir.join("repos").join("acme__pipelines");
+    assert!(co.join("UPSTREAM1.md").exists(), "base follows upstream, not the stale fork");
+    assert_eq!(rev(&co, "main"), rev(&up_bare, "main"));
+    let out = |args: &[&str]| {
+        let o = ligus_core::process_util::command("git").arg("-C").arg(&co).args(args).output().unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    assert_eq!(out(&["rev-parse", "--abbrev-ref", "main@{upstream}"]), "upstream/main");
+    assert_eq!(out(&["remote", "get-url", "--push", "upstream"]), "DISABLED-push-to-fork-only");
+    assert_eq!(out(&["config", "ligus.chatBase"]), "refs/remotes/upstream/main");
+
+    // Listing shows the fork layout; the parent's GitHub row points at it.
+    let v = h.get("/v1/repos").await;
+    let local = v["local"].as_array().unwrap().iter().find(|r| r["name"] == "acme__pipelines").unwrap().clone();
+    assert_eq!(local["fork"]["upstream"], "kubeflow/pipelines", "{local}");
+    assert_eq!(local["fork"]["baseBranch"], "main");
+    assert_eq!(local["fork"]["upstreamPushDisabled"], true);
+    assert_eq!((local["fork"]["behind"].clone(), local["fork"]["ahead"].clone()), (json!(0), json!(0)));
+    assert_eq!(local["defaultBranch"], "main");
+    let parent_row = v["github"]["repos"].as_array().unwrap().iter().find(|r| r["fullName"] == "kubeflow/pipelines").unwrap().clone();
+    assert_eq!(parent_row["viaForkCheckout"], "acme__pipelines", "{parent_row}");
+    assert_eq!(h.get("/v1/repos/fork?repo=kubeflow/pipelines").await["fork"]["cloned"], true);
+
+    // A chat bound to it: its branch starts from upstream.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Fix: the v2 compiler (again)!" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme__pipelines" }))).await;
+    assert_eq!(r["repo"]["fork"]["upstream"], "kubeflow/pipelines", "{r}");
+    let ctx = crate::repos::turn_context(&h.handle.shared.cfg.data_dir, Uuid::parse_str(&chat_id).unwrap());
+    assert!(ctx.contains("a fork of `kubeflow/pipelines`") && ctx.contains("`upstream/main`"), "{ctx}");
+    // The agent's read-only code-host tools see the fork and its upstream.
+    let b = crate::worker::ServiceSource::forge_for(&*h.handle.shared, Uuid::parse_str(&chat_id).unwrap()).expect("bound to a code host");
+    assert_eq!((b.repo.full_name(), b.upstream.map(|u| u.full_name())), ("acme/pipelines".into(), Some("kubeflow/pipelines".into())));
+    assert_eq!(b.reader.id().as_str(), "github:github.com");
+
+    // Upstream moves; pull fast-forwards the base from upstream.
+    commit(&up_work, "UPSTREAM2.md");
+    let p = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(p["updated"], true, "{p}");
+    assert_eq!(rev(&co, "main"), rev(&up_bare, "main"));
+    let wt = ligus_runtime::git_worktree::chat_worktree(&co, &chat_id).unwrap();
+    assert_eq!(rev(&wt, "HEAD"), rev(&up_bare, "main"), "the chat branch starts from upstream's tip");
+
+    // PR: readable branch on the fork, a draft upstream.
+    std::fs::write(wt.join("FIX.md"), "fix\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fix"]);
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Fix the compiler" }))).await;
+    let want = format!("ligus/fix-the-v2-compiler-again-{}", &chat_id.replace('-', "")[..8]);
+    assert_eq!(pr["pushedBranch"], want.as_str(), "{pr}");
+    assert_eq!((pr["repo"].clone(), pr["base"].clone(), pr["draft"].clone()), (json!("kubeflow/pipelines"), json!("main"), json!(true)));
+    let rec = fake.prs.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        (rec.base.full_name(), format!("{}:{}", rec.head.owner, rec.head_branch), rec.base_branch.as_str(), rec.draft),
+        ("kubeflow/pipelines".to_string(), format!("acme:{want}"), "main", true)
+    );
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&wt, "HEAD"));
+    assert!(!git_ok(&up_bare, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{want}")]), "never pushed upstream");
+    assert_eq!(h.get(&format!("/v1/chats/{chat_id}/repo")).await["prBranch"], want.as_str());
+
+    // A later push updates the same branch (from the recorded mapping).
+    let map = crate::repos::PrBranches::load(&h.handle.shared.cfg.data_dir);
+    assert_eq!(map.get("acme__pipelines", Uuid::parse_str(&chat_id).unwrap()), Some(want.as_str()));
+    std::fs::write(wt.join("FIX2.md"), "more\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "more"]);
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Fix the compiler", "draft": false }))).await;
+    assert_eq!((pr["pushedBranch"].as_str(), pr["existing"].clone()), (Some(want.as_str()), json!(true)), "{pr}");
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&wt, "HEAD"));
+
+    // Never forced: a branch that moved on the fork is refused.
+    let other = h._tmp.path().join("other-clone");
+    git(h._tmp.path(), &["clone", "-q", fork_bare.to_str().unwrap(), other.to_str().unwrap()]);
+    git(&other, &["checkout", "-q", &want]);
+    std::fs::write(other.join("THEIRS.md"), "x\n").unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "theirs"]);
+    git(&other, &["push", "-q", "origin", &want]);
+    std::fs::write(wt.join("FIX3.md"), "x\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "mine"]);
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 409, "{v}");
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&other, "HEAD"), "the fork's branch was not overwritten");
+
+    // An origin whose push URL resolves to upstream is refused outright.
+    git(&co, &["remote", "set-url", "--push", "origin", up_bare.to_str().unwrap()]);
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 409, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("refusing to push"), "{v}");
+    let heads = ligus_core::process_util::command("git").arg("-C").arg(&up_bare).args(["for-each-ref", "refs/heads"]).output().unwrap();
+    assert!(!String::from_utf8_lossy(&heads.stdout).contains("ligus/"), "upstream got no ligus branches");
+}
+
+/// A plain fetch of an existing fork checkout without `upstream` adds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fetching_a_fork_checkout_adds_upstream() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "kubeflow", "pipelines");
+    let fork_bare = remotes.join("acme").join("pipelines.git");
+    std::fs::create_dir_all(fork_bare.parent().unwrap()).unwrap();
+    git(h._tmp.path(), &["clone", "-q", "--bare", remotes.join("kubeflow/pipelines.git").to_str().unwrap(), fork_bare.to_str().unwrap()]);
+    // Plain clone first (GitHub signed out: no fork info).
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, false)));
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let co = h.handle.shared.cfg.data_dir.join("repos").join("acme__pipelines");
+    assert!(!git_ok(&co, &["remote", "get-url", "upstream"]));
+    let local = h.get("/v1/repos").await["local"][0].clone();
+    assert!(local.get("fork").is_none(), "{local}");
+    // Signed in: a fetch notices it's a fork and sets up upstream.
+    let mut fake = FakeGitHub::new(&remotes, true);
+    fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
+    use_fake(&h, Arc::new(fake));
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
+    assert_eq!(job["job"]["action"], "fetch");
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let local = h.get("/v1/repos").await["local"][0].clone();
+    assert_eq!(local["fork"]["upstream"], "kubeflow/pipelines", "{local}");
+    assert_eq!(local["fork"]["upstreamPushDisabled"], true);
+}
+
+/// Repo writes follow the box's standing: a write-blocked box (revoked or
+/// pending) gets 403, reads still work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_writes_need_a_box_that_can_write() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    for (m, path, body) in [
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), Some(json!({ "repo": "a/b" }))),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": null }))),
+        (reqwest::Method::POST, format!("/v1/chats/{chat_id}/repo/pull"), None),
+        (reqwest::Method::POST, format!("/v1/chats/{chat_id}/pr"), Some(json!({ "title": "x" }))),
+    ] {
+        let (c, v) = status_of(&h, m, &path, body).await;
+        assert_eq!(c, 403, "{path}: {v}");
+    }
+    assert_eq!(h.get(&format!("/v1/chats/{chat_id}/repo")).await["repo"]["source"], "workspace");
+    let r = h.client.get(format!("{}/v1/repos", h.base)).send().await.unwrap();
+    assert_eq!(r.status(), 401, "bearer required");
+}
+
+/// `GET /v1/proposals/:id/file`: the whole file before or after a proposal,
+/// built from the chat's checkout without touching it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_file_serves_both_sides_from_the_bound_checkout() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let readme = "# Ligus\n\nIntro.\n\n- one\n- two\n";
+    let h = harness(&endpoint, "m", &[("README.md", readme), ("gone.md", "bye\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let diff = "diff --git a/README.md b/README.md\nindex 0000000..1111111 100644\n--- a/README.md\n+++ b/README.md\n\
+@@ -3,4 +3,5 @@\n Intro.\n \n - one\n-- two\n+- two, revised\n+- three\n\
+diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,2 @@\n+# New\n+hi\n\
+diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n";
+    let stale = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n-# Not this\n+# Other\n \n";
+    let mk = |title: &str, d: &str| ligus_core::ActionProposal::file_diff(title, "", d.into(), vec!["README.md".into()]);
+    let (good, bad) = (mk("docs", diff), mk("stale", stale));
+    let (pid, sid) = (good.id, bad.id);
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.upsert_proposal(chat_id, ws, good).unwrap();
+        svc.upsert_proposal(chat_id, ws, bad).unwrap();
+    }
+    h.handle.shared.after_write();
+    let file = |id: Uuid, path: &str, side: &str| format!("/v1/proposals/{id}/file?path={path}&side={side}");
+    let new_readme = "# Ligus\n\nIntro.\n\n- one\n- two, revised\n- three\n";
+
+    // Modified: both sides, the checkout untouched.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "new"), None).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["content"], new_readme);
+    assert_eq!(v["applied"], json!(false));
+    assert_eq!(v["side"], "new");
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(readme)), "{v}");
+    let repo = h._tmp.path().join("repo");
+    assert_eq!(std::fs::read_to_string(repo.join("README.md")).unwrap(), readme);
+    assert!(!repo.join("new.md").exists());
+    // `side` defaults to new.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &format!("/v1/proposals/{pid}/file?path=README.md"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(new_readme)));
+
+    // New file: a new side only.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "new.md", "new"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some("# New\nhi\n")), "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(pid, "new.md", "old"), None).await.0, 404);
+    // Deleted file: an old side only.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "gone.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some("bye\n")), "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(pid, "gone.md", "new"), None).await.0, 404);
+
+    // Bad requests: not in the diff, traversal, absolute, .git, bad side.
+    for bad in [
+        file(pid, "other.md", "new"),
+        file(pid, "../README.md", "new"),
+        file(pid, "docs/../../README.md", "old"),
+        file(pid, "/etc/passwd", "new"),
+        file(pid, ".git/config", "new"),
+        file(pid, "README.md", "both"),
+        format!("/v1/proposals/{pid}/file"),
+    ] {
+        let (code, v) = status_of(&h, reqwest::Method::GET, &bad, None).await;
+        assert_eq!(code, 400, "{bad}: {v}");
+    }
+    // A diff that fits neither base: 409.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(sid, "README.md", "new"), None).await;
+    assert_eq!(code, 409, "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(Uuid::new_v4(), "README.md", "new"), None).await.0, 404);
+    // Unauthenticated: 401 like every other read.
+    let anon = h.client.get(format!("{}{}", h.base, file(pid, "README.md", "new"))).send().await.unwrap();
+    assert_eq!(anon.status().as_u16(), 401);
+
+    // Applied on the chat branch: the base carries the change, the old side
+    // comes from reversing it.
+    git(&repo, &["branch", &crate::repos::chat_branch(chat_id)]);
+    let wt = h._tmp.path().join("wt");
+    git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap(), &crate::repos::chat_branch(chat_id)]);
+    std::fs::write(wt.join("README.md"), new_readme).unwrap();
+    git(&wt, &["commit", "-qam", "apply"]);
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(readme)), "{v}");
+    assert_eq!(v["applied"], json!(true));
+    assert_eq!(v["base"], crate::repos::chat_branch(chat_id));
+
+    // No checkout bound for the chat on this host: 404 with the reason.
+    RepoBindings::default().save(&h._tmp.path().join("serve")).unwrap();
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "new"), None).await;
+    assert_eq!(code, 404, "{v}");
+    assert!(v.to_string().contains("no repository"), "{v}");
+    h.handle.shutdown();
+}
+
+/// The phone's read-only view of the workspace guards: dearth mode, locked
+/// chats and the workspace coordinator lease this box holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let g = h.get("/v1/guards").await;
+    assert!(g["dearth"].is_null(), "{g}");
+    assert_eq!(g["lockedChats"], json!([]));
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let cause = Uuid::new_v4();
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.self_medicate(ws, chat_id, Some(cause), &[(ligus_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
+        let d = ligus_core::guard::DearthMode {
+            enabled: true,
+            reason: "leaked invite".into(),
+            brood_paths: vec![".github/**".into()],
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: String::new(),
+            set_at: Timestamp::now(),
+        };
+        // The box may not be an Admin; switching dearth mode is then refused,
+        // which is itself the rule under test. Seed it as the desktop would.
+        let _ = svc.set_dearth_mode(ws, d);
+    }
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "{g}");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["signal"], "secretInDiff");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["messageId"], json!(cause), "names the reply that tripped it");
+    assert!(!g.to_string().contains("AKIA"), "only kinds, never values");
+
+    // The box claims the workspace coordinator lease on a presence tick. The
+    // background loop ticks every 30 s, and its first tick can land before
+    // the box can write (under load it often does), so drive the tick here
+    // instead of waiting for the timer: the outcome no longer depends on
+    // scheduling.
+    // By now the box writes (it created the chat above), so one tick claims
+    // the lease unless the loop already did.
+    tick_coordinator(&h.handle.shared).await;
+    let coordinator = h.get("/v1/guards").await["coordinator"].clone();
+    assert_eq!(coordinator["isThis"], true, "{coordinator}");
+    assert_eq!(coordinator["epoch"], 1);
+    h.handle.shutdown();
+}
+
+/// One coordinator-lease tick, as `presence_loop` runs it.
+async fn tick_coordinator(shared: &Arc<Shared>) {
+    let relay = crate::relay_client(&shared.cfg).unwrap();
+    let ring = match crate::key_source(&shared.cfg) {
+        Ok(src) => ligus_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
+        Err(_) => {
+            let key = ligus_core::derive_workspace_key(shared.cfg.key.as_deref().unwrap_or_default());
+            ligus_runtime::keyring::KeyringEngine::passphrase(shared.ws, key)
+        }
+    };
+    WorkspaceLease::default().tick(shared, &relay, &shared.cfg.room, &ring).await;
+}
+
+// ── Phone 0.1: proposal sets, lockdown clear, Flow, reviewer recruits ──────
+
+/// Demote this box's identity to Viewer on the desktop and wait until the box
+/// has synced the demotion into `chat_id`'s roster.
+async fn demote_box_to_viewer(h: &Harness, chat_id: Uuid) {
+    let me = h.handle.shared.my_actor_id();
+    let ws = h.handle.shared.ws;
+    let mut demoted = false;
+    for _ in 0..50 {
+        sync_once(&h.desktop).await.unwrap();
+        let mut svc = open_service(&h.desktop).unwrap();
+        let cfg = workspace_config_session_id(ws);
+        if svc.load(cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me)) {
+            svc.set_member_role(cfg, ws, me.clone(), ligus_core::WorkspaceRole::Viewer).unwrap();
+            drop(svc);
+            sync_once(&h.desktop).await.unwrap();
+            demoted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(demoted, "the box never joined the desktop's roster");
+    for _ in 0..50 {
+        let viewer_here = h.handle.shared.lock().load(chat_id).unwrap().unwrap().role_of(&me) == ligus_core::WorkspaceRole::Viewer;
+        let (_, config) = api::hosts_and_agents(&h.handle.shared).ok().unwrap();
+        if viewer_here && config.role_of(&me) == ligus_core::WorkspaceRole::Viewer {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("the demotion never synced to the box");
+}
+
+/// A chat with a two-alternative proposal set; alternative A has one posted
+/// scout assessment. Returns (chat, set, A, B).
+async fn chat_with_set(h: &Harness) -> (Uuid, Uuid, Uuid, Uuid) {
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let mut a = ligus_core::ActionProposal::new("Cache in memory", ligus_core::ProposalKind::Decision, "");
+    a.producing_agent_id = Some(h.agent_id);
+    let b = ligus_core::ActionProposal::new("Cache in Redis", ligus_core::ProposalKind::Decision, "planner");
+    let (aid, bid) = (a.id, b.id);
+    let set_id = {
+        let mut svc = h.handle.shared.lock();
+        let set = ligus_core::ProposalSet::new("Where should the cache live?", "planner", vec![]);
+        let set = svc.open_proposal_set(chat_id, ws, set, vec![a, b]).unwrap();
+        let assessment = ligus_core::proposal_sets::ScoutAssessment {
+            id: Uuid::new_v4(),
+            proposal_id: aid,
+            scout_agent_id: None,
+            scout_name: "reviewer".into(),
+            scout_runtime: "rt-2".into(),
+            score: 80,
+            rationale: "Simple and fast enough".into(),
+            round: 0,
+            attempt: 0,
+            created_at: ligus_core::Timestamp::now(),
+        };
+        svc.post_scout_assessment(chat_id, ws, set.id, assessment).unwrap().expect("assessment folded");
+        set.id
+    };
+    h.handle.shared.after_write();
+    (chat_id, set_id, aid, bid)
+}
+
+/// The phone reads proposal sets (standings, posted assessments, quorum and
+/// pre-flight state) and votes on an alternative through the ordinary vote
+/// route; nothing on the set routes writes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, set_id, aid, bid) = chat_with_set(&h).await;
+
+    let sets = h.get("/v1/proposal-sets").await;
+    let set = &sets["sets"][0];
+    assert_eq!(set["id"], json!(set_id), "{sets}");
+    assert_eq!(set["chatId"], json!(chat_id));
+    assert_eq!(set["question"], "Where should the cache live?");
+    assert_eq!(set["phase"], "scouting");
+    assert_eq!(set["open"], true);
+    assert_eq!(set["dial"], "balanced");
+    assert_eq!(set["decideOn"], "desktop");
+    let alts = set["alternatives"].as_array().unwrap();
+    assert_eq!(alts.len(), 2);
+    let (a, b) = (&alts[0], &alts[1]);
+    assert_eq!((a["label"].as_str(), a["proposalId"].clone()), (Some("A"), json!(aid)));
+    assert_eq!((b["label"].as_str(), b["proposalId"].clone()), (Some("B"), json!(bid)));
+    assert_eq!(a["assessments"][0]["scoutName"], "reviewer");
+    assert_eq!(a["assessments"][0]["score"], 80);
+    assert_eq!(a["assessments"][0]["currentSupport"], 80);
+    assert_eq!(a["assessments"][0]["isSelf"], false);
+    assert_eq!(a["support"], 80);
+    assert_eq!(a["scouts"], 1);
+    assert_eq!(b["assessments"], json!([]), "B has no posted assessment");
+    assert_eq!(b["support"], 0);
+    assert_eq!(a["frozen"], false);
+    assert_eq!(a["isFrontRunner"], false);
+    assert!(a.get("preflight").is_none() || a["preflight"].is_null());
+    assert_eq!(a["canVote"], true);
+    assert_eq!(a["myVote"], Value::Null);
+
+    // The chat's and the single-set views agree.
+    let per_chat = h.get(&format!("/v1/chats/{chat_id}/proposal-sets")).await;
+    assert_eq!(per_chat["sets"][0]["id"], json!(set_id));
+    let one = h.get(&format!("/v1/proposal-sets/{set_id}")).await;
+    assert_eq!(one["set"]["alternatives"][1]["title"], "Cache in Redis");
+    let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/proposal-sets/{}", Uuid::new_v4()), None).await;
+    assert_eq!(code, 404);
+    let (code, _) = status_of(&h, reqwest::Method::GET, "/v1/proposal-sets?status=bogus", None).await;
+    assert_eq!(code, 400);
+    // Read-only: no route writes a set.
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/proposal-sets/{set_id}"), Some(json!({}))).await;
+    assert_eq!(code, 405);
+
+    // Voting on an alternative is the ordinary proposal vote.
+    let voted = box_vote(&h, &bid.to_string(), true).await;
+    assert_eq!(voted["proposal"]["setId"], json!(set_id));
+    let one = h.get(&format!("/v1/proposal-sets/{set_id}")).await;
+    assert_eq!(one["set"]["alternatives"][1]["myVote"], "approve", "{one}");
+    assert_eq!(one["set"]["alternatives"][1]["qualifyingApprovals"], 1);
+    // An unauthenticated caller sees nothing.
+    let r = h.client.get(format!("{}/v1/proposal-sets", h.base)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    h.handle.shutdown();
+}
+
+/// The guards view lists a locked chat; the box's own clear route is gone
+/// (410: the phone clears it with its own key and its person's passkey),
+/// and a demoted box is told it can't clear.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lockdown_clear_needs_a_human_contributor() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    // A person's box: the clear is a human's (a real box, a service member,
+    // is refused: `a_service_box_never_acts_as_a_person`).
+    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.test_person = true).await;
+    let ws = h.handle.shared.ws;
+    let lock = |chat: Uuid| {
+        h.handle
+            .shared
+            .lock()
+            .self_medicate(ws, chat, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+            .unwrap();
+    };
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    lock(chat_id);
+
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "{g}");
+    assert_eq!(g["lockedChats"][0]["chatTitle"], "Triage");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["signal"], "injectionDetected");
+    assert!(g["lockedChats"][0]["signals"][0]["raisedAt"].is_string());
+    assert_eq!(g["canClearLockdown"], true, "{g}");
+
+    // The box never clears it as itself: the phone does, with its person's
+    // passkey (`clearLockdown`, `the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
+    assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+
+    // As a Viewer: `canClearLockdown` says no. The desktop may demote the
+    // box before it has synced this lock; a demotion never lifts a lockdown
+    // either way (ligus-core `prop_a_demotion_never_lifts_a_lockdown`).
+    demote_box_to_viewer(&h, chat_id).await;
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["canClearLockdown"], false, "{g}");
+    assert_eq!(g["myRole"], "viewer");
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "a refused clear left the lockdown in place: {g}");
+    h.handle.shutdown();
+}
+
+/// `GET /v1/flow` and `GET /v1/chats/:id/handoffs` read the folded flow
+/// records: the board (an unreviewed proposal), the queue, marks, the routing
+/// shadow summary and hand-off cards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn flow_view_shows_board_queue_marks_routing_and_handoffs() {
+    use ligus_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Auth" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let now = hflow::now_ms();
+    let reply = Uuid::new_v4();
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = ligus_core::ActionProposal::file_diff("Add login", "", "diff --git a/x b/x\n".into(), vec!["src/login.rs".into()]);
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+        svc.record_flow(chat_id, ws, FlowRecord::Mark(hflow::WorkspaceMark {
+            id: Uuid::new_v4(),
+            kind: hflow::MarkKind::UnderConstruction,
+            path: "src/auth.rs".into(),
+            lines: Some((10, 20)),
+            task_id: String::new(),
+            note: "refactoring".into(),
+            agent: hflow::agent_key(Some(h.agent_id)),
+            by: "coder".into(),
+            session_id: Some(chat_id),
+            at_ms: now,
+            expires_ms: Some(now + 3_600_000),
+        }))
+        .unwrap();
+        let trigger = Uuid::new_v4();
+        svc.record_flow(chat_id, ws, FlowRecord::RouteDecision(hflow::RouteDecision {
+            trigger_id: trigger,
+            task_class: "feature".into(),
+            chosen: hflow::PRIMARY.into(),
+            preferred: hflow::agent_key(Some(h.agent_id)),
+            explore: false,
+            mode: hflow::RouteMode::Shadow,
+            shadow_choice: hflow::agent_key(Some(h.agent_id)),
+            reason: hflow::route::RouteReason::Sampled,
+            epsilon: 0.1,
+            scores: Default::default(),
+            excluded: vec![],
+            at_ms: now,
+        }))
+        .unwrap();
+        svc.record_flow(chat_id, ws, FlowRecord::Handoff(hflow::HandoffCard {
+            id: Uuid::new_v4(),
+            from: hflow::agent_key(Some(h.agent_id)),
+            to: hflow::PRIMARY.into(),
+            from_name: "coder".into(),
+            to_name: String::new(),
+            message_id: Some(reply),
+            task: "Review the login flow".into(),
+            task_class: "review".into(),
+            branch: "ligus/chat/x".into(),
+            files: vec!["src/login.rs".into()],
+            quality: hflow::HandoffQuality { tests_passed: Some(true), ..Default::default() },
+            via: "mention".into(),
+            parcel: Some(hflow::ContextParcel { decisions: vec!["kept the API".into()], ..Default::default() }),
+            at_ms: now,
+        }))
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+
+    let f = h.get("/v1/flow").await;
+    let board = f["board"].as_array().unwrap();
+    let item = board.iter().find(|i| i["kind"] == "unreviewedProposal").unwrap_or_else(|| panic!("{f}"));
+    assert_eq!(item["chatId"], json!(chat_id));
+    assert_eq!(item["chatTitle"], "Auth");
+    assert!(item["proposalId"].is_string());
+    assert_eq!(f["queue"]["gate"]["open"], 1, "{f}");
+    assert_eq!(f["queue"]["queueLimit"], 5);
+    assert!(f["queue"]["alert"].is_null(), "one waiting proposal isn't a bottleneck");
+    let mark = &f["marks"][0];
+    assert_eq!(mark["kind"], "underConstruction");
+    assert_eq!(mark["path"], "src/auth.rs");
+    assert_eq!(mark["lines"], json!([10, 20]));
+    assert_eq!(mark["chatTitle"], "Auth");
+    assert_eq!(f["routing"]["decisions"], 1);
+    assert_eq!(f["routing"]["offPrimaryShare"], 1.0);
+    assert_eq!(f["routing"]["topPicks"][0]["name"], "coder");
+
+    let cards = h.get(&format!("/v1/chats/{chat_id}/handoffs")).await;
+    let c = &cards["handoffs"][0];
+    assert_eq!(c["fromName"], "coder");
+    assert_eq!(c["toName"], "Ligus (primary)", "an empty name falls back to the agent's");
+    assert_eq!(c["messageId"], json!(reply));
+    assert!(c.get("replyMessageId").is_none(), "the receiver hasn't answered yet: {c}");
+    assert_eq!(c["quality"]["testsPassed"], true);
+    assert_eq!(c["parcel"]["decisions"][0], "kept the API");
+    // Once the receiver answers, the card names that answer.
+    let answer = Uuid::new_v4();
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, FlowRecord::TurnTagged(hflow::TurnTag {
+            message_id: answer,
+            trigger_id: Some(reply),
+            agent: hflow::PRIMARY.into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "review".into(),
+            role: hflow::roles::CONVERSATION.into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms: now + 1,
+        }))
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+    let cards = h.get(&format!("/v1/chats/{chat_id}/handoffs")).await;
+    assert_eq!(cards["handoffs"][0]["replyMessageId"], json!(answer), "{cards}");
+    let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/chats/{}/handoffs", Uuid::new_v4()), None).await;
+    assert_eq!(code, 404);
+    h.handle.shutdown();
+}
+
+/// A reviewer recruit naming this box's user pushes `review.recruit` (here
+/// through ntfy), pointing at the proposal waiting longest for them; one that
+/// names someone else doesn't.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reviewer_recruit_naming_you_pushes() {
+    use ligus_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.my_actor_id();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Queue" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let recruit = |members: Vec<String>| {
+        FlowRecord::Recruit(hflow::RecruitNotice {
+            id: Uuid::new_v4(),
+            action: "approvers".into(),
+            queue_len: 6,
+            oldest_wait_ms: 3 * 3_600_000,
+            member_ids: members,
+            to_host: String::new(),
+            from_host: String::new(),
+            reference: String::new(),
+            at_ms: hflow::now_ms(),
+        })
+    };
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = ligus_core::ActionProposal::new("Pick a queue", ligus_core::ProposalKind::Decision, "someone-else");
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+    }
+    h.handle.shared.after_write();
+    let before = h.ntfy.lock().unwrap().len();
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, recruit(vec!["not-me".into()])).unwrap();
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let titles = |pushes: &Pushes| -> Vec<String> {
+        pushes.lock().unwrap().iter().filter_map(|(hd, _)| hd.get("title").and_then(|t| t.to_str().ok()).map(str::to_string)).collect()
+    };
+    assert!(!titles(&h.ntfy).iter().any(|t| t.contains("review queue")), "a recruit for someone else pushed");
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, recruit(vec![me.clone()])).unwrap();
+    }
+    h.handle.shared.after_write();
+    let mut ok = false;
+    for _ in 0..30 {
+        if h.ntfy.lock().unwrap().len() > before
+            && h.ntfy.lock().unwrap().iter().any(|(_, body)| body.contains("6 proposals waiting"))
+        {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok, "no recruit push: {:?}", h.ntfy.lock().unwrap());
+    h.handle.shutdown();
+}
+
+/// A burst of reviewer recruits naming the user (FlowRecorded is a
+/// Contributor event, so any member or agent can write them) is one push, not
+/// one push each: every recruit points at the same waiting proposal, and ntfy
+/// has no rate limit of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_recruits_is_one_push() {
+    use ligus_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.my_actor_id();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Queue" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = ligus_core::ActionProposal::new("Pick a queue", ligus_core::ProposalKind::Decision, "someone-else");
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    {
+        let mut svc = h.handle.shared.lock();
+        // As many as the fold keeps for one reference (S6 bound).
+        for _ in 0..ligus_core::authz::bounds::MAX_RECRUITS_PER_PROPOSAL {
+            let r = FlowRecord::Recruit(hflow::RecruitNotice {
+                id: Uuid::new_v4(),
+                action: "approvers".into(),
+                queue_len: 6,
+                oldest_wait_ms: 0,
+                member_ids: vec![me.clone()],
+                to_host: String::new(),
+                from_host: String::new(),
+                reference: String::new(),
+                at_ms: hflow::now_ms(),
+            });
+            svc.record_flow(chat_id, ws, r).unwrap();
+        }
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let n = h.ntfy.lock().unwrap().iter().filter(|(_, body)| body.contains("proposals waiting")).count();
+    assert_eq!(n, 1, "one recruit burst sent {n} pushes");
+    h.handle.shutdown();
+}
+
+/// Chat details carry each workflow run's coordinator (the run lease's holder).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_runs_show_their_coordinator() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    {
+        let mut svc = h.handle.shared.lock();
+        let def = ligus_core::workflow::preset_review_gate();
+        let me = svc.author().id.clone();
+        let run = ligus_core::workflow::new_run(&def, "go", &me);
+        let run_id = run.id;
+        svc.upsert_workflow_run(chat_id, ws, run).unwrap();
+        svc.claim_lease(
+            chat_id,
+            ws,
+            ligus_core::lease::LeaseScope::WorkflowRun,
+            &run_id.to_string(),
+            1,
+            90_000,
+            ligus_core::lease::LeaseClaimReason::Initial,
+        )
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+    let d = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    let c = &d["workflowRuns"][0]["coordinator"];
+    assert_eq!(c["isThis"], true, "{d}");
+    assert_eq!(c["epoch"], 1);
+    assert_eq!(c["released"], false);
+    assert_eq!(c["online"], true);
+    assert!(c["holderLabel"].as_str().unwrap().contains("this host"));
+    h.handle.shutdown();
+}
+
+/// C1.8: clearing a lockdown needs a human member at Contributor or above,
+/// by both the member record and the roster role the caller folds; a Viewer,
+/// an agent or a stranger never may.
+#[test]
+fn lockdown_clear_requires_contributor_human() {
+    use ligus_core::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
+    let member = |id: &str, kind: ActorKind, role: WorkspaceRole| WorkspaceMember {
+        id: id.into(),
+        actor: ActorIdentity::new(id, id, kind),
+        role,
+        title: String::new(),
+        index: 1,
+        joined_at: ligus_core::Timestamp::now(),
+    };
+    let members = vec![
+        member("ana", ActorKind::Human, WorkspaceRole::Contributor),
+        member("vic", ActorKind::Human, WorkspaceRole::Viewer),
+        member("bot", ActorKind::Agent, WorkspaceRole::Admin),
+    ];
+    assert!(api::can_clear_lockdown(&members, "ana", WorkspaceRole::Contributor));
+    assert!(!api::can_clear_lockdown(&members, "vic", WorkspaceRole::Viewer));
+    assert!(!api::can_clear_lockdown(&members, "bot", WorkspaceRole::Admin));
+    assert!(!api::can_clear_lockdown(&members, "nobody", WorkspaceRole::Owner));
+    // The roster's folded role is checked too: a member record that says
+    // Contributor while the folded role is Viewer is refused.
+    assert!(!api::can_clear_lockdown(&members, "ana", WorkspaceRole::Viewer));
+}
+
+/// A chat with one open decision proposal; returns (chat, proposal).
+async fn chat_with_proposal(h: &Harness) -> (Uuid, Uuid) {
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let p = ligus_core::ActionProposal::new("Ship the cache", ligus_core::ProposalKind::Decision, "");
+    let pid = p.id;
+    h.handle.shared.lock().upsert_proposal(chat_id, h.handle.shared.ws, p).unwrap();
+    h.handle.shared.after_write();
+    (chat_id, pid)
+}
+
+/// A box acting for the owner signs everything as the owner, so a vote or a
+/// lockdown clear from the phone (or any bearer caller) would pass for the
+/// owner's own. Phase B: those routes are gone (410), with or without a
+/// passkey; the phone signs them itself. Nothing reaches the log and the
+/// proposal's human gate is still unmet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_vote_refused_on_delegated_host_without_presence() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+
+    for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
+        assert_gone(&h, &path, None, "vote").await;
+    }
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty(), "a refused vote is never written: {:?}", p.approvals);
+    assert_eq!(p.status, ligus_core::ProposalStatus::Open, "the human gate is still unmet");
+
+    // Nor a lockdown clear, nor their passkey-confirmed forms.
+    h.handle
+        .shared
+        .lock()
+        .self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+        .unwrap();
+    assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    for (action, kind) in [("approve", "vote"), ("reject", "vote"), ("lockdown_clear", "clearLockdown")] {
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
+        assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{action}: {v}");
+        assert!(v["message"].as_str().unwrap().contains(kind));
+    }
+    h.handle.shutdown();
+}
+
+/// P0.6 / S2: rebinding an agent's host is an Admin action (presence under
+/// rules v2). A box acting for the owner would sign a phone's or a bearer
+/// caller's rebind as the owner, so it is refused like a vote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_rebind_refused_on_delegated_host_without_presence() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let host = this_host(&h).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner);
+    let (code, body) =
+        status_of(&h, reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
+    assert_eq!((code, body["error"].clone()), (403, json!("presence_required")), "{body}");
+    let agents = h.get("/v1/agents").await;
+    let a = agents["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(h.agent_id.to_string())).unwrap().clone();
+    assert_ne!(a["hostKind"], "thisHost", "the binding is unchanged: {a}");
+    h.handle.shutdown();
+}
+
+/// On a box that votes as its own member (not delegated), a phone's vote is
+/// that member's: attributed to the box's identity at its roster role, never
+/// to the workspace owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_vote_attribution() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    assert!(!h.handle.shared.lock().is_delegated());
+    assert_gone(&h, &format!("/v1/proposals/{pid}/approve"), None, "vote").await;
+    box_vote(&h, &pid.to_string(), true).await;
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+    let me = h.handle.shared.my_actor_id();
+    let owner = open_service(&h.desktop).unwrap().author().id.clone();
+    assert_eq!(p.approvals.len(), 1);
+    assert_eq!(p.approvals[0].actor_id, me);
+    assert_ne!(p.approvals[0].actor_id, owner);
+    assert_eq!(p.approvals[0].role, s.role_of(&me));
+    h.handle.shutdown();
+}
+
+/// Track D on a headless host: a hosted agent on a tool-loop runtime gets the
+/// folded Ligus tools; it files a proposal, asks a question that the phone
+/// answers (`POST v1/asks/{id}/answer`, pushed as `ask.pending`), and hands
+/// off to a second hosted agent, whose turn starts on this host
+/// (`handoff_starts_receiver_on_every_host`). The worker also applies the
+/// reply's directives (`worker_applies_directives`), and a directive that
+/// duplicates an MCP effect is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
+    // Declared first, so it outlives the harness and covers its teardown.
+    let wd = Watchdog::new("hosted_agent_uses_ligus_tools_asks_and_hands_off", 600);
+    let rounds = vec![
+        streamed_call("c1", "ligus_propose", r#"{"kind":"decision","title":"Use sqlite","body":"smaller footprint"}"#),
+        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":240}"#),
+        streamed_call("c3", "ligus_flow", r#"{"op":"handoff","to":"reviewer","keyFiles":["README.md"],"notes":"check it"}"#),
+        vec![delta(json!({"content": "Asked and handed off.\n[[propose: {\"title\": \"Use sqlite\", \"kind\": \"decision\"}]]\n[[mark: {\"kind\": \"claim\", \"path\": \"README.md\"}]]"}))],
+        vec![delta(json!({"content": "Reviewed."}))],
+    ];
+    let (endpoint, model) = spawn_model(rounds).await;
+    // A person's box: only a person answers an agent's question.
+    wd.stage("harness");
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
+    let ws = h.handle.shared.ws;
+    // A second agent on the same runtime.
+    let reviewer_id = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("reviewer", "gw");
+        a.owner_actor_id = desk.author().id.clone();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    wd.stage("desktop sync");
+    desktop_sync(&h).await;
+    wd.stage("this host");
+    let host = this_host(&h).await;
+    wd.stage("bind agents here");
+    bind_here(&h, &host, &[h.agent_id, reviewer_id]).await;
+    // The phone that answers, certified up front: nothing slow happens while
+    // the agent's question waits (its 240 s timeout, above both 180 s
+    // waits below, is never what decides).
+    wd.stage("certify the phone");
+    let (phone, account) = certified_phone(&h).await;
+    wd.stage("post the message");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let mut rx = h.events(None).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder pick a database" }))).await;
+
+    // The question reaches the phone; answer it there. Each wait ends on its
+    // event; the bound only catches a hang (a loaded CI box ran past 30 s).
+    wd.stage("ask.pending");
+    let seen = collect_until(&mut rx, 180, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
+    let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
+    assert_eq!(ask["question"], "Which database?");
+    assert_eq!(ask["kind"], "question", "the ask says what it is; the phone doesn't parse its text");
+    let ask_id = ask["id"].as_str().unwrap().to_string();
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    assert_eq!(listed["asks"][0]["open"], json!(true));
+    assert_eq!(listed["asks"][0]["kind"], "question");
+    // The box never answers as itself: the phone does, as its person.
+    assert_gone(&h, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 })), "answer").await;
+    let answer = ligus_core::phone_action::PhoneAction::Answer {
+        chat_id: Uuid::parse_str(&chat_id).unwrap(),
+        ask_id: Uuid::parse_str(&ask_id).unwrap(),
+        answer: "postgres".into(),
+        option_index: Some(1),
+    };
+    wd.stage("the phone answers");
+    let (code, v) = phone_act(&h, &phone, account, &answer).await;
+    assert_eq!(code, 200, "{v}");
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    assert_eq!(listed["asks"][0]["answer"], "postgres", "{listed}");
+
+    // The receiver's turn starts on this host and answers once.
+    wd.stage("the reviewer's message.done");
+    let seen = collect_until(&mut rx, 180, |evs| {
+        evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed.")
+    })
+    .await;
+    assert!(seen.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed."), "the reviewer never ran");
+
+    // The model was offered the folded Ligus tools, and got the answer back.
+    {
+        let bodies = model.bodies.lock().unwrap();
+        let tools: Vec<&str> = bodies[0]["tools"].as_array().unwrap().iter().filter_map(|t| t["function"]["name"].as_str()).collect();
+        for t in ["ligus_propose", "ligus_flow", "ligus_read", "ligus_ask"] {
+            assert!(tools.contains(&t), "{t} offered: {tools:?}");
+        }
+        assert!(bodies[2].to_string().contains("postgres"), "the ask's answer reached the model");
+        // No directive teaching with the tools on.
+        assert!(!bodies[0].to_string().contains("[[propose:"), "directives aren't taught when the Ligus tools are offered");
+    }
+    wd.stage("checks");
+    // A few more drain passes: still exactly one reviewer reply.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let cid = Uuid::parse_str(&chat_id).unwrap();
+    let s = h.handle.shared.lock().load(cid).unwrap().unwrap();
+    assert_eq!(s.messages.iter().filter(|m| m.body == "Reviewed.").count(), 1, "the hand-off ran its receiver once");
+    let coder_reply = s.messages.iter().find(|m| m.responder_id == Some(h.agent_id) && !m.is_streaming).unwrap();
+    assert_eq!(coder_reply.body, "Asked and handed off.", "directives stripped on the worker");
+    let sqlite: Vec<_> = s.proposals.iter().filter(|p| p.title.eq_ignore_ascii_case("use sqlite")).collect();
+    assert_eq!(sqlite.len(), 1, "the duplicate directive was dropped");
+    assert_eq!(sqlite[0].producing_agent_id, Some(h.agent_id));
+    let card = s.flow.handoffs.iter().find(|c| c.via == "tool").expect("a tool hand-off card");
+    assert_eq!(card.to_name, "reviewer");
+    assert!(s.flow.tool_summaries.iter().any(|t| t.turn_id == coder_reply.id && t.calls.get("ligus_ask_human") == Some(&1)));
+    let marks = h.handle.shared.lock().flow_config(ws).unwrap().marks;
+    assert!(marks.values().any(|m| m.path == "README.md"), "the worker applied the [[mark]] directive");
+    // The review DTO carries the badges and the exact plan.
+    let p = h.get(&format!("/v1/proposals/{}", sqlite[0].id)).await;
+    assert_eq!(p["proposal"]["authorKind"], "agent");
+    assert_eq!(p["proposal"]["implementPlan"]["targetAgentId"], json!(h.agent_id));
+    wd.stage("teardown");
+    h.handle.shutdown();
+}
+
+/// Phase B: a box stamped as the owner never votes for them, even with
+/// their passkey: `presence/prepare` for a vote or a lockdown clear is gone
+/// (410), and the fold counts a vote only from a certified device of its
+/// voter anyway. The phone votes through `phone-actions` with its own key
+/// (`the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_stamped_as_the_owner_never_votes_for_them_even_with_their_passkey() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner);
+    for action in ["approve", "reject"] {
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
+        assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{v}");
+    }
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
+    h.handle.shutdown();
+}
+
+// ── Code hosts from the phone (`forges_api.rs`) ────────────────────────────
+
+/// Files under `dir` (the secret store's own `secrets/` dir excluded) that
+/// contain `needle`: a grep-style leak check.
+fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut hits = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.file_name().is_some_and(|n| n == "secrets") {
+                continue;
+            }
+            if p.is_dir() {
+                stack.push(p);
+            } else if std::fs::read(&p).is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes())) {
+                hits.push(p);
+            }
+        }
+    }
+    hits
+}
+
+/// `no_forge_token_leaves_device`: add a connection, set a token (loopback
+/// bind), list it. The token is in the box's secret store and nowhere else:
+/// not in an API answer, not in `forges.toml` or `ligus.db`, and not on the
+/// desktop after it pulls everything the relay holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_tokens_stay_in_the_boxs_secret_store() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
+    let v = h.get("/v1/forges").await;
+    assert_eq!(v["forges"][0]["id"], "github:github.com", "the gh login is the default: {v}");
+    assert_eq!(v["forges"][0]["authSource"], "gh");
+    assert_eq!(v["tokenEntry"], true, "a loopback bind is this machine");
+    let add = h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org", "auth": "token"}))).await;
+    assert_eq!((add["forge"]["id"].as_str(), add["forge"]["displayName"].as_str()), (Some("gitea:codeberg.org"), Some("Codeberg")));
+    assert_eq!(add["forge"]["openLabel"], "Open WIP PR");
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org"}))).await;
+    assert_eq!(c, 409, "added once");
+    for bad in [
+        json!({"kind": "gitlab", "baseUrl": "http://gitlab.example.com"}),
+        json!({"kind": "svn", "baseUrl": "https://x.org"}),
+        json!({"kind": "gitlab", "baseUrl": "https://gitlab.com", "auth": "gh"}),
+    ] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(bad.clone())).await;
+        assert_eq!(c, 400, "{bad}: {v}");
+    }
+    let token = "cbtok-0123456789-abcdefABCDEF";
+    let path = "/v1/forges/gitea:codeberg.org/token";
+    let (c, _) = status_of(&h, reqwest::Method::PUT, path, Some(json!({"purpose": "write", "token": "has space"}))).await;
+    assert_eq!(c, 400);
+    let (c, _) = status_of(&h, reqwest::Method::PUT, path, Some(json!({"purpose": "admin", "token": token}))).await;
+    assert_eq!(c, 400);
+    let r = h.send(reqwest::Method::PUT, path, Some(json!({"purpose": "write", "token": token}))).await;
+    assert_eq!((r["forge"]["hasWrite"].clone(), r["forge"]["hasRead"].clone()), (json!(true), json!(true)), "{r}");
+    let (c, _) = status_of(&h, reqwest::Method::PUT, "/v1/forges/github:github.com/token", Some(json!({"purpose": "write", "token": token}))).await;
+    assert_eq!(c, 409, "the gh connection takes no pasted token");
+    let data = h.handle.shared.cfg.data_dir.clone();
+    let store = crate::forge_cmd::token_store(&data);
+    let id = ligus_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
+    assert_eq!(store.get(&id, ligus_forge::Purpose::Write).unwrap().unwrap().expose(), token);
+
+    let listing = h.get("/v1/repos").await;
+    assert!(listing["forges"].as_array().unwrap().iter().any(|f| f["id"] == "gitea:codeberg.org"), "{listing}");
+    for body in [h.get("/v1/forges").await, listing] {
+        assert!(!body.to_string().contains(token), "a token in an API answer: {body}");
+    }
+    // Something to sync after the token was set, then the desktop pulls.
+    h.send(reqwest::Method::POST, "/v1/chats", Some(json!({"title": "after the token"}))).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    crate::sync_once(&h.desktop).await.unwrap();
+    assert_eq!(files_containing(&data, token), Vec::<PathBuf>::new(), "the token leaked into the box's files");
+    assert_eq!(files_containing(&h.desktop.data_dir, token), Vec::<PathBuf>::new(), "the token reached a synced device");
+    assert!(std::fs::read_to_string(data.join("forges.toml")).unwrap().contains("codeberg.org"));
+
+    // Removing the connection removes its tokens.
+    h.send(reqwest::Method::DELETE, "/v1/forges/gitea:codeberg.org", None).await;
+    assert!(store.present(&id).is_empty());
+    let (c, _) = status_of(&h, reqwest::Method::DELETE, "/v1/forges/gitea:codeberg.org", None).await;
+    assert_eq!(c, 404);
+}
+
+/// The forges API needs the bearer, and changes need a box that can write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_endpoints_need_the_bearer_and_a_box_that_can_write() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
+    for (m, p) in [
+        (reqwest::Method::GET, "/v1/forges"),
+        (reqwest::Method::POST, "/v1/forges/github:github.com/test"),
+        (reqwest::Method::PUT, "/v1/forges/github:github.com/token"),
+    ] {
+        let r = h.client.request(m, format!("{}{p}", h.base)).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{p}");
+    }
+    h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org", "auth": "token"}))).await;
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.com"}))),
+        (reqwest::Method::DELETE, "/v1/forges/github:github.com", None),
+        (reqwest::Method::PUT, "/v1/forges/gitea:codeberg.org/token", Some(json!({"purpose": "read", "token": "abc"}))),
+        (reqwest::Method::POST, "/v1/forges/gitea:codeberg.org/auth/device", None),
+    ] {
+        let (c, v) = status_of(&h, m, p, b).await;
+        assert_eq!(c, 403, "{p}: {v}");
+    }
+    let id = ligus_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
+    assert!(crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir).present(&id).is_empty());
+}
+
+/// Clone specs pick the connection by host: an unconnected host, a nested
+/// path on GitHub and an unknown connection are all refused clearly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clone_specs_pick_the_connection_by_host() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, true)));
+    for (spec, code) in [
+        (json!({"repo": "https://gitlab.example.com/a/b"}), 400),
+        (json!({"repo": "grp/sub/app"}), 400),
+        (json!({"repo": "a/b", "forge": "gitlab:nowhere.example"}), 404),
+        (json!({"repo": "a/b", "forge": "nonsense"}), 400),
+    ] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(spec.clone())).await;
+        assert_eq!(c, code, "{spec}: {v}");
+    }
+    let v = h.get("/v1/repos?forge=github.com").await;
+    assert_eq!((v["forge"]["id"].as_str(), v["forge"]["available"].as_bool()), (Some("github:github.com"), Some(true)), "{v}");
+    let (c, _) = status_of(&h, reqwest::Method::GET, "/v1/repos?forge=gitea:codeberg.org", None).await;
+    assert_eq!(c, 404);
+}
+
+/// S12: the user code of a pending device sign-in is as good as the sign-in
+/// itself (whoever approves it first decides whose token the box stores).
+/// Starting one is refused on a plain-HTTP network bind; reading it back
+/// there must not hand the code over either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_user_code_never_over_plain_http() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let id = ligus_forge::ForgeId::parse("gitlab:gitlab.com").unwrap();
+    h.handle.shared.repos.device.lock().unwrap().insert(
+        id,
+        super::repos_api::DeviceSession {
+            user_code: "WDJB-MJHT".into(),
+            verification_uri: "https://gitlab.com/oauth/device".into(),
+            expires_at: std::time::Instant::now() + Duration::from_secs(300),
+            state: "pending",
+            error: None,
+            nonce: 1,
+        },
+    );
+    let (c, v) = status_of(&h, reqwest::Method::GET, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
+    assert!(!v.to_string().contains("WDJB-MJHT"), "the user code went out over plain HTTP: {c} {v}");
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
+    assert_eq!(c, 403, "starting one is refused there too");
+}
+
+/// A device sign-in polls in the background. If the connection is removed
+/// meanwhile (or removed and added again), the poll's answer must not land
+/// in the secret store: no orphaned token, and none attached to a later
+/// connection the person never signed in on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_poll_after_remove_stores_nothing() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let approved = Arc::new(AtomicBool::new(false));
+    let a = approved.clone();
+    let app = Router::new()
+        .route(
+            "/oauth/authorize_device",
+            post(|| async {
+                axum::Json(json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "http://127.0.0.1/oauth/device", "expires_in": 300, "interval": 1}))
+            }),
+        )
+        .route(
+            "/oauth/token",
+            post(move || {
+                let a = a.clone();
+                async move {
+                    if a.load(Ordering::SeqCst) {
+                        axum::Json(json!({"access_token": "STRAY-ACCESS", "refresh_token": "STRAY-REFRESH", "expires_in": 7200}))
+                    } else {
+                        axum::Json(json!({"error": "authorization_pending"}))
+                    }
+                }
+            }),
+        );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123", "internal": true});
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+    let id_str = added["forge"]["id"].as_str().unwrap().to_string();
+    let id = ligus_forge::ForgeId::parse(&id_str).unwrap();
+    let store = crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir);
+    for re_add in [false, true] {
+        let st = h.send(reqwest::Method::POST, &format!("/v1/forges/{id_str}/auth/device"), None).await;
+        assert_eq!(st["state"], "pending", "{st}");
+        h.send(reqwest::Method::DELETE, &format!("/v1/forges/{id_str}"), None).await;
+        if re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+        approved.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(store.present(&id).is_empty(), "re-added {re_add}: the removed connection's sign-in stored a token");
+        let saved = ligus_forge::Connections::load(&h.handle.shared.cfg.data_dir);
+        assert!(saved.get(&id).is_none_or(|c| c.auth == ligus_forge::AuthSource::Token && c.token_expires_at.is_none()), "re-added {re_add}: {saved:?}");
+        approved.store(false, Ordering::SeqCst);
+        if !re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+    }
+}
+
+/// S7: a code-host URL on an internal address is refused unless marked
+/// internal on this box; `/test` is gated like the other writes; and what a
+/// host answers (which may not be a code host at all) is never echoed back,
+/// by `/test` or by the listing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_test_is_gated_internal_marked_and_status_only() {
+    let app = Router::new().fallback(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"message": "INTERNAL-SERVICE-SECRET-BODY"}))) });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    for bad in [base.clone(), "https://169.254.169.254".into(), "https://10.0.0.7".into()] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": bad, "auth": "token"}))).await;
+        assert_eq!(c, 400, "{bad}: {v}");
+        assert!(v.to_string().contains("internal"), "{v}");
+    }
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": base, "auth": "token", "internal": true}))).await;
+    assert_eq!(added["forge"]["internal"], true, "{added}");
+    let id = added["forge"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/forges/{id}/token"), Some(json!({"purpose": "write", "token": "tok-0123456789"}))).await;
+    let t = h.send(reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(t["ok"], false, "{t}");
+    assert!(!t.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "/test echoed the body: {t}");
+    let list = h.get("/v1/forges").await;
+    assert!(!list.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "the listing echoed the body: {list}");
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    let (c, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(c, 403, "/test needs a box that can write: {v}");
+}
+
+/// The gh login is the default only for github.com itself: a look-alike host
+/// that merely contains "://github.com" must not get it (gh answers for
+/// other hosts from GH_ENTERPRISE_TOKEN, which would then go to that host).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_default_only_for_exact_github_com() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    for base in ["https://github.com.evil.example", "https://github.com.evil.example/x"] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "github", "baseUrl": base}))).await;
+        assert!(c != 200 || v["forge"]["authSource"] != "gh", "{base}: {v}");
+    }
+}
+
+/// Who the phone's messages show as. A box that joined with a workspace
+/// invite is its own member: the phone writes as the box (right for a shared
+/// box), under the box's own name, never the Ligus 1.x "ligus-cli". A box
+/// enrolled as its owner's device (`ligus serve enroll`) writes as the owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_messages_show_as_the_box_or_its_owner() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))], vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let box_actor = h.handle.shared.lock().author().clone();
+    assert_ne!(box_actor.display_name, crate::LEGACY_BOX_NAME);
+    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello" }))).await;
+    let as_box = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello again" }))).await;
+    let as_owner = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let m = |id| s.messages.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(m(as_box).author, box_actor.display_name);
+    assert_eq!(m(as_box).actor_identity.as_ref().map(|a| a.id.clone()), Some(box_actor.id.clone()));
+    assert_eq!(m(as_owner).author, owner.display_name, "a delegated box writes as its owner");
+    assert_eq!(m(as_owner).actor_identity.as_ref().map(|a| a.id.clone()), Some(owner.id.clone()));
+    h.handle.shutdown();
+}
+
+// ── Typing indicators (typing_api) ─────────────────────────────────────────
+
+/// The desktop's view of the room's live human beats, plus the raw listing
+/// the relay holds.
+async fn desktop_beats(h: &Harness) -> (Vec<ligus_runtime::human_presence::HumanBeat>, String) {
+    let relay = crate::relay_client(&h.desktop).unwrap();
+    // The keyring first: building it (key derivation, a config fold) is slow
+    // on a loaded machine, and the beats' age is judged from the moment
+    // they're read, so that time must not count against their TTL.
+    let ring = crate::box_ring(&h.desktop).unwrap();
+    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
+    let beats = ligus_runtime::human_presence::open_human_beats(&raw, &ring, ligus_runtime::human_presence::now_ms());
+    (beats, serde_json::to_string(&raw).unwrap())
+}
+
+/// The phone types: the box publishes a beat for that chat, sealed (the relay
+/// sees no chat id, actor or name), attributed like its messages (the box, or
+/// its owner once enrolled as the owner's device); "stopped" goes out at
+/// once, and a phone that goes quiet is expired by the box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_typing_is_published_sealed_and_expires() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let box_actor = h.handle.shared.lock().author().clone();
+    let path = format!("/v1/chats/{chat_id}/typing");
+    // The throttle and the expiry go by a clock the test moves, not by how
+    // fast a loaded machine gets from one request to the next.
+    h.handle.shared.typing.freeze_clock(std::time::Instant::now());
+
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    assert_eq!(r["published"], json!(true));
+    // A second ping right away is throttled (only refreshes the expiry).
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    assert_eq!(r["published"], json!(false));
+    let (beats, raw) = desktop_beats(&h).await;
+    let b = beats.iter().find(|b| b.session_id == chat_id).expect("the desktop sees the phone typing");
+    assert!(b.typing);
+    assert_eq!(b.actor_id, box_actor.id);
+    for leak in [chat_id.as_str(), box_actor.id.as_str(), box_actor.display_name.as_str(), "sessionId", "actorId"] {
+        assert!(!raw.contains(leak), "the relay can read {leak:?}: {raw}");
+    }
+    // Stopped: at once.
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": false }))).await;
+    assert_eq!(r["published"], json!(true));
+    assert!(!desktop_beats(&h).await.0.iter().any(|b| b.typing));
+
+    // Enrolled as the owner's device: typing shows as the owner.
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+    h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    let (beats, _) = desktop_beats(&h).await;
+    assert!(beats.iter().any(|b| b.typing && b.actor_id == owner.id && b.session_id == chat_id));
+
+    // The phone goes quiet: the box publishes "stopped" on its own, once the
+    // (test) clock passes EXPIRE_AFTER since the last ping, and not before.
+    let typing = &h.handle.shared.typing;
+    typing.advance(super::typing_api::EXPIRE_AFTER - Duration::from_millis(1));
+    assert!(typing.expire(typing.now()).is_empty(), "expired before EXPIRE_AFTER");
+    typing.advance(Duration::from_millis(1));
+    let chat_uuid = Uuid::parse_str(&chat_id).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while typing.is_typing(chat_uuid) {
+        assert!(tokio::time::Instant::now() < deadline, "the box never expired the quiet typing");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // A fresh "stopped" beat from the box (not the typing beat ageing out on
+    // the reader's side).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (beats, _) = desktop_beats(&h).await;
+        if !beats.iter().any(|b| b.typing) && beats.iter().any(|b| !b.typing && b.actor_id == owner.id && b.session_id == chat_id) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "quiet typing never expired");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    h.handle.shutdown();
+}
+
+/// The typing route takes the bearer like every route, only chats the box
+/// can see, and refuses a flood.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typing_route_is_authed_scoped_and_rate_limited() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let url = format!("{}/v1/chats/{chat_id}/typing", h.base);
+
+    let r = h.client.post(&url).json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let r = h.client.post(&url).bearer_auth("wrong").json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let other = format!("{}/v1/chats/{}/typing", h.base, Uuid::new_v4());
+    let r = h.client.post(&other).bearer_auth(&h.token).json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    let r = h.client.get(&other).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    let mut limited = false;
+    for _ in 0..(super::typing_api::MAX_REQUESTS + 5) {
+        let r = h.client.post(&url).bearer_auth(&h.token).json(&json!({ "typing": false })).send().await.unwrap();
+        if r.status() == 429 {
+            limited = true;
+            break;
+        }
+        assert_eq!(r.status(), 200);
+    }
+    assert!(limited, "a flood of typing pings is refused");
+    h.handle.shutdown();
+}
+
+/// Someone types on the desktop: a phone holding the event stream gets a
+/// live `typing` event naming them (from the roster), and GET agrees; when
+/// they stop, an empty list follows. The event is not replayed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn others_typing_reaches_the_phone_as_a_live_event() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let mut rx = h.events(None).await;
+
+    let (desk_actor, desk_device) = {
+        let svc = open_service(&h.desktop).unwrap();
+        (svc.author().clone(), svc.device_id().to_string())
+    };
+    let relay = crate::relay_client(&h.desktop).unwrap();
+    let ring = crate::box_ring(&h.desktop).unwrap();
+    let beat = |typing: bool| ligus_runtime::human_presence::HumanBeat {
+        actor_id: desk_actor.id.clone(),
+        name: "Forged\u{202E}name".into(),
+        device_id: desk_device.clone(),
+        session_id: chat_id.clone(),
+        typing,
+        ts: ligus_runtime::human_presence::now_ms(),
+    };
+    ligus_runtime::human_presence::publish_human_beat(&relay, &h.desktop.room, &ring, &beat(true)).await.unwrap();
+    let seen = collect_until(&mut rx, 10, |evs| evs.iter().any(|(n, d, _)| n == "typing" && d["typing"].as_array().is_some_and(|a| !a.is_empty()))).await;
+    let (_, d, id) = seen.iter().find(|(n, _, _)| n == "typing").expect("a typing event").clone();
+    assert_eq!(d["chatId"], json!(chat_id));
+    assert_eq!(d["typing"][0]["actorId"], json!(desk_actor.id));
+    let name = d["typing"][0]["name"].as_str().unwrap();
+    assert!(!name.contains('\u{202E}'), "names are cleaned: {name:?}");
+    let got = h.get(&format!("/v1/chats/{chat_id}/typing")).await;
+    assert_eq!(got["typing"][0]["actorId"], json!(desk_actor.id));
+
+    // Not replayed to a stream resuming from before it.
+    let mut again = h.events(Some(id - 1)).await;
+    let replay = collect_until(&mut again, 1, |_| false).await;
+    assert!(!replay.iter().any(|(n, _, _)| n == "typing"), "{replay:?}");
+
+    ligus_runtime::human_presence::publish_human_beat(&relay, &h.desktop.room, &ring, &beat(false)).await.unwrap();
+    let seen = collect_until(&mut rx, 10, |evs| evs.iter().any(|(n, d, _)| n == "typing" && d["typing"] == json!([]))).await;
+    assert!(seen.iter().any(|(n, d, _)| n == "typing" && d["typing"] == json!([])), "{seen:?}");
+    h.handle.shutdown();
+}
+
+/// `ligus facts export` against a data dir with no database fails and
+/// creates nothing: no identity, no keys, no database.
+#[test]
+fn facts_export_never_creates_a_data_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("typo");
+    let cfg = config(&dir, "http://127.0.0.1:1", "room");
+    let err = crate::cmd_facts_export(&cfg, ligus_runtime::facts::Since::UnixMs(0), 0).unwrap_err().to_string();
+    assert!(err.contains("never creates"), "{err}");
+    assert!(!dir.exists(), "facts export created {}", dir.display());
+}
+
+// ── Workers: sync first (Phase B) ──────────────────────────────────────────
+
+/// Every event a box's own device signed, on every log of its store.
+fn signed_by(dir: &std::path::Path, device: Uuid) -> Vec<ligus_core::SessionEventEnvelope> {
+    let store = ligus_runtime::event_store::EventStore::open(dir.join("ligus.db")).unwrap();
+    let mut out = Vec::new();
+    for id in store.list_session_ids().unwrap() {
+        out.extend(store.list(id).unwrap().into_iter().filter(|e| e.signer_device_id == Some(device)));
+    }
+    out
+}
+
+/// A worker on a room the relay has nothing for refuses to start and writes
+/// nothing: no config seed, no member, no host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_without_a_copy_of_the_workspace_refuses_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-empty-{}", Uuid::new_v4());
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let err = crate::worker_start(&mut cfg, "w1", None).await.err().expect("no workspace copy");
+    assert!(err.to_string().contains("no copy of the workspace"), "{err}");
+    let store = ligus_runtime::event_store::EventStore::open(dir.join("ligus.db")).unwrap();
+    assert_eq!(store.max_row_id().unwrap(), 0, "the worker wrote events");
+    // `ligus register-worker` never seeds one either.
+    assert!(crate::cmd_register_worker(&cfg, Some("w1".into())).is_err());
+    assert_eq!(store.max_row_id().unwrap(), 0);
+}
+
+/// On an existing workspace the worker syncs first and joins as its own
+/// service member: it never writes a config seed or a founder event, never
+/// names itself Owner or Admin, and the workspace's founder stays the
+/// desktop's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_never_writes_a_config_seed_or_founder_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-join-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let (founder, code) = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        (svc.author().id.clone(), crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap())
+    };
+    sync_once(&desktop).await.unwrap();
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let (svc, host) = crate::worker_start(&mut cfg, "w1", Some(code)).await.unwrap();
+    let me = svc.author().clone();
+    let device = svc.device_id();
+    assert_eq!(host, device.to_string());
+    assert_eq!(me.kind, ligus_core::ActorKind::Service);
+    let mine = signed_by(&dir, device);
+    assert!(!mine.is_empty());
+    for e in &mine {
+        match &e.payload {
+            ligus_core::SessionEvent::SessionSnapshot { .. } => panic!("the worker wrote a seed"),
+            ligus_core::SessionEvent::WorkspaceRulesSet { .. } => panic!("the worker wrote genesis rules"),
+            ligus_core::SessionEvent::MemberAdded { member, .. } => {
+                assert_eq!(member.id, me.id, "the worker added someone else");
+                assert_eq!((member.actor.kind, member.role), (ligus_core::ActorKind::Service, ligus_core::WorkspaceRole::Contributor));
+            }
+            ligus_core::SessionEvent::MemberRoleChanged { .. } => panic!("the worker changed a role"),
+            _ => {}
+        }
+    }
+    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    assert_eq!(c.creator_actor_id, founder, "the founder is the desktop's");
+    assert_eq!(c.role_of(&founder), ligus_core::WorkspaceRole::Owner);
+    assert!(c.workspace_hosts.iter().any(|h| h.id == host), "its host is registered");
+    // A restart (the admission still mounted) neither re-joins nor seeds.
+    drop(svc);
+    let before = signed_by(&dir, device).len();
+    let mut cfg = config(&dir, &relay, &room);
+    crate::worker_start(&mut cfg, "w1", None).await.unwrap();
+    let after = signed_by(&dir, device);
+    assert!(after.iter().skip(before).all(|e| !matches!(e.payload, ligus_core::SessionEvent::SessionSnapshot { .. } | ligus_core::SessionEvent::MemberAdded { .. })));
+}
+
+/// A real box is a service member (Phase B): what the phone asks of it that
+/// is a person's act is refused, never done in a person's name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_service_box_never_acts_as_a_person() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.lock().author().clone();
+    assert_eq!(me.kind, ligus_core::ActorKind::Service);
+    assert_eq!(h.get("/v1/health").await["identity"]["mode"], "member");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.handle
+        .shared
+        .lock()
+        .self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+        .unwrap();
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["canClearLockdown"], false, "{g}");
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert!((400..500).contains(&code), "{code}");
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    // It can't invite anyone either (an Admin's act with a passkey).
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    assert!((400..500).contains(&code), "{code}");
+    h.handle.shutdown();
+}
+
+// ── Admitting a box from the phone (Phase B) ───────────────────────────────
+
+/// The phone admits a second box with its own P-256 key and its person's
+/// passkey, through this box (a service member that can't admit anyone
+/// itself): the code comes back sealed to the box that asked, which then
+/// joins as its own service member. A forged signature and a device that
+/// isn't a phone are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
+    use base64::Engine;
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap();
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let phone = ligus_core::testkit::Phone::new();
+    let account = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
+        if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The box can't admit anyone itself.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    assert!((400..500).contains(&code));
+    // A device that isn't a phone: refused at prepare.
+    let me = h.handle.shared.lock().device_id();
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": me }))).await;
+    assert_eq!(code, 403);
+
+    let wdir = h._tmp.path().join("worker2");
+    let mut wcfg = config(&wdir, &h.desktop.relay_url.clone().unwrap(), &h.desktop.room);
+    let request = crate::admit::join_request(&wcfg, "w2").unwrap();
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    assert_eq!(prep["preview"]["boxFingerprint"], json!(request.fingerprint()));
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = ligus_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let preimage = b64(pre["preimage"].as_str().unwrap());
+    // A signature by another key: refused, nothing appended.
+    let forged = ligus_core::crypto::sign_p256(&ligus_core::testkit::Phone::new().key, &preimage);
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": ligus_core::presence::b64url(&forged) }))).await;
+    assert_eq!(code, 403);
+    // The draft is spent: start over and sign with the phone.
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = ligus_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let sig = ligus_core::crypto::sign_p256(&phone.key, &b64(pre["preimage"].as_str().unwrap()));
+    let done = h
+        .send(reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": ligus_core::presence::b64url(&sig) })))
+        .await;
+    assert_eq!(done["sealed"], json!(true));
+    let code = done["code"].as_str().unwrap().to_string();
+    assert!(code.starts_with(ligus_runtime::box_admission::SEALED_PREFIX));
+    // Pushed by the box; the second box redeems it and joins.
+    for _ in 0..20 {
+        h.handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (svc, _) = crate::worker_start(&mut wcfg, "w2", Some(code)).await.unwrap();
+    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let m = c.members.iter().find(|m| m.id == svc.author().id).expect("the second box joined");
+    assert_eq!((m.actor.kind, m.role), (ligus_core::ActorKind::Service, ligus_core::WorkspaceRole::Contributor));
+    h.handle.shutdown();
+}
+
+/// The headless Admin path (CI, scripts): a CLI founder registers a recovery
+/// key, issues box admissions confirmed with it, and serve and a worker join
+/// ONE workspace from those codes, each as its own service member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("headless-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let founder = config(&tmp.path().join("founder"), &relay, &room);
+    crate::cmd_new(&founder, "founding".into()).unwrap();
+    let words = tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    crate::admit::cmd_recovery_key(&founder, &[&"create".to_string()], Some(w.clone())).unwrap();
+    assert_eq!(std::fs::read_to_string(&words).unwrap().split_whitespace().count(), 24);
+    let (s_out, w_out) = (tmp.path().join("serve.code"), tmp.path().join("worker.code"));
+    for out in [&s_out, &w_out] {
+        let flags = |f: &str| match f {
+            "--recovery-words-file" => Some(w.clone()),
+            "--out" => Some(out.to_string_lossy().into_owned()),
+            "--ttl" => Some("2h".into()),
+            _ => None,
+        };
+        crate::admit::cmd_admit(&founder, &[&"issue".to_string()], flags).unwrap();
+    }
+    // Without a recovery key the CLI can't confirm: refused.
+    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |_| None);
+    assert!(none.is_err());
+    sync_once(&founder).await.unwrap();
+
+    let sdir = tmp.path().join("serve");
+    let mut scfg = config(&sdir, &relay, &room);
+    crate::admit::redeem(&mut scfg, &std::fs::read_to_string(&s_out).unwrap()).unwrap();
+    let opts = ServeOptions { token_file: sdir.join("serve.token"), dashboard_file: sdir.join("dashboard.toml"), ..box_opts("serve") };
+    let handle = start(scfg, opts).await.unwrap();
+    for _ in 0..20 {
+        handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut wcfg = config(&tmp.path().join("worker"), &relay, &room);
+    let (wsvc, _) = crate::worker_start(&mut wcfg, "w1", Some(std::fs::read_to_string(&w_out).unwrap())).await.unwrap();
+    for _ in 0..50 {
+        handle.shared.sync_kick.notify_one();
+        let c = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+        if c.members.iter().any(|m| m.id == wsvc.author().id) {
+            let boxes: Vec<_> = c.members.iter().filter(|m| m.actor.kind == ligus_core::ActorKind::Service).collect();
+            assert_eq!(boxes.len(), 2, "serve and the worker are each their own service member");
+            assert!(boxes.iter().all(|m| m.role == ligus_core::WorkspaceRole::Contributor));
+            handle.shutdown();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("serve never saw the worker join");
+}
+
+/// Review R6/R7 end to end: the worker redeems with its code's proof, the
+/// desktop (an Admin) closes the settled admission naming that redemption,
+/// and a code without a redeem key (a person's invite) admits no box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_admission_is_closed_by_the_admins_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-close-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let (code, person_code) = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        let code = crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap();
+        assert!(ligus_runtime::box_admission::redeem_key_of(&code).is_some());
+        // Nothing open is redeemed or lapsed yet: nothing to close.
+        assert_eq!(svc.close_settled_admissions(ws).unwrap(), 0);
+        let pinv = svc.issue_invite(ws).unwrap();
+        let mut plain = crate::serve::admission_code(&desktop, &svc, pinv, &[0; 32]).unwrap();
+        // Strip the redeem key: what a person's invite code looks like.
+        let body = plain.strip_prefix("hivews1:").unwrap().to_string();
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, body).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("ak");
+        plain = format!("hivews1:{}", base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, serde_json::to_vec(&v).unwrap()));
+        (code, plain)
+    };
+    sync_once(&desktop).await.unwrap();
+    // A person's invite code admits no box.
+    let other = tmp.path().join("other");
+    let mut ocfg = config(&other, &relay, &room);
+    let err = crate::worker_start(&mut ocfg, "w2", Some(person_code)).await.err().expect("a person's invite admits no box").to_string();
+    assert!(err.contains("isn't a box admission"), "{err}");
+
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let (svc, _) = crate::worker_start(&mut cfg, "w1", Some(code)).await.unwrap();
+    let me = svc.author().id.clone();
+    let redemption = signed_by(&dir, svc.device_id())
+        .into_iter()
+        .find(|e| matches!(&e.payload, ligus_core::SessionEvent::MemberAdded { proof: Some(_), invite: Some(_), .. }))
+        .expect("the worker redeemed with its code's proof");
+    drop(svc);
+    sync_once(&desktop).await.unwrap();
+    let mut admin = open_service(&desktop).unwrap();
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 1);
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 0, "closed once");
+    let c = admin.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let ligus_core::SessionEvent::MemberAdded { invite: Some(inv), .. } = &redemption.payload else { unreachable!() };
+    assert_eq!(c.guards.closed_admissions.get(inv), Some(&vec![Some(redemption.event_id)]));
+    assert!(c.members.iter().any(|m| m.id == me), "the named redemption stands");
+}
+
+// ── What a person does from the phone (Phase B) ────────────────────────────
+
+/// The `raiseEventId` of each lockdown signal `GET /v1/guards` lists for
+/// `chat` (what a `clearLockdown` names).
+async fn locked_raises(h: &Harness, chat: Uuid) -> Vec<Uuid> {
+    let g = h.send(reqwest::Method::GET, "/v1/guards", None).await;
+    g["lockedChats"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["chatId"] == json!(chat))
+        .flat_map(|c| c["signals"].as_array().cloned().unwrap_or_default())
+        .filter_map(|s| s["raiseEventId"].as_str().and_then(|r| Uuid::parse_str(r).ok()))
+        .collect()
+}
+
+/// A phone certified on the desktop for the founder, seen by the box.
+async fn certified_phone(h: &Harness) -> (ligus_core::testkit::Phone, Uuid) {
+    let ws = h.handle.shared.ws;
+    let phone = ligus_core::testkit::Phone::new();
+    let account = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    desktop_sync(h).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
+        h.handle.shared.sync_kick.notify_one();
+        let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
+        if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
+            return (phone, account);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw the phone's certificate in 120 s");
+}
+
+fn b64d(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap()
+}
+
+/// The phone's whole flow for `action`: prepare, the passkey when the box
+/// says it is needed, the strict preimage check, the P-256 signature, commit.
+/// Returns the commit's status and body (or prepare's, when it refused).
+async fn phone_act(h: &Harness, phone: &ligus_core::testkit::Phone, account: Uuid, action: &ligus_core::phone_action::PhoneAction) -> (u16, Value) {
+    let (code, prep) = status_of(h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": action }))).await;
+    if code != 200 {
+        return (code, prep);
+    }
+    assert_eq!(prep["kind"], json!(action.kind()));
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let (preimage, challenge, assertion) = if prep["presenceRequired"] == json!(true) {
+        assert!(prep.get("preimage").is_none(), "no preimage before the passkey");
+        let challenge: [u8; 32] = b64d(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+        let a = ligus_core::testkit::test_recovery_key(account).assert(&challenge);
+        let pre = h
+            .send(
+                reqwest::Method::POST,
+                "/v1/phone-actions/presence",
+                Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+            )
+            .await;
+        (b64d(pre["preimage"].as_str().unwrap()), Some(challenge), Some(a))
+    } else {
+        (b64d(prep["preimage"].as_str().unwrap()), None, None)
+    };
+    let confirmed = challenge.as_ref().map(|c| ligus_core::phone_action::Confirmed { challenge: c, assertion: assertion.as_ref() });
+    ligus_core::phone_action::check_phone_action_preimage(&preimage, confirmed, h.handle.shared.ws, phone.device_id, account, action)
+        .unwrap_or_else(|e| panic!("the phone refused the box's preimage for {}: {e}", action.kind()));
+    let sig = ligus_core::crypto::sign_p256(&phone.key, &preimage);
+    status_of(h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": id, "signature": ligus_core::presence::b64url(&sig) }))).await
+}
+
+/// Every phone action through serve, signed by the phone's own key as its
+/// person: a post, an approval that counts as the person's, an answer to an
+/// agent's question, clearing a lockdown (with the passkey), and "Apply on
+/// ‹this box›", which the box (a service member) carries out once, on the
+/// person's request only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+
+    // Post: as the person, signed by the phone.
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Post { chat_id, text: "from my phone".into() }).await;
+    assert_eq!(code, 200, "{done}");
+    let mid = Uuid::parse_str(done["messageId"].as_str().unwrap()).unwrap();
+    let env = signed_by(&h._tmp.path().join("serve"), phone.device_id).into_iter().find(|e| e.event_id.to_string() == done["eventId"].as_str().unwrap()).unwrap();
+    assert_eq!(env.actor_stamp.as_ref().unwrap().actor.id, person);
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(s.messages.iter().any(|m| m.id == mid && m.body == "from my phone"));
+    drop(s);
+
+    // Approve a file-diff proposal: the vote is the person's (a human's).
+    let diff = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hi\n";
+    let mut p = ligus_core::ActionProposal::file_diff("add new.txt", "", diff.into(), vec!["new.txt".into()]);
+    p.producing_agent_id = Some(h.agent_id);
+    let pid = p.id;
+    h.handle.shared.lock().upsert_proposal(chat_id, ws, p).unwrap();
+    let prop = h.get(&format!("/v1/proposals/{pid}")).await;
+    let digest = prop["proposal"]["diffDigest"].as_str().unwrap().to_string();
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Vote { chat_id, proposal_id: pid, diff_digest: digest.clone(), approved: true }).await;
+    assert_eq!(code, 200, "{done}");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, ligus_core::ProposalStatus::Approved);
+    assert!(ligus_core::guard::has_human_approval(&s, pid), "the phone's vote counts as its person's");
+    drop(s);
+
+    // Apply on this box: requested by the person, carried out once by the box.
+    let me = Uuid::parse_str(&h.handle.shared.host_id).unwrap();
+    let request = PhoneAction::RequestApply { chat_id, proposal_id: pid, diff_digest: digest.clone(), host_device_id: me, expected_base_commit: None, repo_id: None };
+    let (code, done) = phone_act(&h, &phone, account, &request).await;
+    assert_eq!(code, 200, "{done}");
+    let rid = done["requestId"].as_str().unwrap().to_string();
+    // A second request while it is open: refused before the phone signs.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": request }))).await;
+    assert!(code == 403 || code == 409, "{code}");
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
+    let mut state = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.worker_kick.notify_one();
+        let p = h.get(&format!("/v1/proposals/{pid}")).await;
+        state = p["proposal"]["applyRequests"].as_array().and_then(|a| a.iter().find(|r| r["id"] == json!(rid)).cloned()).unwrap_or(Value::Null);
+        if state["state"] != json!("open") && !state.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state["state"], json!("applied"), "{state}");
+    assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap(), "hi\n");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, ligus_core::ProposalStatus::Applied);
+    drop(s);
+    let commits = std::process::Command::new("git").arg("-C").arg(&wt).args(["log", "--format=%B"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&commits.stdout).matches(&format!("Ligus-Apply-Request: {rid}")).count(), 1, "applied once");
+
+    // Answer an agent's question (the agent is hosted here and asks).
+    bind_here(&h, &this_host(&h).await, &[h.agent_id]).await;
+    let ask_id = Uuid::new_v4();
+    let ask = ligus_core::flow::HumanAsk {
+        ask_id,
+        turn_id: mid,
+        agent_key: ligus_core::flow::agent_key(Some(h.agent_id)),
+        question: "ship it?".into(),
+        options: vec!["yes".into(), "no".into()],
+        at_ms: ligus_core::flow::now_ms(),
+        ..Default::default()
+    };
+    h.handle.shared.lock().as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, ligus_core::flow::FlowRecord::HumanAsk(ask))).unwrap();
+    let answer = PhoneAction::Answer { chat_id, ask_id, answer: "yes".into(), option_index: Some(0) };
+    let (code, done) = phone_act(&h, &phone, account, &answer).await;
+    assert_eq!(code, 200, "{done}");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(!s.flow.asks[&ask_id].is_open(), "answered");
+    drop(s);
+    // Answered once: a second answer is refused before the phone signs.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": answer }))).await;
+    assert_eq!(code, 403);
+
+    // Clear a lockdown: always with the passkey, naming the raises the phone
+    // shows (`GET /v1/guards` lists each signal's `raiseEventId`).
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())]).unwrap();
+    let raises = locked_raises(&h, chat_id).await;
+    assert_eq!(raises.len(), 1, "one signal, named by its raise");
+    let clear = PhoneAction::ClearLockdown { chat_id, raises: raises.clone() };
+    let (code, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": clear }))).await;
+    assert_eq!((code, prep["presenceRequired"].clone()), (200, json!(true)), "{prep}");
+    assert_eq!(prep["preview"]["lockdowns"][0]["raiseEventId"], json!(raises[0]), "{prep}");
+    // A raise that isn't in force (a stale view, or made up): refused before the phone signs.
+    let stale = PhoneAction::ClearLockdown { chat_id, raises: vec![Uuid::new_v4()] };
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": stale }))).await;
+    assert_eq!(code, 403);
+    // A signal raised after the phone's view: the clear doesn't name it, so it stays.
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
+    let (code, done) = phone_act(&h, &phone, account, &clear).await;
+    assert_eq!(code, 200, "{done}");
+    let left = locked_raises(&h, chat_id).await;
+    assert_eq!(left.len(), 1, "the newer signal stays in force");
+    assert!(!left.contains(&raises[0]));
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ClearLockdown { chat_id, raises: left }).await;
+    assert_eq!(code, 200, "{done}");
+    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    // Not locked any more: 409.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": clear }))).await;
+    assert_eq!(code, 409);
+    h.handle.shutdown();
+}
+
+/// The box refuses what it can't draft as a phone's, and what the phone
+/// didn't sign: another device than an enrolled phone, an action outside
+/// the allow-list or with fields it doesn't know, a forged signature, a
+/// commit before the passkey, and a draft whose chain link went stale.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "T" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let post = |t: &str| PhoneAction::Post { chat_id, text: t.into() };
+    // Not a phone (the box's own device), or an unknown device.
+    let me = h.handle.shared.lock().device_id();
+    for dev in [me, Uuid::new_v4()] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": dev, "action": post("x") }))).await;
+        assert_eq!(code, 403);
+    }
+    // Governance isn't an action; unknown fields are refused.
+    for action in [
+        json!({ "kind": "changeRole", "memberId": "x", "role": "owner" }),
+        json!({ "kind": "post", "chatId": chat_id, "text": "x", "relatedProposalId": Uuid::new_v4() }),
+    ] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": action }))).await;
+        assert!((400..500).contains(&code) && code != 404, "{code}");
+    }
+    // A forged signature: refused, nothing stored.
+    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("forged") }))).await;
+    let forged = ligus_core::crypto::sign_p256(&ligus_core::testkit::Phone::new().key, &b64d(prep["preimage"].as_str().unwrap()));
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": ligus_core::presence::b64url(&forged) }))).await;
+    assert_eq!(code, 403);
+    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().messages.iter().any(|m| m.body == "forged"));
+    // Two drafts at once: the second to commit has a stale chain link (409).
+    let (_, a) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("a") }))).await;
+    let (_, b) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("b") }))).await;
+    for (prep, want) in [(&a, 200), (&b, 409)] {
+        let sig = ligus_core::crypto::sign_p256(&phone.key, &b64d(prep["preimage"].as_str().unwrap()));
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": ligus_core::presence::b64url(&sig) }))).await;
+        assert_eq!(code, want, "{v}");
+    }
+    // A passkey-gated action committed without its passkey: 409.
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(ligus_core::guard::LockdownSignal::InjectionDetected, "x".into())]).unwrap();
+    let raises = locked_raises(&h, chat_id).await;
+    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id, raises } }))).await;
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": "AAAA" }))).await;
+    assert_eq!(code, 409);
+    // A draft is single use.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": a["prepareId"], "signature": "AAAA" }))).await;
+    assert_eq!(code, 404);
+    let _ = account;
+    h.handle.shutdown();
+}
+
+// ── "Add this phone" headless, and GET /v1/me on loopback ───────────────────
+
+/// `ligus phones certify`: a CLI person certifies the code a phone shows,
+/// confirming with their recovery key; without it (or with a fingerprint
+/// that doesn't match) nothing is written, and a box can't certify anyone.
+/// `GET /v1/me` on loopback then describes that phone (`?deviceId=`), and
+/// refuses an uncertified one with `device_not_certified`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phones_certify_headless_then_me_on_loopback() {
+    use ligus_runtime::phone_enroll::PhoneCode;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let words = h._tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    // The person's recovery key (the harness desktop already registered its
+    // test recovery key), as the 24 words a person keeps offline.
+    let account = open_service(&h.desktop).unwrap().author().account_id.unwrap();
+    std::fs::write(&words, ligus_core::testkit::test_recovery_key(account).words()).unwrap();
+    let phone = ligus_core::testkit::Phone::new();
+    let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| ligus_core::crypto::sign_p256(&phone.key, m));
+    let certs = || {
+        ligus_runtime::event_store::EventStore::open(h.desktop.data_dir.join("ligus.db"))
+            .unwrap()
+            .list(workspace_config_session_id(ws))
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(&e.payload, ligus_core::SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == phone.device_id))
+            .count()
+    };
+    // No recovery key: refused. A wrong fingerprint: refused.
+    let fp = || Some(code.fingerprint());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, fp(), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000-0000-0000".into()), None).is_err());
+    // No fingerprint and nobody at a terminal to confirm it: refused, saying
+    // how to pass it.
+    let err = crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, None).unwrap_err();
+    assert!(err.to_string().contains("--fingerprint"), "{err}");
+    // A person at a terminal who doesn't confirm it (or answers anything but
+    // yes): refused; the prompt was shown this code.
+    let mut shown = Vec::new();
+    let mut say_no = |p: &ligus_runtime::phone_enroll::PhoneCode| {
+        shown.push(p.fingerprint());
+        Ok(false)
+    };
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_no)).is_err());
+    assert_eq!(shown, vec![code.fingerprint()]);
+    assert_eq!(code.fingerprint().len(), 24, "five groups of four");
+    // A box can't.
+    let box_cfg = h.handle.shared.cfg.clone();
+    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), fp(), None).is_err());
+    assert_eq!(certs(), 0);
+
+    // Not certified yet: 403 device_not_certified.
+    let (status, v) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+    assert_eq!((status, v["error"].as_str()), (403, Some("device_not_certified")), "{v}");
+    let (status, v) = status_of(&h, reqwest::Method::GET, "/v1/me", None).await;
+    assert_eq!(status, 400, "{v}");
+
+    // The code from a file, the fingerprint checked: certified once.
+    let f = h._tmp.path().join("phone.code");
+    std::fs::write(&f, format!("{}\n", code.encode())).unwrap();
+    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()), None)
+        .unwrap();
+    // Confirmed at a terminal instead of --fingerprint.
+    let mut say_yes = |_: &ligus_runtime::phone_enroll::PhoneCode| Ok(true);
+    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes)).unwrap();
+    assert_eq!(certs(), 1, "certifying again writes nothing");
+    sync_once(&h.desktop).await.unwrap();
+    let mut v = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (status, got) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+        if status == 200 {
+            v = got;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(v["device"]["id"], json!(phone.device_id), "{v}");
+    assert_eq!(v["device"]["tier"], "phone");
+    assert_eq!(v["workspaceId"], json!(ws));
+    assert_eq!(v["configLogId"], json!(workspace_config_session_id(ws)));
+    assert_eq!(v["room"], json!(h.desktop.room));
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    assert_eq!(v["account"]["id"], json!(owner.account_id));
+    assert_eq!(v["account"]["memberId"], json!(owner.id));
+    assert!(v["account"]["role"].is_string(), "{v}");
+    assert!(v["rpId"].as_str().is_some_and(|r| !r.is_empty()), "{v}");
+    h.handle.shutdown();
+}
+
+// ── Workspace memory and task state for the phone ───────────────────────────
+
+/// The phone reads memory and task state, and proposes a memory note signed
+/// by its own key; the box (a service member) can't write memory itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_reads_memory_and_task_state_and_proposes_a_note() {
+    use ligus_core::memory::{MemoryOp, TaskStateUpdate, TaskStatus};
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Standup" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+
+    // A person's note, written on the desktop, reaches the phone's box.
+    let (entry, _) = open_service(&h.desktop)
+        .unwrap()
+        .write_memory(ws, ligus_runtime::chat_service::MemoryDraft { title: "Relay ports".into(), body: "8443 for the team relay".into(), tags: vec!["infra".into()], ..Default::default() })
+        .unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    let mut found = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        found = h.get("/v1/memory?q=relay%208443").await;
+        if found["total"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(found["entries"][0]["entry"]["id"], json!(entry), "{found}");
+    assert_eq!(h.get("/v1/memory?q=zebra").await["entries"], json!([]));
+    let one = h.get(&format!("/v1/memory/{entry}")).await;
+    assert_eq!(one["entry"]["current"]["author"]["id"], json!(person));
+
+    // The box can't write memory: it is a service member.
+    let refused = h.handle.shared.lock().write_memory(ws, ligus_runtime::chat_service::MemoryDraft { title: "t".into(), body: "b".into(), ..Default::default() });
+    assert!(refused.is_err(), "a service member writes no memory");
+
+    // The phone proposes a note as its person.
+    let op = MemoryOp::Create { entry_id: Uuid::new_v4(), title: "Deploy day".into(), body: "We ship on Thursdays.".into(), tags: vec![] };
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ProposeMemory { chat_id, op, rationale: "said in standup".into() }).await;
+    assert_eq!(code, 200, "{done}");
+    let pid = done["proposalId"].as_str().unwrap().to_string();
+    let ps = h.get("/v1/memory/proposals").await;
+    let p = &ps["proposals"][0]["proposal"];
+    assert_eq!(p["proposal"]["proposalId"], json!(pid), "{ps}");
+    assert_eq!(p["by"]["id"], json!(person));
+    assert_eq!(p["proposal"]["source"]["chatId"], json!(chat_id));
+    assert_eq!(p["proposal"]["op"]["entryId"], json!(pid), "a new entry is named by its proposal");
+    assert!(p.get("decision").is_none(), "open until a person decides on a desktop");
+
+    // Task state: the chat's runtime reports, the phone reads it.
+    h.handle
+        .shared
+        .lock()
+        .update_task_state(chat_id, ws, None, TaskStateUpdate { task_id: chat_id, turn_id: Uuid::new_v4(), status: TaskStatus::Blocked, summary: "Waiting on review".into(), ..Default::default() })
+        .unwrap();
+    let ts = h.get(&format!("/v1/chats/{chat_id}/task-state")).await;
+    assert_eq!(ts["slots"][0]["slot"]["update"]["summary"], json!("Waiting on review"), "{ts}");
+    assert_eq!(ts["slots"][0]["agentName"], json!("Ligus"));
+    assert_eq!(ts["slots"][0]["active"], json!(true));
+}
+
+/// The owner's case (repos-and-checkouts 9.5,
+/// desktop_bind_proposes_repo_box_detects_and_phone_sees_coverage, box
+/// side): the workspace names a repo, the box has no checkout (missing, no
+/// paths in the listing), clones it by id from its connection, coverage
+/// flips to present, a chat on it runs there with its base pinned; a chat
+/// on a repo the box lacks never runs a turn
+/// (pinned_host_without_checkout_never_runs_turn).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspace_repo_clone_by_id_and_the_turn_gate() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "acme", "widget");
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, true)));
+
+    // The box is a service member (Contributor): adding a repo is an Admin's.
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos", Some(json!({ "input": "github.com/acme/widget" }))).await;
+    assert_eq!(c, 403);
+    let rid = add_repo_on_desktop(&h, "git@github.com:Acme/Widget.git", "Widget").await.to_string();
+    let other_id = add_repo_on_desktop(&h, "github.com/acme/other", "other").await.to_string();
+    let v = h.get("/v1/workspace-repos").await;
+    let w = v["repos"].as_array().unwrap().iter().find(|r| r["id"] == rid.as_str()).unwrap().clone();
+    assert_eq!(w["here"]["state"], "missing", "{v}");
+    assert!(!v.to_string().contains(h._tmp.path().to_str().unwrap()), "no host paths: {v}");
+
+    // Strict ids; a removed or unknown repo can't be cloned.
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repoId": Uuid::new_v4() }))).await;
+    assert_eq!(c, 404);
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repoId": rid }))).await;
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let v = h.get("/v1/workspace-repos").await;
+    let w = v["repos"].as_array().unwrap().iter().find(|r| r["id"] == rid.as_str()).unwrap().clone();
+    assert_eq!(w["here"]["state"], "present", "{v}");
+    let checkout = w["here"]["checkout"].as_str().unwrap().to_string();
+    assert!(checkout.starts_with("widget-") && checkout.len() == "widget-".len() + 8, "{checkout}");
+
+    // A chat on Widget runs here, on its chat branch, and pins its base.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "widget" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/workspace-repo"), Some(json!({ "repoId": rid }))).await;
+    assert_eq!(r["here"]["state"], "present", "{r}");
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut system = String::new();
+    for _ in 0..300 {
+        if let Some(b) = model.bodies.lock().unwrap().first() {
+            system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(system.contains("Repository: Widget (github.com/acme/widget)") && system.contains(&format!("ligus/chat/{chat_id}")), "{system}");
+    let mut pinned = false;
+    for _ in 0..100 {
+        if h.get(&format!("/v1/chats/{chat_id}/details")).await["workspaceRepo"]["basePinned"] == true {
+            pinned = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(pinned, "the first turn pins the chat's base");
+
+    // A chat on a repo this box has no checkout of: refused, never run.
+    let chat2 = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "other" }))).await;
+    let chat2_id = chat2["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat2_id}/workspace-repo"), Some(json!({ "repoId": other_id }))).await;
+    let before = model.bodies.lock().unwrap().len();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat2_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut note = false;
+    for _ in 0..100 {
+        let msgs = h.get(&format!("/v1/chats/{chat2_id}/messages")).await.to_string();
+        if msgs.contains("did not run: No checkout of other") {
+            note = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(note, "the sender is told why");
+    assert_eq!(model.bodies.lock().unwrap().len(), before, "no model call for the refused turn");
+    h.handle.shutdown();
+}
+
+/// The desktop's Owner adds a workspace repo; the box syncs it.
+async fn add_repo_on_desktop(h: &Harness, input: &str, name: &str) -> Uuid {
+    let ws = h.handle.shared.ws;
+    let id = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.add_workspace_repo(ws, input, name, "", "main", None).unwrap().id
+    };
+    for _ in 0..200 {
+        sync_once(&h.desktop).await.unwrap();
+        h.handle.shared.sync_kick.notify_one();
+        let v = h.get("/v1/workspace-repos").await;
+        if v["repos"].as_array().unwrap().iter().any(|r| r["id"] == id.to_string()) {
+            return id;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw the repo");
+}
+
+/// Repos review residual 2: the `serve.token` bearer counts as the owner
+/// only on a loopback listener (every paired phone can fetch the token, and
+/// over the network it is any of them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/workspace-repos/rescan".to_string(), json!({})),
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        (reqwest::Method::PATCH, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/workspace-repo"), json!({ "repoId": null })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/repo"), json!({})),
+    ] {
+        let (c, v) = status_of(&h, m.clone(), &p, Some(b)).await;
+        assert_eq!(c, 403, "{m} {p}: {v}");
+        assert!(v.to_string().contains("owner_required"), "{v}");
+    }
+    // The same box on loopback: the operator.
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 200, "{v}");
+}

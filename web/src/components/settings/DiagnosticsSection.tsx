@@ -47,7 +47,7 @@ export function DiagnosticsSection() {
       </div>
       <pre
         className="mt-1 max-h-[52vh] overflow-auto rounded-xl border p-3 text-[11.5px] leading-relaxed"
-        style={{ ...fieldStyle, fontFamily: "var(--hive-mono, ui-monospace, monospace)", whiteSpace: "pre-wrap" }}
+        style={{ ...fieldStyle, fontFamily: "var(--ligus-mono, ui-monospace, monospace)", whiteSpace: "pre-wrap" }}
       >
         {logs.isError
           ? "No log file yet — it appears once the app has logged something this session."

@@ -41,7 +41,7 @@ flowchart TB
 | Relay sync | Deployment, exactly one replica, `Recreate` | DB URL, token-issuer **public** key, metrics token. Never a workspace key |
 | Relay tunnel | Deployment, exactly one replica, `Recreate`, serves only `/v1/tunnel/*` | as above, plus the APNs key if push is on |
 | langstroth-auth (optional) | Deployment, exactly one replica, `Recreate` | the token-issuer signing key, IdP client secrets, its DB URL |
-| `ligus serve` | StatefulSet, 1 replica, `ReadWriteOncePod` data PVC and a `home` PVC | the workspace key, its device key, `hive.db`, `serve.token`, tunnel keys, checkouts, model and MCP keys you give it |
+| `ligus serve` | StatefulSet, 1 replica, `ReadWriteOncePod` data PVC and a `home` PVC | the workspace key, its device key, `ligus.db`, `serve.token`, tunnel keys, checkouts, model and MCP keys you give it |
 | `ligus worker` | one single-replica StatefulSet per `worker.instances[]` entry | the same kinds of secrets as serve, for its own identity |
 | MCP servers | Deployment + Service + NetworkPolicy each | their own tokens |
 
@@ -205,7 +205,7 @@ kubectl -n langstroth-relay create secret generic relay-db \
   --from-literal=DATABASE_URL='postgres://relay:…@db.example.com:5432/relay?sslmode=verify-full'
 # Secret settings, one key per setting name (mounted as files).
 kubectl -n langstroth-relay create secret generic relay-env \
-  --from-literal=LIGUS_RELAY_TOKEN_PUBKEY=<issuer public key>
+  --from-literal=LANGSTROTH_RELAY_TOKEN_PUBKEY=<issuer public key>
 kubectl -n langstroth-relay create secret generic relay-metrics --from-literal=token=$(openssl rand -hex 24)
 kubectl -n langstroth-relay create secret tls relay-tls --cert=relay.crt --key=relay.key   # or cert-manager
 helm install langstroth-relay <relay-checkout>/deploy/helm/langstroth-relay -n langstroth-relay \
@@ -226,7 +226,7 @@ With the release name `langstroth-relay` the in-cluster Services are
 for the phone app add `--set tunnel.mode=allowlist --set
 'tunnel.allowedHosts[0]=<host id>'` (the host id is printed by
 `ligus remote status` on serve), or `open` behind a token gate
-(`LIGUS_RELAY_TOKEN_PUBKEY` or `LIGUS_RELAY_ACCESS_TOKENS` in `relay-env`).
+(`LANGSTROTH_RELAY_TOKEN_PUBKEY` or `LANGSTROTH_RELAY_ACCESS_TOKENS` in `relay-env`).
 
 `postgres.enabled=true` runs a development Postgres pod (no backups, no TLS,
 `sslmode=disable`): CI and trials only, and it needs a Secret you create
@@ -243,11 +243,11 @@ Settings to get right on the relay:
   own; the chart refuses them in `config.existingSecret` or `config.env`, and
   the relay refuses to start with APNs settings on a pod whose tunnel is off.
 - **Workspace scope.** Issue tokens with `--workspace <id>` and set
-  `LIGUS_RELAY_WORKSPACE_SCOPE=claims` (or `strict`); see
+  `LANGSTROTH_RELAY_WORKSPACE_SCOPE=claims` (or `strict`); see
   [Self-hosting a relay](../networking/self-host.md#per-workspace-token-scope).
-- **Retention.** Postgres keeps the newest `LIGUS_RELAY_MAX_ENVELOPES` per
+- **Retention.** Postgres keeps the newest `LANGSTROTH_RELAY_MAX_ENVELOPES` per
   workspace (default 50000, pruned hourly; `0` = unbounded).
-- A malformed `LIGUS_RELAY_TOKEN_PUBKEY` keeps the relay from starting.
+- A malformed `LANGSTROTH_RELAY_TOKEN_PUBKEY` keeps the relay from starting.
 
 ### One workspace
 
@@ -366,7 +366,7 @@ workspace key itself.
 2. Pin each serve image (by digest) to the desktop release your members run.
 3. `helm upgrade` restarts serve on the same volume and identity; relay-sync
    and the tunnel use `Recreate`, so expect a few seconds without sync.
-4. Before turning on `LIGUS_RELAY_WORKSPACE_SCOPE=strict`, issue
+4. Before turning on `LANGSTROTH_RELAY_WORKSPACE_SCOPE=strict`, issue
    workspace-scoped tokens and roll them out to every client.
 5. Changing `persistence.accessMode`, the `home` volume or the worker layout
    changes the StatefulSets' `volumeClaimTemplates`, which Kubernetes doesn't

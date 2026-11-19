@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/branding/hive-app-icon-1024.png" alt="Ligus" width="112" height="112">
+<img src="assets/branding/ligus-app-icon-1024.png" alt="Ligus" width="112" height="112">
 
 # Ligus
 
@@ -122,7 +122,7 @@ their outputs).
 
 ### Headless agents & always-on workers
 
-Run an agent **without the desktop app** via the [`ligus` CLI](crates/hive-cli/README.md)
+Run an agent **without the desktop app** via the [`ligus` CLI](crates/ligus-cli/README.md)
 — on a cloud VM, a spare box, or as a background process. A **worker daemon**
 registers a machine as a host and runs every agent bound to it on a
 **workspace-owned credential** (never a personal key). Because it's always on, it
@@ -165,10 +165,10 @@ so they reason about the actual state of the repo.
 ### Event-sourced, per-device state
 
 A Ligus workspace is an **append-only log of signed events** (`SessionEvent`s) in
-a local SQLite database (`hive.db`). Nothing is a mutable row you edit in place;
+a local SQLite database (`ligus.db`). Nothing is a mutable row you edit in place;
 every message, reaction, proposal, membership change, and config edit is an event
 appended to the log. The UI state you see is a **projection** — the log **folded**
-by a deterministic projector (`hive-core`). Because the fold is deterministic and
+by a deterministic projector (`ligus-core`). Because the fold is deterministic and
 the log is the source of truth, every device that has the same events converges
 on exactly the same state, which is what makes multi-device and multi-user
 collaboration safe without a central database.
@@ -187,10 +187,10 @@ everything after their cursor; it never sees plaintext and never holds a key.
 
 | Path | What it is |
 |------|-----------|
-| [`crates/hive-core`](crates/hive-core/README.md) | Pure, IO-free domain core: the event-sourced projector, `ChatSession`, authorization, E2EE primitives, and the proposal / workflow / skill / vault / channel types. The source of truth folded into state. |
-| [`crates/hive-runtime`](crates/hive-runtime/README.md) | Orchestration over the core: SQLite event store, `ChatService`, sync engine + relay client, provider adapters, MCP, the tool loop, prompt building, vault fetcher. |
-| [`crates/hive-proto`](crates/hive-proto/README.md) | The `ts-rs` DTOs shared with the frontend; a test regenerates `web/src/bindings/` so the TS contract can't drift. |
-| [`crates/hive-cli`](crates/hive-cli/README.md) | The headless `ligus` client and worker daemon — the same runtime, no Tauri. |
+| [`crates/ligus-core`](crates/ligus-core/README.md) | Pure, IO-free domain core: the event-sourced projector, `ChatSession`, authorization, E2EE primitives, and the proposal / workflow / skill / vault / channel types. The source of truth folded into state. |
+| [`crates/ligus-runtime`](crates/ligus-runtime/README.md) | Orchestration over the core: SQLite event store, `ChatService`, sync engine + relay client, provider adapters, MCP, the tool loop, prompt building, vault fetcher. |
+| [`crates/ligus-proto`](crates/ligus-proto/README.md) | The `ts-rs` DTOs shared with the frontend; a test regenerates `web/src/bindings/` so the TS contract can't drift. |
+| [`crates/ligus-cli`](crates/ligus-cli/README.md) | The headless `ligus` client and worker daemon — the same runtime, no Tauri. |
 | [`app/`](app/README.md) | The Tauri v2 desktop shell: IPC commands, `AppState`, and streaming events; bundles the web UI. |
 | [`web/`](web/README.md) | The React 19 + TypeScript frontend (Vite, TanStack Query, Tauri IPC). |
 | `addons/` | Optional agent shims (e.g. `aider-mcp`). |
@@ -263,7 +263,7 @@ curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh
 
 It fetches the prebuilt `ligus` binary for your platform from the latest release.
 Override the target dir with `LIGUS_INSTALL_DIR` or pin a tag with `LIGUS_VERSION`.
-Or build from source: `cargo install --path crates/hive-cli`.
+Or build from source: `cargo install --path crates/ligus-cli`.
 
 Use `ligus worker` to run a **headless daemon** that answers `@mentions` for the
 agents it hosts — the production way to keep agents responsive when no desktop is
@@ -288,7 +288,7 @@ see [Configure a worker](#run-a-headless-worker) below.
    `hivews1:` invite code **out-of-band** (paste it over a channel you trust) or
    by inviting someone you already share a workspace with. The invite carries the workspace key; the relay
    never sees it. Both of you then sync the same encrypted log.
-5. **Go always-on (optional).** Run the [`ligus` CLI](crates/hive-cli/README.md)
+5. **Go always-on (optional).** Run the [`ligus` CLI](crates/ligus-cli/README.md)
    worker daemon on a spare box so an agent keeps answering while your laptop is
    closed.
 
@@ -374,10 +374,10 @@ Bind address and bounds are env-driven:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `$PORT` / `LIGUS_RELAY_ADDR` | `0.0.0.0:8443` | Bind address (`$PORT` for PaaS, or a full `host:port`). |
-| `LIGUS_RELAY_RETENTION_DAYS` | `0` (off) | Prune envelopes older than N days. |
-| `LIGUS_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
-| `LIGUS_RELAY_ACCESS_TOKENS` | unset (open) | Optional comma-separated allowlist gating *who can connect*. |
+| `$PORT` / `LANGSTROTH_RELAY_ADDR` | `0.0.0.0:8443` | Bind address (`$PORT` for PaaS, or a full `host:port`). |
+| `LANGSTROTH_RELAY_RETENTION_DAYS` | `0` (off) | Prune envelopes older than N days. |
+| `LANGSTROTH_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
+| `LANGSTROTH_RELAY_ACCESS_TOKENS` | unset (open) | Optional comma-separated allowlist gating *who can connect*. |
 
 `/v1/health` round-trips the store, so it reports real liveness. See
 [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/) for a full
@@ -412,11 +412,11 @@ fit together.
   (workspace state lives in `.ligus/`).
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
-  [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable
+  [`ligus` CLI README](crates/ligus-cli/README.md) for every `LIGUS_*` variable
   (relay URL/token, workspace + key, provider/model, MCP config, role gate).
-- **IPC types** in [`hive-proto`](crates/hive-proto/README.md) generate the
+- **IPC types** in [`ligus-proto`](crates/ligus-proto/README.md) generate the
   TypeScript bindings in `web/src/bindings/`; regenerate with
-  `cargo test -p hive-proto export_bindings`.
+  `cargo test -p ligus-proto export_bindings`.
 
 ## Running the infrastructure
 
@@ -445,8 +445,8 @@ Ligus is short for *ligustica*. *Apis mellifera ligustica* is the Italian
 honeybee, the bees our maintainer keeps, and *Ligus* is Latin for "a Ligurian,"
 the region the subspecies is named for. We like the image of a colony: work
 done by many bees in one shared space, each one useful on its own and more
-useful together. (Pronounced LEE-gus.) The default agent is called `@hive`:
-you are talking to the hive.
+useful together. (Pronounced LEE-gus.) The default agent is called `@ligus`:
+you are talking to the ligus.
 
 ## License
 

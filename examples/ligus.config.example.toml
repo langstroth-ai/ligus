@@ -1,7 +1,7 @@
-# Hive example configuration
+# Ligus example configuration
 
 [app]
-name = "Hive"
+name = "Ligus"
 local_mode = true
 sync_mode = "account"
 default_runtime = "local-ollama"
@@ -11,7 +11,7 @@ default_model = "llama3:latest"
 kind = "local"
 
 [transport.relay]
-endpoint = "wss://relay.hive.example/v1"
+endpoint = "wss://relay.ligus.example/v1"
 account_token_env = "LIGUS_RELAY_TOKEN"
 
 [sync]
@@ -62,7 +62,7 @@ performance_score = 7.8
 [[runtimes]]
 id = "home-lab"
 kind = "remote"
-provider = "hive-daemon"
+provider = "ligus-daemon"
 endpoint = "https://home-lab.your-tailnet.ts.net:9443"
 network = "tailnet"
 device_id = "runtime-home-lab"

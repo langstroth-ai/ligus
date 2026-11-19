@@ -22,7 +22,7 @@
 //! LIGUS_APP_LIVE_ENDPOINT=http://host:8080 \
 //! LIGUS_APP_LIVE_MCP_URL=http://mcp-host:8090/mcp \
 //! LIGUS_APP_LIVE_MCP_TOKEN_FILE=/path/to/0600-token-file \
-//!   cargo test -p Hive --features e2e --test app_live -- --nocapture
+//!   cargo test -p ligus-desktop --features e2e --test app_live -- --nocapture
 //! ```
 //!
 //! Optional: `LIGUS_APP_LIVE_SCENARIOS` (default `a,b,c,d,e,f`),
@@ -72,7 +72,7 @@ struct Config {
 }
 
 fn env(name: &str) -> Option<String> {
-    hive_core::compat::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    ligus_core::compat::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 impl Config {
@@ -216,7 +216,7 @@ async fn start_proxy(upstream: String, vault_doc: Arc<String>) -> Proxy {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
     let base = format!("http://{}", listener.local_addr().unwrap());
     let log = Arc::new(Mutex::new(Vec::new()));
-    let client = hive_forge::http_client_builder().build().unwrap();
+    let client = ligus_forge::http_client_builder().build().unwrap();
     let proxy = Proxy { base, log: log.clone() };
     tauri::async_runtime::spawn(async move {
         loop {
@@ -448,8 +448,8 @@ fn planted_repo(dir: &Path) {
 }
 
 /// Leftovers of a turn: registered worktrees other than the repo itself and
-/// the chats' persistent base checkouts (`.hive/worktrees/chat-<id>`, kept
-/// by design), plus any `hive/turn-*` branch.
+/// the chats' persistent base checkouts (`.ligus/worktrees/chat-<id>`, kept
+/// by design), plus any `ligus/turn-*` branch.
 fn turn_leftovers(repo: &Path) -> Vec<String> {
     let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let root = canon(repo);
@@ -462,7 +462,7 @@ fn turn_leftovers(repo: &Path) -> Vec<String> {
         .map(|p| p.display().to_string())
         .collect();
     left.extend(
-        git(repo, &["branch", "--list", "hive/turn-*", "--format=%(refname:short)"])
+        git(repo, &["branch", "--list", "ligus/turn-*", "--format=%(refname:short)"])
             .lines()
             .filter(|l| !l.trim().is_empty())
             .map(str::to_string),
@@ -513,7 +513,7 @@ impl Ctx {
         (r, started.elapsed().as_secs_f64())
     }
 
-    fn chat(&self, sid: &str) -> hive_proto::ChatSessionDto {
+    fn chat(&self, sid: &str) -> ligus_proto::ChatSessionDto {
         crate::get_chat_sync(self.state(), sid.into()).expect("get_chat").expect("chat exists")
     }
 
@@ -529,7 +529,7 @@ impl Ctx {
 
     /// The context meter's command, bounded: it once deadlocked on the
     /// `service` mutex, which must fail this test rather than hang it.
-    fn telemetry(&self, sid: &str) -> hive_proto::ContextTelemetryDto {
+    fn telemetry(&self, sid: &str) -> ligus_proto::ContextTelemetryDto {
         let (tx, rx) = std::sync::mpsc::channel();
         let (app, sid) = (self.app.clone(), sid.to_string());
         std::thread::spawn(move || {
@@ -710,7 +710,7 @@ the search returned.",
     c
 }
 
-const RUNBOOK: &str = "# Hive Lab Runbook\n\n\
+const RUNBOOK: &str = "# Ligus Lab Runbook\n\n\
 ## Nightly backups\n\
 The nightly backup job runs at 02:30 UTC every day. It snapshots the Postgres cluster and the artifact store, \
 then uploads the snapshots to the object-storage bucket named lab-snapshots-7781 in the eu-central region. \
@@ -772,7 +772,7 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
         let system = first.system().unwrap_or("").to_string();
         let last_user = first.last_user().unwrap_or("");
         c.check(
-            last_user.contains(hive_runtime::retrieval::PASSAGES_HEADER),
+            last_user.contains(ligus_runtime::retrieval::PASSAGES_HEADER),
             format!("turn {}: passages ride on the latest user turn", i + 1),
         );
         c.check(
@@ -780,7 +780,7 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
             format!("turn {}: the retrieved passages hold the answer ({} / {})", i + 1, facts[0], facts[1]),
         );
         c.check(
-            !system.contains(hive_runtime::retrieval::PASSAGES_HEADER) && !system.contains("Reference vaults") && !system.contains("lab-snapshots-7781"),
+            !system.contains(ligus_runtime::retrieval::PASSAGES_HEADER) && !system.contains("Reference vaults") && !system.contains("lab-snapshots-7781"),
             format!("turn {}: nothing from the vault in the system prompt", i + 1),
         );
         let earlier_users_clean = first
@@ -789,7 +789,7 @@ async fn scenario_vault(ctx: &Ctx) -> Checks {
             .filter(|m| m["role"] == "user")
             .rev()
             .skip(1)
-            .all(|m| !m["content"].as_str().unwrap_or("").contains(hive_runtime::retrieval::PASSAGES_HEADER));
+            .all(|m| !m["content"].as_str().unwrap_or("").contains(ligus_runtime::retrieval::PASSAGES_HEADER));
         c.check(earlier_users_clean, format!("turn {}: earlier user turns carry no passages", i + 1));
         let reply = ctx.last_reply(&sid);
         c.note(format!("reply {}: {}", i + 1, reply.chars().take(200).collect::<String>().replace('\n', " ")));
@@ -915,13 +915,13 @@ async fn scenario_compaction(ctx: &Ctx) -> Checks {
     let sid = ctx.new_chat("gw-small");
     let uuid = uuid::Uuid::parse_str(&sid).unwrap();
     // Seed the history the way turns land in the log: user messages from the
-    // local actor, completed Hive replies.
+    // local actor, completed Ligus replies.
     let seed = |user: &str, reply: &str| {
         let state = ctx.state();
         let mut svc = state.service.lock().unwrap();
         let ws = svc.load(uuid).unwrap().unwrap().workspace_id;
         let posted = svc.post_user_message(uuid, ws, user).unwrap();
-        let mid = svc.begin_assistant_message(uuid, ws, "Hive", "gw-small", None, Some(posted.id)).unwrap();
+        let mid = svc.begin_assistant_message(uuid, ws, "Ligus", "gw-small", None, Some(posted.id)).unwrap();
         svc.complete_assistant_message(uuid, ws, mid, reply).unwrap();
     };
     for (fact, _) in FACTS {
@@ -1022,7 +1022,7 @@ fn headless_app(data_dir: &Path, repo: &Path) -> tauri::App {
 /// context meter's first poll on a fresh chat (an empty summary cache) once
 /// deadlocked the whole app on the `service` mutex. Returns failures.
 fn run_offline() -> usize {
-    let root = std::env::temp_dir().join(format!("hive-app-offline-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("ligus-app-offline-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -1185,7 +1185,7 @@ fn forge_repo(root: &Path, slug: &str, canonical: &str, config: &str, checkout: 
 
 /// Trust, on this device, the repo-supplied items of `checkout` named in `ids`.
 fn trust(data_dir: &Path, checkout: &Path, ids: &[&str]) {
-    use hive_runtime::workspace_trust as wt;
+    use ligus_runtime::workspace_trust as wt;
     let store = wt::TrustStore::open(data_dir).unwrap();
     let root = wt::root_id(checkout);
     for item in wt::repo_items(checkout).into_iter().filter(|i| ids.contains(&i.id.as_str())) {
@@ -1193,7 +1193,7 @@ fn trust(data_dir: &Path, checkout: &Path, ids: &[&str]) {
     }
 }
 
-fn mcp_ids(servers: &[hive_runtime::McpServerSpec]) -> Vec<String> {
+fn mcp_ids(servers: &[ligus_runtime::McpServerSpec]) -> Vec<String> {
     let mut v: Vec<String> = servers.iter().map(|s| s.id.clone()).collect();
     v.sort();
     v
@@ -1254,7 +1254,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let load = |sid: Uuid| state().service.lock().unwrap().load(sid).unwrap().unwrap();
 
     // Paths as Ligus compares them (links resolved, no Windows verbatim prefix).
-    let canon = |p: &Path| hive_runtime::repos::git::canonical(p);
+    let canon = |p: &Path| ligus_runtime::repos::git::canonical(p);
 
     // ---- Per-turn catalogs and trust (F14) ----
     // The window views chat B: the global catalogs follow it.
@@ -1296,7 +1296,7 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let ws = load(chat_a).workspace_id;
     let file_diff = |title: &str, diff: &str| {
         // Made by an agent (an author's own vote never counts toward quorum).
-        let mut p = hive_core::ActionProposal::new(title, hive_core::ProposalKind::FileDiff, "coder");
+        let mut p = ligus_core::ActionProposal::new(title, ligus_core::ProposalKind::FileDiff, "coder");
         p.diff = Some(diff.into());
         p.required_approvals = 1;
         let id = p.id;
@@ -1307,11 +1307,11 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     let add_file = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hello\n";
     let p1 = file_diff("add new.txt", add_file);
     let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p1.to_string(), None).await;
-    let chat_wt = hive_runtime::git_worktree::chat_worktree_path_of(&alpha, &chat_a.to_string()).unwrap();
+    let chat_wt = ligus_runtime::git_worktree::chat_worktree_path_of(&alpha, &chat_a.to_string()).unwrap();
     c.check(r.is_ok(), format!("an approved repo proposal applies: {:?}", r.err()));
     c.check(chat_wt.join("new.txt").exists(), "it landed on chat A's branch, in Alpha's checkout");
     c.check(!bound.join("new.txt").exists() && !alpha.join("new.txt").exists(), "never in the bound folder or Alpha's own worktree");
-    c.check(load(chat_a).proposals.iter().find(|p| p.id == p1).is_some_and(|p| p.status == hive_core::ProposalStatus::Applied), "the proposal is applied");
+    c.check(load(chat_a).proposals.iter().find(|p| p.id == p1).is_some_and(|p| p.status == ligus_core::ProposalStatus::Applied), "the proposal is applied");
     // The apply passes the turn's checkout gate: never into a checkout whose
     // remote moved, or one another host on this machine manages.
     let p_gate = file_diff("add gate.txt", "diff --git a/gate.txt b/gate.txt\nnew file mode 100644\n--- /dev/null\n+++ b/gate.txt\n@@ -0,0 +1 @@\n+g\n");
@@ -1320,17 +1320,17 @@ async fn repos_checks(handle: &tauri::AppHandle, root: &Path) -> usize {
     c.check(r.as_ref().is_err_and(|e| e.contains("no longer points")), format!("an apply into a checkout whose remote moved is refused: {r:?}"));
     git(&alpha, &["remote", "set-url", "origin", "https://github.com/e2e/alpha.git"]);
     let me = state().service.lock().unwrap().device_id();
-    hive_runtime::repos::marker::take_over(&alpha, Uuid::new_v4(), "e2e-box").unwrap();
+    ligus_runtime::repos::marker::take_over(&alpha, Uuid::new_v4(), "e2e-box").unwrap();
     let r = crate::implement_proposal(handle.clone(), state(), chat_a.to_string(), p_gate.to_string(), None).await;
     c.check(r.as_ref().is_err_and(|e| e.contains("managed by e2e-box")), format!("an apply into a checkout another host manages is refused: {r:?}"));
     // Hygiene and legacy turns leave such a checkout alone too.
     let bound_before = git(&bound, &["worktree", "list"]);
-    hive_runtime::repos::marker::take_over(&bound, Uuid::new_v4(), "e2e-box").unwrap();
+    ligus_runtime::repos::marker::take_over(&bound, Uuid::new_v4(), "e2e-box").unwrap();
     c.check(crate::turn_scope(&state(), &load(chat_c)).is_err_and(|e| e.contains("managed by e2e-box")), "a chat without a repo never runs in a bound folder another host manages");
     let swept = crate::guards::run_hygiene_sweep(&state());
     c.check(git(&bound, &["worktree", "list"]) == bound_before && swept.chat_checkouts_removed == 0, "hygiene never sweeps a checkout another host manages");
-    hive_runtime::repos::marker::take_over(&bound, me, "e2e").unwrap();
-    hive_runtime::repos::marker::take_over(&alpha, me, "e2e").unwrap();
+    ligus_runtime::repos::marker::take_over(&bound, me, "e2e").unwrap();
+    ligus_runtime::repos::marker::take_over(&alpha, me, "e2e").unwrap();
     c.check(!chat_wt.join("gate.txt").exists() && !alpha.join("gate.txt").exists(), "nothing landed while refused");
 
     // Something else lands on the branch; a proposal made before it conflicts.
@@ -1430,13 +1430,13 @@ pub fn run_live() -> usize {
     };
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            hive_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+            ligus_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,dispatch=info,compaction=info,worktree=info")),
         )
         .with_writer(std::io::stderr)
         .try_init();
 
-    let root = std::env::temp_dir().join(format!("hive-app-live-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("ligus-app-live-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let data_dir = root.join("data");
     let repo = root.join("repo");
@@ -1457,7 +1457,7 @@ pub fn run_live() -> usize {
     let activity = Arc::new(Mutex::new(Vec::new()));
     {
         let activity = activity.clone();
-        handle.listen_any(hive_proto::ChatActivityEvent::EVENT, move |ev| {
+        handle.listen_any(ligus_proto::ChatActivityEvent::EVENT, move |ev| {
             if let Ok(v) = serde_json::from_str::<Value>(ev.payload()) {
                 activity.lock().unwrap().push(v);
             }
@@ -1473,7 +1473,7 @@ pub fn run_live() -> usize {
             "in-app live test: upstream {} via proxy {} (gateway private: {}), repo {}",
             cfg.upstream,
             proxy.base,
-            hive_core::endpoint::endpoint_is_private(&cfg.upstream),
+            ligus_core::endpoint::endpoint_is_private(&cfg.upstream),
             repo.display()
         );
         let ctx = Ctx { app: handle.clone(), proxy, repo: repo.clone(), cfg, activity };
@@ -1530,7 +1530,7 @@ pub fn run_live() -> usize {
     // Everything that crossed the proxy (prompts and raw responses; no
     // credentials go through it), for post-mortems of a slow or odd round.
     if let Some(proxy) = proxy_log.lock().unwrap().take() {
-        let path = std::env::temp_dir().join(format!("hive-app-live-proxy-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ligus-app-live-proxy-{}.jsonl", std::process::id()));
         let lines: Vec<String> = proxy
             .iter()
             .map(|r| {

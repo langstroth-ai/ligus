@@ -43,7 +43,7 @@ describe("hand-off cards", () => {
     reply.scrollIntoView = () => {};
     window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
     fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
-    expect(reply.classList.contains("hive-flash")).toBe(true);
+    expect(reply.classList.contains("ligus-flash")).toBe(true);
     reply.dataset.author = "someone-else";
     fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
     expect(screen.getByText("@reviewer hasn't replied yet.")).toBeInTheDocument();
@@ -64,8 +64,8 @@ describe("hand-off cards", () => {
     m3.scrollIntoView = () => {};
     window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
     fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
-    expect(m3.classList.contains("hive-flash")).toBe(true);
-    expect(m2.classList.contains("hive-flash")).toBe(false);
+    expect(m3.classList.contains("ligus-flash")).toBe(true);
+    expect(m2.classList.contains("ligus-flash")).toBe(false);
     m3.dataset.messageId = "m3-not-loaded";
     fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
     expect(screen.getByText("@reviewer's reply isn't in the loaded part of this chat.")).toBeInTheDocument();

@@ -3,17 +3,17 @@
 version = 4
 
 [[package]]
-name = "Hive"
+name = "ligus-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "dunce",
  "ed25519-dalek 3.0.0",
  "futures",
- "hive-core",
- "hive-forge",
- "hive-proto",
- "hive-runtime",
+ "ligus-core",
+ "ligus-forge",
+ "ligus-proto",
+ "ligus-runtime",
  "notify",
  "notify-debouncer-full",
  "objc2",
@@ -2485,7 +2485,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hive-cli"
+name = "ligus-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2497,10 +2497,10 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "hex",
- "hive-core",
- "hive-forge",
- "hive-proto",
- "hive-runtime",
+ "ligus-core",
+ "ligus-forge",
+ "ligus-proto",
+ "ligus-runtime",
  "hkdf",
  "hmac 0.13.0",
  "libc",
@@ -2522,7 +2522,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hive-core"
+name = "ligus-core"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -2546,12 +2546,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "hive-forge"
+name = "ligus-forge"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "hive-core",
+ "ligus-core",
  "http",
  "hyper-util",
  "libc",
@@ -2572,7 +2572,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hive-proto"
+name = "ligus-proto"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -2581,7 +2581,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hive-runtime"
+name = "ligus-runtime"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
@@ -2592,9 +2592,9 @@ dependencies = [
  "flate2",
  "futures-util",
  "getrandom 0.4.3",
- "hive-core",
- "hive-forge",
- "hive-proto",
+ "ligus-core",
+ "ligus-forge",
+ "ligus-proto",
  "hkdf",
  "hmac 0.13.0",
  "iroh",

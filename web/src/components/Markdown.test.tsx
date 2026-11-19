@@ -98,24 +98,24 @@ describe("Markdown @you", () => {
 
   it.each(viewers)("shows @you as @Ana for $who, marked as theirs only for Ana", ({ me }) => {
     const { container } = render(<Markdown content={"Done. @you can you confirm?"} youName="Ana" youIsMe={me} />);
-    const chip = container.querySelector(".hive-mention");
+    const chip = container.querySelector(".ligus-mention");
     expect(chip?.textContent).toBe("@Ana");
-    expect(chip?.classList.contains("hive-mention-me")).toBe(me);
+    expect(chip?.classList.contains("ligus-mention-me")).toBe(me);
     expect(chip?.getAttribute("title")).toBe(me ? "Mentions you" : "Mentions Ana");
     expect(container.textContent).toBe("Done. @Ana can you confirm?");
   });
 
   it("leaves @you alone without a requester, and in code or addresses", () => {
     const plain = render(<Markdown content={"thanks @you"} />);
-    expect(plain.container.querySelector(".hive-mention")).toBeNull();
+    expect(plain.container.querySelector(".ligus-mention")).toBeNull();
     expect(plain.container.textContent).toBe("thanks @you");
     const code = render(<Markdown content={"`@you` and me@you.io"} youName="Ana" />);
-    expect(code.container.querySelector(".hive-mention")).toBeNull();
+    expect(code.container.querySelector(".ligus-mention")).toBeNull();
     expect(code.container.textContent).toBe("@you and me@you.io");
   });
 
   it("sanitizes the name it shows", () => {
     const { container } = render(<Markdown content={"@you"} youName={"A‮na"} />);
-    expect(container.querySelector(".hive-mention")?.textContent).toBe("@Ana");
+    expect(container.querySelector(".ligus-mention")?.textContent).toBe("@Ana");
   });
 });

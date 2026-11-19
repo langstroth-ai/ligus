@@ -1,4 +1,4 @@
-# The agent-turn engine in hive-runtime
+# The agent-turn engine in ligus-runtime
 
 Status: implemented on `feat/turn-engine` (Ligus 0.1.0). Ligus is short for
 ligustica.
@@ -10,10 +10,10 @@ worktree, file the diff as a proposal, run the Ligus tools, finalize the
 reply's directives) was implemented twice: in the desktop
 (`app/src/lib.rs`: `run_prepared_turn_inner`, `try_tool_loop`,
 `mcp_tool_set`, `agent_iface.rs`) and in the headless worker
-(`crates/hive-cli/src/worker.rs` `run_turn`, `reply.rs`). The terminal client
+(`crates/ligus-cli/src/worker.rs` `run_turn`, `reply.rs`). The terminal client
 `lt` could only stream plain chat, because neither copy is reachable from a
 crate it depends on. The engine is that code once, in
-`hive_runtime::turn_engine`, so the desktop, `ligus worker` / `ligus serve`
+`ligus_runtime::turn_engine`, so the desktop, `ligus worker` / `ligus serve`
 and `lt` run the same turn.
 
 ## Boundaries
@@ -30,7 +30,7 @@ on their own branches (the Phase C sandbox), and they apply unchanged when
 they are inputs.
 
 ```
-host (desktop | worker | lt)                       hive_runtime::turn_engine
+host (desktop | worker | lt)                       ligus_runtime::turn_engine
 -------------------------------------------         ------------------------------------
 claim (turn_dispatch / dispatcher)
 context: system prompt + turns
@@ -126,7 +126,7 @@ repos v2 gate with a legacy bound checkout).
 
 ## What moves, what stays
 
-Moves to `hive_runtime::turn_engine`:
+Moves to `ligus_runtime::turn_engine`:
 
 - the Anthropic tool loop adapter and the MCP tool executor (both hosts had a
   copy), tool-name sanitizing, turns to messages;
@@ -155,7 +155,7 @@ Stays in the hosts:
 
 ## Tests
 
-Engine-level, in `hive-runtime` (stub model servers, temp repos, in-memory
+Engine-level, in `ligus-runtime` (stub model servers, temp repos, in-memory
 stores): the tool loop with a stub OpenAI-wire model, built-in file tools,
 an MCP tool call through a stub HTTP MCP server, the per-turn worktree and
 the proposal it files, a Ligus hand-off, cancellation through the stop

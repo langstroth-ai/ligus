@@ -33,11 +33,11 @@ sudo apt-get install -y build-essential pkg-config git   # C toolchain for bundl
 
 git clone https://github.com/langstroth-ai/ligus.git ~/src/ligus   # or pull your branch
 cd ~/src/ligus
-cargo build --release -p hive-cli
+cargo build --release -p ligus-cli
 install -Dm755 target/release/ligus ~/.local/bin/ligus
 ```
 
-Only the `hive-cli` crate (it builds the `ligus` binary) builds. The Tauri app and its web UI aren't needed on
+Only the `ligus-cli` crate (it builds the `ligus` binary) builds. The Tauri app and its web UI aren't needed on
 the box.
 
 ## 2. Configure
@@ -93,8 +93,8 @@ People pane before the phone's vote counts. Defining workspace runtimes
   and bind one:
 
   ```sh
-  git clone <url> "$LIGUS_REPOS_DIR/hive"
-  ligus bind-repo hive                  # the workspace's checkout
+  git clone <url> "$LIGUS_REPOS_DIR/ligus"
+  ligus bind-repo ligus                  # the workspace's checkout
   ligus bind-repo other --chat <id>     # one chat on a different checkout
   ligus repos                           # show bindings
   ```
@@ -127,7 +127,7 @@ Health check from any tailnet device: `curl http://<tailscale-ip>:8787/v1/health
 # Load the unit's settings first: without them `ligus pair` has no listen
 # address or data dir, and refuses rather than print a loopback link.
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
-ligus pair        # prints a QR code and a hive://pair?... link for the configured address
+ligus pair        # prints a QR code and a ligus://pair?... link for the configured address
 ```
 
 Scan the QR code with the iPhone camera, or paste the link into the app. The

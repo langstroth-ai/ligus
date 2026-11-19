@@ -12,7 +12,7 @@ const LOGIN_TEXT: Record<DetectedCliDto["login"], string> = {
 
 /// Subscription CLIs (Google `agy`, GitHub `copilot`): what's installed on this
 /// machine, whether it's signed in, and a one-click "Add runtime". Keyless —
-/// the login stays in the CLI's own config / OS keychain; Hive only runs it.
+/// the login stays in the CLI's own config / OS keychain; Ligus only runs it.
 export function CliRuntimesPanel() {
   const qc = useQueryClient();
   const [probe, setProbe] = useState(false);
@@ -45,7 +45,7 @@ export function CliRuntimesPanel() {
   const added = (provider: string | null) => !!provider && (runtimes.data ?? []).some((r) => r.provider === provider);
 
   return (
-    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
+    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-medium">Subscription CLIs</div>
         <div className="flex gap-1.5">
@@ -99,9 +99,9 @@ export function CliRuntimesPanel() {
                   style={{
                     color:
                       c.login === "loggedIn"
-                        ? "var(--hive-success-ink)"
+                        ? "var(--ligus-success-ink)"
                         : c.login === "notLoggedIn"
-                          ? "var(--hive-danger-ink)"
+                          ? "var(--ligus-danger-ink)"
                           : undefined,
                   }}
                 >

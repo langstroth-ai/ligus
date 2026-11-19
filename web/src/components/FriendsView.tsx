@@ -112,18 +112,18 @@ function LinkBox({
   onClose: () => void;
 }) {
   return (
-    <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: "var(--hive-accent-cool)", background: "var(--hive-panel)" }}>
+    <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: "var(--ligus-accent-cool)", background: "var(--ligus-panel)" }}>
       <div className="font-semibold">{title}</div>
       {note && <p className="mt-1 text-xs">{note}</p>}
       <p className="mt-1 text-xs text-ink-soft">
         Send this link over a channel you trust. It works once. They will see your safety code; if they ask, read it to
         them{code ? <>. Theirs is <code className="font-mono">{code}</code></> : null}.
       </p>
-      <textarea readOnly value={link} rows={3} className="mt-2 w-full rounded-lg border px-2 py-1 font-mono text-[11px]" style={{ borderColor: "var(--hive-line)" }} />
+      <textarea readOnly value={link} rows={3} className="mt-2 w-full rounded-lg border px-2 py-1 font-mono text-[11px]" style={{ borderColor: "var(--ligus-line)" }} />
       <div className="mt-2 flex gap-2">
         <button
           className="rounded-lg px-3 py-1.5 text-xs font-medium"
-          style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+          style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           onClick={() => {
             void navigator.clipboard.writeText(link);
             toast.success("Invite link copied.");
@@ -296,7 +296,7 @@ export function FriendsView({
   const note = contactsNote(pending.data?.contacts);
 
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-6 p-8" style={{ color: "var(--hive-ink)" }}>
+    <div className="mx-auto flex max-w-xl flex-col gap-6 p-8" style={{ color: "var(--ligus-ink)" }}>
       <header className="flex items-center justify-between gap-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <IconUsers size={18} /> People
@@ -326,21 +326,21 @@ export function FriendsView({
           rows={2}
           placeholder="Paste an invite link: hivews1:…"
           className="w-full rounded-lg border px-3 py-2 font-mono text-xs"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
           aria-label="Invite link"
         />
         {info && (
-          <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: info.trust === "mismatch" ? "var(--hive-danger-ink)" : "var(--hive-line)" }}>
+          <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: info.trust === "mismatch" ? "var(--ligus-danger-ink)" : "var(--ligus-line)" }}>
             <div className="text-sm font-medium">{info.isDm ? "Direct message" : info.workspaceName}</div>
             {info.isDm && !info.addressedToMe ? (
-              <div style={{ color: "var(--hive-danger-ink)" }}>This DM invite is addressed to someone else.</div>
+              <div style={{ color: "var(--ligus-danger-ink)" }}>This DM invite is addressed to someone else.</div>
             ) : (
-              <div style={{ color: info.trust === "mismatch" ? "var(--hive-danger-ink)" : undefined }}>{trustNote(info.trust, info.founderName)}</div>
+              <div style={{ color: info.trust === "mismatch" ? "var(--ligus-danger-ink)" : undefined }}>{trustNote(info.trust, info.founderName)}</div>
             )}
             {info.safetyCode && <code className="mt-1 block font-mono text-[11px] text-ink-soft">{info.safetyCode}</code>}
             <button
               className="mt-2 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
               disabled={info.alreadyJoined || info.trust === "mismatch" || (info.isDm && (!info.addressedToMe || info.trust === "claimed"))}
               onClick={() => void join()}
             >
@@ -361,7 +361,7 @@ export function FriendsView({
                 <button
                   onClick={() => void openExistingDm(d.workspaceId)}
                   className="flex items-center justify-between rounded-lg border px-3 py-2 text-left"
-                  style={{ borderColor: warn ? "var(--hive-danger-ink)" : "var(--hive-line)", background: "var(--hive-panel)" }}
+                  style={{ borderColor: warn ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)" }}
                 >
                   <span className="flex items-center gap-2 text-sm">
                     <Avatar name={d.name} url={d.avatarUrl} kind="human" size={22} />
@@ -374,7 +374,7 @@ export function FriendsView({
                   )}
                 </button>
                 {note && (
-                  <div className="flex flex-wrap items-center gap-2 px-3 text-[11px]" style={{ color: warn ? "var(--hive-danger-ink)" : undefined }}>
+                  <div className="flex flex-wrap items-center gap-2 px-3 text-[11px]" style={{ color: warn ? "var(--ligus-danger-ink)" : undefined }}>
                     <span className={warn ? "" : "text-ink-soft"}>{note}</span>
                     {d.inviteDelivery?.pending && (
                       <>
@@ -410,7 +410,7 @@ export function FriendsView({
             <div
               key={p.accountId}
               className="flex flex-col gap-1.5 rounded-lg border px-3 py-2"
-              style={{ borderColor: p.keyConflict ? "var(--hive-danger-ink)" : "var(--hive-line)", background: "var(--hive-panel)" }}
+              style={{ borderColor: p.keyConflict ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)" }}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-2 text-sm">
@@ -419,7 +419,7 @@ export function FriendsView({
                   {p.lookAlike && (
                     <span
                       className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
-                      style={{ color: "var(--hive-danger-ink)", border: "1px solid var(--hive-danger-ink)" }}
+                      style={{ color: "var(--ligus-danger-ink)", border: "1px solid var(--ligus-danger-ink)" }}
                       title="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
                     >
                       Look-alike name
@@ -430,7 +430,7 @@ export function FriendsView({
                   onClick={() => (p.dmWorkspaceId ? void openExistingDm(p.dmWorkspaceId) : void message(p))}
                   disabled={p.keyConflict}
                   className="shrink-0 rounded-md border px-3 py-1 text-xs font-medium hover:brightness-110 disabled:opacity-40"
-                  style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)" }}
+                  style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)" }}
                 >
                   Message
                 </button>
@@ -446,7 +446,7 @@ export function FriendsView({
                 {elsewhere.length > 0 && !p.keyConflict && (
                   <select
                     className="ml-auto rounded border px-1 py-0.5 text-[11px]"
-                    style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)" }}
+                    style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)" }}
                     value=""
                     aria-label={`Invite ${p.displayName} to a workspace`}
                     onChange={(e) => e.target.value && void invite(p, e.target.value)}

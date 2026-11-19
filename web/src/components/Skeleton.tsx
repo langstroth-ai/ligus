@@ -4,7 +4,7 @@
 export function Skeleton({ className = "", style }: { className?: string; style?: React.CSSProperties }) {
   return (
     <div
-      className={`hive-skel ${className}`}
+      className={`ligus-skel ${className}`}
       style={style}
     />
   );
@@ -16,7 +16,7 @@ export function SkeletonRows({ rows = 5, className = "" }: { rows?: number; clas
   return (
     <div className={`space-y-2 ${className}`}>
       {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="rounded-2xl border px-3 py-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div key={i} className="rounded-2xl border px-3 py-3" style={{ borderColor: "var(--ligus-line)" }}>
           <Skeleton className="h-3.5 w-2/3" />
           <Skeleton className="mt-2 h-2.5 w-2/5" />
         </div>
@@ -34,12 +34,12 @@ export function SkeletonBubbles({ count = 3 }: { count?: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="tt" style={{ pointerEvents: "none" }}>
           <div className="tt-av">
-            <div className={`hive-skel h-[30px] w-[30px] ${i % 2 ? "rounded-full" : "rounded-[30%]"}`} />
+            <div className={`ligus-skel h-[30px] w-[30px] ${i % 2 ? "rounded-full" : "rounded-[30%]"}`} />
           </div>
           <div className="tt-body space-y-2 pt-1">
-            <div className="hive-skel h-3 w-28" />
-            <div className="hive-skel h-3" style={{ width: `${86 - i * 12}%` }} />
-            <div className="hive-skel h-3" style={{ width: `${58 + i * 9}%` }} />
+            <div className="ligus-skel h-3 w-28" />
+            <div className="ligus-skel h-3" style={{ width: `${86 - i * 12}%` }} />
+            <div className="ligus-skel h-3" style={{ width: `${58 + i * 9}%` }} />
           </div>
         </div>
       ))}

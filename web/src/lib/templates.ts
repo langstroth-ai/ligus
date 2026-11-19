@@ -7,7 +7,7 @@ export interface PromptTemplate {
   body: string;
 }
 
-const KEY = "hive.promptTemplates";
+const KEY = "ligus.promptTemplates";
 
 export function loadTemplates(): PromptTemplate[] {
   try {

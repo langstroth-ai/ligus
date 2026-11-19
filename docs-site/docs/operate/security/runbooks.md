@@ -95,7 +95,7 @@ can act as that device and read everything it could.
     - A teammate's device: they revoke it in their **My devices**; if they
       can't, an Admin removes the member.
 2. **Cut its relay access.** On a gated relay, revoke its token: remove it
-   from `LIGUS_RELAY_ACCESS_TOKENS` and restart, or (signed tokens) see
+   from `LANGSTROTH_RELAY_ACCESS_TOKENS` and restart, or (signed tokens) see
    [Relay token compromised](#relay-token).
 3. **Cut its reads.** It holds the workspace key. After step 1, **rotate the
    workspace key** ([below](#rotate-workspace-key)): the new key is sealed
@@ -245,8 +245,8 @@ enrollment on your desktop (also with your passkey).
 
 | Gate | Revoke |
 |---|---|
-| `LIGUS_RELAY_ACCESS_TOKENS` | remove the token from the list and restart the relay |
-| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`, and with `--workspace <id>` under `LIGUS_RELAY_WORKSPACE_SCOPE` so a leaked token reaches only its own workspaces. To cut one off now, generate a new issuer key (`langstroth-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
+| `LANGSTROTH_RELAY_ACCESS_TOKENS` | remove the token from the list and restart the relay |
+| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`, and with `--workspace <id>` under `LANGSTROTH_RELAY_WORKSPACE_SCOPE` so a leaked token reaches only its own workspaces. To cut one off now, generate a new issuer key (`langstroth-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
 | Relay with an admin API (downstream builds) | revoke the token there; takes effect immediately |
 
 A relay token only grants use of the relay. Without the workspace key it
@@ -255,7 +255,7 @@ reads nothing.
 ## Issuer key leaked {#issuer-key}
 
 Anyone with the issuer seed can mint relay tokens. Generate a new pair, set
-`LIGUS_RELAY_TOKEN_PUBKEY` to the new public key, restart, re-issue tokens.
+`LANGSTROTH_RELAY_TOKEN_PUBKEY` to the new public key, restart, re-issue tokens.
 Paste the key carefully: since relay v0.2.0 a value that isn't a valid
 Ed25519 public key stops the relay from starting rather than leaving it
 ungated.
@@ -272,11 +272,11 @@ seconds; re-pair direct-path phones. Tunnel phones are unaffected.
 
 `ligus remote reset` makes new host keys and a new host id; every tunnel
 phone must pair again. If the relay uses a tunnel allowlist, replace the old
-host id with the new one in `LIGUS_RELAY_TUNNEL_HOSTS`.
+host id with the new one in `LANGSTROTH_RELAY_TUNNEL_HOSTS`.
 
 ## After any incident {#after}
 
-- Check each device's guard log (the `guard_signals` table in `hive.db`) for
+- Check each device's guard log (the `guard_signals` table in `ligus.db`) for
   ingest rejections around the time of the incident.
 - Consider turning on [dearth mode](../../ligus/features/guards.md#dearth-mode) while
   you clean up: new members and devices then need two Admins.

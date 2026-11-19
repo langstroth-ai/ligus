@@ -8,7 +8,7 @@
 //!   claims the next one only when the holder's heartbeat has lapsed, it
 //!   released, or it handed the run to this device.
 //! * The holder renews by publishing a signed heartbeat to the relay's presence
-//!   channel (`hive_runtime::lease_presence`); the lease loop here publishes
+//!   channel (`ligus_runtime::lease_presence`); the lease loop here publishes
 //!   ours and reads everyone else's.
 //! * Every run write carries the epoch (`WorkflowRun::lease_epoch`), so a
 //!   device that kept driving after another took over (split brain) has its
@@ -21,14 +21,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use hive_core::lease::{
+use ligus_core::lease::{
     lease_health, LeaseClaimReason, LeaseHealth, LeaseScope, LeaseState, DEFAULT_BEAT_EVERY_MS,
     DEFAULT_LEASE_MS,
 };
-use hive_core::signal::GuardSignal;
-use hive_core::workflow::WorkflowRunStatus;
-use hive_proto::RunLeaseDto;
-use hive_runtime::lease_presence::{BeatTrust, LeaseBeat, LeaseBeats};
+use ligus_core::signal::GuardSignal;
+use ligus_core::workflow::WorkflowRunStatus;
+use ligus_proto::RunLeaseDto;
+use ligus_runtime::lease_presence::{BeatTrust, LeaseBeat, LeaseBeats};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
@@ -62,11 +62,11 @@ pub(crate) struct GuardRuntime {
     /// (we simply haven't heard from it yet).
     pub beats_fetched: AtomicBool,
     /// The last hygiene sweep's results (in memory; a restart sweeps again).
-    pub hygiene: Mutex<hive_proto::HygieneReportDto>,
+    pub hygiene: Mutex<ligus_proto::HygieneReportDto>,
     /// Last plan-window observation per runtime kind.
-    pub plan_windows: Mutex<HashMap<hive_core::ModelProviderKind, hive_core::throttle::PlanWindow>>,
+    pub plan_windows: Mutex<HashMap<ligus_core::ModelProviderKind, ligus_core::throttle::PlanWindow>>,
     /// Work the throttles hold back right now, by key (for the UI).
-    pub deferred: Mutex<HashMap<String, hive_proto::DeferredWorkDto>>,
+    pub deferred: Mutex<HashMap<String, ligus_proto::DeferredWorkDto>>,
     /// When the lease loop next runs the hygiene sweep.
     pub last_sweep: Mutex<Option<std::time::Instant>>,
 }
@@ -143,7 +143,7 @@ pub(crate) fn acquire_run_lease(
         let lease = session
             .guards
             .leases
-            .get(&hive_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))
+            .get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))
             .cloned();
         (lease, initiator == svc.author().id)
     };
@@ -287,14 +287,14 @@ fn relay_configured(state: &AppState) -> bool {
 /// allows it. Takes `me`/`my_actor` so it can run under the service lock.
 pub(crate) fn recovery_allowed(
     state: &AppState,
-    session: &hive_core::ChatSession,
+    session: &ligus_core::ChatSession,
     run_id: Uuid,
     me: Uuid,
     my_actor: &str,
     beats_fetched: bool,
 ) -> bool {
     let scope_id = run_id.to_string();
-    let Some(lease) = session.guards.leases.get(&hive_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id)) else {
+    let Some(lease) = session.guards.leases.get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id)) else {
         return true;
     };
     if lease.current.holder == me && !lease.released {
@@ -317,9 +317,9 @@ pub(crate) fn beats_known(state: &AppState) -> bool {
 
 /// The lease card for a run, as this device sees it.
 /// `me` is this device's id (passed in: callers hold the service lock).
-pub(crate) fn run_lease_dto(state: &AppState, session: &hive_core::ChatSession, run_id: Uuid, me: Uuid) -> Option<RunLeaseDto> {
+pub(crate) fn run_lease_dto(state: &AppState, session: &ligus_core::ChatSession, run_id: Uuid, me: Uuid) -> Option<RunLeaseDto> {
     let scope_id = run_id.to_string();
-    let lease = session.guards.leases.get(&hive_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))?;
+    let lease = session.guards.leases.get(&ligus_core::lease::lease_key(LeaseScope::WorkflowRun, &scope_id))?;
     let now = now_ms();
     let beat = state.guards.lease_beats.get(LeaseScope::WorkflowRun, &scope_id);
     let mut last = beat.as_ref().map(|(b, _)| (b.holder, b.epoch, b.at_ms));
@@ -415,10 +415,10 @@ fn elect_successor(state: &AppState, workspace_id: Uuid, session_id: Uuid, run_i
         .and_then(|s| s.workflow_runs.iter().find(|r| r.id == run_id).map(|r| r.initiator_actor_id.clone()))
         .unwrap_or_default();
     drop(svc);
-    let now = hive_core::Timestamp::now();
+    let now = ligus_core::Timestamp::now();
     let mut candidates: Vec<_> = hosts
         .iter()
-        .filter(|h| h.kind == hive_core::HostKind::Device && state.host_presence.is_online(h, &now))
+        .filter(|h| h.kind == ligus_core::HostKind::Device && state.host_presence.is_online(h, &now))
         .filter_map(|h| Uuid::parse_str(&h.id).ok().filter(|id| *id != me).map(|id| (h.owner_actor_id != initiator, id)))
         .collect();
     candidates.sort();
@@ -487,9 +487,9 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
                 },
             );
             if let Some((url, room, Some(ring))) = &conn {
-                if hive_core::room_workspace_id(room) == h.workspace_id {
+                if ligus_core::room_workspace_id(room) == h.workspace_id {
                     let relay = state.relay_client(url);
-                    if let Err(e) = hive_runtime::lease_presence::publish_lease_beat(&relay, room, ring, &signed).await {
+                    if let Err(e) = ligus_runtime::lease_presence::publish_lease_beat(&relay, room, ring, &signed).await {
                         tracing::debug!(target: "leases", "lease beat publish failed: {e}");
                     }
                 }
@@ -499,14 +499,14 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
         if let Some((url, room, Some(ring))) = &conn {
             let relay = state.relay_client(url);
             if let Ok(blobs) = relay.list_presence(room).await {
-                let ws = hive_core::room_workspace_id(room);
+                let ws = ligus_core::room_workspace_id(room);
                 let resolver = {
                     let svc = state.service.lock().unwrap();
                     let trust = svc.store().trust_envelopes(ws).unwrap_or_default();
-                    hive_runtime::envelope_verifier::build_roster(&trust)
+                    ligus_runtime::envelope_verifier::build_roster(&trust)
                 };
-                use hive_runtime::envelope_verifier::DeviceKeyResolver;
-                let beats = hive_runtime::lease_presence::open_lease_beats(&blobs, ring, now_ms(), |d| {
+                use ligus_runtime::envelope_verifier::DeviceKeyResolver;
+                let beats = ligus_runtime::lease_presence::open_lease_beats(&blobs, ring, now_ms(), |d| {
                     if resolver.is_revoked(d) {
                         // A revoked device's beat can't renew anything: treat as
                         // certified with an impossible key so it fails.
@@ -573,12 +573,12 @@ const HYGIENE_FIRST_AFTER: Duration = Duration::from_secs(180);
 /// worktrees (saving their edits), remove checkouts of gone or archived chats
 /// (keeping their branches), and mark open proposals whose diff no longer
 /// applies as stale (taking them out of the inbox).
-pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDto {
-    use hive_core::signal::{HygieneKind, WorktreeState};
-    use hive_runtime::hygiene::{self, ChatStatus, SweepAction};
+pub(crate) fn run_hygiene_sweep(state: &AppState) -> ligus_proto::HygieneReportDto {
+    use ligus_core::signal::{HygieneKind, WorktreeState};
+    use ligus_runtime::hygiene::{self, ChatStatus, SweepAction};
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
-    let mut report = hive_proto::HygieneReportDto { ran_at: crate::rfc3339(hive_core::Timestamp::now()), ..Default::default() };
+    let mut report = ligus_proto::HygieneReportDto { ran_at: crate::rfc3339(ligus_core::Timestamp::now()), ..Default::default() };
     // Every checkout this device manages for the workspace (5.7): the bound
     // folder, and each confirmed checkout of a workspace repo, with the repo
     // it holds (a proposal is judged only against its own repo's checkout).
@@ -586,21 +586,21 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     {
         let svc = state.service.lock().unwrap();
         for m in svc.store().repo_mappings(ws).unwrap_or_default().into_iter().filter(|m| m.confirmed) {
-            if hive_runtime::git_worktree::is_git_repo(&m.path) && !roots.iter().any(|(p, _)| *p == m.path) {
+            if ligus_runtime::git_worktree::is_git_repo(&m.path) && !roots.iter().any(|(p, _)| *p == m.path) {
                 roots.push((m.path, Some(m.repo_id)));
             }
         }
     }
     let bound = std::path::PathBuf::from(&repo);
-    let bound_canon = hive_runtime::repos::git::canonical(&bound);
-    if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
+    let bound_canon = ligus_runtime::repos::git::canonical(&bound);
+    if !repo.trim().is_empty() && ligus_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
         roots.push((bound, None));
     }
     // Never a checkout another host on this machine manages (its marker,
     // review residual 6): its chat worktrees and branches are that host's,
     // and sweeping them would remove its live trees.
     let me = state.service.lock().unwrap().device_id();
-    roots.retain(|(p, _)| match hive_runtime::repos::marker::managed_elsewhere(p, me) {
+    roots.retain(|(p, _)| match ligus_runtime::repos::marker::managed_elsewhere(p, me) {
         Some(label) => {
             tracing::info!(target: "worktree", "hygiene skips {}: managed by {label}", p.display());
             false
@@ -618,7 +618,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     let mut open_diffs: Vec<(Uuid, Uuid, String, String, Option<Uuid>)> = Vec::new();
     let device = {
         let svc = state.service.lock().unwrap();
-        let config_id = hive_core::workspace_config_session_id(ws);
+        let config_id = ligus_core::workspace_config_session_id(ws);
         for id in svc.store().list_session_ids().unwrap_or_default() {
             if id == config_id {
                 continue;
@@ -635,7 +635,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
                 continue;
             }
             for p in &s.proposals {
-                if p.status == hive_core::ProposalStatus::Open
+                if p.status == ligus_core::ProposalStatus::Open
                     && !p.dismissed
                     && p.superseded_by.is_none()
                     && !s.guards.stale_proposals.contains(&p.id)
@@ -655,9 +655,9 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
         let root = root.clone();
         let entries = hygiene::list_worktrees(&root);
         // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
-        // Hive 1.x `.hive/worktrees` checkout is never swept.
-        let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
-            Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
+        // Ligus 1.x `.ligus/worktrees` checkout is never swept.
+        let plan = match ligus_core::compat::workspace_state_path(&root, "worktrees") {
+            Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &ligus_runtime::git_worktree::is_in_use),
             Err(e) => {
                 tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
                 Vec::new()
@@ -704,7 +704,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
             if !mine {
                 continue;
             }
-            let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
+            let branch = format!("ligus/chat/{}", hygiene::slug(&sid.to_string()));
             let dir = remaining
                 .iter()
                 .find(|e| e.branch.as_deref() == Some(branch.as_str()))
@@ -716,7 +716,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
             let mut svc = state.service.lock().unwrap();
             if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
                 signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
-                report.stale_proposals.push(hive_proto::StaleProposalDto {
+                report.stale_proposals.push(ligus_proto::StaleProposalDto {
                     session_id: sid.to_string(),
                     proposal_id: pid.to_string(),
                     title,
@@ -736,7 +736,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
 
 /// Run the hygiene sweep now (Settings → Guards).
 #[tauri::command]
-pub(crate) async fn run_hygiene_now(app: AppHandle) -> Result<hive_proto::HygieneReportDto, String> {
+pub(crate) async fn run_hygiene_now(app: AppHandle) -> Result<ligus_proto::HygieneReportDto, String> {
     let report = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         run_hygiene_sweep(&state)
@@ -748,7 +748,7 @@ pub(crate) async fn run_hygiene_now(app: AppHandle) -> Result<hive_proto::Hygien
 
 /// The last hygiene sweep's results.
 #[tauri::command]
-pub(crate) fn get_hygiene_report(state: State<AppState>) -> hive_proto::HygieneReportDto {
+pub(crate) fn get_hygiene_report(state: State<AppState>) -> ligus_proto::HygieneReportDto {
     state.guards.hygiene.lock().unwrap().clone()
 }
 
@@ -756,7 +756,7 @@ pub(crate) fn get_hygiene_report(state: State<AppState>) -> hive_proto::HygieneR
 /// heartbeats and receipts, boundary decisions, hygiene catches, throttles),
 /// oldest first after `after_row`. Never synced.
 #[tauri::command]
-pub(crate) async fn list_guard_signals(ligus_app: tauri::AppHandle, after_row: Option<i64>, kind: Option<String>, limit: Option<u32>) -> Result<Vec<hive_proto::GuardSignalDto>, String> {
+pub(crate) async fn list_guard_signals(ligus_app: tauri::AppHandle, after_row: Option<i64>, kind: Option<String>, limit: Option<u32>) -> Result<Vec<ligus_proto::GuardSignalDto>, String> {
     crate::off_main(ligus_app, move |ligus_app| list_guard_signals_sync(tauri::Manager::state::<AppState>(ligus_app), after_row, kind, limit)).await
 }
 
@@ -765,7 +765,7 @@ pub(crate) fn list_guard_signals_sync(
     after_row: Option<i64>,
     kind: Option<String>,
     limit: Option<u32>,
-) -> Result<Vec<hive_proto::GuardSignalDto>, String> {
+) -> Result<Vec<ligus_proto::GuardSignalDto>, String> {
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let rows = svc
@@ -773,7 +773,7 @@ pub(crate) fn list_guard_signals_sync(
         .map_err(map_err)?;
     Ok(rows
         .into_iter()
-        .map(|r| hive_proto::GuardSignalDto {
+        .map(|r| ligus_proto::GuardSignalDto {
             row_id: r.row_id,
             at_ms: r.at_ms,
             kind: r.signal.kind_str().to_string(),
@@ -789,17 +789,17 @@ pub(crate) fn list_guard_signals_sync(
 
 /// The envelope a turn in `session` runs in. The session carries the
 /// workspace's guard state (overlaid from the config log by `ChatService::load`).
-pub(crate) fn turn_envelope(session: &hive_core::ChatSession) -> hive_core::sandbox::SandboxEnvelope {
-    hive_core::sandbox::envelope_for_session(session)
+pub(crate) fn turn_envelope(session: &ligus_core::ChatSession) -> ligus_core::sandbox::SandboxEnvelope {
+    ligus_core::sandbox::envelope_for_session(session)
 }
 
 /// The configured MCP servers the envelope's egress policy lets a turn reach.
 /// Each refused (enabled) server is recorded as a content-free egress decision.
 pub(crate) fn filter_mcp_servers(
     state: &AppState,
-    servers: Vec<hive_runtime::McpServerSpec>,
-    egress: &hive_core::sandbox::EgressPolicy,
-) -> Vec<hive_runtime::McpServerSpec> {
+    servers: Vec<ligus_runtime::McpServerSpec>,
+    egress: &ligus_core::sandbox::EgressPolicy,
+) -> Vec<ligus_runtime::McpServerSpec> {
     if egress.is_open() {
         return servers;
     }
@@ -820,9 +820,9 @@ pub(crate) fn filter_mcp_servers(
 
 fn egress_decision(source: &str, reason: &str) -> GuardSignal {
     GuardSignal::GuardDecision {
-        gate: hive_core::signal::GuardGate::Egress,
-        verdict: hive_core::signal::GuardVerdict::Reject,
-        subject: hive_core::signal::GuardSubject::Nestmate,
+        gate: ligus_core::signal::GuardGate::Egress,
+        verdict: ligus_core::signal::GuardVerdict::Reject,
+        subject: ligus_core::signal::GuardSubject::Nestmate,
         source: source.to_string(),
         reason: reason.to_string(),
     }
@@ -831,10 +831,10 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, servers: &[ligus_runtime::McpServerSpec], egress: &ligus_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
-    if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
+    if matches!(egress, ligus_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
     filter_mcp_servers(state, servers.to_vec(), egress)
@@ -843,8 +843,8 @@ fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec],
         .filter(|s| shell || mcp_known_shell_free(state, &s.id))
         .map(|s| {
             let v = match &s.transport {
-                hive_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
-                hive_runtime::McpTransport::Http { url } => serde_json::json!({ "type": "http", "url": url }),
+                ligus_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
+                ligus_runtime::McpTransport::Http { url } => serde_json::json!({ "type": "http", "url": url }),
             };
             (s.id.clone(), v)
         })
@@ -857,17 +857,17 @@ fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec],
 /// device hasn't seen list their tools) stay out.
 pub(crate) fn enforcement_for_servers(
     state: &AppState,
-    provider: hive_core::ModelProviderKind,
-    envelope: &hive_core::sandbox::SandboxEnvelope,
-    servers: &[hive_runtime::McpServerSpec],
+    provider: ligus_core::ModelProviderKind,
+    envelope: &ligus_core::sandbox::SandboxEnvelope,
+    servers: &[ligus_runtime::McpServerSpec],
     shell: bool,
-) -> hive_runtime::sandbox::Enforcement {
-    let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
+) -> ligus_runtime::sandbox::Enforcement {
+    let entries = if provider == ligus_core::ModelProviderKind::ClaudeCode {
         claude_mcp_entries(state, servers, &envelope.egress, shell)
     } else {
         Vec::new()
     };
-    hive_runtime::sandbox::enforce(provider, envelope, &entries)
+    ligus_runtime::sandbox::enforce(provider, envelope, &entries)
 }
 
 // ---------------------------------------------------------------------------
@@ -875,12 +875,12 @@ pub(crate) fn enforcement_for_servers(
 // ---------------------------------------------------------------------------
 
 /// Remember which tools each server listed run shell commands
-/// (`hive_runtime::is_shell_tool`).
-pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, hive_runtime::McpTool)]) {
+/// (`ligus_runtime::is_shell_tool`).
+pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, ligus_runtime::McpTool)]) {
     let mut by_server: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for (server, tool) in tagged {
         let e = by_server.entry(server.clone()).or_default();
-        if hive_runtime::is_shell_tool(&tool.name) {
+        if ligus_runtime::is_shell_tool(&tool.name) {
             e.push(tool.name.clone());
         }
     }
@@ -894,29 +894,29 @@ pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, hive_runtime
 /// A turn without the shell gets only such servers (fail closed: one that
 /// never listed is left out).
 pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
-    id == hive_runtime::executor::LIGUS_MCP_ID || state.mcp_shell_tools.lock().unwrap().get(id).is_some_and(|t| t.is_empty())
+    id == ligus_runtime::executor::LIGUS_MCP_ID || state.mcp_shell_tools.lock().unwrap().get(id).is_some_and(|t| t.is_empty())
 }
 
 /// List the tools of the enabled servers this turn may reach that this
 /// device hasn't listed yet (each bounded), so `mcp_known_shell_free` can
 /// judge them.
-pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy) {
+pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[ligus_runtime::McpServerSpec], egress: &ligus_core::sandbox::EgressPolicy) {
     state.ensure_fresh_mcp_tokens().await;
     const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
     // The turn's own catalog (review F14), tokens re-read after the refresh.
     let mut servers = servers.to_vec();
     crate::apply_mcp_auth(&mut servers, &state.settings.lock().unwrap());
-    let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, servers, egress)
+    let unknown: Vec<ligus_runtime::McpServerSpec> = filter_mcp_servers(state, servers, egress)
         .into_iter()
         .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
         .filter(|s| state.mcp_probe_failed.lock().unwrap().get(&s.id).is_none_or(|t| t.elapsed() > RETRY))
         .collect();
     for s in unknown {
         let id = s.id.clone();
-        let registry = hive_runtime::McpRegistry::new(vec![s]);
+        let registry = ligus_runtime::McpRegistry::new(vec![s]);
         match tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
             Ok(Ok(tools)) => {
-                let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
+                let tagged: Vec<(String, ligus_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
                 if tagged.is_empty() {
                     state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
                 }
@@ -936,21 +936,21 @@ pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[hive_runtime::
 /// turn's own MCP catalog (review F14), never the window's.
 pub(crate) fn turn_sandbox_policy_with(
     state: &AppState,
-    session: &hive_core::ChatSession,
-    envelope: &hive_core::sandbox::SandboxEnvelope,
-    gate: &hive_runtime::author_gate::GatePlan,
+    session: &ligus_core::ChatSession,
+    envelope: &ligus_core::sandbox::SandboxEnvelope,
+    gate: &ligus_runtime::author_gate::GatePlan,
     isolated: bool,
-    servers: &[hive_runtime::McpServerSpec],
-) -> hive_runtime::executor::TurnPolicy {
-    let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
+    servers: &[ligus_runtime::McpServerSpec],
+) -> ligus_runtime::executor::TurnPolicy {
+    let mut policy = ligus_runtime::executor::TurnPolicy::new(ligus_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
     // Opt-in egress presets (device-local). The plan applies them only under
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
     for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
-        if let hive_runtime::McpTransport::Http { url } = &s.transport {
-            policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
+        if let ligus_runtime::McpTransport::Http { url } = &s.transport {
+            policy.mcp_hosts.extend(ligus_runtime::egress::HostPort::from_url(url));
         }
         policy.mcp_ids.push(s.id.clone());
     }
@@ -961,20 +961,20 @@ pub(crate) fn turn_sandbox_policy_with(
 /// servers, `run_command`), before its stream starts (the shell probe, the
 /// MCP tool listing, the API tool loop's MCP calls) and during it: the
 /// turn's envelope, gate and own MCP catalog, the shell only when
-/// [`hive_runtime::author_gate::shell_allowed`] said so (and then MCP
+/// [`ligus_runtime::author_gate::shell_allowed`] said so (and then MCP
 /// servers this device hasn't seen list no shell stay out of the CLI's
 /// set), and the agent's grants. Never the out-of-turn baseline.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn turn_child_policy(
     state: &AppState,
-    session: &hive_core::ChatSession,
-    envelope: &hive_core::sandbox::SandboxEnvelope,
-    gate: &hive_runtime::author_gate::GatePlan,
+    session: &ligus_core::ChatSession,
+    envelope: &ligus_core::sandbox::SandboxEnvelope,
+    gate: &ligus_runtime::author_gate::GatePlan,
     isolated: bool,
-    servers: &[hive_runtime::McpServerSpec],
+    servers: &[ligus_runtime::McpServerSpec],
     shell_allowed: bool,
-    grants: hive_core::sandbox::PathGrants,
-) -> hive_runtime::executor::TurnPolicy {
+    grants: ligus_core::sandbox::PathGrants,
+) -> ligus_runtime::executor::TurnPolicy {
     let mut policy = turn_sandbox_policy_with(state, session, envelope, gate, isolated, servers);
     policy.shell_allowed = shell_allowed;
     if !shell_allowed {
@@ -990,7 +990,7 @@ pub(crate) fn turn_child_policy(
 
 /// The egress presets a chat opted into on this device: the chat's own
 /// setting when it has one, else its workspace's. Off by default.
-pub(crate) fn chat_egress_presets(state: &AppState, workspace_id: Uuid, session_id: Uuid) -> Vec<hive_runtime::egress::EgressPreset> {
+pub(crate) fn chat_egress_presets(state: &AppState, workspace_id: Uuid, session_id: Uuid) -> Vec<ligus_runtime::egress::EgressPreset> {
     let s = state.settings.lock().unwrap();
     effective_egress_presets(&s.egress_presets_by_workspace, &s.egress_presets_by_chat, workspace_id, session_id)
 }
@@ -1000,12 +1000,12 @@ pub(crate) fn effective_egress_presets(
     by_chat: &std::collections::HashMap<String, Vec<String>>,
     workspace_id: Uuid,
     session_id: Uuid,
-) -> Vec<hive_runtime::egress::EgressPreset> {
+) -> Vec<ligus_runtime::egress::EgressPreset> {
     let names = by_chat.get(&session_id.to_string()).or_else(|| by_workspace.get(&workspace_id.to_string()));
-    names.map(|n| hive_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str))).unwrap_or_default()
+    names.map(|n| ligus_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str))).unwrap_or_default()
 }
 
-fn preset_names(presets: &[hive_runtime::egress::EgressPreset]) -> Vec<String> {
+fn preset_names(presets: &[ligus_runtime::egress::EgressPreset]) -> Vec<String> {
     presets.iter().map(|p| p.name().to_string()).collect()
 }
 
@@ -1013,11 +1013,11 @@ fn preset_names(presets: &[hive_runtime::egress::EgressPreset]) -> Vec<String> {
 /// workspace and (optionally) one chat have on, and whether a guard is
 /// overriding them right now.
 #[tauri::command]
-pub(crate) async fn get_egress_presets(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
+pub(crate) async fn get_egress_presets(ligus_app: tauri::AppHandle, session_id: Option<String>) -> Result<ligus_proto::EgressPresetsDto, String> {
     crate::off_main(ligus_app, move |ligus_app| get_egress_presets_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
-pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
+pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option<String>) -> Result<ligus_proto::EgressPresetsDto, String> {
     let ws = state.active_workspace_id();
     let sid = session_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
     let session = match sid {
@@ -1026,29 +1026,29 @@ pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option
     };
     let (workspace, chat) = {
         let s = state.settings.lock().unwrap();
-        let known = |n: &Vec<String>| preset_names(&hive_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str)));
+        let known = |n: &Vec<String>| preset_names(&ligus_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str)));
         let workspace = s.egress_presets_by_workspace.get(&ws.to_string()).map(known).unwrap_or_default();
         let chat = sid.and_then(|id| s.egress_presets_by_chat.get(&id.to_string())).map(known);
         (workspace, chat)
     };
-    let host = preset_names(&hive_runtime::executor::host_paths().egress_presets);
+    let host = preset_names(&ligus_runtime::executor::host_paths().egress_presets);
     let restricted_by = session
         .as_ref()
         .map(|s| {
-            let env = hive_core::sandbox::envelope_for_session(s);
+            let env = ligus_core::sandbox::envelope_for_session(s);
             if env.egress.is_open() {
                 String::new()
-            } else if env.tightened_by.contains(&hive_core::sandbox::TightenedBy::Lockdown) {
+            } else if env.tightened_by.contains(&ligus_core::sandbox::TightenedBy::Lockdown) {
                 "lockdown".to_string()
             } else {
                 "dearth".to_string()
             }
         })
         .unwrap_or_default();
-    Ok(hive_proto::EgressPresetsDto {
-        available: hive_runtime::egress::EgressPreset::ALL
+    Ok(ligus_proto::EgressPresetsDto {
+        available: ligus_runtime::egress::EgressPreset::ALL
             .iter()
-            .map(|p| hive_proto::EgressPresetDto {
+            .map(|p| ligus_proto::EgressPresetDto {
                 name: p.name().into(),
                 label: p.label().into(),
                 hosts: p.host_names().iter().map(|h| h.to_string()).collect(),
@@ -1124,19 +1124,19 @@ pub(crate) fn set_chat_egress_presets(state: State<AppState>, session_id: String
 }
 
 /// Known preset names, or an error naming the unknown one.
-fn parse_preset_names(names: &[String]) -> Result<Vec<hive_runtime::egress::EgressPreset>, String> {
+fn parse_preset_names(names: &[String]) -> Result<Vec<ligus_runtime::egress::EgressPreset>, String> {
     for n in names {
-        if hive_runtime::egress::EgressPreset::parse(n).is_none() {
+        if ligus_runtime::egress::EgressPreset::parse(n).is_none() {
             return Err(format!("unknown egress preset '{n}'"));
         }
     }
-    Ok(hive_runtime::egress::EgressPreset::parse_list(names.iter().map(String::as_str)))
+    Ok(ligus_runtime::egress::EgressPreset::parse_list(names.iter().map(String::as_str)))
 }
 
 /// Endpoints the turn's egress proxy refused: one content-free decision per
 /// endpoint count (no host names: a name can itself carry data) and a note
 /// in the chat so members see why a tool call failed.
-pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: &[hive_runtime::egress::HostPort]) {
+pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: &[ligus_runtime::egress::HostPort]) {
     if denied.is_empty() {
         return;
     }
@@ -1146,14 +1146,14 @@ pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid
     let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision("sandbox_proxy", "endpoint_not_allowed"));
     // Known optional hosts (a CLI's telemetry, the claude.ai connectors
     // proxy) are blocked on purpose and don't affect the turn: no notice.
-    if let Some(note) = hive_runtime::egress::refused_notice(denied) {
+    if let Some(note) = ligus_runtime::egress::refused_notice(denied) {
         let _ = svc.post_system_note(session_id, workspace_id, note);
     }
 }
 
 /// A turn refused because its runtime can't be confined: tell the chat (so
 /// every member sees why nobody answered) and record the decision.
-pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, session_id: Uuid, provider: hive_core::ModelProviderKind) {
+pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, session_id: Uuid, provider: ligus_core::ModelProviderKind) {
     let mut svc = state.service.lock().unwrap();
     let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision(&format!("{provider:?}"), "runtime_unconfinable"));
     let _ = svc.post_system_note(
@@ -1183,8 +1183,8 @@ pub(crate) struct SandboxAgentDto {
 pub(crate) struct SandboxPolicyDto {
     /// The effective policy for the chosen agent (or, with none, for every
     /// runtime the workspace's agents use, plus commands).
-    pub policies: Vec<hive_runtime::executor::EffectivePolicy>,
-    pub grants: hive_core::sandbox::SandboxGrants,
+    pub policies: Vec<ligus_runtime::executor::EffectivePolicy>,
+    pub grants: ligus_core::sandbox::SandboxGrants,
     pub agents: Vec<SandboxAgentDto>,
     /// Admin or above: may change the path grants (with a passkey).
     pub can_edit_paths: bool,
@@ -1204,7 +1204,7 @@ pub(crate) struct SandboxPolicyDto {
 }
 
 /// This device's choice for `workspace_id`'s signed grants (`None`: the
-/// default, `hive_runtime::sandbox::grants_here`).
+/// default, `ligus_runtime::sandbox::grants_here`).
 pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<bool> {
     state.settings.lock().unwrap().sandbox_grants_here.get(&workspace_id.to_string()).copied()
 }
@@ -1232,7 +1232,7 @@ pub(crate) async fn ack_sandbox_grants(ligus_app: tauri::AppHandle) -> Result<()
 
 pub(crate) fn ack_sandbox_grants_sync(state: State<AppState>) -> Result<(), String> {
     let ws = state.active_workspace_id();
-    let fp = hive_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
+    let fp = ligus_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
     let mut s = state.settings.lock().unwrap();
     s.sandbox_grants_seen.insert(ws.to_string(), fp);
     crate::save_settings(&state.data_dir, &s);
@@ -1252,15 +1252,15 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
     let (grants, here, agents_cfg, my_role, local) = {
         let svc = state.service.lock().unwrap();
         let me = svc.author().id.clone();
-        let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
-        let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
+        let config = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
+        let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
         let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
         (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1, agents, my_role, svc.is_local_workspace(ws))
     };
-    let fp = hive_runtime::sandbox::grants_fingerprint(&grants);
+    let fp = ligus_runtime::sandbox::grants_fingerprint(&grants);
     let seen = state.settings.lock().unwrap().sandbox_grants_seen.get(&ws.to_string()).cloned().unwrap_or_default();
     // The policies show what applies on this device.
-    let applied = if here.apply { grants.clone() } else { hive_core::sandbox::SandboxGrants::default() };
+    let applied = if here.apply { grants.clone() } else { ligus_core::sandbox::SandboxGrants::default() };
     let agents: Vec<SandboxAgentDto> = agents_cfg
         .iter()
         .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
@@ -1270,24 +1270,24 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
     match chosen.and_then(|id| agents_cfg.iter().find(|a| a.id == id)) {
         Some(a) => {
             let kind = state.resolve_runtime(&a.runtime_id).provider;
-            policies.push(hive_runtime::executor::effective_policy(Some(kind), &applied.paths_for(Some(a.id)), applied.shell_granted(a.id)));
+            policies.push(ligus_runtime::executor::effective_policy(Some(kind), &applied.paths_for(Some(a.id)), applied.shell_granted(a.id)));
         }
         None => {
-            let mut kinds: Vec<hive_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
+            let mut kinds: Vec<ligus_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
             kinds.sort_by_key(|k| format!("{k:?}"));
             kinds.dedup();
             for k in kinds {
-                policies.push(hive_runtime::executor::effective_policy(Some(k), &applied.paths_for(None), false));
+                policies.push(ligus_runtime::executor::effective_policy(Some(k), &applied.paths_for(None), false));
             }
-            policies.push(hive_runtime::executor::effective_policy(None, &applied.paths_for(None), false));
+            policies.push(ligus_runtime::executor::effective_policy(None, &applied.paths_for(None), false));
         }
     }
     Ok(SandboxPolicyDto {
         policies,
         grants,
         agents,
-        can_edit_paths: my_role.rank() >= hive_core::WorkspaceRole::Admin.rank(),
-        can_edit_shell: my_role == hive_core::WorkspaceRole::Owner,
+        can_edit_paths: my_role.rank() >= ligus_core::WorkspaceRole::Admin.rank(),
+        can_edit_shell: my_role == ligus_core::WorkspaceRole::Owner,
         local,
         applies_here: here.apply,
         applies_by_default: here.default,
@@ -1301,11 +1301,11 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
 /// the passkey sheet confirms it). Admin + presence; changing an agent's
 /// shell grant is the Owner's.
 #[tauri::command(async)]
-pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+pub(crate) async fn set_sandbox_grants(ligus_app: tauri::AppHandle, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
     crate::off_main(ligus_app, move |ligus_app| set_sandbox_grants_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), grants)).await
 }
 
-pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, grants: ligus_core::sandbox::SandboxGrants) -> Result<(), String> {
     let ws = state.active_workspace_id();
     let clean = |v: Vec<String>| -> Vec<String> {
         let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
@@ -1313,16 +1313,16 @@ pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, gr
         v.dedup();
         v
     };
-    let mut g = hive_core::sandbox::SandboxGrants::default();
+    let mut g = ligus_core::sandbox::SandboxGrants::default();
     g.workspace.read_only = clean(grants.workspace.read_only);
     g.workspace.read_write = clean(grants.workspace.read_write);
     for (id, a) in grants.agents {
-        let a = hive_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
-        if a != hive_core::sandbox::AgentGrant::default() {
+        let a = ligus_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
+        if a != ligus_core::sandbox::AgentGrant::default() {
             g.agents.insert(id, a);
         }
     }
-    let fp = hive_runtime::sandbox::grants_fingerprint(&g);
+    let fp = ligus_runtime::sandbox::grants_fingerprint(&g);
     state.service.lock().unwrap().set_sandbox_grants(ws, g).map_err(map_err)?;
     // Your own change needs no notice.
     {
@@ -1341,29 +1341,29 @@ pub(crate) fn set_sandbox_grants_sync(app: AppHandle, state: State<AppState>, gr
 /// Dearth mode for the active workspace, with pending joins and what it does
 /// to each entrance.
 #[tauri::command]
-pub(crate) async fn get_dearth_state(ligus_app: tauri::AppHandle) -> Result<hive_proto::DearthStateDto, String> {
+pub(crate) async fn get_dearth_state(ligus_app: tauri::AppHandle) -> Result<ligus_proto::DearthStateDto, String> {
     crate::off_main(ligus_app, move |ligus_app| get_dearth_state_sync(tauri::Manager::state::<AppState>(ligus_app))).await
 }
 
-pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<hive_proto::DearthStateDto, String> {
+pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_proto::DearthStateDto, String> {
     let ws = state.active_workspace_id();
     let servers = state.combined_mcp_servers();
     let runtimes = state.combined_runtimes();
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
+    let config = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
     let guards = config.as_ref().map(|c| c.guards.clone()).unwrap_or_default();
     let members = config.as_ref().map(|c| c.members.clone()).unwrap_or_default();
-    let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
-    let can_manage = my_role.rank() >= hive_core::WorkspaceRole::Admin.rank() || config.is_none();
-    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| hive_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_else(|| id.to_string());
-    let mut pending: Vec<hive_proto::PendingJoinDto> = guards
+    let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
+    let can_manage = my_role.rank() >= ligus_core::WorkspaceRole::Admin.rank() || config.is_none();
+    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_else(|| id.to_string());
+    let mut pending: Vec<ligus_proto::PendingJoinDto> = guards
         .pending_members
         .iter()
-        .map(|p| hive_proto::PendingJoinDto {
+        .map(|p| ligus_proto::PendingJoinDto {
             subject: p.member.id.clone(),
             kind: "member".into(),
-            name: hive_proto::names::clean_display_name(&p.member.actor.display_name),
+            name: ligus_proto::names::clean_display_name(&p.member.actor.display_name),
             added_by: name_of(&p.added_by),
             can_approve: can_manage && p.added_by != me,
         })
@@ -1371,11 +1371,11 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<hive_proto
     let my_account = svc.author().account_id;
     for (device, account) in svc.pending_devices(ws).map_err(map_err)? {
         let owner = members.iter().find(|m| m.actor.account_id == Some(account));
-        pending.push(hive_proto::PendingJoinDto {
+        pending.push(ligus_proto::PendingJoinDto {
             subject: device.to_string(),
             kind: "device".into(),
             name: format!("Device {}", &device.to_string()[..8]),
-            added_by: owner.map(|m| hive_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_default(),
+            added_by: owner.map(|m| ligus_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_default(),
             can_approve: can_manage && my_account != Some(account),
         });
     }
@@ -1384,43 +1384,43 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<hive_proto
     let egress = d
         .as_ref()
         .filter(|d| d.enabled)
-        .map(|d| hive_core::sandbox::EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() })
-        .unwrap_or(hive_core::sandbox::EgressPolicy::Open);
-    let mut entrances: Vec<hive_proto::EntranceDto> = servers
+        .map(|d| ligus_core::sandbox::EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() })
+        .unwrap_or(ligus_core::sandbox::EgressPolicy::Open);
+    let mut entrances: Vec<ligus_proto::EntranceDto> = servers
         .iter()
         .filter(|s| s.enabled)
-        .map(|s| hive_proto::EntranceDto {
+        .map(|s| ligus_proto::EntranceDto {
             name: s.id.clone(),
             kind: "mcp".into(),
             state: if !on { "open" } else if egress.allows_mcp(&s.id) { "allowed" } else { "closed" }.into(),
         })
         .collect();
     let closed = if on { "closed" } else { "open" };
-    entrances.push(hive_proto::EntranceDto { name: "Web fetch and search (Claude Code)".into(), kind: "web".into(), state: closed.into() });
-    entrances.push(hive_proto::EntranceDto { name: "Shell (Bash, run_command)".into(), kind: "shell".into(), state: closed.into() });
+    entrances.push(ligus_proto::EntranceDto { name: "Web fetch and search (Claude Code)".into(), kind: "web".into(), state: closed.into() });
+    entrances.push(ligus_proto::EntranceDto { name: "Shell (Bash, run_command)".into(), kind: "shell".into(), state: closed.into() });
     let mut seen = std::collections::HashSet::new();
     for rt in runtimes.iter() {
-        if hive_runtime::sandbox::confinable(rt.provider_kind) || !seen.insert(rt.provider_kind) {
+        if ligus_runtime::sandbox::confinable(rt.provider_kind) || !seen.insert(rt.provider_kind) {
             continue;
         }
-        entrances.push(hive_proto::EntranceDto {
+        entrances.push(ligus_proto::EntranceDto {
             name: format!("{:?} agents", rt.provider_kind),
             kind: "runtime".into(),
             state: if on { "refused" } else { "open" }.into(),
         });
     }
-    Ok(hive_proto::DearthStateDto {
+    Ok(ligus_proto::DearthStateDto {
         enabled: on,
         reason: d.as_ref().map(|d| d.reason.clone()).unwrap_or_default(),
         brood_paths: d
             .as_ref()
             .map(|d| d.brood_paths.clone())
-            .unwrap_or_else(|| hive_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect()),
+            .unwrap_or_else(|| ligus_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect()),
         allowed_mcp_servers: d.as_ref().map(|d| d.allowed_mcp_servers.clone()).unwrap_or_default(),
         set_by: d.as_ref().map(|d| name_of(&d.set_by)).unwrap_or_default(),
         set_at: d.as_ref().map(|d| crate::rfc3339(d.set_at)).unwrap_or_default(),
         can_manage,
-        default_brood_paths: hive_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect(),
+        default_brood_paths: ligus_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect(),
         pending,
         entrances,
     })
@@ -1444,14 +1444,14 @@ pub(crate) fn set_dearth_mode_sync(
     let clean = |v: Vec<String>| -> Vec<String> {
         v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
     };
-    let dearth = hive_core::guard::DearthMode {
+    let dearth = ligus_core::guard::DearthMode {
         enabled,
         reason: reason.trim().chars().take(200).collect(),
         brood_paths: clean(brood_paths),
         allowed_mcp_servers: clean(allowed_mcp_servers),
         admitted_devices: Vec::new(),
         set_by: String::new(),
-        set_at: hive_core::Timestamp::now(),
+        set_at: ligus_core::Timestamp::now(),
     };
     state.service.lock().unwrap().set_dearth_mode(ws, dearth).map_err(map_err)?;
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
@@ -1472,9 +1472,9 @@ pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, subject:
         ws,
         None,
         &GuardSignal::GuardDecision {
-            gate: hive_core::signal::GuardGate::DeviceJoin,
-            verdict: hive_core::signal::GuardVerdict::Accept,
-            subject: hive_core::signal::GuardSubject::Unknown,
+            gate: ligus_core::signal::GuardGate::DeviceJoin,
+            verdict: ligus_core::signal::GuardVerdict::Accept,
+            subject: ligus_core::signal::GuardSubject::Unknown,
             source: "approval".into(),
             reason: "second_approval".into(),
         },
@@ -1490,20 +1490,20 @@ pub(crate) fn approve_join_sync(app: AppHandle, state: State<AppState>, subject:
 
 /// A chat's lockdown as the chat header shows it.
 #[tauri::command]
-pub(crate) async fn get_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
+pub(crate) async fn get_chat_lockdown(ligus_app: tauri::AppHandle, session_id: String) -> Result<ligus_proto::ChatLockdownDto, String> {
     crate::off_main(ligus_app, move |ligus_app| get_chat_lockdown_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
 }
 
-pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
+pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String) -> Result<ligus_proto::ChatLockdownDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
     let session = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
-    let view = hive_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
+    let view = ligus_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
     let signals = view
         .signals
         .iter()
-        .map(|l| hive_proto::LockdownSignalDto {
+        .map(|l| ligus_proto::LockdownSignalDto {
             signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             detail: l.detail.clone(),
             raised_at: crate::rfc3339(l.raised_at),
@@ -1511,7 +1511,7 @@ pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String)
             raise_event_id: l.raise_event_id.map(|r| r.to_string()),
         })
         .collect::<Vec<_>>();
-    Ok(hive_proto::ChatLockdownDto {
+    Ok(ligus_proto::ChatLockdownDto {
         active: !signals.is_empty(),
         signals,
         can_clear: view.can_clear,
@@ -1547,7 +1547,7 @@ pub(crate) fn lock_chat_sync(app: AppHandle, state: State<AppState>, session_id:
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
-    svc.self_medicate(ws, sid, None, &[(hive_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
+    svc.self_medicate(ws, sid, None, &[(ligus_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())
@@ -1565,7 +1565,7 @@ fn now_secs() -> i64 {
 const UNKNOWN_RESET_SECS: i64 = 3600;
 
 /// Record a runtime's plan-window report (Claude Code rate-limit events).
-pub(crate) fn record_plan_window(state: &AppState, provider: hive_core::ModelProviderKind, mut window: hive_core::throttle::PlanWindow) {
+pub(crate) fn record_plan_window(state: &AppState, provider: ligus_core::ModelProviderKind, mut window: ligus_core::throttle::PlanWindow) {
     if window.observed_at == 0 {
         window.observed_at = now_secs();
     }
@@ -1574,8 +1574,8 @@ pub(crate) fn record_plan_window(state: &AppState, provider: hive_core::ModelPro
 
 /// A failed turn whose error says the subscription limit was hit counts as a
 /// rejected window (for the CLIs that only report it as an error).
-pub(crate) fn record_usage_error(state: &AppState, provider: hive_core::ModelProviderKind, message: &str) {
-    use hive_runtime::provider::cli_agent::{classify_failure, CliFailure};
+pub(crate) fn record_usage_error(state: &AppState, provider: ligus_core::ModelProviderKind, message: &str) {
+    use ligus_runtime::provider::cli_agent::{classify_failure, CliFailure};
     if !provider.is_cli_agent() || classify_failure(message) != CliFailure::UsageLimit {
         return;
     }
@@ -1583,8 +1583,8 @@ pub(crate) fn record_usage_error(state: &AppState, provider: hive_core::ModelPro
     record_plan_window(
         state,
         provider,
-        hive_core::throttle::PlanWindow {
-            status: hive_core::throttle::WindowStatus::Rejected,
+        ligus_core::throttle::PlanWindow {
+            status: ligus_core::throttle::WindowStatus::Rejected,
             utilization_pct: Some(100),
             resets_at: Some(now + UNKNOWN_RESET_SECS),
             window: None,
@@ -1595,12 +1595,12 @@ pub(crate) fn record_usage_error(state: &AppState, provider: hive_core::ModelPro
 
 fn decide(
     state: &AppState,
-    provider: hive_core::ModelProviderKind,
-    priority: hive_core::throttle::TurnPriority,
+    provider: ligus_core::ModelProviderKind,
+    priority: ligus_core::throttle::TurnPriority,
     agent_key: &str,
-) -> hive_core::throttle::ThrottleDecision {
+) -> ligus_core::throttle::ThrottleDecision {
     let window = state.guards.plan_windows.lock().unwrap().get(&provider).cloned();
-    hive_core::throttle::ThrottlePolicy::default().decide(priority, agent_key, window.as_ref(), now_secs())
+    ligus_core::throttle::ThrottlePolicy::default().decide(priority, agent_key, window.as_ref(), now_secs())
 }
 
 /// Note (or clear) a deferral for the UI, recording a throttle signal when it
@@ -1610,20 +1610,20 @@ fn note_deferral(
     workspace_id: Uuid,
     key: String,
     what: String,
-    provider: hive_core::ModelProviderKind,
-    priority: hive_core::throttle::TurnPriority,
-    decision: hive_core::throttle::ThrottleDecision,
+    provider: ligus_core::ModelProviderKind,
+    priority: ligus_core::throttle::TurnPriority,
+    decision: ligus_core::throttle::ThrottleDecision,
 ) {
     let mut deferred = state.guards.deferred.lock().unwrap();
     match decision {
-        hive_core::throttle::ThrottleDecision::Run => {
+        ligus_core::throttle::ThrottleDecision::Run => {
             deferred.remove(&key);
         }
-        hive_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } => {
+        ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } => {
             let fresh = !deferred.contains_key(&key);
             deferred.insert(
                 key,
-                hive_proto::DeferredWorkDto {
+                ligus_proto::DeferredWorkDto {
                     priority: priority.as_str().into(),
                     what,
                     runtime: format!("{provider:?}"),
@@ -1655,8 +1655,8 @@ fn note_deferral(
 /// Returns an error if the run is canceled while waiting.
 pub(crate) async fn wait_for_capacity(
     app: &AppHandle,
-    provider: hive_core::ModelProviderKind,
-    priority: hive_core::throttle::TurnPriority,
+    provider: ligus_core::ModelProviderKind,
+    priority: ligus_core::throttle::TurnPriority,
     agent_key: &str,
     run_id: Option<Uuid>,
 ) -> Result<(), String> {
@@ -1666,7 +1666,7 @@ pub(crate) async fn wait_for_capacity(
     loop {
         let d = decide(&state, provider, priority, agent_key);
         note_deferral(&state, ws, key.clone(), format!("workflow stage ({agent_key})"), provider, priority, d);
-        let hive_core::throttle::ThrottleDecision::Defer { resets_at, .. } = d else { return Ok(()) };
+        let ligus_core::throttle::ThrottleDecision::Defer { resets_at, .. } = d else { return Ok(()) };
         if let Some(rid) = run_id {
             if state.canceled_runs.lock().unwrap().contains(&rid) {
                 state.guards.deferred.lock().unwrap().remove(&key);
@@ -1684,17 +1684,17 @@ pub(crate) fn defer_background(app: &AppHandle, runtime_id: &str, schedule_id: &
     let state = app.state::<AppState>();
     let rid = if runtime_id.is_empty() { state.current_default_runtime_id() } else { runtime_id.to_string() };
     let provider = state.resolve_runtime(&rid).provider;
-    let d = decide(&state, provider, hive_core::throttle::TurnPriority::Background, schedule_id);
+    let d = decide(&state, provider, ligus_core::throttle::TurnPriority::Background, schedule_id);
     note_deferral(
         &state,
         state.active_workspace_id(),
         format!("schedule:{schedule_id}"),
         "scheduled run".into(),
         provider,
-        hive_core::throttle::TurnPriority::Background,
+        ligus_core::throttle::TurnPriority::Background,
         d,
     );
-    matches!(d, hive_core::throttle::ThrottleDecision::Defer { .. })
+    matches!(d, ligus_core::throttle::ThrottleDecision::Defer { .. })
 }
 
 /// For an agent-to-agent hand-off: the note to post when it must pause.
@@ -1702,19 +1702,19 @@ pub(crate) fn cascade_paused(
     state: &AppState,
     workspace_id: Uuid,
     _session_id: Uuid,
-    provider: hive_core::ModelProviderKind,
+    provider: ligus_core::ModelProviderKind,
     agent_key: &str,
     agent_name: &str,
 ) -> Option<String> {
-    let d = decide(state, provider, hive_core::throttle::TurnPriority::Workflow, agent_key);
-    if let hive_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d {
+    let d = decide(state, provider, ligus_core::throttle::TurnPriority::Workflow, agent_key);
+    if let ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d {
         note_deferral(
             state,
             workspace_id,
             format!("cascade:{agent_key}"),
             format!("hand-off to {agent_name}"),
             provider,
-            hive_core::throttle::TurnPriority::Workflow,
+            ligus_core::throttle::TurnPriority::Workflow,
             d,
         );
         // A hand-off isn't retried on its own; it's recorded and then cleared.
@@ -1728,21 +1728,21 @@ pub(crate) fn cascade_paused(
 
 /// Plan windows, thresholds and what's being held back.
 #[tauri::command]
-pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::ThrottleStateDto {
-    let p = hive_core::throttle::ThrottlePolicy::default();
+pub(crate) fn get_throttle_state(state: State<AppState>) -> ligus_proto::ThrottleStateDto {
+    let p = ligus_core::throttle::ThrottlePolicy::default();
     let now = now_secs();
-    let mut windows: Vec<hive_proto::PlanWindowDto> = state
+    let mut windows: Vec<ligus_proto::PlanWindowDto> = state
         .guards
         .plan_windows
         .lock()
         .unwrap()
         .iter()
-        .map(|(k, w)| hive_proto::PlanWindowDto {
+        .map(|(k, w)| ligus_proto::PlanWindowDto {
             runtime: format!("{k:?}"),
             status: match w.status {
-                hive_core::throttle::WindowStatus::Allowed => "allowed",
-                hive_core::throttle::WindowStatus::Warning => "warning",
-                hive_core::throttle::WindowStatus::Rejected => "rejected",
+                ligus_core::throttle::WindowStatus::Allowed => "allowed",
+                ligus_core::throttle::WindowStatus::Warning => "warning",
+                ligus_core::throttle::WindowStatus::Rejected => "rejected",
             }
             .into(),
             effective_pct: w.effective_pct(now),
@@ -1750,7 +1750,7 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::Throttle
             window: w.window.clone().unwrap_or_default(),
             resets_at: w
                 .resets_at
-                .map(|r| crate::rfc3339(hive_core::Timestamp::from_unix_seconds(r)))
+                .map(|r| crate::rfc3339(ligus_core::Timestamp::from_unix_seconds(r)))
                 .unwrap_or_default(),
             age_secs: (now - w.observed_at).clamp(0, u32::MAX as i64) as u32,
         })
@@ -1758,7 +1758,7 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::Throttle
     windows.sort_by(|a, b| a.runtime.cmp(&b.runtime));
     let mut deferred: Vec<_> = state.guards.deferred.lock().unwrap().values().cloned().collect();
     deferred.sort_by(|a, b| a.what.cmp(&b.what));
-    hive_proto::ThrottleStateDto {
+    ligus_proto::ThrottleStateDto {
         background_pct: p.background_pct,
         workflow_pct: p.workflow_pct,
         stagger_pct: p.stagger_pct,
@@ -1796,9 +1796,9 @@ pub(crate) fn record_progress(
     state: &AppState,
     workspace_id: Uuid,
     session_id: Uuid,
-    progress: &hive_runtime::patch_leaving::ProgressTracker,
+    progress: &ligus_runtime::patch_leaving::ProgressTracker,
 ) {
-    use hive_core::signal::ProgressKind;
+    use ligus_core::signal::ProgressKind;
     let (tests, writes) = progress.units();
     let svc = state.service.lock().unwrap();
     for (units, kind) in [(tests, ProgressKind::TestsPassing), (writes, ProgressKind::FilesWritten)] {
@@ -1835,9 +1835,9 @@ pub(crate) struct Occupancy {
 
 /// Suggestions from occupancy, like adding a box to a hive when about seven of
 /// ten frames are drawn: a little ahead of demand, never before it.
-pub(crate) fn suggest_growth(o: &Occupancy) -> Vec<hive_proto::GrowthSuggestionDto> {
+pub(crate) fn suggest_growth(o: &Occupancy) -> Vec<ligus_proto::GrowthSuggestionDto> {
     let mut out = Vec::new();
-    let s = |id: &str, kind: &str, title: &str, reason: String| hive_proto::GrowthSuggestionDto {
+    let s = |id: &str, kind: &str, title: &str, reason: String| ligus_proto::GrowthSuggestionDto {
         id: id.into(),
         kind: kind.into(),
         title: title.into(),
@@ -1887,7 +1887,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
     let me = state.local_actor_id();
     let known = state.known_room_ids();
     let deferred = state.guards.deferred.lock().unwrap().len();
-    let policy = hive_core::throttle::ThrottlePolicy::default();
+    let policy = ligus_core::throttle::ThrottlePolicy::default();
     let now = now_secs();
     let hot_window = state
         .guards
@@ -1898,16 +1898,16 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         .any(|w| w.effective_pct(now) >= policy.workflow_pct);
     let svc = state.service.lock().unwrap();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
-    let ts_now = hive_core::Timestamp::now();
+    let ts_now = ligus_core::Timestamp::now();
     let mut o = Occupancy {
-        worker_hosts: hosts.iter().filter(|h| h.kind == hive_core::HostKind::Worker).count(),
+        worker_hosts: hosts.iter().filter(|h| h.kind == ligus_core::HostKind::Worker).count(),
         deferred,
         hot_window,
         ..Default::default()
     };
     let week_ago = ts_now.inner().unix_timestamp() - 7 * 86_400;
     let mut by_agent: HashMap<String, usize> = HashMap::new();
-    let config_id = hive_core::workspace_config_session_id(ws);
+    let config_id = ligus_core::workspace_config_session_id(ws);
     for id in svc.store().list_session_ids().unwrap_or_default() {
         if id == config_id {
             continue;
@@ -1917,7 +1917,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
             continue;
         }
         o.agents = o.agents.max(s.workspace_agents.len());
-        for pm in hive_runtime::chat_service::pending_mentions(&s) {
+        for pm in ligus_runtime::chat_service::pending_mentions(&s) {
             let host = s.workspace_agents.iter().find(|a| a.id == pm.agent_id).map(|a| a.host_id.clone()).unwrap_or_default();
             if host.is_empty() {
                 o.queued_on_devices += 1;
@@ -1926,7 +1926,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
             }
         }
         for m in &s.messages {
-            if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+            if matches!(m.role, ligus_core::MessageRole::Assistant | ligus_core::MessageRole::Agent)
                 && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
@@ -1943,11 +1943,11 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
 
 /// Growth suggestions for the active workspace (nuc workspaces start small).
 #[tauri::command]
-pub(crate) async fn growth_suggestions(ligus_app: tauri::AppHandle) -> Vec<hive_proto::GrowthSuggestionDto> {
+pub(crate) async fn growth_suggestions(ligus_app: tauri::AppHandle) -> Vec<ligus_proto::GrowthSuggestionDto> {
     crate::off_main(ligus_app, move |ligus_app| growth_suggestions_sync(tauri::Manager::state::<AppState>(ligus_app))).await
 }
 
-pub(crate) fn growth_suggestions_sync(state: State<AppState>) -> Vec<hive_proto::GrowthSuggestionDto> {
+pub(crate) fn growth_suggestions_sync(state: State<AppState>) -> Vec<ligus_proto::GrowthSuggestionDto> {
     suggest_growth(&gather_occupancy(&state))
 }
 
@@ -1959,8 +1959,8 @@ pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hive_core::lease::{fold_claim, CoordinatorLease, LeaseTable};
-    use hive_core::Timestamp;
+    use ligus_core::lease::{fold_claim, CoordinatorLease, LeaseTable};
+    use ligus_core::Timestamp;
 
     fn lease(holder: Uuid, claimed_s: i64) -> LeaseState {
         let mut t = LeaseTable::new();
@@ -1982,7 +1982,7 @@ mod tests {
     /// Every child a desktop turn spawns runs under the turn's policy: the
     /// shell probe before the engine, and in the engine (which lists MCP
     /// tools, runs the API tool loop and streams under `TurnInput::policy`,
-    /// `hive_runtime::turn_engine`) the policy built here with the shell gate,
+    /// `ligus_runtime::turn_engine`) the policy built here with the shell gate,
     /// the grants and the turn's own MCP catalog. Outside a turn scope a
     /// stdio MCP server would fall back to the baseline.
     #[test]
@@ -2059,7 +2059,7 @@ mod tests {
 #[cfg(test)]
 mod egress_preset_settings_tests {
     use super::*;
-    use hive_runtime::egress::EgressPreset;
+    use ligus_runtime::egress::EgressPreset;
 
     /// Off by default; the chat's own setting wins over the workspace's, and
     /// an empty chat list switches the preset off for that chat.

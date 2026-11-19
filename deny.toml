@@ -24,10 +24,10 @@ unmaintained = "workspace"
 #
 # RUSTSEC-2026-0387 (crypto-bigint 0.5 constant-time gaps): crypto-bigint 0.5.5
 # is reached ONLY via ssh-key 0.6 -> p256/p384/p521 0.13 (identity links,
-# crates/hive-runtime/src/identity_links.rs), which Ligus uses to VERIFY
+# crates/ligus-runtime/src/identity_links.rs), which Ligus uses to VERIFY
 # SSHSIG signatures: public key, public message, public signature, so there
 # is no secret integer for a timing side channel to leak. Ligus's own P-256
-# code (hive-core presence) is on p256 0.14 / crypto-bigint 0.7.11, which is
+# code (ligus-core presence) is on p256 0.14 / crypto-bigint 0.7.11, which is
 # patched. The fix for the ssh-key path is ssh-key 0.7 (RustCrypto 0.14 line),
 # which is still a release candidate. Review by 2027-02-15, or as soon as
 # ssh-key 0.7.0 ships; never extend this to code that signs with these curves.

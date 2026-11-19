@@ -22,7 +22,7 @@ a few days and will keep you updated on the fix and disclosure timeline.
 
 In scope:
 
-- **`hive-core` crypto & signed envelopes** — Ed25519 identity, X25519 key
+- **`ligus-core` crypto & signed envelopes** — Ed25519 identity, X25519 key
   agreement, ChaCha20-Poly1305, HPKE per-device sealing, envelope
   verification/quarantine.
 - **The relay** ([github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay))

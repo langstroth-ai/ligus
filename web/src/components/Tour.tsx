@@ -142,7 +142,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
   }, [rect, hole?.x, hole?.y, hole?.w, hole?.h, vp.w, vp.h, i, step?.placement]);
 
   if (!step) return null;
-  const maskId = "hive-tour-hole";
+  const maskId = "ligus-tour-hole";
 
   return (
     <div className="fixed inset-0 z-[1000]" role="dialog" aria-modal="true" aria-label="Product tour">
@@ -170,7 +170,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
             height={hole.h}
             rx={16}
             fill="none"
-            stroke="var(--hive-accent-cool)"
+            stroke="var(--ligus-accent-cool)"
             strokeWidth={2}
           />
         )}
@@ -185,9 +185,9 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
           maxWidth: "calc(100vw - 28px)",
           top: pos?.top ?? -9999,
           left: pos?.left ?? -9999,
-          background: "var(--hive-panel)",
-          borderColor: "var(--hive-line)",
-          color: "var(--hive-ink)",
+          background: "var(--ligus-panel)",
+          borderColor: "var(--ligus-line)",
+          color: "var(--ligus-ink)",
           visibility: pos ? "visible" : "hidden",
           transition: reduceMotion ? undefined : "top .26s cubic-bezier(.4,0,.2,1), left .26s cubic-bezier(.4,0,.2,1)",
         }}
@@ -202,7 +202,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
                 className="h-1.5 rounded-full transition-all"
                 style={{
                   width: n === i ? 16 : 6,
-                  background: n === i ? "var(--hive-accent-cool)" : "var(--hive-line)",
+                  background: n === i ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
                 }}
               />
             ))}
@@ -228,10 +228,10 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
               type="button"
               onClick={next}
               className="rounded-xl px-4 py-1.5 text-xs font-semibold hover:brightness-110"
-              // `--hive-on-accent` is the scheme-derived legible foreground for the
+              // `--ligus-on-accent` is the scheme-derived legible foreground for the
               // accent fill (dark on Obsidian's silver, white elsewhere) — plain
               // `text-white` was invisible on Obsidian's near-white accent.
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               {atEnd ? "Done" : i === 0 ? "Start" : "Next"}
             </button>

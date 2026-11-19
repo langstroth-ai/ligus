@@ -96,4 +96,4 @@ jobs:
           # Its own key: release-profile artifacts share nothing with debug.
           key: release-${{ matrix.os }}
       - name: Release build (desktop shell + CLI)
-        run: cargo build --locked --release -p Hive -p hive-cli
+        run: cargo build --locked --release -p ligus-desktop -p ligus-cli

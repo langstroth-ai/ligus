@@ -5,14 +5,14 @@
 //! Nothing here involves a provider or a directory. Your account id is the
 //! random id made on first launch; the people you can reach are the members
 //! of workspaces you share, with keys verified on those config logs
-//! (`hive_runtime::directory_trust`); a DM's room and invite id are random
-//! (`hive_runtime::dm`). An invite to a co-member is sealed to their verified
+//! (`ligus_runtime::directory_trust`); a DM's room and invite id are random
+//! (`ligus_runtime::dm`). An invite to a co-member is sealed to their verified
 //! key-agreement keys and dropped into their contact drop box (relay v0.3,
-//! `hive_runtime::contacts`); on a relay without contacts, or for someone
+//! `ligus_runtime::contacts`); on a relay without contacts, or for someone
 //! who hasn't published one, it is a link or QR code you hand over. A DM's
 //! invite for someone whose contact id isn't known yet is held, sealed to
 //! this device's key, and delivered once when it arrives
-//! (`hive_runtime::dm_delivery`, the same code `ligus serve` runs).
+//! (`ligus_runtime::dm_delivery`, the same code `ligus serve` runs).
 //!
 //! Contacts are per device: each device keeps its own contact id and write
 //! key, publishes its record to the relays of its workspaces, announces the
@@ -22,15 +22,15 @@
 
 use std::collections::BTreeMap;
 
-use hive_core::Timestamp;
-use hive_proto::WorkspaceInfoDto;
-use hive_runtime::directory_trust::{self, CoMember, SealPlan};
-use hive_runtime::dm;
-use hive_runtime::dm_delivery::{self, Delivery, HeldInvites};
+use ligus_core::Timestamp;
+use ligus_proto::WorkspaceInfoDto;
+use ligus_runtime::directory_trust::{self, CoMember, SealPlan};
+use ligus_runtime::dm;
+use ligus_runtime::dm_delivery::{self, Delivery, HeldInvites};
 use tauri::State;
 use uuid::Uuid;
 
-use hive_runtime::contacts::{self, ContactsError};
+use ligus_runtime::contacts::{self, ContactsError};
 
 use crate::{
     decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32, random_token,
@@ -42,7 +42,7 @@ fn me(state: &AppState) -> (Option<Uuid>, Option<String>) {
     let svc = state.service.lock().unwrap();
     let account = svc.author().account_id.or_else(|| Uuid::parse_str(&svc.author().id).ok());
     let fk = (!svc.is_delegated())
-        .then(|| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
+        .then(|| ligus_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
     (account, fk)
 }
 
@@ -218,7 +218,7 @@ pub(crate) struct DmDto {
     archived: Vec<String>,
     /// The DM's invite while this device holds it for delivery (and a day
     /// after it finished): `{state, pending, delivered, deliveredAt,
-    /// expiresAt, warning}` (`hive_runtime::dm_delivery`).
+    /// expiresAt, warning}` (`ligus_runtime::dm_delivery`).
     invite_delivery: Option<serde_json::Value>,
 }
 
@@ -452,7 +452,7 @@ pub(crate) fn inspect_invite_sync(state: State<AppState>, code: String) -> Resul
     let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
     let already_joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     Ok(InviteInfoDto {
-        workspace_name: if conn.dm_account.is_some() { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
+        workspace_name: if conn.dm_account.is_some() { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
         is_dm: conn.dm_account.is_some(),
         addressed_to_me: me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
         founder_account: founder.map(|f| f.to_string()),
@@ -507,7 +507,7 @@ pub(crate) fn join_dm_sync(state: State<AppState>, code: String, confirm_safety_
         return Err("not a direct message invite".into());
     }
     admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
-    join_workspace_conn(state, conn, hive_runtime::box_admission::redeem_key_of(&code))
+    join_workspace_conn(state, conn, ligus_runtime::box_admission::redeem_key_of(&code))
 }
 
 #[derive(serde::Serialize)]
@@ -625,9 +625,9 @@ fn my_relays(s: &LiveSettings) -> Vec<String> {
     out
 }
 
-fn ka_keypair(state: &AppState) -> Option<hive_core::e2ee::KeyAgreementKeypair> {
+fn ka_keypair(state: &AppState) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
     let s = state.settings.lock().unwrap();
-    s.ka_secret.as_deref().and_then(parse_hex32).and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
+    s.ka_secret.as_deref().and_then(parse_hex32).and_then(|seed| ligus_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
 }
 
 /// This device's record for `cid`, or `None` on a device that can't speak
@@ -744,7 +744,7 @@ async fn deliver_invite(state: &AppState, person: &CoMember, plan: &SealPlan, in
     out
 }
 
-// ── Held DM invites (hive_runtime::dm_delivery) ───────────────────────────
+// ── Held DM invites (ligus_runtime::dm_delivery) ───────────────────────────
 
 /// This device's held DM invites, one store per data dir.
 fn held(state: &AppState) -> std::sync::Arc<HeldInvites> {
@@ -785,7 +785,7 @@ impl dm_delivery::Host for DesktopHost<'_> {
         let s = self.0.settings.lock().unwrap();
         s.workspaces.iter().any(|w| w.id() == ws && w.dm_account.is_some() && !s.archived_dms.contains(&w.room))
     }
-    fn own_ka(&self) -> Option<hive_core::e2ee::KeyAgreementKeypair> {
+    fn own_ka(&self) -> Option<ligus_core::e2ee::KeyAgreementKeypair> {
         ka_keypair(self.0)
     }
     fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl std::future::Future<Output = Delivery> + Send {
@@ -946,7 +946,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
                 relay: relay.clone(),
                 seq: item.seq,
                 is_dm,
-                workspace_name: if is_dm { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
+                workspace_name: if is_dm { String::new() } else { ligus_proto::names::clean_display_name(&conn.display_name()) },
                 founder_account: founder.map(|f| f.to_string()),
                 founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
                 safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
@@ -1022,7 +1022,7 @@ pub(crate) fn accept_pending_invite_sync(
     } else if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
         return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
     }
-    let joined = join_workspace_conn(state.clone(), conn, hive_runtime::box_admission::redeem_key_of(&code))?;
+    let joined = join_workspace_conn(state.clone(), conn, ligus_runtime::box_admission::redeem_key_of(&code))?;
     mark_handled(&state, &relay, seq);
     Ok(joined)
 }

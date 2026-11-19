@@ -5,9 +5,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use hive_core::flow::HumanAsk;
-use hive_runtime::ligus_mcp::{LigusHost, LigusMcp};
-use hive_runtime::ChatService;
+use ligus_core::flow::HumanAsk;
+use ligus_runtime::ligus_mcp::{LigusHost, LigusMcp};
+use ligus_runtime::ChatService;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
@@ -47,7 +47,7 @@ impl LigusHost for AppHost {
     /// checkout on this device, else its workspace's bound folder; never
     /// the folder the window happens to show (another chat's forge and
     /// credentials).
-    fn forge_for(&self, chat_id: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+    fn forge_for(&self, chat_id: Uuid) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
         let state = self.app.state::<AppState>();
         let root = match crate::repos_ui::chat_checkout(&state, chat_id) {
             Some(p) => p.to_string_lossy().into_owned(),
@@ -62,7 +62,7 @@ impl LigusHost for AppHost {
 
 /// This app's Ligus MCP server (one per process; its host key never leaves
 /// memory). A turn's interface to it is the turn engine's
-/// (`hive_runtime::turn_engine::ligus`).
+/// (`ligus_runtime::turn_engine::ligus`).
 pub(crate) fn server(app: &AppHandle) -> Arc<LigusMcp> {
     static S: OnceLock<Arc<LigusMcp>> = OnceLock::new();
     S.get_or_init(|| LigusMcp::new(Arc::new(AppHost { app: app.clone() }))).clone()
@@ -82,13 +82,13 @@ pub(crate) struct AskDto {
     pub open: bool,
 }
 
-pub(crate) fn ask_dtos(session: &hive_core::ChatSession) -> Vec<AskDto> {
+pub(crate) fn ask_dtos(session: &ligus_core::ChatSession) -> Vec<AskDto> {
     let name = |key: &str| {
-        hive_core::flow::agent_from_key(key)
+        ligus_core::flow::agent_from_key(key)
             .and_then(|id| session.workspace_agents.iter().find(|a| a.id == id).map(|a| a.name.clone()))
-            .unwrap_or_else(|| "hive".into())
+            .unwrap_or_else(|| "ligus".into())
     };
-    let mut v: Vec<&hive_core::flow::AskState> = session.flow.asks.values().collect();
+    let mut v: Vec<&ligus_core::flow::AskState> = session.flow.asks.values().collect();
     v.sort_by_key(|a| a.ask.at_ms);
     v.into_iter()
         .rev()
@@ -144,7 +144,7 @@ pub(crate) fn answer_ask_sync(
 }
 
 /// Record a person's answer (shared with tests).
-pub(crate) fn answer_in(svc: &mut ChatService, session: &hive_core::ChatSession, ask_id: Uuid, answer: String, option_index: Option<u32>) -> Result<(), String> {
+pub(crate) fn answer_in(svc: &mut ChatService, session: &ligus_core::ChatSession, ask_id: Uuid, answer: String, option_index: Option<u32>) -> Result<(), String> {
     let st = session.flow.asks.get(&ask_id).ok_or("no such question")?;
     if !st.is_open() {
         return Err("that question is already answered or closed".into());
@@ -157,12 +157,12 @@ pub(crate) fn answer_in(svc: &mut ChatService, session: &hive_core::ChatSession,
         return Err("an answer is required".into());
     }
     let by = svc.author().display_name.clone();
-    let rec = hive_core::flow::FlowRecord::HumanAnswered(hive_core::flow::HumanAnswered {
+    let rec = ligus_core::flow::FlowRecord::HumanAnswered(ligus_core::flow::HumanAnswered {
         ask_id,
-        answer: text.chars().take(hive_core::flow::MAX_ANSWER_CHARS).collect(),
+        answer: text.chars().take(ligus_core::flow::MAX_ANSWER_CHARS).collect(),
         option_index,
         by,
-        at_ms: hive_core::flow::now_ms(),
+        at_ms: ligus_core::flow::now_ms(),
     });
     svc.record_flow(session.id, session.workspace_id, rec).map_err(|e| e.to_string())
 }

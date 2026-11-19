@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use hive_forge::tokens::{sh_quote, AuthSource, CredentialSource, Purpose, TokenStore};
-use hive_forge::{Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport};
+use ligus_forge::tokens::{sh_quote, AuthSource, CredentialSource, Purpose, TokenStore};
+use ligus_forge::{Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport};
 use serde_json::{json, Value};
 use tauri::State;
 
 use crate::AppState;
 
 fn store(data_dir: &Path) -> Arc<dyn TokenStore> {
-    hive_runtime::forge_secrets::ForgeSecrets::for_data_dir(data_dir)
+    ligus_runtime::forge_secrets::ForgeSecrets::for_data_dir(data_dir)
 }
 
 /// This binary as git's credential helper for a connection:
@@ -64,7 +64,7 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
         return Ok(());
     }
     let id = ForgeId::parse(id).map_err(|e| e.to_string())?;
-    hive_runtime::secret_store::init_for_data_dir(dir, None);
+    ligus_runtime::secret_store::init_for_data_dir(dir, None);
     let mut input = String::new();
     std::io::stdin().take(64 * 1024).read_to_string(&mut input).map_err(|e| e.to_string())?;
     let all = Connections::load(dir);
@@ -75,8 +75,8 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
     let creds = c.credentials(store(dir), None, Some(dir));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let token = rt.block_on(creds.token(Purpose::Write)).ok().flatten();
-    let user = hive_forge::tokens::git_username(c.kind, c.auth, c.login.as_deref());
-    if let Some(a) = hive_forge::tokens::answer_git_credential(action, &input, &c.host(), &user, token.as_ref()) {
+    let user = ligus_forge::tokens::git_username(c.kind, c.auth, c.login.as_deref());
+    if let Some(a) = ligus_forge::tokens::answer_git_credential(action, &input, &c.host(), &user, token.as_ref()) {
         std::io::stdout().write_all(a.as_bytes()).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -85,10 +85,10 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
 /// The chat's code host for the read-only agent tools: the workspace
 /// folder's `origin` on one of this device's connections (and `upstream`
 /// when it is a fork checkout).
-pub(crate) fn binding_for_dir(data_dir: &Path, dir: &Path) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+pub(crate) fn binding_for_dir(data_dir: &Path, dir: &Path) -> Option<ligus_runtime::ligus_mcp::forge_tools::ForgeBinding> {
     // The configured remote URLs, never git's insteadOf rewrites of them.
     let forges: Vec<Arc<dyn Forge>> = Connections::load(data_dir).forges.iter().map(|c| forge(c, data_dir)).collect();
-    hive_runtime::ligus_mcp::forge_tools::binding_for_checkout(dir, &forges)
+    ligus_runtime::ligus_mcp::forge_tools::binding_for_checkout(dir, &forges)
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ async fn dto(c: &Connection, data_dir: &Path, check: bool) -> Value {
         "hasRead": c.auth == AuthSource::Gh || present.contains(&Purpose::Read) || present.contains(&Purpose::Write),
         "hasWrite": f.has_write(),
         "user": c.login,
-        "deviceFlow": f.capabilities().device_flow && hive_forge::device::endpoints(c).is_ok(),
+        "deviceFlow": f.capabilities().device_flow && ligus_forge::device::endpoints(c).is_ok(),
         "openLabel": c.kind.open_label(),
         "holder": "this device",
         "internal": c.internal,
@@ -173,7 +173,7 @@ pub async fn forges_add(
     c.client_id = client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
     // A loopback, private or link-local address only when marked internal.
     c.internal = internal.unwrap_or(false);
-    hive_forge::conn::check_address(&c).await.map_err(err)?;
+    ligus_forge::conn::check_address(&c).await.map_err(err)?;
     let dir = state.data_dir.clone();
     let mut all = Connections::load(&dir);
     if all.get(&c.id).is_some() {
@@ -217,7 +217,7 @@ pub async fn forges_set_token(state: State<'_, AppState>, id: String, purpose: S
     if c.auth == AuthSource::Gh {
         return Err("this connection uses the gh login".into());
     }
-    store(&dir).put(&id, purpose, &hive_forge::Secret::new(t)).map_err(err)?;
+    store(&dir).put(&id, purpose, &ligus_forge::Secret::new(t)).map_err(err)?;
     if c.auth == AuthSource::None {
         c.auth = AuthSource::Token;
     }
@@ -268,8 +268,8 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let id = ForgeId::parse(&id).map_err(err)?;
     let dir = state.data_dir.clone();
     let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
-    let ep = hive_forge::device::endpoints(&c).map_err(err)?;
-    let start = hive_forge::device::start(&ep).await.map_err(err)?;
+    let ep = ligus_forge::device::endpoints(&c).map_err(err)?;
+    let start = ligus_forge::device::start(&ep).await.map_err(err)?;
     let nonce = new_nonce();
     *DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(DevicePending {
         nonce,
@@ -295,18 +295,18 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
             if expired {
                 return set("expired", None);
             }
-            match hive_forge::device::poll(&ep, &start.device_code).await {
-                Ok(hive_forge::device::Poll::Pending) => {}
-                Ok(hive_forge::device::Poll::SlowDown(i)) => interval = i,
-                Ok(hive_forge::device::Poll::Denied) => return set("denied", None),
-                Ok(hive_forge::device::Poll::Expired) => return set("expired", None),
-                Ok(hive_forge::device::Poll::Done(t)) => {
+            match ligus_forge::device::poll(&ep, &start.device_code).await {
+                Ok(ligus_forge::device::Poll::Pending) => {}
+                Ok(ligus_forge::device::Poll::SlowDown(i)) => interval = i,
+                Ok(ligus_forge::device::Poll::Denied) => return set("denied", None),
+                Ok(ligus_forge::device::Poll::Expired) => return set("expired", None),
+                Ok(ligus_forge::device::Poll::Done(t)) => {
                     // Stored only while this sign-in is still the pending
                     // one and the connection still exists.
                     let (d, pid) = (dir.clone(), id.clone());
                     let r = tokio::task::spawn_blocking(move || {
                         let current = || DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|p| p.id == pid && p.nonce == nonce);
-                        hive_forge::conn::save_device_sign_in(&d, store(&d).as_ref(), &pid, &t, current).map_err(err)
+                        ligus_forge::conn::save_device_sign_in(&d, store(&d).as_ref(), &pid, &t, current).map_err(err)
                     })
                     .await
                     .map_err(err)
@@ -358,8 +358,8 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
     let id = ForgeId::parse(&id).map_err(err)?;
     let dir = state.data_dir.clone();
     let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
-    let spec = hive_forge::spec::parse_repo_spec(&repo, c.kind == ForgeKind::GitLab).map_err(err)?;
-    if spec.host.as_deref().is_some_and(|h| !hive_forge::spec::same_host(h, &c.host())) {
+    let spec = ligus_forge::spec::parse_repo_spec(&repo, c.kind == ForgeKind::GitLab).map_err(err)?;
+    if spec.host.as_deref().is_some_and(|h| !ligus_forge::spec::same_host(h, &c.host())) {
         return Err(format!("that URL isn't on {}", c.display()));
     }
     let parent = PathBuf::from(parent.trim());
@@ -375,7 +375,7 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
     let auth = f.git_auth_args();
     let d = dest.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = hive_core::process_util::git();
+        let mut cmd = ligus_core::process_util::git();
         cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
         cmd.args(&auth).args(["clone", "--no-recurse-submodules", "--", &url]).arg(&d);
         let o = cmd.output().map_err(err)?;
@@ -395,13 +395,13 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
 /// the forge builds from the canonical's re-validated parts (never a URL
 /// from an event), the host's address re-checked and pinned for git, and
 /// the connection's credential-helper args (the token never on argv).
-pub(crate) async fn clone_source_for(data_dir: &Path, repo: &hive_core::workspace_repo::WorkspaceRepo) -> Result<(String, Option<String>, Vec<String>), String> {
-    let (host, rref) = hive_runtime::repos::clone::clone_target(repo)?;
+pub(crate) async fn clone_source_for(data_dir: &Path, repo: &ligus_core::workspace_repo::WorkspaceRepo) -> Result<(String, Option<String>, Vec<String>), String> {
+    let (host, rref) = ligus_runtime::repos::clone::clone_target(repo)?;
     let c = Connections::load(data_dir)
         .for_host(&host)
         .cloned()
         .ok_or_else(|| format!("{host} isn't a code host connected to this device: add it under Code hosts first"))?;
-    let pin = hive_forge::conn::git_resolve_pin(&c).await.map_err(err)?;
+    let pin = ligus_forge::conn::git_resolve_pin(&c).await.map_err(err)?;
     let f = forge(&c, data_dir);
     Ok((f.clone_url(&rref, Transport::Https), pin, f.git_auth_args()))
 }
@@ -424,9 +424,9 @@ mod tests {
         }
         let dir = Rm(tmp);
         let dir = &dir;
-        hive_runtime::secret_store::set_for_data_dir(&dir.0, Arc::new(hive_runtime::secret_store::File0600::new(&dir.0)));
+        ligus_runtime::secret_store::set_for_data_dir(&dir.0, Arc::new(ligus_runtime::secret_store::File0600::new(&dir.0)));
         let c = Connection::new(ForgeKind::GitLab, "https://gitlab.example.com", AuthSource::Token).unwrap();
-        store(&dir.0).put(&c.id, Purpose::Write, &hive_forge::Secret::new("glpat-desktop-0123456789")).unwrap();
+        store(&dir.0).put(&c.id, Purpose::Write, &ligus_forge::Secret::new("glpat-desktop-0123456789")).unwrap();
         let args = forge(&c, &dir.0).git_auth_args();
         let joined = args.join(" ");
         assert!(joined.contains("forge git-credential 'gitlab:gitlab.example.com' --data-dir"), "{joined}");

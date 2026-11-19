@@ -1,5 +1,5 @@
 [package]
-name = "Hive"
+name = "ligus-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,19 +7,19 @@ license.workspace = true
 description = "Ligus desktop shell (Tauri v2)"
 
 [lib]
-name = "hive_app_lib"
+name = "ligus_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-hive-core.workspace = true
-hive-proto.workspace = true
+ligus-core.workspace = true
+ligus-proto.workspace = true
 # Inherits default-features = false from the workspace root, so this app's own
-# `p2p` feature is what enables hive-runtime's iroh-backed P2P.
-hive-runtime.workspace = true
-hive-forge.workspace = true
+# `p2p` feature is what enables ligus-runtime's iroh-backed P2P.
+ligus-runtime.workspace = true
+ligus-forge.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -54,7 +54,7 @@ ed25519-dalek = "3"
 # workspace root shows as `C:\…`, not `\\?\C:\…`. Already in the tree.
 dunce = "1"
 # Used by check_for_app_update to fetch the public version manifest (in Rust, so
-# there's no webview CORS issue). Same features as hive-runtime; already built.
+# there's no webview CORS issue). Same features as ligus-runtime; already built.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 
 # macOS-only: native platform passkeys (AuthenticationServices), app/src/passkey_native.
@@ -100,8 +100,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # `--no-default-features` (iroh's `wmi` dep can't cross-compile via cargo-xwin).
 default = ["p2p"]
 # Direct peer-to-peer (iroh).
-p2p = ["hive-runtime/p2p"]
-# The in-app live test (`tests/app_live.rs`): exposes `hive_app_lib::e2e`.
+p2p = ["ligus-runtime/p2p"]
+# The in-app live test (`tests/app_live.rs`): exposes `ligus_desktop_lib::e2e`.
 e2e = []
 
 [[test]]
@@ -110,4 +110,4 @@ harness = false
 
 [dev-dependencies]
 # Tests answer passkey prompts with a test recovery key (never in a real build).
-hive-runtime = { workspace = true, features = ["test-presence"] }
+ligus-runtime = { workspace = true, features = ["test-presence"] }

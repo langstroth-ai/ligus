@@ -105,7 +105,7 @@ export class LspSession {
     if (this.disposed) return false;
     const params = {
       processId: null,
-      clientInfo: { name: "hive-editor" },
+      clientInfo: { name: "ligus-editor" },
       rootUri: this.deps.rootUri,
       rootPath: this.deps.rootUri ? uriToPath(this.deps.rootUri) : null,
       workspaceFolders: this.deps.rootUri

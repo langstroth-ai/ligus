@@ -25,8 +25,8 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hive_core::presence::{self, b64url, returned_challenge, PasskeyCredential, PresenceAssertion, RecoveryKey};
-use hive_runtime::chat_service::{PresenceProvider, PresenceRequest};
+use ligus_core::presence::{self, b64url, returned_challenge, PasskeyCredential, PresenceAssertion, RecoveryKey};
+use ligus_runtime::chat_service::{PresenceProvider, PresenceRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -256,7 +256,7 @@ fn redirect_page(dir: &std::path::Path, url: &str) -> std::io::Result<std::path:
          <script>location.replace({target})</script>"
     );
     let path = dir.join(format!("presence-{}.html", uuid::Uuid::new_v4().simple()));
-    hive_runtime::secret_store::write_private_atomic(&path, page.as_bytes())?;
+    ligus_runtime::secret_store::write_private_atomic(&path, page.as_bytes())?;
     Ok(path)
 }
 
@@ -409,14 +409,14 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
         .into_iter()
         .map(|(credential_id, recovery)| PasskeyDto { credential_id, recovery })
         .collect();
-    let cfg = svc.load(hive_core::workspace_config_session_id(ws)).ok().flatten();
-    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(hive_core::authz::RULES_GENESIS);
+    let cfg = svc.load(ligus_core::workspace_config_session_id(ws)).ok().flatten();
+    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(ligus_core::authz::RULES_GENESIS);
     let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
     Ok(SecurityStatusDto {
         passkeys,
         rules,
         key_version: timeline.current().key_epochs.head_version(),
-        secret_backend: hive_runtime::secret_store::for_data_dir(&state.data_dir).backend().as_str().into(),
+        secret_backend: ligus_runtime::secret_store::for_data_dir(&state.data_dir).backend().as_str().into(),
         device_confirmed: svc.device_confirmed(ws).unwrap_or(false),
     })
 }
@@ -460,7 +460,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             kind: "passkeyRegistered".into(),
             account_id: account,
             credential_ids: existing.clone(),
-            digest_short: hive_core::keys::hex(&challenge[..8]),
+            digest_short: ligus_core::keys::hex(&challenge[..8]),
             summary: "Create a Ligus passkey".into(),
             policy: policy.clone(),
         };
@@ -474,7 +474,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             public_key: pk,
             label: label.trim().chars().take(64).collect(),
             recovery: false,
-            registered_at: hive_core::Timestamp::now(),
+            registered_at: ligus_core::Timestamp::now(),
         };
         // 2. Sign the registration itself.
         let first = existing.is_empty();
@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn the_nonce_stays_off_the_command_line() {
         let dir = std::env::temp_dir().join(format!("ligus-presence-test-{}", uuid::Uuid::new_v4().simple()));
-        let url = format!("{}#op=get&c=abc&p=4242&n=secret-nonce-123", hive_core::presence::PresencePolicy::ligus().page_url());
+        let url = format!("{}#op=get&c=abc&p=4242&n=secret-nonce-123", ligus_core::presence::PresencePolicy::ligus().page_url());
         let page = redirect_page(&dir.join("presence"), &url).unwrap();
         assert!(!page.to_string_lossy().contains("secret-nonce-123"), "the nonce is in the path");
         let html = std::fs::read_to_string(&page).unwrap();

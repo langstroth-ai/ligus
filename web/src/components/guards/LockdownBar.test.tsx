@@ -51,11 +51,11 @@ describe("LockdownBar", () => {
     window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
     const [inA, inB] = Array.from(document.querySelectorAll<HTMLDetailsElement>("details.tcall"));
     expect(revealLockdownCause("fetch_url result", "a")).toBe(true);
-    expect(inA.open && inA.classList.contains("hive-flash")).toBe(true);
-    expect(inB.open || inB.classList.contains("hive-flash")).toBe(false);
+    expect(inA.open && inA.classList.contains("ligus-flash")).toBe(true);
+    expect(inB.open || inB.classList.contains("ligus-flash")).toBe(false);
     // A reply with no tool call (a credential in its changes): the reply itself.
     expect(revealLockdownCause("aws_access_key", "c")).toBe(true);
-    expect(document.querySelector('[data-message-id="c"]')!.classList.contains("hive-flash")).toBe(true);
+    expect(document.querySelector('[data-message-id="c"]')!.classList.contains("ligus-flash")).toBe(true);
     // A reply that isn't loaded: nothing else is picked by mistake.
     expect(revealLockdownCause("fetch_url result", "gone")).toBe(false);
     // No id (an older lockdown): the newest same-named call.

@@ -97,7 +97,7 @@ serve:
     tokenSecret:
       name: ""
       key: token
-  # The data dir: identity, device keys, hive.db, serve.token, tunnel keys,
+  # The data dir: identity, device keys, ligus.db, serve.token, tunnel keys,
   # checkouts. Secret material: use an encrypted StorageClass. Never RWX or
   # NFS. ReadWriteOncePod (Kubernetes 1.29+, CSI volumes) guarantees a single
   # pod; ReadWriteOnce still allows two pods on one node. Don't back it up

@@ -51,16 +51,16 @@ const ACCESS_LABEL: Record<string, string> = { denied: "Denied", read: "Read", "
 
 function PolicyTable({ p }: { p: EffectivePolicy }) {
   return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+    <div className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <span className="text-[12.5px] font-semibold">{p.runtime}</span>
-        <span className="text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <span className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
           sandbox: {p.tier}
         </span>
       </div>
       <table className="w-full text-[11.5px]">
         <thead>
-          <tr style={{ color: "var(--hive-ink-soft)" }}>
+          <tr style={{ color: "var(--ligus-ink-soft)" }}>
             <th className="w-[90px] pb-1 text-left font-semibold">Access</th>
             <th className="pb-1 text-left font-semibold">Path</th>
             <th className="pb-1 text-left font-semibold">Why</th>
@@ -69,11 +69,11 @@ function PolicyTable({ p }: { p: EffectivePolicy }) {
         <tbody>
           {p.entries.map((e, i) => (
             <tr key={`${e.access}:${e.path}:${i}`} className="align-top">
-              <td className="py-0.5 pr-2" style={{ color: e.access === "denied" ? "var(--hive-danger, #c0392b)" : undefined }}>
+              <td className="py-0.5 pr-2" style={{ color: e.access === "denied" ? "var(--ligus-danger, #c0392b)" : undefined }}>
                 {ACCESS_LABEL[e.access] ?? e.access}
               </td>
               <td className="break-all py-0.5 pr-2 font-mono">{e.path}</td>
-              <td className="py-0.5" style={{ color: "var(--hive-ink-soft)" }}>
+              <td className="py-0.5" style={{ color: "var(--ligus-ink-soft)" }}>
                 {e.why}
               </td>
             </tr>
@@ -185,7 +185,7 @@ export function SandboxSection() {
   if (!d) {
     return (
       <Section title="Sandbox">
-        <p className="text-[12.5px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <p className="text-[12.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
           Loading…
         </p>
       </Section>
@@ -224,7 +224,7 @@ export function SandboxSection() {
           <PolicyTable key={p.runtime} p={p} />
         ))}
         {d.local && (
-          <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
             This is your local workspace: you are its only person, so your agents always keep their shell.
           </p>
         )}
@@ -238,7 +238,7 @@ export function SandboxSection() {
           </Button>
         }
       >
-        <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+        <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
           Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing
           paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns.
           {!d.canEditPaths && " You can view them; an Admin changes them."}
@@ -247,13 +247,13 @@ export function SandboxSection() {
           <div
             role="status"
             className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[12.5px]"
-            style={{ borderColor: "var(--hive-accent-ink)" }}
+            style={{ borderColor: "var(--ligus-accent-ink)" }}
           >
             <span>These grants changed since you last looked.</span>
             <Button onClick={() => ack.mutate()}>Got it</Button>
           </div>
         )}
-        <div className="space-y-1 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="space-y-1 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="flex items-center justify-between gap-2">
             <span className="text-[12.5px] font-semibold">Apply workspace sandbox grants on this device</span>
             <Switch
@@ -263,7 +263,7 @@ export function SandboxSection() {
               disabled={here.isPending}
             />
           </div>
-          <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
             {d.appliesWhy}. By default the workspace Owner's own devices apply them and every other member's device
             doesn't: a grant opens paths (and an agent's shell) on your computer, so it's your choice. The policy above
             shows what applies here.
@@ -272,7 +272,7 @@ export function SandboxSection() {
         <PathsField label="Every agent: read-only" value={wsRo} onChange={setWsRo} disabled={!d.canEditPaths} />
         <PathsField label="Every agent: read and write" value={wsRw} onChange={setWsRw} disabled={!d.canEditPaths} />
         {agent ? (
-          <div className="space-y-2.5 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+          <div className="space-y-2.5 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
             <span className="text-[12.5px] font-semibold">@{agent.name} only</span>
             <PathsField label={`@${agent.name}: read-only`} value={cur.ro} onChange={(v) => setCur({ ro: v })} disabled={!d.canEditPaths} />
             <PathsField label={`@${agent.name}: read and write`} value={cur.rw} onChange={(v) => setCur({ rw: v })} disabled={!d.canEditPaths} />
@@ -290,7 +290,7 @@ export function SandboxSection() {
             </div>
           </div>
         ) : (
-          <p className="text-[12px]" style={{ color: "var(--hive-ink-soft)" }}>
+          <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
             Pick an agent above to give it paths of its own or the shell.
           </p>
         )}

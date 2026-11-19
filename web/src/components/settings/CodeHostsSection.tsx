@@ -138,7 +138,7 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
   }
 
   return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }} data-testid={`forge-${c.id}`}>
+    <div className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }} data-testid={`forge-${c.id}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-medium">{c.displayName}</div>

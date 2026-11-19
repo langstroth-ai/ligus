@@ -51,7 +51,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
           <Muted>A severe failure (rate limit, exhausted plan window, provider outage, unreachable server) takes a route out of rotation at once.</Muted>
           <ul className="space-y-1.5 text-xs">
             {r.stops.map((st) => (
-              <li key={st.route} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={st.route} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
                 <span>
                   <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
                 </span>
@@ -93,7 +93,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
             </thead>
             <tbody>
               {r.arms.map((a) => (
-                <tr key={a.arm} className="border-t" style={{ borderColor: "var(--hive-line)" }}>
+                <tr key={a.arm} className="border-t" style={{ borderColor: "var(--ligus-line)" }}>
                   <td className="py-1">{a.arm}</td>
                   <td>{a.turns}</td>
                   <td>{a.accepted}</td>
@@ -124,7 +124,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
             </thead>
             <tbody>
               {r.scores.map((s) => (
-                <tr key={`${s.taskClass}:${s.agent}`} className="border-t" style={{ borderColor: "var(--hive-line)" }}>
+                <tr key={`${s.taskClass}:${s.agent}`} className="border-t" style={{ borderColor: "var(--ligus-line)" }}>
                   <td className="py-1">{s.taskClass}</td>
                   <td>{s.agentName}</td>
                   <td>{pct(s.score)}</td>
@@ -143,11 +143,11 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         ) : (
           <ul className="space-y-1.5 text-xs">
             {r.recent.slice(0, 20).map((d) => (
-              <li key={`${d.sessionId}:${d.atMs}`} className="rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={`${d.sessionId}:${d.atMs}`} className="rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
                 <span className="font-medium">{d.taskClass}</span> · {d.mode === "live" ? "sent to" : "would send to"}{" "}
                 <span className="font-medium">{d.wouldPick}</span>
                 {d.wouldPick !== d.preferred && <> (top score: {d.preferred})</>}
-                <span style={{ color: "var(--hive-ink-soft)" }}> · {REASON_LABEL[d.reason]}</span>
+                <span style={{ color: "var(--ligus-ink-soft)" }}> · {REASON_LABEL[d.reason]}</span>
               </li>
             ))}
           </ul>

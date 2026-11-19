@@ -45,9 +45,9 @@ export function WorkspaceTrustBanner() {
         <div
           role="status"
           className="fixed bottom-4 right-4 z-[60] flex w-[340px] items-start gap-3 rounded-2xl border p-4 shadow-xl"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
         >
-          <div className="mt-0.5" style={{ color: "var(--hive-accent-ink)" }} aria-hidden>
+          <div className="mt-0.5" style={{ color: "var(--ligus-accent-ink)" }} aria-hidden>
             <IconShield size={18} />
           </div>
           <div className="min-w-0 flex-1 text-sm">
@@ -56,7 +56,7 @@ export function WorkspaceTrustBanner() {
               <button
                 onClick={() => setOpen(true)}
                 className="rounded-lg px-3 py-1.5 text-sm font-medium hover:brightness-110"
-                style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+                style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
               >
                 Review
               </button>
@@ -65,7 +65,7 @@ export function WorkspaceTrustBanner() {
         </div>
       )}
       {open && (
-        <Modal onClose={() => setOpen(false)} panelClassName="w-[640px] max-w-full rounded-2xl border p-5" panelStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}>
+        <Modal onClose={() => setOpen(false)} panelClassName="w-[640px] max-w-full rounded-2xl border p-5" panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-base font-semibold">Commands this workspace ships</div>
@@ -79,7 +79,7 @@ export function WorkspaceTrustBanner() {
           </div>
           <ul className="mt-4 flex max-h-[50vh] flex-col gap-2 overflow-y-auto">
             {items.map((it: WorkspaceTrustItem) => (
-              <li key={it.digest} className="rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={it.digest} className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
                 <div className="flex items-center justify-between gap-2 text-sm">
                   <span className="font-medium">
                     {it.kind === "mcpServer" ? "MCP server" : "Runtime"} <code>{it.id}</code>
@@ -107,7 +107,7 @@ export function WorkspaceTrustBanner() {
               onClick={() => all.mutate()}
               disabled={all.isPending || waiting.length === 0}
               className="rounded-lg px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-60"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               Trust this workspace
             </button>

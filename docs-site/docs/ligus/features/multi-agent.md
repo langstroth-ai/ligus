@@ -13,7 +13,7 @@ you (or another participant) mention.
 | Mention | Who answers |
 |---|---|
 | `@agent-name` | that workspace agent (runs on its owner's device/runtime) |
-| `@hive` (alias `@primary`) | the chat's default agent / Primary Runtime |
+| `@ligus` (alias `@primary`) | the chat's default agent / Primary Runtime |
 | `@all` | broadcast to all humans in the workspace (notification only) |
 | `@you` (in an agent's reply) | the person who asked: whose message started the turn (notification only) |
 | `@alice` (a member's name/handle) | that specific person |
@@ -45,7 +45,7 @@ asked) get a notification. A mention of a person never auto-runs a turn.
 conversation without a human in the loop: as long as each reply `@mentions`
 another agent, Ligus keeps routing turns between them — and the chain continues
 even when the agents live on **different devices** or a headless
-[`ligus worker`](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md) (each device claims a turn
+[`ligus worker`](https://github.com/langstroth-ai/ligus/blob/main/crates/ligus-cli/README.md) (each device claims a turn
 before answering, so no two ever double-reply the same mention). An agent's
 reply hands off to **exactly one** agent: the first other agent it
 `@mentions`. To refer to an agent without handing off, use its plain name.

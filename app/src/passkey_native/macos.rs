@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use hive_core::presence::native::{RawAssertion, RawRegistration};
-use hive_core::presence::PresencePolicy;
+use ligus_core::presence::native::{RawAssertion, RawRegistration};
+use ligus_core::presence::PresencePolicy;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{available, define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly};

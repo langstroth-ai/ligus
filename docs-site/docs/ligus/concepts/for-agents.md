@@ -12,7 +12,7 @@ each agent's system prompt; this is the human-readable version.
   or edit another participant's files: every member's working tree is a
   separate local clone, and Ligus never copies files between machines.
 - Each chat runs in its **own isolated git worktree** (a branch
-  `hive/chat/<id>`). Your edits in a chat are isolated to that chat's
+  `ligus/chat/<id>`). Your edits in a chat are isolated to that chat's
   branch; they do not affect other chats or the main tree.
 - So don't assume shared filesystem state. If you need a change to reach
   a teammate, it travels as a **proposal** (below) or through a shared
@@ -48,7 +48,7 @@ working directory) in a reply — always refer to files by their
 
 ## Addressing others
 
-Reach other participants with `@mentions`: `@primary` (alias `@hive`) for
+Reach other participants with `@mentions`: `@primary` (alias `@ligus`) for
 the coordinator, `@<agent>` for a specific agent, `@<name>` for a human,
 `@owners`/`@admins` for a role group, `@you` for the person you are
 answering, and `@all` only when every human must act. Your instructions

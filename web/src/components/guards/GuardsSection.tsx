@@ -78,22 +78,22 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   });
 
   const field = "w-full rounded-lg border px-2.5 py-1.5 text-[13px]";
-  const fieldStyle = { borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" };
+  const fieldStyle = { borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" };
   return (
     <>
       <Section title="Dearth mode">
         <div
           className="rounded-xl border p-3"
           style={{
-            borderColor: d.enabled ? "var(--hive-warn-line)" : "var(--hive-line)",
-            background: d.enabled ? "var(--hive-warn-tint)" : "var(--hive-panel)",
+            borderColor: d.enabled ? "var(--ligus-warn-line)" : "var(--ligus-line)",
+            background: d.enabled ? "var(--ligus-warn-tint)" : "var(--ligus-panel)",
           }}
         >
           <div className="flex flex-wrap items-start gap-3">
             <span
               aria-hidden
               className="grid h-8 w-8 shrink-0 place-items-center rounded-lg"
-              style={{ background: d.enabled ? "var(--hive-warn-tint)" : "var(--hive-mist)", color: d.enabled ? "var(--hive-warn-ink)" : "var(--hive-ink-soft)" }}
+              style={{ background: d.enabled ? "var(--ligus-warn-tint)" : "var(--ligus-mist)", color: d.enabled ? "var(--ligus-warn-ink)" : "var(--ligus-ink-soft)" }}
             >
               <IconLock size={16} />
             </span>
@@ -173,9 +173,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
 
       {d.pending.length > 0 && (
         <Section title="Waiting for a second approval">
-          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }}>
+          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }}>
             {d.pending.map((p) => (
-              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
                 <span className="min-w-0">
                   <span className="font-medium">{p.name}</span>{" "}
                   <span className="text-xs text-ink-soft">
@@ -196,9 +196,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
       )}
 
       <Section title="Entrances">
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }} data-testid="entrances">
+        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="entrances">
           {d.entrances.map((e) => (
-            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
               <span>
                 {e.name} <span className="text-xs text-ink-soft">{e.kind}</span>
               </span>
@@ -290,11 +290,11 @@ function ThrottlePanel() {
           <EmptyHint text="No runtime has reported a plan window yet." />
         </div>
       ) : (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }} data-testid="windows">
+        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="windows">
           {t.windows.map((w) => {
             const tone = TONE[windowTone(w.effectivePct, t)];
             return (
-              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span>
                     <span className="font-medium">{w.runtime}</span>
@@ -306,12 +306,12 @@ function ThrottlePanel() {
                   </span>
                 </div>
                 {w.reported && (
-                  <div className="mt-1.5 h-1 overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--hive-ink) 10%, transparent)" }} aria-hidden>
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--ligus-ink) 10%, transparent)" }} aria-hidden>
                     <div
                       className="h-full rounded-full"
                       style={{
                         width: `${Math.min(100, Math.max(0, w.effectivePct))}%`,
-                        background: tone === "danger" ? "var(--hive-danger)" : tone === "warn" ? "var(--hive-warn)" : "var(--hive-success)",
+                        background: tone === "danger" ? "var(--ligus-danger)" : tone === "warn" ? "var(--ligus-warn)" : "var(--ligus-success)",
                       }}
                     />
                   </div>

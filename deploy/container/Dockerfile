@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Container image for the headless `ligus` binary (hive-cli): `ligus serve`,
+# Container image for the headless `ligus` binary (ligus-cli): `ligus serve`,
 # `ligus worker`, `ligus enroll`, `ligus sync`, ... It is not the desktop app and
 # not the relay (the relay has its own image in github.com/langstroth-ai/langstroth-relay).
 #
@@ -37,7 +37,7 @@ WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p hive-cli \
+    cargo build --release --locked -p ligus-cli \
  && install -Dm755 target/release/ligus /out/ligus
 
 FROM debian:${DEBIAN_RELEASE}-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
@@ -48,7 +48,7 @@ RUN apt-get update \
  && useradd --system --uid 65532 --gid 65532 --home-dir /var/lib/ligus --shell /usr/sbin/nologin ligus \
  && install -d -o 65532 -g 65532 -m 0700 /var/lib/ligus /home/ligus
 COPY --from=build /out/ligus /usr/local/bin/ligus
-# Identity, device keys, hive.db, serve.token and checkouts live in the data
+# Identity, device keys, ligus.db, serve.token and checkouts live in the data
 # dir. Mount a persistent volume there; it holds secrets, keep it private
 # (0700). HOME (agent CLIs' logins and caches) and the working directory are
 # deliberately elsewhere: an agent process never runs in, or reads, the data

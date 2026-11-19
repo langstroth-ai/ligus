@@ -29,18 +29,18 @@ export function ImplementPreview({
     <Modal
       onClose={onClose}
       panelClassName="flex max-h-[88vh] w-[min(96vw,720px)] flex-col overflow-hidden rounded-2xl border"
-      panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)", boxShadow: "var(--hive-shadow-pop)" }}
+      panelStyle={{ background: "var(--ligus-panel)", borderColor: "var(--ligus-line)", boxShadow: "var(--ligus-shadow-pop)" }}
     >
-      <div className="border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="border-b px-4 py-3" style={{ borderColor: "var(--ligus-line)" }}>
         <div className="text-xs text-ink-soft">Implement</div>
         <div className="font-semibold">{title}</div>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 text-sm" data-testid="implement-preview">
         {plan.isPending && <div className="text-ink-soft">Working out what will run…</div>}
-        {plan.isError && <div style={{ color: "var(--hive-danger-ink)" }}>Couldn't build the plan: {errMsg(plan.error)}</div>}
+        {plan.isError && <div style={{ color: "var(--ligus-danger-ink)" }}>Couldn't build the plan: {errMsg(plan.error)}</div>}
         {plan.data && <PlanBody plan={plan.data} target={target} setTarget={setTarget} />}
       </div>
-      <div className="flex justify-end gap-2 border-t px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="flex justify-end gap-2 border-t px-4 py-3" style={{ borderColor: "var(--ligus-line)" }}>
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!plan.data} onClick={() => onConfirm(target ?? plan.data?.targetAgentId ?? null)}>
           {plan.data?.kind === "argv" ? "Run this command" : "Implement"}
@@ -86,7 +86,7 @@ export function PlanBody({
     <>
       {plan.kind === "argv" && (
         <Row label="Runs exactly">
-          <pre className="whitespace-pre-wrap break-all rounded-lg px-2 py-1.5 font-mono text-xs" style={{ background: "var(--hive-overlay)" }} data-testid="plan-argv">
+          <pre className="whitespace-pre-wrap break-all rounded-lg px-2 py-1.5 font-mono text-xs" style={{ background: "var(--ligus-overlay)" }} data-testid="plan-argv">
             {(plan.argv ?? []).map(showArg).join(" ")}
           </pre>
           <div className="mt-1 text-xs text-ink-soft">
@@ -96,7 +96,7 @@ export function PlanBody({
       )}
       {plan.kind === "instruction" && (
         <Row label="Sends">
-          <pre className="whitespace-pre-wrap rounded-lg px-2 py-1.5 font-mono text-xs" style={{ background: "var(--hive-overlay)" }} data-testid="plan-instruction">
+          <pre className="whitespace-pre-wrap rounded-lg px-2 py-1.5 font-mono text-xs" style={{ background: "var(--ligus-overlay)" }} data-testid="plan-instruction">
             {plan.instruction}
           </pre>
         </Row>
@@ -113,11 +113,11 @@ export function PlanBody({
           <select
             aria-label="Target agent"
             className="rounded-md border px-1.5 py-0.5 text-sm"
-            style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+            style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
             value={target ?? plan.targetAgentId ?? ""}
             onChange={(e) => setTarget(e.target.value || null)}
           >
-            <option value="">@hive (primary)</option>
+            <option value="">@ligus (primary)</option>
             {plan.targets.map(([id, name]) => (
               <option key={id} value={id}>
                 {name}

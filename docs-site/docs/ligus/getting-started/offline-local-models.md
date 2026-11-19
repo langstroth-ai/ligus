@@ -142,7 +142,7 @@ Reasoning models spend output tokens thinking before they answer.
   **Let the model think** for the runtime. Thinking is off by default.
 - **LFM2** doesn't reason, so Ligus sends no thinking fields for it.
 
-Ligus sends these fields only to `custom` and `hive-daemon` runtimes,
+Ligus sends these fields only to `custom` and `ligus-daemon` runtimes,
 because hosted APIs reject fields they don't know. If a server rejects
 them anyway, Ligus retries the request without them.
 

@@ -19,9 +19,9 @@ described in
 
 | Component | Secrets it holds | Data it holds | Talks to |
 |---|---|---|---|
-| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, forge tokens of a code host this device connects (read and write kept apart; never synced, never sent to a relay), the contact write key, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
-| **`ligus serve`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys, the relay token; on disk: `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `hive.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
-| **`ligus worker`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys; `LIGUS_WS_SECRET_*` and MCP tokens | `hive.db`, bound checkouts | relay, model providers, MCP servers |
+| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, forge tokens of a code host this device connects (read and write kept apart; never synced, never sent to a relay), the contact write key, relay access tokens, the relay issuer key if you set one | `ligus.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
+| **`ligus serve`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys, the relay token; on disk: `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `ligus.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
+| **`ligus worker`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys; `LIGUS_WS_SECRET_*` and MCP tokens | `ligus.db`, bound checkouts | relay, model providers, MCP servers |
 | **Relay** | token-issuer **public** key, hashed access tokens, APNs key (if push), DB password | ciphertext envelopes, keyring blobs, metadata (see [Self-hosting a relay](../networking/self-host.md#what-the-relay-holds)) | every device, Apple (APNs), GitHub API |
 | **Phone app** | the direct-path bearer token and/or its tunnel credential, Noise key and push key, per host profile, in the iOS Keychain | what it has fetched and cached | `ligus serve` (directly or through the relay) |
 | **Model providers, MCP servers** | | whatever a turn sends them: prompts, chat history, and file contents when file tools or a CLI agent read them | |
@@ -279,7 +279,7 @@ what need a **passkey** assertion over the event:
 
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
-| **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../../ligus/concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
+| **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.ligus`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../../ligus/concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
 | **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux; Landlock + seccomp without namespaces where bubblewrap can't run, see [tiers](../ops/linux-sandbox.md)); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](../../ligus/concepts/security.md#egress-presets), off by default); agents can't commit; where no sandbox exists every agent process is refused (any tier) and HTTP models answer without local tools | automatic | [The OS sandbox](../../ligus/concepts/security.md#os-sandbox), [Sandbox defaults](../../ligus/concepts/security.md#sandbox-defaults), [Linux tiers](../ops/linux-sandbox.md) |
 | **Home default-deny** | every agent process runs with a per-turn home; your real home is unreadable and unwritable except the worktree, a read-only toolchain allow-list and signed grants | automatic; grants: Admin with a passkey | [Your home dir is default-deny](../../ligus/concepts/security.md#home-default-deny) |
 | **Owner-only shell** | a CLI's shell tool, ACP `execute` and `run_command` only for turns the workspace Owner starts (the device owner in the local workspace), or for an agent an Owner granted it | Owner, per agent, with a passkey | [The shell is the Owner's](../../ligus/concepts/security.md#owner-only-shell) |
@@ -342,10 +342,10 @@ list with status is in
   reachable only from the release's pods, executors held until their
   NetworkPolicy is in force, MCP images pinned by digest. See
   [Kubernetes](../deploy/kubernetes.md#hardening-the-charts-apply).
-- Relay v0.2.0: a malformed `LIGUS_RELAY_TOKEN_PUBKEY` refuses to start;
-  per-client limits use `LIGUS_RELAY_TRUSTED_PROXIES`, and `Fly-Client-IP`
+- Relay v0.2.0: a malformed `LANGSTROTH_RELAY_TOKEN_PUBKEY` refuses to start;
+  per-client limits use `LANGSTROTH_RELAY_TRUSTED_PROXIES`, and `Fly-Client-IP`
   is trusted only on Fly; tokens can be confined to workspaces
-  (`LIGUS_RELAY_WORKSPACE_SCOPE`); the chart's tunnel is off by default. See
+  (`LANGSTROTH_RELAY_WORKSPACE_SCOPE`); the chart's tunnel is off by default. See
   [Self-hosting a relay](../networking/self-host.md).
 
 **2026-11-14: Phase 0, Tracks A, C and E.**

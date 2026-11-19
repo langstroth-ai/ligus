@@ -13,7 +13,7 @@ import {
   removeWorkspace,
   type WorkspaceInfoDto,
 } from "@/lib/ipc";
-import { HiveBrandMark } from "@/components/HiveBrand";
+import { LigusBrandMark } from "@/components/LigusBrand";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
@@ -51,22 +51,22 @@ export function WorkspaceRail({
   });
   // Cross-workspace self-mentions: light a dot on any *background* workspace
   // holding an unread mention. Read state is the same per-session localStorage
-  // cursor the Sidebar maintains (`hive.read.<sessionId>` = message count at
+  // cursor the Sidebar maintains (`ligus.read.<sessionId>` = message count at
   // last open); a mention past that cursor is unread.
   const mentions = useQuery({ queryKey: ["all-mention-states"], queryFn: listAllMentionStates });
   // Read cursors live in localStorage, not React state, so a mention being read
-  // (Sidebar writes `hive.read.*`) wouldn't otherwise recompute the memo below.
-  // Bump on the Sidebar's "hive:read-cursor" event so the badge clears promptly.
+  // (Sidebar writes `ligus.read.*`) wouldn't otherwise recompute the memo below.
+  // Bump on the Sidebar's "ligus:read-cursor" event so the badge clears promptly.
   const [cursorTick, setCursorTick] = useState(0);
   useEffect(() => {
     const onCursor = () => setCursorTick((t) => t + 1);
-    window.addEventListener("hive:read-cursor", onCursor);
-    return () => window.removeEventListener("hive:read-cursor", onCursor);
+    window.addEventListener("ligus:read-cursor", onCursor);
+    return () => window.removeEventListener("ligus:read-cursor", onCursor);
   }, []);
   const unreadWorkspaces = useMemo(() => {
     const set = new Set<string>();
     for (const m of mentions.data ?? []) {
-      const cursor = Number(window.localStorage.getItem(`hive.read.${m.sessionId}`)) || 0;
+      const cursor = Number(window.localStorage.getItem(`ligus.read.${m.sessionId}`)) || 0;
       if (m.lastMentionOrdinal > cursor) set.add(m.workspaceId);
     }
     return set;
@@ -166,7 +166,7 @@ export function WorkspaceRail({
     <div
       data-tour="workspaces"
       className="flex w-14 shrink-0 flex-col items-center gap-2 border-r py-3"
-      style={{ background: "var(--hive-sidebar-top)", borderColor: "var(--hive-line)" }}
+      style={{ background: "var(--ligus-sidebar-top)", borderColor: "var(--ligus-line)" }}
     >
       {(workspaces.data ?? []).map((w) => {
         const local = w.kind === "local";
@@ -182,7 +182,7 @@ export function WorkspaceRail({
               style={{
                 width: 3,
                 height: w.active ? 22 : 0,
-                background: "var(--hive-accent-cool)",
+                background: "var(--ligus-accent-cool)",
               }}
               aria-hidden
             />
@@ -197,16 +197,16 @@ export function WorkspaceRail({
               aria-label={w.name}
               className="flex h-10 w-10 items-center justify-center overflow-hidden text-sm font-semibold transition-all hover:brightness-110"
               style={{
-                background: w.active ? "var(--hive-accent-fill)" : "var(--hive-panel)",
-                color: w.active ? "var(--hive-on-accent)" : "var(--hive-ink)",
-                border: w.active ? "none" : "1px solid var(--hive-line)",
+                background: w.active ? "var(--ligus-accent-fill)" : "var(--ligus-panel)",
+                color: w.active ? "var(--ligus-on-accent)" : "var(--ligus-ink)",
+                border: w.active ? "none" : "1px solid var(--ligus-line)",
                 borderRadius: w.active ? 12 : 18,
               }}
             >
               {w.iconUrl ? (
                 <img src={w.iconUrl} alt="" className="h-full w-full object-cover" />
               ) : local ? (
-                <HiveBrandMark size={22} />
+                <LigusBrandMark size={22} />
               ) : (
                 <span>{roomInitials(w.name)}</span>
               )}
@@ -215,8 +215,8 @@ export function WorkspaceRail({
               <span
                 className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full"
                 style={{
-                  background: "var(--hive-accent-cool)",
-                  boxShadow: "0 0 0 2px var(--hive-sidebar-top)",
+                  background: "var(--ligus-accent-cool)",
+                  boxShadow: "0 0 0 2px var(--ligus-sidebar-top)",
                 }}
                 aria-label={`${w.name} — unread mention`}
                 title={`${w.name} — you were mentioned`}
@@ -230,7 +230,7 @@ export function WorkspaceRail({
         title="Add a workspace — create or join a team"
         aria-label="Add a workspace"
         className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110"
-        style={{ background: "var(--hive-panel)", color: "var(--hive-ink)", border: "1px solid var(--hive-line)", opacity: 0.85 }}
+        style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
       >
         <IconPlus size={18} />
       </button>
@@ -241,7 +241,7 @@ export function WorkspaceRail({
           title="People — co-members, direct messages and invites"
           aria-label="People"
           className="mt-auto flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110"
-          style={{ background: "var(--hive-panel)", color: "var(--hive-ink)", border: "1px solid var(--hive-line)", opacity: 0.85 }}
+          style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
         >
           <IconUsers size={17} />
         </button>
@@ -255,9 +255,9 @@ export function WorkspaceRail({
           aria-pressed={!sidebarVisible}
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends ? "" : "mt-auto"}`}
           style={{
-            background: "var(--hive-panel)",
-            color: "var(--hive-ink)",
-            border: "1px solid var(--hive-line)",
+            background: "var(--ligus-panel)",
+            color: "var(--ligus-ink)",
+            border: "1px solid var(--ligus-line)",
             opacity: sidebarVisible ? 0.85 : 1,
           }}
         >
@@ -272,7 +272,7 @@ export function WorkspaceRail({
           title="Take the tour — a quick walk through Ligus"
           aria-label="Take the tour"
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar ? "" : "mt-auto"}`}
-          style={{ background: "var(--hive-panel)", color: "var(--hive-ink)", border: "1px solid var(--hive-line)", opacity: 0.85 }}
+          style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
         >
           <IconInfo size={17} />
         </button>
@@ -286,9 +286,9 @@ export function WorkspaceRail({
           aria-pressed={settingsActive}
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar || onOpenHelp ? "" : "mt-auto"}`}
           style={{
-            background: settingsActive ? "var(--hive-accent-cool)" : "var(--hive-panel)",
-            color: settingsActive ? "#fff" : "var(--hive-ink)",
-            border: settingsActive ? "none" : "1px solid var(--hive-line)",
+            background: settingsActive ? "var(--ligus-accent-cool)" : "var(--ligus-panel)",
+            color: settingsActive ? "#fff" : "var(--ligus-ink)",
+            border: settingsActive ? "none" : "1px solid var(--ligus-line)",
             opacity: settingsActive ? 1 : 0.85,
           }}
         >
@@ -302,7 +302,7 @@ export function WorkspaceRail({
           <div className="fixed inset-0 z-[950]" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
           <div
             className="fixed z-[951] min-w-44 rounded-lg border py-1 text-sm shadow-2xl"
-            style={{ left: menu.x + 4, top: menu.y, borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+            style={{ left: menu.x + 4, top: menu.y, borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
           >
             <div className="truncate px-3 py-1 text-[10px] font-semibold uppercase tracking-wider opacity-50">
               {menu.ws.name}
@@ -339,8 +339,8 @@ export function WorkspaceRail({
 function MenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
   return (
     <button
-      className="block w-full px-3 py-1.5 text-left hover:bg-[color:var(--hive-overlay)]"
-      style={danger ? { color: "var(--hive-danger-ink)" } : undefined}
+      className="block w-full px-3 py-1.5 text-left hover:bg-[color:var(--ligus-overlay)]"
+      style={danger ? { color: "var(--ligus-danger-ink)" } : undefined}
       onClick={onClick}
     >
       {label}

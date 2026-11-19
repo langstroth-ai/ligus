@@ -29,7 +29,7 @@ case "$os" in
 esac
 
 if [ -z "$target" ]; then
-  echo "ligus: unsupported platform $os/$arch — build from source: cargo install --path crates/hive-cli" >&2
+  echo "ligus: unsupported platform $os/$arch — build from source: cargo install --path crates/ligus-cli" >&2
   exit 1
 fi
 

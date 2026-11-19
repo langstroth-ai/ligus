@@ -1,6 +1,6 @@
 // Typed wrappers around the Tauri IPC commands/events. Each corresponds to a
 // `#[tauri::command]` (or emitted event) in `app`, typed with the ts-rs
-// bindings generated from `hive-proto`. This is the single seam the frontend
+// bindings generated from `ligus-proto`. This is the single seam the frontend
 // uses to reach the Rust backend.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -170,11 +170,11 @@ export const addRuntime = (
 
 /// Whether an endpoint's host is local or private (loopback, LAN, Tailscale,
 /// link-local, *.local; not *.ts.net names, which Funnel can make public) —
-/// Hive's built-in file tools are only offered
+/// Ligus's built-in file tools are only offered
 /// to other endpoints with the runtime's explicit opt-in.
 export const endpointIsPrivate = (endpoint: string) => invoke<boolean>("endpoint_is_private", { endpoint });
 
-/// Hive's built-in file tools for HTTP model runtimes (Settings → Permissions).
+/// Ligus's built-in file tools for HTTP model runtimes (Settings → Permissions).
 export type AgentToolSettings = {
   /// Offer read_file / list_dir / search (and edits where allowed).
   enabled: boolean;
@@ -638,10 +638,10 @@ export type LaunchHealth = {
 };
 
 /// macOS signals that predict silent agent stalls (a quarantined/translocated
-/// bundle can't persist the file-access grant Hive's spawned CLIs need).
+/// bundle can't persist the file-access grant Ligus's spawned CLIs need).
 export const launchHealth = () => invoke<LaunchHealth>("launch_health");
 
-/// Open the macOS Full Disk Access pane so the user can grant Hive persistent
+/// Open the macOS Full Disk Access pane so the user can grant Ligus persistent
 /// file access.
 export const openFileAccessSettings = () =>
   invoke<void>("open_file_access_settings");
@@ -694,7 +694,7 @@ export interface EnvDetectDto {
 }
 export const detectEnvironment = () => invoke<EnvDetectDto>("detect_environment");
 
-/// A provider Hive can reach right now (creds present or none needed), for the
+/// A provider Ligus can reach right now (creds present or none needed), for the
 /// one-click "detect & configure" setup flow.
 export interface DetectedProviderDto {
   kind: string;
@@ -728,7 +728,7 @@ export interface DetectedCliDto {
 export const detectCliRuntimes = (probe = false) =>
   invoke<DetectedCliDto[]>("detect_cli_runtimes", { probe });
 
-/// Portable config (hive.toml): export the current runtime/agent/MCP setup +
+/// Portable config (ligus.toml): export the current runtime/agent/MCP setup +
 /// defaults as TOML (no secrets), or import one to stamp a setup. import returns
 /// a human summary.
 export const exportConfig = () => invoke<string>("export_config");
@@ -759,7 +759,7 @@ export interface ProviderPresetDto {
 export const listProviderPresets = () =>
   invoke<ProviderPresetDto[]>("list_provider_presets");
 
-/// Hive's defaults for a model family (role hint in the add-runtime form).
+/// Ligus's defaults for a model family (role hint in the add-runtime form).
 export interface ModelProfileDto {
   family: string;
   /// "agent" | "chat" | "utility" | "quality" | "embedding" | "rerank"; null
@@ -771,7 +771,7 @@ export interface ModelProfileDto {
   contextWindow: number;
   note: string;
 }
-/// The profile for a model id, or null when Hive has none for its family.
+/// The profile for a model id, or null when Ligus has none for its family.
 export const modelProfileHint = (model: string) =>
   invoke<ModelProfileDto | null>("model_profile_hint", { model });
 export const setProviderKey = (kind: string, key: string) =>

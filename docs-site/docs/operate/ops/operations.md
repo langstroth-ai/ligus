@@ -8,7 +8,7 @@ upgrades. For problems by symptom, see [Troubleshooting](../../ligus/help/troubl
 | Component | Check | Healthy |
 |---|---|---|
 | Relay | `curl -fsS https://relay.example.com/v1/health` | `ok` (200). `503` = the relay runs but its store doesn't answer |
-| Relay | `GET /metrics` (bearer `LIGUS_RELAY_METRICS_TOKEN` if set) | `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight` |
+| Relay | `GET /metrics` (bearer `LANGSTROTH_RELAY_METRICS_TOKEN` if set) | `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight` |
 | Relay tunnel | `curl -s https://relay.example.com/v1/tunnel/info` | `{"versions":[1],…}`; 404 = tunnel off |
 | `ligus serve` | `curl -s http://<listen>/v1/health` | `{"ok":true,"version":"0.1.0"}`; with the bearer token also `identity.mode` (`owner`, `member`; `pending` or `revoked` means it can't write) |
 | `ligus serve` relay link | `ligus remote status` (server's env) | `serve: connected for …` |
@@ -37,13 +37,13 @@ For a home box, a cron job is enough:
 | Relay | stdout/stderr | fixed |
 
 Ligus logs ids, kinds and reasons, not message content. Each device also
-keeps a local **guard log** (the `guard_signals` table in `hive.db`, newest
+keeps a local **guard log** (the `guard_signals` table in `ligus.db`, newest
 20,000 entries, never synced): ingest rejections, tool role-gate decisions,
 MCP tools offered and dropped, redactions, lockdowns, worktree clean-ups,
 throttles. Read it with any SQLite client:
 
 ```sh
-sqlite3 "$LIGUS_DATA_DIR/hive.db" "SELECT * FROM guard_signals ORDER BY rowid DESC LIMIT 20;"
+sqlite3 "$LIGUS_DATA_DIR/ligus.db" "SELECT * FROM guard_signals ORDER BY rowid DESC LIMIT 20;"
 ```
 
 ## Backups and restore
@@ -57,7 +57,7 @@ any events it hadn't synced yet.
 
 | File | Desktop | CLI (`serve`/`worker`) | Contains |
 |---|---|---|---|
-| `hive.db` (+ `-wal`, `-shm`) | yes | yes | all events (SQLite, WAL mode) |
+| `ligus.db` (+ `-wal`, `-shm`) | yes | yes | all events (SQLite, WAL mode) |
 | `identity.json` | yes | yes | public identity |
 | `secrets/` (`ligus.keychain-db` on macOS), `credentials/` (systemd-creds), or `keys/` (file fallback) | yes | yes | **private key seeds**, workspace keys, API keys and tokens (see [Key storage](../../ligus/concepts/identity.md#key-storage)) |
 | `settings.json` | yes | | settings; secrets only as `{"set": true}` |
@@ -79,12 +79,12 @@ database with SQLite's online backup, then the rest:
 D=$HOME/.ligus-serve                      # or the desktop's app data dir
 B=/backups/ligus-$(date +%F)
 install -d -m 700 "$B"
-sqlite3 "$D/hive.db" ".backup '$B/hive.db'"
-rsync -a --exclude 'hive.db*' --exclude 'repos/' "$D/" "$B/"
+sqlite3 "$D/ligus.db" ".backup '$B/ligus.db'"
+rsync -a --exclude 'ligus.db*' --exclude 'repos/' "$D/" "$B/"
 tar -C "$B" -czf "$B.tgz" . && rm -rf "$B"
 ```
 
-Don't copy `hive.db` alone with `cp` while the process runs: the WAL file
+Don't copy `ligus.db` alone with `cp` while the process runs: the WAL file
 may hold the newest events.
 
 Also back up your repositories the usual way (push them). Worktrees under
@@ -133,11 +133,11 @@ kept compatible.
 - **Hygiene sweep**, 3 minutes after launch and every 6 hours: removes
   leftover turn worktrees (saving unfinished edits under
   `.ligus/stopped-turns/`), checkouts of deleted or archived chats (their
-  `hive/chat/…` branches are kept), and marks proposals whose diff no longer
+  `ligus/chat/…` branches are kept), and marks proposals whose diff no longer
   applies as stale. **Settings → Guards → Sweep now** runs it at once. See
   [Hygiene](../../ligus/features/guards.md#hygiene).
 - **Foreign-workspace purge**: a worker removes events of other workspaces
-  that older clients pushed into its room, after a `hive.db.bak-foreign-purge-<time>`
+  that older clients pushed into its room, after a `ligus.db.bak-foreign-purge-<time>`
   backup next to the database.
 - **Plan-window throttles** pause scheduled runs, then workflow stages and
   hand-offs, near a subscription's usage limit. See

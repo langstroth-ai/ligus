@@ -14,8 +14,8 @@
 
 use std::sync::OnceLock;
 
-use hive_core::presence::native::{RawAssertion, RawRegistration};
-use hive_core::presence::{client_data_json, PresencePolicy, EDDSA, ES256};
+use ligus_core::presence::native::{RawAssertion, RawRegistration};
+use ligus_core::presence::{client_data_json, PresencePolicy, EDDSA, ES256};
 use tauri::Manager;
 use windows_sys::core::{GUID, HRESULT, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, NTE_EXISTS, NTE_USER_CANCELLED};

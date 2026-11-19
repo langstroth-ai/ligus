@@ -1,7 +1,7 @@
 // Timestamp helpers shared across the chat surfaces.
 //
-// Hive's own messages are always UTC RFC 3339 with a `Z` suffix, but a stray
-// timestamp from seed data, a migration, or an older/non-Hive client can arrive
+// Ligus's own messages are always UTC RFC 3339 with a `Z` suffix, but a stray
+// timestamp from seed data, a migration, or an older/non-Ligus client can arrive
 // *without* a timezone designator. JS parses such a string as LOCAL time, which
 // at a +8/9h offset renders a reply as ~8h earlier than the message it answers
 // (time appears to run backwards). Normalizing a designator-less value to UTC

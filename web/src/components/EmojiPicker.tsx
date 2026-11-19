@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 type EmojiItem = { emoji: string; name: string; slug: string };
 type EmojiGroup = { name: string; slug: string; emojis: EmojiItem[] };
 
-const RECENT_KEY = "hive.emoji.recent";
+const RECENT_KEY = "ligus.emoji.recent";
 const RECENT_SEED = ["👍", "👎", "🎉", "👀", "❤️"];
 const RECENT_MAX = 24;
 
@@ -105,8 +105,8 @@ export function EmojiPicker({
         dir === "up" ? "bottom-full mb-1" : "top-full mt-1"
       }`}
       style={{
-        borderColor: "var(--hive-line)",
-        background: "var(--hive-panel)",
+        borderColor: "var(--ligus-line)",
+        background: "var(--ligus-panel)",
         ...(align === "right" ? { right: 0 } : { left: 0 }),
       }}
     >
@@ -117,7 +117,7 @@ export function EmojiPicker({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search emoji"
           className="w-full rounded-lg border px-2.5 py-1.5 text-sm outline-none"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
         />
       </div>
 
@@ -155,7 +155,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     <div className="mt-1">
       <div
         className="sticky top-0 z-10 px-1 py-1 text-[11px] font-semibold uppercase tracking-wide"
-        style={{ color: "var(--hive-ink-soft)", background: "var(--hive-panel)" }}
+        style={{ color: "var(--ligus-ink-soft)", background: "var(--ligus-panel)" }}
       >
         {title}
       </div>
@@ -174,7 +174,7 @@ function Grid({ items, onPick }: { items: { emoji: string; name: string }[]; onP
           aria-label={it.name}
           onClick={() => onPick(it.emoji)}
           className="flex h-8 w-8 items-center justify-center rounded-md text-xl leading-none transition-transform hover:scale-110"
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           {it.emoji}

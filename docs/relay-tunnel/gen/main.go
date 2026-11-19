@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-func seed(label string) []byte { h := sha256.Sum256([]byte("hive-tunnel test " + label)); return h[:] }
+func seed(label string) []byte { h := sha256.Sum256([]byte("ligus-tunnel test " + label)); return h[:] }
 func b64(b []byte) string      { return base64.RawURLEncoding.EncodeToString(b) }
 func hx(b []byte) string       { return hex.EncodeToString(b) }
 
@@ -251,7 +251,7 @@ func main() {
 			"tag":           b64(tag),
 			"tagHash":       b64(tagHash[:]),
 			"pskHex":        hx(psk),
-			"link": fmt.Sprintf("hive://pair?url=%s&token=%s&v=2&hid=%s&hs=%s&relay=%s&ps=%s&exp=1793000600",
+			"link": fmt.Sprintf("ligus://pair?url=%s&token=%s&v=2&hid=%s&hs=%s&relay=%s&ps=%s&exp=1793000600",
 				b64([]byte("http://100.101.102.104:8787")), "4f1c0de5a1b2c3d4e5f60718293a4b5c6d7e8f9011223344556677889900aabb",
 				hostID, b64(hostS.Public), b64([]byte("https://relay.example.com")), b64(ps)),
 		},

@@ -2,7 +2,7 @@
 
 /**
  * One unit of queued work: an unanswered agent mention, tagged with the host
- * its agent is bound to and that host's live status. Surfaces the CLI's `hive
+ * its agent is bound to and that host's live status. Surfaces the CLI's `ligus
  * queue` in the desktop Review pane so offline/detached work is visible and
  * reassignable (spec §12.5).
  */

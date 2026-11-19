@@ -176,16 +176,16 @@ export function CommandPalette({
     <Modal
       onClose={onClose}
       overlayClassName="z-[900] flex items-start justify-center pt-[12vh]"
-      overlayStyle={{ background: "color-mix(in srgb, var(--hive-ink) 45%, transparent)" }}
+      overlayStyle={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)" }}
       panelClassName="w-full max-w-lg overflow-hidden rounded-2xl border shadow-2xl"
-      panelStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+      panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search chats, workspaces, actions…"
         className="w-full border-b bg-transparent px-4 py-3 text-base outline-none"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -207,7 +207,7 @@ export function CommandPalette({
             onMouseEnter={() => setActive(i)}
             onClick={c.run}
             className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm"
-            style={{ background: i === active ? "var(--hive-mist)" : "transparent" }}
+            style={{ background: i === active ? "var(--ligus-mist)" : "transparent" }}
           >
             <span className="truncate">{c.label}</span>
             {c.hint && <span className="shrink-0 text-xs text-ink-soft">{c.hint}</span>}
@@ -216,7 +216,7 @@ export function CommandPalette({
       </div>
       <div
         className="flex items-center gap-3 border-t px-4 py-2 text-[11px] text-ink-soft"
-        style={{ borderColor: "var(--hive-line)" }}
+        style={{ borderColor: "var(--ligus-line)" }}
       >
         <span>↑↓ navigate</span>
         <span>↵ select</span>

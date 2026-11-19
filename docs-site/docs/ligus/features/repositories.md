@@ -164,7 +164,7 @@ The chip at the top of a chat shows its repository and base branch ("WeFit ·
 main") or "No repository". Click it to pick another workspace repository, or
 none. Contributors and above can change it; agents can't.
 
-A new chat branch, `hive/chat/<chat-id>`, is cut from the chat's base branch
+A new chat branch, `ligus/chat/<chat-id>`, is cut from the chat's base branch
 (`upstream/<branch>` in a fork, else `origin/<branch>`, else the local branch).
 The first host to cut it **pins** that commit for the chat, so every device
 starts the chat from the same base. The first pin wins: a later pin from

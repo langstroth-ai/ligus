@@ -91,12 +91,12 @@ type UtilityPane =
   | "activity"
   | "context";
 
-const UI_SCALE_STORAGE_KEY = "hive.uiScale";
+const UI_SCALE_STORAGE_KEY = "ligus.uiScale";
 const DEFAULT_UI_SCALE = 1;
 const MIN_UI_SCALE = 0.85;
 const MAX_UI_SCALE = 1.2;
-const MENU_PANE_WIDTH_STORAGE_KEY = "hive.menuPaneWidth";
-const UTILITY_PANE_WIDTH_STORAGE_KEY = "hive.utilityPaneWidth";
+const MENU_PANE_WIDTH_STORAGE_KEY = "ligus.menuPaneWidth";
+const UTILITY_PANE_WIDTH_STORAGE_KEY = "ligus.utilityPaneWidth";
 const DEFAULT_MENU_PANE_WIDTH = 260;
 const DEFAULT_UTILITY_PANE_WIDTH = 340;
 const MIN_MENU_PANE_WIDTH = 200;
@@ -170,16 +170,16 @@ export function App() {
   const [utilityPane, setUtilityPane] = useState<UtilityPane>("tools");
   // Pane visibility persists — a focused layout should survive restarts.
   const [showUtilityPane, setShowUtilityPane] = useState(
-    () => window.localStorage.getItem("hive.utilityPaneVisible") !== "0",
+    () => window.localStorage.getItem("ligus.utilityPaneVisible") !== "0",
   );
   const [sidebarVisible, setSidebarVisible] = useState(
-    () => window.localStorage.getItem("hive.sidebarVisible") !== "0",
+    () => window.localStorage.getItem("ligus.sidebarVisible") !== "0",
   );
   useEffect(() => {
-    window.localStorage.setItem("hive.utilityPaneVisible", showUtilityPane ? "1" : "0");
+    window.localStorage.setItem("ligus.utilityPaneVisible", showUtilityPane ? "1" : "0");
   }, [showUtilityPane]);
   useEffect(() => {
-    window.localStorage.setItem("hive.sidebarVisible", sidebarVisible ? "1" : "0");
+    window.localStorage.setItem("ligus.sidebarVisible", sidebarVisible ? "1" : "0");
   }, [sidebarVisible]);
   // Suppress the webview's default right-click menu (Reload/Inspect in dev; a bare
   // menu in prod) on app chrome, so our own themed context menus are the only ones
@@ -427,11 +427,11 @@ export function App() {
       setMode("chat");
       setComposerSeed(text);
     };
-    window.addEventListener("hive:editor-open-in-diff", onOpenInDiff);
-    window.addEventListener("hive:editor-send-to-chat", onSendToChat);
+    window.addEventListener("ligus:editor-open-in-diff", onOpenInDiff);
+    window.addEventListener("ligus:editor-send-to-chat", onSendToChat);
     return () => {
-      window.removeEventListener("hive:editor-open-in-diff", onOpenInDiff);
-      window.removeEventListener("hive:editor-send-to-chat", onSendToChat);
+      window.removeEventListener("ligus:editor-open-in-diff", onOpenInDiff);
+      window.removeEventListener("ligus:editor-send-to-chat", onSendToChat);
     };
   }, []);
 
@@ -818,14 +818,14 @@ export function App() {
     return (
       <div
         className="flex h-full flex-col items-center justify-center p-6"
-        style={{ background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+        style={{ background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
       >
         <ToastHost />
         <div
           className="w-full max-w-md rounded-2xl border p-6 text-center"
-          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
+          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--ligus-danger-ink)" }}>
             Couldn't load your settings
           </h1>
           <p className="mt-2 text-sm opacity-70">
@@ -836,14 +836,14 @@ export function App() {
             <button
               onClick={() => void settings.refetch()}
               className="rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
             >
               Retry
             </button>
             <button
               onClick={() => location.reload()}
               className="rounded-xl border px-4 py-2 text-sm font-medium transition-colors"
-              style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+              style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
             >
               Reload
             </button>
@@ -852,7 +852,7 @@ export function App() {
             <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
             <pre
               className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-[11px] leading-5"
-              style={{ background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+              style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
             >
               {errMsg(settings.error)}
             </pre>
@@ -897,14 +897,14 @@ export function App() {
       anchor: "sidebar",
       placement: "right",
       title: "Chats & agents",
-      body: "Your chats live here. Start one, then @-mention agents to bring them in — @hive always answers, and you can add your own agents on this or another machine.",
+      body: "Your chats live here. Start one, then @-mention agents to bring them in — @ligus always answers, and you can add your own agents on this or another machine.",
       before: () => setSidebarVisible(true),
     },
     {
       anchor: "canvas",
       placement: "bottom",
       title: "Talk to your agents",
-      body: "This is the chat canvas. Ask @hive to explain, review, or change code; it replies with proposed edits you stay in control of.",
+      body: "This is the chat canvas. Ask @ligus to explain, review, or change code; it replies with proposed edits you stay in control of.",
       before: () => setMode("chat"),
     },
     {
@@ -949,7 +949,7 @@ export function App() {
   return (
     <div
       className="flex h-full min-w-0 overflow-hidden"
-      style={{ background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+      style={{ background: "var(--ligus-canvas)", color: "var(--ligus-ink)" }}
     >
       {tourOpen && <Tour steps={tourSteps} onClose={() => endTour()} />}
       <ToastHost />
@@ -1091,7 +1091,7 @@ export function App() {
                 (and the workspace crumb); Chat falls back to the placeholder. */}
             <div
               className="flex items-center gap-3 border-b px-4 py-2"
-              style={{ borderColor: "var(--hive-line)" }}
+              style={{ borderColor: "var(--ligus-line)" }}
             >
               <div className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="truncate text-base font-semibold tracking-tight opacity-70">
@@ -1291,11 +1291,11 @@ function PaneResizeHandle({
       role="separator"
       aria-orientation="vertical"
       aria-label={ariaLabel}
-      className="relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[color:var(--hive-overlay)] active:bg-[color:var(--hive-overlay)]"
+      className="relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[color:var(--ligus-overlay)] active:bg-[color:var(--ligus-overlay)]"
       style={{ touchAction: "none" }}
       onPointerDown={onPointerDown}
     >
-      <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--hive-line)]" />
+      <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--ligus-line)]" />
     </div>
   );
 }
@@ -1306,7 +1306,7 @@ function PaneResizeHandle({
 /// button, and near-white tab text that vanished on light palettes).
 /// The header status pill, driven by real connection health (not just "a relay
 /// URL is set"): live → success tint, error → danger tint (with the failure in
-/// the tooltip), offline → a muted neutral state. All color via --hive-* tokens.
+/// the tooltip), offline → a muted neutral state. All color via --ligus-* tokens.
 type SyncPill = { label: string; color: "success" | "danger" | "warn" | null; title?: string; actionable?: boolean };
 
 function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
@@ -1371,13 +1371,13 @@ function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
     );
   }
   const chipStyle: CSSProperties = {
-    color: `var(--hive-${pill.color}-ink)`,
-    borderColor: `var(--hive-${pill.color}-line)`,
-    background: `var(--hive-${pill.color}-tint)`,
+    color: `var(--ligus-${pill.color}-ink)`,
+    borderColor: `var(--ligus-${pill.color}-line)`,
+    background: `var(--ligus-${pill.color}-tint)`,
   };
   const icon =
     pill.color === "success" ? (
-      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--hive-success)" }} />
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ligus-success)" }} />
     ) : (
       <IconAlertTriangle size={11} />
     );
@@ -1419,7 +1419,7 @@ function CanvasModeTabs({
     <div
       data-tour="canvas-tabs"
       className="flex shrink-0 items-center gap-0.5 rounded-xl border p-0.5"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       role="tablist"
       aria-label="Canvas mode"
     >
@@ -1431,9 +1431,9 @@ function CanvasModeTabs({
           onClick={() => onChangeMode(t.id)}
           className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
           style={{
-            background: mode === t.id ? "var(--hive-panel)" : "transparent",
-            color: mode === t.id ? "var(--hive-ink)" : "var(--hive-ink-soft)",
-            boxShadow: mode === t.id ? "var(--hive-shadow-1)" : undefined,
+            background: mode === t.id ? "var(--ligus-panel)" : "transparent",
+            color: mode === t.id ? "var(--ligus-ink)" : "var(--ligus-ink-soft)",
+            boxShadow: mode === t.id ? "var(--ligus-shadow-1)" : undefined,
           }}
         >
           {t.label}
@@ -1477,7 +1477,7 @@ function ChatHeaderBar({
   return (
     <div
       className="flex items-center gap-3 border-b px-4 py-2"
-      style={{ borderColor: "var(--hive-line)" }}
+      style={{ borderColor: "var(--ligus-line)" }}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {workspaceCrumb && (
@@ -1490,7 +1490,7 @@ function ChatHeaderBar({
         )}
         <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
         <button
-          className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--hive-hover)] hover:text-ink"
+          className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
           title="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
@@ -1505,11 +1505,11 @@ function ChatHeaderBar({
           onClick={onOpenContext}
           title={`${contextPct}% of the model's context window in use — open the Context pane`}
           aria-label="Context usage"
-          className="flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-[color:var(--hive-accent-cool)]"
+          className="flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
           style={{
-            borderColor: "var(--hive-line)",
-            background: "var(--hive-mist)",
-            color: contextPct >= 80 ? "var(--hive-warn-ink)" : "var(--hive-ink)",
+            borderColor: "var(--ligus-line)",
+            background: "var(--ligus-mist)",
+            color: contextPct >= 80 ? "var(--ligus-warn-ink)" : "var(--ligus-ink)",
           }}
         >
           <IconHexagon size={11} />
@@ -1525,12 +1525,12 @@ function ChatHeaderBar({
         className="shrink-0 rounded-xl border px-3 py-1 text-sm font-medium transition-colors"
         style={{
           borderColor: utilityPaneVisible
-            ? "color-mix(in srgb, var(--hive-accent-cool) 40%, transparent)"
-            : "var(--hive-line)",
+            ? "color-mix(in srgb, var(--ligus-accent-cool) 40%, transparent)"
+            : "var(--ligus-line)",
           background: utilityPaneVisible
-            ? "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)"
-            : "var(--hive-mist)",
-          color: "var(--hive-ink)",
+            ? "color-mix(in srgb, var(--ligus-accent-cool) 18%, transparent)"
+            : "var(--ligus-mist)",
+          color: "var(--ligus-ink)",
         }}
       >
         Tools

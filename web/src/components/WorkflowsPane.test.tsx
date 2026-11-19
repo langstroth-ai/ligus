@@ -143,10 +143,10 @@ describe("WorkflowsPane", () => {
 
 describe("status helpers", () => {
   it("maps statuses to design-token tones", () => {
-    expect(statusTone("succeeded").color).toBe("var(--hive-success-ink)");
-    expect(statusTone("failed").color).toBe("var(--hive-danger-ink)");
-    expect(statusTone("running").color).toBe("var(--hive-accent-ink)");
-    expect(statusTone("pending").color).toBe("var(--hive-ink)");
+    expect(statusTone("succeeded").color).toBe("var(--ligus-success-ink)");
+    expect(statusTone("failed").color).toBe("var(--ligus-danger-ink)");
+    expect(statusTone("running").color).toBe("var(--ligus-accent-ink)");
+    expect(statusTone("pending").color).toBe("var(--ligus-ink)");
   });
 
   it("humanizes camelCase statuses", () => {

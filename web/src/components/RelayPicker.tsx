@@ -50,8 +50,8 @@ export function RelayPicker({
             onClick={() => onChoice(o.v)}
             className="flex w-full flex-col items-start gap-0.5 rounded-xl border px-3 py-2 text-left"
             style={{
-              borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)",
-              background: active ? "var(--hive-mist)" : "transparent",
+              borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
+              background: active ? "var(--ligus-mist)" : "transparent",
             }}
           >
             <span className="text-sm font-medium">{o.title}</span>

@@ -139,9 +139,9 @@ and in the langstroth-relay chart's values (`config.env`):
 ```yaml
 config:
   env:
-    LIGUS_RELAY_TOKEN_PUBKEY: "<public key from langstroth-auth keygen>"
-    LIGUS_RELAY_WORKSPACE_SCOPE: strict
-    LIGUS_RELAY_TENANTS: acme
+    LANGSTROTH_RELAY_TOKEN_PUBKEY: "<public key from langstroth-auth keygen>"
+    LANGSTROTH_RELAY_WORKSPACE_SCOPE: strict
+    LANGSTROTH_RELAY_TENANTS: acme
 ```
 
 On a Kubeflow cluster, Dex is usually reachable in-cluster at

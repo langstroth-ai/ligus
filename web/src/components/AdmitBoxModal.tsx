@@ -55,7 +55,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
       role="tab"
       aria-selected={mode === m}
       className="rounded-md px-3 py-1 text-sm"
-      style={{ background: mode === m ? "var(--hive-accent-fill)" : "transparent", color: mode === m ? "var(--hive-on-accent)" : "var(--hive-ink)" }}
+      style={{ background: mode === m ? "var(--ligus-accent-fill)" : "transparent", color: mode === m ? "var(--ligus-on-accent)" : "var(--ligus-ink)" }}
       onClick={() => {
         setMode(m);
         setResult(null);
@@ -66,7 +66,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
   );
 
   return (
-    <Modal onClose={onClose} panelClassName="w-full max-w-lg rounded-xl border p-5" panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)", color: "var(--hive-ink)" }}>
+    <Modal onClose={onClose} panelClassName="w-full max-w-lg rounded-xl border p-5" panelStyle={{ background: "var(--ligus-panel)", borderColor: "var(--ligus-line)", color: "var(--ligus-ink)" }}>
       <h2 className="text-base font-semibold">Admit a box to {workspaceName}</h2>
       <p className="mt-1 text-sm opacity-75">
         A serve or worker box joins as its own service member: at most Contributor, and its votes never count as a person's approval.
@@ -84,12 +84,12 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
               : "A single-use bearer code: put it in a Kubernetes Secret (or the file LIGUS_ADMISSION_FILE names) and delete it once the box has joined."}{" "}
             It expires in {result.expiresInMinutes} min.
           </p>
-          <textarea readOnly aria-label="Admission code" className="h-24 w-full rounded border p-2 font-mono text-xs" value={result.code} style={{ borderColor: "var(--hive-line)", background: "transparent" }} />
+          <textarea readOnly aria-label="Admission code" className="h-24 w-full rounded border p-2 font-mono text-xs" value={result.code} style={{ borderColor: "var(--ligus-line)", background: "transparent" }} />
           <div className="flex justify-end gap-2">
-            <button className="rounded-md border px-3 py-1 text-sm" style={{ borderColor: "var(--hive-line)" }} onClick={() => void copy(result.code)}>
+            <button className="rounded-md border px-3 py-1 text-sm" style={{ borderColor: "var(--ligus-line)" }} onClick={() => void copy(result.code)}>
               Copy code
             </button>
-            <button className="rounded-md px-3 py-1 text-sm" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }} onClick={onClose}>
+            <button className="rounded-md px-3 py-1 text-sm" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }} onClick={onClose}>
               Done
             </button>
           </div>
@@ -102,7 +102,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
           <textarea
             id="box-request"
             className="h-20 w-full rounded border p-2 font-mono text-xs"
-            style={{ borderColor: "var(--hive-line)", background: "transparent" }}
+            style={{ borderColor: "var(--ligus-line)", background: "transparent" }}
             value={request}
             onChange={(e) => {
               setRequest(e.target.value);
@@ -116,12 +116,12 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <button className="rounded-md border px-3 py-1 text-sm" style={{ borderColor: "var(--hive-line)" }} disabled={!request.trim()} onClick={() => void check()}>
+            <button className="rounded-md border px-3 py-1 text-sm" style={{ borderColor: "var(--ligus-line)" }} disabled={!request.trim()} onClick={() => void check()}>
               Check
             </button>
             <button
               className="rounded-md px-3 py-1 text-sm disabled:opacity-50"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
               disabled={!checked || busy}
               onClick={() => void admit()}
             >
@@ -140,7 +140,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
             min={1}
             max={144}
             className="w-24 rounded border p-1 text-sm"
-            style={{ borderColor: "var(--hive-line)", background: "transparent" }}
+            style={{ borderColor: "var(--ligus-line)", background: "transparent" }}
             value={hours}
             onChange={(e) => setHours(Math.min(144, Math.max(1, Number(e.target.value) || 1)))}
           />
@@ -148,7 +148,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
           <div className="flex justify-end">
             <button
               className="rounded-md px-3 py-1 text-sm disabled:opacity-50"
-              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
               disabled={busy}
               onClick={() => void admit()}
             >

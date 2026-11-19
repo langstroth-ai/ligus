@@ -33,14 +33,14 @@ authorAvatarUrl: string | null,
  */
 authorColorHex: string | null, 
 /**
- * For a primary-`@hive` turn: the display name of the user whose device
- * answered (every user's default agent is named "hive", so this
- * disambiguates "Alice's hive" from "Bob's hive"). None for human turns and
+ * For a primary-`@ligus` turn: the display name of the user whose device
+ * answered (every user's default agent is named "ligus", so this
+ * disambiguates "Alice's ligus" from "Bob's ligus"). None for human turns and
  * named agents (whose own name is the label).
  */
 responderName: string | null, 
 /**
- * Where a primary-`@hive` turn ran, relative to the viewer: "this" (this
+ * Where a primary-`@ligus` turn ran, relative to the viewer: "this" (this
  * device), "mine" (another device of the viewer's own account), or None
  * (someone else's device, or not a primary turn). The UI shows "This
  * device" / "Your other device" instead of the viewer's own name, so a

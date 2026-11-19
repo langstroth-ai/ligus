@@ -62,7 +62,7 @@ The owner bound `~/apps/WeFit` to a workspace in the desktop app. Their
 `ligus serve` box runs on the same Mac, enrolled as their own device. The
 phone, paired with the box, shows "No checkouts on the host yet." in the
 repo picker and "No repository yet." for the chat
-(`ligus-ios/Hive/Views/RepoPickerView.swift:366` and `:277`).
+(`ligus-ios/Ligus/Views/RepoPickerView.swift:366` and `:277`).
 
 Why, step by step:
 
@@ -72,12 +72,12 @@ Why, step by step:
    (`app/src/lib.rs:430-439`), persisted in `<desktop data dir>/settings.json`.
    The doc comment says it plainly: device-local, never synced.
 2. Nothing is written to any log. There is no repo-related config event at all
-   (the closest is `HomeBeacon.base_branch`, `crates/hive-core/src/flow/mod.rs:238`,
+   (the closest is `HomeBeacon.base_branch`, `crates/ligus-core/src/flow/mod.rs:238`,
    which is a branch name with no repo attached).
 3. The box is a separate process with its own data dir and its own device id.
    Its checkouts are whatever sits directly under `repos_dir`
-   (`crates/hive-cli/src/repos.rs:43`, default `<box data>/repos`) and contains
-   `.git` (`local_checkouts`, `crates/hive-cli/src/serve/repos_api.rs:558`). Its
+   (`crates/ligus-cli/src/repos.rs:43`, default `<box data>/repos`) and contains
+   `.git` (`local_checkouts`, `crates/ligus-cli/src/serve/repos_api.rs:558`). Its
    bindings are `<box data>/repo-bindings.toml` (`RepoBindings`,
    `repos.rs:33`), which is empty.
 4. `GET /v1/repos` therefore answers `local: []`, and `GET /v1/chats/:id/repo`
@@ -96,12 +96,12 @@ processes driving `.ligus/worktrees/chat-<id>` in the same repository.
 
 | # | Situation | What happens today |
 |---|---|---|
-| G1 | Several devices with different checkouts of the same code (laptop at `~/src/wefit`, desktop at `D:\code\WeFit`, box at `<data>/repos/zazulam__wefit`). | Each device binds independently. Nobody can tell they are the same repo. Proposals carry a bare diff (`ActionProposal.diff`, `crates/hive-core/src/proposals.rs:95-100`) and "any device whose tree matches the base can apply it", but nothing says which tree. |
-| G2 | An agent pinned to a host (`WorkspaceAgent.host_id`, `crates/hive-core/src/agent.rs:34`) that has a different checkout, or none. | Dispatch (`turn_runs_here`, `app/src/lib.rs:6921`; `flow::candidates`, `app/src/flow.rs:255-270`; `workflows::prepare_stage`) checks host binding and online state only. A turn reaches a box with no checkout and runs without file tools or in a scratch dir. The user finds out from the agent's reply. |
+| G1 | Several devices with different checkouts of the same code (laptop at `~/src/wefit`, desktop at `D:\code\WeFit`, box at `<data>/repos/zazulam__wefit`). | Each device binds independently. Nobody can tell they are the same repo. Proposals carry a bare diff (`ActionProposal.diff`, `crates/ligus-core/src/proposals.rs:95-100`) and "any device whose tree matches the base can apply it", but nothing says which tree. |
+| G2 | An agent pinned to a host (`WorkspaceAgent.host_id`, `crates/ligus-core/src/agent.rs:34`) that has a different checkout, or none. | Dispatch (`turn_runs_here`, `app/src/lib.rs:6921`; `flow::candidates`, `app/src/flow.rs:255-270`; `workflows::prepare_stage`) checks host binding and online state only. A turn reaches a box with no checkout and runs without file tools or in a scratch dir. The user finds out from the agent's reply. |
 | G3 | People pointing at forks, personal clones, or different branches. | The box's fork layout (`ForkLayout`, `check_push_target`, `repos.rs:229-376`) handles one person's fork on one box. Two members whose `origin` is their own fork of the same upstream look like two unrelated repos. |
 | G4 | Several repos in one workspace (app + API + infra). | Desktop: one folder per workspace, no per-chat binding. Box: one workspace default plus per-chat overrides, by local checkout name. No shared list. |
-| G5 | A phone that only sees one box. | The phone talks to one `HostProfile` at a time (`ligus-ios/Hive/App/HostProfiles.swift:25`, `AppModel.client`). It sees that box's checkouts and nothing about the owner's desktop, so it can't say "WeFit is on your Mac, not on this box". |
-| G6 | Two Ligus processes on one machine, same OS user (owner's case). | Both may end up using the same checkout. Both create `hive/chat/<id>` worktrees at `<repo>/.ligus/worktrees/chat-<slug>` (`git_worktree.rs:120-125`). Git refuses to check out one branch in two worktrees, so the second one fails or, worse, falls back to running in place (`apply_chat_dir`, `app/src/lib.rs:6730`). |
+| G5 | A phone that only sees one box. | The phone talks to one `HostProfile` at a time (`ligus-ios/Ligus/App/HostProfiles.swift:25`, `AppModel.client`). It sees that box's checkouts and nothing about the owner's desktop, so it can't say "WeFit is on your Mac, not on this box". |
+| G6 | Two Ligus processes on one machine, same OS user (owner's case). | Both may end up using the same checkout. Both create `ligus/chat/<id>` worktrees at `<repo>/.ligus/worktrees/chat-<slug>` (`git_worktree.rs:120-125`). Git refuses to check out one branch in two worktrees, so the second one fails or, worse, falls back to running in place (`apply_chat_dir`, `app/src/lib.rs:6730`). |
 
 ### 1.3 What exists today (inventory)
 
@@ -111,15 +111,15 @@ processes driving `.ligus/worktrees/chat-<id>` in the same repository.
 | Desktop root adoption | `is_auto_adoptable_workspace` (`:1330`), `initial_workspace_root` (`:1344`) | cwd adopted only with `.git` or `.ligus/`, never shallow or system dirs (the v1.10.2 launch-hang fix). |
 | Desktop turn dir | `run_prepared_turn_inner` (`:8395`), `turn_repo_root` (`:8072`), `isolates_turn` / `isolates_on_write` | Per-turn worktree cut from the chat branch; refuses when the envelope says `isolate_writes` and no worktree could be made (`:8603-8608`). |
 | Box binding | `RepoBindings` (`repos.rs:33`), `repo-bindings.toml` | `workspace = "<name or abs path>"`, `[chats] "<uuid>" = "<name>"`. Resolution chat → workspace (`resolve`, `:80`). |
-| Box repo API | `repos_api.rs` | `GET /v1/repos`, `POST /v1/repos/clone`, `GET/PUT /v1/chats/:id/repo`, `pull`, `pr`; `forges_api.rs` for connections. Clone spec checked by `hive_forge::spec::parse_repo_spec` and must name a connected host (`resolve_spec`, `:813`). Paths never leave the box (`binding_name`, `:575`). |
-| Worktrees | `crates/hive-runtime/src/git_worktree.rs` | `<repo>/.ligus/worktrees/chat-<slug>` on branch `hive/chat/<slug>` (note: the `hive/` prefix is still used in 2.0); turn trees `hive/turn-<slug>`; pool; `chat_base` reads `hive.chatBase`, else `HEAD`. |
-| Hygiene | `crates/hive-runtime/src/hygiene.rs`, driver `run_hygiene_sweep` (`app/src/guards.rs:572`) | Sweeps stale trees; marks open diff proposals stale when `git apply --check` fails against the chat checkout. Runs only on the active workspace's bound repo. |
-| Repo-supplied config trust | `crates/hive-runtime/src/workspace_trust.rs` | Repo runtimes and MCP servers load inert; per-item digest enablement in device-local `workspace_trust`; `root_id = SHA-256(canonical path ‖ first commit)` (`:150`). |
+| Box repo API | `repos_api.rs` | `GET /v1/repos`, `POST /v1/repos/clone`, `GET/PUT /v1/chats/:id/repo`, `pull`, `pr`; `forges_api.rs` for connections. Clone spec checked by `ligus_forge::spec::parse_repo_spec` and must name a connected host (`resolve_spec`, `:813`). Paths never leave the box (`binding_name`, `:575`). |
+| Worktrees | `crates/ligus-runtime/src/git_worktree.rs` | `<repo>/.ligus/worktrees/chat-<slug>` on branch `ligus/chat/<slug>` (note: the `ligus/` prefix is still used in 2.0); turn trees `ligus/turn-<slug>`; pool; `chat_base` reads `ligus.chatBase`, else `HEAD`. |
+| Hygiene | `crates/ligus-runtime/src/hygiene.rs`, driver `run_hygiene_sweep` (`app/src/guards.rs:572`) | Sweeps stale trees; marks open diff proposals stale when `git apply --check` fails against the chat checkout. Runs only on the active workspace's bound repo. |
+| Repo-supplied config trust | `crates/ligus-runtime/src/workspace_trust.rs` | Repo runtimes and MCP servers load inert; per-item digest enablement in device-local `workspace_trust`; `root_id = SHA-256(canonical path ‖ first commit)` (`:150`). |
 | Proposals | `ActionProposal` (`proposals.rs:70`) | Diff + changed files. **No repo id, no base commit, no branch, no host.** `ProposalSet.base_commit` exists (`proposal_sets.rs:290`) and `proposal_preflight::check_base` uses it. |
 | Apply | `implement_proposal` (`app/src/lib.rs:6015`), `implement_proposal_targeted` (`:6139`); box `apply_on_this_host` (`serve/api.rs:1365`, opt-in `LIGUS_SERVE_APPLY_ON_APPROVE=1`) | `git apply` into the chat worktree, commit "Apply proposal: <title>", then `ProposalApplied { proposal_id, diff_digest, commit? }` (`events.rs:330`). Repo is "the active workspace's binding". |
-| Hosts | `WorkspaceHost` (`crates/hive-core/src/workspace_host.rs`), `WorkspaceHostUpserted` (config log, Contributor), heartbeats via throttled `touch_host` (`chat_service.rs:1721`) | id, kind Device/Worker, label, owner, last_seen. No repo fields. |
-| Forges | `crates/hive-forge` | GitHub, GitLab, Gitea/Forgejo/Codeberg. `spec::parse_remote` (`spec.rs:114`) turns https, `ssh://`, scp-style into `(host, RepoRef)`; `same_host` (`:36`) folds port, case, `www.`, `ssh.github.com`. No single canonical-string function. Tokens per connection in `SecretStore`; `forges.toml` device-local; `internal` mark for private addresses. |
-| Forge tools | `crates/hive-runtime/src/ligus_mcp/forge_tools.rs` | Read-only, `repo` limited to the chat's bound repo or its upstream (`ForgeBinding::target`), binding from configured origin ignoring `insteadOf`. |
+| Hosts | `WorkspaceHost` (`crates/ligus-core/src/workspace_host.rs`), `WorkspaceHostUpserted` (config log, Contributor), heartbeats via throttled `touch_host` (`chat_service.rs:1721`) | id, kind Device/Worker, label, owner, last_seen. No repo fields. |
+| Forges | `crates/ligus-forge` | GitHub, GitLab, Gitea/Forgejo/Codeberg. `spec::parse_remote` (`spec.rs:114`) turns https, `ssh://`, scp-style into `(host, RepoRef)`; `same_host` (`:36`) folds port, case, `www.`, `ssh.github.com`. No single canonical-string function. Tokens per connection in `SecretStore`; `forges.toml` device-local; `internal` mark for private addresses. |
+| Forge tools | `crates/ligus-runtime/src/ligus_mcp/forge_tools.rs` | Read-only, `repo` limited to the chat's bound repo or its upstream (`ForgeBinding::target`), binding from configured origin ignoring `insteadOf`. |
 
 ---
 
@@ -128,7 +128,7 @@ processes driving `.ligus/worktrees/chat-<id>` in the same repository.
 ### 2.1 Workspace repo (shared)
 
 ```rust
-// crates/hive-core/src/workspace_repo.rs (new)
+// crates/ligus-core/src/workspace_repo.rs (new)
 pub struct WorkspaceRepo {
     pub id: Uuid,                    // UUIDv5(LIGUS_REPO_NS, canonical)  -- see 2.3
     pub canonical: String,           // "github.com/zazulam/wefit" or "local:<root sha>"
@@ -154,7 +154,7 @@ it does not make any device fetch anything.
 ### 2.2 Checkout mapping (device-local)
 
 ```sql
--- <data_dir>/hive.db, never synced, never exported
+-- <data_dir>/ligus.db, never synced, never exported
 CREATE TABLE repo_checkouts (
   workspace_id TEXT NOT NULL,
   repo_id      TEXT NOT NULL,
@@ -167,7 +167,7 @@ CREATE TABLE repo_checkouts (
 ```
 
 - The desktop and the box use the same table and the same code (in
-  `hive-runtime`, so `ligus serve`, `ligus worker` and the app share it; this
+  `ligus-runtime`, so `ligus serve`, `ligus worker` and the app share it; this
   follows RC-1, one host abstraction).
 - `repo-bindings.toml` and `workspace_dirs` become views over it (section 8).
 - Per-chat overrides stay possible: `chat_checkouts(chat_id, repo_id, path)`,
@@ -175,7 +175,7 @@ CREATE TABLE repo_checkouts (
 
 ### 2.3 Canonical identity
 
-One function, in `hive-forge` (it already owns remote parsing), used everywhere:
+One function, in `ligus-forge` (it already owns remote parsing), used everywhere:
 
 ```rust
 pub fn canonical_repo(remote: &str, aliases: &HostAliases) -> Result<Canonical, CanonError>;
@@ -262,7 +262,7 @@ editing app and API together) are an open question (10, Q4); a workspace
 having several repos (G4) is covered either way, because each chat picks
 one. If a workspace has exactly one repo, new chats get it by default.
 
-The chat branch name stays `hive/chat/<id>` per checkout. It is
+The chat branch name stays `ligus/chat/<id>` per checkout. It is
 device-local scratch state (see 5.5); the synced truth is the ordered list
 of applied proposals.
 
@@ -296,7 +296,7 @@ entry already says.
 signs its report with its own device key (`HostBeat.coverageSig`, Ed25519
 over `"ligus-coverage-v1\0" ‖ workspace(16) ‖ device(16) ‖ u64le(seq) ‖
 u32le(n) ‖ n × (repo(16) ‖ u32le(len) state ‖ u32le(len) code ‖ via_fork
-byte)`; golden vectors in `crates/hive-core/tests/coverage_sig.rs`). A
+byte)`; golden vectors in `crates/ligus-core/tests/coverage_sig.rs`). A
 reader records a beat's coverage only when the signature verifies against
 the device its `hostId` names, as its current roster has it (certified, not
 revoked, not a phone, acting for a current member); otherwise only the
@@ -318,11 +318,11 @@ beat's liveness counts. Unsigned liveness is a residual (11.6).
 | Chat repo | chat | `ChatRepoSet { repo_id, base_branch }` | Contributor | `repo_id` must name a live repo at the author's `cfg_frontier`, else hold/no-op. Agent tier: denied (agents can't redirect a chat to other code). |
 | Proposal repo and base | chat | new fields on `ProposalUpserted` (5.4) | unchanged | Covered by the proposal digest (5.4). |
 | Applied commit | chat | `ProposalApplied` gains `repo_id`, `applied_on` | unchanged (human Contributor+) | |
-| Checkout paths, roots to scan, per-chat local overrides, clone jobs | device | `repo_checkouts`, `chat_checkouts`, `scan_roots` in `hive.db` | n/a | Never in events, invites, contact records, logs at info level, crash reports, the relay or the phone API. |
+| Checkout paths, roots to scan, per-chat local overrides, clone jobs | device | `repo_checkouts`, `chat_checkouts`, `scan_roots` in `ligus.db` | n/a | Never in events, invites, contact records, logs at info level, crash reports, the relay or the phone API. |
 | Forge tokens | device | `SecretStore` scope `forge` | n/a | Unchanged (identity-and-forges 5.4). |
 
-All new config events go through `authz::authorize` (`crates/hive-core/src/authz/mod.rs:221`)
-with `min_role_for` entries (`crates/hive-core/src/authorization.rs:193`). Old
+All new config events go through `authz::authorize` (`crates/ligus-core/src/authz/mod.rs:221`)
+with `min_role_for` entries (`crates/ligus-core/src/authorization.rs:193`). Old
 clients fold them to `SessionEvent::Unknown` (inert) and re-sync the raw
 bytes, as with every 2.0 addition. All new fields are `serde(default,
 skip_serializing_if…)`.
@@ -364,7 +364,7 @@ Why detection needs confirmation: once a checkout is `Present`, turns run in
 it, and anything a hostile repo planted (hooks, repo config) becomes
 relevant. Repo-supplied runtimes and MCP servers are already inert until
 trusted (`workspace_trust.rs`), hooks are disabled by `harden_git`
-(`crates/hive-core/src/process_util.rs:180`), but a human should still say
+(`crates/ligus-core/src/process_util.rs:180`), but a human should still say
 "yes, that folder".
 
 ### 4.2 Scanning
@@ -402,27 +402,27 @@ trusted (`workspace_trust.rs`), hooks are disabled by `harden_git`
   are, after re-validation with `spec::parse_repo_spec` and `valid_host`, and
   only for a host this box already has a connection to (so SSRF goes through
   the connection's `validate_base_url` / `check_address` / `internal` rules,
-  `crates/hive-forge/src/conn.rs:108, 171`).
+  `crates/ligus-forge/src/conn.rs:108, 171`).
 - Credentials stay on the host: `git -c credential.<base>.helper=!ligus forge
   git-credential <id>` (`tokens.rs:398`), never argv or env. The phone never
   sees a token. Existing limits (timeout, size cap, two concurrent jobs,
   hidden temp dir then rename) stay.
 - On success the box writes the mapping (`source = 'cloned'`, confirmed) and
   publishes coverage.
-- Desktop clone: the same code from `hive-runtime`, into a folder the user
+- Desktop clone: the same code from `ligus-runtime`, into a folder the user
   picks, with the desktop's connection.
 
 ### 4.4 Worktree layout
 
 Unchanged for one host per checkout: `<checkout>/.ligus/worktrees/chat-<slug>`
-on `hive/chat/<slug>`, turn trees `hive/turn-<slug>`, pool, stopped-turn
+on `ligus/chat/<slug>`, turn trees `ligus/turn-<slug>`, pool, stopped-turn
 patches (`git_worktree.rs`). Multi-repo needs nothing new: each checkout is
 its own repository with its own `.ligus/worktrees`.
 
-`chat_base` (`git_worktree.rs:181`) currently reads `hive.chatBase` or uses
+`chat_base` (`git_worktree.rs:181`) currently reads `ligus.chatBase` or uses
 `HEAD`. It becomes: the chat's `base_branch` (from `ChatRepoSet`), resolved
 as `upstream/<branch>` for a fork checkout and `origin/<branch>` otherwise,
-falling back to the local branch, then `hive.chatBase`, then `HEAD`. Using
+falling back to the local branch, then `ligus.chatBase`, then `HEAD`. Using
 `HEAD` means "whatever the human has checked out right now", which differs by
 device; that is the root of many "stale base" surprises in G1.
 
@@ -430,7 +430,7 @@ device; that is the root of many "stale base" surprises in G1.
 
 The owner's case invites pointing the box at the desktop's folder. That is
 unsafe as is: both processes would manage `.ligus/worktrees/chat-<slug>` and
-the same `hive/chat/<id>` branch, and the hygiene sweep of one would remove
+the same `ligus/chat/<id>` branch, and the hygiene sweep of one would remove
 trees the other is using (its `in_use` set is per process,
 `git_worktree.rs:30-59`).
 
@@ -473,7 +473,7 @@ workspace folder if one is bound, or without file tools).
 
 On the box, `repos::resolve` (`repos.rs:80`) gets the same lookup and
 `turn_context` (`:470`) names the workspace repo ("Repository: WeFit
-(github.com/zazulam/wefit), branch hive/chat/…").
+(github.com/zazulam/wefit), branch ligus/chat/…").
 
 ### 5.2 Which host runs a turn: the coverage check
 
@@ -564,7 +564,7 @@ workspace:
 
 ### 5.6 Chat branches across devices
 
-Each device's `hive/chat/<id>` is local. After Alice applies proposal P1 on
+Each device's `ligus/chat/<id>` is local. After Alice applies proposal P1 on
 her laptop, Bob's box doesn't have P1's commit, so P2 (produced on the box)
 has a base without P1, and P1's changes are invisible to the box's agent.
 
@@ -574,7 +574,7 @@ any ledger entries its chat branch lacks (it has each diff in the proposal),
 in order, on top of the chat base. A replay conflict stops the turn with
 "This chat's branch has diverged on mac-test" and the 5.5 actions. This is
 the deferred **Phase 2b "pull in"**, made concrete and keyed by repo id.
-Pushing chat branches to the forge (as `hive/chat/<id>`) is an optional
+Pushing chat branches to the forge (as `ligus/chat/<id>`) is an optional
 accelerator, not the source of truth (Q8).
 
 Promote-to-main, explicit per-chat folder override and auto-apply (deferred
@@ -684,7 +684,7 @@ relay; a malicious self-hosted forge.
 | Hostile remote: `ext::sh -c …`, `file:///`, `fd::`, `--upload-pack=…` as a "URL" | Canonical form is `host/path` only; clone URL rebuilt by `Forge::clone_url(Https)`; `--` before the URL; `protocol.ext.allow=never` (`harden_git`); add `protocol.file.allow=never` for clones by repo id. | `clone_url_rebuilt_never_from_event_string`, `ext_and_file_protocols_refused` |
 | SSRF via a self-hosted forge host in a repo entry (`169.254.169.254/x/y`, `localhost`) | A repo entry never causes a request by itself. Clones and forge calls need a device-local connection for that host, which went through `validate_base_url` + `check_address` (public addresses only unless the device marked it `internal`). An Admin can't mark another device's connection internal (the mark is in `forges.toml`, never synced). | `repo_entry_cannot_create_connection`, `internal_mark_not_synced` |
 | Repo entry auto-clones on every box | Never automatic in 2.x. Clone is a human action per host. | `adding_repo_moves_no_bytes` |
-| Agent adds a repo, changes a chat's repo, or rewrites coverage | Agent tier denied for `WorkspaceRepo*`, `ChatRepoSet`, `HostRepoCoverage` (`authz/agent.rs`). Mappings are device-local and have no MCP tool; the sandbox denies the data dir (phase0 C.4/C.5), so `hive.db` and `repo-bindings.toml` can't be written by agents. | `agent_cannot_set_chat_repo`, `agent_cannot_write_mappings` |
+| Agent adds a repo, changes a chat's repo, or rewrites coverage | Agent tier denied for `WorkspaceRepo*`, `ChatRepoSet`, `HostRepoCoverage` (`authz/agent.rs`). Mappings are device-local and have no MCP tool; the sandbox denies the data dir (phase0 C.4/C.5), so `ligus.db` and `repo-bindings.toml` can't be written by agents. | `agent_cannot_set_chat_repo`, `agent_cannot_write_mappings` |
 | Contributor fakes another host's coverage to steer dispatch | `HostRepoCoverage` valid only when signed by `host_id`'s own certified device. | `coverage_signed_by_other_device_ignored` |
 | Fake coverage makes a turn run in the wrong code | Host-side re-check (5.3) of mapping + remote canonical before every turn. | `host_refuses_turn_without_matching_checkout` |
 | Approval re-targeted to another repo | Digest v2 covers `repo_id` and `base_commit`; `ProposalApplied.repo_id` must match. | `vote_for_repo_a_does_not_count_for_repo_b` |
@@ -710,7 +710,7 @@ mappings; nothing is published without a human.
 | Desktop folder without git, or git without remote | Stays a plain workspace folder (today's behaviour), or `local:<root>` repo if the Admin chooses. | No. |
 | Box `repo-bindings.toml` `workspace = "<name>"` | Mapping for the repo whose canonical matches that checkout's remote; same proposal flow (the phone shows "Add WeFit to the workspace?" to an Admin). | Mapping: yes. Repo: proposed. |
 | Box `[chats] "<id>" = "<name>"` | `ChatRepoSet { repo_id }` authored by the box only after the repo exists, plus `chat_checkouts` if the chat used a non-primary checkout. | Once per chat, after the repo is added. |
-| `hive.chatBase` git config | Read as a fallback in `chat_base`; the repo's `default_branch` takes over for new chats. | Yes. |
+| `ligus.chatBase` git config | Read as a fallback in `chat_base`; the repo's `default_branch` takes over for new chats. | Yes. |
 | Existing proposals (no `repo_id`) | Apply as today against the device's single binding for the chat's workspace; shown as "repository unknown". | n/a |
 
 The migration is idempotent (keyed on `(ws, path)`), runs in `build_state`'s
@@ -777,14 +777,14 @@ follow once identity and coverage have run for a while.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **1. MVP: the owner's case** | `canonical_repo` in hive-forge; `WorkspaceRepo{Added,Updated,Removed}` + authz + bounds; `repo_checkouts` table shared by desktop and box; desktop "Add WeFit to the workspace?" after binding and in migration; box: scan `repos_dir` + configured roots, `ligus repos roots add`, `ligus repos bind`, `POST /v1/repos/clone {repoId}`; `HostRepoCoverage`; `GET /v1/workspace-repos` (repos + coverage per host, no paths); phone "Workspace repositories" section with coverage and Clone here; managing-host marker (4.5). | Owner binds `~/apps/WeFit` on the desktop, accepts the prompt, opens the phone: "WeFit · On Mac app · Not on mac-test · Clone here"; taps it; the box clones, coverage flips, a chat on the box runs in WeFit. |
+| **1. MVP: the owner's case** | `canonical_repo` in ligus-forge; `WorkspaceRepo{Added,Updated,Removed}` + authz + bounds; `repo_checkouts` table shared by desktop and box; desktop "Add WeFit to the workspace?" after binding and in migration; box: scan `repos_dir` + configured roots, `ligus repos roots add`, `ligus repos bind`, `POST /v1/repos/clone {repoId}`; `HostRepoCoverage`; `GET /v1/workspace-repos` (repos + coverage per host, no paths); phone "Workspace repositories" section with coverage and Clone here; managing-host marker (4.5). | Owner binds `~/apps/WeFit` on the desktop, accepts the prompt, opens the phone: "WeFit · On Mac app · Not on mac-test · Clone here"; taps it; the box clones, coverage flips, a chat on the box runs in WeFit. |
 | **2. Chats and dispatch** | `ChatRepoSet`; desktop and box resolve the turn dir from the chat's repo; `chat_base` from `base_branch`; `coverage()` at both dispatch gates, `flow::candidates`, `ensure_stages_runnable`, `offer_stage_here`; host-side refusal (5.3); composer warnings and handoff actions; per-checkout hygiene. | A pinned agent on a host without the repo never starts a turn there; the sender sees why and can clone or hand off. |
 | **3. Proposals across devices** | `repo_id`/`base_commit`/`base_ref`/`produced_on` on proposals; digest v2; `ProposalApplied.repo_id`; apply-anywhere with `--3way` and the conflict actions; ledger replay (5.6, the deferred 2b). | A proposal made on the box applies on the desktop and vice versa; stale bases are handled without partial applies. |
 | **4. Forks, aliases, multi-person polish** | Host aliases, look-alike flagging, "via fork" coverage, per-chat checkout override (deferred Phase 4), coverage opt-out, optional forge push of chat branches. | Two people with their own forks both show coverage of the upstream repo and can apply each other's proposals. |
 
 ### 9.5 Executable tests the implementation must ship
 
-Unit and property (hive-forge, hive-core):
+Unit and property (ligus-forge, ligus-core):
 
 - `canonical_ssh_https_scp_equal`: `git@github.com:A/B.git`, `ssh://git@github.com:22/a/b`, `https://www.github.com/a/b/`, `ssh.github.com:443` forms all give `github.com/a/b`.
 - `canonical_self_hosted_with_port_and_alias`: `ssh://git@ssh.git.example.com:2222/grp/sub/repo.git` with alias → `git.example.com/grp/sub/repo`.
@@ -824,7 +824,7 @@ warning when the box lacks the chat's repo.
 5. **Q5 Same-machine sharing.** When the box and the desktop are on one Mac, allow read-only box turns in the desktop's checkout (4.5 option 2), or always require a separate `--reference` clone?
 6. **Q6 Coverage reporting default.** On for all devices, or on only for workers and the owner's own devices, off for other members' personal machines unless they opt in?
 7. **Q7 Digest v2.** Accept a new domain string `ligus-proposal-digest-v2` so approvals bind to a repo and base, or bind via `ProposalApplied` checks only (weaker: the vote itself isn't repo-specific)?
-8. **Q8 Chat branches.** Ledger replay as the cross-device source of truth (this doc), or push `hive/chat/<id>` to the forge when the host has write access? Also: rename the `hive/` branch prefix to `ligus/` in 2.x, given the rebrand?
+8. **Q8 Chat branches.** Ledger replay as the cross-device source of truth (this doc), or push `ligus/chat/<id>` to the forge when the host has write access? Also: rename the `ligus/` branch prefix to `ligus/` in 2.x, given the rebrand?
 9. **Q9 Driving another host.** Should the desktop be able to ask a box to clone (a workspace-addressed request carried over the log or the tunnel), or is that phone-only for now?
 10. **Q10 Unknown forges.** For a host with no connection and unknown kind, keep case-sensitive paths (safe, may split one repo into two entries) or lowercase everything (simple, may merge two repos on a case-sensitive server)?
 
@@ -832,10 +832,10 @@ warning when the box lacks the chat's repo.
 
 ## Implementation notes (0.1.0)
 
-Built: canonical identity (`hive_core::workspace_repo::canonical_repo`), the
+Built: canonical identity (`ligus_core::workspace_repo::canonical_repo`), the
 repo fold and its order rules, the chat ledger (`ChatSession::applied_order`,
 `workspace_repo::ledger`), device-local tables (`repo_checkouts`,
-`chat_checkouts`, scan roots, SSH host aliases), `hive_runtime::repos` (bind,
+`chat_checkouts`, scan roots, SSH host aliases), `ligus_runtime::repos` (bind,
 detect, the managing-host marker, coverage, the turn gate, `prepare_chat` with
 pinned bases and ledger replay, scratch-tree compare-and-swap apply, clone by
 id), the box's turn gate, clone by id and `/v1/workspace-repos` API, the
@@ -885,11 +885,11 @@ time" is honoured only in the case the composer offers it.
 
 Not built yet: the phone UI (in the separate phone app repository; the box API
 it needs is here), "Clone there" from the desktop to another host (the review
-keeps it phone-only), and renaming the `hive/` branch prefix.
+keeps it phone-only), and renaming the `ligus/` branch prefix.
 
 Built since (2026-11-18, branch `feat/device-dispatcher`, reviewed and
 completed on `feat/device-dispatcher-v2`): the device-keyed dispatcher
-(section 11: `hive_core::dispatch`, `ChatService::dispatch_turn`, both
+(section 11: `ligus_core::dispatch`, `ChatService::dispatch_turn`, both
 desktop gates, the deferred claim, hand-offs, the worker, workflow stage
 offers, the desktop's revision and regenerate turns) and workspace-synced
 repo and host aliases (section 12); signed coverage (2.8, repos review
@@ -905,7 +905,7 @@ box API lists only once the phone repository adopts them.
 ## 11. The device-keyed dispatcher (architecture-review 4.9; review F8, R8)
 
 Status: designed 2026-11-18 for Ligus 0.1.0 (Ligus is short for
-*ligustica*). Built in `hive_core::dispatch` (the fold and the decision,
+*ligustica*). Built in `ligus_core::dispatch` (the fold and the decision,
 both pure) and `ChatService::dispatch_turn` (the one entry every dispatch
 site calls).
 
@@ -1134,7 +1134,7 @@ order-independent):
   those names). Removing a repo drops its aliases.
 
 **Local confirmation.** A synced alias changes nothing on a device until a
-person there accepts it (`accepted_aliases` in `hive.db`, keyed by alias
+person there accepts it (`accepted_aliases` in `ligus.db`, keyed by alias
 and target, so a changed target needs a new acceptance; the desktop sends
 the target it showed, and accepting refuses when the workspace has since
 pointed the alias elsewhere). An acceptance counts only while the roster a

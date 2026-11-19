@@ -40,9 +40,9 @@ export function revealLockdownCause(detail: string, messageId?: string): boolean
   if (!target) return false;
   if (card) card.open = true;
   target.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-  target.classList.remove("hive-flash");
+  target.classList.remove("ligus-flash");
   void target.offsetWidth;
-  target.classList.add("hive-flash");
+  target.classList.add("ligus-flash");
   if (card) (card.querySelector("summary") as HTMLElement | null)?.focus({ preventScroll: true });
   return true;
 }

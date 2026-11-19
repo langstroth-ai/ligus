@@ -12,7 +12,7 @@
 //!   `clientDataJSON` itself, with origin `https://<rp id>`.
 //! * **Windows**: `webauthn.dll` ([`windows`]), loaded at run time. The app
 //!   builds the `clientDataJSON` itself
-//!   ([`hive_core::presence::client_data_json`], origin: the workspace's
+//!   ([`ligus_core::presence::client_data_json`], origin: the workspace's
 //!   hand-off page origin), so any well-formed workspace RP works.
 //! * **Linux**: no platform API; the browser hand-off as before.
 //!
@@ -22,7 +22,7 @@
 //! picks the browser on the confirmation sheet.
 //!
 //! The result is the same [`PresenceAssertion`] the hand-off returns (mapped
-//! by [`hive_core::presence::native`]); the desktop checks its challenge with
+//! by [`ligus_core::presence::native`]); the desktop checks its challenge with
 //! the same [`returned_challenge`], and the fold verifies it with the same
 //! verifiers. Nothing about the digest or its binding differs by path.
 //!
@@ -38,9 +38,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hive_core::presence::native::{RawAssertion, RawRegistration};
-use hive_core::presence::{returned_challenge, unb64url, PresenceAssertion, PresencePolicy, RecoveryKey};
-use hive_runtime::chat_service::PresenceRequest;
+use ligus_core::presence::native::{RawAssertion, RawRegistration};
+use ligus_core::presence::{returned_challenge, unb64url, PresenceAssertion, PresencePolicy, RecoveryKey};
+use ligus_runtime::chat_service::PresenceRequest;
 
 #[cfg(target_os = "macos")]
 mod macos;

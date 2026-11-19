@@ -24,7 +24,7 @@ Working notes on where Ligus is heading. Not a promise — a prioritized sketch.
 ## Exploring
 
 - **Subdomain communities (multi-tenant on one relay).** One relay hosts many
-  communities addressed by subdomain (`acme.hive.example.com` → community `acme`),
+  communities addressed by subdomain (`acme.ligus.example.com` → community `acme`),
   the URL authoritative for the workspace, tenant-scoped state. The relay is
   already multi-room; the work is (1) subdomain→community routing + per-community
   scoping in the **Go relay**, (2) client treats the community URL as the

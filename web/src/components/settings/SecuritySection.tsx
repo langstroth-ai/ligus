@@ -71,7 +71,7 @@ export function SecuritySection() {
     <>
       {st && !st.deviceConfirmed && (
         <Section title="This device">
-          <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
             This device isn't confirmed for this workspace yet. A new device of an account with a passkey counts
             only after that passkey confirms it; until then other devices don't accept its changes.
           </p>
@@ -95,7 +95,7 @@ export function SecuritySection() {
               </code>
               <button
                 className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger-ink)" }}
+                style={{ color: "var(--ligus-danger-ink)" }}
                 disabled={remove.isPending}
                 onClick={() => remove.mutate(p.credentialId)}
               >
@@ -106,7 +106,7 @@ export function SecuritySection() {
           {passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}
         </ul>
         {passkeys.length === 1 && (
-          <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
             Register another passkey so losing one device doesn't lock you out.
           </p>
         )}
@@ -143,7 +143,7 @@ export function SecuritySection() {
         )}
       </Section>
       {st && (passkeys.length === 0 || !hasRecovery) && (
-        <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }} data-testid="finish-securing">
+        <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }} data-testid="finish-securing">
           Finish securing this workspace: membership, roles, devices and keys need your passkey, and a recovery key
           keeps a lost passkey from locking you out.
         </p>
@@ -158,12 +158,12 @@ export function SecuritySection() {
           Rotate workspace key
         </Button>
         {st?.secretBackend === "file" && (
-          <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
             This device keeps Ligus's secrets in owner-only files, not an OS secret store.
           </p>
         )}
         {st?.secretBackend === "unavailable" && (
-          <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+          <p className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
             The Ligus keychain isn't available, so Ligus can't save secrets on this device. Ligus won't fall back to
             plain files on its own: fix the keychain, or start Ligus with LIGUS_SECRET_BACKEND=file to keep them in
             owner-only files.

@@ -4,7 +4,7 @@
 
 Status: design spec, written 2026-11-14. Nothing was implemented. All repositories were opened read-only. Ligus is short for *ligustica*.
 
-**Amendment 2026-11-16 (owner decision; the code wins).** 2.0 dropped the SourceHut and Tangled identity-link verifiers. The rows for them in §2.3, the sr.ht "verified by name" residual in S1, the atproto PDS/DID fetching and the reserved `AtprotoRecord` and `OidcAttestation` methods below are superseded. A link naming `sourcehut` or `tangled` still folds unchanged (the wire shape, the statement and `ligus-identity-link-v1@ligus.ai` are untouched) and is shown as self-asserted, never verified (`hive_core::identity_link::DROPPED_PROVIDERS`). A method this build doesn't know, `atprotoRecord` and `oidcAttestation` included, folds through the `#[serde(other)]` arm and shows as "not checked".
+**Amendment 2026-11-16 (owner decision; the code wins).** 2.0 dropped the SourceHut and Tangled identity-link verifiers. The rows for them in §2.3, the sr.ht "verified by name" residual in S1, the atproto PDS/DID fetching and the reserved `AtprotoRecord` and `OidcAttestation` methods below are superseded. A link naming `sourcehut` or `tangled` still folds unchanged (the wire shape, the statement and `ligus-identity-link-v1@ligus.ai` are untouched) and is shown as self-asserted, never verified (`ligus_core::identity_link::DROPPED_PROVIDERS`). A method this build doesn't know, `atprotoRecord` and `oidcAttestation` included, folds through the `#[serde(other)]` arm and shows as "not checked".
 
 **Scope.**
 
@@ -33,7 +33,7 @@ Unless a path says otherwise, citations are relative to the root of this repo. R
 
 ## 0. Summary
 
-1. **Identity.** A Ligus account is an account key with a random UUIDv4 `account_id`, which is what `IdentityStore::bootstrap` already generates (`crates/hive-runtime/src/identity_store.rs:146-175`).
+1. **Identity.** A Ligus account is an account key with a random UUIDv4 `account_id`, which is what `IdentityStore::bootstrap` already generates (`crates/ligus-runtime/src/identity_store.rs:146-175`).
    - GitHub sign-in stops being identity. The switch from the local id to `account_id_for(github_id)` is deleted from the app.
    - The profile is a display name plus an avatar. Both already ride on `ActorIdentity`.
 2. **Linked identities** are optional, opt-in for each workspace, and proven on the device.
@@ -63,7 +63,7 @@ There are 117 findings in total. The tables below cover everything that matters 
 
 | # | Where | What |
 |---|---|---|
-| I1 | `crates/hive-runtime/src/github.rs:1-7` | The module doc says "The GitHub user is the Hive *account*". |
+| I1 | `crates/ligus-runtime/src/github.rs:1-7` | The module doc says "The GitHub user is the Ligus *account*". |
 | I2 | `github.rs:13-18` | Device-flow endpoints `github.com/login/device/code` and `/login/oauth/access_token`. Scope `read:user user:email`. |
 | I3 | `github.rs:20-27` **[V]** | `ACCOUNT_NS = 0x6869_7665_6769_7468_6163_636f_756e_7401` (ASCII "hivegithaccount\x01"); `account_id_for(id) = UUIDv5(ACCOUNT_NS, "github:<id>")`. This derives the account id from a public id. |
 | I4 | `github.rs:50-72` | `GithubAccount{id, login, name, email, avatar_url}` and `account_id()`. |
@@ -74,13 +74,13 @@ There are 117 findings in total. The tables below cover everything that matters 
 | I15 | `app/src/lib.rs:11303-11307` | At startup, with a GitHub account present, the app calls `set_author_account(account_id_for(id))`. **This is the local-to-GitHub id switch.** |
 | I16 | `app/src/lib.rs:14514-14520` | `github_logout` doesn't revert the actor id. |
 | I17 | `app/src/lib.rs:9233-9240` | A `turn_runs_here` workaround for author-id churn at sign-in. |
-| I18-I22 | `crates/hive-runtime/src/chat_service.rs:485-560, 780, 1284-1315`; `event_store.rs:437` | Account adoption and migration of the provisional self, dedupe and re-publish. The whole class exists only because the id changes at GitHub sign-in. |
-| I23 | `crates/hive-core/src/events.rs:214-222` | The `AccountKeyRegistered` doc says "GitHub-anchored". Only the comment is GitHub-specific; the wire isn't. |
+| I18-I22 | `crates/ligus-runtime/src/chat_service.rs:485-560, 780, 1284-1315`; `event_store.rs:437` | Account adoption and migration of the provisional self, dedupe and re-publish. The whole class exists only because the id changes at GitHub sign-in. |
+| I23 | `crates/ligus-core/src/events.rs:214-222` | The `AccountKeyRegistered` doc says "GitHub-anchored". Only the comment is GitHub-specific; the wire isn't. |
 | I24-I27 | `envelope_verifier.rs:28-32,150-160,…`; `identity_verifier.rs:1-72,301-330`; `sync_engine.rs:127-132,704-760` | Dormant "Option C" `GithubSigningKeys` mode, which checks account keys against `api.github.com/users/{login}/ssh_signing_keys`. Enabled only in tests; the env switch is ignored (P0.8). |
 | I28 | `app/src/lib.rs:602-623` | `WorkspaceConn.dm_account` (`github:<id>`) and `founder_actor_id` (`github:<id>` for DMs) inside `hivews1:` invites. |
-| I29 | `crates/hive-runtime/src/relay_client.rs:353-366` **[V]** | `authed()` attaches `X-Hive-Github-Token` to **every** relay request, not only directory calls. The relay operator can read it (`docs-site/docs/operate/networking/self-host.md:293-300`). |
+| I29 | `crates/ligus-runtime/src/relay_client.rs:353-366` **[V]** | `authed()` attaches `X-Hive-Github-Token` to **every** relay request, not only directory calls. The relay operator can read it (`docs-site/docs/operate/networking/self-host.md:293-300`). |
 | I30 | `app/src/lib.rs:6421-6434, 11645-11908, 12089-12160` | Every relay client, the sync loop and probes carry the token. |
-| I31 | `crates/hive-cli/src/main.rs:14,55,176,273,362,428` | The headless CLI forwards env `LIGUS_RELAY_GITHUB_TOKEN` the same way. |
+| I31 | `crates/ligus-cli/src/main.rs:14,55,176,273,362,428` | The headless CLI forwards env `LIGUS_RELAY_GITHUB_TOKEN` the same way. |
 | I32 | `web/src/lib/ipc.ts:508-536`; `web/src/components/settings/AccountSection.tsx:8-320`; `web/src/components/Onboarding.tsx:15-19,202-290,520-600,913` | The sign-in UI. Onboarding step 1 offers GitHub. The git email is locked while signed in. |
 
 The relay keys this identity in two different id spaces:
@@ -100,7 +100,7 @@ Both must go.
 | D8-D10 | `relay_client.rs:900-1062` | `account/*` and `friends/*`; `post_workspace_invite{toLogin}`. |
 | D11-D12 | `app/src/lib.rs:13035-13066, 12545-12550` | `register_directory`. It does nothing without a GitHub token. |
 | D13-D14 | `app/src/lib.rs:13107-13230` | `invite_by_handle`: directory lookup, then `account_id_for`, then seal to the directory devices ([directory-trust](directory-trust.md)), then `upsert_member("github:<id>")`, then the inbox. |
-| D15 | `app/src/lib.rs:13020-13033`; `crates/hive-runtime/src/directory_trust.rs` | `seal_plan` (verified versus unverified recipients). |
+| D15 | `app/src/lib.rs:13020-13033`; `crates/ligus-runtime/src/directory_trust.rs` | `seal_plan` (verified versus unverified recipients). |
 | D16-D22 | `app/src/lib.rs:13234-13655` | Pending invites, join, add or remove a member by handle, `social_ctx`, the friends commands. |
 | D23 | `app/src/lib.rs:4324-4368`; `github.rs:201-300` | `import_github_teams` (`read:org`) maps GitHub team members to `account_id_for`. |
 | D24 | `app/src/lib.rs:14451-14512` | `generate_agent_bootstrap`: handle, then directory, then `sub = "github:<id>"`, then `mint_hrt1_token`. |
@@ -118,7 +118,7 @@ Both must go.
 
 | # | Where | What |
 |---|---|---|
-| M1 | `app/src/lib.rs:13656-13670` **[V]** | `dm_room_for(a,b)` strips `github:`, sorts the two numeric ids, and returns `"dm-" + UUIDv5(DM_NS = "hivedmroompair01", "<lo>\0<hi>").simple()`. Anyone who knows two GitHub ids can compute the room, and from it the workspace id (`room_workspace_id`, `crates/hive-core/src/channel.rs:26-30`). The relay can therefore test any pair of known users for a DM. |
+| M1 | `app/src/lib.rs:13656-13670` **[V]** | `dm_room_for(a,b)` strips `github:`, sorts the two numeric ids, and returns `"dm-" + UUIDv5(DM_NS = "hivedmroompair01", "<lo>\0<hi>").simple()`. Anyone who knows two GitHub ids can compute the room, and from it the workspace id (`room_workspace_id`, `crates/ligus-core/src/channel.rs:26-30`). The relay can therefore test any pair of known users for a DM. |
 | M2 | `app/src/lib.rs:13709-13800` | `friend_open_dm`. The owner is decided by `"github:<a>" <= "github:<b>"`. |
 | M3 | `app/src/lib.rs:13781` | The invite id is `UUIDv5(ws_id, "dm-invite")`, which is derivable too. |
 | M4 | `app/src/lib.rs:13311-13330` | `adopt_dm_key` trusts the relay-stamped `from_login`. |
@@ -128,12 +128,12 @@ Both must go.
 
 | # | Where | What |
 |---|---|---|
-| R1-R2 | `crates/hive-cli/src/repos.rs:97-148, 191` | `parse_repo_spec` accepts only `owner/name` or `https://github.com/…` ("only github.com repositories can be cloned here"), and `git@github.com:`. |
+| R1-R2 | `crates/ligus-cli/src/repos.rs:97-148, 191` | `parse_repo_spec` accepts only `owner/name` or `https://github.com/…` ("only github.com repositories can be cloned here"), and `git@github.com:`. |
 | R3-R7 | `repos.rs:229-559` | `ForkLayout`, `UPSTREAM_REMOTE = "upstream"`, `check_push_target` (refuses pushes to upstream, including `ssh.github.com`), PR branch names, and the agent prompt "opened against upstream as drafts". These are forge-neutral apart from the hostnames. |
-| R8-R9 | `crates/hive-cli/src/serve/repos_api.rs:1-24, 200-276` | A `GitHub` trait: `status, list, owners, clone_url, git_auth_args, create_pr, repo_meta`. This is the seed of the `Forge` trait. |
+| R8-R9 | `crates/ligus-cli/src/serve/repos_api.rs:1-24, 200-276` | A `GitHub` trait: `status, list, owners, clone_url, git_auth_args, create_pr, repo_meta`. This is the seed of the `Forge` trait. |
 | R10-R14 | `repos_api.rs:278-445` | `GhCli` runs `gh api …`, `gh auth status --hostname github.com`, `gh pr create … --draft`, and the credential helper `credential.https://github.com.helper=!gh auth git-credential` (`:405-414` **[V]**). |
 | R15-R20 | `repos_api.rs:489-1430`; `serve/api.rs:471-477` | The repo list (`{local, github:{…}}`), fork plan, clone and fetch jobs, the upstream push URL `DISABLED-push-to-fork-only`, pull, and `POST /v1/chats/:id/pr`. |
-| R21 | `crates/hive-cli/src/mcp_config.rs:11-15`; `crates/hive-cli/README.md:140-175`; `deploy/ligus-serve/dashboard-team.toml.example:15,42-51` | **There is no read-only GitHub MCP wrapper in code.** GitHub MCP is generic user config (`npx @modelcontextprotocol/server-github`, with `GITHUB_PERSONAL_ACCESS_TOKEN` inherited from the worker env). The "read-only GitHub MCP" exists only in `docs/design/pr-test-sandbox.md:5`. |
+| R21 | `crates/ligus-cli/src/mcp_config.rs:11-15`; `crates/ligus-cli/README.md:140-175`; `deploy/ligus-serve/dashboard-team.toml.example:15,42-51` | **There is no read-only GitHub MCP wrapper in code.** GitHub MCP is generic user config (`npx @modelcontextprotocol/server-github`, with `GITHUB_PERSONAL_ACCESS_TOKEN` inherited from the worker env). The "read-only GitHub MCP" exists only in `docs/design/pr-test-sandbox.md:5`. |
 | R22 | `docs/ios-app.md:58, 269-308` | The phone's view of the repo API. |
 
 Repo work uses the **host's `gh` login**. The desktop never shells out to `gh`, and the app's device-flow token isn't used for repo work.
@@ -141,15 +141,15 @@ Repo work uses the **host's `gh` login**. The desktop never shells out to `gh`, 
 ### 1.5 Other (24 sites; not identity, keep as is)
 
 - **Copilot runtime:** `cli_detect.rs:177-185,284-291`, `executor/cli_home.rs:45,67`, `executor/mod.rs:279,300`, `provider/copilot.rs`, `provider/acp.rs:65-71`.
-- **GitHub raw-URL fetchers** for skills and vaults: `remote_manifest.rs:7-57`, `hive-core/src/vault.rs:1-161`. These should become forge-neutral raw URLs in 2.x.
+- **GitHub raw-URL fetchers** for skills and vaults: `remote_manifest.rs:7-57`, `ligus-core/src/vault.rs:1-161`. These should become forge-neutral raw URLs in 2.x.
 - **Guards** (`guard_scan.rs:24`, `guard.rs:18,276,360`, `review.rs:121,142`, `builtin_tools.rs:1240`). Add `.gitlab-ci.yml`, `.forgejo/workflows/`, `.gitea/workflows/`, `.tangled/workflows/` and `.build.yml`/`.builds/` (sr.ht) next to `.github/workflows/`. [PHASE0](phase0-specs.md) D.5 already lists `.gitlab-ci.yml`.
-- **Env scrubbing** (`hive-core/src/process_util.rs:45-56,195,218`). Add `GITLAB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `SRHT_*` and atproto app passwords.
+- **Env scrubbing** (`ligus-core/src/process_util.rs:45-56,195,218`). Add `GITLAB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `SRHT_*` and atproto app passwords.
 - **Updater, CI, install and Homebrew:** stay on GitHub releases.
 
 ### 1.6 Docs to rewrite
 
-- **Identity and discovery:** `README.md`, `SECURITY.md`, `docs-site/docs/ligus/concepts/identity.md`, `concepts/security.md`, `concepts/headless-agents.md`, `deploy/solo.md`, `features/{collaborators,invites,onboarding,settings}.md`, `getting-started/first-launch.md`, `networking/self-host.md`, `ops/{deployment,managed-service,server-side-membership,tiering,troubleshooting}.md`, `reference/{env-vars,invite-payload,settings,wire-protocols}.md`, `security/{index,runbooks,threat-model}.md`, `docs/hive-relay-api.md`, `docs/hive-social-graph-plan.md`, `docs/security-hardening-plan.md`.
-  - `docs/hive-relay-api.md:68-75` still says the relay falls back to the bearer. That fallback was removed in relay v0.2.0 (`relay/CHANGELOG.md:44-50`).
+- **Identity and discovery:** `README.md`, `SECURITY.md`, `docs-site/docs/ligus/concepts/identity.md`, `concepts/security.md`, `concepts/headless-agents.md`, `deploy/solo.md`, `features/{collaborators,invites,onboarding,settings}.md`, `getting-started/first-launch.md`, `networking/self-host.md`, `ops/{deployment,managed-service,server-side-membership,tiering,troubleshooting}.md`, `reference/{env-vars,invite-payload,settings,wire-protocols}.md`, `security/{index,runbooks,threat-model}.md`, `docs/langstroth-relay-api.md`, `docs/ligus-social-graph-plan.md`, `docs/security-hardening-plan.md`.
+  - `docs/langstroth-relay-api.md:68-75` still says the relay falls back to the bearer. That fallback was removed in relay v0.2.0 (`relay/CHANGELOG.md:44-50`).
 - **Repos:** `docs-site/docs/operate/ops/serve-repos.md`, `docs-site/docs/operate/reference/serve-api.md`, `docs/ios-app.md`, `docs/design/pr-test-sandbox.md`.
 
 ---
@@ -160,11 +160,11 @@ Repo work uses the **host's `gh` login**. The desktop never shells out to `gh`, 
 
 - **`account_id`**: a random UUIDv4, created with the account key on first launch (`identity_store.rs:160-161`, already the case). It is never derived from anything public.
 - **Account key**: Ed25519. Registered on each workspace config log with `AccountKeyRegistered` (unchanged). It certifies devices with `DeviceCertificate` (`hive-device-cert-v1`, unchanged).
-- **More devices** join the account through the existing enrollment code (`hivedev1:`, `hive-device-enroll-v1`, `crates/hive-runtime/src/device_enroll.rs:46-51`). They never join by signing into a provider.
+- **More devices** join the account through the existing enrollment code (`hivedev1:`, `hive-device-enroll-v1`, `crates/ligus-runtime/src/device_enroll.rs:46-51`). They never join by signing into a provider.
   - **[I]** Today two devices that sign into the same GitHub account each have their *own* account key under the same derived `account_id`. Registration is first-wins plus dispute, so the second device's `AccountKeyRegistered` is disputed in shared workspaces. Removing derivation removes this hazard.
 - **Passkeys and recovery key**: unchanged ([PHASE0](phase0-specs.md) B.4).
 - **Account fingerprint**: hex of the first 16 bytes of SHA-256 of the account signing key. This is the **existing `fk` computation** (`app/src/lib.rs:617-623`). It is shown as eight groups of four hex characters ("safety code") on profiles and invites, so people can compare out of band. No new crypto.
-- **Profile**: `display_name` and `avatar_url` (a bounded `data:` URL) on `ActorIdentity`, already synced (`crates/hive-core/src/identity.rs:37-60`). `HumanAccount.handle` (`identity_store.rs:166`) becomes an optional, non-unique nickname. There is no global handle namespace, because Ligus has no server that could own one.
+- **Profile**: `display_name` and `avatar_url` (a bounded `data:` URL) on `ActorIdentity`, already synced (`crates/ligus-core/src/identity.rs:37-60`). `HumanAccount.handle` (`identity_store.rs:166`) becomes an optional, non-unique nickname. There is no global handle namespace, because Ligus has no server that could own one.
 - **Git commit identity** (`git_email`) is a profile setting.
   - It is no longer overwritten by a GitHub email.
   - The Forges page offers "use this forge's noreply address" per connection: on GitHub, `<id>+<login>@users.noreply.github.com` **[I: format widely documented]**.
@@ -181,7 +181,7 @@ A **linked identity** is an optional claim, "this Ligus account is also `<subjec
 - **Opt-in.** Off by default.
 - **Published for each workspace.** It is an event on that workspace's config log, so only that workspace's members see it.
 - **Proven on the linking device** and **re-verifiable by every other device**, directly against the forge or DID document. The relay is never involved.
-- **Verification is never fold state.** The fold records the claim. Whether it currently verifies is a device-local view result, cached in a device-local table (`identity_link_checks` in `hive.db`). This keeps the fold network-free and env-free (review RC-8, [PHASE0](phase0-specs.md) §0 rule 4).
+- **Verification is never fold state.** The fold records the claim. Whether it currently verifies is a device-local view result, cached in a device-local table (`identity_link_checks` in `ligus.db`). This keeps the fold network-free and env-free (review RC-8, [PHASE0](phase0-specs.md) §0 rule 4).
 
 **Wire (2.0).** Two new `SessionEvent` kinds go on the config log. Tags are camelCase, and an older decoder folds them as `Unknown`, which is a no-op ([PHASE0](phase0-specs.md) §0 rule 3).
 
@@ -279,7 +279,7 @@ It can be produced by:
 
 ### 2.5 How every device verifies
 
-`crates/hive-runtime/src/identity_links.rs` is a pure core with a pluggable fetcher. It replaces the dormant `identity_verifier.rs` Option C and reuses its OpenSSH Ed25519 parser. Steps:
+`crates/ligus-runtime/src/identity_links.rs` is a pure core with a pluggable fetcher. It replaces the dormant `identity_verifier.rs` Option C and reuses its OpenSSH Ed25519 parser. Steps:
 
 1. **Fold checks**, which are cheap and offline:
    - the signer's certified `account_id` equals `link.account_id`;
@@ -384,7 +384,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
   1. The account key fingerprint equals the `fk` the user got out of band (invite or QR), **or** the account is already pinned from a shared workspace.
   2. Each certificate verifies under the account key.
   3. Each envelope verifies under a certified device's key.
-  4. The record has not expired, and its `issuedAt` is not older than the newest one seen for that `cid` (anti-rollback). The newest-seen time is kept per `cid` in `hive.db` (`contact_seen`), so it survives restarts.
+  4. The record has not expired, and its `issuedAt` is not older than the newest one seen for that `cid` (anti-rollback). The newest-seen time is kept per `cid` in `ligus.db` (`contact_seen`), so it survives restarts.
   5. No device the record lists was revoked on a log this device holds; revoked devices are dropped, and a record with only revoked devices is refused.
   6. A link verifies only by Section 2.5.
 
@@ -405,7 +405,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 | GET | `/v1/contacts/{cid}/drop?after=<seq>` | contact key | `{items:[{seq, blob, createdAt}]}`; same row cap as `relay_inbox` (`TestInboxRowCapEvictsOldest`) |
 
 - **Write keys are per relay.** The device keeps one master write key and never sends it. Each relay gets `HKDF-SHA256(master, info = "ligus-contact-write-key-v1\0" + lowercased base URL)`, so a relay that sees its key in clear can't read, acknowledge or overwrite the same contact on another relay. One relay refusing the key doesn't make the device drop its `cid` everywhere: the device replaces the `cid` only when no relay holds the record any more.
-- **Reclaim hold.** When a record expires, the relay keeps only its write-key hash and seq counter for 180 days (`HIVE_RELAY_CONTACT_RECLAIM_HOLD_DAYS`). During the hold only the old key can re-create the `cid`, so a lapsed contact id can't be taken over while co-members still deliver to it.
+- **Reclaim hold.** When a record expires, the relay keeps only its write-key hash and seq counter for 180 days (`LANGSTROTH_RELAY_CONTACT_RECLAIM_HOLD_DAYS`). During the hold only the old key can re-create the `cid`, so a lapsed contact id can't be taken over while co-members still deliver to it.
 - **Seqs are monotonic.** A drop box's seqs never go backwards, also across expiry and re-creation: a re-created box starts after a time-based base, so each device's `after=` cursor and acknowledgements stay valid. The owner reads every page of the box.
 - **Bodies are UTF-8.** The relay stores records and blobs byte-exact and answers `400` to a record or blob that isn't valid UTF-8 (the snapshot would otherwise rewrite it).
 - **Flood eviction (R6).** When a box is over its row or byte cap, the relay evicts first the drops it has already served to the owner (returned by an owner-keyed read), oldest first, then the unread drops of the heaviest sender in that box (most bytes, then most rows; on a tie an unverified sender before a verified one). A sender is the relay-token subject when the request has one (counted as verified), otherwise the client address (IPv6 /64 or IPv4), kept only as a salted hash. A flood from a few addresses that know the `cid` evicts its own drops rather than an invite nobody has read yet. Relay test: `TestContactDropFloodKeepsUnreadInvites`.
@@ -413,10 +413,10 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 - **Storage:** `relay_contacts(cid PK, write_key_hash, record, updated_at)` and `relay_contact_drop(cid, seq, blob, created_at)`, in the memory, Postgres and snapshot stores.
 - **2.0 without v0.3.** A 2.0 desktop against a relay without contacts gets a 404 on `/v1/contacts/`. It then falls back to links and QR only, and says so: "this relay doesn't support contacts".
 - **The GitHub routes:**
-  - v0.3 registers them only when `LIGUS_RELAY_GITHUB_SOCIAL=1`. The default is off. The `/v1/directory/` and similar prefixes stay reserved, so nobody can reuse the paths with different semantics.
+  - v0.3 registers them only when `LANGSTROTH_RELAY_GITHUB_SOCIAL=1`. The default is off. The `/v1/directory/` and similar prefixes stay reserved, so nobody can reuse the paths with different semantics.
   - v0.4 deletes the handlers, the `relay_directory*`, `relay_account*`, `relay_login_index`, `relay_inbox` and `relay_friend*` tables, and the GitHub verifier.
   - The 2.0 client never sends `X-Hive-Github-Token` or `X-Ligus-Github-Token`.
-- **Relay membership** (`/v1/workspaces/{id}/members`, only when `HIVE_RELAY_MEMBERSHIP=1`) keeps keying on the `hrt1` `sub`. The client stops inventing `github:<id>`:
+- **Relay membership** (`/v1/workspaces/{id}/members`, only when `LANGSTROTH_RELAY_MEMBERSHIP=1`) keeps keying on the `hrt1` `sub`. The client stops inventing `github:<id>`:
   - with ligus-auth, the `sub` is `<tenant>:<user>` (`relay/ligusauth/flows.go:953-957`);
   - with a desktop-minted token, it is `ligus:<account_id>`.
 
@@ -442,7 +442,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 
 ## 4. DMs and rooms
 
-- **The room is random.** It is `"dm-" + uuid_v4().simple()` and is chosen by the initiator. `room_workspace_id(room)` stays as it is (`crates/hive-core/src/channel.rs:26-30`), and its input is now random.
+- **The room is random.** It is `"dm-" + uuid_v4().simple()` and is chosen by the initiator. `room_workspace_id(room)` stays as it is (`crates/ligus-core/src/channel.rs:26-30`), and its input is now random.
 - **The invite id is random.** It replaces `UUIDv5(ws_id, "dm-invite")` (M3).
 - **Roles.** The initiator is the founder and owner. `founder_actor_id` is the initiator's account UUID, with `fk` pinned. This replaces the lexicographic `github:` comparison (M2).
 - **Delivery.** The `hivews1:` invite, with `dm_account = <peer account_id>` (the field keeps its name; its content becomes a UUID string), is sealed to the peer's verified KA keys and either:
@@ -466,8 +466,8 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 
 ### 5.1 Where it lives
 
-- `crates/hive-forge/` is a new crate. It is pure HTTP plus git argv builders, with no Tauri and no axum.
-- It is used by `ligus serve` (`crates/hive-cli/src/serve/repos_api.rs`, which replaces the `GitHub` trait at `:200-276`) and later by the desktop.
+- `crates/ligus-forge/` is a new crate. It is pure HTTP plus git argv builders, with no Tauri and no axum.
+- It is used by `ligus serve` (`crates/ligus-cli/src/serve/repos_api.rs`, which replaces the `GitHub` trait at `:200-276`) and later by the desktop.
 - The existing fork logic (`repos.rs:229-376`: `ForkLayout`, `check_push_target`, the `DISABLED-push-to-fork-only` push URL) becomes forge-neutral. It takes hosts from the connection instead of the `github.com` literals.
 
 ### 5.2 Trait
@@ -639,18 +639,18 @@ pub trait Forge: Send + Sync {
 
 ### 5.4 Credentials: where they live
 
-- **`SecretStore`** ([PHASE0](phase0-specs.md) B.2; `crates/hive-runtime/src/secret_store.rs`): scope `"forge"`, name `<forge id>:<purpose>`, where purpose is `read` or `write`.
+- **`SecretStore`** ([PHASE0](phase0-specs.md) B.2; `crates/ligus-runtime/src/secret_store.rs`): scope `"forge"`, name `<forge id>:<purpose>`, where purpose is `read` or `write`.
   - **macOS:** Keychain, `ThisDeviceOnly`.
   - **Linux desktop:** Secret Service.
   - **Headless serve or worker:** systemd-creds.
   - **Kubernetes:** a mounted Secret.
-- **Never** in `settings.json`, `hive.db`, synced events, invites, contact records, logs or the relay. Test: `no_forge_token_leaves_device` (Section 7).
+- **Never** in `settings.json`, `ligus.db`, synced events, invites, contact records, logs or the relay. Test: `no_forge_token_leaves_device` (Section 7).
 - **Ownership.** The device or box that does git work for a repo binding (the hosts and bindings model) holds that forge's tokens. A phone never holds a forge token. It drives the box (5.7).
 - **Refreshes are serialized.** OAuth refreshes are serialized per data dir by an exclusive lock on `.forges.lock`, across serve, the agents' forge tools and the git credential helper. The refresher re-reads the saved expiry first, and the new expiry is saved once while the lock is held, so a rotating GitLab refresh token is never spent twice and nobody is signed out (test `refreshed_expiry_is_persisted_once`).
 - **Device sign-in after removal.** Each device sign-in carries a random id; removing the connection ends it. Tokens are saved only while the connection exists and that sign-in is still the pending one (test `device_poll_after_remove_stores_nothing`).
 - **Internal hosts.** A connection may be marked `internal` on one device (stored in `forges.toml`, never synced; `POST /v1/forges {internal}`, the Settings > Code hosts checkbox, or `ligus forge add --internal`). Without the mark, a base URL that is or resolves to a loopback, private, link-local (cloud metadata), CGNAT or other non-public address is refused when added, and every request uses a resolver that only returns public addresses (DNS rebinding finds nothing). Caveats: behind `HTTP(S)_PROXY` or `ALL_PROXY` the proxy resolves the target, and git's own pushes look the host up themselves.
 - **Agents never read the forge CLIs' logins.** The sandbox denies `~/.config/gh` (except for the Copilot CLI, which may sign in through it), `glab-cli`, `tea` and `hub` alongside `~/.ssh`, `~/.netrc` and `~/.git-credentials`.
-- **Tests never reach a real forge.** `hive-forge` refuses real hosts in test builds and whenever `LIGUS_FORGE_DENY_REAL=1`; tests use loopback fakes only.
+- **Tests never reach a real forge.** `ligus-forge` refuses real hosts in test builds and whenever `LIGUS_FORGE_DENY_REAL=1`; tests use loopback fakes only.
 - **Git transport:**
   - HTTPS uses `-c credential.<base>.helper=` (reset) plus `-c credential.<base>.helper=!ligus forge git-credential <forge-id>`. That reads the write token from the store at push time. It generalises `repos_api.rs:405-414`.
   - SSH uses the user's agent.
@@ -792,7 +792,7 @@ These are additive. The existing `/v1/repos*` and `/v1/chats/:id/pr` shapes stay
 | S4 | **Key rotation on the forge** (key removed after compromise). | The status becomes `stale` at the next check. The attacker who holds the old key can make new statements, but they fail the forge check once the key is removed. Between removal and the next check, a cached `verified` can persist for up to 24 h. | `removed_forge_key_turns_stale`, `cache_ttl_bounds_staleness` |
 | S5 | **Compromised or malicious forge** (or PDS or PLC operator for Tangled). | The forge can list any key for any user, so it can make links "verify" for any user on it. **A linked identity proves "this forge says so", nothing more.** Ligus never grants membership, roles, or sealing trust from a link alone (3.5). For Tangled, read through `com.atproto.sync.getRecord` proofs and the PLC audit log in 2.x **[I]**. | `link_never_grants_membership_or_seal_trust` (authz plus seal-plan table test) |
 | S6 | **The relay as attacker** (contacts). | It can withhold, delay or replay old contact records, and enumerate the cids it has seen. It cannot forge records (signature chain) or read drops (sealed). Rollback is bounded by `expiresAt` ≤ 30 days and the newest-seen `issuedAt` kept locally. It cannot substitute KA keys for co-members, which come from config logs. For first contact, the `fk` from the QR or link anchors the account. | `contact_record_rollback_rejected`, `contact_record_wrong_fk_unverified`, `relay_substituted_ka_key_not_sealed_to` (extends `directory_seal_plan_prefers_verified_devices`) |
-| S7 | **The relay sees forge tokens.** | 2.0 never sends one: the header code is deleted. Repo tokens are used only between the host and the forge. | `relay_client_never_sends_forge_headers` (a request recorder asserts that no `X-*-Github-Token` and no `Authorization` other than the relay bearer ever reaches the relay), `no_forge_token_leaves_device` (property test: random token values never appear in `settings.json`, `hive.db`, synced envelopes, invites, contact records or logs) |
+| S7 | **The relay sees forge tokens.** | 2.0 never sends one: the header code is deleted. Repo tokens are used only between the host and the forge. | `relay_client_never_sends_forge_headers` (a request recorder asserts that no `X-*-Github-Token` and no `Authorization` other than the relay bearer ever reaches the relay), `no_forge_token_leaves_device` (property test: random token values never appear in `settings.json`, `ligus.db`, synced envelopes, invites, contact records or logs) |
 | S8 | **Cid squatting or drop spam.** | A cid is 128 random bits, so it can't be squatted without knowing it. Drops are rate-limited and capped, and the owner can rotate the cid. Garbage drops fail to unseal and are discarded. | relay: `TestContactWriteKeyRequired`, `TestContactDropRateLimit`, `TestContactDropReadNeedsKey`, `TestContactRoutesAdditive` (existing `/v1` bodies byte-identical) |
 | S9 | **Derivable DM ids** (today's M1). | Rooms and invite ids are random. | `no_room_or_invite_id_derived_from_public_ids` (allow-list test over `new_v5(` call sites), `dm_room_is_random`, `simultaneous_dm_converges` |
 | S10 | **Privacy leaks.** | (a) Forge lookups reveal the viewer: a setting plus the cache. (b) Links are seen by every member and by agents: per-workspace opt-in and UI disclosure. (c) Forge avatars are never hot-linked. (d) The forge index (2.1) tells the relay which forge account owns a cid: opt-in, documented. (e) `git_email` is synced as today, with a warning in Settings. | `links_absent_from_unselected_workspaces`, `forge_checks_disabled_makes_no_requests`, `no_remote_avatar_urls_rendered` (web) |
@@ -848,7 +848,7 @@ Sizes: S is about 1-3 days, M is about 1-2 weeks, L is longer. "Relay" marks ite
 | ID-3 | **Random DM ids and DM via invite.** Delete `dm_room_for`. Random room and invite id. Founder = initiator. `dm_account` holds a UUID. Accept rule on `fk`. Simultaneous-open rule. Tests S9. | yes | no | M | ID-1 |
 | ID-4 | **Remove the GitHub social client paths.** directory, account, friends, invite-by-handle and team import (D1-D31). Relay membership `sub` becomes `ligus:<account>` or the ligus-auth sub. `generate_agent_bootstrap` gets a new sub. | yes | no | M | ID-1 |
 | ID-5 | **Co-member invites and DMs** using verified config-log KA keys (reuse `directory_trust::signed_ka_keys`). Delivery by link or QR now, and the drop box when present. | yes | uses RL-1 if present | M | ID-3, ID-4 |
-| FG-1 | **`hive-forge` crate and `Forge` trait.** Port `GhCli` as a credential source. Generic `ligus forge git-credential` helper. Forge-neutral `ForkLayout`/`check_push_target`. `parse_repo_spec` for any host. | yes | no | M | ID-2 |
+| FG-1 | **`ligus-forge` crate and `Forge` trait.** Port `GhCli` as a credential source. Generic `ligus forge git-credential` helper. Forge-neutral `ForkLayout`/`check_push_target`. `parse_repo_spec` for any host. | yes | no | M | ID-2 |
 | FG-2 | **GitHub REST implementation** (token, `gh`, device flow through the Ligus GitHub App or OAuth App per D5). Draft PRs, checks fallback. | yes | no | M | FG-1 |
 | FG-3 | **GitLab implementation** (.com and self-managed; device flow plus PAT; `Draft:` MRs; pipelines). | yes | no | M | FG-1 |
 | FG-4 | **Forgejo/Gitea/Codeberg implementation** (PAT; `WIP:` PRs; statuses and actions). | yes | no | M | FG-1 |
@@ -857,7 +857,7 @@ Sizes: S is about 1-3 days, M is about 1-2 weeks, L is longer. "Relay" marks ite
 | LK-1 | **Identity links core.** `IdentityLinkPublished`/`Removed` kinds (reserve the slots in the A1 list), authz rule, fold into `RosterState.links`, statement renderer, SSHSIG verification, device-local check cache, verification for GitHub, GitLab, Forgejo/Gitea/Codeberg, **SourceHut and Tangled** (key fetchers only). Tests S1-S5, S10, S13-S14. | yes (owner D1, D2) | no | M-L | A2 authz, FG-1 (key fetchers) |
 | LK-2 | **Link UI** (Settings flow, agent key matching, chips, per-workspace publish). | yes | no | M | LK-1 |
 | RL-1 | **Relay contacts routes** (3.3) in memory, Postgres and snapshot stores. Relay tests S8. `/v1/contacts/` prefix reserved. | client tolerant in 2.0; relay v0.3 | **yes** | M | none |
-| RL-2 | **Deprecate the GitHub social routes** (`LIGUS_RELAY_GITHUB_SOCIAL`, default off in v0.3; delete in v0.4). README and CHANGELOG. | relay v0.3 | **yes** | S | none |
+| RL-2 | **Deprecate the GitHub social routes** (`LANGSTROTH_RELAY_GITHUB_SOCIAL`, default off in v0.3; delete in v0.4). README and CHANGELOG. | relay v0.3 | **yes** | S | none |
 | CT-1 | **Client contacts:** publish the record, heartbeat, drop box poll, contact card QR, anti-rollback store. | yes if RL-1 ships with 2.0, else 2.1 | uses RL-1 | M | RL-1, ID-5 |
 | DOC-1 | Docs (6.6). | yes | n/a | M | all of the above |
 | LK-3 | **ligus-auth `OidcAttestation`.** `POST /t/{tenant}/attest` signs `{uid, display claims, account key, device id}` with the issuer key. Needs a **new** domain string (`ligus-auth-identity-v1\0`). Workspace rules extension pins tenant issuer keys. | 2.1 | ligus-auth | M | Track E |
@@ -878,7 +878,7 @@ RL-1, RL-2 (relay repo, any time) → CT-1
 DOC-1 last
 ```
 
-**Conflict hot spots.** `app/src/lib.rs` is touched by ID-1, ID-3, ID-4 and ID-5. Keep the edits as calls into new `hive-runtime` modules (`identity_links.rs`, `contacts.rs`, `dm.rs`). `events.rs` gets the two new kinds in the A1 reserved list.
+**Conflict hot spots.** `app/src/lib.rs` is touched by ID-1, ID-3, ID-4 and ID-5. Keep the edits as calls into new `ligus-runtime` modules (`identity_links.rs`, `contacts.rs`, `dm.rs`). `events.rs` gets the two new kinds in the A1 reserved list.
 
 **Proof tests at the cut:**
 - S1-S4, S7, S9, S10, S11, S13, S14, S15 (client);

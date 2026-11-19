@@ -17,8 +17,8 @@ theme:
   # Logo, favicon and stylesheet live in docs-site/theme and are copied
   # into the built site at the same paths.
   custom_dir: theme
-  logo: images/hive-logo.svg
-  favicon: images/hive-favicon.png
+  logo: images/ligus-logo.svg
+  favicon: images/ligus-favicon.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default

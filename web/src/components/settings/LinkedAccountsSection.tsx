@@ -103,7 +103,7 @@ export function LinkedAccountsSection() {
           </div>
           <button
             className="shrink-0 text-xs hover:opacity-80"
-            style={{ color: "var(--hive-danger-ink)" }}
+            style={{ color: "var(--ligus-danger-ink)" }}
             onClick={() => void unlink(l.linkId, `${forgeLabel(l.provider, l.host)} ${l.handle}`)}
           >
             Unlink
@@ -208,7 +208,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
         </div>
         {draft.method === "keyPublished" ? (
           <div className="space-y-2">
-            <p style={{ color: "var(--hive-danger-ink)" }}>{KEY_PUBLISHED_DISCLOSURE}</p>
+            <p style={{ color: "var(--ligus-danger-ink)" }}>{KEY_PUBLISHED_DISCLOSURE}</p>
             <p>
               Add this as a <strong>signing key</strong> on {forgeLabel(draft.provider, draft.host)} (GitHub: Settings → SSH
               and GPG keys → New SSH key → Key type "Signing Key"; GitLab: SSH Keys → Usage type "Signing", not the default "Authentication &amp; Signing"), then publish.
@@ -326,7 +326,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
           <input type="radio" className="mt-0.5" checked={method === "keyPublished"} onChange={() => setMethod("keyPublished")} />
           <span>
             Or add my Ligus key to the forge as a signing key
-            {method === "keyPublished" && <span className="mt-1 block" style={{ color: "var(--hive-danger-ink)" }}>{KEY_PUBLISHED_DISCLOSURE}</span>}
+            {method === "keyPublished" && <span className="mt-1 block" style={{ color: "var(--ligus-danger-ink)" }}>{KEY_PUBLISHED_DISCLOSURE}</span>}
           </span>
         </label>
       )}
@@ -375,7 +375,7 @@ function ForgeCheckSettings() {
           <span className="font-mono">
             {f.provider} · {f.baseUrl}
           </span>
-          <button className="hover:opacity-80" style={{ color: "var(--hive-danger-ink)" }} onClick={() => void save({ ...cur, forges: cur.forges.filter((x) => x !== f) })}>
+          <button className="hover:opacity-80" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => void save({ ...cur, forges: cur.forges.filter((x) => x !== f) })}>
             Remove
           </button>
         </div>

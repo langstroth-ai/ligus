@@ -1,0 +1,1710 @@
+//! Verify-on-read with quarantine — ported from `EnvelopeVerifier.swift`.
+//!
+//! Before projecting a workspace's event stream, each signed envelope is
+//! checked against the writing device's public key (resolved from the device
+//! roster). Envelopes that fail — bad signature, unknown/revoked device, or
+//! (under the clean-replacement default) unsigned — are diverted to a
+//! quarantine list and excluded from projection, rather than poisoning state.
+
+use ligus_core::crypto::verify_envelope;
+use ligus_core::{CryptoError, DeviceIdentity, SessionEvent, SessionEventEnvelope};
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
+
+/// Why an envelope was quarantined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineReason {
+    /// No signature present (rejected unless `allow_unsigned`).
+    Unsigned,
+    /// Signed by a device id not in the roster.
+    UnknownDevice,
+    /// Signed by a device whose key has been revoked.
+    RevokedDevice,
+    /// Signature did not verify against the device's public key.
+    BadSignature,
+    /// The stamped author's account is not the signing device's account — a
+    /// member trying to attribute an event to someone else.
+    Impersonation,
+    /// Option C (github-signing-keys identity mode): GitHub was fetched and the
+    /// account's registered signing key is **not** among the login's
+    /// `ssh_signing_keys` — a provably-bad identity binding. See
+    /// `identity_verifier` and docs/security-hardening-plan.md S1 Option C.
+    GithubKeyNotListed,
+    /// The account's own key lineage asserts two keys (its own device
+    /// registered a second key, or a key it rotated away from designated
+    /// another successor), or, for an account with no anchor, two
+    /// self-evident registrations conflict. Fail closed: events stamped as
+    /// it are held, never applied. A registration someone else published
+    /// under the account id is refused instead and disputes nothing
+    /// (`ligus_core::account_keys`).
+    DisputedAccountKey,
+    /// The device was certified while dearth mode is on and still waits for a
+    /// second Admin's approval. Held (never accepted, never dropped) in every
+    /// identity mode, so the approval binds in Relay mode too.
+    PendingApproval,
+    /// Signed by a device no certificate vouches for yet, while its stamp
+    /// claims an account the workspace already knows. Held (retried), never
+    /// accepted: otherwise anyone with the workspace key could stamp events as
+    /// a known member from a fresh device id.
+    UncertifiedDevice,
+}
+
+/// Resolves device public keys + revocation status for verification.
+pub trait DeviceKeyResolver {
+    fn public_key(&self, device_id: Uuid) -> Option<&[u8]>;
+    fn is_revoked(&self, device_id: Uuid) -> bool;
+}
+
+/// A roster of known devices, the simplest [`DeviceKeyResolver`].
+#[derive(Debug, Default, Clone)]
+pub struct DeviceRoster {
+    keys: HashMap<Uuid, Vec<u8>>,
+    revoked: HashMap<Uuid, bool>,
+}
+
+impl DeviceRoster {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, device: &DeviceIdentity) {
+        self.keys
+            .insert(device.id, device.signing_public_key.clone());
+        self.revoked.insert(device.id, device.is_revoked());
+    }
+
+    pub fn with_device(mut self, device: &DeviceIdentity) -> Self {
+        self.insert(device);
+        self
+    }
+}
+
+impl DeviceKeyResolver for DeviceRoster {
+    fn public_key(&self, device_id: Uuid) -> Option<&[u8]> {
+        self.keys.get(&device_id).map(Vec::as_slice)
+    }
+    fn is_revoked(&self, device_id: Uuid) -> bool {
+        self.revoked.get(&device_id).copied().unwrap_or(false)
+    }
+}
+
+/// The split result of verifying an envelope stream.
+#[derive(Debug, Default)]
+pub struct VerificationOutcome {
+    /// Envelopes that verified — safe to project.
+    pub valid: Vec<SessionEventEnvelope>,
+    /// Rejected envelopes paired with the reason.
+    pub quarantined: Vec<(SessionEventEnvelope, QuarantineReason)>,
+}
+
+/// Verify each envelope against the resolver. `allow_unsigned` controls whether
+/// envelopes without a signature pass through (Swift's back-compat behavior) or
+/// are quarantined (the clean-replacement default, where everything is signed).
+pub fn verify_stream<R: DeviceKeyResolver>(
+    envelopes: impl IntoIterator<Item = SessionEventEnvelope>,
+    resolver: &R,
+    allow_unsigned: bool,
+) -> VerificationOutcome {
+    let mut outcome = VerificationOutcome::default();
+    for env in envelopes {
+        let Some(device_id) = env.signer_device_id else {
+            if allow_unsigned {
+                outcome.valid.push(env);
+            } else {
+                outcome.quarantined.push((env, QuarantineReason::Unsigned));
+            }
+            continue;
+        };
+        if resolver.is_revoked(device_id) {
+            outcome
+                .quarantined
+                .push((env, QuarantineReason::RevokedDevice));
+            continue;
+        }
+        let Some(public_key) = resolver.public_key(device_id) else {
+            outcome
+                .quarantined
+                .push((env, QuarantineReason::UnknownDevice));
+            continue;
+        };
+        match verify_envelope(&env, public_key) {
+            Ok(()) => outcome.valid.push(env),
+            Err(CryptoError::Unsigned) if allow_unsigned => outcome.valid.push(env),
+            Err(_) => outcome
+                .quarantined
+                .push((env, QuarantineReason::BadSignature)),
+        }
+    }
+    outcome
+}
+
+// ---------------------------------------------------------------------------
+// Workspace roster + verdicts (S1) — a device-key resolver built by folding the
+// trust events (`AccountKeyRegistered`, `DeviceCertificateAdded`, membership)
+// out of a workspace's own event stream, so verification needs no network at
+// ingest and every device derives the identical roster (it folds in canonical
+// order). See docs/security-hardening-plan.md S1.
+// ---------------------------------------------------------------------------
+
+/// device_id → (signing public key, the set of accounts that have cert-verified
+/// this device) for trusted, non-revoked devices, plus the set of devices whose
+/// owning account was removed. A device can be certified to more than one
+/// account — e.g. a local identity that later signs into GitHub is the same
+/// person, and each cert is signed by its own account key — so an event is
+/// authentic if its stamp matches ANY of the device's certified accounts.
+///
+/// A device id is derived from the device's key
+/// (`ligus_core::crypto::device_id_for`) and a certificate under any other id
+/// never verifies, so every certificate of one id names the same key: no
+/// member can certify someone else's device id under a key of their own.
+#[derive(Debug, Default, Clone)]
+pub struct WorkspaceRoster {
+    devices: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+    revoked: HashSet<Uuid>,
+    /// account_id → the account's pinned signing public key, for member accounts
+    /// (first-registration wins, canonical order). Retained so the Option-C
+    /// identity gate can check this exact key against the account's GitHub
+    /// `ssh_signing_keys`. Not used by Option A (relay-trusted) verification.
+    account_keys: HashMap<Uuid, Vec<u8>>,
+    /// Device certificates withheld because they were issued while their
+    /// workspace was in dearth mode and lack a second approval:
+    /// `(workspace, device, account)`.
+    pending: Vec<(Uuid, Uuid, Uuid)>,
+    /// Workspaces whose config log has dearth mode on (Admin-authorized).
+    /// While on, an event no certified device vouches for is held, not
+    /// accepted, whatever the identity mode.
+    dearth_workspaces: HashSet<Uuid>,
+    /// Accounts for which two *different* signing keys were registered — a
+    /// contested binding. Events stamped as one of these are quarantined (fail
+    /// closed), so a forged registration under a victim's account can't hijack it.
+    disputed: HashSet<Uuid>,
+    /// Every device whose certificate verifies against its account's pinned
+    /// key, member or not (for the batch fixpoint's self-validating events).
+    chained: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+    /// The log's certificates and registrations (`ligus_core::account_keys`):
+    /// whether a device published its own certificate for an account under a
+    /// key it registered itself, disputed or not, is what a self-enrollment
+    /// or a founding seed signed by that device is checked against in the
+    /// batch fixpoint (`self_validating`). The admission is what anchors an
+    /// account's key (`ligus_core::account_keys`), so a dispute an attacker
+    /// raised before it arrived must not keep it out.
+    key_index: Option<std::sync::Arc<ligus_core::account_keys::KeyIndex>>,
+    /// Accounts an authorized removal took out (and no Admin re-added).
+    removed_accounts: HashSet<Uuid>,
+    /// Agent signing keys valid at the config head: key_id → (key, agent).
+    agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)>,
+    /// Devices in `revoked` only because no account they are certified to
+    /// has been admitted here yet: never a member, not removed, not
+    /// explicitly revoked. Their events are held, not refused, at ingest.
+    unadmitted: HashSet<Uuid>,
+    /// Account key registrations and rotations refused (someone else's
+    /// registration under an account id, a rotation no key of the account
+    /// signed), each with its signer: attributed, never a dispute.
+    refused_keys: Vec<ligus_core::account_keys::RefusedKey>,
+}
+
+impl WorkspaceRoster {
+    /// Whether `device_id` is cert-verified to sign as `account` (any of its
+    /// certified accounts). False for an unknown device.
+    pub fn device_signs_for(&self, device_id: Uuid, account: Uuid) -> bool {
+        self.devices.get(&device_id).is_some_and(|(_, accts)| accts.contains(&account))
+    }
+    /// Whether `device_id` is a trusted (cert-verified, non-revoked) device.
+    pub fn is_certified(&self, device_id: Uuid) -> bool {
+        self.devices.contains_key(&device_id)
+    }
+    /// One account this device is certified to (deterministic: smallest by id),
+    /// for callers needing a single account when an event carries no stamp. Use
+    /// `device_signs_for` for authorization — a device may hold several.
+    pub fn account_of(&self, device_id: Uuid) -> Option<Uuid> {
+        self.devices.get(&device_id).and_then(|(_, accts)| accts.iter().min().copied())
+    }
+    /// The pinned account signing key for a member account, if known. Used by the
+    /// Option-C identity gate to compare against GitHub `ssh_signing_keys`.
+    pub fn account_signing_key(&self, account_id: Uuid) -> Option<&[u8]> {
+        self.account_keys.get(&account_id).map(Vec::as_slice)
+    }
+    /// Whether `account_id`'s own key lineage asserts two keys (see
+    /// `ligus_core::account_keys`). Events stamped as it are held — fail
+    /// closed.
+    pub fn is_disputed(&self, account_id: Uuid) -> bool {
+        self.disputed.contains(&account_id)
+    }
+    /// The account key events refused here, each with its signer (at most
+    /// `ligus_core::account_keys::REFUSED_KEEP`).
+    pub fn refused_keys(&self) -> &[ligus_core::account_keys::RefusedKey] {
+        &self.refused_keys
+    }
+    pub fn is_empty(&self) -> bool {
+        self.devices.is_empty() && self.revoked.is_empty()
+    }
+    /// Certificates waiting for a dearth-mode second approval, as
+    /// `(workspace, device, account)`.
+    pub fn pending_devices(&self) -> &[(Uuid, Uuid, Uuid)] {
+        &self.pending
+    }
+    /// Every trusted (cert-verified, non-revoked) device id.
+    pub fn certified_devices(&self) -> Vec<Uuid> {
+        let mut v: Vec<Uuid> = self.devices.keys().copied().collect();
+        v.sort();
+        v
+    }
+}
+
+/// Dearth mode as the roster needs it: which devices are admitted without a
+/// second approval, and the accounts of the Admins who approved each subject.
+struct DearthPolicy {
+    admitted: HashSet<Uuid>,
+    approvers: HashMap<String, Vec<Uuid>>,
+}
+
+impl DearthPolicy {
+    /// A certificate counts if its device was trusted when dearth mode began,
+    /// or an Admin of a *different* account approved it (the owner's own
+    /// certificate is the first approval).
+    fn admits(&self, cert: &ligus_core::crypto::DeviceCertificate) -> bool {
+        self.admitted.contains(&cert.device_id)
+            || self
+                .approvers
+                .get(&cert.device_id.to_string())
+                .is_some_and(|accts| accts.iter().any(|a| *a != cert.account_id))
+    }
+}
+
+/// Workspaces whose config log is in `ordered`.
+fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
+    ordered
+        .iter()
+        .filter(|e| e.session_id == ligus_core::workspace_config_session_id(e.workspace_id))
+        .map(|e| e.workspace_id)
+        .collect()
+}
+
+/// Per workspace, the active dearth policy from its config log, projected with
+/// the usual ingest authorization (so only an Admin's switch or approval counts)
+/// and the same founder pin as the roster, so a forged lower-lamport seed
+/// can't pick the projection dearth mode is read from.
+fn dearth_policies(ordered: &[&SessionEventEnvelope], pin: Option<&FounderPin>) -> HashMap<Uuid, DearthPolicy> {
+    let founder = pin.map(|p| p.founder_account.to_string());
+    let mut logs: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
+    for env in ordered {
+        if env.session_id == ligus_core::workspace_config_session_id(env.workspace_id) {
+            logs.entry(env.workspace_id).or_default().push((*env).clone());
+        }
+    }
+    let mut out = HashMap::new();
+    for (ws, envs) in logs {
+        if !envs.iter().any(|e| matches!(e.payload, SessionEvent::DearthModeChanged { .. })) {
+            continue;
+        }
+        let Some(cfg) = ligus_core::project_with_founder(&envs, founder.as_deref()) else { continue };
+        let Some(d) = cfg.guards.dearth_on() else { continue };
+        let approvers = cfg
+            .guards
+            .join_approvals
+            .iter()
+            .map(|(subject, ids)| {
+                let accts = ids
+                    .iter()
+                    .filter_map(|id| cfg.members.iter().find(|m| &m.id == id))
+                    .filter(|m| m.role.rank() >= ligus_core::WorkspaceRole::Admin.rank())
+                    .filter_map(|m| m.actor.account_id)
+                    .collect();
+                (subject.clone(), accts)
+            })
+            .collect();
+        out.insert(ws, DearthPolicy { admitted: d.admitted_devices.iter().copied().collect(), approvers });
+    }
+    out
+}
+
+impl DeviceKeyResolver for WorkspaceRoster {
+    fn public_key(&self, device_id: Uuid) -> Option<&[u8]> {
+        self.devices.get(&device_id).map(|(k, _)| k.as_slice())
+    }
+    // (see below for is_revoked)
+    fn is_revoked(&self, device_id: Uuid) -> bool {
+        self.revoked.contains(&device_id)
+    }
+}
+
+/// Fold a workspace's events into a [`WorkspaceRoster`]. Trust rooted in the
+/// members (an account is trusted while it's in the roster) and the cryptographic
+/// cert chain (a device is trusted only if its certificate verifies against its
+/// account's registered signing key). Account keys are pinned first-registration
+/// wins in canonical order (deterministic); the GitHub-anchored binding of that
+/// key to a real identity is established where the key *enters* the log (the
+/// directory / GitHub proof — Options A/B/C in the plan). A removed account's
+/// devices become revoked.
+pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
+    build_roster_pinned(envelopes, None)
+}
+
+/// A workspace's founder, pinned out of band by its invite (B2): the founder's
+/// account and the first 16 bytes of SHA-256 of its signing key (`fk`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FounderPin {
+    pub founder_account: Uuid,
+    pub fk: [u8; 16],
+}
+
+impl FounderPin {
+    /// Parse a pin from the invite's founder id and hex `fk`.
+    pub fn parse(founder: &str, fk_hex: &str) -> Option<Self> {
+        let founder_account = Uuid::parse_str(founder.trim()).ok()?;
+        let fk_hex = fk_hex.trim();
+        if fk_hex.len() != 32 {
+            return None;
+        }
+        let mut fk = [0u8; 16];
+        for (i, b) in fk.iter_mut().enumerate() {
+            *b = u8::from_str_radix(fk_hex.get(2 * i..2 * i + 2)?, 16).ok()?;
+        }
+        Some(Self { founder_account, fk })
+    }
+
+    /// The `fk` of an account signing key.
+    pub fn fingerprint(signing_public_key: &[u8]) -> [u8; 16] {
+        use sha2::{Digest, Sha256};
+        let d = Sha256::digest(signing_public_key);
+        let mut out = [0u8; 16];
+        out.copy_from_slice(&d[..16]);
+        out
+    }
+
+    /// Lowercase hex of [`FounderPin::fingerprint`], as the invite carries it.
+    pub fn fingerprint_hex(signing_public_key: &[u8]) -> String {
+        Self::fingerprint(signing_public_key).iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// The creation seed a pinned fold takes as its base (the earliest seed
+/// naming the pinned founder as creator and author), when it is authentic:
+/// signed by a device certified for the founder's account under a key whose
+/// fingerprint is the pinned `fk`, and the account's key binding is not
+/// disputed. `None` while no such seed is on the log: the founder named by an
+/// invite has not (yet) founded it. A stamp claiming the founder's id is not
+/// enough; a co-member who forged an invite "from" someone else can't sign as
+/// that person's device.
+pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin) -> Option<&'a SessionEventEnvelope> {
+    let roster = build_roster_pinned(envelopes, Some(pin));
+    let account = pin.founder_account;
+    let key = roster.account_signing_key(account)?;
+    if FounderPin::fingerprint(key) != pin.fk || roster.is_disputed(account) {
+        return None;
+    }
+    let founder = account.to_string();
+    let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    ordered.sort_by_key(|e| e.canonical_key());
+    // The first one that verifies: a forged copy under the seed's id (or any
+    // snapshot claiming the founder) sorting first doesn't hide the real one.
+    ordered.into_iter().find(|e| {
+        let claims = match &e.payload {
+            ligus_core::SessionEvent::SessionSnapshot { session } => {
+                session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
+            }
+            _ => false,
+        };
+        claims
+            && e.signer_device_id.is_some_and(|device| {
+                roster.device_signs_for(device, account)
+                    && !roster.is_revoked(device)
+                    && roster.public_key(device).is_some_and(|k| ligus_core::crypto::verify_envelope(e, k).is_ok())
+            })
+    })
+}
+
+/// One workspace's roster from that workspace's own trust events (P0.4). With
+/// a founder pin, a registration of the founder's account under a key that
+/// doesn't match the pin is rejected.
+pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&FounderPin>) -> WorkspaceRoster {
+    let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    ordered.sort_by_key(|e| e.canonical_key());
+
+    let mut explicit_revoked: HashSet<Uuid> = HashSet::new();
+    let mut raw_revocations: Vec<(Uuid, Uuid)> = Vec::new();
+    let mut members: HashSet<Uuid> = HashSet::new();
+    let mut member_account: HashMap<String, Uuid> = HashMap::new();
+    let mut certs: Vec<ligus_core::crypto::DeviceCertificate> = Vec::new();
+    // The workspace each certificate was published in (parallel to `certs`).
+    let mut cert_ws: Vec<Uuid> = Vec::new();
+
+    let note_member = |members: &mut HashSet<Uuid>,
+                           member_account: &mut HashMap<String, Uuid>,
+                           m: &ligus_core::WorkspaceMember| {
+        if let Some(aid) = m.actor.account_id {
+            members.insert(aid);
+            member_account.insert(m.id.clone(), aid);
+        }
+    };
+
+    // Each workspace's config log, folded once with the founder pin (a
+    // lower-lamport seed from a keyholder who merely verifies, a
+    // self-enrolled joiner, must not become a projection's founder).
+    let founder = pin.map(|p| p.founder_account.to_string());
+    let cfg_folds: Vec<CfgFold> = config_workspaces(&ordered)
+        .into_iter()
+        .map(|ws| {
+            let envs: Vec<SessionEventEnvelope> = ordered
+                .iter()
+                .filter(|e| e.workspace_id == ws && e.session_id == ligus_core::workspace_config_session_id(ws))
+                .map(|e| (*e).clone())
+                .collect();
+            let (projected, timeline) = ligus_core::project_config(&envs, founder.as_deref(), None);
+            // By copy: a forged copy under an allowed event's id is not that
+            // event (`ligus_core::copies`).
+            let decisions = ligus_core::fold_copy_decisions(&envs, founder.as_deref(), None, ligus_core::WorkspaceAuthz::Unchecked);
+            CfgFold { ws, envs, projected, timeline, decisions }
+        })
+        .collect();
+
+    // Account keys (`ligus_core::account_keys`): the same rules the config
+    // fold applies, with the anchors that fold found (the founder's seed, each
+    // account's own admission), so a registration someone else published
+    // under an account id is refused (attributed to its signer) and never
+    // disputes the account.
+    let index = std::sync::Arc::new(ligus_core::account_keys::KeyIndex::of(ordered.iter().copied()));
+    let mut book = ligus_core::account_keys::KeyBook::new(std::sync::Arc::clone(&index), pin.map(|p| (p.founder_account, p.fk)));
+    for c in &cfg_folds {
+        for (account, device) in c.timeline.anchors() {
+            book.anchor(*account, *device);
+        }
+    }
+    for env in &ordered {
+        match &env.payload {
+            // Rules v2: rotating the key of an account that holds a passkey
+            // needs its presence, so only a rotation its config log allowed
+            // counts (one without presence, or published elsewhere, would let
+            // a thief holding the account key re-pin it and drop every device
+            // the owner certified).
+            SessionEvent::AccountKeyRotated { account_id, .. } => {
+                book.rotate(env, !rotation_gated(&cfg_folds, env, *account_id));
+            }
+            SessionEvent::AccountKeyRegistered { .. } => {
+                book.register(env);
+            }
+            SessionEvent::SessionSnapshot { session } => {
+                for m in &session.members {
+                    note_member(&mut members, &mut member_account, m);
+                }
+            }
+            SessionEvent::MemberAdded { member, .. } => {
+                note_member(&mut members, &mut member_account, member);
+            }
+            // On a config log, only a removal its projection accepted counts
+            // (applied below, sticky); a raw one could come from anyone.
+            SessionEvent::MemberRemoved { member_id, .. }
+                if env.session_id != ligus_core::workspace_config_session_id(env.workspace_id) =>
+            {
+                if let Some(aid) = member_account.get(member_id) {
+                    members.remove(aid);
+                }
+            }
+            SessionEvent::DeviceCertificateAdded { certificate } => {
+                certs.push(certificate.clone());
+                cert_ws.push(env.workspace_id);
+            }
+            SessionEvent::DeviceRevoked { device_id, .. } => {
+                raw_revocations.push((env.workspace_id, *device_id));
+            }
+            _ => {}
+        }
+    }
+
+    // Removal is sticky against the removed: an account taken out on a
+    // workspace-config log stays out unless the authorization-checked
+    // projection of that log has it as a member again (an Admin's re-add). A
+    // raw `MemberAdded`, chat seed or unsigned event naming them afterwards,
+    // their own included, doesn't count: a removed member still holds old
+    // epoch keys and could otherwise re-enter with a freshly certified device.
+    //
+    // And the converse: a raw `MemberRemoved` that projection refuses (a
+    // Contributor "removing" the owner, an unsigned one, one on a chat log)
+    // must not revoke anyone. Every member of an authorization-checked config
+    // projection stays a member, unless an authorized removal elsewhere took
+    // the account out (removal wins, as the roster is shared by workspaces).
+    let mut removed_by_ws: HashMap<Uuid, HashSet<String>> = HashMap::new();
+    let mut agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)> = HashMap::new();
+    let mut current_accounts: HashSet<Uuid> = HashSet::new();
+    let mut sticky_removed: HashSet<Uuid> = HashSet::new();
+    // Each workspace's config roster at its head (rules, passkeys, the
+    // devices its own log allowed).
+    let mut heads: HashMap<Uuid, ligus_core::authz::RosterState> = HashMap::new();
+    // A device revocation counts when the config projection accepted it
+    // (Admin+). One for a workspace whose config log we don't hold (legacy,
+    // pre-hoist) keeps the raw behaviour.
+    for (ws, device) in &raw_revocations {
+        if !cfg_folds.iter().any(|c| c.ws == *ws) {
+            explicit_revoked.insert(*device);
+        }
+    }
+    for CfgFold { ws, envs: cfg_envs, projected, timeline, decisions } in cfg_folds {
+        // Only removals this projection accepted are sticky; a raw one it
+        // refused (anyone "removing" the founder) removes no one.
+        for e in &cfg_envs {
+            if let SessionEvent::MemberRemoved { member_id, .. } = &e.payload {
+                if decisions.get(e) == Some(ligus_core::Verdict::Allowed) {
+                    removed_by_ws.entry(ws).or_default().insert(member_id.clone());
+                }
+            }
+        }
+        heads.insert(ws, timeline.current().clone());
+        // A3: agent keys valid at the config head (certified, still bound).
+        let head = timeline.current();
+        for (key_id, k) in &head.agent_keys {
+            if head.valid_agent_key(*key_id).is_some() {
+                agent_keys.insert(*key_id, (k.signing_public_key.clone(), k.agent_id));
+            } else {
+                // Rebound since (or its host revoked): its events are refused.
+                explicit_revoked.insert(*key_id);
+            }
+        }
+        explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
+        let current: Vec<ligus_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
+        current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
+        for id in removed_by_ws.get(&ws).into_iter().flatten() {
+            if !current.iter().any(|m| &m.id == id) {
+                if let Some(aid) = member_account.get(id) {
+                    sticky_removed.insert(*aid);
+                }
+            }
+        }
+    }
+    members.extend(current_accounts);
+    for aid in &sticky_removed {
+        members.remove(aid);
+    }
+
+    // Every account with a key (a disputed one keeps the key its lineage
+    // reached, for the revocation bookkeeping below; it certifies nothing).
+    let account_keys: HashMap<Uuid, Vec<u8>> = book.keys_any().into_iter().collect();
+    let mut roster = WorkspaceRoster::default();
+    roster.agent_keys = agent_keys;
+    roster.disputed = book.disputed().into_iter().collect();
+    roster.refused_keys = book.refused().to_vec();
+    roster.key_index = Some(index);
+    roster.removed_accounts = sticky_removed.clone();
+    // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
+    // if they still hold a valid member cert — verdict_for checks is_revoked first.
+    roster.revoked.extend(explicit_revoked.iter().copied());
+    // Retain the pinned account signing keys for accounts that are members — the
+    // Option-C gate checks these against GitHub. (Non-member account keys are
+    // irrelevant; their devices are revoked below.)
+    for (account_id, key) in &account_keys {
+        if members.contains(account_id) {
+            roster.account_keys.insert(*account_id, key.clone());
+        }
+    }
+    let dearth = dearth_policies(&ordered, pin);
+    roster.dearth_workspaces = dearth.keys().copied().collect();
+    for (cert, ws) in certs.iter().zip(&cert_ws) {
+        let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
+        if cert.verify(account_key).is_err() {
+            continue; // cert must chain to its account's key
+        }
+        // Rules v2: a device of an account that holds a passkey or a recovery
+        // key counts only once its config log allowed it (with that account's
+        // presence). A certificate published anywhere else (a chat log, or
+        // under a backdated frontier) certifies nothing then.
+        if heads.get(ws).is_some_and(|h| {
+            h.rules >= 2
+                && h.passkeys.get(&cert.account_id).is_some_and(|m| !m.is_empty())
+                && !h.account_certified(cert.account_id, cert.device_id)
+        }) {
+            continue;
+        }
+        if !roster.disputed.contains(&cert.account_id) {
+            roster
+                .chained
+                .entry(cert.device_id)
+                .or_insert_with(|| (cert.device_public_key.clone(), HashSet::new()))
+                .1
+                .insert(cert.account_id);
+        }
+        // Dearth mode: a device that wasn't trusted when the entrance closed
+        // needs a second approval before its certificate counts.
+        if let Some(policy) = dearth.get(ws) {
+            if members.contains(&cert.account_id) && !policy.admits(cert) {
+                roster.pending.push((*ws, cert.device_id, cert.account_id));
+                continue;
+            }
+        }
+        if members.contains(&cert.account_id) {
+            // Accumulate every member account this device is certified to (a
+            // device may transition identities — e.g. local → GitHub sign-in — and
+            // hold a valid cert under each). Any of them is a valid signing account.
+            let entry = roster
+                .devices
+                .entry(cert.device_id)
+                .or_insert_with(|| (cert.device_public_key.clone(), HashSet::new()));
+            entry.1.insert(cert.account_id);
+        }
+    }
+    // A device whose *only* verified certs are to removed accounts is revoked —
+    // but a device that also holds a current member cert (above) stays trusted.
+    // One whose accounts were never members here (their admission isn't on
+    // this device yet, or never comes) is revoked too, but marked unadmitted:
+    // whether the admission came first is arrival order, so ingest holds its
+    // events rather than refusing them for good (`verdict_for`).
+    let ever_members: HashSet<Uuid> = member_account.values().copied().chain(sticky_removed.iter().copied()).collect();
+    let mut removed_only: HashSet<Uuid> = HashSet::new();
+    for cert in &certs {
+        if roster.devices.contains_key(&cert.device_id) {
+            continue;
+        }
+        if let Some(account_key) = account_keys.get(&cert.account_id) {
+            if cert.verify(account_key).is_ok() && !members.contains(&cert.account_id) {
+                roster.revoked.insert(cert.device_id);
+                if ever_members.contains(&cert.account_id) {
+                    removed_only.insert(cert.device_id);
+                } else {
+                    roster.unadmitted.insert(cert.device_id);
+                }
+            }
+        }
+    }
+    roster.unadmitted.retain(|d| !removed_only.contains(d) && !explicit_revoked.contains(d));
+    roster
+}
+
+/// One workspace's config log, folded for the roster.
+struct CfgFold {
+    ws: Uuid,
+    envs: Vec<SessionEventEnvelope>,
+    projected: Option<ligus_core::ChatSession>,
+    timeline: ligus_core::authz::ConfigTimeline,
+    decisions: ligus_core::CopyVerdicts,
+}
+
+/// Whether an `AccountKeyRotated` for `account` is left out of the roster:
+/// its workspace is on rules v2 and the rotation isn't one its config log
+/// allowed. Under rules v2 every rotation needs its account's presence
+/// (`authz::rules`), so the config fold never moves an account without a
+/// passkey (a box) or one rotated off the config log: neither does the
+/// roster, or ingest and the fold would hold different keys for it (and a
+/// copy of such a rotation, which anyone can publish again, would count).
+fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) -> bool {
+    let _ = account;
+    let Some(c) = cfg.iter().find(|c| c.ws == env.workspace_id) else { return false };
+    let head = c.timeline.current();
+    if head.rules < 2 {
+        return false;
+    }
+    let on_config = env.session_id == ligus_core::workspace_config_session_id(c.ws);
+    !on_config || c.decisions.get(env) != Some(ligus_core::Verdict::Allowed)
+}
+
+/// One roster per workspace, each folded from that workspace's events only
+/// (P0.4): removing an account in one workspace never touches its devices in
+/// another.
+pub fn build_rosters(
+    envelopes: &[SessionEventEnvelope],
+    pins: &HashMap<Uuid, FounderPin>,
+) -> HashMap<Uuid, WorkspaceRoster> {
+    let mut by_ws: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
+    for e in envelopes {
+        by_ws.entry(e.workspace_id).or_default().push(e.clone());
+    }
+    by_ws.into_iter().map(|(ws, envs)| (ws, build_roster_pinned(&envs, pins.get(&ws)))).collect()
+}
+
+/// Kinds that feed the trust roster (the same set `EventStore::trust_envelopes`
+/// returns).
+pub fn is_trust_kind(e: &SessionEvent) -> bool {
+    matches!(
+        e,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+            | SessionEvent::DeviceRevoked { .. }
+            | SessionEvent::MemberAdded { .. }
+            | SessionEvent::MemberRemoved { .. }
+            | SessionEvent::SessionSnapshot { .. }
+            | SessionEvent::MemberRoleChanged { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. }
+            | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::AgentUpserted { .. }
+            | SessionEvent::AgentRosterUpdated { .. }
+            | SessionEvent::AgentRemoved { .. }
+            | SessionEvent::WorkspaceRulesSet { .. }
+            | SessionEvent::PasskeyRegistered { .. }
+            | SessionEvent::PasskeyRemoved { .. }
+    )
+}
+
+/// The roster for judging an incoming batch of one workspace (P0.4): the
+/// stored trust events, plus the batch's own trust events **only once they
+/// verify**. Account keys and device certificates are self-validating (a cert
+/// is signed by its account key; registration is first-wins plus dispute), so
+/// they join at once; membership and other trust events join in canonical
+/// order once their verdict is `Valid` against the roster so far, repeated
+/// until nothing changes (at most once per event). An unverified
+/// `MemberAdded` in a batch therefore never certifies anyone.
+pub fn roster_with_batch(
+    mut stored: Vec<SessionEventEnvelope>,
+    batch: &[&SessionEventEnvelope],
+    pin: Option<&FounderPin>,
+) -> WorkspaceRoster {
+    let mut pending: Vec<&SessionEventEnvelope> = batch.iter().copied().filter(|e| is_trust_kind(&e.payload)).collect();
+    pending.sort_by_key(|e| e.canonical_key());
+    let (boot, mut pending): (Vec<_>, Vec<_>) = pending.into_iter().partition(|e| is_trust_bootstrap(e));
+    // A key registration or rotation joins only when it speaks for its own
+    // signer's account (see `key_publication_ok`): a forged one would make the
+    // victim's account disputed for this very batch.
+    let boot: Vec<_> = boot.into_iter().filter(|e| key_publication_ok(e)).collect();
+    stored.extend(boot.into_iter().cloned());
+    // The batch's config-log events that haven't joined (yet) still count as
+    // lamport witnesses, inert: the trust events after them count from them
+    // (`ligus_core::lamport`), and a roster folded from part of the log would
+    // otherwise hold those.
+    let with_witnesses = |stored: &[SessionEventEnvelope]| -> Vec<SessionEventEnvelope> {
+        let have: HashSet<Uuid> = stored.iter().map(|e| e.event_id).collect();
+        let mut all = stored.to_vec();
+        all.extend(
+            batch
+                .iter()
+                .filter(|e| e.session_id == ligus_core::workspace_config_session_id(e.workspace_id) && !have.contains(&e.event_id))
+                .map(|e| ligus_core::lamport::inert_witness(e)),
+        );
+        all
+    };
+    let mut roster = build_roster_pinned(&with_witnesses(&stored), pin);
+    while !pending.is_empty() {
+        let (ok, rest): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|e| verdict_for(&roster, e) == Verdict::Valid || self_validating(&roster, e, pin));
+        pending = rest;
+        if ok.is_empty() {
+            break;
+        }
+        stored.extend(ok.into_iter().cloned());
+        roster = build_roster_pinned(&with_witnesses(&stored), pin);
+    }
+    roster
+}
+
+/// Whether `env` is signed by a device whose certificate chains to `account`.
+///
+/// For a self-enrollment the device's own certificate for the account counts
+/// too, under a key it registered itself, even while the account's key is
+/// disputed: the admission is what anchors the key
+/// (`ligus_core::account_keys`), and it still has to be allowed by the fold
+/// (a redeemable invite, its redeem key's proof). Never for a founding seed
+/// (`seed`): any device can vouch for any account id that way, and a seed
+/// that joins can become the roster's base (earliest seed) and anchor the
+/// founder to its signer. A seed's signer vouches only under the founder
+/// pin's key (`fk`), or chains under the account's roster key.
+fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid, seed: Option<Option<&FounderPin>>) -> bool {
+    let Some(device) = env.signer_device_id else { return false };
+    match seed {
+        None => {
+            if roster.key_index.as_ref().is_some_and(|i| i.device_vouches(env, account, device)) {
+                return true;
+            }
+        }
+        Some(Some(pin)) => {
+            let pinned = roster.key_index.as_ref().is_some_and(|i| {
+                i.registered_by(account, device)
+                    .iter()
+                    .any(|k| FounderPin::fingerprint(k) == pin.fk && i.device_vouches_under(env, account, device, k))
+            });
+            if pinned {
+                return true;
+            }
+        }
+        Some(None) => {}
+    }
+    let Some((key, accounts)) = roster.chained.get(&device) else { return false };
+    // Not `is_revoked`: before its account is a member, the roster lists such
+    // a device as revoked (non-member certs are). A removed member's own
+    // re-enrollment is refused by the config projection, and their removal
+    // stays sticky in the roster.
+    accounts.contains(&account) && verify_envelope(env, key).is_ok()
+}
+
+/// Membership events that verify without already being a member: the config
+/// log's founding seed (the self-consistent seed, signed by a device of the
+/// founder's account; the pinned founder's, when pinned) and a self-enrollment
+/// below Admin signed by a device of the joining account.
+fn self_validating(roster: &WorkspaceRoster, env: &SessionEventEnvelope, pin: Option<&FounderPin>) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    match &env.payload {
+        SessionEvent::SessionSnapshot { session }
+            if env.session_id == ligus_core::workspace_config_session_id(env.workspace_id) =>
+        {
+            let owners: Vec<_> =
+                session.members.iter().filter(|m| m.role == ligus_core::WorkspaceRole::Owner).collect();
+            session.creator_actor_id == author
+                && owners.len() == 1
+                && owners[0].id == author
+                && pin.is_none_or(|p| p.founder_account == account)
+                && signed_as(roster, env, account, Some(pin))
+        }
+        SessionEvent::MemberAdded { member, .. } => {
+            member.id == author
+                && member.actor.account_id == Some(account)
+                && member.role.rank() < ligus_core::WorkspaceRole::Admin.rank()
+                && signed_as(roster, env, account, None)
+        }
+        _ => false,
+    }
+}
+
+/// One roster per workspace in `batch`, each from that workspace's stored
+/// trust events, its founder pin, and the batch's verified trust events.
+pub fn rosters_for_batch(
+    store: &crate::event_store::EventStore,
+    batch: &[&SessionEventEnvelope],
+) -> crate::event_store::Result<HashMap<Uuid, WorkspaceRoster>> {
+    let mut by_ws: HashMap<Uuid, Vec<&SessionEventEnvelope>> = HashMap::new();
+    for e in batch {
+        by_ws.entry(e.workspace_id).or_default().push(e);
+    }
+    let mut out = HashMap::new();
+    for (ws, envs) in by_ws {
+        let pin = store.workspace_pin(ws)?;
+        out.insert(ws, roster_with_batch(store.trust_envelopes(ws)?, &envs, pin.as_ref()));
+    }
+    Ok(out)
+}
+
+/// The verification outcome for a single envelope, split so a caller can apply a
+/// non-bricking policy: **quarantine** the provably-bad, but only **hold** the
+/// merely-unverifiable (retry as the roster grows) instead of dropping it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Signed by a known, non-revoked device; signature valid; author matches.
+    Valid,
+    /// Provably bad — reject: bad signature, revoked device, or impersonation.
+    Quarantine(QuarantineReason),
+    /// Can't verify yet (unsigned, or a device whose cert we haven't seen).
+    /// Safe to accept for now and re-check later; never a reason to drop.
+    Unverifiable(QuarantineReason),
+}
+
+/// Account-key and certificate events: inert in projection (only the roster
+/// reads them, and the roster applies the dearth policy to certificates
+/// itself), and Admins must be able to see a pending device to approve it.
+fn is_trust_bootstrap(env: &SessionEventEnvelope) -> bool {
+    matches!(
+        env.payload,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+    )
+}
+
+/// Dearth mode is on for the event's workspace and the event is not a trust
+/// bootstrap: an event no certified device vouches for waits.
+fn entrance_closed(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> bool {
+    roster.dearth_workspaces.contains(&env.workspace_id) && !is_trust_bootstrap(env)
+}
+
+/// An account key registration or rotation is published by a device of that
+/// account: signed, and stamped as that account. Anyone else publishing one
+/// for a victim's account id would make it disputed (every event the victim
+/// signs is then quarantined).
+fn key_publication_ok(env: &SessionEventEnvelope) -> bool {
+    let account = match &env.payload {
+        SessionEvent::AccountKeyRegistered { account_id, .. } | SessionEvent::AccountKeyRotated { account_id, .. } => {
+            *account_id
+        }
+        _ => return true,
+    };
+    env.signer_device_id.is_some() && env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account)
+}
+
+/// Whether an event `signer` signed, stamped as `claimed` (if anything), that
+/// ingest held could be judged otherwise now: its signer isn't waiting for a
+/// dearth-mode approval, and it signs for the account it claims (an
+/// undisputed one), or is certified when it claims none. What a dropped held
+/// event is fetched again for (`event_store::held`); one from a device
+/// nobody certifies never is.
+pub fn may_judge_now(roster: &WorkspaceRoster, signer: Uuid, claimed: Option<Uuid>) -> bool {
+    if roster.pending.iter().any(|(_, d, _)| *d == signer) {
+        return false;
+    }
+    if roster.agent_keys.contains_key(&signer) {
+        return true;
+    }
+    match claimed {
+        Some(a) => !roster.is_disputed(a) && roster.device_signs_for(signer, a),
+        None => roster.is_certified(signer),
+    }
+}
+
+/// Classify an envelope against the roster (see [`Verdict`]).
+///
+/// An account key registration, rotation or device certificate that can't be
+/// judged yet is never held: it is accepted inert and the account-key rules
+/// (`ligus_core::account_keys`) judge it in every roster and fold. Holding one
+/// (its account disputed by a forgery that arrived first, say) would leave
+/// only the forgery stored, so an unanchored account would take the
+/// forger's key on that device while one that met them in the other order
+/// disputes it.
+pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
+    match verdict_inner(roster, env) {
+        Verdict::Unverifiable(_) if is_trust_bootstrap(env) => Verdict::Unverifiable(QuarantineReason::UnknownDevice),
+        v => v,
+    }
+}
+
+fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
+    if !key_publication_ok(env) {
+        return Verdict::Quarantine(QuarantineReason::Impersonation);
+    }
+    let Some(device_id) = env.signer_device_id.filter(|_| env.signature.is_some()) else {
+        // A genuine event is ALWAYS signed: every write goes through
+        // `append_signed` (or an agent's or phone's signing path), which sets
+        // the signature and the actor stamp together, and nothing unsigned is
+        // ever pushed. So an unsigned envelope is provably not an event any
+        // device wrote. With a stamp it claims an author with no signature to
+        // prove it (projection-authz and seed selection would trust that
+        // author: a workspace takeover). Without one it claims no author, but
+        // it can still carry a real event's id: a forged copy (review:
+        // erase-by-forgery), or an event of its own that every member's fold
+        // has to carry. Either way it is QUARANTINED (refused, kept only as a
+        // lamport witness), never accepted.
+        return Verdict::Quarantine(QuarantineReason::Unsigned);
+    };
+    // A3: an agent's own key (certified by its host, still bound to it).
+    if let Some((agent_key, agent_id)) = roster.agent_keys.get(&device_id) {
+        if verify_envelope(env, agent_key).is_err() {
+            return Verdict::Quarantine(QuarantineReason::BadSignature);
+        }
+        let speaks_as_agent = env.actor_stamp.as_ref().is_some_and(|s| {
+            s.actor.kind == ligus_core::ActorKind::Agent && s.actor.id == agent_id.to_string() && s.actor.account_id.is_none()
+        });
+        return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
+    }
+    if roster.is_revoked(device_id) {
+        // Certified only to accounts not admitted here (yet): held until the
+        // admission arrives, never applied without it. Refusing it for good
+        // would make the verdict depend on arrival order (a device that had
+        // the `MemberAdded` first applies it). A body its own key doesn't
+        // sign is refused as ever.
+        if roster.unadmitted.contains(&device_id) {
+            return match roster.chained.get(&device_id) {
+                // Its own account keys and certificates are judged by the
+                // roster, as from any device no certificate here vouches for
+                // (stored inert): holding them would make what a device
+                // stores depend on whether it met them before or after the
+                // device's certificate.
+                Some((k, _)) if verify_envelope(env, k).is_ok() && is_trust_bootstrap(env) => {
+                    Verdict::Unverifiable(QuarantineReason::UnknownDevice)
+                }
+                Some((k, _)) if verify_envelope(env, k).is_ok() => Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+                Some(_) => Verdict::Quarantine(QuarantineReason::BadSignature),
+                // Its account's key is disputed: held, never applied (a
+                // dispute can still resolve once the account's own
+                // admission arrives, so refusing for good would depend on
+                // arrival order).
+                None => Verdict::Unverifiable(QuarantineReason::DisputedAccountKey),
+            };
+        }
+        return Verdict::Quarantine(QuarantineReason::RevokedDevice);
+    }
+    if !roster.is_certified(device_id) {
+        if roster.pending.iter().any(|(_, d, _)| *d == device_id) && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
+        if entrance_closed(roster, env) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
+        // A device no certificate here vouches for, stamping an account: wait
+        // for that account's certificate of it, never accept on the stamp.
+        // Whether the account is known yet is arrival order (its key may come
+        // after this event), so any account claim waits, known or not;
+        // otherwise a device that met the event first would fold it as that
+        // account and one that knew the account wouldn't. Waiting costs
+        // nothing: held events never pin the sync cursor.
+        let stamp = env.actor_stamp.as_ref();
+        let claims_account = stamp.is_some_and(|s| s.actor.account_id.is_some())
+            || stamp.and_then(|s| Uuid::parse_str(&s.actor.id).ok()).is_some_and(|a| {
+                roster.account_signing_key(a).is_some() || roster.is_disputed(a) || roster.removed_accounts.contains(&a)
+            });
+        if claims_account && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
+        }
+        return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
+    }
+    // The device's one key (its id derives from it): only the device signs.
+    if roster.public_key(device_id).is_none_or(|k| verify_envelope(env, k).is_err()) {
+        return Verdict::Quarantine(QuarantineReason::BadSignature);
+    }
+    // The stamped author's account must be one the signing device is
+    // certified to. A device may act for more than one account (each
+    // certificate is signed by that account's own key), and any account can
+    // certify a device's key at any time, so a device not (yet) certified
+    // for the stamped account here proves nothing for good: another device
+    // may already hold that certificate and accept the event. Refusing it
+    // for good (quarantine) would make verdicts depend on arrival order. It
+    // is held until the certificate arrives instead, and never applied
+    // without it. Only a contested account key refuses for good (disputes
+    // only grow).
+    let Some(stamp) = &env.actor_stamp else { return Verdict::Valid };
+    let claimed = match stamp.actor.account_id {
+        Some(a) => Some(a),
+        // No account on the stamp, but its actor id *is* a known account (a
+        // member's actor id is their account id): the signer must sign for
+        // it, or a member could leave the account off and act under anyone's
+        // id (the fold and the author gate read the actor id).
+        None => Uuid::parse_str(&stamp.actor.id)
+            .ok()
+            .filter(|n| roster.account_signing_key(*n).is_some() || roster.is_disputed(*n) || roster.removed_accounts.contains(n)),
+    };
+    if let Some(claimed) = claimed {
+        if roster.is_disputed(claimed) {
+            // Fail closed, but held rather than refused: whether an account
+            // is disputed can change as events arrive (an unanchored
+            // conflict resolves once the account's own admission is here,
+            // `ligus_core::account_keys`), so a refusal would depend on
+            // arrival order.
+            return Verdict::Unverifiable(QuarantineReason::DisputedAccountKey);
+        }
+        if !roster.device_signs_for(device_id, claimed) {
+            // An account's key registration and certificates are what make
+            // the device its own: as for a device nobody certified, they are
+            // accepted and judged by the roster (a certificate verifies only
+            // under its account's key), or the account could never be
+            // established here once someone else certified its device's key
+            // for themselves.
+            return if is_trust_bootstrap(env) {
+                Verdict::Unverifiable(QuarantineReason::UnknownDevice)
+            } else {
+                Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+            };
+        }
+    }
+    Verdict::Valid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity_store::{FileKeyVault, IdentityStore};
+    use ligus_core::{sign_envelope, ChatMessage, MessageRole, SessionEvent};
+
+    fn signed_env(
+        store: &IdentityStore<FileKeyVault>,
+        device_id: Uuid,
+        seq: i64,
+    ) -> SessionEventEnvelope {
+        let kp = store.device_keypair(device_id).unwrap();
+        let mut env = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            seq,
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "Mara", "hi"),
+            },
+        );
+        sign_envelope(&mut env, device_id, &kp);
+        env
+    }
+
+    #[test]
+    fn valid_signature_passes_unknown_and_tampered_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = IdentityStore::new(dir.path(), FileKeyVault::new(dir.path()));
+        let id = store.bootstrap("Mara", "mara", "Mac").unwrap();
+        let roster = DeviceRoster::new().with_device(&id.device);
+
+        // 1) a properly signed envelope
+        let good = signed_env(&store, id.device.id, 1);
+
+        // 2) tampered after signing
+        let mut tampered = signed_env(&store, id.device.id, 2);
+        tampered.sequence = 999;
+
+        // 3) signed by an unknown device
+        let mut unknown = good.clone();
+        unknown.signer_device_id = Some(Uuid::new_v4());
+
+        // 4) unsigned
+        let unsigned = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            4,
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "x", "y"),
+            },
+        );
+
+        let outcome = verify_stream(
+            vec![good, tampered, unknown, unsigned],
+            &roster,
+            false,
+        );
+        assert_eq!(outcome.valid.len(), 1);
+        assert_eq!(outcome.quarantined.len(), 3);
+        let reasons: Vec<_> = outcome.quarantined.iter().map(|(_, r)| *r).collect();
+        assert!(reasons.contains(&QuarantineReason::BadSignature));
+        assert!(reasons.contains(&QuarantineReason::UnknownDevice));
+        assert!(reasons.contains(&QuarantineReason::Unsigned));
+    }
+
+    #[test]
+    fn revoked_device_is_quarantined() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = IdentityStore::new(dir.path(), FileKeyVault::new(dir.path()));
+        let mut id = store.bootstrap("Mara", "mara", "Mac").unwrap();
+        let env = signed_env(&store, id.device.id, 1);
+
+        id.device.revoked_at = Some(ligus_core::Timestamp::now());
+        let roster = DeviceRoster::new().with_device(&id.device);
+
+        let outcome = verify_stream(vec![env], &roster, false);
+        assert_eq!(outcome.valid.len(), 0);
+        assert_eq!(
+            outcome.quarantined[0].1,
+            QuarantineReason::RevokedDevice
+        );
+    }
+
+    // --- S1 roster + verdicts ------------------------------------------------
+
+    use ligus_core::crypto::{DeviceCertificate, SigningKeypair};
+    use ligus_core::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
+    use ligus_core::{ChatSession, SessionEventEnvelope, Timestamp};
+
+    /// A test principal: an account keypair + one device keypair, with the trust
+    /// events (`AccountKeyRegistered`, `DeviceCertificateAdded`, `MemberAdded`)
+    /// that put it in a roster.
+    struct Principal {
+        account_kp: SigningKeypair,
+        account_id: Uuid,
+        device_kp: SigningKeypair,
+        device_id: Uuid,
+    }
+
+    fn principal() -> Principal {
+        let device_kp = SigningKeypair::generate().unwrap();
+        Principal {
+            account_kp: SigningKeypair::generate().unwrap(),
+            account_id: Uuid::new_v4(),
+            device_id: ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes()),
+            device_kp,
+        }
+    }
+
+    fn env(lamport: i64, payload: SessionEvent) -> SessionEventEnvelope {
+        SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), lamport, payload)
+    }
+
+    fn trust_events(p: &Principal, lamport_base: i64) -> Vec<SessionEventEnvelope> {
+        let cert = DeviceCertificate::issue(&p.account_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        let member = WorkspaceMember {
+            id: p.account_id.to_string(),
+            actor: ActorIdentity {
+                id: p.account_id.to_string(),
+                display_name: "P".into(),
+                kind: ActorKind::Human,
+                account_id: Some(p.account_id),
+                device_id: Some(p.device_id),
+                git_email: None,
+                key_agreement_public: None,
+                avatar_url: None,
+                contact: None,
+            },
+            role: WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 1,
+            joined_at: Timestamp::epoch(),
+        };
+        // Published by the principal's own device, stamped as its account,
+        // as every device publishes its identity.
+        vec![
+            signed_as(p, p.account_id, env(lamport_base, SessionEvent::MemberAdded { member, invite: None, proof: None })),
+            signed_as(
+                p,
+                p.account_id,
+                env(
+                    lamport_base + 1,
+                    SessionEvent::AccountKeyRegistered {
+                        account_id: p.account_id,
+                        signing_public_key: p.account_kp.public_key_bytes().to_vec(),
+                    },
+                ),
+            ),
+            signed_as(p, p.account_id, env(lamport_base + 2, SessionEvent::DeviceCertificateAdded { certificate: cert })),
+        ]
+    }
+
+    /// `e`, stamped as `account` and signed by `p`'s device.
+    fn signed_as(p: &Principal, account: Uuid, mut e: SessionEventEnvelope) -> SessionEventEnvelope {
+        e.actor_stamp = Some(ActorStamp {
+            actor: ActorIdentity {
+                id: account.to_string(),
+                display_name: "P".into(),
+                kind: ActorKind::Human,
+                account_id: Some(account),
+                device_id: Some(p.device_id),
+                git_email: None,
+                key_agreement_public: None,
+                avatar_url: None,
+                contact: None,
+            },
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
+        e.clear_raw();
+        ligus_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
+        e
+    }
+
+    /// A content event signed by `signer`, stamping `claimed_account` as author.
+    fn authored(
+        signer_device: Uuid,
+        signer_kp: &SigningKeypair,
+        claimed_account: Uuid,
+        lamport: i64,
+    ) -> SessionEventEnvelope {
+        let mut e = env(
+            lamport,
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "P", "hi"),
+            },
+        );
+        e.actor_stamp = Some(ActorStamp {
+            actor: ActorIdentity {
+                id: claimed_account.to_string(),
+                display_name: "P".into(),
+                kind: ActorKind::Human,
+                account_id: Some(claimed_account),
+                device_id: Some(signer_device),
+                git_email: None,
+                key_agreement_public: None,
+                avatar_url: None,
+                contact: None,
+            },
+            recorded_at: Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        ligus_core::sign_envelope(&mut e, signer_device, signer_kp);
+        e
+    }
+
+    #[test]
+    fn valid_account_key_rotation_re_pins_without_dispute() {
+        // P2-2: an owner rotates K1 → K2 by signing K2 with K1 (succession proof),
+        // and re-certs the device under K2. The roster re-pins to K2 without a
+        // dispute, and the device stays trusted.
+        let p = principal();
+        let new_kp = SigningKeypair::generate().unwrap();
+        let mut events = trust_events(&p, 1); // establishes K1 + device cert under K1
+
+        let sig = p.account_kp.sign(&new_kp.public_key_bytes()).to_vec();
+        events.push(signed_as(
+            &p,
+            p.account_id,
+            env(
+                10,
+                SessionEvent::AccountKeyRotated {
+                    account_id: p.account_id,
+                    new_signing_public_key: new_kp.public_key_bytes().to_vec(),
+                    succession_signature: sig,
+                },
+            ),
+        ));
+        // Re-cert the device under K2 (its K1 cert no longer verifies vs pinned K2).
+        let cert2 = DeviceCertificate::issue(&new_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        events.push(signed_as(&p, p.account_id, env(11, SessionEvent::DeviceCertificateAdded { certificate: cert2 })));
+
+        let roster = build_roster(&events);
+        assert!(!roster.is_disputed(p.account_id), "a valid succession must NOT dispute");
+        let signed = authored(p.device_id, &p.device_kp, p.account_id, 20);
+        assert_eq!(verdict_for(&roster, &signed), Verdict::Valid);
+    }
+
+    #[test]
+    fn a_rotation_the_current_key_did_not_sign_is_refused_not_disputed() {
+        // A rotation whose succession signature is NOT by the current key (an
+        // attacker trying to seize an established account, from a fresh
+        // device stamped as the victim) is refused and attributed to its
+        // signer. It used to dispute the account: a cheap way to silence any
+        // member.
+        let p = principal();
+        let attacker = principal();
+        let mut events = trust_events(&p, 1);
+        let bad_sig = attacker.account_kp.sign(&attacker.account_kp.public_key_bytes()).to_vec();
+        let forged = signed_as(
+            &attacker,
+            p.account_id,
+            env(
+                10,
+                SessionEvent::AccountKeyRotated {
+                    account_id: p.account_id,
+                    new_signing_public_key: attacker.account_kp.public_key_bytes().to_vec(),
+                    succession_signature: bad_sig,
+                },
+            ),
+        );
+        events.push(forged.clone());
+        let roster = build_roster(&events);
+        assert!(!roster.is_disputed(p.account_id), "a rotation not signed by the current key must not dispute");
+        assert_eq!(roster.account_signing_key(p.account_id), Some(&p.account_kp.public_key_bytes()[..]));
+        assert!(roster.refused_keys().iter().any(|r| r.event_id == forged.event_id && r.signer_device_id == Some(attacker.device_id)));
+        assert_eq!(verdict_for(&roster, &authored(p.device_id, &p.device_kp, p.account_id, 20)), Verdict::Valid);
+    }
+
+    #[test]
+    fn a_fork_of_the_accounts_own_rotations_is_a_genuine_dispute() {
+        // The account's own key designates two successors (K1 → K2, then K1 →
+        // K3): only the holder of K1 can sign either, so its lineage asserts
+        // two keys. That is the dispute the rule keeps: fail closed.
+        let p = principal();
+        let (k2, k3) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
+        let mut events = trust_events(&p, 1);
+        for (l, k) in [(10, &k2), (11, &k3)] {
+            let sig = p.account_kp.sign(&k.public_key_bytes()).to_vec();
+            events.push(signed_as(
+                &p,
+                p.account_id,
+                env(l, SessionEvent::AccountKeyRotated { account_id: p.account_id, new_signing_public_key: k.public_key_bytes().to_vec(), succession_signature: sig }),
+            ));
+        }
+        assert!(build_roster(&events).is_disputed(p.account_id));
+        let mut reversed = events.clone();
+        reversed.reverse();
+        assert!(build_roster(&reversed).is_disputed(p.account_id), "order-independent");
+    }
+
+    #[test]
+    fn explicitly_revoked_device_is_quarantined_even_with_a_valid_cert() {
+        // P1-3: a DeviceRevoked event revokes a single device without removing its
+        // account — its signed events are quarantined even though its cert still
+        // chains to a current member account.
+        let p = principal();
+        let mut events = trust_events(&p, 1);
+        // Sanity: without revocation the device's event is Valid.
+        let before = build_roster(&events);
+        let signed = authored(p.device_id, &p.device_kp, p.account_id, 10);
+        assert_eq!(verdict_for(&before, &signed), Verdict::Valid);
+
+        // Revoke the device; now the same signed event is quarantined.
+        events.push(env(20, SessionEvent::DeviceRevoked { device_id: p.device_id, watermark: Vec::new() }));
+        let after = build_roster(&events);
+        assert_eq!(
+            verdict_for(&after, &signed),
+            Verdict::Quarantine(QuarantineReason::RevokedDevice)
+        );
+    }
+
+    #[test]
+    fn a_registration_someone_else_published_is_refused_not_disputed() {
+        // P0-2 / the dispute DoS: an attacker publishes
+        // AccountKeyRegistered{victim_account, attacker_key}, stamped as the
+        // victim, from a fresh device. It is refused (no certificate under
+        // that key names its signer, or it isn't the victim's lineage) and
+        // attributed to its signer; the victim's events keep folding, before
+        // or after it in canonical order.
+        //
+        // (Here the trust events sit on no config log, so nothing anchors the
+        // victim's key: the variant where the attacker also certifies its
+        // own device under its key is covered on a real config log in
+        // `tests/roster_props.rs`.)
+        let victim = principal();
+        let attacker = principal();
+        for lamport in [0, 5] {
+            {
+                let with_cert = false;
+                let mut events = trust_events(&victim, 1);
+                let forged = signed_as(
+                    &attacker,
+                    victim.account_id,
+                    env(
+                        lamport,
+                        SessionEvent::AccountKeyRegistered {
+                            account_id: victim.account_id,
+                            signing_public_key: attacker.account_kp.public_key_bytes().to_vec(),
+                        },
+                    ),
+                );
+                events.push(forged.clone());
+                if with_cert {
+                    // The attacker certifies its own device for the victim's
+                    // account under its own key (self-evident), backdated too.
+                    let cert = DeviceCertificate::issue(&attacker.account_kp, victim.account_id, &attacker.device_kp.public_key_bytes(), Timestamp::epoch());
+                    events.push(signed_as(&attacker, victim.account_id, env(lamport, SessionEvent::DeviceCertificateAdded { certificate: cert })));
+                }
+                let roster = build_roster(&events);
+                assert!(!roster.is_disputed(victim.account_id), "lamport {lamport} cert {with_cert}: disputed");
+                assert_eq!(roster.account_signing_key(victim.account_id), Some(&victim.account_kp.public_key_bytes()[..]));
+                assert!(roster.refused_keys().iter().any(|r| r.event_id == forged.event_id && r.signer_device_id == Some(attacker.device_id)));
+                let genuine = authored(victim.device_id, &victim.device_kp, victim.account_id, 10);
+                assert_eq!(verdict_for(&roster, &genuine), Verdict::Valid, "lamport {lamport} cert {with_cert}");
+                let as_victim = authored(attacker.device_id, &attacker.device_kp, victim.account_id, 11);
+                assert_ne!(verdict_for(&roster, &as_victim), Verdict::Valid, "the attacker never signs as the victim");
+            }
+        }
+    }
+
+    #[test]
+    fn the_accounts_own_device_registering_a_second_key_is_a_genuine_dispute() {
+        // A device the account itself certified (under its current key, a
+        // certificate it published) registers another key for the account:
+        // the account's own lineage asserts two keys. Fail closed: held.
+        let p = principal();
+        let other = SigningKeypair::generate().unwrap();
+        let mut events = trust_events(&p, 1);
+        let cert = DeviceCertificate::issue(&other, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        events.push(signed_as(&p, p.account_id, env(8, SessionEvent::DeviceCertificateAdded { certificate: cert })));
+        events.push(signed_as(
+            &p,
+            p.account_id,
+            env(9, SessionEvent::AccountKeyRegistered { account_id: p.account_id, signing_public_key: other.public_key_bytes().to_vec() }),
+        ));
+        let roster = build_roster(&events);
+        assert!(roster.is_disputed(p.account_id));
+        assert_eq!(
+            verdict_for(&roster, &authored(p.device_id, &p.device_kp, p.account_id, 10)),
+            Verdict::Unverifiable(QuarantineReason::DisputedAccountKey)
+        );
+    }
+
+    #[test]
+    fn unsigned_event_with_a_forged_stamp_is_quarantined_not_accepted() {
+        // P0-1 PoC: a malicious member forges an UNSIGNED governance event stamped
+        // as the real Owner. Genuine events are always signed (append_signed signs
+        // + stamps together), so this is provably forged and MUST be quarantined —
+        // not accepted (Relay mode), where projection-authz would trust the stamped
+        // Owner and apply the takeover on every device.
+        use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
+
+        let owner = principal();
+        let roster = build_roster(&trust_events(&owner, 1));
+
+        // Forged: unsigned (signer_device_id stays None) but stamped as the owner,
+        // carrying a self-promotion to Owner.
+        let mut forged = env(
+            10,
+            SessionEvent::MemberRoleChanged {
+                change: ligus_core::MemberRoleChange {
+                    member_id: owner.account_id.to_string(),
+                    old_role: WorkspaceRole::Contributor,
+                    new_role: WorkspaceRole::Owner,
+                }, watermark: Vec::new(),
+            },
+        );
+        forged.actor_stamp = Some(ActorStamp {
+            actor: ActorIdentity {
+                id: owner.account_id.to_string(),
+                display_name: "P".into(),
+                kind: ActorKind::Human,
+                account_id: Some(owner.account_id),
+                device_id: Some(owner.device_id),
+                git_email: None,
+                key_agreement_public: None,
+                avatar_url: None,
+                contact: None,
+            },
+            recorded_at: Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
+
+        // The verdict must be Quarantine, and Relay-mode ingest must DROP it.
+        assert_eq!(
+            verdict_for(&roster, &forged),
+            Verdict::Quarantine(QuarantineReason::Unsigned)
+        );
+        let cache = IdentityCache::new();
+        assert!(
+            matches!(
+                gate_ingest(IdentityMode::Relay, verdict_for(&roster, &forged), None, None, &cache),
+                IngestAction::Quarantine(_)
+            ),
+            "Relay-mode ingest must quarantine a forged unsigned stamped event, not Accept it",
+        );
+
+        // An unsigned event with NO stamp claims no author, but it can carry a
+        // real event's id (review: erase-by-forgery) and nothing honest is ever
+        // unsigned: it is quarantined too.
+        let unstamped = env(
+            11,
+            SessionEvent::MessageAppended {
+                message: ChatMessage::new(MessageRole::User, "x", "y"),
+            },
+        );
+        assert_eq!(
+            verdict_for(&roster, &unstamped),
+            Verdict::Quarantine(QuarantineReason::Unsigned)
+        );
+    }
+
+    #[test]
+    fn roster_accepts_valid_rejects_tamper_and_impersonation() {
+        let alice = principal();
+        let roster = build_roster(&trust_events(&alice, 1));
+
+        // 1) Alice's device signs, stamping Alice → Valid.
+        let good = authored(alice.device_id, &alice.device_kp, alice.account_id, 100);
+        assert_eq!(verdict_for(&roster, &good), Verdict::Valid);
+
+        // 2) Tampered after signing → BadSignature (provably bad, quarantined).
+        let mut tampered = good.clone();
+        tampered.sequence = 9999;
+        assert_eq!(
+            verdict_for(&roster, &tampered),
+            Verdict::Quarantine(QuarantineReason::BadSignature)
+        );
+
+        // 3) Alice's device signs but stamps a DIFFERENT account: held (never
+        // applied) until that account certifies the device, which it may do
+        // later (or another device may already hold), so never refused for
+        // good on arrival order.
+        let spoof = authored(alice.device_id, &alice.device_kp, Uuid::new_v4(), 101);
+        assert_eq!(
+            verdict_for(&roster, &spoof),
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+        );
+    }
+
+    #[test]
+    fn device_certified_to_multiple_accounts_may_sign_as_any() {
+        // Identity transition: the SAME device is certified to an old account and
+        // a new one (e.g. a local id, then a GitHub sign-in). Each cert is signed
+        // by its own account key, so events stamped with EITHER account are
+        // authentic — but a third, uncertified account is still impersonation.
+        let p = principal();
+        let old_account = p.account_id;
+        let new_account = Uuid::new_v4();
+        let new_account_kp = SigningKeypair::generate().unwrap();
+
+        let old_cert = DeviceCertificate::issue(&p.account_kp, old_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        let new_cert = DeviceCertificate::issue(&new_account_kp, new_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        let mk_member = |acct: Uuid| WorkspaceMember {
+            id: acct.to_string(),
+            actor: ActorIdentity {
+                id: acct.to_string(),
+                display_name: "P".into(),
+                kind: ActorKind::Human,
+                account_id: Some(acct),
+                device_id: Some(p.device_id),
+                git_email: None,
+                key_agreement_public: None,
+                avatar_url: None,
+                contact: None,
+            },
+            role: WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 1,
+            joined_at: Timestamp::epoch(),
+        };
+        let events = vec![
+            signed_as(&p, old_account, env(1, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(old_account) })),
+            signed_as(&p, new_account, env(2, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(new_account) })),
+            signed_as(&p, old_account, env(3, SessionEvent::AccountKeyRegistered {
+                account_id: old_account,
+                signing_public_key: p.account_kp.public_key_bytes().to_vec(),
+            })),
+            signed_as(&p, new_account, env(4, SessionEvent::AccountKeyRegistered {
+                account_id: new_account,
+                signing_public_key: new_account_kp.public_key_bytes().to_vec(),
+            })),
+            signed_as(&p, old_account, env(5, SessionEvent::DeviceCertificateAdded { certificate: old_cert })),
+            signed_as(&p, new_account, env(6, SessionEvent::DeviceCertificateAdded { certificate: new_cert })),
+        ];
+        let roster = build_roster(&events);
+
+        // Signing as the new account → Valid (the device is certified to it).
+        let as_new = authored(p.device_id, &p.device_kp, new_account, 100);
+        assert_eq!(verdict_for(&roster, &as_new), Verdict::Valid);
+        // Signing as the old account → still Valid.
+        let as_old = authored(p.device_id, &p.device_kp, old_account, 101);
+        assert_eq!(verdict_for(&roster, &as_old), Verdict::Valid);
+        // Signing as a third, uncertified account → held until certified.
+        let as_other = authored(p.device_id, &p.device_kp, Uuid::new_v4(), 102);
+        assert_eq!(
+            verdict_for(&roster, &as_other),
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+        );
+    }
+
+    #[test]
+    fn unknown_is_unverifiable_not_dropped_and_unsigned_is_refused() {
+        let alice = principal();
+        let roster = build_roster(&trust_events(&alice, 1));
+
+        // A device with no cert in the roster, stamping an account (even one
+        // not known here yet) → held until that account certifies it, never
+        // accepted on the stamp (whether the account is known yet is arrival
+        // order).
+        let stranger = principal();
+        let unknown = authored(stranger.device_id, &stranger.device_kp, stranger.account_id, 100);
+        assert_eq!(
+            verdict_for(&roster, &unknown),
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+        );
+
+        // Unsigned → refused: no device writes one.
+        let unsigned = env(101, SessionEvent::SessionTitleChanged { title: "x".into() });
+        assert_eq!(
+            verdict_for(&roster, &unsigned),
+            Verdict::Quarantine(QuarantineReason::Unsigned)
+        );
+    }
+
+    #[test]
+    fn cert_not_chaining_to_account_key_is_ignored() {
+        let alice = principal();
+        // Forge a cert for alice.device signed by a DIFFERENT (attacker) account key.
+        let attacker = SigningKeypair::generate().unwrap();
+        let forged = DeviceCertificate::issue(&attacker, alice.account_id, &alice.device_kp.public_key_bytes(), Timestamp::epoch());
+        let events = vec![
+            env(1, SessionEvent::AccountKeyRegistered {
+                account_id: alice.account_id,
+                signing_public_key: alice.account_kp.public_key_bytes().to_vec(), // real key
+            }),
+            env(2, SessionEvent::DeviceCertificateAdded { certificate: forged }),
+        ];
+        let roster = build_roster(&events);
+        // The forged cert doesn't verify against Alice's real account key → device
+        // never enters the roster.
+        assert!(roster.public_key(alice.device_id).is_none());
+    }
+
+    #[test]
+    fn removed_member_devices_are_revoked() {
+        let alice = principal();
+        let mut events = trust_events(&alice, 1);
+        events.push(env(50, SessionEvent::MemberRemoved { member_id: alice.account_id.to_string(), watermark: Vec::new() }));
+        let roster = build_roster(&events);
+
+        assert!(roster.is_revoked(alice.device_id), "removed account's device is revoked");
+        let e = authored(alice.device_id, &alice.device_kp, alice.account_id, 100);
+        assert_eq!(
+            verdict_for(&roster, &e),
+            Verdict::Quarantine(QuarantineReason::RevokedDevice)
+        );
+    }
+
+    #[test]
+    fn roster_is_order_independent() {
+        let alice = principal();
+        let bob = principal();
+        let mut events = trust_events(&alice, 1);
+        events.extend(trust_events(&bob, 10));
+
+        let forward = build_roster(&events);
+        let mut reversed = events.clone();
+        reversed.reverse();
+        let backward = build_roster(&reversed);
+
+        for p in [&alice, &bob] {
+            assert_eq!(
+                forward.public_key(p.device_id),
+                backward.public_key(p.device_id),
+                "roster must be identical regardless of event order",
+            );
+            assert!(forward.public_key(p.device_id).is_some());
+        }
+        let _ = ChatSession::new("x", Uuid::nil(), "r"); // silence unused import in some cfgs
+    }
+}

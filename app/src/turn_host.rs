@@ -1,4 +1,4 @@
-//! The desktop as the turn engine's host (`hive_runtime::turn_engine`): its
+//! The desktop as the turn engine's host (`ligus_runtime::turn_engine`): its
 //! MCP catalogs and trust, the repo gate, worktree reuse, the flow and
 //! proposal-set follow-ups, guard telemetry, and the Tauri events the window
 //! renders. The turn itself runs in the engine, as on every host.
@@ -7,14 +7,14 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use hive_core::sandbox::EgressPolicy;
-use hive_core::{ActionProposal, ChatSession, ModelProviderKind};
-use hive_proto::{ChatActivityEvent, ChatStreamEvent};
-use hive_runtime::git_worktree::Worktree;
-use hive_runtime::ligus_mcp::LigusMcp;
-use hive_runtime::provider::dispatch::StreamActivity;
-use hive_runtime::turn_engine::{Checkout, FinalizeArgs, Phase, TurnHost};
-use hive_runtime::{ChatService, McpServerSpec, McpTool};
+use ligus_core::sandbox::EgressPolicy;
+use ligus_core::{ActionProposal, ChatSession, ModelProviderKind};
+use ligus_proto::{ChatActivityEvent, ChatStreamEvent};
+use ligus_runtime::git_worktree::Worktree;
+use ligus_runtime::ligus_mcp::LigusMcp;
+use ligus_runtime::provider::dispatch::StreamActivity;
+use ligus_runtime::turn_engine::{Checkout, FinalizeArgs, Phase, TurnHost};
+use ligus_runtime::{ChatService, McpServerSpec, McpTool};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -95,9 +95,9 @@ impl TurnHost for DesktopHost<'_> {
         crate::flow::release_worktree(self.state, wt, chat_id);
     }
 
-    fn workflow_tool(&self, session: &ChatSession) -> Option<hive_runtime::workflow_tool::WorkflowTool> {
+    fn workflow_tool(&self, session: &ChatSession) -> Option<ligus_runtime::workflow_tool::WorkflowTool> {
         let session = session.clone();
-        Some(hive_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
+        Some(ligus_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
             crate::workflows::definition_from_directive(json, &session).map(|d| d.name)
         })))
     }
@@ -166,11 +166,11 @@ impl TurnHost for DesktopHost<'_> {
         crate::guards::record_tools_selected(self.state, self.workspace_id, self.session_id, per_server);
     }
 
-    fn progress(&self, progress: &hive_runtime::patch_leaving::ProgressTracker) {
+    fn progress(&self, progress: &ligus_runtime::patch_leaving::ProgressTracker) {
         crate::guards::record_progress(self.state, self.workspace_id, self.session_id, progress);
     }
 
-    fn egress_denials(&self, denied: &[hive_runtime::egress::HostPort]) {
+    fn egress_denials(&self, denied: &[ligus_runtime::egress::HostPort]) {
         crate::guards::record_sandbox_egress_denials(self.state, self.workspace_id, self.session_id, denied);
     }
 

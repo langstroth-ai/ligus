@@ -71,9 +71,9 @@ export function errMsg(e: unknown): string {
 }
 
 const KIND_STYLE: Record<ToastKind, { bar: string; label: string }> = {
-  success: { bar: "var(--hive-success)", label: "Done" },
-  error: { bar: "var(--hive-danger)", label: "Error" },
-  info: { bar: "var(--hive-accent-cool)", label: "Note" },
+  success: { bar: "var(--ligus-success)", label: "Done" },
+  error: { bar: "var(--ligus-danger)", label: "Error" },
+  info: { bar: "var(--ligus-accent-cool)", label: "Note" },
 };
 
 /** Mount once near the app root. */
@@ -90,9 +90,9 @@ export function ToastHost() {
             role="status"
             className="pointer-events-auto flex items-start gap-3 rounded-xl border px-3 py-2.5 text-sm shadow-lg"
             style={{
-              borderColor: "var(--hive-line)",
-              background: "var(--hive-panel)",
-              color: "var(--hive-ink)",
+              borderColor: "var(--ligus-line)",
+              background: "var(--ligus-panel)",
+              color: "var(--ligus-ink)",
               borderLeft: `3px solid ${s.bar}`,
             }}
           >
