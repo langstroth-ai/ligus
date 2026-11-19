@@ -97,6 +97,66 @@ pub fn verify_claimed_root(dest: &Path, repo: &WorkspaceRepo) -> Option<bool> {
     repo.root_commit.as_deref().map(|r| super::git::has_root(dest, r))
 }
 
+/// After a clone by repo id, on every host: `origin` names the repo's
+/// identity ([`set_identity_origin`]), and the entry's claimed root is
+/// checked ([`verify_claimed_root`]; `Some(false)` is a warning, never
+/// hidden).
+pub fn finish_clone(dest: &Path, repo: &WorkspaceRepo) -> Result<Option<bool>, String> {
+    set_identity_origin(dest, repo)?;
+    Ok(verify_claimed_root(dest, repo))
+}
+
+/// A clone by repo id that landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cloned {
+    pub path: std::path::PathBuf,
+    /// Whether it holds the root commit the repo entry claims (`None`: it
+    /// claims none).
+    pub root_matches: Option<bool>,
+}
+
+/// Clone workspace repo `repo` into `parent/<clone_dir_name>`: the desktop's
+/// "Clone into…", on the same safe path as the box's clone by id (4.3).
+/// `url` is the one the caller built from the repo's canonical for a host
+/// this device has a connection to (never a string from an event); `pin`
+/// and `auth` as in [`clone_command`]. The clone lands in a hidden temp dir
+/// next to it and is renamed only when complete, so a half-done clone never
+/// shows up (or gets bound) as a checkout. The folder name is injective
+/// (review F13); an existing folder is refused, never reused.
+pub fn clone_into(repo: &WorkspaceRepo, url: &str, parent: &Path, pin: Option<&str>, auth: &[String]) -> Result<Cloned, String> {
+    clone_target(repo)?;
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Err("pick an existing folder to clone into".into());
+    }
+    let dest = parent.join(super::clone_dir_name(repo));
+    if std::fs::symlink_metadata(&dest).is_ok() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    let tmp = parent.join(format!(".ligus-clone-{}", uuid::Uuid::new_v4().simple()));
+    let mut cmd = clone_command(url, &tmp, None, pin, auth);
+    cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
+    let out = cmd.output().map_err(|e| e.to_string());
+    let failed = match out {
+        Ok(o) if o.status.success() => None,
+        Ok(o) => Some(format!("git clone failed: {}", String::from_utf8_lossy(&o.stderr).lines().rfind(|l| !l.trim().is_empty()).unwrap_or("").trim())),
+        Err(e) => Some(e),
+    };
+    if let Some(e) = failed {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if std::fs::symlink_metadata(&dest).is_ok() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("{} appeared while cloning", dest.display()));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &dest) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("moving the clone into place: {e}"));
+    }
+    let root_matches = finish_clone(&dest, repo)?;
+    Ok(Cloned { path: dest, root_matches })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

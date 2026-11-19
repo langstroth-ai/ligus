@@ -169,6 +169,22 @@ pub fn apply_to_chat_branch(
     Ok(Applied { base: tip, commit, tree, three_way })
 }
 
+/// Whether `diff` applies on the chat's branch in `checkout` now, without
+/// changing anything: `Ok(None)` when it does (exactly, or three-way),
+/// `Ok(Some(why))` with the conflict when it doesn't, for "Ask the agent to
+/// rebase". The three-way try runs in a scratch tree that is thrown away.
+pub fn conflict_probe(checkout: &Path, chat_id: &str, diff: &str) -> Result<Option<String>, String> {
+    let tip = git(checkout, &["rev-parse", "--verify", &branch_ref(chat_id)]).map_err(|_| "this chat has no branch here yet".to_string())?;
+    if tree_for(checkout, &tip, diff, false).is_ok() {
+        return Ok(None);
+    }
+    match three_way_tree(checkout, &tip, diff) {
+        Ok(_) => Ok(None),
+        Err(ApplyError::Conflict(why)) => Ok(Some(why)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// The values of `trailer` in the **trailer blocks** of the chat branch's
 /// commits (each message's last paragraph, never its subject or body),
 /// only on commits since `base` when one is given (the chat's pinned base:

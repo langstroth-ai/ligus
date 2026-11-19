@@ -495,3 +495,64 @@ fn legacy_apply_title_never_carries_a_trailer_block() {
     commit(&legacy_apply_message(&title), "two.txt");
     assert!(!branch_has_trailer(&e.checkout, &chat_id, hive_core::workspace_repo::PROPOSAL_TRAILER, victim));
 }
+
+/// The desktop's "Clone into…" (4.3): the same safe clone by id as the
+/// box's. Named from the repo (injective), never half there, origin set to
+/// the repo's identity (the source URL kept for transport), the claimed
+/// root checked; a `local:` repo, a relative or missing parent, and an
+/// existing folder are refused.
+#[test]
+fn clone_into_is_the_safe_clone_by_id() {
+    let e = env();
+    let parent = e.checkout.parent().unwrap().join("into");
+    std::fs::create_dir_all(&parent).unwrap();
+    let mut repo = wefit();
+    repo.root_commit = Some(sh(&e.checkout, &["rev-list", "--max-parents=0", "HEAD"]));
+    let url = e.forge.to_string_lossy().into_owned();
+
+    let c = super::clone::clone_into(&repo, &url, &parent, None, &[]).unwrap();
+    assert_eq!(c.path.file_name().unwrap().to_string_lossy(), clone_dir_name(&repo));
+    assert_eq!(c.root_matches, Some(true));
+    assert_eq!(sh(&c.path, &["remote", "get-url", "origin"]), "https://github.com/zazulam/wefit.git");
+    // Fetches still reach the source (a local insteadOf); identity doesn't follow it.
+    sh(&c.path, &["fetch", "-q", "origin"]);
+    let aliases = Default::default();
+    assert!(checkout_matches(&c.path, &repo, &aliases).is_some(), "the clone counts as WeFit");
+    assert!(std::fs::read_dir(&parent).unwrap().flatten().all(|d| !d.file_name().to_string_lossy().starts_with(".ligus-clone")), "no temp dir left");
+
+    // Again into the same folder: refused, nothing touched.
+    let again = super::clone::clone_into(&repo, &url, &parent, None, &[]);
+    assert!(again.is_err_and(|e| e.contains("already exists")));
+    // A failing clone leaves nothing behind.
+    let other = WorkspaceRepo { id: repo_id("github.com/zazulam/other"), canonical: "github.com/zazulam/other".into(), display_name: "Other".into(), ..wefit() };
+    assert!(super::clone::clone_into(&other, &parent.join("nope.git").to_string_lossy(), &parent, None, &[]).is_err());
+    assert!(std::fs::read_dir(&parent).unwrap().flatten().all(|d| d.file_name().to_string_lossy() == clone_dir_name(&repo)), "only the first clone");
+    // Refusals.
+    assert!(super::clone::clone_into(&repo, &url, Path::new("relative/dir"), None, &[]).is_err());
+    assert!(super::clone::clone_into(&repo, &url, &parent.join("missing"), None, &[]).is_err());
+    let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), ..wefit() };
+    assert!(super::clone::clone_into(&local, &url, &parent, None, &[]).is_err());
+    // A claimed root the clone doesn't have is reported, not hidden.
+    let wrong = WorkspaceRepo { root_commit: Some("b".repeat(40)), display_name: "Wrong".into(), ..wefit() };
+    assert_eq!(super::clone::clone_into(&wrong, &url, &parent, None, &[]).unwrap().root_matches, Some(false));
+}
+
+/// "Ask the agent to rebase" carries the conflict this device sees, found
+/// without touching the chat's branch or worktree; a patch that applies
+/// (exactly or three-way) has none.
+#[test]
+fn conflict_probe_reports_without_changing_anything() {
+    let e = env();
+    let chat_id = Uuid::new_v4().to_string();
+    let wt = crate::git_worktree::chat_worktree(&e.checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("README.md"), "mine\n").unwrap();
+    sh(&wt, &["commit", "-qam", "mine"]);
+    let tip = sh(&wt, &["rev-parse", "HEAD"]);
+    let why = conflict_probe(&e.checkout, &chat_id, DIFF_README).unwrap().expect("a conflict");
+    assert!(why.contains("README.md") || why.contains("apply"), "{why}");
+    assert_eq!(conflict_probe(&e.checkout, &chat_id, DIFF_A).unwrap(), None);
+    assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(sh(&wt, &["status", "--porcelain"]), "");
+    assert!(sh(&e.checkout, &["worktree", "list"]).lines().all(|l| !l.contains("ligus-3way")), "scratch tree removed");
+    assert!(conflict_probe(&e.checkout, &Uuid::new_v4().to_string(), DIFF_A).is_err(), "no branch here");
+}
