@@ -126,7 +126,11 @@ pub(crate) fn memory_write_sync(
 
 /// Remove an entry from `base` (a tombstone; the history stays in the log).
 #[tauri::command]
-pub(crate) fn memory_remove(
+pub(crate) async fn memory_remove(ligus_app: tauri::AppHandle, entry_id: String, base: String, resolves: Option<Vec<String>>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| memory_remove_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), entry_id, base, resolves)).await
+}
+
+pub(crate) fn memory_remove_sync(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     entry_id: String,
@@ -146,7 +150,11 @@ pub(crate) fn memory_remove(
 
 /// Accept or reject a memory proposal.
 #[tauri::command]
-pub(crate) fn memory_decide(
+pub(crate) async fn memory_decide(ligus_app: tauri::AppHandle, proposal_id: String, accepted: bool, note: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| memory_decide_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), proposal_id, accepted, note)).await
+}
+
+pub(crate) fn memory_decide_sync(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     proposal_id: String,
@@ -168,7 +176,24 @@ pub(crate) fn memory_decide(
 /// a Contributor proposing an edit of someone else's entry).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn memory_propose(
+pub(crate) async fn memory_propose(
+    ligus_app: tauri::AppHandle,
+    op: String,
+    entry_id: Option<String>,
+    base: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    tags: Option<Vec<String>>,
+    rationale: Option<String>,
+) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| {
+        memory_propose_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), op, entry_id, base, title, body, tags, rationale)
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn memory_propose_sync(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     op: String,

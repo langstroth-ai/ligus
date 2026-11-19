@@ -360,35 +360,35 @@ pub fn remove_workspace_repo_sync(state: State<AppState>, repo_id: String) -> Re
 /// passkey prompt comes from the service): other spellings of the same
 /// repo, names only.
 #[tauri::command]
-pub async fn set_repo_aliases(ligus_app: tauri::AppHandle, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
-    crate::off_main(ligus_app, move |ligus_app| set_repo_aliases_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, aliases)).await
+pub async fn set_repo_aliases(ligus_app: tauri::AppHandle, workspace_id: String, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_aliases_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, repo_id, aliases)).await
 }
 
-pub fn set_repo_aliases_sync(state: State<AppState>, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
-    let ws = ws_of(&state);
+pub fn set_repo_aliases_sync(state: State<AppState>, workspace_id: String, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().set_repo_aliases(ws, parse(&repo_id)?, &aliases).map_err(map_err)
 }
 
 /// Map a host alias to a repository host for the workspace, or clear it
 /// with an empty `host` (Admin, with presence).
 #[tauri::command]
-pub async fn set_host_alias(ligus_app: tauri::AppHandle, alias: String, host: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_host_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, host)).await
+pub async fn set_host_alias(ligus_app: tauri::AppHandle, workspace_id: String, alias: String, host: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_host_alias_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, alias, host)).await
 }
 
-pub fn set_host_alias_sync(state: State<AppState>, alias: String, host: String) -> Result<(), String> {
-    let ws = ws_of(&state);
+pub fn set_host_alias_sync(state: State<AppState>, workspace_id: String, alias: String, host: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().set_host_alias(ws, &alias, &host).map_err(map_err)
 }
 
 /// Accept a synced alias on this device (or stop using it). Device-local.
 #[tauri::command]
-pub async fn accept_repo_alias(ligus_app: tauri::AppHandle, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
-    crate::off_main(ligus_app, move |ligus_app| accept_repo_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, accept, target)).await
+pub async fn accept_repo_alias(ligus_app: tauri::AppHandle, workspace_id: String, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| accept_repo_alias_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, alias, accept, target)).await
 }
 
-pub fn accept_repo_alias_sync(state: State<AppState>, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
-    let ws = ws_of(&state);
+pub fn accept_repo_alias_sync(state: State<AppState>, workspace_id: String, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().accept_alias_for(ws, &alias, target.as_deref(), accept).map_err(map_err)
 }
 
@@ -443,12 +443,12 @@ pub fn rescan_repos_sync(state: State<AppState>, root: Option<String>) -> Result
 }
 
 #[tauri::command]
-pub async fn set_repo_coverage_reporting(ligus_app: tauri::AppHandle, on: Option<bool>) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_repo_coverage_reporting_sync(tauri::Manager::state::<AppState>(ligus_app), on)).await
+pub async fn set_repo_coverage_reporting(ligus_app: tauri::AppHandle, workspace_id: String, on: Option<bool>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_coverage_reporting_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, on)).await
 }
 
-pub fn set_repo_coverage_reporting_sync(state: State<AppState>, on: Option<bool>) -> Result<(), String> {
-    let ws = ws_of(&state);
+pub fn set_repo_coverage_reporting_sync(state: State<AppState>, workspace_id: String, on: Option<bool>) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     let svc = state.service.lock().unwrap();
     rr::set_coverage_reporting(svc.store(), ws, on).map_err(map_err)
 }

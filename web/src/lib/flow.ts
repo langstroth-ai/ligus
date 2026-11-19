@@ -2,6 +2,7 @@
 // Typed wrappers around the `flow_*` Tauri commands (app/src/flow.rs). The
 // shapes mirror the serde (camelCase) structs in ligus_core::flow.
 import { invoke } from "@tauri-apps/api/core";
+import { shownWorkspace } from "@/lib/shownWorkspace";
 
 export interface HandoffQuality {
   testsPassed?: boolean;
@@ -271,13 +272,14 @@ export interface PathZone {
 export const listZones = () => invoke<PathZone[]>("flow_zones");
 export const setZone = (z: { pattern: string; kind: ZoneKind; approvalFloor?: Role; requiredApprovals?: number; note: string }) =>
   invoke<void>("flow_set_zone", {
+    workspaceId: shownWorkspace(),
     pattern: z.pattern,
     kind: z.kind,
     approvalFloor: z.approvalFloor ?? null,
     requiredApprovals: z.requiredApprovals ?? null,
     note: z.note,
   });
-export const removeZone = (zoneId: string) => invoke<void>("flow_remove_zone", { zoneId });
+export const removeZone = (zoneId: string) => invoke<void>("flow_remove_zone", { workspaceId: shownWorkspace(), zoneId });
 
 export type Career = "probation" | "proposer" | "reviewer";
 

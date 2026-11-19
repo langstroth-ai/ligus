@@ -30,6 +30,7 @@ import {
   syncStatus,
   type SyncStatusDto,
 } from "@/lib/ipc";
+import { setShownWorkspace } from "@/lib/shownWorkspace";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { editorStore } from "@/state/editorStore";
@@ -600,6 +601,8 @@ export function App() {
   const workspaceFolder = settings.data?.workspaceFolder ?? "";
   const activeWorkspace = workspaceList.data?.find((w) => w.active);
   const activeWorkspaceId = activeWorkspace?.id ?? "";
+  // Settings and grant commands act on this workspace, the one on screen.
+  setShownWorkspace(activeWorkspaceId);
   const activeWorkspaceName = activeWorkspace?.name?.trim();
 
   // Default view on workspace open/switch: land on the workspace's most-recent

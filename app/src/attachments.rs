@@ -249,10 +249,23 @@ pub(crate) struct AttachmentCheck {
     needs_confirmation: bool,
 }
 
-/// The last check of each attachment on this device (what "Save" relies on).
-fn checks() -> &'static Mutex<HashMap<Uuid, AttachmentCheck>> {
-    static C: std::sync::OnceLock<Mutex<HashMap<Uuid, AttachmentCheck>>> = std::sync::OnceLock::new();
+/// The last check of each attachment on this device (what "Save" relies
+/// on), by workspace and attachment: an attachment id is its sharer's choice,
+/// so the same id in another workspace is another file.
+fn checks() -> &'static Mutex<HashMap<(Uuid, Uuid), AttachmentCheck>> {
+    static C: std::sync::OnceLock<Mutex<HashMap<(Uuid, Uuid), AttachmentCheck>>> = std::sync::OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember the check of attachment `id` in workspace `ws`.
+fn remember_check(ws: Uuid, id: Uuid, check: AttachmentCheck) {
+    checks().lock().unwrap().insert((ws, id), check);
+}
+
+/// The check "Save" relies on: of this attachment, in this workspace, of
+/// these bytes.
+fn checked(ws: Uuid, id: Uuid, sha256: &str) -> Option<AttachmentCheck> {
+    checks().lock().unwrap().get(&(ws, id)).cloned().filter(|c| c.sha256 == sha256)
 }
 
 /// Download, verify and inspect a shared file (an explicit action). Nothing
@@ -324,7 +337,7 @@ pub(crate) async fn check_attachment(state: State<'_, AppState>, session_id: Str
         refused,
         needs_confirmation,
     };
-    checks().lock().unwrap().insert(a.id, check.clone());
+    remember_check(session.workspace_id, a.id, check.clone());
     Ok(check)
 }
 
@@ -342,7 +355,7 @@ pub(crate) fn save_received_attachment_sync(state: State<AppState>, session_id: 
     let rules = state.service.lock().unwrap().attachment_rules(session.workspace_id).map_err(map_err)?;
     blob::receivable(&s, &rules).map_err(|e| e.to_string())?;
     let a = &s.attachment;
-    let check = checks().lock().unwrap().get(&a.id).cloned().filter(|c| c.sha256 == a.sha256).ok_or("check the file first")?;
+    let check = checked(session.workspace_id, a.id, &a.sha256).ok_or("check the file first")?;
     if let Some(why) = &check.refused {
         return Err(why.clone());
     }
@@ -473,12 +486,12 @@ pub(crate) fn attachment_rules_sync(state: State<AppState>) -> Result<Attachment
 
 /// Set the attachment policy (Admin; asks for a passkey confirmation).
 #[tauri::command(async)]
-pub(crate) async fn set_attachment_policy(ligus_app: tauri::AppHandle, policy: AttachmentPolicy) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| set_attachment_policy_sync(tauri::Manager::state::<AppState>(ligus_app), policy)).await
+pub(crate) async fn set_attachment_policy(ligus_app: tauri::AppHandle, workspace_id: String, policy: AttachmentPolicy) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_attachment_policy_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, policy)).await
 }
 
-pub(crate) fn set_attachment_policy_sync(state: State<AppState>, policy: AttachmentPolicy) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn set_attachment_policy_sync(state: State<AppState>, workspace_id: String, policy: AttachmentPolicy) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     if state.is_local_only_ws(ws) {
         return Err("files in your own workspace stay on this device".into());
     }
@@ -487,23 +500,23 @@ pub(crate) fn set_attachment_policy_sync(state: State<AppState>, policy: Attachm
 
 /// Block a file by its SHA-256 (Admin).
 #[tauri::command(async)]
-pub(crate) async fn block_attachment_hash(ligus_app: tauri::AppHandle, sha256: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| block_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), sha256)).await
+pub(crate) async fn block_attachment_hash(ligus_app: tauri::AppHandle, workspace_id: String, sha256: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| block_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, sha256)).await
 }
 
-pub(crate) fn block_attachment_hash_sync(state: State<AppState>, sha256: String) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn block_attachment_hash_sync(state: State<AppState>, workspace_id: String, sha256: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().block_attachment_hash(ws, &sha256).map_err(map_err)
 }
 
 /// Lift a block (Admin; asks for a passkey confirmation).
 #[tauri::command(async)]
-pub(crate) async fn unblock_attachment_hash(ligus_app: tauri::AppHandle, sha256: String) -> Result<(), String> {
-    crate::off_main(ligus_app, move |ligus_app| unblock_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), sha256)).await
+pub(crate) async fn unblock_attachment_hash(ligus_app: tauri::AppHandle, workspace_id: String, sha256: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| unblock_attachment_hash_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, sha256)).await
 }
 
-pub(crate) fn unblock_attachment_hash_sync(state: State<AppState>, sha256: String) -> Result<(), String> {
-    let ws = state.active_workspace_id();
+pub(crate) fn unblock_attachment_hash_sync(state: State<AppState>, workspace_id: String, sha256: String) -> Result<(), String> {
+    let ws = crate::shown_workspace(&state, &workspace_id)?;
     state.service.lock().unwrap().unblock_attachment_hash(ws, &sha256).map_err(map_err)
 }
 
@@ -579,4 +592,40 @@ async fn share_offer(
     let _ = blob::cache_verified(&blob::verified_cache_dir(&state.data_dir), &att, &prepared.plaintext);
     let _ = std::fs::remove_file(staged_dir(&state.data_dir).join(pid.to_string()));
     Ok(())
+}
+
+#[cfg(test)]
+mod check_gate_tests {
+    use super::*;
+
+    fn check(sha: &str, sender: &str) -> AttachmentCheck {
+        AttachmentCheck {
+            id: String::new(),
+            sha256: sha.into(),
+            name: "a.txt".into(),
+            size: 1,
+            sender: sender.into(),
+            assessment: attachment::assess("a.txt", b"a"),
+            archive: None,
+            scan: safety::ScanResult::NotConfigured,
+            blocked_type: None,
+            refused: None,
+            needs_confirmation: false,
+        }
+    }
+
+    /// An attachment id is the sharer's choice: the same id and bytes in
+    /// another workspace (another sharer, another policy) needs its own
+    /// check, and one workspace's check never lets "Save" through in another.
+    #[test]
+    fn a_check_counts_only_in_its_own_workspace() {
+        let (a, b, id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        remember_check(a, id, check("s1", "Ada"));
+        assert_eq!(checked(a, id, "s1").map(|c| c.sender), Some("Ada".into()));
+        assert!(checked(b, id, "s1").is_none(), "workspace B used A's check");
+        assert!(checked(a, id, "s2").is_none(), "other bytes used the check");
+        remember_check(b, id, check("s1", "Mallory"));
+        assert_eq!(checked(a, id, "s1").map(|c| c.sender), Some("Ada".into()), "B's check replaced A's");
+        assert_eq!(checked(b, id, "s1").map(|c| c.sender), Some("Mallory".into()));
+    }
 }

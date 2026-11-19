@@ -82,22 +82,23 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+/// Decode a form value: `+` is a space and `%XY` (exactly two hex digits,
+/// the last one may end the string) is that byte; anything else, a cut-off
+/// or malformed escape included, stays as written.
 fn urldecode(s: &str) -> String {
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        match b[i] {
-            b'+' => out.push(b' '),
-            b'%' if i + 2 < b.len() => {
-                if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
-                    out.push(v);
-                    i += 2;
-                } else {
-                    out.push(b'%');
-                }
+        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+            (b'%', Some(hi), Some(lo)) => {
+                out.push(hi << 4 | lo);
+                i += 3;
+                continue;
             }
-            c => out.push(c),
+            (b'+', _, _) => out.push(b' '),
+            (c, _, _) => out.push(c),
         }
         i += 1;
     }
@@ -519,10 +520,10 @@ pub async fn recovery_key_create(app: AppHandle) -> Result<String, String> {
 /// Turn on (or set) the workspace rules version; v2 needs a passkey and a
 /// recovery key first, and the switch itself is confirmed with a passkey.
 #[tauri::command]
-pub async fn workspace_rules_set(app: AppHandle, version: u32) -> Result<(), String> {
+pub async fn workspace_rules_set(app: AppHandle, workspace_id: String, version: u32) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let ws = state.active_workspace_id();
+        let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
         svc.set_workspace_rules(ws, version).map(|_| ()).map_err(|e| e.to_string())
     })
@@ -533,10 +534,10 @@ pub async fn workspace_rules_set(app: AppHandle, version: u32) -> Result<(), Str
 /// Remove one of this account's passkeys (or the recovery key) on the
 /// active workspace.
 #[tauri::command]
-pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(), String> {
+pub async fn passkey_remove(app: AppHandle, workspace_id: String, credential_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let ws = state.active_workspace_id();
+        let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
         let account = svc.author().account_id.ok_or("this device has no account")?;
         svc.remove_passkey(ws, account, &credential_id).map(|_| ()).map_err(|e| e.to_string())
@@ -549,10 +550,10 @@ pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(),
 /// again (rules v2): an Admin's re-grant of their role, confirmed with this
 /// account's passkey.
 #[tauri::command]
-pub async fn passkey_regrant(app: AppHandle, member_id: String) -> Result<(), String> {
+pub async fn passkey_regrant(app: AppHandle, workspace_id: String, member_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let ws = state.active_workspace_id();
+        let ws = crate::shown_workspace(&state, &workspace_id)?;
         let mut svc = state.service.lock().unwrap();
         svc.regrant_passkey(ws, &member_id).map(|_| ()).map_err(|e| e.to_string())
     })
@@ -655,5 +656,32 @@ mod tests {
             assert_eq!(std::fs::metadata(page.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod urldecode_tests {
+    use super::{urldecode, urlencode};
+
+    /// Form values decode exactly: an escape at the very end, a cut-off
+    /// escape, a `+`, and only two hex digits count (no sign, no other text).
+    #[test]
+    fn urldecode_vectors() {
+        assert_eq!(urldecode("%41"), "A");
+        assert_eq!(urldecode("ab%41"), "abA");
+        assert_eq!(urldecode("%41%42"), "AB");
+        assert_eq!(urldecode("a%4"), "a%4");
+        assert_eq!(urldecode("a%"), "a%");
+        assert_eq!(urldecode("%"), "%");
+        assert_eq!(urldecode("a+b"), "a b");
+        assert_eq!(urldecode("%2B"), "+");
+        assert_eq!(urldecode("%+1x"), "% 1x", "a sign is not a hex digit");
+        assert_eq!(urldecode("%zz"), "%zz");
+        assert_eq!(urldecode("%%41"), "%A");
+        assert_eq!(urldecode("%C3%A9"), "é");
+        assert_eq!(urldecode("%é1"), "%é1");
+        for s in ["", "a b+c/d=e&f", "é~-_.", "%41"] {
+            assert_eq!(urldecode(&urlencode(s)), s);
+        }
     }
 }

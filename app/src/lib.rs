@@ -104,7 +104,7 @@ impl BoundedIdSet {
 }
 
 struct AppState {
-    service: Mutex<ChatService>,
+    service: BlockingLock<ChatService>,
     /// Host liveness from the connected room's relay presence channel (see
     /// `ligus_runtime::host_presence`), refreshed by `run_device_host_loop`.
     host_presence: ligus_runtime::HostPresence,
@@ -1880,33 +1880,82 @@ fn resolve_on_path(bin: &str) -> Option<PathBuf> {
         let p = PathBuf::from(bin);
         return if p.is_file() { Some(p) } else { None };
     }
-    let path_var = augmented_path();
-    #[cfg(windows)]
-    let exts: Vec<String> = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
+    find_in_dirs(bin, std::env::split_paths(&augmented_path()), &path_exts())
+}
+
+/// Windows: the extensions `PATHEXT` lists (`.com`, `.exe`, `.bat`, `.cmd`
+/// by default), lowercased. Elsewhere: none.
+fn path_exts() -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    std::env::var("PATHEXT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string())
         .split(';')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase())
-        .collect();
-    for dir in std::env::split_paths(&path_var) {
-        let direct = dir.join(bin);
-        if direct.is_file() {
-            return Some(direct);
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| s.starts_with('.') && s.len() > 1)
+        .collect()
+}
+
+/// The program `bin` names in `dirs`, as the OS would run it. With no
+/// `exts` (not Windows), the first `dir/bin` that is a file. With `exts`
+/// (Windows' `PATHEXT`), a bare name resolves like `where.exe` does for a
+/// program: `dir/bin<ext>` for each extension in order; the extensionless
+/// file beside it is skipped, because Windows can't run it (VS Code's `bin`
+/// holds a POSIX `code` script next to `code.cmd`).
+fn find_in_dirs(bin: &str, dirs: impl IntoIterator<Item = PathBuf>, exts: &[String]) -> Option<PathBuf> {
+    let has_ext = Path::new(bin).extension().is_some();
+    for dir in dirs {
+        if exts.is_empty() || has_ext {
+            let direct = dir.join(bin);
+            if direct.is_file() {
+                return Some(direct);
+            }
+            continue;
         }
-        #[cfg(windows)]
-        {
-            // If the name has no extension, try each PATHEXT candidate.
-            if PathBuf::from(bin).extension().is_none() {
-                for ext in &exts {
-                    let cand = dir.join(format!("{bin}{ext}"));
-                    if cand.is_file() {
-                        return Some(cand);
-                    }
-                }
+        for ext in exts {
+            let cand = dir.join(format!("{bin}{ext}"));
+            if cand.is_file() {
+                return Some(cand);
             }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod find_on_path_tests {
+    use super::find_in_dirs;
+
+    fn exts() -> Vec<String> {
+        [".com", ".exe", ".bat", ".cmd"].iter().map(|s| s.to_string()).collect()
+    }
+
+    /// VS Code's `bin` holds a POSIX `code` script beside `code.cmd`: on
+    /// Windows the bare name is the `.cmd` (what `where.exe code` runs), never
+    /// the script Windows can't start.
+    #[test]
+    fn windows_finds_code_cmd_not_the_posix_script() {
+        let t = std::env::temp_dir().join(format!("ligus-find-{}", uuid::Uuid::new_v4()));
+        let (a, b) = (t.join("a"), t.join("vscode-bin"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("code"), "#!/usr/bin/env sh").unwrap();
+        std::fs::write(b.join("code.cmd"), "@echo off").unwrap();
+        let dirs = || vec![a.clone(), b.clone()];
+        assert_eq!(find_in_dirs("code", dirs(), &exts()), Some(b.join("code.cmd")));
+        // A name with its extension is taken as is.
+        assert_eq!(find_in_dirs("code.cmd", dirs(), &exts()), Some(b.join("code.cmd")));
+        // PATHEXT order: an .exe earlier on PATH wins over a later .cmd.
+        std::fs::write(a.join("code.exe"), "MZ").unwrap();
+        assert_eq!(find_in_dirs("code", dirs(), &exts()), Some(a.join("code.exe")));
+        // Elsewhere the script is the program.
+        assert_eq!(find_in_dirs("code", vec![b.clone()], &[]), Some(b.join("code")));
+        assert_eq!(find_in_dirs("cursor", dirs(), &exts()), None);
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }
 
 /// Incremental parser for LSP's `Content-Length`-framed JSON-RPC stream. Bytes
@@ -8840,6 +8889,220 @@ async fn run_prepared_turn_inner(
     }
 }
 
+/// Refused when a settings or grant command names a workspace other than
+/// the active one (it switched after the view was drawn).
+pub(crate) const WORKSPACE_CHANGED: &str = "the workspace changed since this view was opened; check the setting again and retry";
+
+/// The workspace a settings or grant command acts on: the one the view
+/// showed when the person acted (`workspace_id`, sent by the UI). Refused
+/// unless it is still the active one, so a switch in between (another
+/// window, a link, the palette) never lands the change on a workspace the
+/// person wasn't looking at. The command then uses the returned id, not
+/// the active one, for everything it does.
+pub(crate) fn shown_workspace(state: &AppState, workspace_id: &str) -> Result<Uuid, String> {
+    check_shown_workspace(state.active_workspace_id(), workspace_id)
+}
+
+pub(crate) fn check_shown_workspace(active: Uuid, workspace_id: &str) -> Result<Uuid, String> {
+    match Uuid::parse_str(workspace_id.trim()) {
+        Ok(shown) if shown == active => Ok(shown),
+        _ => Err(WORKSPACE_CHANGED.into()),
+    }
+}
+
+#[cfg(test)]
+mod shown_workspace_tests {
+    use uuid::Uuid;
+
+    /// Every settings and grant command takes the workspace the view showed
+    /// and acts on it through `shown_workspace`, never on whatever is active.
+    const COMMANDS: &[(&str, &str, &str)] = &[
+        ("guards.rs", include_str!("guards.rs"), "set_workspace_cli_user_config"),
+        ("guards.rs", include_str!("guards.rs"), "set_workspace_egress_presets"),
+        ("guards.rs", include_str!("guards.rs"), "set_sandbox_grants_here"),
+        ("guards.rs", include_str!("guards.rs"), "ack_sandbox_grants"),
+        ("guards.rs", include_str!("guards.rs"), "set_sandbox_grants"),
+        ("guards.rs", include_str!("guards.rs"), "set_dearth_mode"),
+        ("attachments.rs", include_str!("attachments.rs"), "set_attachment_policy"),
+        ("attachments.rs", include_str!("attachments.rs"), "block_attachment_hash"),
+        ("attachments.rs", include_str!("attachments.rs"), "unblock_attachment_hash"),
+        ("passkey_ui.rs", include_str!("passkey_ui.rs"), "workspace_rules_set"),
+        ("passkey_ui.rs", include_str!("passkey_ui.rs"), "passkey_remove"),
+        ("passkey_ui.rs", include_str!("passkey_ui.rs"), "passkey_regrant"),
+        ("repos_ui.rs", include_str!("repos_ui.rs"), "set_repo_aliases"),
+        ("repos_ui.rs", include_str!("repos_ui.rs"), "set_host_alias"),
+        ("repos_ui.rs", include_str!("repos_ui.rs"), "accept_repo_alias"),
+        ("repos_ui.rs", include_str!("repos_ui.rs"), "set_repo_coverage_reporting"),
+        ("flow.rs", include_str!("flow.rs"), "flow_set_zone"),
+        ("flow.rs", include_str!("flow.rs"), "flow_remove_zone"),
+        ("guards.rs", include_str!("guards.rs"), "approve_join"),
+    ];
+
+    fn item<'a>(src: &'a str, name: &str) -> Option<&'a str> {
+        let at = src.find(&format!("fn {name}("))?;
+        let rest = &src[at..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        Some(&rest[..end])
+    }
+
+    #[test]
+    fn settings_and_grant_commands_act_on_the_shown_workspace() {
+        let mut wrong = Vec::new();
+        for (file, src, name) in COMMANDS {
+            let cmd = item(src, name).unwrap_or_else(|| panic!("{file}: no fn {name}"));
+            let sig = &cmd[..cmd.find('{').unwrap_or(cmd.len())];
+            let body = item(src, &format!("{name}_sync")).unwrap_or(cmd);
+            if !sig.contains("workspace_id: String") || !body.contains("shown_workspace(") || body.contains("active_workspace_id()") || body.contains("ws_of(") {
+                wrong.push(format!("{file}: {name}"));
+            }
+        }
+        assert!(wrong.is_empty(), "act on the active workspace, not the shown one: {wrong:?}");
+    }
+
+    #[test]
+    fn a_workspace_switch_in_between_is_refused() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(super::check_shown_workspace(a, &a.to_string()), Ok(a));
+        assert_eq!(super::check_shown_workspace(a, &format!(" {a} ")), Ok(a));
+        assert_eq!(super::check_shown_workspace(a, &b.to_string()), Err(super::WORKSPACE_CHANGED.to_string()));
+        assert_eq!(super::check_shown_workspace(a, ""), Err(super::WORKSPACE_CHANGED.to_string()));
+    }
+}
+
+/// The service lock. Async commands and the helpers they call take it on a
+/// tokio worker: a wait there (a passkey ceremony or a long write holds it)
+/// would stall every other task queued on that worker. [`BlockingLock::lock`]
+/// waits inside `block_in_place` on a multi-thread runtime's worker, so the
+/// runtime hands that worker's other tasks to another thread meanwhile.
+/// Everywhere else (the blocking pool, the main thread, tests) it is a plain
+/// `Mutex::lock`.
+pub(crate) struct BlockingLock<T>(Mutex<T>);
+
+impl<T> BlockingLock<T> {
+    pub(crate) fn new(v: T) -> Self {
+        Self(Mutex::new(v))
+    }
+
+    pub(crate) fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, T>> {
+        if let Ok(g) = self.0.try_lock() {
+            return Ok(g);
+        }
+        let on_worker = tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
+        if on_worker {
+            // On the blocking pool of that runtime this runs `f` in place.
+            tokio::task::block_in_place(|| self.0.lock())
+        } else {
+            self.0.lock()
+        }
+    }
+}
+
+impl<T> std::ops::Deref for BlockingLock<T> {
+    type Target = Mutex<T>;
+    fn deref(&self) -> &Mutex<T> {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+mod blocking_lock_tests {
+    use super::BlockingLock;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A task waiting for the service lock on a tokio worker leaves the
+    /// runtime free: with one worker, a second task still runs while the
+    /// first waits, and the first gets the lock once it is released.
+    #[test]
+    fn waiting_for_the_service_lock_does_not_starve_the_runtime() {
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        let lock = Arc::new(BlockingLock::new(0u32));
+        let guard = lock.lock().unwrap();
+        let l2 = lock.clone();
+        let waiter = rt.spawn(async move {
+            *l2.lock().unwrap() += 1;
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(async move {
+            let _ = tx.send(());
+        });
+        let progressed = rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        drop(guard);
+        rt.block_on(waiter).unwrap();
+        assert_eq!(*lock.lock().unwrap(), 1);
+        assert!(progressed, "a task waiting for the service lock blocked the only worker");
+        rt.shutdown_timeout(Duration::from_secs(1));
+    }
+
+    /// No Tauri command runs on the main thread (a sync command) or as a
+    /// sync body on a tokio worker (`command(async)`) while taking the service
+    /// lock itself: such a command is `async` and runs its body through
+    /// `off_main`.
+    #[test]
+    fn no_sync_command_takes_the_service_lock() {
+        let files: &[(&str, &str)] = &[
+            ("agent_iface.rs", include_str!("agent_iface.rs")),
+            ("attachments.rs", include_str!("attachments.rs")),
+            ("flow.rs", include_str!("flow.rs")),
+            ("forges.rs", include_str!("forges.rs")),
+            ("guards.rs", include_str!("guards.rs")),
+            ("lib.rs", include_str!("lib.rs")),
+            ("ligus_auth_ui.rs", include_str!("ligus_auth_ui.rs")),
+            ("links_ui.rs", include_str!("links_ui.rs")),
+            ("memory_ui.rs", include_str!("memory_ui.rs")),
+            ("passkey_ui.rs", include_str!("passkey_ui.rs")),
+            ("people.rs", include_str!("people.rs")),
+            ("phones_ui.rs", include_str!("phones_ui.rs")),
+            ("proposal_sets.rs", include_str!("proposal_sets.rs")),
+            ("repos_ui.rs", include_str!("repos_ui.rs")),
+            ("workflows.rs", include_str!("workflows.rs")),
+        ];
+        let lock = |b: &str| {
+            let squashed: String = b.chars().filter(|c| !c.is_whitespace()).collect();
+            squashed.contains("service.lock()")
+        };
+        let mut wrong = Vec::new();
+        for (file, src) in files {
+            for (at, _) in src.match_indices("#[tauri::command") {
+                let rest = &src[at..];
+                let Some(fn_at) = rest.find("fn ") else { continue };
+                let head = &rest[..fn_at];
+                if head.contains("async ") {
+                    continue;
+                }
+                let body = &rest[fn_at..];
+                let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+                if lock(body) {
+                    let name: String = body[3..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    wrong.push(format!("{file}: {name}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "sync commands that wait on the service lock: {wrong:?}");
+    }
+
+    /// Off the runtime and on a current-thread runtime it is a plain lock.
+    #[test]
+    fn plain_lock_outside_a_multi_thread_worker() {
+        let lock = BlockingLock::new(1u32);
+        assert_eq!(*lock.lock().unwrap(), 1);
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async { *lock.lock().unwrap() += 1 });
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).build().unwrap();
+        rt.block_on(async {
+            tokio::task::spawn_blocking({
+                let l = Arc::new(BlockingLock::new(5u32));
+                move || *l.lock().unwrap()
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(*lock.lock().unwrap(), 2);
+    }
+}
+
 /// Run a command's body off the main thread. A sync Tauri command runs on
 /// the main thread, so one that waits on the `service` lock (held across a
 /// passkey ceremony, a long write) froze the window: the commands that can
@@ -10060,8 +10323,8 @@ fn open_path_in_editor(
     } else {
         std::path::Path::new(&root).join(rel)
     };
-    if on_path(cli) {
-        return ligus_core::process_util::command(cli)
+    if let Some(exe) = which_on_path(cli) {
+        return ligus_core::process_util::command(exe)
             .arg(&target)
             .spawn()
             .map(|_| ())
@@ -10170,7 +10433,11 @@ fn get_git_status(state: State<AppState>) -> GitStatusDto {
 
 /// Set the user's git email (for commit attribution) and apply it live.
 #[tauri::command]
-fn set_git_email(state: State<AppState>, email: String) -> Result<(), String> {
+async fn set_git_email(ligus_app: tauri::AppHandle, email: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_git_email_sync(tauri::Manager::state::<AppState>(ligus_app), email)).await
+}
+
+pub(crate) fn set_git_email_sync(state: State<AppState>, email: String) -> Result<(), String> {
     let trimmed = email.trim();
     {
         let mut s = state.settings.lock().unwrap();
@@ -11021,7 +11288,11 @@ fn remove_workspace_from_list(state: State<AppState>, path: String) -> Result<Ve
 }
 
 #[tauri::command]
-fn set_display_name(state: State<AppState>, name: String) -> Result<(), String> {
+async fn set_display_name(ligus_app: tauri::AppHandle, name: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_display_name_sync(tauri::Manager::state::<AppState>(ligus_app), name)).await
+}
+
+pub(crate) fn set_display_name_sync(state: State<AppState>, name: String) -> Result<(), String> {
     state.identity.update_display_name(&name).map_err(map_err)?;
     // Refresh the live ChatService author so new messages + signatures use the
     // new name immediately (updating the persisted identity alone doesn't).
@@ -11069,7 +11340,11 @@ pub(crate) fn set_avatar_sync(state: State<AppState>, avatar: Option<String>) ->
 /// Set (or clear) an agent's avatar — owner-only, propagated to every member via
 /// the roster event.
 #[tauri::command]
-fn set_agent_avatar(
+async fn set_agent_avatar(ligus_app: tauri::AppHandle, session_id: String, agent_id: String, avatar: Option<String>, color_hex: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_agent_avatar_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, agent_id, avatar, color_hex)).await
+}
+
+pub(crate) fn set_agent_avatar_sync(
     state: State<AppState>,
     session_id: String,
     agent_id: String,
@@ -11935,7 +12210,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     }
 
     Ok(AppState {
-        service: Mutex::new(service),
+        service: BlockingLock::new(service),
         host_presence: ligus_runtime::HostPresence::new(),
         guards: Default::default(),
         identity,
@@ -12675,7 +12950,11 @@ struct SyncStatus {
 }
 
 #[tauri::command]
-fn sync_status(state: State<AppState>) -> SyncStatus {
+async fn sync_status(ligus_app: tauri::AppHandle) -> SyncStatus {
+    crate::off_main(ligus_app, move |ligus_app| sync_status_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn sync_status_sync(state: State<AppState>) -> SyncStatus {
     let health = state.conn_health.lock().unwrap().clone();
     let held = {
         let ws = state.active_workspace_id();
@@ -13910,14 +14189,15 @@ struct EnvDetectDto {
 
 /// Is `bin` on PATH (trying common Windows extensions)?
 fn on_path(bin: &str) -> bool {
-    let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                exts.iter().any(|ext| dir.join(format!("{bin}{ext}")).is_file())
-            })
-        })
-        .unwrap_or(false)
+    which_on_path(bin).is_some()
+}
+
+/// `bin` resolved against this process's `PATH` (with `PATHEXT` on
+/// Windows), the path to run: `Command::new("code")` on Windows looks only
+/// for `code.exe`, so a `.cmd` shim must be spawned by its full path.
+fn which_on_path(bin: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    find_in_dirs(bin, std::env::split_paths(&paths), &path_exts())
 }
 
 fn git_config_value(key: &str) -> Option<String> {
