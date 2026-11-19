@@ -10,11 +10,15 @@ Full release notes are on the
   each device keeps its own checkouts of them, private to that device, and
   hosts report which ones they have (never where). An Admin adds a repository
   from a bound folder ("Add WeFit to the workspace?"), Settings →
-  Repositories or `ligus repos add`; the phone and a box clone one by id. A
-  chat picks its repository from the chip at its top; a turn runs only on a
-  host with a confirmed checkout of it and otherwise says why. Chat branches
-  start from a pinned base, applied proposals replay on every host, and an
-  apply never half-applies. See
+  Repositories or `ligus repos add`; the phone, a box and the desktop
+  (**Clone into…**) clone one by id. A chat picks its repository from the chip
+  at its top; a turn runs only on a host with a confirmed checkout of it and
+  otherwise says why, and takes its runtimes, MCP servers and trust from its
+  own chat's folder, never the one on screen. The composer warns when an
+  agent's host lacks the chat's repository and can run that turn here once
+  instead. Chat branches start from a pinned base, applied proposals replay
+  on every host, and an apply never half-applies; a conflict offers **Ask the
+  agent to rebase** and **Open in editor**. See
   [Workspace repositories](../features/repositories.md) and
   [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
 - **The phone acts as you with its own key; one host applies.** Since the

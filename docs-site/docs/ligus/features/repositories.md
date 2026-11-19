@@ -79,6 +79,18 @@ which fork. Pushes still go to your fork.
 - every other host's coverage: checked out, cloning, not checked out, or
   unknown (a host that doesn't report).
 
+**Clone into…** clones a repository this device doesn't have into a folder
+you pick, as `<name>-<first 8 characters of its id>` (for example
+`wefit-1a2b3c4d`), and records it as this device's checkout. It takes the same
+path as a box's clone by id: the URL is rebuilt from the repository's
+canonical name for a code host connected under **Settings → Code hosts** (with
+no connection to that host, it is refused), the host's address is checked
+again and pinned for git, credentials go through the connection's helper and
+never on a command line, submodules are not fetched, and the clone appears
+only once it is complete. If the clone doesn't contain the first commit the
+workspace entry names, Ligus says so. Cloning on another host (a box, a
+worker) is done from the phone connected to it, never from the desktop.
+
 **Scan a folder…** looks for checkouts under a folder (at most three levels
 deep, 2,000 folders, no symlinks; never your home folder itself or a system
 folder). **Rescan** repeats it for the folders you added.
@@ -115,6 +127,25 @@ The host that runs a turn is the only judge of whether it can:
   WeFit on mac-test. Clone it here or bind a folder." A turn never runs in
   other code.
 
+A turn also takes everything else from its own chat, not from the chat or
+folder the window shows: it runs in its chat's folder (for a chat with a
+repository, its chat branch in this device's checkout; otherwise its chat
+branch in the workspace's folder), and its runtimes, MCP servers and trusted
+items are read from that folder. A server a repository supplies is offered to
+a turn only in a chat on that repository, and only after you trust it for that
+repository: trusting a server in one repository doesn't trust the same server
+in another. The window's file tree and file watcher follow the chat you are
+viewing; viewing a chat never cuts its branch.
+
+If a chat's agent is pinned to a host that says it lacks the chat's
+repository, the composer says so when you address it: "ScoutBee runs on
+mac-test, which has no WeFit. Clone there · Run here this time". **Clone
+there** tells you how to clone it on that host (from the phone connected to
+it). **Run here this time** sends that one message's turn to this device
+instead; it is offered only when this device has the repository, can run the
+agent's runtime, and the agent is yours. The host backs off when it sees this
+device's claim on the turn.
+
 While a host is cloning the repository, a turn it has already claimed waits
 for the clone (up to ten minutes). Coverage shown elsewhere is a hint: the
 router skips an agent whose host says it lacks the chat's repository, and a
@@ -133,6 +164,17 @@ for a three-way merge) and moves the chat's branch only if it is still where it
 was: a conflict changes nothing, and the chat says so. A proposal made on
 another base that merges cleanly is applied and noted as "applied on a
 different base".
+
+When a proposal doesn't apply, the card offers:
+
+- **Ask the agent to rebase**: files a follow-up turn to the agent that made
+  it, with the conflict as this device's git reports it (found without
+  changing the branch) and the branch's current tip. The agent's new version
+  supersedes this one and needs approval again; an edited result never enters
+  the chat's history without a vote.
+- **Open in editor**: opens the chat's folder for the repository with your
+  system's default handler for folders, to look at the conflict or at local
+  changes in the way.
 
 Every apply commit carries `Ligus-Proposal: <id>` in its trailer block.
 Before a turn, a host replays any applied proposal its chat branch lacks (by

@@ -830,12 +830,29 @@ desktop's turn gate and repo-addressed Implement, Settings → Repositories, the
 chat repo chip, the add-this-repo prompt, `ligus repos …`, per-checkout
 hygiene and preflight, router and workflow coverage checks, look-alike flags.
 
+Also built (R9 and the 6.1/6.3 desktop pieces): per-turn resolution on the
+desktop (review F14): `turn_scope` resolves a turn's directory, runtimes, MCP
+servers and trust from its own chat (a repo chat's chat worktree in this
+device's checkout; another chat's worktree in the workspace's folder) before
+any tool loop, and re-resolves the responder's runtime against that catalog;
+the global root, catalogs and watcher follow only the viewed chat, and
+viewing never cuts a chat branch. The desktop's "Clone into…"
+(`repos::clone::clone_into`, the box's safe path: URL rebuilt from the
+canonical for a connected host, address re-check and pin, helper-only
+credentials, temp dir and rename, identity origin, claimed-root check). The
+composer warning ("‹agent› runs on ‹host›, which has no ‹repo›. Clone there
+· Run here this time"), where "Clone there" points to the phone and "Run here
+this time" claims that one turn on this device when it has the repo, runs the
+agent's runtime and the agent is this person's. Apply-conflict actions: "Ask
+the agent to rebase" (a follow-up turn carrying `apply::conflict_probe`'s
+conflict and the branch tip; the revision supersedes and needs a vote) and
+"Open in editor" (the chat's folder via the OS opener, no shell). Desktop
+command-layer tests for these, the gate, apply and clone run in the in-app
+harness's offline checks (`app/src/e2e.rs`, `--features e2e`).
+
 Not built yet: the phone UI (in the separate phone app repository; the box API
-it needs is here), the desktop's own "Clone into…" and "Clone there" (the
-review keeps driving another host phone-only), the composer warning naming a
-pinned agent's host, per-turn catalog and trust resolution for a chat whose
-repo differs from the viewed one (the turn's directory is per chat; MCP and
-runtime catalogs still follow the viewed folder), workspace-synced repo and
-host aliases (Phase 4, presence-gated, review R2), the device-keyed
-dispatcher the review sequences Phase 2 after (architecture-review 4.9), and
-renaming the `hive/` branch prefix.
+it needs is here), "Clone there" from the desktop to another host (the review
+keeps it phone-only), workspace-synced repo and host aliases (Phase 4,
+presence-gated, review R2), the device-keyed dispatcher the review sequences
+Phase 2 after (architecture-review 4.9), and renaming the `hive/` branch
+prefix.
