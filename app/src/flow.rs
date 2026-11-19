@@ -2262,7 +2262,6 @@ mod tests {
         let author = hive_core::ActorIdentity::new("u1", "Ana", hive_core::ActorKind::Human);
         let mut svc = ChatService::new(
             store,
-            Uuid::new_v4(),
             hive_core::SigningKeypair::generate().unwrap(),
             hive_core::SigningKeypair::generate().unwrap(),
             author,

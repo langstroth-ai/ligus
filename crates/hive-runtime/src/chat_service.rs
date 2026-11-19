@@ -159,13 +159,10 @@ const STREAM_HOLD: usize = 512;
 pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
 impl ChatService {
-    pub fn new(
-        store: EventStore,
-        device_id: Uuid,
-        keypair: SigningKeypair,
-        account_keypair: SigningKeypair,
-        author: ActorIdentity,
-    ) -> Self {
+    /// A service signing with `keypair`: its device id is the one that key
+    /// derives (`hive_core::crypto::device_id_for`).
+    pub fn new(store: EventStore, keypair: SigningKeypair, account_keypair: SigningKeypair, author: ActorIdentity) -> Self {
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &keypair.public_key_bytes());
         // This crate's unit tests: every author holds an account, since rules
         // v2 governance needs an account's presence.
         #[cfg(test)]
@@ -395,7 +392,7 @@ impl ChatService {
     /// An enrollment request for this device in `workspace_id` (the code the
     /// owner pastes into their desktop), signed by this device's key.
     pub fn enrollment_request(&self, workspace_id: Uuid, label: &str) -> crate::device_enroll::DeviceEnrollment {
-        crate::device_enroll::DeviceEnrollment::new(workspace_id, self.device_id, &self.keypair, label)
+        crate::device_enroll::DeviceEnrollment::new(workspace_id, &self.keypair, label)
     }
 
     /// Where this device stands in `workspace_id`: its own identity, enrolled as
@@ -445,13 +442,8 @@ impl ChatService {
                 "this desktop's account key isn't the one the workspace trusts for you".into(),
             ));
         }
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            request.device_id,
-            &request.device_public_key,
-            Timestamp::now(),
-        );
+        // `verify` above checked the id is the one the key derives.
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
         self.append_signed(
             config_id,
             ws,
@@ -503,7 +495,7 @@ impl ChatService {
     /// with no pin (created here, or the device-local one).
     pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
         let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
-        let envs = self.store.list(workspace_config_session_id(workspace_id))?;
+        let envs = self.store.list_copies(workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
     }
 
@@ -917,13 +909,7 @@ impl ChatService {
                 signing_public_key: self.account_keypair.public_key_bytes().to_vec(),
             },
         )?;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -965,13 +951,7 @@ impl ChatService {
         )?;
         // Adopt the new account key, then re-certify this device under it.
         self.account_keypair = new_keypair;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -2419,14 +2399,18 @@ impl ChatService {
             return Ok(0);
         }
         let envelopes = self.store.config_envelopes(workspace_id)?;
-        let verdicts =
-            hive_core::fold_decisions(&envelopes, self.trusted_founder.as_deref(), self.local_workspace_id, hive_core::WorkspaceAuthz::Unchecked);
+        let verdicts = hive_core::fold_copy_decisions(
+            &envelopes,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+            hive_core::WorkspaceAuthz::Unchecked,
+        );
         let mut closed = 0;
         for (invite, expires_ms) in open {
             let redeemed = envelopes
                 .iter()
                 .find(|e| {
-                    verdicts.get(&e.event_id) == Some(&hive_core::Verdict::Allowed)
+                    verdicts.get(e) == Some(hive_core::Verdict::Allowed)
                         && matches!(&e.payload, SessionEvent::MemberAdded { member, invite: Some(i), .. }
                             if *i == invite && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == member.id))
                 })
@@ -2495,7 +2479,9 @@ impl ChatService {
         let sessions = self.store.sessions_of_workspace(workspace_id)?;
         let mut logs = Vec::new();
         for sid in sessions {
-            logs.push((sid, self.store.list(sid)?));
+            // Every copy held: the device's own event under an id another
+            // signer's copy reached first is still one of its heads.
+            logs.push((sid, self.store.list_copies(sid)?));
         }
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {
@@ -2918,7 +2904,8 @@ impl ChatService {
         // Every event on the chain is judged against this chat's own
         // workspace; one stamped with another workspace fails closed.
         let Some(chat_workspace) = self.store.workspace_of(session_id)? else { return Ok(None) };
-        let envs = self.store.list(session_id)?;
+        // Every copy (a forged copy that arrived first doesn't hide a link).
+        let envs = self.store.list_copies(session_id)?;
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
@@ -3137,7 +3124,7 @@ impl ChatService {
     /// This is one message's signers only; a turn's gate is
     /// [`Self::trigger_author_role`], which follows the chain.
     pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let envs = self.store.list(session_id)?;
+        let envs = self.store.list_copies(session_id)?;
         let touching = touching_message(&envs, message_id);
         if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
             return Ok(None);
@@ -3645,11 +3632,10 @@ mod tests {
         let store = EventStore::open_in_memory().unwrap();
         let kp = SigningKeypair::generate().unwrap();
         let public = kp.public_key_bytes().to_vec();
-        let device_id = Uuid::new_v4();
         let account_kp = SigningKeypair::generate().unwrap();
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        (ChatService::new(store, device_id, kp, account_kp, author), public)
+        (ChatService::new(store, kp, account_kp, author), public)
     }
 
     /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
@@ -4051,7 +4037,7 @@ mod tests {
 
         let store = EventStore::open_in_memory().unwrap();
         let device_kp = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes());
         let account_kp = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let author = ActorIdentity {
@@ -4065,7 +4051,7 @@ mod tests {
             avatar_url: None,
             contact: None,
         };
-        let mut svc = ChatService::new(store, device_id, device_kp, account_kp, author);
+        let mut svc = ChatService::new(store, device_kp, account_kp, author);
 
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         svc.post_user_message(chat.id, chat.workspace_id, "hello").unwrap();
@@ -4139,7 +4125,7 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     /// A3: with an agent vault, an agent bound to this device signs its own
@@ -5001,12 +4987,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             verdict_for(&build_roster(&all), env),
-            Verdict::Quarantine(QuarantineReason::Impersonation),
-            "ingest refuses a stamp naming a known account its signer doesn't sign for"
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+            "ingest holds (never applies) a stamp naming a known account its signer doesn't sign for"
         );
         assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
-        // The same stamp on a governance event (self-promotion) is refused
-        // at ingest too.
+        // The same stamp on a governance event (self-promotion) is held at
+        // ingest too.
         // (Authoring refuses it for lack of presence; a peer that skips the
         // check publishes it anyway.)
         assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
@@ -5015,7 +5001,7 @@ mod tests {
         con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
-        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
+        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
         // The same stamp on an agent's reply caps nothing upward either.
         let r = agent_reply(&mut con, chat, wid, Some(Uuid::new_v4()), Some(honest), "@coder go");
         assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
@@ -5360,7 +5346,7 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         let mut author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
         author.account_id = Some(Uuid::new_v4());
-        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        let mut svc = ChatService::new(store, kp, account_kp, author);
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let mid = svc
             .begin_assistant_message(chat.id, chat.workspace_id, "Hive", "anthropic", None, None)
@@ -5737,7 +5723,7 @@ mod flow_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     #[test]
@@ -5908,8 +5894,8 @@ mod flow_tests {
     }
 
     /// A chat whose fold changes without a new row in its own log is observed
-    /// again: an equivocating copy of one of its events (both copies are
-    /// denied), or a trust change on its workspace's config log.
+    /// again: another copy under one of its event ids, or a trust change on
+    /// its workspace's config log.
     #[test]
     fn facts_export_reobserves_chats_whose_fold_changed_elsewhere() {
         use crate::facts::{Cursor, Since};
@@ -5927,8 +5913,8 @@ mod flow_tests {
         let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
         let c1 = cursor_of(&first);
 
-        // An equivocating copy of the reply's completion lands in the
-        // evidence table, not the log: the chat's fold changed all the same.
+        // Another copy under the reply's completion's id lands in the
+        // copies table, not the log: the chat is observed again.
         let (_, envs) = svc.store.envelopes_after_row(0).unwrap();
         let mut forged = envs.iter().filter(|e| e.session_id == chat.id).last().unwrap().clone();
         forged.payload = SessionEvent::SessionTitleChanged { title: "other".into() };

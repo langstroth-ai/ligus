@@ -53,13 +53,14 @@ impl World {
         let people: BTreeMap<&'static str, Person> = NAMES
             .iter()
             .map(|n| {
+                let device = SigningKeypair::generate().unwrap();
                 (
                     *n,
                     Person {
                         account_id: Uuid::new_v4(),
                         account: SigningKeypair::generate().unwrap(),
-                        device_id: Uuid::new_v4(),
-                        device: SigningKeypair::generate().unwrap(),
+                        device_id: hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
+                        device,
                     },
                 )
             })
@@ -73,7 +74,7 @@ impl World {
         for name in NAMES {
             let p = &w.people[name];
             let (account_id, pk) = (p.account_id, p.account.public_key_bytes().to_vec());
-            let cert = DeviceCertificate::issue(&p.account, p.account_id, p.device_id, &p.device.public_key_bytes(), Timestamp::epoch());
+            let cert = DeviceCertificate::issue(&p.account, p.account_id, &p.device.public_key_bytes(), Timestamp::epoch());
             w.push(name, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: pk });
             w.push(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
         }
@@ -366,9 +367,9 @@ fn delegated_host_cannot_publish_its_owners_links() {
     // Ada's desktop enrolls a box for her (a certificate the box didn't
     // publish itself: a delegated host).
     let ada = &w.people["ada"];
-    let box_id = Uuid::new_v4();
     let box_key = SigningKeypair::generate().unwrap();
-    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, box_id, &box_key.public_key_bytes(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, &box_key.public_key_bytes(), Timestamp::epoch());
+    let box_id = cert.device_id;
     w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
     assert!(w.roster().devices[&box_id].delegated_for(w.account("ada")));
     let mut env = w.draft("ada", publish(w.link("ada", "7")));
@@ -388,9 +389,9 @@ fn delegated_host_cannot_remove_its_owners_links() {
     let id = w.push("ada", publish(l.clone()));
     assert_eq!(w.verdict(id), Verdict::Allowed);
     let ada = &w.people["ada"];
-    let box_id = Uuid::new_v4();
     let box_key = SigningKeypair::generate().unwrap();
-    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, box_id, &box_key.public_key_bytes(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, &box_key.public_key_bytes(), Timestamp::epoch());
+    let box_id = cert.device_id;
     w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
     assert!(w.roster().devices[&box_id].delegated_for(w.account("ada")));
     let mut env = w.draft("ada", SessionEvent::IdentityLinkRemoved { account_id: w.account("ada"), link_id: l.link_id });

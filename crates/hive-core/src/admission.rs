@@ -283,23 +283,63 @@ pub fn closure_refusal(env: &SessionEventEnvelope, fold: &ChatSession, on_config
 /// self-enrollment through a closed invite but the one each closure names.
 /// `closures` are the allowed closures of a first pass (invite → each
 /// closure's named redemption).
+///
+/// Keyed by copy ([`crate::copies`]): a closure names a redemption by its
+/// event id, and two signers can each hold a copy under one id. A named id
+/// under which more than one redemption of the invite is kept (a holder of
+/// the code copying the box's redemption id) names none of them: which one
+/// the closer saw can't be told, so all are denied (fail closed; the Admin
+/// issues a new admission). Only a redemption the code's holder could have
+/// made counts there: one whose proof verifies under the invite's redeem key
+/// (and, for a box-bound admission, signed by that box), so the invite and
+/// redemption ids alone, on the log for every keyholder, deny no one.
 pub fn closure_denials(
     envelopes: &[SessionEventEnvelope],
     closures: &std::collections::BTreeMap<Uuid, Vec<Option<Uuid>>>,
-) -> std::collections::BTreeSet<Uuid> {
+    invites: &std::collections::BTreeMap<Uuid, Admission>,
+    copies: &crate::copies::Copies,
+) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
     if closures.is_empty() {
         return out;
     }
-    for e in envelopes {
-        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &e.payload else { continue };
+    let redemption = |e: &SessionEventEnvelope| -> Option<Uuid> {
+        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &e.payload else { return None };
         let author = e.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-        if member.id != author {
-            continue;
+        (member.id == author).then_some(*id)
+    };
+    // The code's holder could have made `e`: its proof verifies.
+    let proven = |e: &SessionEventEnvelope, invite: Uuid| -> bool {
+        let SessionEvent::MemberAdded { member, proof: Some(proof), .. } = &e.payload else { return false };
+        let (Some(terms), Some(device)) = (invites.get(&invite), e.signer_device_id) else { return false };
+        let Some(key) = terms.redeem_key.as_deref() else { return false };
+        // Under its own account (as `redemption_refusal` requires): a copy
+        // of the box's record and proof replayed through the box's device id
+        // certified for someone else is not the box's.
+        let stamped = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+        if stamped.is_none() || member.actor.account_id != stamped {
+            return false;
         }
-        if let Some(named) = closures.get(id) {
-            if named.iter().any(|n| *n != Some(e.event_id)) {
-                out.insert(e.event_id);
+        crate::crypto::verify(key, &redemption_message(e.workspace_id, invite, &member.id, device), proof).is_ok()
+            && terms.device_key.as_deref().is_none_or(|k| crate::crypto::verify_envelope(e, k).is_ok())
+    };
+    // Redemptions per (invite, event id): more than one proven is ambiguous.
+    let mut under: std::collections::BTreeMap<(Uuid, Uuid), Vec<&SessionEventEnvelope>> = std::collections::BTreeMap::new();
+    for e in envelopes {
+        if let Some(invite) = redemption(e) {
+            under.entry((invite, e.event_id)).or_default().push(e);
+        }
+    }
+    let ambiguous: std::collections::BTreeSet<(Uuid, Uuid)> = under
+        .iter()
+        .filter(|((invite, _), v)| v.len() > 1 && v.iter().filter(|e| proven(e, *invite)).count() > 1)
+        .map(|(k, _)| *k)
+        .collect();
+    for e in envelopes {
+        let Some(id) = redemption(e) else { continue };
+        if let Some(named) = closures.get(&id) {
+            if ambiguous.contains(&(id, e.event_id)) || named.iter().any(|n| *n != Some(e.event_id)) {
+                out.insert(copies.kept(e));
             }
         }
     }

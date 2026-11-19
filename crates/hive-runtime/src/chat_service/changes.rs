@@ -113,7 +113,7 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("me".to_string(), "Me".to_string(), ActorKind::Human);
-        ChatService::new(EventStore::open_in_memory().unwrap(), Uuid::new_v4(), kp, account, author)
+        ChatService::new(EventStore::open_in_memory().unwrap(), kp, account, author)
     }
 
     #[test]

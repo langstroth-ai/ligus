@@ -78,7 +78,10 @@ a removed account also needs an Admin to re-add it; a removed member's new
 events are refused on every device (but see the backdated-frontier
 limitation below). They can't post as another member: an event whose stamp
 names an account its signing device isn't certified for is quarantined, and
-the author gate gives it no role. After removal with key rotation they can't read new
+the author gate gives it no role. Nor can they (or anyone holding the key)
+erase someone else's event by publishing another envelope under its id: only
+the same signer's two copies are an equivocation (see
+[Equivocation](#known-limitations), item 25). After removal with key rotation they can't read new
 traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
@@ -674,11 +677,40 @@ it.
     before.
 25. **Equivocation is caught where both copies meet.** Event ids are
     chosen by their author, so a signer can publish two different envelopes
-    under one id. A device that holds both denies both, whatever order they
-    came in, and coverage never passes through that id; but a device only
-    learns of it when the second copy reaches it (the relay keeps the first
-    one it saw), so devices can disagree until both copies have reached
-    them.
+    under one id. A device that holds both denies every copy of that
+    signer under the id, whatever order they came in, and coverage never
+    passes through them; but a device only learns of it when the second
+    copy reaches it, so devices can disagree until both copies have reached
+    them. Anyone else can also publish an envelope under a real event's id,
+    and that is not an equivocation: an unsigned copy is refused at ingest,
+    a copy no certified key verifies never counts against a verified one,
+    and a copy signed by someone else's own key is their own event, folded
+    beside the real one and judged as theirs. What remains:
+    - **Before the certificate arrives.** Until the certificate of the
+      real event's signer has reached a device, the real copy is no more
+      verified there than a forged one signed by an unknown device, and
+      both are left out (or, if the forger's device is certified and the
+      real one's isn't yet, the forger's copy folds as the forger's own
+      event). The real event folds once the certificate arrives.
+    - **A closed admission's named redemption.** A closure names the
+      redemption it saw by event id. If someone holding the admission code
+      copies that id with a redemption of their own, the closure names
+      neither: both are refused and the Admin issues a new admission. A
+      copy without a proof that verifies (the invite and redemption ids
+      alone, which every keyholder sees) confuses nothing.
+    - **Copies under a covered id.** A removal's watermark names a device's
+      chain by event id. An id under which two copies are held for that
+      device (the device equivocated, or a copy no key of it signed) is
+      never covered and coverage stops there, as at a gap, so the member's
+      events behind it are judged as of the cut. A second key for a device
+      id can't exist: a device id is derived from its key.
+    - **Readers outside the fold.** Device-local lookups that read raw
+      events rather than the fold (who signed a proposal, a flow answer's
+      author, a cut's watermark, the membership audit, what a peer link
+      forwards) read every copy held; the audit lists only what the config
+      fold allowed. A re-encoded copy of a genuine envelope (other
+      whitespace or key order, same signature) is that envelope, never its
+      signer's second one.
 26. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
@@ -893,10 +925,14 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host (doctor) | `ligus doctor --turn-test` reported leaks on the bubblewrap tier that weren't: pid 1 in the turn's own pid namespace is bubblewrap, and `ls` of the data dir lists the empty tmpfs over it | The probe counts a readable environ only in the host's pid namespace and a data dir only when it shows an entry. Verified by `probe_script_reports_only_real_leaks` |
 | Host (Phase C, shell) | Any member at the write floor (Admin) drove a CLI's shell tool or `run_command` on the host's machine | The shell is on only when every person behind the turn is the workspace Owner (the device owner in the local workspace) or an Owner granted it to the agent with a passkey; otherwise each CLI runs without its shell, ACP `execute` is denied, and Codex, aider and Hermes are refused. Verified by `the_shell_is_the_owners_unless_granted`, `shell_free_args_cap_every_cli_at_edits`, `no_shell_takes_bash_away`, `shell_role_is_the_workspace_role_outside_the_local_workspace` and the `sandbox_grants_fold` tests, including a property test against a reference model |
 | Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
-| Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is quarantined as impersonation, and held from an uncertified device. The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
+| Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is held and never applied (since the review of forged copies: held rather than quarantined, so the verdict never depends on which certificates arrived first). The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
 | Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |
 | Core (event clocks) | An author chose an event's lamport, so an event drafted early and withheld (by its author, or by a box holding a phone-signed action) could be given a huge lamport and sort after genuinely newer events: a stale approve beat a later reject, a delayed `ChatLockdownCleared` lifted a newer lockdown (it cleared every lockdown on the chat), and a lamport near `u64::MAX` dragged every honest clock after it | A stamp names its log head and the lamport is one past it, checked by every fold and by the phone before it signs; an event out of bounds is refused and is no position. A clear names the raises it lifts. Between one person's concurrent votes a rejection wins. Verified by `prop_no_honest_history_is_denied`, `prop_an_inflated_lamport_changes_nothing_else`, `a_withheld_vote_sorts_where_it_was_drafted`, `a_withheld_clear_lifts_only_what_its_author_saw` and `between_concurrent_votes_of_one_person_a_rejection_wins` |
 | Core (chain workspace) | The trigger chain judged each event on the config log of the workspace that event named, so an event in a chat stamped with another workspace its author owned was judged as Owner there; the chain's config cache answered every workspace with the first one it loaded | Events stamped with a workspace other than the chat's fail the chain closed, a workflow run's first record must name the chat's workspace, and the cache is keyed by workspace. Hardening: such an event doesn't fold into the chat today. Verified by `an_event_stamped_with_another_workspace_fails_closed` |
+
+| Core (forged copies) | Anyone holding the workspace key could erase any event: an unsigned envelope (or one no key verifies, or one signed by a device of their own) under a real event's id was accepted, recorded as an equivocation, and both copies were then denied on every device, so a `MemberRemoved`, a reject vote, a lockdown raise or the config seed vanished | Only the same signer's two verified copies are an equivocation. Unsigned envelopes are refused at ingest; a copy no certified key verifies never displaces a verified one; another signer's copy under the id is their own event, and every fold structure (denials, coverage, cut identity, verdicts, the frontier's lamport) is keyed by copy. Every reader that must not be blinded by a copy that arrived first reads all copies. Verified by `a_forged_copy_never_erases_an_honest_title_change`, `a_forged_copy_never_erases_a_removal`, `a_forged_copy_of_the_seed_leaves_the_workspace_standing`, `prop_forged_copies_never_erase_honest_events`, `the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_order` and `prop_devices_fold_the_honest_log_whatever_arrives_first` |
+
+| Core (device-id squatting) | Device ids were chosen by the device, so a member could certify another member's device id (or one that would be theirs) under their own account with a key of their own. The fold then checked the victim's key events against the squatter's key, and the trust roster took whichever certificate sorted first (a backdated copy did): every event of the victim's device was refused everywhere, and the squatter could sign as the victim, or certify a key for an agent hosted on the victim's device, through its id. Revoking a device the squatter's account had certified was self-service, so any Contributor could revoke anyone's device, the founder's included | Refused by construction: a device id is derived from the device's first signing key (UUIDv8 of `SHA-256("ligus-device-id-v1\0" ‖ alg ‖ "\0" ‖ key)`, every device kind, phones from their Secure Enclave key), and a certificate whose id isn't its key's never verifies, so it is refused in the fold, at ingest and in the roster wherever it sorts. One device id names one key, and only that device signs under it. Certifying someone else's real device key for your own account signs nothing, and who holds a device is read from the whole log (the accounts the device itself vouched for), never from a position: such an account can't revoke the device as theirs, run an unbound agent on it, or make the device's own account's events wait or fail for good. A device several members certified that vouched for none of them (a phone, a box its person's desktop enrolled) is no one's own to revoke: it goes down the ranks over all of them (final review: an adopter could revoke anyone's phone, `an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one`). Verified by `a_backdated_squat_is_refused_wherever_it_sorts`, `a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id`, `a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device`, `a_squatter_cannot_revoke_the_victims_device_as_their_own`, `certifying_someone_elses_device_key_holds_nothing_backdated_or_not`, `a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim`, `a_backdated_squat_neither_erases_nor_impersonates_at_ingest`, `a_victims_event_before_its_certificate_is_held_not_refused_after_an_adoption` and `device_id_vectors_derive_as_frozen` |
 
 ### Open {#findings-open}
 
@@ -907,7 +943,13 @@ warning), a CLI-founded workspace staying unsecured until its founder adds a pas
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order, the reach of a removal's watermark (its
 author's word, and chats the remover never synced), equivocations seen only
-where both copies meet, what lamport bounds leave to an author (backdating,
+where both copies meet, a member certifying someone else's phone key for
+their own account (a phone never vouches for its account on the log, so
+both accounts hold it: neither can revoke it as their own, so it is revoked
+by someone who outranks both, or by its person once that member is
+removed, and its pairing names no one until then), an Admin revoking a device that isn't
+certified on the workspace yet (a device id is derived from its key, so
+one who knows the key can name the device before it joins), what lamport bounds leave to an author (backdating,
 concurrent writes that apply to everything before them, holds), human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through

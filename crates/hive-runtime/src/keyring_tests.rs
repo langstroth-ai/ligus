@@ -39,11 +39,12 @@ struct Person {
 
 impl Person {
     fn new() -> Self {
+        let device = SigningKeypair::generate().unwrap();
         Self {
             account_id: Uuid::new_v4(),
             account: SigningKeypair::generate().unwrap(),
-            device_id: Uuid::new_v4(),
-            device: SigningKeypair::generate().unwrap(),
+            device_id: hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
+            device,
             ka_seed: KeyAgreementKeypair::generate().unwrap().seed_bytes(),
         }
     }
@@ -120,7 +121,7 @@ impl World {
     fn publish_identity(&mut self, name: &'static str) {
         let p = &self.people[name];
         let (account_id, pk) = (p.account_id, p.account.public_key_bytes().to_vec());
-        let cert = DeviceCertificate::issue(&p.account, p.account_id, p.device_id, &p.device.public_key_bytes(), Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&p.account, p.account_id, &p.device.public_key_bytes(), Timestamp::epoch());
         self.push(name, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: pk });
         self.push(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
     }
@@ -734,8 +735,8 @@ fn service(path: &std::path::Path, name: &str) -> (crate::ChatService, KeyAgreem
     let account = Uuid::new_v4();
     let mut author = ActorIdentity::new(account.to_string(), name, ActorKind::Human);
     author.account_id = Some(account);
-    let device = Uuid::new_v4();
-    let svc = crate::ChatService::new(store, device, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+    let svc = crate::ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+    let device = svc.device_id();
     (svc, KeyAgreementKeypair::generate().unwrap(), device)
 }
 

@@ -232,7 +232,7 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
-        let mut s = ChatService::new(EventStore::open_in_memory().unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut s = ChatService::new(EventStore::open_in_memory().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         s.enable_test_presence();
         let ws = Uuid::new_v4();
         s.ensure_workspace_config(ws).unwrap();

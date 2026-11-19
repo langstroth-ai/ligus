@@ -140,7 +140,7 @@ fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
     let ws = Uuid::from_u128(1);
     let owner_acct = SigningKeypair::from_seed(&[1; 32]).unwrap();
     let owner_dev = SigningKeypair::from_seed(&[2; 32]).unwrap();
-    let (owner_id, dev_id) = (Uuid::from_u128(10), Uuid::from_u128(11));
+    let (owner_id, dev_id) = (Uuid::from_u128(10), hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &owner_dev.public_key_bytes()));
     let owner = owner_id.to_string();
     let stamp = |f: Option<hive_core::CfgFrontier>| {
         let mut a = ActorIdentity::new(owner.clone(), "o", ActorKind::Human);
@@ -170,7 +170,7 @@ fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
     seed.created_at = Timestamp::epoch();
     let mut cfg = vec![make(cfg_id, SessionEvent::SessionSnapshot { session: Box::new(seed) }, None)];
     cfg.push(make(cfg_id, SessionEvent::AccountKeyRegistered { account_id: owner_id, signing_public_key: owner_acct.public_key_bytes().to_vec() }, None));
-    let cert = DeviceCertificate::issue(&owner_acct, owner_id, dev_id, &owner_dev.public_key_bytes(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue(&owner_acct, owner_id, &owner_dev.public_key_bytes(), Timestamp::epoch());
     cfg.push(make(cfg_id, SessionEvent::DeviceCertificateAdded { certificate: cert }, None));
     cfg.push(make(cfg_id, SessionEvent::MemberAdded { invite: None, proof: None, member: member("mara", WorkspaceRole::Contributor, Uuid::from_u128(12)) }, None));
     let head = Some(hive_core::CfgFrontier { lamport: cfg.last().unwrap().lamport, event_id: cfg.last().unwrap().event_id });

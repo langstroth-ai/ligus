@@ -52,7 +52,7 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
     executor::configure_host(data.path(), &[], &[]);
     std::env::set_var("LIGUS_MCP_BRIDGE", env!("CARGO_BIN_EXE_ligus-mcp-bridge"));
     let store = EventStore::open(data.path().join("hive.db")).unwrap();
-    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ActorIdentity::new("u", "U", ActorKind::Human));
     let wid = Uuid::new_v4();
     let chat = svc.create_chat("Ligustica-7341", wid, "rt").unwrap();
     let reply = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, None).unwrap();

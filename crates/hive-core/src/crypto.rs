@@ -36,6 +36,8 @@ pub enum CryptoError {
     Unsigned,
     #[error("signature verification failed")]
     VerifyFailed,
+    #[error("the device id is not the one its key derives")]
+    DeviceIdMismatch,
 }
 
 /// An Ed25519 signing keypair. The private seed never leaves the owning device
@@ -121,6 +123,20 @@ pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
         None => serde_json::to_vec(&env.payload).expect("serialize payload"),
     };
     preimage_of(env, [scope, timestamp, actor_stamp, payload])
+}
+
+/// What a copy of an event signs, independent of how its bytes were encoded:
+/// the typed preimage when the received bytes mean exactly the typed value
+/// (only key order, spacing or number spelling may differ), else the
+/// received bytes' own. Two encodings of one signed event are one event
+/// ([`crate::copies`]): re-encoding a genuine envelope needs no key, and the
+/// typed-preimage fallback in [`verify_envelope`] verifies it.
+pub(crate) fn canonical_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    if env.raw().is_some() && received_matches_typed(env) {
+        typed_preimage(env)
+    } else {
+        envelope_preimage(env)
+    }
 }
 
 /// The preimage over the typed fields re-serialized (ignoring received bytes).
@@ -358,6 +374,42 @@ pub fn p256_public_key(key: &p256::ecdsa::SigningKey) -> Vec<u8> {
     key.verifying_key().to_sec1_point(false).as_bytes().to_vec()
 }
 
+/// FROZEN domain tag of [`device_id_for`]: never rename with the product.
+pub const DEVICE_ID_CONTEXT: &[u8] = b"ligus-device-id-v1\0";
+
+/// The device id a device signing key names: a UUIDv8 of the first 16 bytes
+/// of `SHA-256("ligus-device-id-v1\0" || alg || "\0" || public_key)`, where
+/// `alg` is the key's algorithm as its wire name (`ed25519` or `p256`) and
+/// `public_key` the certified bytes (32 for Ed25519, the 65-byte SEC1
+/// uncompressed point for P-256), with the version nibble set to 8 and the
+/// RFC 9562 variant bits to `10`.
+///
+/// Every device id is derived this way from the device's first signing key
+/// (desktop, CLI, serve box, worker, phone), so a device id names exactly one
+/// key: nobody can certify an id that belongs, or will belong, to someone
+/// else's device under a key of their own (device-id squatting), whatever
+/// position they give the certificate. A certificate whose id doesn't derive
+/// from its key never verifies ([`DeviceCertificate::verify`]). A device with
+/// a new key is a new device (a new id); Ligus has no in-place device-key
+/// rotation.
+pub fn device_id_for(alg: SigAlg, public_key: &[u8]) -> Uuid {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(DEVICE_ID_CONTEXT);
+    h.update(match alg {
+        SigAlg::Ed25519 => b"ed25519".as_slice(),
+        SigAlg::P256 => b"p256".as_slice(),
+    });
+    h.update([0u8]);
+    h.update(public_key);
+    let digest = h.finalize();
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&digest[..16]);
+    b[6] = (b[6] & 0x0f) | 0x80;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(b)
+}
+
 /// A certificate binding a device key to an account, signed by the account key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -412,8 +464,17 @@ impl DeviceCertificate {
     }
 
     /// Issue a certificate for a phone's P-256 (Secure Enclave) key, signed
-    /// by the account keypair.
-    pub fn issue_p256(
+    /// by the account keypair. The device id is the one the key derives
+    /// ([`device_id_for`]).
+    pub fn issue_p256(account_keypair: &SigningKeypair, account_id: Uuid, device_public_key: &[u8], issued_at: Timestamp) -> Self {
+        Self::issue_p256_for_id(account_keypair, account_id, device_id_for(SigAlg::P256, device_public_key), device_public_key, issued_at)
+    }
+
+    /// [`DeviceCertificate::issue_p256`] under a chosen device id: a
+    /// certificate whose id isn't the one its key derives never verifies
+    /// (tests of that refusal only).
+    #[doc(hidden)]
+    pub fn issue_p256_for_id(
         account_keypair: &SigningKeypair,
         account_id: Uuid,
         device_id: Uuid,
@@ -425,9 +486,18 @@ impl DeviceCertificate {
         Self { device_id, device_public_key: device_public_key.to_vec(), account_id, issued_at, signature, alg: SigAlg::P256 }
     }
 
-    /// Issue a certificate for `device_id`/`device_public_key`, signed by the
-    /// account keypair.
-    pub fn issue(
+    /// Issue a certificate for an Ed25519 `device_public_key`, signed by the
+    /// account keypair. The device id is the one the key derives
+    /// ([`device_id_for`]).
+    pub fn issue(account_keypair: &SigningKeypair, account_id: Uuid, device_public_key: &[u8], issued_at: Timestamp) -> Self {
+        Self::issue_for_id(account_keypair, account_id, device_id_for(SigAlg::Ed25519, device_public_key), device_public_key, issued_at)
+    }
+
+    /// [`DeviceCertificate::issue`] under a chosen device id: a certificate
+    /// whose id isn't the one its key derives never verifies (tests of that
+    /// refusal only).
+    #[doc(hidden)]
+    pub fn issue_for_id(
         account_keypair: &SigningKeypair,
         account_id: Uuid,
         device_id: Uuid,
@@ -446,9 +516,20 @@ impl DeviceCertificate {
         }
     }
 
+    /// Whether the device id is the one the certified key derives
+    /// ([`device_id_for`]).
+    pub fn id_matches_key(&self) -> bool {
+        self.device_id == device_id_for(self.alg, &self.device_public_key)
+    }
+
     /// Verify the certificate against the account's public key (and that a
-    /// P-256 certificate carries a well-formed P-256 key).
+    /// P-256 certificate carries a well-formed P-256 key, and that its device
+    /// id is the one its key derives: device-id squatting is refused here,
+    /// for every reader of a certificate).
     pub fn verify(&self, account_public_key: &[u8]) -> Result<(), CryptoError> {
+        if !self.id_matches_key() {
+            return Err(CryptoError::DeviceIdMismatch);
+        }
         if self.alg == SigAlg::P256
             && (self.device_public_key.len() != 65
                 || p256::ecdsa::VerifyingKey::from_sec1_bytes(&self.device_public_key).is_err())
@@ -645,15 +726,9 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
 
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
+        assert_eq!(cert.device_id, device_id_for(SigAlg::Ed25519, &device.public_key_bytes()));
         assert!(cert.verify(&account.public_key_bytes()).is_ok());
 
         // a different account key cannot have issued it

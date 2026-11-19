@@ -1527,6 +1527,8 @@ mod tests {
                 message: ChatMessage::new(MessageRole::User, "A", "still delivered"),
             },
         );
+        let snap = crate::event_store::fixture_signed(&snap);
+        let msg = crate::event_store::fixture_signed(&msg);
         let batch: Vec<(u64, Value)> = vec![
             (1, serde_json::to_value(&snap).unwrap()),
             (2, serde_json::json!({ "ciphertext": 1 })), // provably malformed
@@ -1573,6 +1575,8 @@ mod tests {
                 message: ChatMessage::new(MessageRole::User, "A", "reachable"),
             },
         );
+        let snap = crate::event_store::fixture_signed(&snap);
+        let msg = crate::event_store::fixture_signed(&msg);
         let seal = |k: &[u8; 32], ver: u32, e: &SessionEventEnvelope| -> Value {
             let plain = serde_json::to_vec(e).unwrap();
             serde_json::to_value(seal_symmetric(k, ver, &plain).unwrap()).unwrap()
@@ -1633,14 +1637,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -1877,6 +1875,8 @@ mod tests {
                 message: ChatMessage::new(MessageRole::User, "A", "reachable"),
             },
         );
+        let snap = crate::event_store::fixture_signed(&snap);
+        let msg = crate::event_store::fixture_signed(&msg);
         let seal = |k: &[u8; 32], ver: u32, e: &SessionEventEnvelope| -> Value {
             let plain = serde_json::to_vec(e).unwrap();
             serde_json::to_value(seal_symmetric(k, ver, &plain).unwrap()).unwrap()
@@ -1965,14 +1965,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -2348,6 +2342,7 @@ mod tests {
         let session = ChatSession::new("Shared", Uuid::new_v4(), "anthropic");
         let (sid, wid) = (session.id, session.workspace_id);
         let snap = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) });
+        let snap = crate::event_store::fixture_signed(&snap);
         let relay = RelayClient::new(&base);
         let sealed = seal_symmetric(&missing, 7, &serde_json::to_vec(&snap).unwrap()).unwrap();
         relay.push_value(&workspace, &serde_json::to_value(sealed).unwrap()).await.unwrap();

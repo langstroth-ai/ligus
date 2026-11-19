@@ -772,7 +772,9 @@ pub fn validate(flow: &FlowState, record: &FlowRecord, signer: Option<Uuid>, aut
 /// first: taking a new entry (and its authorship) over, or swapping its own
 /// operation into a proposal a person already accepted. With the binding,
 /// a second record under the id is a second event under one event id, which
-/// every fold denies.
+/// every fold denies (when the copies are different signers' and each would
+/// otherwise fold as its own event, `crate::copies`, the fold denies every
+/// copy of a record this binds).
 pub fn bound_event_id(record: &FlowRecord) -> Option<Uuid> {
     match record {
         FlowRecord::MemoryWritten(w) if w.base.is_none() => Some(w.entry_id),

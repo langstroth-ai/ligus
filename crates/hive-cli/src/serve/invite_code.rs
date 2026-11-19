@@ -243,7 +243,7 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, founder, Uuid::new_v4(), &device.public_key_bytes(), hive_core::Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), hive_core::Timestamp::epoch());
         let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         for name in ["", "Team"] {
             let mut conn = InviteConn {

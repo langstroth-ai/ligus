@@ -674,7 +674,7 @@ mod workspace_invite_tests {
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, founder, Uuid::new_v4(), &device.public_key_bytes(), hive_core::Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), hive_core::Timestamp::epoch());
         let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         for name in ["", "Team"] {
             let mut conn = WorkspaceConn {
@@ -4503,7 +4503,12 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
     let active = state.active_workspace_id();
     let config_id = hive_core::workspace_config_session_id(active);
     let svc = state.service.lock().unwrap();
-    let envs = svc.store().list(config_id).map_err(map_err)?;
+    // What the log decided, copy by copy: a refused event (or another
+    // signer's copy under a real event's id) never shows as a change.
+    let all = svc.store().list_copies(config_id).map_err(map_err)?;
+    let verdicts = hive_core::fold_copy_decisions(&all, svc.trusted_founder(), None, hive_core::WorkspaceAuthz::Unchecked);
+    let mut envs: Vec<_> = all.iter().filter(|e| verdicts.get(e) == Some(hive_core::Verdict::Allowed)).cloned().collect();
+    envs.sort_by_key(|e| e.canonical_key());
     // Resolve MemberRemoved's id → name from the adds seen earlier in the log.
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut out: Vec<MembershipAuditDto> = Vec::new();
@@ -12047,7 +12052,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
     // the events table on every launch and blocked first paint.
-    let mut service = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    let mut service = ChatService::new(store, device_kp, account_kp, stored.account.actor());
     // Agents bound to this device sign their own output with keys it
     // certifies (A3), kept with this device's other keys.
     service.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&data_dir)));
@@ -16950,7 +16955,7 @@ mod finalize_proposal_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        let mut svc = ChatService::new(store, kp, account_kp, author);
         svc.enable_test_presence();
         svc
     }
@@ -18429,7 +18434,7 @@ mod responder_place_tests {
     fn device(author: hive_core::ActorIdentity) -> ChatService {
         use hive_core::crypto::SigningKeypair;
         let store = hive_runtime::EventStore::open_in_memory().unwrap();
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }

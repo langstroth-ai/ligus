@@ -1,0 +1,4 @@
+{"alg": "ed25519", "deviceId": "4d1cac7c-6b59-81a6-90b7-8fb8fde5e3d3", "label": "ed25519-counting", "publicKey": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"}
+{"alg": "ed25519", "deviceId": "a925b2bf-19e8-8455-886b-c4f89e86dc28", "label": "ed25519-ones", "publicKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+{"alg": "p256", "deviceId": "320994f1-40c1-8502-84e5-5c781e33bb60", "label": "p256-phone-actions-key", "publicKey": "040217e617f0b6443928278f96999e69a23a4f2c152bdf6d6cdf66e5b80282d4ed194a7debcb97712d2dda3ca85aa8765a56f45fc758599652f2897c65306e5794"}
+{"alg": "p256", "deviceId": "a78960d5-25cc-8dbd-8d5d-7262a0490e04", "label": "p256-cryptokit-key", "publicKey": "04d9fe4548e8b8aea07b9b9de263b3c8717f00f3eb53b04ebb48d2db290169c6d562459ccdac18ab93532573d2e7f7bef97a7264669cfc5d5ef501a40de277d4a0"}

@@ -251,7 +251,7 @@ fn a_p256_key_under_an_ed25519_certificate_is_refused() {
     w.admit("owner", "mara", WorkspaceRole::Contributor);
     let phone = Phone::new();
     let p = &w.people["mara"];
-    let cert = DeviceCertificate::issue(&p.account, p.account_id, phone.device_id, &phone.public_key(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue_for_id(&p.account, p.account_id, phone.device_id, &phone.public_key(), Timestamp::epoch());
     assert!(cert.verify(&p.account.public_key_bytes()).is_err(), "an Ed25519 certificate names a 32-byte key");
     w.push("mara", SessionEvent::DeviceCertificateAdded { certificate: cert });
     assert!(!w.roster().devices.contains_key(&phone.device_id), "the key is never certified");

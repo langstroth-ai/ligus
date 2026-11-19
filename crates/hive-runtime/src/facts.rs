@@ -144,7 +144,7 @@ pub struct Cursor {
     pub signals: i64,
     pub events: i64,
     /// Rows of the equivocation evidence table: an equivocating copy changes
-    /// a chat's fold (both copies are denied) without adding a log row.
+    /// a chat's fold (the fold decides which copies count) without adding a log row.
     pub equivocations: i64,
 }
 

@@ -408,7 +408,7 @@ before it pairs or signs anything. Reference implementation:
 **1. The phone's code.** Generate the Secure Enclave key once
 (`SecureEnclave.P256.Signing.PrivateKey`, access control
 `.privateKeyUsage`, kept in the Keychain as `kSecAttrTokenIDSecureEnclave`)
-and a device id. Show, on **Settings > This phone**, the code as a QR code
+and derive its device id from it (below). Show, on **Settings > This phone**, the code as a QR code
 and as copyable text, and the fingerprint:
 
 ```
@@ -429,10 +429,25 @@ fingerprint = upper-case hex of SHA-256(pubkey)[0..10] (80 bits), as
 b64u        = base64url without padding
 ```
 
-The device id is whatever the phone presents. A coming change derives it
-from the device's first signing key; `check_device_id` is where that rule
-lands, so derive it as specified then and keep it stable across reinstalls
-(it lives with the key).
+`device_id` is never chosen: it is the id the key derives,
+
+```
+device_id   = SHA-256("ligus-device-id-v1\0" ‖ "p256" ‖ "\0" ‖ pubkey(65))[0..16]
+              with byte 6 := (b6 & 0x0f) | 0x80 (UUID version 8)
+              and  byte 8 := (b8 & 0x3f) | 0x80 (RFC 9562 variant)
+```
+
+over the same 65-byte `x963Representation` as `pubkey` (never the
+compressed or raw 64-byte form, and never `"ed25519"` as the algorithm).
+Shown or sent as text it is the lowercase hyphenated UUID. Check the
+derivation against the golden vectors in
+`crates/hive-core/tests/golden/device_id_v1.jsonl` in the app's tests. It
+lives with the key: a new Secure Enclave key (a reinstall that loses the
+key, Reset device key) is a new device with a new id, certified again.
+A code whose id isn't its key's is refused on decode with "the phone's
+device id doesn't belong to its key" (`check_device_id`), before the
+desktop shows the fingerprint, so a phone that sends a stored or random id
+can't be added.
 
 **2. The desktop certifies it.** The person pastes the code into **My
 devices > Add this phone** on their desktop (or runs `ligus phones certify
@@ -441,9 +456,10 @@ theirs; without `--fingerprint` it asks at a terminal and refuses
 otherwise), compares the fingerprint with the phone's screen and confirms with
 their passkey. The desktop appends `DeviceCertificateAdded` with a P-256
 certificate (`alg: "p256"`): the phone tier, capped by the person's role.
-Refused: a code whose signature doesn't verify, a device id already certified
-with another key or as a desktop or box, a revoked device id (the phone needs
-a new key and id).
+Refused: a code whose signature doesn't verify, a device id its key doesn't
+derive, a device id already certified with another key or as a desktop or box
+(impossible for a derived id, and refused by the fold too), a revoked device
+id (the phone needs a new key and id).
 
 **3. Pair.** Scan `ligus pair` as before; the enrollment's device claim
 (`device: {id, sig}`, [`relay-tunnel.md`](relay-tunnel.md) §7.2 E3a) names
@@ -472,6 +488,20 @@ box drafts and relays it. Reference implementation:
 `hive_core::phone_action` (`PhoneAction`, `check_phone_action_preimage`,
 `parse_phone_preimage`); golden vectors in
 `crates/hive-core/tests/golden/phone_actions_v1.jsonl`.
+
+**Device id.** The phone's workspace device id is derived from its Secure
+Enclave key, never chosen: the first 16 bytes of
+`SHA-256("ligus-device-id-v1\0" ‖ "p256" ‖ "\0" ‖ publicKey)`, where
+`publicKey` is the 65-byte SEC1 uncompressed point (`0x04 ‖ x ‖ y`, CryptoKit
+`P256.Signing.PublicKey.x963Representation`), with byte 6 set to
+`(b6 & 0x0f) | 0x80` (version 8) and byte 8 to `(b8 & 0x3f) | 0x80` (the RFC
+9562 variant), as a lowercase hyphenated UUID. Send it as `deviceId`
+everywhere, and as the stamp's `actor.deviceId` and the envelope's
+`signerDeviceId`. A certificate naming any other id never verifies, and
+enrollment refuses one (`hive_core::crypto::device_id_for`; golden vectors in
+`crates/hive-core/tests/golden/device_id_v1.jsonl`, including the key of
+`p256_cryptokit.jsonl`: check them in the app's tests). A new Secure Enclave
+key is a new device with a new id, enrolled again.
 
 **Endpoints.**
 

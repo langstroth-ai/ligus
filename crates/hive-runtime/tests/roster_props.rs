@@ -28,12 +28,13 @@ struct Principal {
 
 impl Principal {
     fn new(name: &'static str) -> Self {
+        let device = SigningKeypair::generate().unwrap();
         Self {
             name,
             account: SigningKeypair::generate().unwrap(),
             account_id: Uuid::new_v4(),
-            device: SigningKeypair::generate().unwrap(),
-            device_id: Uuid::new_v4(),
+            device_id: hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes()),
+            device,
             present: std::cell::Cell::new(false),
         }
     }
@@ -65,7 +66,7 @@ impl Principal {
         e
     }
     fn trust(&self, ws: Uuid, lamport: u64) -> Vec<SessionEventEnvelope> {
-        let cert = DeviceCertificate::issue(&self.account, self.account_id, self.device_id, &self.device.public_key_bytes(), Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&self.account, self.account_id, &self.device.public_key_bytes(), Timestamp::epoch());
         vec![
             self.sign(ws, lamport, SessionEvent::AccountKeyRegistered { account_id: self.account_id, signing_public_key: self.account.public_key_bytes().to_vec() }),
             self.sign(ws, lamport + 1, SessionEvent::DeviceCertificateAdded { certificate: cert }),
@@ -224,7 +225,7 @@ fn founder_pin_disputes_forged_founder_key() {
     // The forger registers the founder's account id under its own key, with a
     // device certificate chained to that key, at a lower lamport.
     let forger = Principal { account_id: founder.account_id, ..Principal::new("forger") };
-    let fcert = DeviceCertificate::issue(&forger.account, founder.account_id, forger.device_id, &forger.device.public_key_bytes(), Timestamp::epoch());
+    let fcert = DeviceCertificate::issue(&forger.account, founder.account_id, &forger.device.public_key_bytes(), Timestamp::epoch());
     let mut reg = forger.sign(ws, 0, SessionEvent::AccountKeyRegistered { account_id: founder.account_id, signing_public_key: forger.account.public_key_bytes().to_vec() });
     reg.lamport = 0;
     reg.clear_raw();

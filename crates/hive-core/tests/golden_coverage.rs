@@ -281,7 +281,9 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
             proof: None,
         }),
         ("deviceCertificateAdded/phone-p256", cfg, SessionEvent::DeviceCertificateAdded {
-            certificate: DeviceCertificate::issue_p256(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
+            // The frozen line's synthetic device id (a wire-shape vector; the
+            // id a key derives is pinned by `golden/device_id_v1.jsonl`).
+            certificate: DeviceCertificate::issue_p256_for_id(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
         }),
         ("memberRemoved/watermark-gaps", cfg, SessionEvent::MemberRemoved { member_id: u(9).to_string(), watermark: wm_gaps }),
     ]

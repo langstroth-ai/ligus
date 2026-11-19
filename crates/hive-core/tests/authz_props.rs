@@ -55,13 +55,13 @@ fn account_key(who: &str) -> hive_core::SigningKeypair {
 
 /// `who`'s own signing device.
 fn device_of(who: &str) -> (Uuid, hive_core::SigningKeypair) {
-    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("device:{who}").as_bytes());
     let mut seed = [0u8; 32];
     for (i, b) in who.bytes().enumerate() {
         seed[i % 32] ^= b;
     }
     seed[31] = 0x5a;
-    (id, hive_core::SigningKeypair::from_seed(&seed).unwrap())
+    let key = hive_core::SigningKeypair::from_seed(&seed).unwrap();
+    (hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &key.public_key_bytes()), key)
 }
 
 /// Chat kinds a test author confirms with presence (the gated ones).
@@ -104,7 +104,8 @@ impl World {
         let (device, dk) = device_of(who);
         let acct = account_key(who);
         self.cfg_push(who, SessionEvent::AccountKeyRegistered { account_id: account(who), signing_public_key: acct.public_key_bytes().to_vec() });
-        let cert = hive_core::DeviceCertificate::issue(&acct, account(who), device, &dk.public_key_bytes(), Timestamp::epoch());
+        let cert = hive_core::DeviceCertificate::issue(&acct, account(who), &dk.public_key_bytes(), Timestamp::epoch());
+        assert_eq!(cert.device_id, device);
         self.cfg_push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
         let id = self.cfg_push(who, hive_core::testkit::recovery_registration(account(who)));
         let env = self.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
@@ -743,21 +744,23 @@ fn applied_only_from_a_human_member_for_the_approved_content() {
 
 // ---- R5 self-revoke ----
 
-fn trust_events(w: &mut World, who: &str, device: Uuid) {
+/// `who` certifies a new device of theirs; its id (derived from its key).
+fn trust_events(w: &mut World, who: &str) -> Uuid {
     use hive_core::crypto::{DeviceCertificate, SigningKeypair};
     let acct = SigningKeypair::from_seed(&[who.len() as u8 + 1; 32]).unwrap();
     let dev = SigningKeypair::generate().unwrap();
     w.cfg_push(who, SessionEvent::AccountKeyRegistered { account_id: account(who), signing_public_key: acct.public_key_bytes().to_vec() });
-    let cert = DeviceCertificate::issue(&acct, account(who), device, &dev.public_key_bytes(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue(&acct, account(who), &dev.public_key_bytes(), Timestamp::epoch());
+    let device = cert.device_id;
     w.cfg_push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    device
 }
 
 #[test]
 fn self_revoke_allowed_other_revoke_needs_admin() {
     let mut w = World::new();
-    let (maras_laptop, vals_phone) = (Uuid::from_u128(0xD1), Uuid::from_u128(0xD2));
-    trust_events(&mut w, "mara", maras_laptop);
-    trust_events(&mut w, "val", vals_phone);
+    let maras_laptop = trust_events(&mut w, "mara");
+    let vals_phone = trust_events(&mut w, "val");
     // mara (Contributor) can't revoke val's device...
     let other = w.cfg_push("mara", SessionEvent::DeviceRevoked { device_id: vals_phone, watermark: Vec::new() });
     // ...but can revoke her own.
@@ -773,8 +776,7 @@ fn self_revoke_allowed_other_revoke_needs_admin() {
 #[test]
 fn self_revoke_needs_the_certificate_not_a_claim() {
     let mut w = World::new();
-    let d = Uuid::from_u128(0xD3);
-    trust_events(&mut w, "val", d);
+    let d = trust_events(&mut w, "val");
     // mara claims a device her account never certified.
     let claim = w.cfg_push("mara", SessionEvent::DeviceRevoked { device_id: d, watermark: Vec::new() });
     assert_eq!(w.verdicts()[&claim], Verdict::Denied);
@@ -1268,6 +1270,8 @@ fn a_chat_founded_by_a_non_member_does_not_exist() {
 struct AgentSetup {
     agent_id: Uuid,
     key_id: Uuid,
+    /// The device that certified the agent key (its id derived from its key).
+    host: Uuid,
 }
 
 /// `owner_name` owns an agent bound to their device `host`, which certifies a
@@ -1277,9 +1281,9 @@ fn agent_world(owner_name: &str) -> (World, AgentSetup) {
     let mut w = World::new();
     let acct = account_key(owner_name);
     let dev = SigningKeypair::from_seed(&[owner_name.len() as u8 + 80; 32]).unwrap();
-    let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("{owner_name}-device").as_bytes());
     w.cfg_push(owner_name, SessionEvent::AccountKeyRegistered { account_id: account(owner_name), signing_public_key: acct.public_key_bytes().to_vec() });
-    let cert = DeviceCertificate::issue(&acct, account(owner_name), host, &dev.public_key_bytes(), Timestamp::epoch());
+    let cert = DeviceCertificate::issue(&acct, account(owner_name), &dev.public_key_bytes(), Timestamp::epoch());
+    let host = cert.device_id;
     w.cfg_push(owner_name, SessionEvent::DeviceCertificateAdded { certificate: cert });
     let mut agent = hive_core::WorkspaceAgent::new("coder", "gw");
     agent.owner_actor_id = owner_name.into();
@@ -1290,7 +1294,7 @@ fn agent_world(owner_name: &str) -> (World, AgentSetup) {
     let key_id = acert.key_id;
     let id = w.cfg_push(owner_name, SessionEvent::AgentKeyCertified { cert: acert });
     w.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(host);
-    (w, AgentSetup { agent_id, key_id })
+    (w, AgentSetup { agent_id, key_id, host })
 }
 
 impl World {
@@ -1484,28 +1488,33 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     let owner_key = account_key("owner");
     let (desk_key, box_key, box_acct_key) =
         (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
-    let (desk, bx, box_acct) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let cert = |k: &SigningKeypair, acct, dev, dk: &SigningKeypair| SessionEvent::DeviceCertificateAdded {
-        certificate: DeviceCertificate::issue(k, acct, dev, &dk.public_key_bytes(), Timestamp::epoch()),
+    let id_of = |k: &SigningKeypair| hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &k.public_key_bytes());
+    let (desk, bx, box_acct) = (id_of(&desk_key), id_of(&box_key), Uuid::new_v4());
+    let cert = |k: &SigningKeypair, acct, dk: &SigningKeypair| SessionEvent::DeviceCertificateAdded {
+        certificate: DeviceCertificate::issue(k, acct, &dk.public_key_bytes(), Timestamp::epoch()),
     };
+    // Published by `signer` (signed with its key, as ingest requires).
     let signed = |w: &mut World, by: &str, e: SessionEvent, signer: Uuid| {
         w.cfg_push(by, e);
-        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+        let key = if signer == desk { &desk_key } else { &box_key };
+        let env = w.cfg.last_mut().unwrap();
+        env.clear_raw();
+        hive_core::crypto::sign_envelope(env, signer, key);
     };
     // The owner's desktop publishes its own identity.
     signed(&mut w, "owner", SessionEvent::AccountKeyRegistered {
         account_id: owner_acct,
         signing_public_key: owner_key.public_key_bytes().to_vec(),
     }, desk);
-    signed(&mut w, "owner", cert(&owner_key, owner_acct, desk, &desk_key), desk);
+    signed(&mut w, "owner", cert(&owner_key, owner_acct, &desk_key), desk);
     // The box first published an identity of its own...
     signed(&mut w, "sff", SessionEvent::AccountKeyRegistered {
         account_id: box_acct,
         signing_public_key: box_acct_key.public_key_bytes().to_vec(),
     }, bx);
-    signed(&mut w, "sff", cert(&box_acct_key, box_acct, bx, &box_key), bx);
+    signed(&mut w, "sff", cert(&box_acct_key, box_acct, &box_key), bx);
     // ...then the owner's desktop enrolled it as one of the owner's devices.
-    signed(&mut w, "owner", cert(&owner_key, owner_acct, bx, &box_key), desk);
+    signed(&mut w, "owner", cert(&owner_key, owner_acct, &box_key), desk);
 
     let roster = w.timeline().current().clone();
     assert!(roster.devices[&bx].delegated_for(owner_acct));
@@ -1543,18 +1552,23 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
     let owner_acct = account("owner");
     let owner_key = account_key("owner");
     let (desk_key, box_key) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
-    let (desk, bx) = (Uuid::new_v4(), Uuid::new_v4());
-    let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, bx, &box_key.public_key_bytes(), Timestamp::epoch());
+    let id_of = |k: &SigningKeypair| hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &k.public_key_bytes());
+    let (desk, bx) = (id_of(&desk_key), id_of(&box_key));
+    let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, &box_key.public_key_bytes(), Timestamp::epoch());
+    // Published by `signer` (signed with its key, as ingest requires).
     let signed = |w: &mut World, e: SessionEvent, signer: Uuid| {
         w.cfg_push("owner", e);
-        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+        let key = if signer == desk { &desk_key } else { &box_key };
+        let env = w.cfg.last_mut().unwrap();
+        env.clear_raw();
+        hive_core::crypto::sign_envelope(env, signer, key);
     };
     signed(&mut w, SessionEvent::AccountKeyRegistered {
         account_id: owner_acct,
         signing_public_key: owner_key.public_key_bytes().to_vec(),
     }, desk);
     signed(&mut w, SessionEvent::DeviceCertificateAdded {
-        certificate: DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch()),
+        certificate: DeviceCertificate::issue(&owner_key, owner_acct, &desk_key.public_key_bytes(), Timestamp::epoch()),
     }, desk);
     // The desktop enrolls the box...
     signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert.clone() }, desk);
@@ -1573,7 +1587,7 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
 
     // And nobody can make the desktop delegated by re-publishing its cert
     // from another device (the desktop's own publication came first).
-    let desk_cert = DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch());
+    let desk_cert = DeviceCertificate::issue(&owner_key, owner_acct, &desk_key.public_key_bytes(), Timestamp::epoch());
     signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: desk_cert }, bx);
     assert!(!w.timeline().current().devices[&desk].delegated_for(owner_acct));
 }
@@ -2149,7 +2163,7 @@ fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
 #[test]
 fn an_agent_key_answer_commits_for_its_certifying_host() {
     let (mut w, a) = agent_world("mara");
-    let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"mara-device");
+    let host = a.host;
     let trigger = hive_core::ChatMessage::new(hive_core::MessageRole::User, "mara", "@coder go");
     let t = trigger.id;
     w.chat_push("mara", SessionEvent::MessageAppended { message: trigger });

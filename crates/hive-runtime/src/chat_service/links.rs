@@ -200,7 +200,7 @@ mod tests {
         let account = Uuid::new_v4();
         let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
         author.account_id = Some(account);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         let wid = Uuid::new_v4();
         svc.ensure_workspace_config(wid).unwrap();
         (svc, wid)

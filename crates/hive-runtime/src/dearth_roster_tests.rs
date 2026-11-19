@@ -20,12 +20,13 @@ struct Who {
 }
 
 fn who(name: &str) -> Who {
+    let dk = SigningKeypair::generate().unwrap();
     Who {
         id: name.into(),
         account: Uuid::new_v4(),
         kp: SigningKeypair::generate().unwrap(),
-        device: Uuid::new_v4(),
-        dk: SigningKeypair::generate().unwrap(),
+        device: hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &dk.public_key_bytes()),
+        dk,
     }
 }
 
@@ -72,7 +73,7 @@ impl Log {
     /// their test recovery key.
     fn identity(&mut self, w: &Who) {
         self.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
-        let c = DeviceCertificate::issue(&w.kp, w.account, w.device, &w.dk.public_key_bytes(), Timestamp::epoch());
+        let c = DeviceCertificate::issue(&w.kp, w.account, &w.dk.public_key_bytes(), Timestamp::epoch());
         self.push(w, SessionEvent::DeviceCertificateAdded { certificate: c });
         let mut e = self.draft(w, hive_core::testkit::recovery_registration(w.account));
         hive_core::testkit::prove_recovery(&mut e, w.account, w.device, &w.dk);
@@ -80,11 +81,14 @@ impl Log {
         self.present.insert(w.account);
         self.signing_devices.push(w.device);
     }
-    fn cert(&mut self, owner: &Who, device: Uuid) -> SigningKeypair {
+    /// `owner` certifies a new device of theirs; its id (derived from its
+    /// key) and its key.
+    fn cert(&mut self, owner: &Who) -> (Uuid, SigningKeypair) {
         let dk = SigningKeypair::generate().unwrap();
-        let c = DeviceCertificate::issue(&owner.kp, owner.account, device, &dk.public_key_bytes(), Timestamp::epoch());
+        let c = DeviceCertificate::issue(&owner.kp, owner.account, &dk.public_key_bytes(), Timestamp::epoch());
+        let device = c.device_id;
         self.push(owner, SessionEvent::DeviceCertificateAdded { certificate: c });
-        dk
+        (device, dk)
     }
 }
 
@@ -117,8 +121,7 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
         log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
         log.identity(w);
     }
-    let laptop = Uuid::new_v4();
-    log.cert(&owner, laptop);
+    let (laptop, _) = log.cert(&owner);
     (log, owner, admin2, alice, laptop)
 }
 
@@ -126,8 +129,7 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
 fn a_device_certified_during_dearth_needs_another_admins_approval() {
     let (mut log, owner, admin2, alice, laptop) = setup();
     log.push(&owner, dearth(true, vec![laptop]));
-    let new_box = Uuid::new_v4();
-    log.cert(&owner, new_box);
+    let (new_box, _) = log.cert(&owner);
     let r = build_roster(&log.envs);
     assert!(r.public_key(laptop).is_some(), "devices trusted before dearth mode stay trusted");
     assert!(r.public_key(new_box).is_none(), "the owner's certificate alone is one approval");
@@ -151,8 +153,7 @@ fn a_contributor_cannot_switch_dearth_off_in_the_roster() {
     let (mut log, owner, _admin2, alice, laptop) = setup();
     log.push(&owner, dearth(true, vec![laptop]));
     log.push(&alice, dearth(false, vec![]));
-    let new_box = Uuid::new_v4();
-    log.cert(&alice, new_box);
+    let (new_box, _) = log.cert(&alice);
     assert!(build_roster(&log.envs).public_key(new_box).is_none(), "bypass attempt: the forged switch-off is ignored");
     // An Admin switching it off lets the certificate count again.
     log.push(&owner, dearth(false, vec![]));
@@ -162,8 +163,7 @@ fn a_contributor_cannot_switch_dearth_off_in_the_roster() {
 #[test]
 fn without_dearth_mode_one_certificate_is_enough() {
     let (mut log, owner, ..) = setup();
-    let new_box = Uuid::new_v4();
-    log.cert(&owner, new_box);
+    let (new_box, _) = log.cert(&owner);
     assert!(build_roster(&log.envs).public_key(new_box).is_some());
 }
 
@@ -177,8 +177,7 @@ fn a_pending_device_is_not_accepted_in_relay_mode() {
     use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
     let (mut log, owner, _admin2, _alice, laptop) = setup();
     log.push(&owner, dearth(true, vec![laptop]));
-    let new_box = Uuid::new_v4();
-    let dk = log.cert(&owner, new_box);
+    let (new_box, dk) = log.cert(&owner);
     // The pending device signs a chat message as the owner's account.
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
@@ -234,13 +233,11 @@ fn an_uncertified_device_is_not_accepted_during_dearth_in_relay_mode() {
 fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     use crate::envelope_verifier::{verdict_for, Verdict};
     let (mut log, owner, _admin2, alice, _laptop) = setup();
-    let alice_laptop = Uuid::new_v4();
-    log.cert(&alice, alice_laptop);
+    let (alice_laptop, _) = log.cert(&alice);
     log.push(&owner, SessionEvent::MemberRemoved { member_id: alice.id.clone(), watermark: Vec::new() });
     log.push(&owner, SessionEvent::DeviceRevoked { device_id: alice_laptop, watermark: Vec::new() });
     // Alice comes back on her own.
-    let fresh = Uuid::new_v4();
-    let fk = log.cert(&alice, fresh);
+    let (fresh, fk) = log.cert(&alice);
     log.push(
         &alice,
         SessionEvent::MemberAdded { invite: None, proof: None,
@@ -268,8 +265,7 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
     let (mut log, owner, _admin2, alice, laptop) = setup();
     let owner_dk = {
         // Re-certify a device whose key we hold for the owner.
-        let d = Uuid::new_v4();
-        (d, log.cert(&owner, d))
+        log.cert(&owner)
     };
     log.push(&alice, SessionEvent::MemberRemoved { member_id: owner.id.clone(), watermark: Vec::new() });
     // Same thing, unsigned and unstamped, on a chat log.
@@ -334,8 +330,7 @@ fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
     log.push(&owner, seed(&owner, &[(&owner, WorkspaceRole::Owner), (&alice, WorkspaceRole::Contributor)]));
     log.identity(&owner);
     log.push(&alice, SessionEvent::AccountKeyRegistered { account_id: alice.account, signing_public_key: alice.kp.public_key_bytes().to_vec() });
-    let laptop = Uuid::new_v4();
-    log.cert(&owner, laptop);
+    let (laptop, _) = log.cert(&owner);
     log.push(&owner, dearth(true, vec![laptop]));
     // Alice forges a seed beside the founder's (lamport 1, the lowest a
     // seed can claim), naming herself Owner.
@@ -343,8 +338,7 @@ fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
     forged.lamport = 1;
     forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     log.envs.push(forged);
-    let new_box = Uuid::new_v4();
-    log.cert(&alice, new_box);
+    let (new_box, _) = log.cert(&alice);
     let pin = FounderPin { founder_account: owner.account, fk: FounderPin::fingerprint(&owner.kp.public_key_bytes()) };
     let r = build_roster_pinned(&log.envs, Some(&pin));
     assert!(r.public_key(laptop).is_some(), "control: the founder's device is trusted");

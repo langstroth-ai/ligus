@@ -150,6 +150,11 @@ pub fn verify_stream<R: DeviceKeyResolver>(
 /// account — e.g. a local identity that later signs into GitHub is the same
 /// person, and each cert is signed by its own account key — so an event is
 /// authentic if its stamp matches ANY of the device's certified accounts.
+///
+/// A device id is derived from the device's key
+/// (`hive_core::crypto::device_id_for`) and a certificate under any other id
+/// never verifies, so every certificate of one id names the same key: no
+/// member can certify someone else's device id under a key of their own.
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceRoster {
     devices: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
@@ -178,6 +183,10 @@ pub struct WorkspaceRoster {
     removed_accounts: HashSet<Uuid>,
     /// Agent signing keys valid at the config head: key_id → (key, agent).
     agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)>,
+    /// Devices in `revoked` only because no account they are certified to
+    /// has been admitted here yet: never a member, not removed, not
+    /// explicitly revoked. Their events are held, not refused, at ingest.
+    unadmitted: HashSet<Uuid>,
 }
 
 impl WorkspaceRoster {
@@ -367,18 +376,22 @@ pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin)
     let founder = account.to_string();
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
-    let base = ordered.into_iter().find(|e| match &e.payload {
-        hive_core::SessionEvent::SessionSnapshot { session } => {
-            session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
-        }
-        _ => false,
-    })?;
-    let device = base.signer_device_id?;
-    let device_key = roster.public_key(device)?;
-    (roster.device_signs_for(device, account)
-        && !roster.is_revoked(device)
-        && hive_core::crypto::verify_envelope(base, device_key).is_ok())
-    .then_some(base)
+    // The first one that verifies: a forged copy under the seed's id (or any
+    // snapshot claiming the founder) sorting first doesn't hide the real one.
+    ordered.into_iter().find(|e| {
+        let claims = match &e.payload {
+            hive_core::SessionEvent::SessionSnapshot { session } => {
+                session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
+            }
+            _ => false,
+        };
+        claims
+            && e.signer_device_id.is_some_and(|device| {
+                roster.device_signs_for(device, account)
+                    && !roster.is_revoked(device)
+                    && roster.public_key(device).is_some_and(|k| hive_core::crypto::verify_envelope(e, k).is_ok())
+            })
+    })
 }
 
 /// One workspace's roster from that workspace's own trust events (P0.4). With
@@ -420,7 +433,9 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 .map(|e| (*e).clone())
                 .collect();
             let (projected, timeline) = hive_core::project_config(&envs, founder.as_deref(), None);
-            let decisions = hive_core::fold_decisions(&envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
+            // By copy: a forged copy under an allowed event's id is not that
+            // event (`hive_core::copies`).
+            let decisions = hive_core::fold_copy_decisions(&envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
             CfgFold { ws, envs, projected, timeline, decisions }
         })
         .collect();
@@ -551,7 +566,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         // refused (anyone "removing" the founder) removes no one.
         for e in &cfg_envs {
             if let SessionEvent::MemberRemoved { member_id, .. } = &e.payload {
-                if decisions.get(&e.event_id) == Some(&hive_core::Verdict::Allowed) {
+                if decisions.get(e) == Some(hive_core::Verdict::Allowed) {
                     removed_by_ws.entry(ws).or_default().insert(member_id.clone());
                 }
             }
@@ -589,7 +604,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     roster.removed_accounts = sticky_removed.clone();
     // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
     // if they still hold a valid member cert — verdict_for checks is_revoked first.
-    roster.revoked.extend(explicit_revoked);
+    roster.revoked.extend(explicit_revoked.iter().copied());
     // Retain the pinned account signing keys for accounts that are members — the
     // Option-C gate checks these against GitHub. (Non-member account keys are
     // irrelevant; their devices are revoked below.)
@@ -645,6 +660,12 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     }
     // A device whose *only* verified certs are to removed accounts is revoked —
     // but a device that also holds a current member cert (above) stays trusted.
+    // One whose accounts were never members here (their admission isn't on
+    // this device yet, or never comes) is revoked too, but marked unadmitted:
+    // whether the admission came first is arrival order, so ingest holds its
+    // events rather than refusing them for good (`verdict_for`).
+    let ever_members: HashSet<Uuid> = member_account.values().copied().chain(sticky_removed.iter().copied()).collect();
+    let mut removed_only: HashSet<Uuid> = HashSet::new();
     for cert in &certs {
         if roster.devices.contains_key(&cert.device_id) {
             continue;
@@ -652,9 +673,15 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         if let Some(account_key) = account_keys.get(&cert.account_id) {
             if cert.verify(account_key).is_ok() && !members.contains(&cert.account_id) {
                 roster.revoked.insert(cert.device_id);
+                if ever_members.contains(&cert.account_id) {
+                    removed_only.insert(cert.device_id);
+                } else {
+                    roster.unadmitted.insert(cert.device_id);
+                }
             }
         }
     }
+    roster.unadmitted.retain(|d| !removed_only.contains(d) && !explicit_revoked.contains(d));
     roster
 }
 
@@ -664,7 +691,7 @@ struct CfgFold {
     envs: Vec<SessionEventEnvelope>,
     projected: Option<hive_core::ChatSession>,
     timeline: hive_core::authz::ConfigTimeline,
-    decisions: std::collections::BTreeMap<Uuid, hive_core::Verdict>,
+    decisions: hive_core::CopyVerdicts,
 }
 
 /// Whether an `AccountKeyRotated` for `account` is left out of the roster:
@@ -677,7 +704,7 @@ fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) ->
         return false;
     }
     let on_config = env.session_id == hive_core::workspace_config_session_id(c.ws);
-    !on_config || c.decisions.get(&env.event_id) != Some(&hive_core::Verdict::Allowed)
+    !on_config || c.decisions.get(env) != Some(hive_core::Verdict::Allowed)
 }
 
 /// One roster per workspace, each folded from that workspace's events only
@@ -879,23 +906,19 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
     if !key_publication_ok(env) {
         return Verdict::Quarantine(QuarantineReason::Impersonation);
     }
-    let Some(device_id) = env.signer_device_id else {
-        // A genuine event is ALWAYS signed — `append_signed` sets the signature and
-        // the actor stamp together — so an unsigned envelope that nonetheless
-        // carries an `actor_stamp` is provably forged: it claims an author with no
-        // signature to prove it. It must be QUARANTINED, not merely held/accepted;
-        // otherwise the default (Relay) ingest accepts it and projection-authz +
-        // seed-selection trust the unverified stamped author — a workspace takeover
-        // (a forged `MemberRoleChanged`/`MemberRemoved` or founder-stamped snapshot
-        // stamped as the real Owner). An unsigned event with NO stamp claims no
-        // author, so it stays the lenient `Unverifiable`.
-        return if env.actor_stamp.is_some() {
-            Verdict::Quarantine(QuarantineReason::Unsigned)
-        } else if entrance_closed(roster, env) {
-            Verdict::Unverifiable(QuarantineReason::PendingApproval)
-        } else {
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
-        };
+    let Some(device_id) = env.signer_device_id.filter(|_| env.signature.is_some()) else {
+        // A genuine event is ALWAYS signed: every write goes through
+        // `append_signed` (or an agent's or phone's signing path), which sets
+        // the signature and the actor stamp together, and nothing unsigned is
+        // ever pushed. So an unsigned envelope is provably not an event any
+        // device wrote. With a stamp it claims an author with no signature to
+        // prove it (projection-authz and seed selection would trust that
+        // author: a workspace takeover). Without one it claims no author, but
+        // it can still carry a real event's id: a forged copy (review:
+        // erase-by-forgery), or an event of its own that every member's fold
+        // has to carry. Either way it is QUARANTINED (refused, kept only as a
+        // lamport witness), never accepted.
+        return Verdict::Quarantine(QuarantineReason::Unsigned);
     };
     // A3: an agent's own key (certified by its host, still bound to it).
     if let Some((agent_key, agent_id)) = roster.agent_keys.get(&device_id) {
@@ -908,9 +931,22 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
     }
     if roster.is_revoked(device_id) {
+        // Certified only to accounts not admitted here (yet): held until the
+        // admission arrives, never applied without it. Refusing it for good
+        // would make the verdict depend on arrival order (a device that had
+        // the `MemberAdded` first applies it). A body its own key doesn't
+        // sign is refused as ever.
+        if roster.unadmitted.contains(&device_id) {
+            return match roster.chained.get(&device_id) {
+                Some((k, _)) if verify_envelope(env, k).is_ok() => Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+                Some(_) => Verdict::Quarantine(QuarantineReason::BadSignature),
+                // Its account's key is contested: fail closed, as ever.
+                None => Verdict::Quarantine(QuarantineReason::RevokedDevice),
+            };
+        }
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
-    let Some(signing_key) = roster.public_key(device_id) else {
+    if !roster.is_certified(device_id) {
         if roster.pending.iter().any(|(_, d, _)| *d == device_id) && !is_trust_bootstrap(env) {
             return Verdict::Unverifiable(QuarantineReason::PendingApproval);
         }
@@ -930,40 +966,48 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
             return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
         }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
-    };
-    if verify_envelope(env, signing_key).is_err() {
+    }
+    // The device's one key (its id derives from it): only the device signs.
+    if roster.public_key(device_id).is_none_or(|k| verify_envelope(env, k).is_err()) {
         return Verdict::Quarantine(QuarantineReason::BadSignature);
     }
-    // Impersonation: the stamped author's account must be one the signing device
-    // is cert-verified to. A device legitimately certified to more than one
-    // account (an identity transition) may sign as any of them — each cert is
-    // signed by that account's own key, so this can't be forged. The device is
-    // known here (public_key resolved above), so a stamp matching none of its
-    // certified accounts is provably an impersonation.
-    if let Some(stamp) = &env.actor_stamp {
-        if let Some(claimed) = stamp.actor.account_id {
-            // Contested identity: two different keys were registered for this
-            // account, so we can't tell which is genuine. Fail closed — this is
-            // what stops a forged `AccountKeyRegistered` under a victim's account
-            // id from hijacking it (the victim's real registration now makes the
-            // account disputed rather than silently losing first-registration).
-            if roster.is_disputed(claimed) {
-                return Verdict::Quarantine(QuarantineReason::DisputedAccountKey);
-            }
-            if !roster.device_signs_for(device_id, claimed) {
-                return Verdict::Quarantine(QuarantineReason::Impersonation);
-            }
-        } else if let Ok(named) = Uuid::parse_str(&stamp.actor.id) {
-            // No account on the stamp, but its actor id *is* a known account
-            // (a member's actor id is their account id): the signer must sign
-            // for it, or a member could leave the account off and act under
-            // anyone's id (the fold and the author gate read the actor id).
-            let known = roster.account_signing_key(named).is_some()
-                || roster.is_disputed(named)
-                || roster.removed_accounts.contains(&named);
-            if known && !roster.device_signs_for(device_id, named) {
-                return Verdict::Quarantine(QuarantineReason::Impersonation);
-            }
+    // The stamped author's account must be one the signing device is
+    // certified to. A device may act for more than one account (each
+    // certificate is signed by that account's own key), and any account can
+    // certify a device's key at any time, so a device not (yet) certified
+    // for the stamped account here proves nothing for good: another device
+    // may already hold that certificate and accept the event. Refusing it
+    // for good (quarantine) would make verdicts depend on arrival order. It
+    // is held until the certificate arrives instead, and never applied
+    // without it. Only a contested account key refuses for good (disputes
+    // only grow).
+    let Some(stamp) = &env.actor_stamp else { return Verdict::Valid };
+    let claimed = match stamp.actor.account_id {
+        Some(a) => Some(a),
+        // No account on the stamp, but its actor id *is* a known account (a
+        // member's actor id is their account id): the signer must sign for
+        // it, or a member could leave the account off and act under anyone's
+        // id (the fold and the author gate read the actor id).
+        None => Uuid::parse_str(&stamp.actor.id)
+            .ok()
+            .filter(|n| roster.account_signing_key(*n).is_some() || roster.is_disputed(*n) || roster.removed_accounts.contains(n)),
+    };
+    if let Some(claimed) = claimed {
+        if roster.is_disputed(claimed) {
+            return Verdict::Quarantine(QuarantineReason::DisputedAccountKey);
+        }
+        if !roster.device_signs_for(device_id, claimed) {
+            // An account's key registration and certificates are what make
+            // the device its own: as for a device nobody certified, they are
+            // accepted and judged by the roster (a certificate verifies only
+            // under its account's key), or the account could never be
+            // established here once someone else certified its device's key
+            // for themselves.
+            return if is_trust_bootstrap(env) {
+                Verdict::Unverifiable(QuarantineReason::UnknownDevice)
+            } else {
+                Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
+            };
         }
     }
     Verdict::Valid
@@ -1069,11 +1113,12 @@ mod tests {
     }
 
     fn principal() -> Principal {
+        let device_kp = SigningKeypair::generate().unwrap();
         Principal {
             account_kp: SigningKeypair::generate().unwrap(),
             account_id: Uuid::new_v4(),
-            device_kp: SigningKeypair::generate().unwrap(),
-            device_id: Uuid::new_v4(),
+            device_id: hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes()),
+            device_kp,
         }
     }
 
@@ -1082,13 +1127,7 @@ mod tests {
     }
 
     fn trust_events(p: &Principal, lamport_base: i64) -> Vec<SessionEventEnvelope> {
-        let cert = DeviceCertificate::issue(
-            &p.account_kp,
-            p.account_id,
-            p.device_id,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert = DeviceCertificate::issue(&p.account_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: p.account_id.to_string(),
             actor: ActorIdentity {
@@ -1173,13 +1212,7 @@ mod tests {
             },
         ));
         // Re-cert the device under K2 (its K1 cert no longer verifies vs pinned K2).
-        let cert2 = DeviceCertificate::issue(
-            &new_kp,
-            p.account_id,
-            p.device_id,
-            &p.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let cert2 = DeviceCertificate::issue(&new_kp, p.account_id, &p.device_kp.public_key_bytes(), Timestamp::epoch());
         events.push(env(11, SessionEvent::DeviceCertificateAdded { certificate: cert2 }));
 
         let roster = build_roster(&events);
@@ -1321,8 +1354,9 @@ mod tests {
             "Relay-mode ingest must quarantine a forged unsigned stamped event, not Accept it",
         );
 
-        // Sanity: an unsigned event with NO stamp claims no author, so it stays the
-        // lenient Unverifiable — genuinely unauthored events aren't newly dropped.
+        // An unsigned event with NO stamp claims no author, but it can carry a
+        // real event's id (review: erase-by-forgery) and nothing honest is ever
+        // unsigned: it is quarantined too.
         let unstamped = env(
             11,
             SessionEvent::MessageAppended {
@@ -1331,7 +1365,7 @@ mod tests {
         );
         assert_eq!(
             verdict_for(&roster, &unstamped),
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
+            Verdict::Quarantine(QuarantineReason::Unsigned)
         );
     }
 
@@ -1352,11 +1386,14 @@ mod tests {
             Verdict::Quarantine(QuarantineReason::BadSignature)
         );
 
-        // 3) Alice's device signs but stamps a DIFFERENT account → Impersonation.
+        // 3) Alice's device signs but stamps a DIFFERENT account: held (never
+        // applied) until that account certifies the device, which it may do
+        // later (or another device may already hold), so never refused for
+        // good on arrival order.
         let spoof = authored(alice.device_id, &alice.device_kp, Uuid::new_v4(), 101);
         assert_eq!(
             verdict_for(&roster, &spoof),
-            Verdict::Quarantine(QuarantineReason::Impersonation)
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
         );
     }
 
@@ -1371,12 +1408,8 @@ mod tests {
         let new_account = Uuid::new_v4();
         let new_account_kp = SigningKeypair::generate().unwrap();
 
-        let old_cert = DeviceCertificate::issue(
-            &p.account_kp, old_account, p.device_id, &p.device_kp.public_key_bytes(), Timestamp::epoch(),
-        );
-        let new_cert = DeviceCertificate::issue(
-            &new_account_kp, new_account, p.device_id, &p.device_kp.public_key_bytes(), Timestamp::epoch(),
-        );
+        let old_cert = DeviceCertificate::issue(&p.account_kp, old_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
+        let new_cert = DeviceCertificate::issue(&new_account_kp, new_account, &p.device_kp.public_key_bytes(), Timestamp::epoch());
         let mk_member = |acct: Uuid| WorkspaceMember {
             id: acct.to_string(),
             actor: ActorIdentity {
@@ -1417,16 +1450,16 @@ mod tests {
         // Signing as the old account → still Valid.
         let as_old = authored(p.device_id, &p.device_kp, old_account, 101);
         assert_eq!(verdict_for(&roster, &as_old), Verdict::Valid);
-        // Signing as a third, uncertified account → Impersonation.
+        // Signing as a third, uncertified account → held until certified.
         let as_other = authored(p.device_id, &p.device_kp, Uuid::new_v4(), 102);
         assert_eq!(
             verdict_for(&roster, &as_other),
-            Verdict::Quarantine(QuarantineReason::Impersonation)
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice)
         );
     }
 
     #[test]
-    fn unknown_and_unsigned_are_unverifiable_not_dropped() {
+    fn unknown_is_unverifiable_not_dropped_and_unsigned_is_refused() {
         let alice = principal();
         let roster = build_roster(&trust_events(&alice, 1));
 
@@ -1438,11 +1471,11 @@ mod tests {
             Verdict::Unverifiable(QuarantineReason::UnknownDevice)
         );
 
-        // Unsigned → held, not rejected.
+        // Unsigned → refused: no device writes one.
         let unsigned = env(101, SessionEvent::SessionTitleChanged { title: "x".into() });
         assert_eq!(
             verdict_for(&roster, &unsigned),
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
+            Verdict::Quarantine(QuarantineReason::Unsigned)
         );
     }
 
@@ -1451,13 +1484,7 @@ mod tests {
         let alice = principal();
         // Forge a cert for alice.device signed by a DIFFERENT (attacker) account key.
         let attacker = SigningKeypair::generate().unwrap();
-        let forged = DeviceCertificate::issue(
-            &attacker,
-            alice.account_id, // claims Alice's account…
-            alice.device_id,
-            &alice.device_kp.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let forged = DeviceCertificate::issue(&attacker, alice.account_id, &alice.device_kp.public_key_bytes(), Timestamp::epoch());
         let events = vec![
             env(1, SessionEvent::AccountKeyRegistered {
                 account_id: alice.account_id,

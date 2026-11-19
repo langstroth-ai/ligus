@@ -102,6 +102,11 @@ impl JoinRequest {
         if r.device_public_key.len() != 32 || r.ka_public.len() != 32 {
             return Err("the join request's keys are malformed".into());
         }
+        // A box's device id is the one its key derives: an admission bound to
+        // the request names the device that key is.
+        if r.device_id != hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &r.device_public_key) {
+            return Err("the join request's device id isn't the one its key derives".into());
+        }
         Ok(r)
     }
 
@@ -193,7 +198,18 @@ mod tests {
     use super::*;
 
     fn request(ka: &hive_core::KeyAgreementKeypair) -> JoinRequest {
-        JoinRequest::new(Uuid::new_v4(), Uuid::new_v4(), &[3; 32], &ka.public_key_bytes(), "build-1\n")
+        let device = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &[3; 32]);
+        JoinRequest::new(Uuid::new_v4(), device, &[3; 32], &ka.public_key_bytes(), "build-1\n")
+    }
+
+    /// A join request naming a device id its key doesn't derive is refused.
+    #[test]
+    fn a_join_request_under_another_device_id_is_refused() {
+        let ka = hive_core::KeyAgreementKeypair::generate().unwrap();
+        let mut r = request(&ka);
+        r.device_id = Uuid::new_v4();
+        let err = JoinRequest::decode(&r.encode()).unwrap_err();
+        assert!(err.contains("derives"), "{err}");
     }
 
     #[test]

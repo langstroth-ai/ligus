@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hive_core::crypto::{DeviceCertificate, DeviceIdentity, HumanAccount, Platform, SigningKeypair};
+use hive_core::crypto::{device_id_for, DeviceCertificate, DeviceIdentity, HumanAccount, Platform, SigAlg, SigningKeypair};
 use hive_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -167,6 +167,11 @@ impl<V: KeyVault> IdentityStore<V> {
         device_name: &str,
     ) -> Result<StoredIdentity, IdentityError> {
         if let Some(existing) = self.load()? {
+            // A device whose id isn't the one its key derives (made before
+            // ids were derived) is never certified anywhere: replace it.
+            if existing.device.id != device_id_for(SigAlg::Ed25519, &existing.device.signing_public_key) {
+                return self.rotate_device();
+            }
             return Ok(existing);
         }
 
@@ -187,17 +192,12 @@ impl<V: KeyVault> IdentityStore<V> {
         };
 
         // This device, certified by the account key.
+        // Its id is the one its key derives (`hive_core::crypto::device_id_for`).
         let device_kp = SigningKeypair::generate()?;
-        let device_id = Uuid::new_v4();
+        let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
         self.vault
             .store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
-        let certificate = DeviceCertificate::issue(
-            &account_kp,
-            account_id,
-            device_id,
-            &device_kp.public_key_bytes(),
-            now,
-        );
+        let certificate = DeviceCertificate::issue(&account_kp, account_id, &device_kp.public_key_bytes(), now);
         let device = DeviceIdentity {
             id: device_id,
             account_id,
@@ -258,16 +258,11 @@ impl<V: KeyVault> IdentityStore<V> {
             .ok_or_else(|| IdentityError::Vault("no identity to rotate".into()))?;
         let account_kp = self.account_keypair(stored.account.id)?;
         let now = Timestamp::now();
+        // A new key is a new device: its id is the one the new key derives.
         let device_kp = SigningKeypair::generate()?;
-        let device_id = Uuid::new_v4();
+        let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
         self.vault.store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
-        let certificate = DeviceCertificate::issue(
-            &account_kp,
-            stored.account.id,
-            device_id,
-            &device_kp.public_key_bytes(),
-            now,
-        );
+        let certificate = DeviceCertificate::issue(&account_kp, stored.account.id, &device_kp.public_key_bytes(), now);
         stored.device = DeviceIdentity {
             id: device_id,
             account_id: stored.account.id,
