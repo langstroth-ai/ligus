@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use hive_core::proposals::ProposalRefinement;
@@ -628,6 +628,11 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/repos/fork", get(super::repos_api::fork_of))
         .route("/v1/repos/clone", post(super::repos_api::clone_repo))
         .route("/v1/repos/clone/{job}", get(super::repos_api::clone_job))
+        .route("/v1/workspace-repos", get(super::workspace_repos_api::list).post(super::workspace_repos_api::add))
+        .route("/v1/workspace-repos/rescan", post(super::workspace_repos_api::rescan))
+        .route("/v1/workspace-repos/{id}", patch(super::workspace_repos_api::rename).delete(super::workspace_repos_api::remove))
+        .route("/v1/workspace-repos/{id}/confirm", post(super::workspace_repos_api::confirm))
+        .route("/v1/chats/{id}/workspace-repo", put(super::workspace_repos_api::set_chat_repo))
         .route("/v1/chats/{id}/repo", get(super::repos_api::get_chat_repo).put(super::repos_api::put_chat_repo))
         .route("/v1/chats/{id}/repo/pull", post(super::repos_api::pull_chat_repo))
         .route("/v1/chats/{id}/pr", post(super::repos_api::open_pr))

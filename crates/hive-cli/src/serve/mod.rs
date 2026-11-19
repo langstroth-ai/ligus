@@ -58,6 +58,7 @@ pub mod repos_api;
 pub mod sets;
 pub mod tunnel;
 pub mod typing_api;
+pub mod workspace_repos_api;
 
 #[cfg(test)]
 mod identity_tests;
@@ -1284,7 +1285,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 /// read everyone else's, every [`HOST_BEAT_EVERY_SECS`](hive_runtime::host_presence::HOST_BEAT_EVERY_SECS).
 /// Replaces the durable heartbeat (a signed host upsert a minute, forever).
 async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    use hive_runtime::host_presence::{fetch_host_beats, publish_host_beat, HOST_BEAT_EVERY_SECS};
+    use hive_runtime::host_presence::{fetch_beats, publish_beat, HOST_BEAT_EVERY_SECS};
     let (Ok(relay), Some(pass)) = (crate::relay_client(&shared.cfg), shared.cfg.key.clone()) else {
         return;
     };
@@ -1292,8 +1293,19 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let room = shared.cfg.room.clone();
     let mut coordinator = WorkspaceLease::default();
     let mut retry_seen = Timestamp::now().inner().unix_timestamp();
+    let mut known_repos: Option<Vec<uuid::Uuid>> = None;
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
+        // When the workspace's repos change (and at start): map the legacy
+        // bindings and look for checkouts in the repos dir (found ones stay
+        // unconfirmed until someone says "use it").
+        let live: Vec<uuid::Uuid> = shared.lock().workspace_roster(shared.ws).map(|r| hive_runtime::repos::live_repos(&r).iter().map(|x| x.id).collect()).unwrap_or_default();
+        if known_repos.as_ref() != Some(&live) {
+            known_repos = Some(live);
+            let sh = shared.clone();
+            let _ = tokio::task::spawn_blocking(move || repos_refresh(&sh)).await;
+        }
+        let coverage = repo_coverage(&shared);
         // A box that can't write (revoked, awaiting approval) isn't serving work.
         let writable = shared.lock().write_block().is_none();
         // The one keyring (B1): beats seal at the authorized head.
@@ -1302,13 +1314,13 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(_) => hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
         };
         if writable {
-            if let Err(e) = publish_host_beat(&relay, &room, &ring, &shared.host_id).await {
+            if let Err(e) = publish_beat(&relay, &room, &ring, &shared.host_id, coverage).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
             coordinator.tick(&shared, &relay, &room, &ring).await;
         }
-        if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
-            shared.presence.merge(beats);
+        if let Ok(beats) = fetch_beats(&relay, &room, &ring).await {
+            shared.presence.merge_beats(beats);
         }
         if shared.tunnel.is_some() {
             revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
@@ -1318,6 +1330,31 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+/// Map legacy bindings and scan the repos dir (and the box's scan roots)
+/// for the workspace's repos. Device-local only: nothing is published.
+pub(crate) fn repos_refresh(shared: &Shared) {
+    let svc = shared.lock();
+    if let Err(e) = crate::repos_cmd::migrate_bindings(&shared.cfg.data_dir, &svc, shared.ws, &shared.opts.label) {
+        eprintln!("repos: migrating bindings failed: {e}");
+    }
+    if let Ok(roster) = svc.workspace_roster(shared.ws) {
+        if let Err(e) = hive_runtime::repos::detect(svc.store(), shared.ws, &roster, &[crate::repos::repos_dir(&shared.cfg.data_dir)]) {
+            eprintln!("repos: scanning failed: {e}");
+        }
+    }
+}
+
+/// This box's coverage of the workspace's repos for its beat (on by
+/// default for a box; `ligus repos coverage off` turns it off).
+pub(crate) fn repo_coverage(shared: &Shared) -> Vec<hive_core::workspace_repo::CoverageEntry> {
+    let svc = shared.lock();
+    if !hive_runtime::repos::coverage_reporting(svc.store(), shared.ws, true) {
+        return Vec::new();
+    }
+    let Ok(roster) = svc.workspace_roster(shared.ws) else { return Vec::new() };
+    hive_runtime::repos::coverage(svc.store(), shared.ws, &hive_runtime::repos::live_repos(&roster), &hive_runtime::repos::cloning())
 }
 
 /// Publish this box's phone-revocation status for the desktops, and take the

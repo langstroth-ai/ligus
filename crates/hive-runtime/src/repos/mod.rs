@@ -201,6 +201,33 @@ pub fn clone_dir_name(repo: &WorkspaceRepo) -> String {
     }
 }
 
+// ── Clones in flight on this host ────────────────────────────────────────
+
+fn cloning_set() -> &'static std::sync::Mutex<HashSet<Uuid>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<HashSet<Uuid>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// The repos this process is cloning now (coverage says `cloning`, and a
+/// turn in a chat on one of them waits, already claimed).
+pub fn cloning() -> HashSet<Uuid> {
+    cloning_set().lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Mark `repo` as being cloned until the guard drops.
+pub fn start_cloning(repo: Uuid) -> CloningGuard {
+    cloning_set().lock().unwrap_or_else(|p| p.into_inner()).insert(repo);
+    CloningGuard(repo)
+}
+
+pub struct CloningGuard(Uuid);
+
+impl Drop for CloningGuard {
+    fn drop(&mut self) {
+        cloning_set().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.0);
+    }
+}
+
 // ── Coverage ─────────────────────────────────────────────────────────────
 
 fn coverage_key(workspace_id: Uuid) -> String {

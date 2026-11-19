@@ -2048,6 +2048,20 @@ impl ChatService {
         proposal_id: Uuid,
         commit: Option<String>,
     ) -> Result<Option<ActionProposal>> {
+        self.mark_proposal_applied_on(session_id, workspace_id, proposal_id, commit, None, None)
+    }
+
+    /// [`ChatService::mark_proposal_applied`], naming the base it was applied
+    /// onto and the tree it made (both 40/64 hex), when known.
+    pub fn mark_proposal_applied_on(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        commit: Option<String>,
+        base_commit: Option<String>,
+        applied_tree_hash: Option<String>,
+    ) -> Result<Option<ActionProposal>> {
         let Some(session) = self.load(session_id)? else {
             return Ok(None);
         };
@@ -2069,8 +2083,8 @@ impl ChatService {
                 at: Timestamp::now(),
                 repo_id,
                 applied_on: Some(self.device_id),
-                base_commit: None,
-                applied_tree_hash: None,
+                base_commit,
+                applied_tree_hash,
                 request_id: None,
             },
         )?;

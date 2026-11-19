@@ -48,6 +48,7 @@ mod mcp_config;
 mod selftest;
 mod reply;
 mod repos;
+mod repos_cmd;
 mod serve;
 mod worker;
 
@@ -1570,7 +1571,12 @@ fn usage() -> ! {
          ligus recovery-key create --out PATH   register a recovery key for this CLI identity (never a box)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
          ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
-         ligus repos                     show the repos dir and bindings\n  \
+         ligus repos [list]              the workspace's repositories, this host's checkouts, the repos dir\n  \
+         ligus repos add <remote|canonical|path> [--name N] [--kind K] [--branch B]   add a workspace repository (Admin)\n  \
+         ligus repos remove|rename <repo> …   remove (Admin) or rename a workspace repository\n  \
+         ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>\n                                       this host's checkout of a repository (device-local)\n  \
+         ligus repos scan | roots [add|remove <path>] | alias <ssh-host> <host> [--remove]\n                                       find checkouts under scan roots; SSH host aliases for identity\n  \
+         ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
@@ -1696,6 +1702,8 @@ fn run() -> Result<()> {
         "--client-id",
         "--expect-tier",
         "--health-listen",
+        "--kind",
+        "--branch",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1948,7 +1956,13 @@ fn run() -> Result<()> {
             flag_val("--chat").as_deref(),
             has("--clear"),
         ),
-        "repos" => repos::cmd_repos(&cfg.data_dir),
+        "repos" => {
+            let mut svc = open_service(&cfg)?;
+            let ws = uuid_of_room(&cfg.room);
+            let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
+            let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
+            repos_cmd::cmd(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
+        }
         "forge" => {
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
             forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"), has("--internal"))

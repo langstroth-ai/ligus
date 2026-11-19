@@ -480,6 +480,7 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
         "vaults": vaults,
         // The checkout this chat works in on this host (`GET /v1/chats/:id/repo`).
         "repo": super::repos_api::details_repo(&s, chat.id),
+        "workspaceRepo": super::workspace_repos_api::chat_repo(&s, chat.id).unwrap_or(serde_json::Value::Null),
     });
     if let Some(c) = channel {
         out["channel"] = channel_dto(&c);

@@ -54,6 +54,25 @@ pub fn clone_local_reference(url: &str, dest: &Path, reference: Option<&Path>) -
     }
 }
 
+/// After a clone by repo id: make `origin`'s URL the repo's identity
+/// (`https://<canonical>.git`), so the checkout matches it by remote. When
+/// the clone came from another URL, a local `insteadOf` keeps git fetching
+/// from there; identity never follows `insteadOf`.
+pub fn set_identity_origin(dest: &Path, repo: &WorkspaceRepo) -> Result<(), String> {
+    if repo.canonical.starts_with("local:") {
+        return Ok(());
+    }
+    let identity = format!("https://{}.git", repo.canonical);
+    let current = super::git::git(dest, &["remote", "get-url", "origin"])?;
+    let aliases = Default::default();
+    if hive_core::workspace_repo::canonical_repo(&current, &repo.forge_kind, &aliases).is_ok_and(|c| c == repo.canonical) {
+        return Ok(());
+    }
+    super::git::git(dest, &["config", &format!("url.{current}.insteadOf"), &identity])?;
+    super::git::git(dest, &["remote", "set-url", "origin", &identity])?;
+    Ok(())
+}
+
 /// After a clone: whether the repo entry's claimed root commit is in it
 /// (review F10: membership, never a recomputation). `None` when the entry
 /// claims none.

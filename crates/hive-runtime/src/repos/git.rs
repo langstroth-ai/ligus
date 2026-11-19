@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use hive_core::workspace_repo::{canonical_repo, is_commit_id, WorkspaceRepo};
 
 /// Run hardened git in `dir`; stdout trimmed on success.
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
