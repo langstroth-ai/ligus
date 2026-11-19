@@ -519,8 +519,11 @@ mod combined {
         out
     }
 
+    /// Config and chat verdicts, both folds (as JSON) and the held events.
+    type Outcome = (BTreeMap<Uuid, Verdict>, BTreeMap<Uuid, Verdict>, serde_json::Value, serde_json::Value, Vec<Uuid>);
+
     /// Everything the folds decide, in an order-free form.
-    fn outcome(cfg: &[SessionEventEnvelope], chat: &[SessionEventEnvelope]) -> (BTreeMap<Uuid, Verdict>, BTreeMap<Uuid, Verdict>, serde_json::Value, serde_json::Value, Vec<Uuid>) {
+    fn outcome(cfg: &[SessionEventEnvelope], chat: &[SessionEventEnvelope]) -> Outcome {
         let (c, t) = ligus_core::events::project_config(cfg, None, None);
         let cv = ligus_core::events::fold_decisions(cfg, None, None, ligus_core::WorkspaceAuthz::Unchecked);
         let hv = ligus_core::events::fold_decisions(chat, None, None, ligus_core::WorkspaceAuthz::Timeline(&t));
