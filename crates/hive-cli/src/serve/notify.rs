@@ -113,7 +113,7 @@ fn base(kind: &str, s: &ChatSession, title: String) -> PushContent {
 /// A message just finished (agent reply) or appeared (anyone else's):
 /// `message.done`, `mention`, or nothing.
 pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Option<(Notice, PushContent)> {
-    if m.is_streaming || m.role == MessageRole::System || m.kind != TranscriptEventKind::Message || me.wrote(m) {
+    if m.is_streaming || m.superseded || m.role == MessageRole::System || m.kind != TranscriptEventKind::Message || me.wrote(m) {
         return None;
     }
     let reply = is_reply(m.role);

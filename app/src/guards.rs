@@ -575,8 +575,35 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
     let mut report = hive_proto::HygieneReportDto { ran_at: crate::rfc3339(hive_core::Timestamp::now()), ..Default::default() };
-    let root = std::path::PathBuf::from(&repo);
-    if repo.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(&root) {
+    // Every checkout this device manages for the workspace (5.7): the bound
+    // folder, and each confirmed checkout of a workspace repo, with the repo
+    // it holds (a proposal is judged only against its own repo's checkout).
+    let mut roots: Vec<(std::path::PathBuf, Option<Uuid>)> = Vec::new();
+    {
+        let svc = state.service.lock().unwrap();
+        for m in svc.store().repo_mappings(ws).unwrap_or_default().into_iter().filter(|m| m.confirmed) {
+            if hive_runtime::git_worktree::is_git_repo(&m.path) && !roots.iter().any(|(p, _)| *p == m.path) {
+                roots.push((m.path, Some(m.repo_id)));
+            }
+        }
+    }
+    let bound = std::path::PathBuf::from(&repo);
+    let bound_canon = hive_runtime::repos::git::canonical(&bound);
+    if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
+        roots.push((bound, None));
+    }
+    // Never a checkout another host on this machine manages (its marker,
+    // review residual 6): its chat worktrees and branches are that host's,
+    // and sweeping them would remove its live trees.
+    let me = state.service.lock().unwrap().device_id();
+    roots.retain(|(p, _)| match hive_runtime::repos::marker::managed_elsewhere(p, me) {
+        Some(label) => {
+            tracing::info!(target: "worktree", "hygiene skips {}: managed by {label}", p.display());
+            false
+        }
+        None => true,
+    });
+    if roots.is_empty() {
         *state.guards.hygiene.lock().unwrap() = report.clone();
         return report;
     }
@@ -584,7 +611,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     // The workspace's chats, their streaming turns and open diff proposals.
     let mut chats = std::collections::HashMap::new();
     let mut live_turns = std::collections::HashSet::new();
-    let mut open_diffs: Vec<(Uuid, Uuid, String, String)> = Vec::new();
+    let mut open_diffs: Vec<(Uuid, Uuid, String, String, Option<Uuid>)> = Vec::new();
     let device = {
         let svc = state.service.lock().unwrap();
         let config_id = hive_core::workspace_config_session_id(ws);
@@ -610,74 +637,87 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
                     && !s.guards.stale_proposals.contains(&p.id)
                 {
                     if let Some(d) = &p.diff {
-                        open_diffs.push((id, p.id, p.title.clone(), d.clone()));
+                        open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
                     }
                 }
             }
         }
         svc.device_id()
     };
-    let entries = hygiene::list_worktrees(&root);
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
-    // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
-    // Hive 1.x `.hive/worktrees` checkout is never swept.
-    let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
-        Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
-        Err(e) => {
-            tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
-            Vec::new()
-        }
-    };
-    for action in plan {
-        if !hygiene::apply(&root, &action) {
-            continue;
-        }
-        match &action {
-            SweepAction::RemoveTurnWorktree { .. } => {
-                report.turn_worktrees_removed += 1;
-                signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+    let legacy_root = roots.iter().find(|(_, r)| r.is_none()).map(|(p, _)| p.clone()).or_else(|| roots.first().map(|(p, _)| p.clone()));
+    for (root, root_repo) in &roots {
+        let root = root.clone();
+        let entries = hygiene::list_worktrees(&root);
+        // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
+        // Hive 1.x `.hive/worktrees` checkout is never swept.
+        let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
+            Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
+            Err(e) => {
+                tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
+                Vec::new()
             }
-            SweepAction::RemoveChatCheckout { chat_slug, .. } => {
-                report.chat_checkouts_removed += 1;
-                signals.push(GuardSignal::WorktreeState {
-                    state: WorktreeState::Removed,
-                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+        };
+        for action in plan {
+            if !hygiene::apply(&root, &action) {
+                continue;
+            }
+            match &action {
+                SweepAction::RemoveTurnWorktree { .. } => {
+                    report.turn_worktrees_removed += 1;
+                    signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+                }
+                SweepAction::RemoveChatCheckout { chat_slug, .. } => {
+                    report.chat_checkouts_removed += 1;
+                    signals.push(GuardSignal::WorktreeState {
+                        state: WorktreeState::Removed,
+                        repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                    });
+                }
+                // A gone or archived chat's reuse pool: a hygienic removal, never
+                // an abandoned turn (parking and reuse record nothing).
+                SweepAction::RemoveParkedWorktree { chat_slug, .. } => {
+                    report.parked_worktrees_removed += 1;
+                    signals.push(GuardSignal::WorktreeState {
+                        state: WorktreeState::Removed,
+                        repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                    });
+                }
+            }
+        }
+        hygiene::prune(&root);
+        // Stale proposals: check each open diff against its chat's branch checkout
+        // (or the repository's HEAD when the chat has none).
+        let remaining = hygiene::list_worktrees(&root);
+        for (sid, pid, title, diff, p_repo) in open_diffs.iter().cloned() {
+            // A repo's proposals against that repo's checkout; one without a
+            // repo against the bound folder.
+            let mine = match p_repo {
+                Some(r) => *root_repo == Some(r),
+                None => legacy_root.as_ref() == Some(&root),
+            };
+            if !mine {
+                continue;
+            }
+            let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
+            let dir = remaining
+                .iter()
+                .find(|e| e.branch.as_deref() == Some(branch.as_str()))
+                .map(|e| e.path.clone())
+                .unwrap_or_else(|| root.clone());
+            if hygiene::patch_applies(&dir, &diff) {
+                continue;
+            }
+            let mut svc = state.service.lock().unwrap();
+            if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
+                signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
+                report.stale_proposals.push(hive_proto::StaleProposalDto {
+                    session_id: sid.to_string(),
+                    proposal_id: pid.to_string(),
+                    title,
                 });
             }
-            // A gone or archived chat's reuse pool: a hygienic removal, never
-            // an abandoned turn (parking and reuse record nothing).
-            SweepAction::RemoveParkedWorktree { chat_slug, .. } => {
-                report.parked_worktrees_removed += 1;
-                signals.push(GuardSignal::WorktreeState {
-                    state: WorktreeState::Removed,
-                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
-                });
-            }
-        }
-    }
-    hygiene::prune(&root);
-    // Stale proposals: check each open diff against its chat's branch checkout
-    // (or the repository's HEAD when the chat has none).
-    let remaining = hygiene::list_worktrees(&root);
-    for (sid, pid, title, diff) in open_diffs {
-        let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
-        let dir = remaining
-            .iter()
-            .find(|e| e.branch.as_deref() == Some(branch.as_str()))
-            .map(|e| e.path.clone())
-            .unwrap_or_else(|| root.clone());
-        if hygiene::patch_applies(&dir, &diff) {
-            continue;
-        }
-        let mut svc = state.service.lock().unwrap();
-        if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
-            signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
-            report.stale_proposals.push(hive_proto::StaleProposalDto {
-                session_id: sid.to_string(),
-                proposal_id: pid.to_string(),
-                title,
-            });
         }
     }
     {
@@ -783,15 +823,16 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy, shell: bool) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
-    filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+    filter_mcp_servers(state, servers.to_vec(), egress)
         .into_iter()
         .filter(|s| s.enabled && s.auth.is_none())
+        .filter(|s| shell || mcp_known_shell_free(state, &s.id))
         .map(|s| {
             let v = match &s.transport {
                 hive_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
@@ -802,29 +843,96 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
         .collect()
 }
 
-/// How the turn's runtime honors the envelope (extra flags, or a refusal).
-pub(crate) fn enforcement_for(
+/// How the turn's runtime honors the envelope (extra flags, or a refusal),
+/// with the turn's own MCP catalog (review F14). `shell`: whether the turn
+/// has the shell; without it, MCP servers that offer one (or that this
+/// device hasn't seen list their tools) stay out.
+pub(crate) fn enforcement_for_servers(
     state: &AppState,
     provider: hive_core::ModelProviderKind,
     envelope: &hive_core::sandbox::SandboxEnvelope,
+    servers: &[hive_runtime::McpServerSpec],
+    shell: bool,
 ) -> hive_runtime::sandbox::Enforcement {
     let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
-        claude_mcp_entries(state, &envelope.egress)
+        claude_mcp_entries(state, servers, &envelope.egress, shell)
     } else {
         Vec::new()
     };
     hive_runtime::sandbox::enforce(provider, envelope, &entries)
 }
 
+// ---------------------------------------------------------------------------
+// MCP servers that offer a shell
+// ---------------------------------------------------------------------------
+
+/// Remember which tools each server listed run shell commands
+/// (`hive_runtime::is_shell_tool`).
+pub(crate) fn record_mcp_tools(state: &AppState, tagged: &[(String, hive_runtime::McpTool)]) {
+    let mut by_server: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (server, tool) in tagged {
+        let e = by_server.entry(server.clone()).or_default();
+        if hive_runtime::is_shell_tool(&tool.name) {
+            e.push(tool.name.clone());
+        }
+    }
+    let mut m = state.mcp_shell_tools.lock().unwrap();
+    for (server, shells) in by_server {
+        m.insert(server, shells);
+    }
+}
+
+/// Whether this device has seen `id` list its tools, none of them a shell.
+/// A turn without the shell gets only such servers (fail closed: one that
+/// never listed is left out).
+pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
+    id == hive_runtime::executor::LIGUS_MCP_ID || state.mcp_shell_tools.lock().unwrap().get(id).is_some_and(|t| t.is_empty())
+}
+
+/// List the tools of the enabled servers this turn may reach that this
+/// device hasn't listed yet (each bounded), so `mcp_known_shell_free` can
+/// judge them.
+pub(crate) async fn probe_mcp_shells(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy) {
+    state.ensure_fresh_mcp_tokens().await;
+    const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
+    // The turn's own catalog (review F14), tokens re-read after the refresh.
+    let mut servers = servers.to_vec();
+    crate::apply_mcp_auth(&mut servers, &state.settings.lock().unwrap());
+    let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, servers, egress)
+        .into_iter()
+        .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
+        .filter(|s| state.mcp_probe_failed.lock().unwrap().get(&s.id).is_none_or(|t| t.elapsed() > RETRY))
+        .collect();
+    for s in unknown {
+        let id = s.id.clone();
+        let registry = hive_runtime::McpRegistry::new(vec![s]);
+        match tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
+            Ok(Ok(tools)) => {
+                let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
+                if tagged.is_empty() {
+                    state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
+                }
+                record_mcp_tools(state, &tagged);
+                state.mcp_probe_failed.lock().unwrap().remove(&id);
+            }
+            _ => {
+                state.mcp_probe_failed.lock().unwrap().insert(id, std::time::Instant::now());
+            }
+        }
+    }
+}
+
 /// The OS-sandbox policy for one turn on this desktop: the envelope, the
 /// author gate's plan, and the endpoints of the MCP servers the envelope
-/// lets this chat reach (their hosts join the egress allow-list).
-pub(crate) fn turn_sandbox_policy(
+/// lets this chat reach (their hosts join the egress allow-list), from the
+/// turn's own MCP catalog (review F14), never the window's.
+pub(crate) fn turn_sandbox_policy_with(
     state: &AppState,
     session: &hive_core::ChatSession,
     envelope: &hive_core::sandbox::SandboxEnvelope,
     gate: &hive_runtime::author_gate::GatePlan,
     isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
 ) -> hive_runtime::executor::TurnPolicy {
     let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
@@ -832,12 +940,39 @@ pub(crate) fn turn_sandbox_policy(
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
-    for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+    for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
         }
         policy.mcp_ids.push(s.id.clone());
     }
+    policy
+}
+
+/// The policy every child of one turn runs under (the CLI, stdio MCP
+/// servers, `run_command`), before its stream starts (the shell probe, the
+/// MCP tool listing, the API tool loop's MCP calls) and during it: the
+/// turn's envelope, gate and own MCP catalog, the shell only when
+/// [`hive_runtime::author_gate::shell_allowed`] said so (and then MCP
+/// servers this device hasn't seen list no shell stay out of the CLI's
+/// set), and the agent's grants. Never the out-of-turn baseline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn turn_child_policy(
+    state: &AppState,
+    session: &hive_core::ChatSession,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    gate: &hive_runtime::author_gate::GatePlan,
+    isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
+    shell_allowed: bool,
+    grants: hive_core::sandbox::PathGrants,
+) -> hive_runtime::executor::TurnPolicy {
+    let mut policy = turn_sandbox_policy_with(state, session, envelope, gate, isolated, servers);
+    policy.shell_allowed = shell_allowed;
+    if !shell_allowed {
+        policy.mcp_ids.retain(|id| mcp_known_shell_free(state, id));
+    }
+    policy.grants = grants;
     policy
 }
 
@@ -1014,6 +1149,165 @@ pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, sessio
         workspace_id,
         format!("A {provider:?} turn was not run: this chat's sandbox has network egress restricted and {provider:?} can't be confined to it. Claude Code, Codex and API models can."),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox: the effective policy and the signed grants (Phase C)
+// ---------------------------------------------------------------------------
+
+/// One agent of the workspace, for the Sandbox section.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SandboxAgentDto {
+    pub id: String,
+    pub name: String,
+    pub runtime: String,
+}
+
+/// Settings, Sandbox: what agent turns may reach on this device and why,
+/// the signed grants in force, and who may change them.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SandboxPolicyDto {
+    /// The effective policy for the chosen agent (or, with none, for every
+    /// runtime the workspace's agents use, plus commands).
+    pub policies: Vec<hive_runtime::executor::EffectivePolicy>,
+    pub grants: hive_core::sandbox::SandboxGrants,
+    pub agents: Vec<SandboxAgentDto>,
+    /// Admin or above: may change the path grants (with a passkey).
+    pub can_edit_paths: bool,
+    /// The Owner: may grant or withdraw an agent's shell (with a passkey).
+    pub can_edit_shell: bool,
+    /// The workspace is the device-local one (its only person is the device
+    /// owner, who always has the shell).
+    pub local: bool,
+    /// Whether this device applies the grants (`policies` show what applies
+    /// here), its default, its own choice, and why.
+    pub applies_here: bool,
+    pub applies_by_default: bool,
+    pub applies_setting: Option<bool>,
+    pub applies_why: String,
+    /// The signed grants changed since this device's user last looked.
+    pub changed: bool,
+}
+
+/// This device's choice for `workspace_id`'s signed grants (`None`: the
+/// default, `hive_runtime::sandbox::grants_here`).
+pub(crate) fn grants_setting(state: &AppState, workspace_id: Uuid) -> Option<bool> {
+    state.settings.lock().unwrap().sandbox_grants_here.get(&workspace_id.to_string()).copied()
+}
+
+/// Apply (or not, or back to the default with `None`) the active
+/// workspace's signed sandbox grants on this device.
+#[tauri::command]
+pub(crate) fn set_sandbox_grants_here(state: State<AppState>, apply: Option<bool>) -> Result<(), String> {
+    let ws = state.active_workspace_id().to_string();
+    let mut s = state.settings.lock().unwrap();
+    match apply {
+        Some(v) => s.sandbox_grants_here.insert(ws, v),
+        None => s.sandbox_grants_here.remove(&ws),
+    };
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
+}
+
+/// The user has seen the active workspace's signed grants as they are now
+/// (the change notice goes away until they change again).
+#[tauri::command]
+pub(crate) fn ack_sandbox_grants(state: State<AppState>) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let fp = hive_runtime::sandbox::grants_fingerprint(&state.service.lock().unwrap().sandbox_grants(ws));
+    let mut s = state.settings.lock().unwrap();
+    s.sandbox_grants_seen.insert(ws.to_string(), fp);
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
+}
+
+/// The effective sandbox policy and the signed grants for the active
+/// workspace; `agent_id` narrows it to one agent (its runtime, its grants).
+#[tauri::command]
+pub(crate) fn get_sandbox_policy(state: State<AppState>, agent_id: Option<String>) -> Result<SandboxPolicyDto, String> {
+    let ws = state.active_workspace_id();
+    let setting = grants_setting(&state, ws);
+    let (grants, here, agents_cfg, my_role, local) = {
+        let svc = state.service.lock().unwrap();
+        let me = svc.author().id.clone();
+        let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
+        let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
+        let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
+        (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1, agents, my_role, svc.is_local_workspace(ws))
+    };
+    let fp = hive_runtime::sandbox::grants_fingerprint(&grants);
+    let seen = state.settings.lock().unwrap().sandbox_grants_seen.get(&ws.to_string()).cloned().unwrap_or_default();
+    // The policies show what applies on this device.
+    let applied = if here.apply { grants.clone() } else { hive_core::sandbox::SandboxGrants::default() };
+    let agents: Vec<SandboxAgentDto> = agents_cfg
+        .iter()
+        .map(|a| SandboxAgentDto { id: a.id.to_string(), name: a.name.clone(), runtime: format!("{:?}", state.resolve_runtime(&a.runtime_id).provider) })
+        .collect();
+    let chosen = agent_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let mut policies = Vec::new();
+    match chosen.and_then(|id| agents_cfg.iter().find(|a| a.id == id)) {
+        Some(a) => {
+            let kind = state.resolve_runtime(&a.runtime_id).provider;
+            policies.push(hive_runtime::executor::effective_policy(Some(kind), &applied.paths_for(Some(a.id)), applied.shell_granted(a.id)));
+        }
+        None => {
+            let mut kinds: Vec<hive_core::ModelProviderKind> = agents_cfg.iter().map(|a| state.resolve_runtime(&a.runtime_id).provider).collect();
+            kinds.sort_by_key(|k| format!("{k:?}"));
+            kinds.dedup();
+            for k in kinds {
+                policies.push(hive_runtime::executor::effective_policy(Some(k), &applied.paths_for(None), false));
+            }
+            policies.push(hive_runtime::executor::effective_policy(None, &applied.paths_for(None), false));
+        }
+    }
+    Ok(SandboxPolicyDto {
+        policies,
+        grants,
+        agents,
+        can_edit_paths: my_role.rank() >= hive_core::WorkspaceRole::Admin.rank(),
+        can_edit_shell: my_role == hive_core::WorkspaceRole::Owner,
+        local,
+        applies_here: here.apply,
+        applies_by_default: here.default,
+        applies_setting: here.setting,
+        applies_why: here.why,
+        changed: fp != seen,
+    })
+}
+
+/// Replace the active workspace's sandbox grants (signed on the config log;
+/// the passkey sheet confirms it). Admin + presence; changing an agent's
+/// shell grant is the Owner's.
+#[tauri::command(async)]
+pub(crate) fn set_sandbox_grants(app: AppHandle, state: State<AppState>, grants: hive_core::sandbox::SandboxGrants) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let clean = |v: Vec<String>| -> Vec<String> {
+        let mut v: Vec<String> = v.into_iter().map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let mut g = hive_core::sandbox::SandboxGrants::default();
+    g.workspace.read_only = clean(grants.workspace.read_only);
+    g.workspace.read_write = clean(grants.workspace.read_write);
+    for (id, a) in grants.agents {
+        let a = hive_core::sandbox::AgentGrant { read_only: clean(a.read_only), read_write: clean(a.read_write), shell: a.shell };
+        if a != hive_core::sandbox::AgentGrant::default() {
+            g.agents.insert(id, a);
+        }
+    }
+    let fp = hive_runtime::sandbox::grants_fingerprint(&g);
+    state.service.lock().unwrap().set_sandbox_grants(ws, g).map_err(map_err)?;
+    // Your own change needs no notice.
+    {
+        let mut s = state.settings.lock().unwrap();
+        s.sandbox_grants_seen.insert(ws.to_string(), fp);
+        crate::save_settings(&state.data_dir, &s);
+    }
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1629,6 +1923,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         }
         for m in &s.messages {
             if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+                && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
                 *by_agent.entry(m.author.clone()).or_default() += 1;
@@ -1674,6 +1969,34 @@ mod tests {
             },
         );
         t.into_values().next().unwrap()
+    }
+
+    /// Every child a desktop turn spawns runs under the turn's policy: the
+    /// shell probe, the MCP tool listing and the API tool loop (whose MCP
+    /// calls spawn their servers) before the stream, and the stream itself
+    /// (the CLI, stdio MCP servers, `run_command`). Outside a turn scope a
+    /// stdio MCP server would fall back to the baseline, not this turn's
+    /// envelope, shell and grants.
+    #[test]
+    fn every_spawn_in_a_desktop_turn_is_in_the_turns_policy() {
+        let src = include_str!("lib.rs");
+        let start = src.find("async fn run_prepared_turn_inner(").expect("run_prepared_turn_inner");
+        let end = start + src[start..].find("\n}\n").expect("its end");
+        let body = &src[start..end];
+        let lines: Vec<&str> = body.lines().collect();
+        let mut seen = 0;
+        for call in ["probe_mcp_shells(", "mcp_tool_set(", "try_tool_loop(", "stream_with_tools("] {
+            for (i, line) in lines.iter().enumerate().filter(|(_, l)| l.contains(call)) {
+                let window = lines[i.saturating_sub(2)..=i].join("\n");
+                assert!(window.contains("executor::with_turn("), "{call} outside a turn scope: {line}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 4, "every spawning call was found ({seen})");
+        // Both policies come from the one builder, so the shell gate and the
+        // grants are applied to each.
+        assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
+        assert!(!body.contains("turn_sandbox_policy_with("), "a policy built without the shell gate");
     }
 
     #[test]

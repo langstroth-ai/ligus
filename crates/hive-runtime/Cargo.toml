@@ -37,6 +37,9 @@ aho-corasick = "1"
 # Egress proxy allow-list parsing (already in the tree via hive-core).
 url = "2"
 walkdir = "2"
+# Attachment archive-bomb checks: inflate a gzip stream into a counter,
+# bounded (issue #118; already in the tree via reqwest/zip).
+flate2 = "1"
 # Zeroized secret buffers (B2; already in the tree).
 zeroize = "1"
 # Identity links (IDENTITY-AND-FORGES §2.5): SSHSIG verification for
@@ -66,7 +69,7 @@ libc = "0.2"
 # Whether a turn dir's owner process is still running (`executor::pid_alive`).
 # The version Tauri and the app already pull, so no new crate.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [features]
 # P2P is ON by default. The Windows *cross-compile* (cargo-xwin) is the one

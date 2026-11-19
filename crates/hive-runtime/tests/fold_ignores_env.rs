@@ -64,6 +64,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_MODEL_PRICES\"", "LIGUS_MODEL_PRICES", "token prices for a turn's spend budget (device-local host policy)"),
     ("name", "LIGUS_AGENT_MAX_LINE_BYTES", "cap on one line of an agent's output"),
     ("name", "LIGUS_AGENT_MAX_OUTPUT_BYTES", "cap on an agent turn's output"),
+    ("GRANTS_ENV", "LIGUS_SANDBOX_GRANTS", "whether this host applies the workspace's signed sandbox grants (device-local)"),
 ];
 
 fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

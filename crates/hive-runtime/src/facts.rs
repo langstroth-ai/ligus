@@ -124,6 +124,10 @@ pub const KIND_AGENT: &str = "agent";
 pub const KIND_HOST: &str = "host";
 pub const KIND_LEASE: &str = "lease";
 pub const KIND_GUARD_SIGNAL: &str = "guardSignal";
+/// Workspace memory, as counts only (config log).
+pub const KIND_MEMORY: &str = "memory";
+/// A chat's live task state, as counts only.
+pub const KIND_TASK_STATE: &str = "taskState";
 /// The last line of an export: the cursor to pass as the next `--since`.
 pub const KIND_CURSOR: &str = "cursor";
 
@@ -284,7 +288,7 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
         }
     } else {
         let replies: Vec<&hive_core::ChatMessage> =
-            s.messages.iter().rev().filter(|m| is_agent_role(m.role)).take(MAX_REPLIES_PER_CHAT).collect();
+            s.messages.iter().rev().filter(|m| is_agent_role(m.role) && !m.superseded).take(MAX_REPLIES_PER_CHAT).collect();
         for m in replies.into_iter().rev() {
             let mut a = Attrs::new(&ws);
             a.s("ligus.chat.id", &chat).id("ligus.turn.id", Some(m.id)).s("ligus.agent.key", &agent_key(m.responder_id));
@@ -393,6 +397,29 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
         a.v("ligus.lease.claimed_at_ms", ts(&c.claimed_at)).v("ligus.lease.released", json!(l.released));
         a.v("ligus.lease.fenced_claims", json!(l.fenced.len()));
         push(KIND_LEASE, a);
+    }
+
+    // Memory and task state: counts only, never a title, body, tag, note,
+    // question, result or id (design section 9).
+    let m = &s.flow.memory;
+    if config && !m.is_empty() {
+        let mut a = Attrs::new(&ws);
+        a.v("ligus.memory.entries", json!(m.live_count()));
+        a.v("ligus.memory.tombstones", json!(m.entries.len() - m.live_count()));
+        a.v("ligus.memory.conflicted_entries", json!(m.live().filter(|e| !e.conflicts.is_empty()).count()));
+        a.v("ligus.memory.open_proposals", json!(m.open_proposals().count()));
+        a.v("ligus.memory.decided_proposals", json!(m.proposals.len() - m.open_proposals().count()));
+        push(KIND_MEMORY, a);
+    }
+    if !config && !s.flow.tasks.is_empty() {
+        let t = &s.flow.tasks;
+        let mut a = Attrs::new(&ws);
+        a.s("ligus.chat.id", &chat);
+        a.v("ligus.task_state.slots", json!(t.len()));
+        a.v("ligus.task_state.active", json!(t.iter().filter(|x| x.active(at_ms)).count()));
+        a.v("ligus.task_state.finished", json!(t.iter().filter(|x| x.update.status.is_final()).count()));
+        a.v("ligus.task_state.updates", json!(t.iter().map(|x| x.updates as u64).sum::<u64>()));
+        push(KIND_TASK_STATE, a);
     }
     out
 }
@@ -734,6 +761,27 @@ mod tests {
             hive_core::lease::lease_key(lease.scope, &lease.scope_id),
             hive_core::lease::LeaseState { current: lease, released: false, handover_to: None, fenced: vec![] },
         );
+        // Memory and task state whose every text field is content.
+        use hive_core::memory::*;
+        let author = MemoryAuthor { id: text(), name: text(), kind: hive_core::ActorKind::Human };
+        let rev = MemoryRevision { rev: Uuid::from_u128(70), title: text(), body: text(), tags: vec![text()], author: author.clone(), at_ms: 1, ..Default::default() };
+        let entry = MemoryEntry { id: Uuid::from_u128(71), current: rev.clone(), created_by: author.clone(), conflicts: vec![rev], ..Default::default() };
+        s.flow.memory.entries.insert(entry.id, entry);
+        let op = MemoryOp::Create { entry_id: Uuid::from_u128(72), title: text(), body: text(), tags: vec![text()] };
+        let proposal = MemoryProposal { proposal_id: Uuid::from_u128(73), op, proposer: text(), source: Default::default(), rationale: text() };
+        s.flow.memory.proposals.insert(Uuid::from_u128(73), ProposalState { proposal, by: author.clone(), signer: None, at_ms: 1, decision: None });
+        let update = TaskStateUpdate {
+            task_id: Uuid::from_u128(74),
+            agent_key: text(),
+            turn_id: Uuid::from_u128(21),
+            status: TaskStatus::Working,
+            summary: text(),
+            progress: Some(10),
+            open_questions: vec![text()],
+            partial_results: vec![text()],
+            ttl_ms: None,
+        };
+        s.flow.tasks = vec![TaskSlot { update, writer: Uuid::from_u128(41), by: author, at_ms: 1_760_000_000_000, rev: Uuid::from_u128(75), updates: 3 }];
         s
     }
 
@@ -813,7 +861,7 @@ mod tests {
         let kinds: Vec<String> = chat.iter().chain(&config).map(|l| serde_json::from_str::<Value>(l).unwrap()["kind"].as_str().unwrap().to_string()).collect();
         assert_eq!(
             kinds,
-            ["reply", "proposal", "workflowRun", "workflowStage", "workflowStage", "lease", "agent", "host", "proposal", "workflowRun", "workflowStage", "workflowStage", "lease"]
+            ["reply", "proposal", "workflowRun", "workflowStage", "workflowStage", "lease", "taskState", "agent", "host", "proposal", "workflowRun", "workflowStage", "workflowStage", "lease", "memory"]
         );
         let golden = |l: &str| l.replace("WS", "39d3159fe171bad3").replace("DEV41", "e474dffb1830df11").replace("WORKER", "13029f9e83d15b3d");
         let tail = r#","schema":"ligus.facts.v1","seq":9,"timeUnixMs":1760000100000}"#;
@@ -826,6 +874,11 @@ mod tests {
             (&chat[5], r#"{"attributes":{"ligus.lease.claimed_at_ms":1760000000000,"ligus.lease.epoch":2,"ligus.lease.fenced_claims":0,"ligus.lease.holder_hash":"DEV41","ligus.lease.lease_ms":30000,"ligus.lease.reason":"initial","ligus.lease.released":false,"ligus.lease.scope":"workflowRun","ligus.lease.scope_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"lease"#),
             (&config[0], r#"{"attributes":{"ligus.agent.created_at_ms":1760000000000,"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.host.id_hash":"WORKER","ligus.runtime.id":"x","ligus.workspace.id_hash":"WS"},"kind":"agent"#),
             (&config[1], r#"{"attributes":{"ligus.host.id_hash":"WORKER","ligus.host.kind":"worker","ligus.host.last_seen_ms":1760000000000,"ligus.workspace.id_hash":"WS"},"kind":"host"#),
+        ];
+        let expect = [
+            expect[0], expect[1], expect[2], expect[3], expect[4], expect[5], expect[6], expect[7],
+            (&chat[6], r#"{"attributes":{"ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.task_state.active":1,"ligus.task_state.finished":0,"ligus.task_state.slots":1,"ligus.task_state.updates":3,"ligus.workspace.id_hash":"WS"},"kind":"taskState"#),
+            (&config[7], r#"{"attributes":{"ligus.memory.conflicted_entries":1,"ligus.memory.decided_proposals":0,"ligus.memory.entries":1,"ligus.memory.open_proposals":1,"ligus.memory.tombstones":0,"ligus.workspace.id_hash":"WS"},"kind":"memory"#),
         ];
         for (got, want) in expect {
             assert_eq!(got, &format!("{}\"{}", golden(want), tail));

@@ -200,6 +200,144 @@ pub fn gate_turn(runtime: ModelProviderKind, args: &mut Vec<String>, author_role
     plan
 }
 
+// ---------------------------------------------------------------------------
+// The owner-only shell (Phase C)
+// ---------------------------------------------------------------------------
+
+/// Whether a turn may use a shell (`run_command`, a CLI's Bash or shell
+/// tool, an ACP `execute` request). The shell is the Owner's: on when every
+/// person behind the turn is the workspace Owner (`shell_role`, resolved by
+/// `ChatService::trigger_shell_role`: the device owner in the local
+/// workspace), or when an Owner granted it to the turn's agent through the
+/// signed sandbox grants. Off for agents acting for anyone else, and when
+/// the person behind the turn can't be resolved (fail closed).
+pub fn shell_allowed(shell_role: Option<WorkspaceRole>, granted: bool) -> bool {
+    granted || shell_role == Some(WorkspaceRole::Owner)
+}
+
+/// Why a turn has no shell, for the system note.
+pub const NO_SHELL: &str = "the shell is the workspace Owner's: this turn was started by another member, and no Owner granted this agent the shell";
+
+/// A CLI runtime's args without its shell: the tier is capped at accepting
+/// edits, and the CLI's shell tool is denied by flag where it has one
+/// (Claude Code's Bash is taken off its tool list by `claude_code::confine`).
+/// `Err` when the runtime always runs shell commands and has no way to turn
+/// them off (Codex, aider, hermes).
+pub fn shell_free_args(runtime: ModelProviderKind, args: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::with_capacity(args.len() + 2);
+    match runtime {
+        ModelProviderKind::ClaudeCode => {
+            // runCommands (`--allowedTools Bash`) and bypassPermissions both
+            // become acceptEdits (if the tier was above the read-only one).
+            let tiered = read_only_args(runtime, args) != args;
+            let mut skip = false;
+            for (i, a) in args.iter().enumerate() {
+                if skip {
+                    skip = false;
+                    continue;
+                }
+                if a == "--permission-mode" || a == "--allowedTools" {
+                    let v = args.get(i + 1).map(String::as_str).unwrap_or("");
+                    if a == "--allowedTools" {
+                        let keep: Vec<&str> = v.split(',').map(str::trim).filter(|t| !t.is_empty() && !is_claude_shell_tool(t)).collect();
+                        if !keep.is_empty() {
+                            out.push(a.clone());
+                            out.push(keep.join(","));
+                        }
+                    }
+                    skip = true;
+                    continue;
+                }
+                if a.starts_with("--permission-mode=") || a == "--dangerously-skip-permissions" {
+                    continue;
+                }
+                if let Some(v) = a.strip_prefix("--allowedTools=") {
+                    let keep: Vec<&str> = v.split(',').map(str::trim).filter(|t| !t.is_empty() && !is_claude_shell_tool(t)).collect();
+                    if !keep.is_empty() {
+                        out.push(format!("--allowedTools={}", keep.join(",")));
+                    }
+                    continue;
+                }
+                out.push(a.clone());
+            }
+            if tiered {
+                out.splice(0..0, ["--permission-mode".to_string(), "acceptEdits".to_string()]);
+            }
+            // `claude_code::confine` takes Bash off the tool list and denies
+            // it (from the turn's `shell_allowed`); an ACP session's
+            // `execute` requests are denied (`acp::judge_permission`).
+        }
+        ModelProviderKind::Copilot => {
+            let tiered = read_only_args(runtime, args) != args;
+            for a in args {
+                let shellish = a == "--allow-tool=shell" || a == "--allow-all-tools" || a == "--allow-all" || a.starts_with("--allow-tool=shell");
+                if !shellish {
+                    out.push(a.clone());
+                }
+            }
+            if tiered && !out.iter().any(|a| a == "--allow-tool=write") {
+                out.push("--allow-tool=read".into());
+                out.push("--allow-tool=write".into());
+            }
+            // Deny rules beat allow rules.
+            out.push("--deny-tool=shell".into());
+        }
+        ModelProviderKind::Antigravity => {
+            // `--mode auto` (runCommands) and the bypass become accept-edits.
+            let tiered = read_only_args(runtime, args) != args;
+            let mut skip = false;
+            for a in args {
+                if skip {
+                    skip = false;
+                    continue;
+                }
+                if a == "--mode" {
+                    skip = true;
+                    continue;
+                }
+                if a.starts_with("--mode=") || a == "--dangerously-skip-permissions" {
+                    continue;
+                }
+                out.push(a.clone());
+            }
+            if tiered {
+                out.splice(0..0, ["--mode".to_string(), "accept-edits".to_string()]);
+            }
+        }
+        ModelProviderKind::Pi => {
+            out.extend(args.iter().cloned());
+            out.push("--exclude-tools".into());
+            out.push("bash".into());
+        }
+        ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Hermes => {
+            return Err(format!(
+                "{runtime:?} runs shell commands with no way to turn them off, and {NO_SHELL}. An Owner can grant this agent the shell \
+                 in Settings, Sandbox (signed, with a passkey)"
+            ));
+        }
+        // HTTP model runtimes: Ligus's own `run_command` is withheld by the
+        // host instead.
+        _ => out.extend(args.iter().cloned()),
+    }
+    Ok(out)
+}
+
+/// Claude Code tool names that run shell commands.
+fn is_claude_shell_tool(t: &str) -> bool {
+    let name = t.split('(').next().unwrap_or(t).trim();
+    matches!(name, "Bash" | "BashOutput" | "KillShell" | "KillBash")
+}
+
+/// Apply the shell decision to a runtime's args (after [`gate_turn`]).
+/// `Err` carries the refusal for a runtime that can't run without a shell.
+pub fn gate_shell(runtime: ModelProviderKind, args: &mut Vec<String>, allowed: bool) -> Result<(), String> {
+    if allowed {
+        return Ok(());
+    }
+    *args = shell_free_args(runtime, args)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +409,50 @@ mod tests {
         let mut args = v(&["--model", "opus"]);
         assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Contributor)), GatePlan::Full);
         assert_eq!(gate_turn(ModelProviderKind::ClaudeCode, &mut args, Some(Viewer)), GatePlan::ReadOnly);
+    }
+
+    #[test]
+    fn the_shell_is_the_owners_unless_granted() {
+        assert!(shell_allowed(Some(Owner), false));
+        for r in [None, Some(Viewer), Some(Contributor), Some(Admin)] {
+            assert!(!shell_allowed(r, false), "{r:?}");
+            assert!(shell_allowed(r, true), "{r:?} with a grant");
+        }
+    }
+
+    #[test]
+    fn shell_free_args_cap_every_cli_at_edits() {
+        let a = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let claude = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--permission-mode", "acceptEdits", "--allowedTools", "Bash", "--model", "opus"])).unwrap();
+        assert_eq!(claude, a(&["--permission-mode", "acceptEdits", "--model", "opus"]));
+        assert_eq!(tier_of(ModelProviderKind::ClaudeCode, &claude), "acceptEdits");
+        let bypass = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--permission-mode", "bypassPermissions"])).unwrap();
+        assert_eq!(tier_of(ModelProviderKind::ClaudeCode, &bypass), "acceptEdits");
+        let skip = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--dangerously-skip-permissions", "--allowedTools=Bash(git:*),Edit"])).unwrap();
+        assert!(!skip.iter().any(|x| x.contains("Bash(") || x == "--dangerously-skip-permissions"), "{skip:?}");
+        assert!(skip.contains(&"--allowedTools=Edit".to_string()), "{skip:?}");
+        // A read-only claude stays read-only (no tier added), shell still denied.
+        let ro = shell_free_args(ModelProviderKind::ClaudeCode, &a(&["--model", "opus"])).unwrap();
+        assert_eq!(ro, a(&["--model", "opus"]));
+        let copilot = shell_free_args(ModelProviderKind::Copilot, &a(&["--allow-tool=read", "--allow-tool=write", "--allow-tool=shell"])).unwrap();
+        assert!(copilot.contains(&"--deny-tool=shell".to_string()) && !copilot.contains(&"--allow-tool=shell".to_string()), "{copilot:?}");
+        let all = shell_free_args(ModelProviderKind::Copilot, &a(&["--allow-all-tools"])).unwrap();
+        assert!(all.contains(&"--allow-tool=write".to_string()) && !all.contains(&"--allow-all-tools".to_string()), "{all:?}");
+        let agy = shell_free_args(ModelProviderKind::Antigravity, &a(&["--mode", "auto", "--model", "x"])).unwrap();
+        assert_eq!(agy, a(&["--mode", "accept-edits", "--model", "x"]));
+        let pi = shell_free_args(ModelProviderKind::Pi, &a(&["-p"])).unwrap();
+        assert_eq!(pi, a(&["-p", "--exclude-tools", "bash"]));
+        for k in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Hermes] {
+            assert!(shell_free_args(k, &[]).is_err(), "{k:?}");
+        }
+        // HTTP runtimes: unchanged (the host withholds run_command).
+        assert_eq!(shell_free_args(ModelProviderKind::Ollama, &a(&["x"])).unwrap(), a(&["x"]));
+        let mut args = a(&["--allowedTools", "Bash"]);
+        gate_shell(ModelProviderKind::ClaudeCode, &mut args, true).unwrap();
+        assert_eq!(args, a(&["--allowedTools", "Bash"]), "an allowed shell leaves the args alone");
+    }
+
+    fn tier_of(k: ModelProviderKind, args: &[String]) -> &'static str {
+        crate::provider::acp::tier_from_args(k, args)
     }
 }

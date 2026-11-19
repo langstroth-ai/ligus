@@ -86,6 +86,91 @@ traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
 
+### Workspace repositories {#repositories}
+
+[Workspace repositories](../../ligus/features/repositories.md) are signed
+config events; checkouts and their paths never leave a device.
+
+- **A malicious Admin, or a compromised one**, can add a look-alike
+  repository (`github.com/zazu1am/wefit`). Adding and removing need the
+  Admin's passkey presence; Settings shows the full canonical name and flags a
+  repository whose name reads the same as another's once common ASCII
+  confusables are folded (`1`/`l`, `rn`/`m`, `0`/`o`, dashes, case), or whose
+  claimed root commit equals another's. A repository entry
+  makes no device fetch anything: a clone is a person's act on one host, from
+  that host's own code-host connection, with the URL rebuilt as `https://`
+  from the canonical (never a string from the event) and the address checked
+  again and pinned right before git runs; git follows no redirect, so the
+  server at the pinned address can't send the clone to another host. An entry can't create a connection
+  or mark one internal.
+- **A member or an agent** can't add, remove or rename a repository, and an
+  agent (or a runtime effect) can't set a chat's repository or pin its base.
+  A proposal's repository comes from the chat when it is filed and never
+  changes; its base commit is in the vote, so re-basing it clears the votes.
+- **A host's coverage** rides its sealed presence beat, and the host signs
+  the report with its own device key. A reader uses a report only when the
+  signature verifies against that device as the workspace roster has it
+  (certified, not revoked, not a phone, acting for a current member), so a
+  member who holds the workspace key can't report another host's coverage:
+  a beat it seals for that host keeps its liveness and loses the coverage.
+  Coverage stays advisory: the host that runs a turn checks its own
+  confirmed checkout (by remote, without `insteadOf` or includes) before
+  every turn and refuses otherwise.
+- **Driving the box's repositories from a phone** (clone by name or by id,
+  rename, picking a chat's repository, rescan, confirming a found checkout)
+  spends the box's own code-host access, so only the box owner can: a phone
+  certified to the account of the Admin who admitted the box, over its own
+  pairing, or the `serve.token` bearer when the box listens on loopback (on
+  a network listener the bearer is refused: every paired phone can fetch
+  it). Anyone else gets `owner_required`. A request carried on the log never
+  starts a clone.
+- **A hostile repository** found by a scan is never used until a person
+  confirms it on that device; its hooks, `core.fsmonitor`, submodules and
+  file-protocol URLs stay off (every git call runs with those overridden),
+  and its runtimes and MCP servers stay inert until trusted. A marker it ships
+  in its work tree means nothing: the managing-host marker lives in the git
+  directory.
+- **Applying** builds the commit in a scratch index or worktree and moves the
+  chat branch only by compare-and-swap, so a conflict or a moved branch
+  applies nothing.
+- **Ledger replay** reads `Ligus-Proposal` and `Ligus-Revert` only from a
+  commit's trailer block (never its subject, which carries the proposal's
+  agent-written title) and only on commits since the chat's pinned base. A
+  host whose chat branch wasn't cut from the pinned base refuses the chat's
+  turns instead of replaying onto a different base. An applied proposal's
+  content can't change afterwards (a re-upsert that would is refused), so a
+  replay only ever applies the approved bytes. A host fulfilling a person's
+  "Apply on" request uses the same checkout check as a turn.
+- **A chat's pinned base** can't be moved by any member: the first pin wins
+  (switching the chat's repository away and back keeps it), and moving it
+  takes an explicit re-pin by an Admin or the chat's creator, from their own
+  device, with presence under rules v2, naming the pin it replaces. A host
+  follows a re-pin only by rebuilding the chat branch from the ledger, and
+  refuses rather than drop a commit that isn't an applied proposal.
+- **One managing host per checkout** also binds work that doesn't claim one:
+  hygiene never sweeps, and a chat without a repository never runs or
+  applies in, a checkout another host on the machine manages.
+- **Desktop actions on repository text.** "Ask the agent to rebase" quotes
+  git's conflict output as data in a fence it can't close and keeps the
+  agent's title on one line, so a patch's file names can't pose as your
+  message. "Open in editor" hands the OS opener one absolute path to a real
+  folder inside the checkout (never a link a repository planted, never a
+  macOS package it would launch; on Windows one quoted argument, so
+  `explorer` can't read a comma as a switch). "Clone into…" never follows a
+  redirect and names the folder from `[a-z0-9-]` only.
+- **A remote URL** with `#`, `?` or a backslash has no identity: git connects
+  to the host before them, so `https://evil.example#@github.com/o/n` never
+  reads as github.com's repository.
+- **Limits:** coverage is self-reported: a host can sign "present" and
+  then refuse its turns. Liveness on the beat isn't signed, so a member can
+  make a dead host look online for a while; the dispatcher still hands a
+  turn whose holder hasn't answered over after two minutes. A replayed old
+  signed report counts on a reader that restarted until the host's next
+  beat. A person who
+  writes a commit with a real `Ligus-Proposal` trailer in a chat's worktree
+  makes that host's replay skip that proposal there. The repository list is
+  visible to every member, Viewers included.
+
 ### A compromised serve or worker box {#compromised-box}
 
 A `ligus serve` or `ligus worker` box is its own **service member**, never a
@@ -228,6 +313,83 @@ permissions on an untrusted repository. Runtimes Ligus can't confine from
 outside (aider, pi, Hermes, Antigravity, Copilot) are refused whenever
 egress is restricted, but run with their own permissions otherwise.
 
+### Shared files {#shared-files}
+
+Shared files are one of the easiest ways for an intruder, or a compromised
+member device, to spread malware to a whole workspace. Files are end-to-end
+encrypted, so the relay can't scan them: every content check runs on
+members' devices ([Sharing files](../../ligus/features/attachments.md)).
+
+| Threat | Defence |
+|---|---|
+| A member shares a program, script, macro document, disguised type or archive bomb | Sharing is off until an Admin sets the attachment policy (Admin and passkey presence; the recommended policy blocks programs, installers, disk images and scripts). Every device detects the type from the content, not the name, and refuses a blocked type on receipt too. Nothing opens or previews automatically; risky types need a second confirmation naming the sender; saved files carry the OS quarantine marking (Gatekeeper, SmartScreen). Archives are inspected without extracting anything, and a likely bomb isn't saved. An optional local scanner can refuse the save. |
+| A known-bad file keeps circulating | An Admin blocks its SHA-256 (no presence needed: it only narrows). Every device refuses to share, fetch or save it, including copies shared before the block. |
+| A stolen or revoked device, or a removed member, keeps posting files | A share is a signed chat event judged by the workspace fold at its author's position: a revoked device's later events never fold, and a removed member's are judged as of the removal (not a member). Removing a member can also delete everything they shared. |
+| An agent shares a file, or is tricked into it | Agents never sign a share. With the policy's agent switch on, an agent's file is filed as a proposal; it is shared only after a person approves it, by the host that produced it, and every device checks the shared file is the approved one (same hash, size, name and type). |
+| The relay swaps, truncates, replays or withholds a file | The signed reference binds the file's SHA-256 and size; a download that doesn't open to exactly those bytes is refused and nothing is kept. Withholding can't be prevented: the card says the file isn't available. |
+| Filename tricks (right-to-left override, double extensions, traversal, reserved names) | Names are cleaned when shared and checked by the fold: one path component, no control, bidirectional or invisible characters, no leading dots, Windows device names prefixed, at most 200 bytes. A double extension (`report.pdf.exe`) is flagged. Saving never overwrites a file or follows a symlink and never sets an executable bit. |
+| A preview runs code | Previews exist only for PNG, JPEG, GIF, WebP, BMP and plain text, rendered in an empty-sandbox frame whose policy blocks every load. SVG, HTML and PDF are never previewed. |
+| A shared file carries a prompt injection | Agents get shared files only as delimited untrusted data (text content up to 64 KB, otherwise only a description), never as instructions and never as a path they could run. An agent can't offer a file outside its worktree, through a symlink or through a hard link. |
+| A member uses the relay as free storage or a distribution point | The relay authenticates uploads, mints random non-enumerable ids, refuses past per-file, per-workspace, per-member, per-tenant and relay-wide quotas and an upload rate, and expires files (30 days by default). See [File attachments on the relay](../networking/self-host.md#file-attachments). |
+| A path in someone else's message opens something on your device | A device-local `[Attached: <path>]` marker becomes a clickable chip only in your own messages; in anyone else's it is text. |
+
+Residual risks:
+
+- **Metadata.** The relay sees each file's size, when it was uploaded and
+  fetched, and by which token or address.
+- **Policy before content.** The fold can only judge what a share declares
+  (its name, size and hash); the content checks run on each receiving device.
+  A member on a modified client can upload any bytes; receivers still refuse
+  them by content.
+- **Relay deletion is best effort.** A deleted or expired file stops being
+  offered on every device once the signed deletion folds, but a relay that
+  ignores deletes keeps its ciphertext (which it can't read). A relay that
+  binds each blob to the token subject that uploaded it deletes it only for
+  that subject or a relay Admin; an upload with no token identity (an open
+  relay tagging by address) stays deletable by anyone with write access who
+  knows its id. When the relay refuses an Admin's delete of someone else's
+  file, the file is still hidden everywhere by the signed deletion and the
+  relay expires it at the end of its retention.
+- **A policy change applies to files already shared.** A share is judged at
+  the position its author stamped, and an author may name a position from
+  before a policy change, so the fold can't stop such a share. Every device
+  therefore also refuses to fetch, preview, save or give an agent a file the
+  policy in force refuses (attachments off, its type blocked, over the size
+  cap), whenever it was shared.
+- **Attachment ids are bound to the sharing device.** A share's id is derived
+  from the signing device and the relay blob (an agent offer's from its host
+  and the proposal), so no member can claim someone else's file id first and
+  suppress it.
+- **Forged copies.** Until the same-signer-only equivocation rule lands, a
+  member who copies a share's event id under their own signature makes both
+  copies drop out (the share disappears for everyone); this holds for every
+  event kind, not only shares.
+- **Archives.** Zip and gzip files are inflated into a counter (nothing is
+  written) to judge what an extractor would unpack, including names from
+  Unicode Path fields and zips or gzips nested up to three deep. Entries that
+  are encrypted or use another compression, and other archive formats (7z,
+  RAR, tar, xz, …), can't be looked inside: they are flagged and need the
+  second confirmation, but the types inside them aren't checked against the
+  policy.
+- **Saving** writes the verified bytes straight to the new file (marked
+  first); if Ligus is killed mid-write, a partial, marked file can remain.
+- **Local file markers.** A `[Attached: <path>]` marker resolves to a local
+  file only in a turn the person wrote themselves, never in an agent's reply
+  or a runtime effect signed under their identity. The chat view still shows
+  a chip for a path string the person used in one of their own messages
+  wherever that string appears.
+- **Deleting a message doesn't delete its files.** Delete the file from its
+  card, or remove the member and their files.
+- **Quotas on an open relay** count per token subject, or per address when
+  there is no token. Per-member quotas are on by default (128 MiB and 500
+  files per workspace).
+- **Linux** has no quarantine marking to set.
+- **Scanning is optional** and depends on the scanner the person installed.
+- **The phone app doesn't show shared files yet**, and `ligus serve` and
+  worker boxes can't keep agents' file offers.
+- **Older builds** without attachment support show the marker as text and
+  don't fetch anything.
+
 ### Endpoint redirection (model gateways) {#endpoint-redirection}
 
 Where an operator routes agents through an LLM gateway
@@ -302,8 +464,12 @@ it.
    the [OS sandbox](../../ligus/concepts/security.md#os-sandbox) (Seatbelt on macOS,
    bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
    seeds, workspace keys, `settings.json`, `serve.token`), credential dirs and
-   direct network. The sandbox shares your user and kernel: it is not a
-   boundary against kernel bugs. A host without it (Windows, Linux without
+   direct network, and since Phase C your whole
+   [home dir](../../ligus/concepts/security.md#home-default-deny) but the
+   worktree, the turn's own dirs, a read-only toolchain allow-list and
+   signed grants. The sandbox shares your user and kernel: it is not a
+   boundary against kernel bugs, and a same-user process outside it (an LSP
+   server, your terminal) is not confined. A host without it (Windows, Linux without
    bubblewrap and user namespaces or Landlock, `LIGUS_SANDBOX=off`) runs no
    agent process at all: CLI agent turns at every tier, commands, pre-flight
    tests and stdio MCP servers are refused, and HTTP models answer without
@@ -558,7 +724,62 @@ it.
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
-28. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
+28. **What the home allow-list and grants leave open.** The home is
+    denied by default, but some of it stays readable to every agent
+    process: the [toolchain allow-list](../../ligus/concepts/security.md#home-allow-list)
+    (binaries and libraries can be read and copied, never written), and
+    every `PATH` entry under your home, which Ligus trusts as an install
+    dir; a program's own install dir under your home is readable to that
+    process. A [signed grant](../../ligus/concepts/security.md#sandbox-grants)
+    applies on every host that runs the agent, including other members'
+    hosts and boxes, wherever `~/…` points there; it never opens a data dir
+    or credential dir. On macOS, Copilot and Antigravity keep the login
+    keychain files readable because their sign-ins live there. `/usr/bin/git`
+    and other `xcrun` shims print `couldn't create cache file` warnings
+    under the sandbox (their cache lives in the per-user temp dir, which
+    stays unwritable); the commands still run. The Landlock tier can't hide
+    other processes and can't create entries at the worktree's top level;
+    the bubblewrap tier is not exercised on hosts whose AppArmor restricts
+    user namespaces (Ubuntu 24.04 without the profile). `git commit` inside
+    the worktree stays denied by design: agents' changes are captured as a
+    diff. A grant is judged where it resolves when the turn is planned and
+    checked again when the Linux executors bind it (the Landlock tier also
+    verifies each opened descriptor); on the bubblewrap tier a path swapped
+    for a symlink in the moments between that check and bubblewrap's own
+    mount, by an agent of a concurrent turn with write access beside it,
+    is still bound. Other turns' scratch dirs are denied as a whole; a
+    turn's own home holds its CLI's sign-in by design, so the agent in that
+    turn can read it. A read-write grant of a project dir is code you will
+    run: the code-path list covers your home's startup files, plugins and
+    caches, not a repository's own `.git/hooks`, `.git/config`, `.envrc` or
+    build files, which run when you next work in it.
+29. **The shell is the Owner's, not a boundary.** For a turn another member
+    starts, the [owner-only shell](../../ligus/concepts/security.md#owner-only-shell)
+    takes away each CLI's shell tool, ACP `execute` requests and
+    `run_command`, and refuses Codex, aider and Hermes, which can't run
+    without one. Edits stay, and so do the CLIs' other tools: a tool that
+    runs a program for the agent without being its shell (a build or test
+    tool an MCP server offers, an editor action) is not covered, and the OS
+    sandbox, not the shell gate, bounds what any of them reaches. An
+    Owner's per-agent grant turns the shell on for everyone's turns of that
+    agent. Build and test tools are code execution: an agent without a
+    shell can still write a `build.rs`, a `conftest.py`, a `package.json`
+    script or a test, and whatever later runs them (an Owner's turn with a
+    shell, an approved `cargo test` command, the device-local pre-flight
+    test, your own terminal) runs that code, inside the sandbox when Ligus
+    starts it and with your full access when you do. The gate stops a
+    non-Owner's agent from running commands now; it does not make the code
+    it writes safe to run. Review the diff before you build it. An MCP
+    server that offers a shell is told apart by its tool names (`bash`,
+    `exec`, `run_command`, `terminal`, ...) and offered only to turns with
+    the shell; a server that names its shell something else still gives one
+    to every member's turns, so allow-list only servers whose tools you
+    know. The workspace's signed grants reach a member's host only when that
+    device applies them: by default the Owner's devices do and every other
+    member's don't, a device's user chooses in Settings → Sandbox (a
+    headless host with `LIGUS_SANDBOX_GRANTS`), and a change shows a notice
+    until it is reviewed.
+30. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
     Every event names the newest event of its log its author held
     (`logHead`) and its lamport is exactly one past it, so a lamport is
     never more than the longest chain of real events on its log (a lamport
@@ -693,6 +914,16 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | Turn claims were keyed by the trigger message alone, so when one reply handed off to two agents on two devices, the second receiver never ran | Hand-off receivers claim (trigger, agent); user-message turns keep the plain claim, so older devices still coordinate |
 | Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
 | Host (authority) | The author gate read only the immediate trigger's author, and a message every event of which this device signed as its user cleared every floor. An agent reply the host signed for an agent without its own key (the device-local workspace, no agent vault, a key that couldn't be certified) counted as the host user's own message, so a Contributor's request handed to another agent, or an @mention cascade from it, ran at the host's Owner tier. Workflow stage prompts, posted as the driving device's user, ran at that user's tier whoever started the run | An agent's message has no role of its own: every host resolves it through its reply links (hand-offs, cascades) to the lowest role of the humans behind the chain, caps a peer's agent output at that peer's role, and runs a chain with no human read-only. A stage prompt is linked to its run and judged at the lower of its poster's and the run initiator's role. Verified by `handoff_chain_author_role_is_min_of_chain`, `mention_cascade_never_raises_tier`, `host_signed_agent_output_carries_no_role`, `agent_signed_reply_resolves_to_the_chain_human` and `workflow_stage_role_is_the_run_initiators` |
+| Sandbox (Phase C, home) | Agent processes could read everything in your home outside a short deny list: documents, other repositories and other workspaces' worktrees, `~/.gitconfig` (URL rewrites with tokens), `~/.npmrc`, `~/.cargo/credentials.toml`, tool configs under `~/.config` | The home is default-deny for every agent process on Seatbelt, bubblewrap and Landlock; each child gets a per-turn home; a read-only allow-list of toolchain install dirs, each with its reason, and signed grants let paths back in; a grant never opens a data or credential dir. Verified by `sandbox_home_is_default_deny`, `sandbox_home_grants_open_only_what_they_name`, `sandbox_turn_home_has_only_the_git_identity`, `bwrap_home_is_a_tmpfs_and_hard_denies_come_last`, and the `sandbox_home_regression` runs (git, `cargo build`, node, pip into a venv, Claude Code `-p`, `codex login status`) |
+| Sandbox (Phase C review, allow-list) | `cargo` (and every program under `~/.cargo/bin`) opened `~/.cargo`, `credentials.toml` included, to an approved command or MCP server it ran as; a real launcher in `~/.local/bin` opened all of `~/.local`. An allow-list entry or grant that was a symlink to the home (a symlinked `~/.local/bin`) opened the whole home on every tier, and on the Landlock tier one through a link into `~/.ssh` opened it. A read-write grant of the home's parent (`/home`) brought the home back read-write on the bubblewrap tier. A read-write grant of a `PATH` dir, a shell startup file or a login item let an agent plant code that later runs as you, unconfined, which put an Admin's grant above the Owner-only shell | A program's prefix never climbs to a dir directly in the home; every path that opens part of the home is judged where it resolves (never the home, a dir above it or a denied path); read-write grants stay read-only on `PATH`, toolchain, shell startup, autostart and tool-config paths. Verified by `review_program_prefix_never_opens_a_tool_home(_live)`, `review_symlinked_allow_entries_resolve_before_they_open(_live)`, `review_a_grant_above_the_home_opens_nothing_in_it(_live)`, `review_rw_grants_never_open_code_that_runs_outside_the_sandbox(_live)` and `review_grant_case_variants_open_no_denied_path` |
+| Host (Phase C review, shell) | A CLI Ligus starts outside any turn (the chat summarizer and compaction, chat titles, a runtime's Test) ran with the baseline policy, whose shell was on: Claude Code got Bash for a prompt built from other members' messages. `ligus doctor --sandbox` and Settings → Sandbox showed the login keychain readable for a CLI signed in by file | No turn in scope means no shell (`turn_shell_allowed`); the doctor's turn test runs in a turn of its own; the effective policy predicts the file sign-in without reading the keychain. Verified by `no_turn_in_scope_means_no_shell` and `review_effective_policy_shows_the_keychain_denied_for_file_sign_in` |
+| Sandbox (Phase C second review, protected links) | A protected path in the worktree (`.envrc`, `ligus.config.toml`, `.claude`, ...) that was a symlink out of it, committed to a repository, was bound read-only at its resolved target after the home's tmpfs on the bubblewrap tier: `.envrc -> ../../.ssh` exposed `~/.ssh` to every turn on that checkout (pre-existing). On every tier the link itself could be replaced | A turn that may write a checkout whose protected path is a symbolic link is refused, naming the path. Verified by `review2_protected_symlink_out_of_the_worktree_opens_nothing_live` (Seatbelt, Landlock, bubblewrap) |
+| Sandbox (Phase C second review, scratch dirs) | Every turn's scratch dir sat side by side in the system temp dir, readable by any other turn's processes: a concurrent turn's home held its CLI's sign-in (Copilot's `hosts.json`, Codex's `auth.json`) | Turn dirs live in one private `ligus-turns-<uid>` dir that every executor denies but the turn's own (bubblewrap: an empty tmpfs; Landlock: inode rules, so later dirs are outside them). Verified by `review2_a_turn_never_reads_another_turns_scratch_live` |
+| Sandbox (Phase C second review, grants) | A read-write grant spelled in another case (`~/Library/launchagents`, `~/.SSH`) for a dir that didn't exist yet passed the code-path and deny checks on macOS and let an agent create a login item; a grant of `~/.cargo`, `~/.m2` or `~/.npmrc` read the registry tokens in it; read-write grants of a Python user site, `~/.cargo/registry`, editor tasks and extensions, `~/bin` or Homebrew's prefix let an agent plant code that later runs unconfined; a grant swapped for a symlink between the plan and the Linux executors' binds opened its target; with `HOME` unset or wrong the real home wasn't denied | Paths compare without case on macOS and Windows; credential files beside tool config are hard denies; the code-path list covers interpreter startup and site dirs, package caches, editors, terminals, tool plugins and writable install prefixes; the plan keeps resolved paths and the Linux executors skip any that moved (Landlock verifies each opened descriptor); the password database's home is denied too. Verified by `review2_rw_grant_case_variants_never_reach_code_or_denied_paths_live`, `review2_a_grant_of_a_tool_dir_never_opens_its_tokens_live`, `review2_rw_grants_never_open_more_code_paths`, `review2_a_path_swapped_after_the_plan_opens_nothing` and `review2_a_wrong_home_still_denies_the_real_one_live` |
+| Host (Phase C second review, shell) | A CLI started outside a turn on the legacy (non-ACP) path kept the shell its runtime args named (Copilot's `--allow-tool=shell`, Antigravity's `--mode auto`, pi's bash), and the summarizer and titler ran with the checkout as their working dir (a title, synced to every member, could carry a file from it). An MCP server whose tool was a shell gave one to every member's turns. A signed grant applied on every member's host with no notice or opt-out | Outside a turn the shell is switched off by flag where the CLI has one; the summarizer and titler run in their scratch dir. MCP tools named like a shell are offered only to turns with the shell, and a CLI turn without it gets only servers seen to list none. Each device decides whether it applies the grants (on by default only for the Owner's devices), shown in Settings → Sandbox and `ligus doctor`, with a notice when they change. Verified by `review2_outside_a_turn_a_cli_has_no_shell`, `shell_tools_are_flagged_by_name`, `grants_apply_by_default_only_on_the_owners_devices` and the Settings tests |
+| Tests (credentials) | Nearly every executor test spawned a CLI turn against the real home, which bridged Claude Code's login-keychain item and copied the real CLI sign-ins into temp turn homes | A test run (this crate's unit tests, nextest, any binary cargo built into `deps`) copies no real sign-in and reads no keychain item unless `LIGUS_TEST_KEYCHAIN=1`. Verified by `review2_tests_never_carry_real_sign_ins` |
+| Host (doctor) | `ligus doctor --turn-test` reported leaks on the bubblewrap tier that weren't: pid 1 in the turn's own pid namespace is bubblewrap, and `ls` of the data dir lists the empty tmpfs over it | The probe counts a readable environ only in the host's pid namespace and a data dir only when it shows an entry. Verified by `probe_script_reports_only_real_leaks` |
+| Host (Phase C, shell) | Any member at the write floor (Admin) drove a CLI's shell tool or `run_command` on the host's machine | The shell is on only when every person behind the turn is the workspace Owner (the device owner in the local workspace) or an Owner granted it to the agent with a passkey; otherwise each CLI runs without its shell, ACP `execute` is denied, and Codex, aider and Hermes are refused. Verified by `the_shell_is_the_owners_unless_granted`, `shell_free_args_cap_every_cli_at_edits`, `no_shell_takes_bash_away`, `shell_role_is_the_workspace_role_outside_the_local_workspace` and the `sandbox_grants_fold` tests, including a property test against a reference model |
 | Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
 | Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is held and never applied (since the review of forged copies: held rather than quarantined, so the verdict never depends on which certificates arrived first). The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
 | Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |

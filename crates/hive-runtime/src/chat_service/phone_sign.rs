@@ -98,6 +98,42 @@ impl ChatService {
         Ok(actor)
     }
 
+    /// The accounts of the person who admitted this box (repos review F12,
+    /// the box owner): the Admins whose `JoinApproved` issued the admission
+    /// this box's own `MemberAdded` redeemed, while they are still members
+    /// at Admin or above. Empty when this device wasn't admitted that way.
+    pub fn box_owner_accounts(&self, workspace_id: Uuid) -> Result<std::collections::BTreeSet<Uuid>> {
+        let mut out = std::collections::BTreeSet::new();
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(out) };
+        let me = self.author.id.as_str();
+        let invite = self.store.config_envelopes(workspace_id)?.into_iter().find_map(|e| match &e.payload {
+            SessionEvent::MemberAdded { member, invite: Some(i), .. }
+                if member.id == me
+                    && e.signer_device_id == Some(self.device_id)
+                    && e.actor_stamp.as_ref().is_some_and(|st| st.actor.id == me) =>
+            {
+                Some(*i)
+            }
+            _ => None,
+        });
+        let Some(invite) = invite else { return Ok(out) };
+        let roster = timeline.current();
+        for approver in config.guards.join_approvals.get(&hive_core::authorization::invite_subject(invite)).into_iter().flatten() {
+            if let Some(m) = roster.members.get(approver).filter(|m| m.role.rank() >= hive_core::WorkspaceRole::Admin.rank()) {
+                out.extend(m.account_id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether phone `phone` is certified here (enrolled, not revoked, its
+    /// person a member) for one of `accounts`.
+    pub fn phone_of_accounts(&self, workspace_id: Uuid, phone: Uuid, accounts: &std::collections::BTreeSet<Uuid>) -> bool {
+        let Ok(person) = self.phone_person(workspace_id, phone) else { return false };
+        person.account_id.is_some_and(|a| accounts.contains(&a))
+    }
+
     /// Draft `payload` on `session_id` (a chat of `workspace_id`, or its
     /// config log) as the person phone `phone` is certified for, to be signed
     /// by that phone, at this box's head. Nothing is written.
@@ -197,6 +233,28 @@ impl ChatService {
             }
             PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
                 SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
+            }
+            PhoneAction::ProposeMemory { chat_id, op, rationale } => {
+                // A new entry is named by its proposal; the source chat's
+                // egress is recorded (it can only narrow who reads the note).
+                let proposal_id = Uuid::new_v4();
+                let op = match op {
+                    hive_core::memory::MemoryOp::Create { title, body, tags, .. } => {
+                        hive_core::memory::MemoryOp::Create { entry_id: proposal_id, title: title.clone(), body: body.clone(), tags: tags.clone() }
+                    }
+                    other => other.clone(),
+                };
+                let mut source = hive_core::memory::MemorySource { chat_id: Some(*chat_id), ..Default::default() };
+                self.stamp_memory_egress(workspace_id, &mut source);
+                SessionEvent::FlowRecorded {
+                    record: hive_core::flow::FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                        proposal_id,
+                        op,
+                        proposer: String::new(),
+                        source,
+                        rationale: rationale.clone(),
+                    }),
+                }
             }
         };
         let session_id = action.session_id(workspace_id);

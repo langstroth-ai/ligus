@@ -96,6 +96,25 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
             SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
         }
+        PhoneAction::ProposeMemory { chat_id, op, rationale } => {
+            // A new entry is named by its proposal (the box's id).
+            let id = Uuid::new_v4();
+            let op = match op {
+                hive_core::memory::MemoryOp::Create { title, body, tags, .. } => {
+                    hive_core::memory::MemoryOp::Create { entry_id: id, title: title.clone(), body: body.clone(), tags: tags.clone() }
+                }
+                other => other.clone(),
+            };
+            SessionEvent::FlowRecorded {
+                record: FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                    proposal_id: id,
+                    op,
+                    proposer: String::new(),
+                    source: hive_core::memory::MemorySource { chat_id: Some(*chat_id), message_id: None, turn_id: None, egress: None },
+                    rationale: rationale.clone(),
+                }),
+            }
+        }
     }
 }
 
@@ -115,7 +134,7 @@ fn draft(f: &mut Fixture, chat: Option<Uuid>, payload: SessionEvent) -> SessionE
 
 fn chat_of(action: &PhoneAction) -> Option<Uuid> {
     match action {
-        PhoneAction::ClearLockdown { .. } => None,
+        PhoneAction::ClearLockdown { .. } | PhoneAction::ProposeMemory { .. } => None,
         a => Some(a.chat_id()),
     }
 }
@@ -144,6 +163,11 @@ fn actions(f: &Fixture) -> Vec<PhoneAction> {
             repo_id: None,
         },
         PhoneAction::WithdrawApply { chat_id: f.chat, proposal_id: f.pid, request_id: Uuid::from_u128(9) },
+        PhoneAction::ProposeMemory {
+            chat_id: f.chat,
+            op: hive_core::memory::MemoryOp::Create { entry_id: Uuid::from_u128(0x31), title: "Deploy day".into(), body: "Thursdays".into(), tags: vec![] },
+            rationale: "from standup".into(),
+        },
     ]
 }
 
@@ -321,7 +345,7 @@ proptest! {
     /// Whatever bytes a box sends, an accepted preimage carries exactly the
     /// action the phone asked for (only box-chosen fields may differ).
     #[test]
-    fn an_accepted_preimage_is_the_requested_action(which in 0usize..6, edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>(), 0u8..3), 1..4)) {
+    fn an_accepted_preimage_is_the_requested_action(which in 0usize..7, edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>(), 0u8..3), 1..4)) {
         let mut f = fixture();
         let action = actions(&f)[which].clone();
         let __a0 = chat_of(&action);
@@ -392,7 +416,9 @@ fn the_phone_tier_is_exactly_the_allow_list() {
         let allowed = phone_tier_allows(e, me).is_ok();
         let expected = match e {
             SessionEvent::MessageAppended { message } => message.role == MessageRole::User,
-            SessionEvent::FlowRecorded { record } => matches!(record, FlowRecord::HumanAnswered(_)),
+            SessionEvent::FlowRecorded { record } => {
+                matches!(record, FlowRecord::HumanAnswered(_)) || matches!(record, FlowRecord::MemoryProposed(p) if p.proposer.is_empty())
+            }
             SessionEvent::JoinApproved { admission, .. } => admission.is_some(),
             SessionEvent::DeviceRevoked { device_id, .. } => *device_id == me,
             _ => PHONE_TIER.contains(&k),
@@ -410,6 +436,7 @@ fn the_phone_tier_is_exactly_the_allow_list() {
         "passkeyRegistered", "passkeyRemoved", "agentUpserted", "agentRosterUpdated", "agentRemoved", "agentKeyCertified",
         "workspaceRuntimeUpserted", "workspaceHostUpserted", "workspaceRepoAdded", "dearthModeChanged", "workflowDefinitionsUpdated",
         "proposalApplied", "proposalApplyFailed", "proposalSetDecided", "proposalSetTuned", "proposalUpserted", "deviceCertificateAdded",
+        "workspaceSandboxSet",
     ] {
         assert!(!PHONE_TIER.contains(&k), "{k}");
         for e in kinds.iter().filter(|e| e.kind_str() == k) {

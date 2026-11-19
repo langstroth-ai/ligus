@@ -390,6 +390,22 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
     .map_err(err)?
 }
 
+/// Where a clone by repo id comes from on this desktop (4.3, review F12):
+/// this device's connection to the repo's host (none: refused), the URL
+/// the forge builds from the canonical's re-validated parts (never a URL
+/// from an event), the host's address re-checked and pinned for git, and
+/// the connection's credential-helper args (the token never on argv).
+pub(crate) async fn clone_source_for(data_dir: &Path, repo: &hive_core::workspace_repo::WorkspaceRepo) -> Result<(String, Option<String>, Vec<String>), String> {
+    let (host, rref) = hive_runtime::repos::clone::clone_target(repo)?;
+    let c = Connections::load(data_dir)
+        .for_host(&host)
+        .cloned()
+        .ok_or_else(|| format!("{host} isn't a code host connected to this device: add it under Code hosts first"))?;
+    let pin = hive_forge::conn::git_resolve_pin(&c).await.map_err(err)?;
+    let f = forge(&c, data_dir);
+    Ok((f.clone_url(&rref, Transport::Https), pin, f.git_auth_args()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -97,6 +97,29 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
     Ok(out)
 }
 
+/// The checkout on this host that `job` applies in: for a proposal with a
+/// repo, this device's confirmed checkout of **that** repo (never the
+/// legacy per-workspace binding, review F1); for one without, `legacy`.
+///
+/// The repo checkout passes the same gate as a turn
+/// ([`crate::repos::turn_checkout`]): the chat still works in that repo,
+/// and this device's confirmed checkout of it still is that repo by its
+/// remote and is managed by this host. Anything else applies nowhere (the
+/// request then fails with "no checkout"), never into another repository
+/// or another host's chat branch.
+pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    let Some(repo) = job.proposal.repo_id else { return legacy };
+    let session = svc.load(job.chat_id).ok().flatten()?;
+    if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
+        return None;
+    }
+    let roster = svc.workspace_roster(job.workspace_id).ok()?;
+    match crate::repos::turn_checkout(svc.store(), svc.device_id(), "this host", &session, &roster, &crate::repos::cloning()) {
+        crate::repos::TurnCheckout::Ready(r) if r.repo.id == repo => Some(r.path),
+        _ => None,
+    }
+}
+
 fn lock(svc: &Mutex<ChatService>) -> std::sync::MutexGuard<'_, ChatService> {
     svc.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -151,6 +174,7 @@ fn git(dir: &Path, args: &[&str]) -> std::result::Result<String, String> {
     }
 }
 
+#[cfg(test)]
 fn git_apply(dir: &Path, diff: &str) -> std::result::Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
@@ -316,22 +340,18 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
         Ok(_) => return fail(svc, job, "the checkout has uncommitted changes; commit or discard them, then ask again".into()),
         Err(e) => return fail(svc, job, e),
     }
-    if let Err(e) = git_apply(&wt, &diff) {
-        return fail(svc, job, e);
-    }
-    let message = format!("Apply proposal: {}\n\n{TRAILER}: {}\n", job.proposal.title, job.request.id);
-    // A headless box may have no git identity: give the commit one, keeping
-    // the host's own when it has one.
-    let named = git(&wt, &["config", "user.email"]).is_ok_and(|e| !e.is_empty());
-    let mut commit_args = if named { vec![] } else { vec!["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost"] };
-    commit_args.extend(["commit", "-q", "-m", &message]);
-    let committed = git(&wt, &["add", "-A"]).and_then(|_| git(&wt, &commit_args));
-    if let Err(e) = committed {
-        let _ = git(&wt, &["reset", "--hard", &base]);
-        return fail(svc, job, e);
-    }
-    let commit = git(&wt, &["rev-parse", "HEAD"]).ok().filter(|c| *c != base);
-    let tree = git(&wt, &["rev-parse", "HEAD^{tree}"]).ok();
+    // The patch lands in a scratch index (or a scratch worktree, three-way)
+    // and the chat branch moves by compare-and-swap from the base the
+    // person saw: a conflict leaves the branch and the worktree untouched.
+    let message = crate::repos::apply::apply_message(&job.proposal.title, job.proposal.id, &[(TRAILER, job.request.id.to_string())]);
+    let Some(root) = repo else { return fail(svc, job, "this host has no checkout for this chat".into()) };
+    let applied = match crate::repos::apply::apply_to_chat_branch(root, &job.chat_id.to_string(), &diff, &message, false, Some(&base)) {
+        Ok(a) => a,
+        Err(crate::repos::apply::ApplyError::Moved) => return fail(svc, job, "the checkout moved while applying; ask again".into()),
+        Err(e) => return fail(svc, job, e.to_string()),
+    };
+    let commit = Some(applied.commit.clone());
+    let tree = Some(applied.tree.clone());
     let mut s = pinned(svc, job);
     let written = s.fulfil_apply_request(job.chat_id, job.workspace_id, job.request.id, commit.clone(), Some(base.clone()), tree);
     s.store().finish_apply_attempt(job.request.id)?;
@@ -408,6 +428,38 @@ mod tests {
 
     fn outcome(svc: &Mutex<ChatService>, chat: Uuid, job: &ApplyJob) -> Option<ApplyOutcome> {
         lock(svc).load(chat).unwrap().unwrap().apply_outcomes.get(&job.request.id).cloned()
+    }
+
+    /// The host applying a person's request for a repo proposal passes the
+    /// same gate as a turn (adversarial review): a mapped checkout whose
+    /// `origin` no longer is the repo, or that another host on this machine
+    /// manages, is never written to.
+    #[test]
+    fn repo_apply_checkout_passes_the_turn_gate() {
+        let (svc, chat, wid, mut job, tmp) = setup();
+        let path = tmp.path().join("wefit");
+        std::fs::create_dir_all(&path).unwrap();
+        sh(&path, &["init", "-q", "-b", "main"]);
+        sh(&path, &["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        sh(&path, &["remote", "add", "origin", "https://github.com/zazulam/wefit.git"]);
+        let repo = {
+            let mut s = lock(&svc);
+            let repo = s.add_workspace_repo(wid, "github.com/zazulam/wefit", "WeFit", "github", "main", None).unwrap();
+            s.set_chat_repo(chat, wid, Some(repo.id), "").unwrap();
+            let me = s.device_id();
+            crate::repos::bind(s.store(), me, "h", wid, &repo, &path, crate::event_store::CheckoutSource::Bound).unwrap();
+            repo
+        };
+        job.proposal.repo_id = Some(repo.id);
+        let canon = crate::repos::git::canonical(&path);
+        assert_eq!(checkout_for(&lock(&svc), &job, None), Some(canon.clone()));
+        // origin re-pointed: no longer WeFit.
+        sh(&path, &["remote", "set-url", "origin", "https://github.com/evil/other.git"]);
+        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "remote_mismatch");
+        sh(&path, &["remote", "set-url", "origin", "https://github.com/zazulam/wefit.git"]);
+        // Another host on this machine took the checkout over.
+        crate::repos::marker::take_over(&path, Uuid::new_v4(), "box").unwrap();
+        assert_eq!(checkout_for(&lock(&svc), &job, None), None, "managed elsewhere");
     }
 
     #[test]

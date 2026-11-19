@@ -1,3 +1,4 @@
+import { TaskStatePanel } from "@/components/TaskStatePanel";
 import { responderBadge } from "@/lib/responderBadge";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,7 +16,7 @@ import {
   presencePing,
   saveAttachment,
   shareAttachment,
-  resolveAttachmentBlob,
+  listAttachments,
   readImageDataUrl,
   openExternal,
   readWorkspaceFile,
@@ -35,7 +36,8 @@ import {
   type RuntimeSummaryDto,
   type WorkspaceAgentDto,
 } from "@/lib/ipc";
-import { splitAttachments, fileBaseName, isImagePath, isImageType, type BlobAttachmentRef } from "@/lib/attachments";
+import { splitAttachments, fileBaseName, isImagePath } from "@/lib/attachments";
+import { SharedAttachmentCard } from "@/components/SharedAttachmentCard";
 import { useContextMenu } from "@/components/ContextMenu";
 import { relTime, absTime, clockTime, dayKey, dayLabel } from "@/lib/time";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
@@ -70,6 +72,7 @@ import {
   type EmojiEntry,
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
+import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import { detectMention, filterMentions } from "@/lib/mentions";
@@ -768,14 +771,14 @@ export function ChatView({
   }, [slash]);
 
   // Dispatch a fully-built message body as a turn (the actual send).
-  async function sendBody(body: string, sentAttachments: typeof attachments) {
+  async function sendBody(body: string, sentAttachments: typeof attachments, runHere = false) {
     setStreamError(null);
     setOptimisticUser(body);
     setSending(true);
     lastActivityRef.current = Date.now();
     setStalled(false);
     try {
-      await sendMessage(sessionId, body);
+      await sendMessage(sessionId, body, runHere || undefined);
     } catch (e) {
       // Keep the draft + attachments so nothing is lost, and offer a retry.
       setSending(false);
@@ -788,12 +791,17 @@ export function ChatView({
         toast.info("Waiting for the workspace's founder. Your draft is kept; send it once their founding syncs.");
         return;
       }
-      toast.error(`Couldn't send: ${errMsg(e)}`, { label: "Retry", run: () => void sendBody(body, sentAttachments) });
+      toast.error(`Couldn't send: ${errMsg(e)}`, { label: "Retry", run: () => void sendBody(body, sentAttachments, runHere) });
     } finally {
       qc.invalidateQueries({ queryKey: ["chat", sessionId] });
       qc.invalidateQueries({ queryKey: ["chats"] });
     }
   }
+
+  // "Run here this time" for the next message to a pinned agent whose host
+  // lacks the chat's repository (one message; reset on send or chat switch).
+  const [runHereOnce, setRunHereOnce] = useState(false);
+  useEffect(() => setRunHereOnce(false), [sessionId]);
 
   async function handleSend() {
     const text = input.trim();
@@ -827,7 +835,8 @@ export function ChatView({
       setQueued(body);
       return;
     }
-    void sendBody(body, sentAttachments);
+    void sendBody(body, sentAttachments, runHereOnce);
+    setRunHereOnce(false);
   }
 
   // Stop the in-flight turn and free the composer immediately. The backend
@@ -999,6 +1008,7 @@ export function ChatView({
         style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
       >
         <div className="relative flex min-h-0 flex-1 flex-col">
+        {!embedded && <ChatRepoChip sessionId={sessionId} />}
         <div ref={scrollRef} onScroll={onScroll} className="flex flex-1 flex-col overflow-y-auto px-1 py-2">
           {chat.isLoading && messages.length === 0 && <SkeletonBubbles count={3} />}
           {chat.isError && messages.length === 0 && (
@@ -1099,6 +1109,7 @@ export function ChatView({
                   {showDay && <DaySeparator label={dayLabel(m.createdAt)} />}
                   <Bubble
                   messageId={m.id}
+                  sessionId={sessionId}
                   role={m.role}
                   author={m.author}
                   handle={handle}
@@ -1232,6 +1243,7 @@ export function ChatView({
               </div>
             </div>
           )}
+          <TaskStatePanel sessionId={sessionId} />
           <PeopleTyping presence={presence.data} sessionId={sessionId} />
           {waitingForFounder && (
             <div className="tt-note" role="status" aria-live="polite">
@@ -1310,6 +1322,14 @@ export function ChatView({
           {/* Composer — a turn-shaped card; the "next turn" in the transcript
               (spec §7.5). Card lights its accent border on focus / while sending;
               the route pill resolves the recipient, and the @ / popovers stay. */}
+          {!embedded && (
+            <PinnedHostWarning
+              sessionId={sessionId}
+              routeHandle={routeHandle}
+              runHere={runHereOnce}
+              onRunHere={setRunHereOnce}
+            />
+          )}
           <div className={`cmp${composerFocused ? " is-focused" : ""}${sending ? " is-sending" : ""}`}>
             <div
               className="cmp-card"
@@ -1722,15 +1742,37 @@ export function extractFileRefs(body: string): string[] {
   return out;
 }
 
-/// Renders a message: markdown text plus previews/chips for any `[Attached: …]`
-/// paths, and click-to-open chips for any `@file`-style path references. Image
-/// attachments show an inline thumbnail (loaded from the local file as a data
-/// URL); non-images — and images whose bytes aren't on this device — show a
-/// filename chip.
-function MessageBody({ body, youName, youIsMe }: { body: string; youName?: string; youIsMe?: boolean }) {
-  const { text, paths, blobs } = splitAttachments(body);
+/// Renders a message: markdown text, shared files (issue #118) and device-local
+/// path chips. A shared file shows only in the sharer's own signed message,
+/// and never fetches or previews anything until asked (`SharedAttachmentCard`).
+/// A `[Attached: <path>]` marker becomes a chip only in this person's own
+/// messages: a path in someone else's message names a file on their device
+/// (or one they'd like this device to open), so it stays text.
+function MessageBody({
+  body,
+  youName,
+  youIsMe,
+  sessionId,
+  messageId,
+}: {
+  body: string;
+  youName?: string;
+  youIsMe?: boolean;
+  sessionId?: string;
+  messageId?: string;
+}) {
+  const { text, paths, attachmentIds } = splitAttachments(body);
   const fileRefs = extractFileRefs(text);
   const attCtx = useContextMenu();
+  const files = useQuery({
+    queryKey: ["chat", sessionId, "attachments"],
+    queryFn: () => listAttachments(sessionId as string),
+    enabled: !!sessionId && (paths.length > 0 || attachmentIds.length > 0),
+    staleTime: 5_000,
+  });
+  const ownPaths = new Set(files.data?.ownLocalPaths ?? []);
+  const shown = (files.data?.shared ?? []).filter((v) => attachmentIds.includes(v.id) && !!messageId && v.messageIds.includes(messageId));
+  const unplaced = attachmentIds.filter((id) => !shown.some((v) => v.id === id));
   const attItems = (path: string): import("@/components/ContextMenu").MenuItemSpec[] => [
     { label: "Open", onClick: () => editorStore.requestOpen(path) },
     { label: "Open with default app", onClick: () => void openExternal(`file://${path}`) },
@@ -1738,6 +1780,8 @@ function MessageBody({ body, youName, youIsMe }: { body: string; youName?: strin
     { label: "Copy filename", onClick: () => void navigator.clipboard?.writeText(fileBaseName(path)) },
     { label: "Copy path", onClick: () => void navigator.clipboard?.writeText(path) },
   ];
+  const localPaths = paths.filter((p) => ownPaths.has(p));
+  const foreignPaths = paths.filter((p) => !ownPaths.has(p));
   return (
     <>
       {text && <Markdown content={text} youName={youName} youIsMe={youIsMe} />}
@@ -1762,64 +1806,34 @@ function MessageBody({ body, youName, youIsMe }: { body: string; youName?: strin
           ))}
         </div>
       )}
-      {(paths.length > 0 || blobs.length > 0) && (
+      {(paths.length > 0 || attachmentIds.length > 0) && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {paths.map((p, i) => (
+          {localPaths.map((p, i) => (
             <div key={`${p}-${i}`} onContextMenu={(e) => attCtx.open(e, attItems(p))}>
               {isImagePath(p) ? <ImageAttachment path={p} /> : <AttachmentChip path={p} />}
             </div>
           ))}
-          {blobs.map((b) => (
-            <BlobAttachment
-              key={b.id}
-              blob={b}
-              onMenu={(e, path) => attCtx.open(e, attItems(path))}
-            />
+          {foreignPaths.map((p, i) => (
+            <span
+              key={`f-${p}-${i}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60"
+              style={{ borderColor: "var(--hive-line)" }}
+              title="A file on the sender's device; it wasn't shared"
+            >
+              <IconFile size={13} /> {fileBaseName(p)} (on the sender's device)
+            </span>
           ))}
+          {sessionId && shown.map((v) => <SharedAttachmentCard key={v.id} sessionId={sessionId} view={v} />)}
+          {files.isFetched &&
+            unplaced.map((id) => (
+              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--hive-line)" }}>
+                An attachment that isn't available
+              </span>
+            ))}
         </div>
       )}
       {attCtx.menu}
     </>
-  );
-}
-
-/// A relay-shared attachment: resolves the blob reference to a local file (cache
-/// hit or download+decrypt), then renders it like a local attachment. Falls back
-/// to a filename chip while resolving or if it can't be fetched.
-function BlobAttachment({
-  blob,
-  onMenu,
-}: {
-  blob: BlobAttachmentRef;
-  onMenu?: (e: React.MouseEvent, path: string) => void;
-}) {
-  const resolved = useQuery({
-    queryKey: ["blob-attachment", blob.id],
-    queryFn: () => resolveAttachmentBlob(blob.id, blob.name),
-    staleTime: Infinity,
-    retry: false,
-  });
-  const isImage = isImageType(blob.contentType, blob.name);
-  if (resolved.isError) return <AttachmentChip path={blob.name} image={isImage} />;
-  if (!resolved.data) {
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-70"
-        style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
-        title={`Fetching ${blob.name}…`}
-      >
-        <span aria-hidden className="opacity-60">
-          {isImage ? <IconImage size={13} /> : <IconFile size={13} />}
-        </span>
-        <span className="max-w-[14rem] truncate">{blob.name}</span>
-      </span>
-    );
-  }
-  const path = resolved.data;
-  return (
-    <div onContextMenu={onMenu ? (e) => onMenu(e, path) : undefined}>
-      {isImage ? <ImageAttachment path={path} /> : <AttachmentChip path={path} />}
-    </div>
   );
 }
 
@@ -1942,6 +1956,7 @@ export function ToolCallCards({
 
 const Bubble = memo(function Bubble({
   messageId,
+  sessionId,
   role,
   author,
   handle,
@@ -1968,6 +1983,8 @@ const Bubble = memo(function Bubble({
   onContextMenu,
 }: {
   messageId?: string;
+  /// The chat, for its shared files.
+  sessionId?: string;
   role: string;
   author: string;
   /// The mentionable handle for an agent turn (rendered "@handle"); the human
@@ -2040,11 +2057,11 @@ const Bubble = memo(function Bubble({
     // content, so each delta re-parses the accumulated text once; partial/unclosed
     // markup (an open ``` fence) renders gracefully. The caret trails the content.
     <div className="hive-stream">
-      <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} />
+      <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} sessionId={sessionId} messageId={messageId} />
       <span className="tt-caret" />
     </div>
   ) : body ? (
-    <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} />
+    <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} sessionId={sessionId} messageId={messageId} />
   ) : toolCalls && toolCalls.length > 0 ? null : (
     <span className="opacity-50">…</span>
   );

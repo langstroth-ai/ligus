@@ -72,6 +72,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         }
         // Gates and quorum.
         SessionEvent::ProposalSetTuned { .. } | SessionEvent::WorkspaceRulesSet { .. } => true,
+        // Sandbox grants widen what agents reach on every host that runs them.
+        SessionEvent::WorkspaceSandboxSet { .. } => true,
         SessionEvent::ProposalUpserted { proposal } => fold.proposals.iter().find(|p| p.id == proposal.id).is_some_and(|old| {
             proposal.required_approvals < old.required_approvals
                 || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()
@@ -99,7 +101,17 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // Repos: adding or removing one steers clones and chats (repos
         // review F7); renaming is cosmetic; using one in a chat is content.
         SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
+        // Aliases change identity matching (repos review F6, R2): as add.
+        SessionEvent::WorkspaceRepoAliasesSet { .. } | SessionEvent::WorkspaceHostAliasSet { .. } => true,
         SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
+        // Moving a chat's pinned base rewrites every host's chat branch.
+        SessionEvent::ChatBaseRepinned { .. } => true,
+        // Attachments (issue #118): the policy decides who shares what, so
+        // changing it is a person's, with presence; lifting a block widens
+        // it too. Blocking a hash only narrows; sharing and deleting are
+        // content, judged by the policy.
+        SessionEvent::AttachmentPolicySet { .. } | SessionEvent::AttachmentHashUnblocked { .. } => true,
+        SessionEvent::AttachmentHashBlocked { .. } | SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => false,
         // Everything else is content, coordination or a self-validating
         // publication.
         SessionEvent::SessionSnapshot { .. }

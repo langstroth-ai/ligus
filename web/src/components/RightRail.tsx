@@ -24,6 +24,8 @@ import {
   addVault,
   getContextTelemetry,
   implementProposal,
+  askAgentToRebase,
+  openChatCheckout,
   requestApplyOnHost,
   withdrawApplyRequest,
   installMcpServer,
@@ -60,7 +62,9 @@ import {
   type QueuedWorkDto,
   type WorkspaceHostDto,
   type WorkspaceAgentDto,
+  deleteMemberAttachments,
 } from "@/lib/ipc";
+import { confirmDialog } from "@/components/Dialog";
 import { groupProposals, isSettled, isVotable } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
@@ -108,6 +112,7 @@ import { FlowPane } from "@/components/flow/FlowPane";
 import { ProposalBadges } from "@/components/ReviewBadges";
 import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
+import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
 
 // Re-exported from the shared pane source so existing
@@ -224,6 +229,7 @@ export function RightRail({
         {pane === "skills" && <SkillsPane sessionId={sessionId} />}
         {pane === "workflows" && <WorkflowsPane sessionId={sessionId} />}
         {pane === "flow" && <FlowPane />}
+        {pane === "memory" && <MemoryPane sessionId={sessionId} />}
         {pane === "context" && <ContextPane sessionId={sessionId} activeRuntimeId={activeRuntimeId} />}
         {pane === "activity" && <ActivityPane />}
       </div>
@@ -1228,6 +1234,51 @@ function DiffFileBlock({
   );
 }
 
+export type ApplyConflictKind = "conflict" | "dirty";
+
+/// Which apply failure on a repo chat's branch this is (the backend's
+/// "Not applied: …" sentences): a patch that conflicts with what landed
+/// since (rebase it, or look at it), or local changes in the chat's folder
+/// that are in the way (look at them). Anything else is a plain error.
+export function applyConflictKind(message: string): ApplyConflictKind | null {
+  if (!message.startsWith("Not applied")) return null;
+  if (message.includes("doesn't apply on this chat's branch")) return "conflict";
+  if (message.includes("local changes in the way")) return "dirty";
+  return null;
+}
+
+/// "Ask the agent to rebase" files a follow-up turn with the conflict;
+/// "Open in editor" opens the chat's folder for its repository.
+export function ApplyConflictActions({
+  conflict,
+  busy,
+  rebasing,
+  onRebase,
+  onOpen,
+}: {
+  conflict: { kind: ApplyConflictKind; message: string };
+  busy: boolean;
+  rebasing: boolean;
+  onRebase: () => void;
+  onOpen: () => void;
+}) {
+  return (
+    <div role="alert" className="mt-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)" }}>
+      <div className="mb-1.5">{conflict.message}</div>
+      <div className="flex flex-wrap gap-2">
+        {conflict.kind === "conflict" && (
+          <Button size="sm" variant="primary" disabled={busy} onClick={onRebase}>
+            {rebasing ? "Asking…" : "Ask the agent to rebase"}
+          </Button>
+        )}
+        <Button size="sm" disabled={busy} onClick={onOpen}>
+          Open in editor
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ProposalCard({
   proposal,
   sessionId,
@@ -1272,13 +1323,33 @@ function ProposalCard({
     onError: (e) => toast.error(`Couldn't record your vote: ${errMsg(e)}`),
   });
 
+  // An apply that didn't land on the chat's branch: what to do next.
+  const [applyConflict, setApplyConflict] = useState<{ kind: ApplyConflictKind; message: string } | null>(null);
   const implement = useMutation({
     mutationFn: (target: string | null) => implementProposal(sessionId, proposal.id, target),
     onSuccess: () => {
+      setApplyConflict(null);
       onChanged();
       toast.success(proposal.workflow ? "Workflow added." : proposal.argv ? "Command ran." : "Sent to the agent to implement.");
     },
-    onError: (e) => toast.error(`Couldn't implement: ${errMsg(e)}`),
+    onError: (e) => {
+      const kind = applyConflictKind(errMsg(e));
+      if (kind) setApplyConflict({ kind, message: errMsg(e) });
+      else toast.error(`Couldn't implement: ${errMsg(e)}`);
+    },
+  });
+  const rebase = useMutation({
+    mutationFn: () => askAgentToRebase(sessionId, proposal.id),
+    onSuccess: () => {
+      setApplyConflict(null);
+      onChanged();
+      toast.success("Asked the agent to rebase it.");
+    },
+    onError: (e) => toast.error(`Couldn't ask the agent: ${errMsg(e)}`),
+  });
+  const openEditor = useMutation({
+    mutationFn: () => openChatCheckout(sessionId),
+    onError: (e) => toast.error(`Couldn't open it: ${errMsg(e)}`),
   });
   // Apply on a host (Phase B): one named host applies it, once.
   const openRequest = proposal.applyRequests?.find((r) => r.state === "open");
@@ -1343,6 +1414,7 @@ function ProposalCard({
   const busy =
     vote.isPending ||
     implement.isPending ||
+    rebase.isPending ||
     refine.isPending ||
     sendBack.isPending ||
     requestApply.isPending ||
@@ -1410,6 +1482,22 @@ function ProposalCard({
             </>
           ) : (
             proposal.body && <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.body}</p>
+          )}
+          {/* Issue #118: an agent's file offer. The reviewer sees exactly
+              what approving shares (its content was checked when offered; the
+              host uploads only this file, by hash). */}
+          {proposal.offeredFile && (
+            <div
+              data-testid="offered-file"
+              className="mt-2 rounded-md border px-2 py-1.5 text-xs"
+              style={{ borderColor: proposal.offeredFile.risky ? "var(--hive-danger)" : "var(--hive-line)" }}
+            >
+              <div className="font-medium">Shares the file “{proposal.offeredFile.name}” with this chat</div>
+              <div className="text-ink-soft">
+                {proposal.offeredFile.contentType} · {proposal.offeredFile.size} bytes · SHA-256 {proposal.offeredFile.sha256.slice(0, 16)}…
+              </div>
+              {proposal.offeredFile.risky && <div role="alert">Its type can run code when opened.</div>}
+            </div>
           )}
           {/* A fileDiff proposal (from an agent's isolated worktree) carries a
               unified diff. It's cramped in this narrow pane, so offer opening it
@@ -1521,6 +1609,16 @@ function ProposalCard({
           <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
+
+      {applyConflict && proposal.status !== "applied" && (
+        <ApplyConflictActions
+          conflict={applyConflict}
+          busy={busy}
+          onRebase={() => rebase.mutate()}
+          onOpen={() => openEditor.mutate()}
+          rebasing={rebase.isPending}
+        />
+      )}
 
       {/* Apply on a host: the requests a person filed, and how each ended. */}
       {(proposal.applyRequests?.length ?? 0) > 0 && (
@@ -1948,11 +2046,28 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     },
     onError: (e) => toast.error(`Couldn't re-grant: ${errMsg(e)}`),
   });
+  // Issue #118: a removal can also take the member's shared files down (a
+  // signed deletion of each, then their blobs off the relay).
+  const offerFileCleanup = async (id: string) => {
+    const ok = await confirmDialog("Also delete the files they shared in this workspace? Everyone stops seeing them and their encrypted copies leave the relay.", {
+      title: "Their shared files",
+      confirmLabel: "Delete their files",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const n = await deleteMemberAttachments(id);
+      toast.success(n === 1 ? "Deleted 1 file." : `Deleted ${n} files.`);
+    } catch (e) {
+      toast.error(`Couldn't delete their files: ${errMsg(e)}`);
+    }
+  };
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeMember(sessionId, id),
-    onSuccess: () => {
+    onSuccess: (_r, id) => {
       setError(null);
       refresh();
+      void offerFileCleanup(id);
     },
     onError: (e) => setError(String(e)),
   });
@@ -1960,9 +2075,10 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   // lose access to new messages.
   const revokeMutation = useMutation({
     mutationFn: (id: string) => removeAndRevoke(sessionId, id),
-    onSuccess: (r) => {
+    onSuccess: (r, id) => {
       setError(null);
       refresh();
+      void offerFileCleanup(id);
       toast.success(
         r.rotated
           ? `Removed and revoked — key rotated to ${r.recipients} member${r.recipients === 1 ? "" : "s"}.`

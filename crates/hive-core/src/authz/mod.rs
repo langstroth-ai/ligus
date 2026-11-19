@@ -35,6 +35,7 @@
 //! role checks, as before.
 
 pub mod agent;
+pub mod attachments;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
@@ -158,6 +159,14 @@ pub struct AuthzState {
     pub message_authors: BTreeMap<Uuid, String>,
     /// The signed author of each apply request: they (or an Admin) withdraw it.
     pub apply_requesters: BTreeMap<Uuid, String>,
+    /// The turns a person wrote themselves, by their author: a User message
+    /// signed for a human and not a runtime effect, never since rewritten or
+    /// continued by anything else. Only these name local files
+    /// (`[Attached: <path>]`, issue #118): an agent's reply or a runtime
+    /// effect the host signs under its person's identity (an automatic
+    /// pickup posts whatever title someone else filed) is not the person.
+    /// Kept in the device-local workspace too.
+    pub person_messages: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -197,6 +206,9 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
                 | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
+                | SessionEvent::ChatBaseRepinned { .. }
+                | SessionEvent::AttachmentShared { .. }
+                | SessionEvent::AttachmentDeleted { .. }
         )
 }
 
@@ -276,6 +288,22 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             {
                 return Decision::deny("only a human answers an agent's question");
             }
+            // Memory and task state (`crate::memory`): their log, the ids
+            // bound to their events, then the fold's own rules (bounds, a
+            // known base, one writer per slot).
+            let on_config_log = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+            if crate::memory::is_memory(record) && !on_config_log {
+                return Decision::deny("workspace memory is kept on the workspace config log");
+            }
+            if matches!(record, crate::flow::FlowRecord::TaskState(_)) && on_config_log {
+                return Decision::deny("task state is kept on its chat's log");
+            }
+            if let Err(why) = crate::memory::id_binding_ok(record, env.event_id) {
+                return Decision::deny(why);
+            }
+            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, env.signer_device_id, author) {
+                return Decision::deny(why);
+            }
             // A daily outcome summary speaks for the device that signed it:
             // the fold keys summaries by (agent, host, day), so another
             // member's device must not replace or invent a host's numbers.
@@ -302,6 +330,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if let Some(why) = stale_epoch(env, ctx, on_config) {
         return Decision::deny(why);
     }
+    // File attachments (issue #118): what holds on every log and tier.
+    if let Some(why) = attachments::payload_refusal(env, on_config, ctx.checked && !on_config, if ctx.checked { ctx.workspace } else { None }, ctx.running) {
+        return Decision::deny(why);
+    }
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
     // A message is its author's (checked chat folds).
@@ -314,6 +346,20 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             SessionEvent::MessageRemoved { message_id } => Some((*message_id, true)),
             _ => None,
         };
+        // An applied proposal's content is what the chat's ledger replays on
+        // every device that hasn't applied it yet
+        // (`workspace_repo::ledger`): it never changes after the apply, or a
+        // re-upsert (its producing agent's own, or anyone's) would have
+        // other devices replay bytes nobody approved. A title edit is fine.
+        if let SessionEvent::ProposalUpserted { proposal } = &env.payload {
+            if let Some(old) = fold.proposals.iter().find(|p| p.id == proposal.id && p.status == crate::proposals::ProposalStatus::Applied) {
+                let mut incoming = proposal.clone();
+                incoming.repo_id = old.repo_id;
+                if votes::diff_digest(old) != votes::diff_digest(&incoming) {
+                    return Decision::deny("an applied proposal's content can't change");
+                }
+            }
+        }
         if let Some((id, removal)) = target {
             if fold.authz.message_authors.get(&id).is_some_and(|orig| orig != author) {
                 let moderator = removal
@@ -435,6 +481,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return Decision::deny(why);
         }
     }
+    if let SessionEvent::FlowRecorded { record } = &env.payload {
+        if let Some(why) = memory_refusal(env, record, ctx, author) {
+            return Decision::deny(why);
+        }
+    }
     let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
     if !exempt {
         let member = if ctx.checked {
@@ -469,6 +520,21 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         // the Owner's call, like the version.
         if presence.as_ref().is_some_and(|p| *p != ctx.running.presence_policy) && fold.role_of(author) != WorkspaceRole::Owner {
             return Decision::deny("only the Owner changes the relying party");
+        }
+    }
+
+    // Phase C: the sandbox grants live on the config log, are well formed,
+    // and only the Owner turns an agent's shell grant on or off (the shell
+    // is the Owner's; path grants are an Admin's). Presence below.
+    if let SessionEvent::WorkspaceSandboxSet { grants } = &env.payload {
+        if !on_config {
+            return Decision::deny("the sandbox grants are set on the workspace config log");
+        }
+        if let Err(e) = grants.well_formed() {
+            return Decision::deny(format!("sandbox grants: {}", e.0));
+        }
+        if !grants.shell_changes(&fold.guards.sandbox_grants).is_empty() && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner grants or withdraws an agent's shell");
         }
     }
 
@@ -816,12 +882,52 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                     return Decision::deny("bad base branch");
                 }
             }
+            SessionEvent::AttachmentShared { attachment } => {
+                if let Err(why) = attachments::share_ok(env, attachment, fold, at, author, role) {
+                    return Decision::deny(why);
+                }
+            }
+            SessionEvent::AttachmentDeleted { attachment_id } => {
+                if let Err(why) = attachments::delete_ok(env, *attachment_id, fold, at, author, role) {
+                    return Decision::deny(why);
+                }
+            }
             SessionEvent::ChatBasePinned { repo_id, commit } => {
                 if !crate::workspace_repo::is_commit_id(commit) {
                     return Decision::deny("malformed commit id");
                 }
                 if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
                     return Decision::deny("pins a base for a repository this chat doesn't use");
+                }
+            }
+            // Review residual 3: re-pinning is explicit, a person's (never an
+            // agent or a runtime effect, through their own device), an
+            // Admin's or the chat's creator's, from the pin in force.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never re-pins a chat's base");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person re-pins a chat's base through their own device");
+                }
+                let creator = !fold.creator_actor_id.is_empty() && fold.creator_actor_id == author;
+                if !creator && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only an Admin or the chat's creator re-pins its base");
+                }
+                if !crate::workspace_repo::is_commit_id(commit) || !crate::workspace_repo::is_commit_id(previous) || commit == previous {
+                    return Decision::deny("malformed re-pin");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("re-pins a base for a repository this chat doesn't use");
+                }
+                let history = fold.repo_bases.get(repo_id);
+                if history.and_then(|h| h.last()) != Some(previous) {
+                    return Decision::deny("re-pins from a base that isn't the one in force");
+                }
+                if history.is_some_and(|h| h.len() >= crate::workspace_repo::MAX_BASE_PINS) {
+                    return Decision::deny("this chat has re-pinned its base too many times");
                 }
             }
             _ => {}
@@ -837,6 +943,76 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
 /// An agent-signed event (A3): a key valid at this position whose agent the
 /// stamp names, an owner who is a member here, the Agent tier, and the
 /// owner's role as the cap.
+/// Who may write memory and task state (`crate::memory`; design sections 4
+/// to 6), beyond the tiers: a direct memory write or a decision is a
+/// person's (a human stamp, never a runtime effect), and changing an entry
+/// is its creator's or an Admin's; a host-signed task-state slot is an agent
+/// bound to the signing device (the A3 transition), and only the runtime
+/// writes `primary`.
+fn memory_refusal(env: &SessionEventEnvelope, record: &crate::flow::FlowRecord, ctx: &Ctx<'_>, author: &str) -> Option<&'static str> {
+    use crate::flow::FlowRecord;
+    let stamp = env.actor_stamp.as_ref();
+    let runtime = stamp.is_some_and(|s| s.runtime_effect);
+    let kind = stamp.map(|s| s.actor.kind);
+    if crate::memory::is_person_only(record) {
+        if runtime || kind != Some(ActorKind::Human) {
+            return Some("only a person writes workspace memory or decides a memory proposal; agents propose");
+        }
+        let m = &ctx.fold.flow.memory;
+        let role = ctx.fold.role_of(author);
+        let op = match record {
+            FlowRecord::MemoryWritten(w) => Some(crate::memory::write_op(w)),
+            FlowRecord::MemoryRemoved(r) => Some(crate::memory::MemoryOp::Remove { entry_id: r.entry_id, base: r.base }),
+            FlowRecord::MemoryProposalDecided(d) if d.accepted => m.proposals.get(&d.proposal_id).map(|p| p.proposal.op.clone()),
+            _ => None,
+        };
+        if op.is_some_and(|op| !crate::memory::may_change(m, &op, author, role)) {
+            return Some("only its creator or an Admin changes a memory entry");
+        }
+    }
+    if let FlowRecord::MemoryProposed(p) = record {
+        // A person or a service member proposes as itself; an agent's
+        // proposal comes from its key (the Agent tier) or a runtime effect.
+        if !runtime && kind != Some(ActorKind::Agent) && !p.proposer.is_empty() {
+            return Some("a memory proposal names an agent only when that agent files it");
+        }
+        // A runtime effect speaks for the chat's runtime or for an agent
+        // bound to the signing device (the A3 fallback), never for anyone
+        // else and never as the host person (an empty proposer would read
+        // as the person's own proposal).
+        if runtime && p.proposer != crate::flow::PRIMARY {
+            let roster = if env.session_id == crate::channel::workspace_config_session_id(env.workspace_id) {
+                Some(ctx.running)
+            } else {
+                ctx.workspace
+            };
+            let bound = crate::flow::agent_from_key(&p.proposer)
+                .zip(env.signer_device_id)
+                .is_some_and(|(a, d)| roster.is_some_and(|r| r.agent_bound_to(a, d)));
+            if !bound {
+                return Some("a runtime's memory proposal names the chat's runtime or an agent on the signing device");
+            }
+        }
+    }
+    if let FlowRecord::TaskState(t) = record {
+        if kind == Some(ActorKind::Agent) {
+            return None;
+        }
+        if runtime {
+            return (t.agent_key != crate::flow::PRIMARY).then_some("the chat's runtime writes only its own task state");
+        }
+        if let Some(roster) = ctx.workspace {
+            let bound = crate::flow::agent_from_key(&t.agent_key)
+                .zip(env.signer_device_id)
+                .is_some_and(|(a, d)| roster.agent_bound_to(a, d));
+            if !bound {
+                return Some("task state is written by its agent, or the host that agent runs on");
+            }
+        }
+    }
+    None
+}
+
 fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterState) -> Decision {
     let author = author_of(env);
     let Some(key) = env.signer_device_id.and_then(|k| roster.valid_agent_key(k)) else {
@@ -1021,6 +1197,9 @@ fn service_member_refusal(
         return Some("a service member carries no presence".into());
     }
     match &env.payload {
+        SessionEvent::FlowRecorded { record } if crate::memory::is_person_only(record) => {
+            Some("a person writes workspace memory, not a service".into())
+        }
         SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
         SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
         // Phase B: a service member cuts no one and admits no one. Leaving,
@@ -1213,7 +1392,11 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
     use crate::workspace_repo as wr;
     let live = |id: &Uuid| roster.repo_live(*id);
     match e {
-        SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::WorkspaceRepoRemoved { .. }
+        SessionEvent::WorkspaceRepoAdded { .. }
+        | SessionEvent::WorkspaceRepoUpdated { .. }
+        | SessionEvent::WorkspaceRepoRemoved { .. }
+        | SessionEvent::WorkspaceRepoAliasesSet { .. }
+        | SessionEvent::WorkspaceHostAliasSet { .. }
             if !on_config =>
         {
             Err("workspace repositories live on the workspace config log".into())
@@ -1226,8 +1409,14 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
             if roster.repos.values().filter(|r| !r.removed).count() >= wr::MAX_LIVE_REPOS {
                 return Err("too many repositories".into());
             }
+            // Design 12: an alias already owns this name.
+            if let Some(why) = wr::shadowed_by_alias(roster, &repo.canonical) {
+                return Err(why);
+            }
             Ok(())
         }
+        SessionEvent::WorkspaceRepoAliasesSet { repo_id, aliases } => wr::repo_aliases_ok(roster, *repo_id, aliases),
+        SessionEvent::WorkspaceHostAliasSet { alias, host } => wr::host_alias_ok(roster, alias, host),
         SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } => {
             if !live(repo_id) {
                 return Err("no such repository".into());

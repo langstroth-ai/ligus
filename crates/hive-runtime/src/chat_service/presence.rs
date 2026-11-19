@@ -91,6 +91,24 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::ChatLockdownCleared { .. } => "Clear a chat's lockdown".into(),
         SessionEvent::DearthModeChanged { .. } => "Change dearth mode".into(),
+        // The sheet says what agents will reach on every host that runs them.
+        SessionEvent::WorkspaceSandboxSet { grants } => {
+            let paths = |g: &hive_core::sandbox::PathGrants| g.read_only.len() + g.read_write.len();
+            let agent_paths: usize = grants.agents.values().map(|a| a.read_only.len() + a.read_write.len()).sum();
+            let shells: Vec<String> = grants.agents.iter().filter(|(_, a)| a.shell).map(|(id, _)| id.to_string()).collect();
+            let mut s = format!(
+                "Set the agent sandbox grants: {} path(s) for every agent ({} read-write), {} for single agents",
+                paths(&grants.workspace),
+                grants.workspace.read_write.len(),
+                agent_paths
+            );
+            if shells.is_empty() {
+                s.push_str("; no agent keeps a shell for other members");
+            } else {
+                s.push_str(&format!("; the shell for other members' turns granted to agent(s) {}", shells.join(", ")));
+            }
+            s
+        }
         SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:") => {
             "Let someone join with a single-use invite".into()
         }

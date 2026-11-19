@@ -184,7 +184,7 @@ every fold will, stores and syncs it.
 |---|---|---|
 | `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's, derived from its Secure Enclave key: see the iOS spec). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; for `clearLockdown`, `preview.lockdowns` lists the lockdowns it names (`{raiseEventId, signal, detail, raisedAt}`), and a raise that isn't in force on the box (a stale view: refresh and prepare again) is a 403; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
 | `POST /v1/phone-actions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | only when `presenceRequired`: puts the assertion into the stamp and answers `{preimage}`. 409 when the action needs no passkey or was already confirmed; 404 unknown or expired `prepareId` |
-| `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post) or `requestId` (requestApply). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
+| `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post), `requestId` (requestApply) or `proposalId` (proposeMemory). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
 
 Drafts are single use, kept in memory for 5 minutes, at most 32 at once (the
 oldest goes first). A request whose `action` has an unknown `kind` or a field
@@ -200,6 +200,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 | `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
+| `proposeMemory` | `chatId` (the chat the phone is in; recorded as the source), `op` (`{op: "create", entryId, title, body, tags?}` (the new note is named by the proposal: send any `entryId`, a nil UUID is fine), `{op: "edit", entryId, base, title, body, tags?}` or `{op: "remove", entryId, base}`), `rationale?` (at most 500 characters) | `flowRecorded` / `memoryProposed`, as the person (no agent proposer) | the workspace config log | never |
 
 The box decides `presenceRequired` by judging the draft; the fold decides in
 the end. Rebinding an agent, issuing a person's invite and DMs are not phone
@@ -216,7 +217,7 @@ word until the phone has read it; refuse to sign unless all of these hold:
    then exactly four fields each prefixed with a u32 LE length (scope,
    timestamp, stamp, payload), and **no trailing bytes**.
 2. `workspaceId` is this workspace. `sessionId` is the action's `chatId`, or
-   for `clearLockdown` the workspace config log id (UUIDv5 of the workspace,
+   for `clearLockdown` and `proposeMemory` the workspace config log id (UUIDv5 of the workspace,
    `workspace_config_session_id`).
 3. Each of scope, timestamp, stamp and payload decodes and re-encodes to the
    same JSON value: no field the phone doesn't read. The scope is the
@@ -247,7 +248,14 @@ word until the phone has read it; refuse to sign unless all of these hold:
       the phone asked to clear (same ids, same order);
     - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
       `expectedBaseCommit` and `repoId` as asked;
-    - `withdrawApply`: `requestId` and `proposalId` as asked.
+    - `withdrawApply`: `requestId` and `proposalId` as asked;
+    - `proposeMemory`: a memory proposal whose `op` and `rationale` are
+      exactly as asked (except a create's `entryId`, which must equal the
+      `proposalId`), `proposer` empty (the person's own), and `source`
+      naming exactly `chatId` (no message or turn; the box may add the
+      chat's `egress`, which only narrows which agent turns read the note);
+      its `proposalId` is the event id (the box picks it, and every fold
+      requires the two to match).
 
 The box may choose only what grants nothing: the event id, sequence, the log
 head it counts from (and so the lamport, one past it), timestamps, its config
@@ -291,12 +299,35 @@ voter's account, so they never act as the person (see
 |---|---|---|
 | `GET /v1/repos` | `?q=&owner=&page=&perPage=&forge=` | local checkouts and running clone jobs, plus: without `forge`, `github` (the GitHub connection's repos, as before) and `forges` (every connection); with `forge=<id>`, that connection's repos under `forge` |
 | `GET /v1/repos/fork` | `?repo=owner/name&forge=` | the signed-in account's fork, if any. 412 if the connection isn't signed in |
-| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` | Contributor. Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
+| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` or `{repoId}` | Contributor, and the box **owner** (below). Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). With `repoId`, a workspace repository: the URL is rebuilt from its canonical for a connected host, the address is re-checked and pinned, and the clone is mapped and reported as this box's checkout (404 for an unknown or removed repository). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
 | `GET /v1/repos/clone/:job` | | job status (last 20 finished kept) |
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
-| `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor. Binds a checkout under the repos dir; `null`/`""` = workspace default |
+| `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor, owner. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |
 | `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
+
+### Workspace repositories
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/workspace-repos` | | `{repos, hostAliases, hostId, label}`. Each repo: `id`, `name`, `canonical`, `forgeKind`, `defaultBranch`, `removed`, `lookalikeOf`, `here` (`state`: `present`, `cloning`, `missing`, `error`; `code`; `viaFork`; `checkout`: the folder name; `found`: folder names a scan found), `hosts` (every other host's `state`, `unknown` when it reports nothing, or when its report isn't signed by that host's own certified device) and `aliases` (the workspace's synced names for it). `hostAliases`: `[{alias, host}]`. No paths |
+| `POST /v1/workspace-repos` | `{input, name?, kind?, branch?}` | Admin with presence: a box (Contributor) answers 403 |
+| `PATCH /v1/workspace-repos/{id}` | `{name, branch?}` | Admin, owner |
+| `DELETE /v1/workspace-repos/{id}` | | Admin with presence |
+| `POST /v1/workspace-repos/{id}/confirm` | `{checkout}` | Contributor, owner. Use a found checkout (by folder name) |
+| `POST /v1/workspace-repos/rescan` | | Owner. Scan the repos dir and scan roots again |
+| `PUT /v1/chats/{id}/workspace-repo` | `{repoId \| null, baseBranch?}` | Contributor, owner. The chat's repository (a removed one is refused). The answer is the chat's `workspaceRepo` |
+
+**Owner** (repos review F12): the request comes from a phone certified to
+the account of the Admin who admitted this box, over its own pairing, or
+with the `serve.token` bearer on a box whose listener is loopback. Anything
+else answers `403` with `owner_required`: these spend the box's own
+code-host access or steer its checkouts.
+
+`GET /v1/chats/{id}/details` adds `workspaceRepo`: `{id, name, canonical,
+removed, baseBranch, basePinned, here: {state, reason}}`, where `state` is
+`present`, `cloning` or why a turn wouldn't run here (`no_checkout`,
+`remote_mismatch`, `managed_elsewhere`, `repo_removed`, …).
 
 ### Code hosts
 
@@ -328,6 +359,21 @@ What the phone may touch on disk is limited; see
 | `GET /v1/dashboard` | the host dashboard; see [Host dashboard](../../ligus/features/dashboard.md) |
 | `GET /v1/lab/status` | **deprecated**; answers with `Deprecation: true` and a `Link` to `/v1/dashboard` |
 | `GET /v1/appearance` | `{palette, mode, source}` for *Match host* |
+
+### Memory and task state {#memory}
+
+Read-only: [workspace memory](../../ligus/features/memory.md) and the chats'
+live task state. A phone proposes a memory change with the `proposeMemory`
+[phone action](#phone-actions); writing, editing, removing and deciding stay
+on a person's desktop (a box is a service member, and the fold refuses a
+service's memory writes).
+
+| Method + path | Notes |
+|---|---|
+| `GET /v1/memory?q=&tag=&limit=` | live notes matching every word of `q` (and every comma-separated `tag`), best first; `limit` 1 to 100 (default 50). `{total, openProposals, entries: [{entry, score}]}`; an `entry` is `{id, current: {rev, base?, title, body, tags?, author: {id, name, kind}, atMs, source?: {chatId?, messageId?, turnId?}, viaProposal?, proposer?}, createdBy, createdAtMs, revisionCount, conflicts?}` |
+| `GET /v1/memory/{id}` | one live note: `{entry, proposerName}`; 404 for an unknown or removed one |
+| `GET /v1/memory/proposals` | `{proposals: [{proposal: {proposal: {proposalId, op, proposer?, source?, rationale?}, by, atMs, decision?}, proposerName}]}`, open first, at most 100 |
+| `GET /v1/chats/{id}/task-state` | the chat's current cards, newest first: `{slots: [{slot: {update: {taskId, agentKey, turnId, status, summary, progress?, openQuestions?, partialResults?, ttlMs?}, writer, by, atMs, rev, updates}, agentName, active, expiresAtMs}]}` (stale cards are left out) |
 
 ### Live events
 

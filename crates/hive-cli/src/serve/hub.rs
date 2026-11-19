@@ -158,7 +158,8 @@ pub struct Differ {
 fn snap(s: &ChatSession) -> ChatSnap {
     ChatSnap {
         title: s.title.clone(),
-        messages: s.messages.iter().map(|m| (m.id, (m.is_streaming, m.body.len()))).collect(),
+        // A superseded (fenced duplicate) answer is hidden from every view.
+        messages: s.messages.iter().filter(|m| !m.superseded).map(|m| (m.id, (m.is_streaming, m.body.len()))).collect(),
         proposals: s.proposals.iter().map(|p| (p.id, proposal_snap(p))).collect(),
         gates: awaiting_gates(s).collect(),
         recruits: approver_recruits(s).collect(),
@@ -205,7 +206,7 @@ impl Differ {
         for s in sessions {
             let before = self.chats.get(&s.id).cloned().unwrap_or_default();
             let mut touched = !self.chats.contains_key(&s.id) || before.title != s.title;
-            for m in &s.messages {
+            for m in s.messages.iter().filter(|m| !m.superseded) {
                 match before.messages.get(&m.id) {
                     None => {
                         touched = true;
@@ -224,8 +225,13 @@ impl Differ {
                     _ => {}
                 }
             }
-            if before.messages.len() > s.messages.len() {
-                touched = true; // a message was removed
+            // A message was removed, or became superseded (now hidden).
+            if !before.messages.is_empty() {
+                let visible: std::collections::HashSet<Uuid> =
+                    s.messages.iter().filter(|m| !m.superseded).map(|m| m.id).collect();
+                if before.messages.keys().any(|id| !visible.contains(id)) {
+                    touched = true;
+                }
             }
             for p in &s.proposals {
                 match before.proposals.get(&p.id) {
@@ -338,6 +344,34 @@ mod tests {
             d.diff(std::slice::from_ref(&s)),
             vec![Change::MessageDone { chat: s.id, message: mid }, Change::ChatUpdated { chat: s.id }]
         );
+    }
+
+    #[test]
+    fn superseded_message_is_hidden_and_becoming_superseded_is_a_removal() {
+        let mut d = Differ::default();
+        let mut s = chat();
+        d.seed(std::slice::from_ref(&s));
+        let mut dup = ChatMessage::new(MessageRole::Assistant, "coder", "");
+        dup.is_streaming = true;
+        dup.superseded = true;
+        s.messages.push(dup);
+        assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "a superseded message produces no created event");
+        s.messages[0].body = "streamed".into();
+        assert!(d.diff(std::slice::from_ref(&s)).is_empty(), "nor a delta");
+        let keep = ChatMessage::new(MessageRole::Assistant, "coder", "answer");
+        let kid = keep.id;
+        s.messages.push(keep);
+        assert_eq!(
+            d.diff(std::slice::from_ref(&s)),
+            vec![
+                Change::MessageCreated { chat: s.id, message: kid },
+                Change::MessageDone { chat: s.id, message: kid },
+                Change::ChatUpdated { chat: s.id },
+            ]
+        );
+        s.messages[1].superseded = true;
+        assert_eq!(d.diff(std::slice::from_ref(&s)), vec![Change::ChatUpdated { chat: s.id }], "now hidden: a removal");
+        assert!(d.diff(std::slice::from_ref(&s)).is_empty());
     }
 
     #[test]

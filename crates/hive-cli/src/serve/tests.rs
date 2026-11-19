@@ -4384,3 +4384,199 @@ async fn phones_certify_headless_then_me_on_loopback() {
     assert!(v["rpId"].as_str().is_some_and(|r| !r.is_empty()), "{v}");
     h.handle.shutdown();
 }
+
+// ── Workspace memory and task state for the phone ───────────────────────────
+
+/// The phone reads memory and task state, and proposes a memory note signed
+/// by its own key; the box (a service member) can't write memory itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_reads_memory_and_task_state_and_proposes_a_note() {
+    use hive_core::memory::{MemoryOp, TaskStateUpdate, TaskStatus};
+    use hive_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Standup" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+
+    // A person's note, written on the desktop, reaches the phone's box.
+    let (entry, _) = open_service(&h.desktop)
+        .unwrap()
+        .write_memory(ws, hive_runtime::chat_service::MemoryDraft { title: "Relay ports".into(), body: "8443 for the team relay".into(), tags: vec!["infra".into()], ..Default::default() })
+        .unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    let mut found = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        found = h.get("/v1/memory?q=relay%208443").await;
+        if found["total"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(found["entries"][0]["entry"]["id"], json!(entry), "{found}");
+    assert_eq!(h.get("/v1/memory?q=zebra").await["entries"], json!([]));
+    let one = h.get(&format!("/v1/memory/{entry}")).await;
+    assert_eq!(one["entry"]["current"]["author"]["id"], json!(person));
+
+    // The box can't write memory: it is a service member.
+    let refused = h.handle.shared.lock().write_memory(ws, hive_runtime::chat_service::MemoryDraft { title: "t".into(), body: "b".into(), ..Default::default() });
+    assert!(refused.is_err(), "a service member writes no memory");
+
+    // The phone proposes a note as its person.
+    let op = MemoryOp::Create { entry_id: Uuid::new_v4(), title: "Deploy day".into(), body: "We ship on Thursdays.".into(), tags: vec![] };
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ProposeMemory { chat_id, op, rationale: "said in standup".into() }).await;
+    assert_eq!(code, 200, "{done}");
+    let pid = done["proposalId"].as_str().unwrap().to_string();
+    let ps = h.get("/v1/memory/proposals").await;
+    let p = &ps["proposals"][0]["proposal"];
+    assert_eq!(p["proposal"]["proposalId"], json!(pid), "{ps}");
+    assert_eq!(p["by"]["id"], json!(person));
+    assert_eq!(p["proposal"]["source"]["chatId"], json!(chat_id));
+    assert_eq!(p["proposal"]["op"]["entryId"], json!(pid), "a new entry is named by its proposal");
+    assert!(p.get("decision").is_none(), "open until a person decides on a desktop");
+
+    // Task state: the chat's runtime reports, the phone reads it.
+    h.handle
+        .shared
+        .lock()
+        .update_task_state(chat_id, ws, None, TaskStateUpdate { task_id: chat_id, turn_id: Uuid::new_v4(), status: TaskStatus::Blocked, summary: "Waiting on review".into(), ..Default::default() })
+        .unwrap();
+    let ts = h.get(&format!("/v1/chats/{chat_id}/task-state")).await;
+    assert_eq!(ts["slots"][0]["slot"]["update"]["summary"], json!("Waiting on review"), "{ts}");
+    assert_eq!(ts["slots"][0]["agentName"], json!("Ligus"));
+    assert_eq!(ts["slots"][0]["active"], json!(true));
+}
+
+/// The owner's case (repos-and-checkouts 9.5,
+/// desktop_bind_proposes_repo_box_detects_and_phone_sees_coverage, box
+/// side): the workspace names a repo, the box has no checkout (missing, no
+/// paths in the listing), clones it by id from its connection, coverage
+/// flips to present, a chat on it runs there with its base pinned; a chat
+/// on a repo the box lacks never runs a turn
+/// (pinned_host_without_checkout_never_runs_turn).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspace_repo_clone_by_id_and_the_turn_gate() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "acme", "widget");
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, true)));
+
+    // The box is a service member (Contributor): adding a repo is an Admin's.
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos", Some(json!({ "input": "github.com/acme/widget" }))).await;
+    assert_eq!(c, 403);
+    let rid = add_repo_on_desktop(&h, "git@github.com:Acme/Widget.git", "Widget").await.to_string();
+    let other_id = add_repo_on_desktop(&h, "github.com/acme/other", "other").await.to_string();
+    let v = h.get("/v1/workspace-repos").await;
+    let w = v["repos"].as_array().unwrap().iter().find(|r| r["id"] == rid.as_str()).unwrap().clone();
+    assert_eq!(w["here"]["state"], "missing", "{v}");
+    assert!(!v.to_string().contains(h._tmp.path().to_str().unwrap()), "no host paths: {v}");
+
+    // Strict ids; a removed or unknown repo can't be cloned.
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repoId": Uuid::new_v4() }))).await;
+    assert_eq!(c, 404);
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repoId": rid }))).await;
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let v = h.get("/v1/workspace-repos").await;
+    let w = v["repos"].as_array().unwrap().iter().find(|r| r["id"] == rid.as_str()).unwrap().clone();
+    assert_eq!(w["here"]["state"], "present", "{v}");
+    let checkout = w["here"]["checkout"].as_str().unwrap().to_string();
+    assert!(checkout.starts_with("widget-") && checkout.len() == "widget-".len() + 8, "{checkout}");
+
+    // A chat on Widget runs here, on its chat branch, and pins its base.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "widget" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/workspace-repo"), Some(json!({ "repoId": rid }))).await;
+    assert_eq!(r["here"]["state"], "present", "{r}");
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut system = String::new();
+    for _ in 0..300 {
+        if let Some(b) = model.bodies.lock().unwrap().first() {
+            system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(system.contains("Repository: Widget (github.com/acme/widget)") && system.contains(&format!("hive/chat/{chat_id}")), "{system}");
+    let mut pinned = false;
+    for _ in 0..100 {
+        if h.get(&format!("/v1/chats/{chat_id}/details")).await["workspaceRepo"]["basePinned"] == true {
+            pinned = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(pinned, "the first turn pins the chat's base");
+
+    // A chat on a repo this box has no checkout of: refused, never run.
+    let chat2 = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "other" }))).await;
+    let chat2_id = chat2["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat2_id}/workspace-repo"), Some(json!({ "repoId": other_id }))).await;
+    let before = model.bodies.lock().unwrap().len();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat2_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut note = false;
+    for _ in 0..100 {
+        let msgs = h.get(&format!("/v1/chats/{chat2_id}/messages")).await.to_string();
+        if msgs.contains("did not run: No checkout of other") {
+            note = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(note, "the sender is told why");
+    assert_eq!(model.bodies.lock().unwrap().len(), before, "no model call for the refused turn");
+    h.handle.shutdown();
+}
+
+/// The desktop's Owner adds a workspace repo; the box syncs it.
+async fn add_repo_on_desktop(h: &Harness, input: &str, name: &str) -> Uuid {
+    let ws = h.handle.shared.ws;
+    let id = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.add_workspace_repo(ws, input, name, "", "main", None).unwrap().id
+    };
+    for _ in 0..200 {
+        sync_once(&h.desktop).await.unwrap();
+        h.handle.shared.sync_kick.notify_one();
+        let v = h.get("/v1/workspace-repos").await;
+        if v["repos"].as_array().unwrap().iter().any(|r| r["id"] == id.to_string()) {
+            return id;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw the repo");
+}
+
+/// Repos review residual 2: the `serve.token` bearer counts as the owner
+/// only on a loopback listener (every paired phone can fetch the token, and
+/// over the network it is any of them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/workspace-repos/rescan".to_string(), json!({})),
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        (reqwest::Method::PATCH, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/workspace-repo"), json!({ "repoId": null })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/repo"), json!({})),
+    ] {
+        let (c, v) = status_of(&h, m.clone(), &p, Some(b)).await;
+        assert_eq!(c, 403, "{m} {p}: {v}");
+        assert!(v.to_string().contains("owner_required"), "{v}");
+    }
+    // The same box on loopback: the operator.
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 200, "{v}");
+}

@@ -68,7 +68,24 @@ pub enum SessionEvent {
     /// deterministically on every device (see `ChatSession::turn_claims`); a
     /// device that has synced another device's winning claim backs off. Benign
     /// coordination — not projection-gated.
-    TurnClaimed { trigger_id: Uuid, device_id: Uuid },
+    ///
+    /// The device-keyed dispatcher (`crate::dispatch`, design
+    /// repos-and-checkouts 11) adds three optional fields, all absent on a
+    /// plain first claim (which then folds exactly as before): `epoch`, the
+    /// claim generation (absent = 1); `supersedes`, the holder a hand-over
+    /// takes the turn from (required past epoch 1); and `repo_id`, the
+    /// claiming device's signed statement that it holds a confirmed checkout
+    /// of the chat's repo (a covering claim displaces a non-covering holder).
+    TurnClaimed {
+        trigger_id: Uuid,
+        device_id: Uuid,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        epoch: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        supersedes: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+    },
     MemberAdded {
         member: WorkspaceMember,
         /// The Admin-issued invite a self-enrollment redeems (an id whose
@@ -346,6 +363,14 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         redeemed: Option<Uuid>,
     },
+    /// The sandbox grants in force (config log; the whole set, replacing the
+    /// previous one): extra paths agents may read or write on the host that
+    /// runs them, for every agent or per agent, and per agent the shell for
+    /// turns a member other than the Owner starts. Admin + presence; turning
+    /// an agent's shell grant on or off is the Owner's. Agents never set it
+    /// (they hold no presence). Additive (Phase C): an older build decodes it
+    /// as `Unknown`, and its agents run without the grants (narrower).
+    WorkspaceSandboxSet { grants: crate::sandbox::SandboxGrants },
     /// An infection signal locked a chat down (self-medication): its envelope
     /// closes egress and every proposal needs a human approval until a member
     /// clears it. Config log (so the workspace roster authorizes the clear);
@@ -438,6 +463,27 @@ pub enum SessionEvent {
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.
     WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Name other spellings of a live repo (config log; Admin, presence;
+    /// never an agent): normal-form canonicals the same repo also goes by
+    /// (an old owner, a case split on a case-sensitive forge). Replaces the
+    /// repo's list; at most 8; disjoint from every live canonical and alias
+    /// and no look-alike of one (`workspace_repo::repo_aliases_ok`). Names
+    /// only: identity matching on a device that accepted them, never where a
+    /// clone connects (design repos-and-checkouts 12).
+    WorkspaceRepoAliasesSet {
+        repo_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
+    },
+    /// Map a host name (an SSH host a forge serves from, say) to a live
+    /// repo's canonical host for identity matching (config log; Admin,
+    /// presence; never an agent). `host` empty clears the alias. At most 16;
+    /// never shadows a live repo's host (`workspace_repo::host_alias_ok`).
+    WorkspaceHostAliasSet {
+        alias: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host: String,
+    },
     /// Pick this chat's repository (chat log; Contributor; never an agent).
     /// `None` = no repo. Must name a live repo at the author's position.
     ChatRepoSet {
@@ -449,6 +495,14 @@ pub enum SessionEvent {
     /// Pin the commit this chat's branch was cut from, for its repo (chat
     /// log; Contributor; never an agent).
     ChatBasePinned { repo_id: Uuid, commit: String },
+    /// Move this chat's pinned base for its repo from `previous` to `commit`
+    /// (chat log; Admin or the chat's creator, a human through their own
+    /// device, with presence under rules v2). The only way a pin changes:
+    /// `ChatBasePinned` is first-pin-wins. `previous` must be the pin in
+    /// force, so two re-pins racing can't both land. Every host with a chat
+    /// branch on an earlier pin rebases it onto `commit` by replaying the
+    /// chat's ledger there, or refuses the chat's turns visibly.
+    ChatBaseRepinned { repo_id: Uuid, commit: String, previous: String },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
@@ -480,6 +534,28 @@ pub enum SessionEvent {
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
     IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
+    /// The workspace attachment policy (issue #118; config log; Admin, with
+    /// presence): part of the workspace rules. Off until one is set; see
+    /// [`crate::attachment::AttachmentPolicy`]. Read by the roster tracker.
+    AttachmentPolicySet { policy: crate::attachment::AttachmentPolicy },
+    /// Block a file by the SHA-256 of its plaintext (config log; Admin; no
+    /// presence: it only narrows). A blocked file is refused when shared and
+    /// when downloaded, whenever it was shared.
+    AttachmentHashBlocked { sha256: String },
+    /// Lift a block (config log; Admin, with presence).
+    AttachmentHashUnblocked { sha256: String },
+    /// A file shared in a chat (chat log): binds the relay blob to its
+    /// author's device, the plaintext's hash and size, its declared type and
+    /// its cleaned name. Judged against the attachment policy and the
+    /// blocklist at its author's position; a download that doesn't open to
+    /// exactly these bytes is refused. An agent never signs one: a file an
+    /// agent produced is shared by its host only once a person approved the
+    /// proposal it was filed as (`proposal_id`).
+    AttachmentShared { attachment: crate::attachment::AttachmentRef },
+    /// Remove a shared file (chat log; its sharer or an Admin). Every client
+    /// stops offering it; the sharer's or the Admin's device also deletes the
+    /// blob from the relay.
+    AttachmentDeleted { attachment_id: Uuid },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -549,6 +625,7 @@ impl SessionEvent {
             SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
             SessionEvent::JoinApproved { .. } => "joinApproved",
             SessionEvent::AdmissionClosed { .. } => "admissionClosed",
+            SessionEvent::WorkspaceSandboxSet { .. } => "workspaceSandboxSet",
             SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
@@ -568,8 +645,16 @@ impl SessionEvent {
             SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
             SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+            SessionEvent::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
             SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
             SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
+            SessionEvent::ChatBaseRepinned { .. } => "chatBaseRepinned",
+            SessionEvent::AttachmentPolicySet { .. } => "attachmentPolicySet",
+            SessionEvent::AttachmentHashBlocked { .. } => "attachmentHashBlocked",
+            SessionEvent::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
+            SessionEvent::AttachmentShared { .. } => "attachmentShared",
+            SessionEvent::AttachmentDeleted { .. } => "attachmentDeleted",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -598,6 +683,7 @@ impl SessionEvent {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::AdmissionClosed { .. }
+            | SessionEvent::WorkspaceSandboxSet { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
@@ -610,7 +696,12 @@ impl SessionEvent {
             | SessionEvent::IdentityLinkRemoved { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. }
+            | SessionEvent::AttachmentPolicySet { .. }
+            | SessionEvent::AttachmentHashBlocked { .. }
+            | SessionEvent::AttachmentHashUnblocked { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -682,9 +773,16 @@ impl SessionEventEnvelope {
         payload: SessionEvent,
     ) -> Self {
         let scope = payload.scope();
+        // A new memory entry and a memory proposal are known by the event
+        // that made them (`memory::bound_event_id`).
+        let event_id = match &payload {
+            SessionEvent::FlowRecorded { record } => crate::memory::bound_event_id(record),
+            _ => None,
+        }
+        .unwrap_or_else(Uuid::new_v4);
         Self {
             id: Uuid::new_v4(),
-            event_id: Uuid::new_v4(),
+            event_id,
             session_id,
             workspace_id,
             sequence,
@@ -719,10 +817,14 @@ impl ChatSession {
         match event {
             SessionEvent::SessionSnapshot { .. } => {}
             SessionEvent::MessageAppended { message } => {
+                // `superseded` is fold state (`crate::dispatch::note_answer`),
+                // never the author's.
+                let mut message = message.clone();
+                message.superseded = false;
                 if let Some(idx) = self.message_index(message.id) {
-                    self.messages[idx] = message.clone();
+                    self.messages[idx] = message;
                 } else {
-                    self.messages.push(message.clone());
+                    self.messages.push(message);
                 }
             }
             SessionEvent::MessageChunkReceived { message_id, chunk } => {
@@ -739,11 +841,17 @@ impl ChatSession {
             }
             SessionEvent::MessageRemoved { message_id } => {
                 self.messages.retain(|m| &m.id != message_id);
+                crate::dispatch::note_removed(self, *message_id);
             }
-            SessionEvent::TurnClaimed { trigger_id, device_id } => {
-                // First claim in canonical fold order wins; later claims for the
-                // same trigger are ignored. Deterministic across devices.
-                self.turn_claims.entry(*trigger_id).or_insert(*device_id);
+            SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } => {
+                // The dispatcher's fold (`crate::dispatch`): a plain first
+                // claim wins in canonical order as it always did; a covering
+                // claim or a hand-over may move the turn. Deterministic.
+                crate::dispatch::fold_claim(
+                    self,
+                    *trigger_id,
+                    crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id },
+                );
             }
             SessionEvent::MemberAdded { member, invite, .. } => {
                 if let Some(id) = invite {
@@ -843,6 +951,9 @@ impl ChatSession {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     if p.ready_to_apply() && crate::authz::votes::diff_digest(p) == *diff_digest {
                         p.status = crate::proposals::ProposalStatus::Applied;
+                        if !self.applied_order.contains(proposal_id) {
+                            self.applied_order.push(*proposal_id);
+                        }
                     }
                 }
                 if let Some(rid) = request_id.filter(|r| self.apply_requests.contains_key(r)) {
@@ -866,20 +977,47 @@ impl ChatSession {
                     self.apply_outcomes.entry(*request_id).or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
                 }
             }
+            // A chat's pin is per repo and outlives switching repos: pointing
+            // the chat away and back restores the repo's pin, never clears
+            // it (else any Contributor could re-pin by switching twice,
+            // review residual 3).
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {
-                let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
-                let base_commit = if same { self.repo.as_ref().and_then(|r| r.base_commit.clone()) } else { None };
+                let base_commit = repo_id.and_then(|r| self.repo_bases.get(&r)).and_then(|h| h.last().cloned());
                 self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
             }
+            // First pin wins: a later `ChatBasePinned` for a repo that has a
+            // pin (two hosts cutting the branch at once, or a member trying
+            // to move it) changes nothing. Moving it is `ChatBaseRepinned`.
             SessionEvent::ChatBasePinned { repo_id, commit } => {
-                if let Some(r) = self.repo.as_mut().filter(|r| r.repo_id == Some(*repo_id)) {
-                    r.base_commit = Some(commit.clone());
+                if !self.repo_bases.contains_key(repo_id) && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    self.repo_bases.insert(*repo_id, vec![commit.clone()]);
+                    if let Some(r) = self.repo.as_mut() {
+                        r.base_commit = Some(commit.clone());
+                    }
+                }
+            }
+            // A re-pin lands only on the pin it names as `previous` (a
+            // compare-and-swap in the fold; authz checks the same), and
+            // keeps the earlier pins: a host's branch on any of them
+            // follows by rebasing.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                let current = self.repo_bases.get(repo_id).and_then(|h| h.last());
+                if current == Some(previous) && commit != previous && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    let history = self.repo_bases.entry(*repo_id).or_default();
+                    if history.len() < crate::workspace_repo::MAX_BASE_PINS {
+                        history.push(commit.clone());
+                        if let Some(r) = self.repo.as_mut() {
+                            r.base_commit = Some(commit.clone());
+                        }
+                    }
                 }
             }
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -888,7 +1026,13 @@ impl ChatSession {
             | SessionEvent::PasskeyRegistered { .. }
             | SessionEvent::PasskeyRemoved { .. }
             | SessionEvent::IdentityLinkPublished { .. }
-            | SessionEvent::IdentityLinkRemoved { .. } => {}
+            | SessionEvent::IdentityLinkRemoved { .. }
+            | SessionEvent::AttachmentPolicySet { .. }
+            | SessionEvent::AttachmentHashBlocked { .. }
+            | SessionEvent::AttachmentHashUnblocked { .. } => {}
+            // Folded with their signed author in projection (`fold_pass`),
+            // never from a bare payload.
+            SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -1059,6 +1203,9 @@ impl ChatSession {
                 self.guards.used_invites.insert(*invite);
                 self.guards.closed_admissions.entry(*invite).or_default().push(*redeemed);
             }
+            SessionEvent::WorkspaceSandboxSet { grants } => {
+                self.guards.sandbox_grants = grants.clone();
+            }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();
                 if !list.iter().any(|l| l.id == lockdown.id) {
@@ -1085,6 +1232,10 @@ impl ChatSession {
 }
 
 /// The proposal-set view of a `SessionEvent`, for [`crate::proposal_sets::apply`].
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
 fn set_change(event: &SessionEvent) -> Option<SetChange<'_>> {
     Some(match event {
         SessionEvent::ProposalSetOpened { set } => SetChange::Opened(set),
@@ -1693,6 +1844,7 @@ fn fold_pass(
     };
     session.updated_at = ordered[base].timestamp;
     session.authz = Default::default();
+    session.attachments.clear();
     // A chat founded by someone who wasn't a workspace member at its frontier
     // (a keyholder outside the roster) doesn't exist for a checked fold.
     if let WorkspaceAuthz::Timeline(t) = workspace {
@@ -1914,8 +2066,54 @@ fn fold_pass(
                     session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
                 }
             }
+            // The turns a person wrote themselves (see
+            // `AuthzState::person_messages`).
+            if trusted || checked {
+                let personal = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == crate::identity::ActorKind::Human && !s.runtime_effect);
+                let touched = match payload {
+                    SessionEvent::MessageAppended { message } => Some((message.id, message.role == crate::chat::MessageRole::User)),
+                    SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => Some((*message_id, false)),
+                    _ => None,
+                };
+                if let Some((id, user_turn)) = touched {
+                    let first_author = session.authz.message_authors.get(&id).is_none_or(|a| a == author);
+                    if personal && user_turn && first_author && !session.messages.iter().any(|m| m.id == id && !session.authz.person_messages.contains_key(&id)) {
+                        session.authz.person_messages.insert(id, author.to_string());
+                    } else {
+                        session.authz.person_messages.remove(&id);
+                    }
+                }
+            }
             if let SessionEvent::ProposalApplyRequested { request } = payload {
                 session.authz.apply_requesters.entry(request.id).or_insert_with(|| author.to_string());
+            }
+            // Attachments (issue #118) are folded with their signed author.
+            match payload {
+                SessionEvent::AttachmentShared { attachment } => {
+                    let stamp = env.actor_stamp.as_ref();
+                    let author_kind = at
+                        .and_then(|r| r.members.get(author))
+                        .map(|m| m.kind)
+                        .or_else(|| stamp.map(|s| s.actor.kind))
+                        .unwrap_or(crate::identity::ActorKind::Human);
+                    session.attachments.entry(attachment.id).or_insert_with(|| crate::attachment::SharedAttachment {
+                        attachment: attachment.clone(),
+                        author: author.to_string(),
+                        author_kind,
+                        author_name: stamp.map(|s| s.actor.display_name.clone()).unwrap_or_default(),
+                        author_account: stamp.and_then(|s| s.actor.account_id),
+                        signer_device: env.signer_device_id,
+                        event_id: env.event_id,
+                        shared_at: env.timestamp,
+                        deleted: false,
+                    });
+                }
+                SessionEvent::AttachmentDeleted { attachment_id } => {
+                    if let Some(a) = session.attachments.get_mut(attachment_id) {
+                        a.deleted = true;
+                    }
+                }
+                _ => {}
             }
             // Where content was filed (see `AuthzState::content_frontier`).
             if checked && !trusted {
@@ -1956,8 +2154,45 @@ fn fold_pass(
             };
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.
-            if !superseded && !crate::guard::fold_authored(&mut session, payload, author) {
-                session.apply(payload);
+            // Memory and task state fold with their envelope's provenance.
+            let enveloped = match payload {
+                SessionEvent::FlowRecorded { record } => {
+                    crate::memory::apply_enveloped(&mut session.flow, record, &crate::memory::RevCtx::of(env))
+                }
+                _ => false,
+            };
+            if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
+                let ms = crate::admission::envelope_ms(env);
+                if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
+                    // The dispatcher's fold (`crate::dispatch`) with the
+                    // claim's signed time and whether the holder it would
+                    // displace is gone at its position.
+                    let holder_gone = session
+                        .turn_claims
+                        .get(trigger_id)
+                        .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
+                    let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
+                    crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                } else {
+                    session.apply(payload);
+                }
+                // The dispatcher's commit (`crate::dispatch`): an answer whose
+                // origin device is the signer (or certified the signing agent
+                // key, as the workspace roster at its position holds it)
+                // commits its turn or is marked superseded.
+                if let SessionEvent::MessageAppended { message } = payload {
+                    let agent_host = |k: Uuid| {
+                        at.and_then(|r| r.valid_agent_key(k))
+                            .or_else(|| tracker.state.valid_agent_key(k))
+                            .map(|key| key.host_device_id)
+                    };
+                    let origin = message
+                        .origin_device_id
+                        .filter(|o| env.signer_device_id == Some(*o) || env.signer_device_id.and_then(agent_host) == Some(*o));
+                    if let Some(o) = origin {
+                        crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
+                    }
+                }
             }
             session.updated_at = env.timestamp;
         }
@@ -2492,12 +2727,12 @@ mod tests {
         let trigger = Uuid::new_v4();
         let device_a = Uuid::new_v4();
         let device_b = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a });
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&trigger), Some(&device_a), "first claim wins");
         // A different trigger claims independently.
         let t2 = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&t2), Some(&device_b));
     }
 

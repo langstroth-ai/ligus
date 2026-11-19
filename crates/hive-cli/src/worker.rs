@@ -73,6 +73,18 @@ pub struct WorkerCtx<'a> {
     /// This host's Ligus MCP server (Track D). `None`: agents use the reply
     /// directives only.
     pub ligus: Option<std::sync::Arc<LigusMcp>>,
+    /// Host liveness from the relay's presence channel (`ligus serve`), so
+    /// the dispatcher never hands over a turn a live device holds. `None`:
+    /// every holder counts as live (only a revoked or removed holder's turn
+    /// is handed over).
+    pub presence: Option<&'a hive_runtime::HostPresence>,
+}
+
+/// What the drain loop remembers between ticks.
+#[derive(Default)]
+pub struct DrainState {
+    /// Mentions whose turn hard-failed here (not retried).
+    pub failed: HashSet<Uuid>,
 }
 
 /// Where a headless host's chat service lives, for its Ligus MCP server.
@@ -305,9 +317,10 @@ pub fn agent_workspace_runtime(
 pub async fn drain_tick(
     ctx: &WorkerCtx<'_>,
     svc: &Mutex<ChatService>,
-    failed: &mut HashSet<Uuid>,
+    drain: &mut DrainState,
     sink: &dyn TurnSink,
 ) -> Result<()> {
+    let failed = &mut drain.failed;
     // Bound the hard-failed set over a long uptime — past a generous cap,
     // drop it so transiently-failed mentions get another chance and memory
     // can't creep unbounded.
@@ -356,14 +369,35 @@ pub async fn drain_tick(
                     .filter(|pm| hosted.contains(&pm.agent_id) && !failed.contains(&pm.message_id)),
             );
         }
-        // Claim each turn so a worker and the agent-owner's desktop (or another
-        // worker) don't both answer the same mention. Back off if we lost.
+        // The device-keyed dispatcher (design repos-and-checkouts 11): this
+        // host is eligible for every mention of an agent it hosts. It claims
+        // with its signed coverage of the chat's repo (the repo gate's own
+        // check, read-only, before claiming: review F8), waits while a
+        // covering host goes first, and hands over a turn whose holder went
+        // silent. Back off when another device holds it.
+        let roster = svc.workspace_roster(ctx.ws).ok();
+        let online: HashSet<Uuid> = match ctx.presence {
+            Some(p) => {
+                let now = hive_core::Timestamp::now();
+                svc.list_hosts(ctx.ws).unwrap_or_default().iter().filter(|h| p.is_online(h, &now)).filter_map(|h| Uuid::parse_str(&h.id).ok()).collect()
+            }
+            None => HashSet::new(),
+        };
+        let live = |d: Uuid| ctx.presence.is_none() || online.contains(&d);
         let mut work = Vec::new();
         for pm in candidates {
-            let Some(ws) = svc.load(pm.session_id)?.map(|s| s.workspace_id) else { continue };
-            match svc.claim_turn(pm.session_id, ws, pm.message_id) {
-                Ok(true) => work.push(pm),
-                Ok(false) => {}
+            let Some(s) = svc.load(pm.session_id)? else { continue };
+            let coverage = match roster.as_ref() {
+                Some(r) => hive_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &hive_runtime::repos::cloning()),
+                None => hive_core::dispatch::Coverage::NoRepo,
+            };
+            // The same claim key the desktop uses (a hand-off is keyed by
+            // its receiver), and the service's own wait clock per holder.
+            let receiver = hive_runtime::claim_receiver(&s, &pm);
+            let dctx = hive_runtime::DispatchCtx { eligible: true, coverage, waited: std::time::Duration::ZERO, holder_live: &live };
+            match svc.dispatch_turn(pm.session_id, s.workspace_id, pm.message_id, receiver, dctx) {
+                Ok(hive_core::dispatch::Step::Run) => work.push(pm),
+                Ok(_) => {}
                 Err(e) => eprintln!("worker: claim {} failed: {e}", pm.message_id),
             }
         }
@@ -388,6 +422,9 @@ pub async fn drain_tick(
 /// person's `ProposalApplyRequested` names a host.
 pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, hive_runtime::apply_host::Outcome)> {
     let repo_for = |chat: Uuid| {
+        // Called only for a proposal without a repo: one with a repo applies
+        // only in this box's checkout of that repo (apply_host::checkout_for,
+        // in the apply tick).
         let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), chat);
         if let Some(r) = repo.as_deref() {
             crate::repos::ensure_chat_base(r);
@@ -504,15 +541,31 @@ async fn run_turn(
         g.workspace_id = Some(s.workspace_id);
         g.agent_id = Some(agent.id);
     }
+    // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
+    // with a repo runs only in this box's confirmed checkout of it, never
+    // in other code; the turn is already claimed, so waiting on a clone is
+    // safe.
+    let repo_turn = match crate::repos_cmd::repo_for_turn(&ctx.cfg.data_dir, svc, &s, ctx.host_label).await {
+        Ok(r) => r,
+        Err(reason) => {
+            let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+            sink.changed();
+            return Err(anyhow!("refused by the repo gate"));
+        }
+    };
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
-    crate::materialize_turns(ctx.cfg, &mut turns).await;
+    let (head, me) = {
+        let g = lock(svc);
+        (g.attachment_rules(s.workspace_id).unwrap_or_default(), g.author().id.clone())
+    };
+    crate::materialize_turns(ctx.cfg, &s, &head, &me, &mut turns).await;
     let system = format!(
         "You are @{}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
         agent.name,
         hive_runtime::prompt::runtime_identity_block(&rt, &format!("worker {}", ctx.host_label)),
         // Which checkout (and branch) this turn's files come from, re-read
         // every turn: the phone can switch a chat's repo between turns.
-        crate::repos::turn_context(&ctx.cfg.data_dir, s.id)
+        repo_turn.context
     );
     // Who the turn answers (what the reply's `@you` means).
     let system = match hive_runtime::prompt::requester_guidance(&s, Some(pm.message_id)) {
@@ -529,6 +582,13 @@ async fn run_turn(
     // hand-off, an @mention cascade) has none of its own and resolves to the
     // lowest of the humans behind its chain (the rule every host shares).
     let author_role = lock(svc).trigger_author_role(pm.session_id, pm.message_id).ok().flatten();
+    // Phase C: the shell is the Owner's (every person behind the turn a
+    // workspace Owner), or an Owner granted it to this agent.
+    let shell_role = lock(svc).trigger_shell_role(pm.session_id, pm.message_id).ok().flatten();
+    // The signed grants, when this host applies them (`LIGUS_SANDBOX_GRANTS`;
+    // by default only on the workspace Owner's own hosts).
+    let grants = lock(svc).sandbox_grants_here(s.workspace_id, hive_runtime::sandbox::grants_setting_from_env()).0;
+    let shell_allowed = hive_runtime::author_gate::shell_allowed(shell_role, grants.shell_granted(agent.id));
     let mut rt = rt;
     let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     let gate_plan = hive_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
@@ -578,18 +638,21 @@ async fn run_turn(
         sink.changed();
         return Err(anyhow!("refused: no agent sandbox on this host"));
     }
+    // Without the shell the CLI runs without its shell tool; one that can't
+    // drop it is refused.
+    if let Err(reason) = hive_runtime::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+        sink.changed();
+        return Err(anyhow!("refused: no shell for this turn"));
+    }
     rt.args.extend(enforcement.extra_args);
     let mut tool_settings = ctx.settings.clone();
-    tool_settings.run_command &= enforcement.allow_run_command;
+    tool_settings.run_command &= enforcement.allow_run_command && shell_allowed;
     tool_settings.mcp_egress = envelope.egress.clone();
     tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
-    // The checkout this chat is bound to on this box (see `repos.rs`).
-    let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
-    // A fork checkout's chat branches start from upstream's default branch.
-    if let Some(r) = repo_root.as_deref().filter(|r| hive_runtime::git_worktree::is_git_repo(r)) {
-        crate::repos::ensure_chat_base(r);
-    }
+    // The checkout this chat runs in on this box (the gate above).
+    let repo_root = repo_turn.repo_root.clone();
 
     let mid = lock(svc).begin_assistant_message(
         s.id,
@@ -706,6 +769,8 @@ async fn run_turn(
     let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
     sandbox.worktree_is_isolated = eager.is_some();
     sandbox.ligus_mcp_socket = socket;
+    sandbox.shell_allowed = shell_allowed;
+    sandbox.grants = grants.paths_for(Some(agent.id));
     let fut = hive_runtime::executor::with_turn(sandbox, hive_runtime::agent_turn::with_agent_turn(scope, reply::generate_reply_streaming(
         &rt,
         &system,
@@ -779,6 +844,12 @@ async fn run_turn(
                     // approve it — the self-approval guard excludes no one.
                     let mut prop = hive_core::ActionProposal::file_diff(title, "", diff, files);
                     prop.producing_agent_id = Some(agent.id);
+                    // What it was made on (the repo itself comes from the chat).
+                    if let Some((_, tip, base_ref)) = &repo_turn.base {
+                        prop.base_commit = Some(tip.clone());
+                        prop.base_ref = base_ref.clone();
+                    }
+                    prop.produced_on = Some(svc.device_id());
                     if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
                         prop.title = t;
                         prop.body = b;

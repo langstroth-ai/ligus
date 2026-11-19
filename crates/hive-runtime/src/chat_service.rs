@@ -25,15 +25,20 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod attachments;
 mod changes;
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
 mod keys;
 mod links;
+mod memory;
+pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;
+mod repos;
+pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
 pub use phone_sign::{PhoneDraft, STALE_DRAFT};
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
@@ -135,6 +140,11 @@ pub struct ChatService {
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
     stream_hold: std::collections::HashMap<Uuid, String>,
+    /// The dispatcher's wait clock (design repos-and-checkouts 11.4): per
+    /// claim key, the holder and epoch this device last saw and since when,
+    /// so "how long has this holder been silent" restarts at every new
+    /// holder whichever path asks (both gates, the watcher, the worker).
+    dispatch_seen: std::collections::HashMap<Uuid, (Option<Uuid>, u32, std::time::Instant)>,
     /// Where every append is published ([`ChatService::subscribe`]).
     changes: ChangeFeed,
 }
@@ -186,6 +196,7 @@ impl ChatService {
             agent_messages: std::collections::HashMap::new(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
+            dispatch_seen: std::collections::HashMap::new(),
             changes: ChangeFeed::default(),
         }
     }
@@ -459,6 +470,11 @@ impl ChatService {
     /// to it skip the governance authz check (solo, never-synced — see the field).
     pub fn set_local_workspace(&mut self, id: Uuid) {
         self.local_workspace_id = Some(id);
+    }
+
+    /// Whether `id` is this device's local workspace (solo, never synced).
+    pub fn is_local_workspace(&self, id: Uuid) -> bool {
+        self.local_workspace_id == Some(id)
     }
 
     /// Pin (or clear, with `None`/empty) the trusted founder for the active
@@ -1414,13 +1430,106 @@ impl ChatService {
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id },
+            SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id, epoch: 0, supersedes: None, repo_id: None },
         )?;
         Ok(self
             .load(session_id)?
             .and_then(|s| s.turn_claims.get(&trigger_id).copied())
             .map(|w| w == self.device_id)
             .unwrap_or(true))
+    }
+
+    /// This host's presence beat for `workspace_id` with its repo coverage,
+    /// the coverage signed with this device's own key (repos review residual
+    /// 1: a beat is sealed with the workspace key every member holds, so
+    /// readers use a coverage report only when its host signed it).
+    pub fn signed_beat(&self, workspace_id: Uuid, coverage: Vec<hive_core::workspace_repo::CoverageEntry>) -> hive_core::workspace_repo::HostBeat {
+        let mut beat = crate::host_presence::beat_now(&self.device_id.to_string(), coverage);
+        if !beat.coverage.is_empty() {
+            beat.sign_coverage(workspace_id, self.device_id, &self.keypair);
+        }
+        beat
+    }
+
+    /// Whether a fetched beat's coverage is its host's own signed report
+    /// that the current roster of `workspace_id` vouches for (certified, not
+    /// revoked, acting for a member). Unsigned or wrongly signed: ignored.
+    pub fn beat_verifier(&self, workspace_id: Uuid) -> impl Fn(&hive_core::workspace_repo::HostBeat) -> bool {
+        let roster = self.workspace_roster(workspace_id).ok();
+        move |b| roster.as_ref().is_some_and(|r| b.coverage_verified(workspace_id, r))
+    }
+
+    /// The device-keyed dispatcher's one entry (design repos-and-checkouts
+    /// 11; `hive_core::dispatch`): decide what this device does about the
+    /// turn `trigger` (for `agent`, a hand-off receiver; `None` for the plain
+    /// trigger key), write the claim it calls for, re-fold, and say whether
+    /// to run, look again later, or stand down. Never returns
+    /// [`hive_core::dispatch::Step::Claim`].
+    ///
+    /// `ctx` carries what only the caller knows: eligibility from
+    /// `turn_runs_here` (both dispatch gates), this host's coverage of the
+    /// chat's repo, how long it has waited and whether the holder is live
+    /// on the presence channel. Whether the holder is gone (revoked, or no
+    /// longer a member's) is read from the current roster here.
+    pub fn dispatch_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<Uuid>, ctx: DispatchCtx) -> Result<hive_core::dispatch::Step> {
+        use hive_core::dispatch::{self as d, Step};
+        let key = hive_core::turn_claim_key(trigger, agent);
+        let Some(session) = self.load(session_id)? else { return Ok(Step::StandDown) };
+        // How long this device has watched the current holder (or, with no
+        // holder, the unclaimed turn): the caller's word, or this service's
+        // own clock, whichever is longer.
+        if self.dispatch_seen.len() >= 8192 {
+            self.dispatch_seen.clear();
+        }
+        let watched = {
+            let now = std::time::Instant::now();
+            let cur = (session.turn_claims.get(&key).copied(), session.turn_dispatch.get(&key).map(|x| x.epoch).unwrap_or(0));
+            let e = self.dispatch_seen.entry(key).or_insert((cur.0, cur.1, now));
+            if (e.0, e.1) != cur {
+                *e = (cur.0, cur.1, now);
+            }
+            now.duration_since(e.2)
+        };
+        let ctx = DispatchCtx { waited: ctx.waited.max(watched), ..ctx };
+        let roster = self.workspace_roster(workspace_id).ok();
+        let me = self.device_id;
+        let view = |s: &ChatSession| {
+            let holder = s.turn_claims.get(&key).copied();
+            let age = s
+                .messages
+                .iter()
+                .find(|m| m.id == trigger)
+                .map(|m| {
+                    let secs = (hive_core::Timestamp::now().0 - m.created_at.0).whole_seconds();
+                    std::time::Duration::from_secs(secs.max(0) as u64)
+                })
+                .unwrap_or_default();
+            d::View {
+                me,
+                eligible: ctx.eligible,
+                coverage: ctx.coverage,
+                waited: ctx.waited,
+                age,
+                holder_live: holder.is_some_and(|h| (ctx.holder_live)(h)),
+                holder_gone: holder.is_some_and(|h| roster.as_ref().is_some_and(|r| d::holder_gone(r, h))),
+            }
+        };
+        let repo = session.repo.as_ref().and_then(|r| r.repo_id);
+        match d::decide(&session, key, repo, &view(&session)) {
+            Step::Claim(c) => {
+                self.append_signed(
+                    session_id,
+                    workspace_id,
+                    SessionEvent::TurnClaimed { trigger_id: key, device_id: self.device_id, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id },
+                )?;
+                let Some(after) = self.load(session_id)? else { return Ok(Step::StandDown) };
+                Ok(match d::decide(&after, key, repo, &view(&after)) {
+                    Step::Claim(_) => Step::Wait(std::time::Duration::from_secs(1)),
+                    other => other,
+                })
+            }
+            other => Ok(other),
+        }
     }
 
     /// [`Self::claim_turn`] for one receiver of `trigger`: a hand-off reply
@@ -2033,6 +2142,20 @@ impl ChatService {
         proposal_id: Uuid,
         commit: Option<String>,
     ) -> Result<Option<ActionProposal>> {
+        self.mark_proposal_applied_on(session_id, workspace_id, proposal_id, commit, None, None)
+    }
+
+    /// [`ChatService::mark_proposal_applied`], naming the base it was applied
+    /// onto and the tree it made (both 40/64 hex), when known.
+    pub fn mark_proposal_applied_on(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        commit: Option<String>,
+        base_commit: Option<String>,
+        applied_tree_hash: Option<String>,
+    ) -> Result<Option<ActionProposal>> {
         let Some(session) = self.load(session_id)? else {
             return Ok(None);
         };
@@ -2054,8 +2177,8 @@ impl ChatService {
                 at: Timestamp::now(),
                 repo_id,
                 applied_on: Some(self.device_id),
-                base_commit: None,
-                applied_tree_hash: None,
+                base_commit,
+                applied_tree_hash,
                 request_id: None,
             },
         )?;
@@ -2739,6 +2862,43 @@ impl ChatService {
     ///
     /// Anything unresolved fails closed (`None`).
     pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        self.trigger_role(session_id, message_id, false)
+    }
+
+    /// The role the shell gate (Phase C, `author_gate::shell_allowed`) reads:
+    /// the same walk as [`Self::trigger_author_role`], except that this
+    /// device's own user counts as the Owner only in the device-local
+    /// workspace (the device owner). In a shared workspace their workspace
+    /// role at the message's position is used, so the shell is on only when
+    /// every person behind the turn is a workspace Owner.
+    pub fn trigger_shell_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        self.trigger_role(session_id, message_id, true)
+    }
+
+    /// The signed sandbox grants in force for `workspace_id`
+    /// (`WorkspaceSandboxSet` on its config log; none when it has none).
+    pub fn sandbox_grants(&self, workspace_id: Uuid) -> hive_core::sandbox::SandboxGrants {
+        self.workspace_guards(workspace_id).map(|g| g.sandbox_grants).unwrap_or_default()
+    }
+
+    /// This device's user's role in `workspace_id` (its config roster
+    /// today); `None` when the workspace has no config yet.
+    pub fn my_workspace_role(&self, workspace_id: Uuid) -> Option<WorkspaceRole> {
+        let cfg = self.load(hive_core::workspace_config_session_id(workspace_id)).ok().flatten()?;
+        Some(self.actor_role(&cfg))
+    }
+
+    /// The signed grants this device applies for `workspace_id`, and why
+    /// (`sandbox::grants_here`): none when this device doesn't apply them.
+    /// `setting` is this device's own choice (Settings, Sandbox on the
+    /// desktop; `LIGUS_SANDBOX_GRANTS` on a headless host).
+    pub fn sandbox_grants_here(&self, workspace_id: Uuid, setting: Option<bool>) -> (hive_core::sandbox::SandboxGrants, crate::sandbox::GrantsHere) {
+        let here = crate::sandbox::grants_here(setting, self.my_workspace_role(workspace_id), self.is_local_workspace(workspace_id));
+        let grants = if here.apply { self.sandbox_grants(workspace_id) } else { Default::default() };
+        (grants, here)
+    }
+
+    fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
         // Every event on the chain is judged against this chat's own
@@ -2794,11 +2954,11 @@ impl ChatService {
                 continue;
             }
             humans += 1;
-            let Some(role) = self.human_message_role(session_id, &touching, &mut cx)? else { return Ok(None) };
+            let Some(role) = self.human_message_role(session_id, &touching, &mut cx, shell)? else { return Ok(None) };
             lowest = Some(min_role(lowest, role));
             let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
             for run_id in runs {
-                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx)? else { return Ok(None) };
+                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx, shell)? else { return Ok(None) };
                 lowest = Some(min_role(lowest, role));
             }
         }
@@ -2807,8 +2967,8 @@ impl ChatService {
 
     /// A human's message: Owner when every event shaping it was signed by
     /// this device as its own user, else the lowest role of its authors.
-    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
-        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) {
+    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx, shell: bool) -> Result<Option<WorkspaceRole>> {
+        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) && self.own_user_is_owner(touching[0].workspace_id, shell) {
             return Ok(Some(WorkspaceRole::Owner));
         }
         let mut lowest = None;
@@ -2875,6 +3035,7 @@ impl ChatService {
         chat_workspace: Uuid,
         run_id: Uuid,
         cx: &mut RoleCx,
+        shell: bool,
     ) -> Result<Option<WorkspaceRole>> {
         let Some(first) = envs
             .iter()
@@ -2888,10 +3049,18 @@ impl ChatService {
         {
             return Ok(None);
         }
-        if self.signed_by_own_user(first) {
+        if self.signed_by_own_user(first) && self.own_user_is_owner(first.workspace_id, shell) {
             return Ok(Some(WorkspaceRole::Owner));
         }
         self.envelope_author_role(session_id, first, cx)
+    }
+
+    /// Whether this device's own user counts as the Owner for a gate: always
+    /// for the tool gate (their own tools on their own device); for the shell
+    /// gate only in the device-local workspace, where they are the device
+    /// owner and the only person.
+    fn own_user_is_owner(&self, workspace_id: Uuid, shell: bool) -> bool {
+        !shell || self.local_workspace_id == Some(workspace_id)
     }
 
     /// The role one event's stamped author held at its position (`None` when
@@ -2916,6 +3085,11 @@ impl ChatService {
         // The stamped member must be the signer's: a member with an account
         // is speaking only when the stamp names that account and the signing
         // device is certified for it (and not revoked) at this position.
+        // This device's own user, signed by this device, is known without
+        // the roster's certificate (the shell gate reads their role here).
+        if self.signed_by_own_user(env) {
+            return Ok(Some(member.role));
+        }
         if let Some(account) = member.account_id {
             let signer_acts_for = env
                 .signer_device_id
@@ -3094,7 +3268,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
                 continue;
             };
             let answered = session.messages[i + 1..].iter().any(|later| {
-                if later.role != MessageRole::Assistant {
+                if later.role != MessageRole::Assistant || later.superseded {
                     return false;
                 }
                 match later.reply_to_message_id {
@@ -3124,7 +3298,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
     // another agent (not itself). It's actionable work for that agent's worker,
     // which — unlike the desktop's inline loop — otherwise never sees it. Bound by
     // cascade depth so an A↔B chain across devices/workers can't loop forever.
-    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System) {
+    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
         if let Some(agent) = cascade_target(session, last) {
             out.retain(|p| p.agent_id != agent.id);
             out.push(PendingMention {
@@ -3146,6 +3320,42 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
 /// hand-off starts its receiver wherever that agent runs, exactly once: a
 /// duplicate delivery folds to the same card, and the receiver's reply
 /// (stamped as answering the handing reply) clears it.
+/// What only a dispatch site knows about a turn ([`ChatService::dispatch_turn`]).
+pub struct DispatchCtx<'a> {
+    /// `turn_runs_here` at this gate (a local-only or solo device always is).
+    pub eligible: bool,
+    /// This host's coverage of the chat's repo (`repos::dispatch_coverage`).
+    pub coverage: hive_core::dispatch::Coverage,
+    /// How long this device has watched the turn.
+    pub waited: std::time::Duration,
+    /// Whether a device beats on the presence channel now.
+    pub holder_live: &'a dyn Fn(Uuid) -> bool,
+}
+
+impl<'a> DispatchCtx<'a> {
+    /// An eligible device with no repo to cover, that hasn't waited, and
+    /// sees every holder as live (so it never hands a turn over).
+    pub fn plain(holder_live: &'a dyn Fn(Uuid) -> bool) -> Self {
+        Self { eligible: true, coverage: hive_core::dispatch::Coverage::NoRepo, waited: std::time::Duration::ZERO, holder_live }
+    }
+}
+
+/// The receiver a pending turn's claim is keyed by
+/// ([`hive_core::turn_claim_key`]), the same on every host: `None` for a user
+/// message's first mentioned agent (what the desktop's gates and older
+/// devices claim), and the agent itself for a hand-off or cascade (an
+/// agent's message, as the desktop's `handoff_turn` and `respond_once`
+/// claim) or for a user message's later mentions, each of which may run on
+/// another host.
+pub fn claim_receiver(session: &ChatSession, pm: &PendingMention) -> Option<Uuid> {
+    let Some(m) = session.messages.iter().find(|m| m.id == pm.message_id) else { return Some(pm.agent_id) };
+    if m.role != MessageRole::User {
+        return Some(pm.agent_id);
+    }
+    let first = crate::mentions::parse_mentions(&m.body, session).agents.first().copied();
+    (first != Some(pm.agent_id)).then_some(pm.agent_id)
+}
+
 pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
     let mut out = pending_mentions(session);
     if session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH {
@@ -3159,7 +3369,7 @@ pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
         // cascade of the same reply may have answered it first).
         let answered = session.messages[at + 1..]
             .iter()
-            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id));
+            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id) && !m.superseded);
         if !answered {
             out.retain(|p| p.agent_id != agent_id);
             out.push(PendingMention { session_id: session.id, message_id: trigger, agent_id, agent_name: agent.name.clone() });
@@ -3187,6 +3397,7 @@ pub fn empty_reply_notice(runtime_label: &str) -> String {
 /// every host's queue use this same rule, so exactly one responder runs.
 pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Option<&'a hive_core::WorkspaceAgent> {
     if !matches!(reply.role, MessageRole::Assistant | MessageRole::Agent)
+        || reply.superseded
         || session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH
     {
         return None;
@@ -3282,7 +3493,8 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
         Some(oid) => m.responder_id == Some(oid),
         None => m.responder_id.is_none() && !own_author.is_empty() && m.author == own_author,
     };
-    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming).collect();
+    // A superseded answer (the dispatcher fenced a duplicate) is never context.
+    let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded).collect();
     let mut turns: Vec<ChatTurn> = kept
         .iter()
         .filter_map(|m| {
@@ -3426,6 +3638,52 @@ mod tests {
         (ChatService::new(store, kp, account_kp, author), public)
     }
 
+    /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
+    /// A holds is watched, not run; once A stays silent past the claim
+    /// timeout (and isn't live) this device hands it over and runs it; A's
+    /// late answer is then fenced.
+    #[test]
+    fn dispatch_turn_watches_then_hands_over_a_silent_holder() {
+        use hive_core::dispatch::{Coverage, Step, CLAIM_TIMEOUT};
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let trigger = svc.post_user_message(chat.id, wid, "@hive go").unwrap().id;
+        let (device_a, key_a) = (Uuid::new_v4(), SigningKeypair::generate().unwrap());
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None }).unwrap();
+        // A claimed the turn half a minute ago (a hand-over signed sooner
+        // after the claim than the timeout allows is ignored by the fold).
+        env.timestamp = hive_core::Timestamp::from_unix_seconds(hive_core::Timestamp::now().inner().unix_timestamp() - 30);
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        fn live(_: Uuid) -> bool {
+            true
+        }
+        fn silent(_: Uuid) -> bool {
+            false
+        }
+        let ctx = |waited, holder_live: &'static dyn Fn(Uuid) -> bool| DispatchCtx { eligible: true, coverage: Coverage::NoRepo, waited, holder_live };
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(std::time::Duration::ZERO, &silent)).unwrap(), Step::Wait(_)));
+        assert!(matches!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &live)).unwrap(), Step::Wait(_)), "a live holder keeps it");
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::Run);
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.turn_claims[&trigger], svc.device_id());
+        assert_eq!(s.turn_dispatch[&trigger].epoch, 2);
+        // A's late answer (signed by A) is fenced; ours commits.
+        let mut late = ChatMessage::new(MessageRole::Assistant, "hive", "late");
+        late.reply_to_message_id = Some(trigger);
+        late.origin_device_id = Some(device_a);
+        let late_id = late.id;
+        let mut env = svc.draft_signed(chat.id, wid, SessionEvent::MessageAppended { message: late }).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &key_a);
+        assert!(svc.store.ingest(&env).unwrap());
+        let ours = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, Some(trigger)).unwrap();
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.messages.iter().find(|m| m.id == late_id).unwrap().superseded);
+        assert_eq!(s.turn_dispatch[&trigger].answer, Some(ours));
+        assert_eq!(svc.dispatch_turn(chat.id, wid, trigger, None, ctx(CLAIM_TIMEOUT, &silent)).unwrap(), Step::StandDown);
+    }
+
     /// A hand-off reply that starts two receivers on two devices: device A
     /// claims the reply for the first receiver, and device B must still be
     /// able to claim it for the second one (claims keyed by trigger alone
@@ -3441,7 +3699,7 @@ mod tests {
         let device_a = Uuid::new_v4();
         // Device A's claim for the first receiver, signed by device A and
         // synced in (this device can't claim on A's behalf).
-        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a };
+        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a, epoch: 0, supersedes: None, repo_id: None };
         assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
         let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
         hive_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());
@@ -4390,6 +4648,53 @@ mod tests {
         assert_eq!(host.trigger_author_role(chat_id, own).unwrap(), Some(WorkspaceRole::Owner));
     }
 
+    /// Phase C: the shell gate's role. The tool gate lets this device's own
+    /// user clear every floor; the shell gate counts them as the Owner only
+    /// in the device-local workspace. In a shared workspace an Admin's own
+    /// message, on the Admin's own device, is an Admin's: no shell.
+    #[test]
+    fn shell_role_is_the_workspace_role_outside_the_local_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let chat_id = {
+            let mut a = svc_on(&path, "u1", "Ana");
+            let chat = a.create_chat("A", wid, "anthropic").unwrap();
+            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            chat.id
+        };
+        let mut owner = svc_on(&path, "u1", "Ana");
+        let mut adm = svc_on(&path, "adm", "Adm");
+        let mut con = svc_on(&path, "con", "Con");
+        let o = owner.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        let a = adm.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        let c = con.post_user_message(chat_id, wid, "@coder build").unwrap().id;
+        // The Owner's message: the shell. (Another device judges it by the
+        // Owner's device certificate, which this fixture doesn't publish.)
+        assert_eq!(owner.trigger_shell_role(chat_id, o).unwrap(), Some(WorkspaceRole::Owner));
+        // The Admin's own message on the Admin's own device: the tool gate
+        // says Owner (their own tools), the shell gate says Admin.
+        assert_eq!(adm.trigger_author_role(chat_id, a).unwrap(), Some(WorkspaceRole::Owner));
+        assert_eq!(adm.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
+        assert_eq!(owner.trigger_shell_role(chat_id, a).unwrap(), Some(WorkspaceRole::Admin));
+        assert_eq!(owner.trigger_shell_role(chat_id, c).unwrap(), Some(WorkspaceRole::Contributor));
+        // An agent's reply to the Contributor stays the Contributor's.
+        let r = agent_reply(&mut owner, chat_id, wid, Some(Uuid::new_v4()), Some(c), "@other run it");
+        assert_eq!(owner.trigger_shell_role(chat_id, r).unwrap(), Some(WorkspaceRole::Contributor));
+        for (role, want) in [(owner.trigger_shell_role(chat_id, o).unwrap(), true), (owner.trigger_shell_role(chat_id, a).unwrap(), false), (owner.trigger_shell_role(chat_id, r).unwrap(), false)] {
+            assert_eq!(crate::author_gate::shell_allowed(role, false), want, "{role:?}");
+        }
+        // The device-local workspace: its only person is the device owner.
+        let (mut solo, _) = service();
+        let local = Uuid::new_v4();
+        solo.set_local_workspace(local);
+        let lc = solo.create_chat("solo", local, "rt").unwrap();
+        let m = solo.post_user_message(lc.id, local, "@coder go").unwrap().id;
+        assert_eq!(solo.trigger_shell_role(lc.id, m).unwrap(), Some(WorkspaceRole::Owner));
+        assert!(solo.sandbox_grants(local).is_empty());
+    }
+
     // ── Authority through a trigger chain ──────────────────────────────────
 
     /// An agent's reply to `to`, written by `svc` as the agent's host. With
@@ -4473,6 +4778,34 @@ mod tests {
         // The primary runtime's tool loop posts a User-role message as the host.
         let effect = host.as_agent(None, |s| s.post_user_message(chat, wid, "@coder push")).unwrap().id;
         assert_eq!(host.trigger_author_role(chat, effect).unwrap(), None, "a runtime effect is not the host user");
+    }
+
+    /// Second review (issue #118): a `[Attached: <path>]` marker resolves to a
+    /// local file (image inlining, path chips) only in a turn the person
+    /// wrote. A runtime effect stamped with their identity (an automatic
+    /// pickup posts whatever title someone else filed) and an agent's reply
+    /// the host signed are not the person's own.
+    #[test]
+    fn only_a_persons_own_turns_name_local_files() {
+        let (_dir, _path, wid, chat, mut host) = chain_fixture();
+        host.post_user_message(chat, wid, "mine [Attached: /tmp/mine.png]").unwrap();
+        host.as_agent(None, |s| s.post_user_message(chat, wid, "[Attached: /Users/ana/passport.png] review this")).unwrap();
+        agent_reply(&mut host, chat, wid, None, None, "[Attached: /Users/ana/keys.png]");
+        agent_reply(&mut host, chat, wid, Some(Uuid::new_v4()), None, "[Attached: /Users/ana/id.png]");
+        let session = host.load(chat).unwrap().unwrap();
+        let own = crate::attachment_blob::own_path_markers(&session, &host.author().id);
+        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/mine.png]".to_string()]);
+        // The device-local workspace: the person's own attachments still
+        // resolve there (its fold is trusted), an agent's never.
+        let (mut solo, _) = service();
+        let local = Uuid::new_v4();
+        solo.set_local_workspace(local);
+        let c = solo.create_chat("solo", local, "rt").unwrap();
+        solo.post_user_message(c.id, local, "[Attached: /tmp/solo.png]").unwrap();
+        agent_reply(&mut solo, c.id, local, None, None, "[Attached: /Users/mara/keys.png]");
+        let session = solo.load(c.id).unwrap().unwrap();
+        let own = crate::attachment_blob::own_path_markers(&session, &solo.author().id);
+        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/solo.png]".to_string()]);
     }
 
     /// The host-signed agent fallback (no agent key on this host: the

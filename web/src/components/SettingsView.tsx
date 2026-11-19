@@ -16,6 +16,7 @@ import {
 import { AccountSection } from "@/components/settings/AccountSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { FolderGitSection } from "@/components/settings/FolderGitSection";
+import { RepositoriesSection } from "@/components/settings/RepositoriesSection";
 import { CodeHostsSection } from "@/components/settings/CodeHostsSection";
 import { TeamSyncSection } from "@/components/settings/TeamSyncSection";
 import { SchedulesSection } from "@/components/settings/SchedulesSection";
@@ -28,6 +29,8 @@ import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { GuardsSection } from "@/components/guards/GuardsSection";
 import { FlowSection } from "@/components/settings/FlowSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
+import { SandboxSection } from "@/components/settings/SandboxSection";
+import { AttachmentsSection } from "@/components/settings/AttachmentsSection";
 import { IconComb } from "@/components/flow/icon";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
@@ -36,14 +39,17 @@ export type SettingsTab =
   | "account"
   | "appearance"
   | "folder-git"
+  | "repositories"
   | "code-hosts"
   | "team-sync"
   | "guards"
   | "passkeys"
+  | "attachments"
   | "schedules"
   | "models"
   | "tools"
   | "permissions"
+  | "sandbox"
   | "flow"
   | "updates"
   | "diagnostics"
@@ -67,9 +73,11 @@ const NAV_GROUPS: NavGroup[] = [
     cap: "This workspace",
     items: [
       { id: "folder-git", label: "Folder & Git", icon: <IconFile size={16} />, keywords: ["project", "folder", "directory", "path", "git", "branch", "repo"] },
+      { id: "repositories", label: "Repositories", icon: <IconFile size={16} />, keywords: ["repository", "repositories", "repo", "checkout", "clone", "coverage", "fork", "scan", "bind"] },
       { id: "code-hosts", label: "Code hosts", icon: <IconFile size={16} />, keywords: ["forge", "github", "gitlab", "codeberg", "forgejo", "gitea", "token", "clone", "repository", "pull request", "merge request"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
       { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
+      { id: "attachments", label: "File attachments", icon: <IconFile size={16} />, keywords: ["attachment", "file", "upload", "share", "quarantine", "blocklist", "hash", "malware", "scan", "policy"] },
       { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress", "network", "preset", "registries", "npm", "connectors"] },
       { id: "schedules", label: "Schedules", icon: <IconActivity size={16} />, keywords: ["cron", "recurring", "timer", "automation"] },
     ],
@@ -79,7 +87,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "models", label: "Models & runtimes", icon: <IconHexagon size={16} />, keywords: ["api key", "provider", "anthropic", "openai", "openrouter", "ollama", "claude", "model", "runtime", "endpoint", "agent", "prompt"] },
       { id: "tools", label: "Tools & MCP", icon: <IconWrench size={16} />, keywords: ["mcp", "server", "linear", "github", "tool", "integration"] },
-      { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety", "sandbox"] },
+      { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety"] },
+      { id: "sandbox", label: "Sandbox", icon: <IconLock size={16} />, keywords: ["sandbox", "home", "folder", "read", "write", "grant", "allow", "path", "shell", "owner", "toolchain", "seatbelt", "landlock", "bubblewrap"] },
       { id: "flow", label: "Flow", icon: <IconComb size={16} />, keywords: ["routing", "route", "shadow", "hand-off", "handoff", "queue", "review queue", "task board", "marks", "worktree"] },
     ],
   },
@@ -114,9 +123,11 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "folder-git":
     case "workspace":
       return "folder-git";
+    case "repositories":
+    case "repos":
+      return "repositories";
     case "code-hosts":
     case "forges":
-    case "repos":
       return "code-hosts";
     case "team-sync":
     case "team":
@@ -128,6 +139,9 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "security":
     case "dearth":
       return "guards";
+    case "attachments":
+    case "files":
+      return "attachments";
     case "schedules":
       return "schedules";
     case "models":
@@ -136,6 +150,9 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
       return "tools";
     case "permissions":
       return "permissions";
+    case "sandbox":
+    case "grants":
+      return "sandbox";
     case "flow":
     case "routing":
       return "flow";
@@ -273,14 +290,17 @@ export function SettingsView({
             />
           )}
           {tab === "folder-git" && <FolderGitSection />}
+          {tab === "repositories" && <RepositoriesSection />}
           {tab === "code-hosts" && <CodeHostsSection />}
           {tab === "team-sync" && <TeamSyncSection />}
           {tab === "guards" && <GuardsSection chat={activeChat} />}
           {tab === "passkeys" && <SecuritySection />}
+          {tab === "attachments" && <AttachmentsSection />}
           {tab === "schedules" && <SchedulesSection />}
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}
           {tab === "permissions" && <PermissionsSection />}
+          {tab === "sandbox" && <SandboxSection />}
           {tab === "flow" && <FlowSection />}
           {tab === "updates" && <UpdatesSection />}
           {tab === "diagnostics" && <DiagnosticsSection />}

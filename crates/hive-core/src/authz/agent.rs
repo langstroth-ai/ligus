@@ -53,6 +53,9 @@ pub fn tier_allows(event: &SessionEvent, agent_id: Uuid, host_device: Uuid, fold
             // Track D: an agent's own ask and its own turn's tool summary.
             FlowRecord::HumanAsk(a) => a.agent_key == me,
             FlowRecord::TurnToolSummary(t) => t.agent_key == me,
+            // Memory: proposals only, as itself; its own task-state slot.
+            FlowRecord::MemoryProposed(p) => p.proposer == me,
+            FlowRecord::TaskState(t) => t.agent_key == me,
             _ => false,
         },
         SessionEvent::ChatLockdownRaised { .. } => true,
@@ -99,16 +102,20 @@ pub fn runtime_tier_allows(event: &SessionEvent) -> Result<(), String> {
         SessionEvent::ProposalUpserted { proposal } => {
             proposal.status == ProposalStatus::Open && proposal.approvals.is_empty()
         }
-        SessionEvent::FlowRecorded { record } => matches!(
-            record,
+        SessionEvent::FlowRecorded { record } => match record {
             FlowRecord::Mark(_)
-                | FlowRecord::MarkCleared { .. }
-                | FlowRecord::Handoff(_)
-                | FlowRecord::Recruit(_)
-                | FlowRecord::RouteDecision(_)
-                | FlowRecord::HumanAsk(_)
-                | FlowRecord::TurnToolSummary(_)
-        ),
+            | FlowRecord::MarkCleared { .. }
+            | FlowRecord::Handoff(_)
+            | FlowRecord::Recruit(_)
+            | FlowRecord::RouteDecision(_)
+            | FlowRecord::HumanAsk(_)
+            | FlowRecord::TurnToolSummary(_)
+            // A memory proposal (the host's fallback for an agent without
+            // its own key names that agent), never a write.
+            | FlowRecord::MemoryProposed(_) => true,
+            FlowRecord::TaskState(t) => t.agent_key == crate::flow::PRIMARY,
+            _ => false,
+        },
         _ => false,
     };
     if ok {
