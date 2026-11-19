@@ -51,6 +51,7 @@ mod selftest;
 mod reply;
 mod repos;
 mod repos_cmd;
+mod secret_arg;
 mod serve;
 mod worker;
 
@@ -195,7 +196,7 @@ fn relay_url_problem(relay_url: Option<&str>) -> Option<String> {
     }
 }
 
-/// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
+/// `ligus enroll - | --file PATH [--token - | @FILE]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
@@ -237,7 +238,7 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     println!("Saved to {}.", config_path(&cfg.data_dir).display());
     if f.token.is_none() {
         println!("No access token set — for a membership-enforcing relay, add one:");
-        println!("  ligus enroll <invite> --token <hrt1-token>   (or export LIGUS_RELAY_ACCESS_TOKEN)");
+        println!("  ligus enroll --file <invite-file> --token @<token-file>   (or export LIGUS_RELAY_ACCESS_TOKEN)");
     }
     println!("Next: `ligus sync` then `ligus worker` to bring the agent online.");
     Ok(())
@@ -1635,7 +1636,7 @@ fn usage() -> ! {
          ligus send <chat-id> <message…> [--push]\n  \
          ligus sync [--watch]\n  \
          ligus runtimes                  list workspace-owned runtimes (spec §12.5)\n  \
-         ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret <value>]\n                                       define a workspace-owned runtime\n  \
+         ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret - | @FILE]\n                                       define a workspace-owned runtime\n  \
          ligus rm-runtime <id>           remove a workspace-owned runtime\n  \
          ligus agents                    list the workspace's agents\n  \
          ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]   add a workspace agent\n  \
@@ -1666,7 +1667,7 @@ fn usage() -> ! {
          workspace-synced aliases, names only (Admin, passkey)\n  \
          ligus repos accept <alias> [--revoke]   use a synced alias for identity on this host\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
-         ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
+         ligus remote enable --relay URL [--reg-token - | @FILE] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
          ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
@@ -1681,7 +1682,7 @@ fn usage() -> ! {
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in ligus metrics panels can show\n\n\
          Setup:\n  \
-         ligus enroll - | --file PATH [--token <hrt1>]   one-shot: save the workspace connection (the invite\n                                       \
+         ligus enroll - | --file PATH [--token @FILE]   one-shot: save the workspace connection (the invite\n                                       \
          piped or in a file: it carries the workspace key)\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
          ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
@@ -1832,7 +1833,7 @@ fn run() -> Result<()> {
         "runtimes" => cmd_runtimes(&cfg),
         "add-runtime" => {
             if positional.len() < 4 {
-                bail!("usage: ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret <value>]");
+                bail!("usage: ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret - | @FILE]");
             }
             cmd_add_runtime(
                 &cfg,
@@ -1842,7 +1843,7 @@ fn run() -> Result<()> {
                 positional[3],
                 flag_val("--endpoint"),
                 flag_val("--secret-ref"),
-                flag_val("--secret"),
+                secret_arg::secret_flag_warn("--secret", flag_val("--secret"), &mut secret_arg::stdin_once())?,
             )
         }
         "rm-runtime" => {
@@ -1850,18 +1851,16 @@ fn run() -> Result<()> {
             cmd_rm_runtime(&cfg, id)
         }
         "enroll" => {
-            let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), || {
-                let mut s = String::new();
-                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
-                Ok(s)
-            })?;
+            let mut stdin = secret_arg::stdin_once();
+            let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), &mut stdin)?;
             if on_argv {
                 eprintln!(
                     "warning: an invite carries the workspace key, and the command line leaks it (ps, shell history): \
                      next time pipe it to `ligus enroll -` or use `ligus enroll --file PATH`"
                 );
             }
-            cmd_enroll(&cfg, &invite, flag_val("--token"))
+            let token = secret_arg::secret_flag_warn("--token", flag_val("--token"), &mut stdin)?;
+            cmd_enroll(&cfg, &invite, token)
         }
         "join" => {
             let code = positional
@@ -1928,7 +1927,7 @@ fn run() -> Result<()> {
             opts.remote = serve::tunnel::RelaySettings::resolve(
                 &cfg.data_dir,
                 flag_val("--remote-relay"),
-                flag_val("--reg-token"),
+                secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
                 has("--insecure-relay"),
             )?;
             serve::cmd_serve(cfg, opts)
@@ -1949,7 +1948,7 @@ fn run() -> Result<()> {
             opts.remote = serve::tunnel::RelaySettings::resolve(
                 &cfg.data_dir,
                 flag_val("--remote-relay"),
-                flag_val("--reg-token"),
+                secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
                 has("--insecure-relay"),
             )?;
             serve::cmd_pair(&cfg, &opts, has("--relay-only"))
@@ -1957,7 +1956,12 @@ fn run() -> Result<()> {
         "remote" => {
             use serve::tunnel::cli;
             match positional.first().map(|s| s.as_str()) {
-                Some("enable") => cli::remote_enable(&cfg.data_dir, flag_val("--relay"), flag_val("--reg-token"), has("--insecure-relay")),
+                Some("enable") => cli::remote_enable(
+                    &cfg.data_dir,
+                    flag_val("--relay"),
+                    secret_arg::secret_flag_warn("--reg-token", flag_val("--reg-token"), &mut secret_arg::stdin_once())?,
+                    has("--insecure-relay"),
+                ),
                 Some("disable") => cli::remote_disable(&cfg.data_dir),
                 Some("status") | None => cli::remote_status(&cfg.data_dir),
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
@@ -2065,12 +2069,12 @@ fn run() -> Result<()> {
 /// The invite `ligus enroll` uses: piped (`-`), from `--file PATH`, or (with a
 /// warning, since it carries the workspace key) on the command line. The bool
 /// is whether it came from the command line.
-fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce() -> std::io::Result<String>) -> Result<(String, bool)> {
+fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<(String, bool)> {
     match (arg, file) {
         (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
         (Some(c), None) => Ok((c.trim().to_string(), true)),
         (None, Some(path)) => Ok((admit::read_code_file(std::path::Path::new(&path))?, false)),
-        _ => bail!("usage: ligus enroll <hivews1:invite> | - | --file <path> [--token <access-token>]"),
+        _ => bail!("usage: ligus enroll <hivews1:invite> | - | --file <path> [--token - | @FILE]"),
     }
 }
 
@@ -2147,8 +2151,8 @@ mod cli_tests {
     /// from a file instead of sitting in argv.
     #[test]
     fn enroll_takes_the_invite_from_stdin_or_a_file() {
-        let no_stdin = || -> std::io::Result<String> { panic!("stdin not read") };
-        assert_eq!(super::enroll_invite(Some("-"), None, || Ok("hivews1:x\n".into())).unwrap(), ("hivews1:x".to_string(), false));
+        let no_stdin = &mut || -> std::io::Result<String> { panic!("stdin not read") };
+        assert_eq!(super::enroll_invite(Some("-"), None, &mut || Ok("hivews1:x\n".into())).unwrap(), ("hivews1:x".to_string(), false));
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("invite");
         std::fs::write(&f, "hivews1:y\n").unwrap();

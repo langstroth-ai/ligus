@@ -97,7 +97,7 @@ live only on the worker:
 
 ```sh
 brew install langstroth-ai/ligus/ligus
-ligus enroll --file ./invite --token 'hrt1.…'   # or pipe it: ligus enroll -
+ligus enroll --file ./invite --token @./relay-token   # or pipe the invite: ligus enroll -
 ligus sync
 ligus register-worker --label team-worker      # prints the host id
 ```

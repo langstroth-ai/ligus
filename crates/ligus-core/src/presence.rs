@@ -673,6 +673,15 @@ pub struct RecoveryKey {
     seed: [u8; 32],
 }
 
+impl Drop for RecoveryKey {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.seed);
+    }
+}
+
+/// The seed is wiped when the key is dropped.
+impl zeroize::ZeroizeOnDrop for RecoveryKey {}
+
 impl RecoveryKey {
     pub fn generate() -> Result<Self, PresenceError> {
         let mut seed = [0u8; 32];
@@ -689,11 +698,14 @@ impl RecoveryKey {
     }
     /// From the 24 words (checksum verified).
     pub fn from_words(words: &str) -> Result<Self, PresenceError> {
-        let m = bip39::Mnemonic::parse_normalized(&words.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase())
-            .map_err(|_| err("those aren't 24 valid recovery words"))?;
-        let e = m.to_entropy();
-        let seed: [u8; 32] = e.as_slice().try_into().map_err(|_| err("a recovery key is 24 words"))?;
-        Ok(Self { seed })
+        let mut normalized = words.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        let m = bip39::Mnemonic::parse_normalized(&normalized);
+        zeroize::Zeroize::zeroize(&mut normalized);
+        let m = m.map_err(|_| err("those aren't 24 valid recovery words"))?;
+        let mut e = m.to_entropy();
+        let seed: Result<[u8; 32], _> = e.as_slice().try_into();
+        zeroize::Zeroize::zeroize(&mut e);
+        Ok(Self { seed: seed.map_err(|_| err("a recovery key is 24 words"))? })
     }
     fn keypair(&self) -> crate::crypto::SigningKeypair {
         crate::crypto::SigningKeypair::from_seed(&self.seed).expect("32-byte seed")

@@ -121,6 +121,26 @@ lifts the restriction for every program on the host (a much wider change),
 and the [container image](../deploy/kubernetes.md) ships `bwrap` for
 hosts where Ligus runs in a container.
 
+## Setuid bubblewrap and `NoNewPrivileges` {#setuid-bwrap}
+
+The shipped systemd unit (`deploy/ligus-serve/ligus-serve.service`) sets
+`NoNewPrivileges=yes`. Most distros ship a plain `bwrap` that uses
+unprivileged user namespaces, and that works under it. Where unprivileged
+user namespaces are off, a distro ships `bwrap` **setuid root** instead, and
+under `NoNewPrivileges=yes` it can't gain root: the bubblewrap tier is lost
+(Ligus falls back to the Landlock tier, or refuses every turn without
+Landlock ABI 4).
+
+`ligus-local start --systemd` checks this: when `bwrap` is setuid and
+`unshare -U true` fails, it writes `NoNewPrivileges=no`, with the reason as a
+comment in the unit, and reports a `systemd.nnp` warning. Agent processes
+still run with `no_new_privs` (bubblewrap and Ligus's sandbox helper set it
+for every child); only the `ligus` process itself loses the flag. To keep
+`NoNewPrivileges=yes`, turn on unprivileged user namespaces (or install a
+non-setuid `bwrap`) and start again. `ligus-local unit --role serve
+--data-dir DIR` prints the unit it would install. If you install the unit by
+hand on such a host, make the same choice yourself.
+
 ## Checking a host
 
 - `ligus doctor` prints the tier, why, and what it leaves open.

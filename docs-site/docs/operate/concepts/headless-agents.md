@@ -109,7 +109,7 @@ agent is live:
 
 ```sh
 brew install langstroth-ai/ligus/ligus && \
-  ligus enroll "hivews1:…" --token "hrt1.…" && \
+  ligus enroll --file ./invite --token @./relay-token && \
   ligus worker --label prod-box
 ```
 
@@ -130,7 +130,7 @@ paste the workspace's `hivews1:` invite (the same one the app shares) —
 `$LIGUS_DATA_DIR/config.toml`:
 
 ```sh
-ligus enroll "hivews1:…" --token <hrt1-access-token>   # --token only for a membership-enforcing relay
+ligus enroll --file ./invite --token @./relay-token   # 0600 files; --token only for a membership-enforcing relay
 ```
 
 Then provision the agent's model credential (the §12.5 rule — a detached agent
@@ -243,7 +243,7 @@ LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 
 - `--secret-ref <name>` keeps the key **off** the synced log — the worker holds
   it in env `LIGUS_WS_SECRET_<name>`. `ligus runtimes` shows `✓` when it's present.
-- `--secret <value>` carries the key **E2EE on the log** (zero worker
+- `--secret - | @FILE` carries the key **E2EE on the log** (zero worker
   provisioning; use only for trusted workspaces).
 
 ## Concurrency: worker pools + isolated edits

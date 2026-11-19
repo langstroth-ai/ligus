@@ -26,6 +26,9 @@ Restart=always
 RestartSec=5
 # Files it creates (token, state, worktrees) are private to the user.
 UMask=0077
+# With a setuid-root bwrap and unprivileged user namespaces off, this stops
+# bwrap sandboxing agents; ligus-local start --systemd then writes
+# NoNewPrivileges=no with the reason (docs: operate/ops/linux-sandbox, setuid-bwrap).
 NoNewPrivileges=yes
 PrivateTmp=yes
 # SIGTERM lets a turn in flight finish for up to 15 s; a longer one is

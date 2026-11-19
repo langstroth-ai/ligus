@@ -77,7 +77,7 @@ This creates the box's host keys and saves the relay in
 
 | Option | Use |
 |---|---|
-| `--reg-token <token>` / `LIGUS_REMOTE_REG_TOKEN` | a relay that only admits hosts with an access token |
+| `--reg-token - \| @FILE` / `LIGUS_REMOTE_REG_TOKEN` (or `LIGUS_REMOTE_REG_TOKEN_FILE`) | a relay that only admits hosts with an access token. `-` reads it from stdin, `@FILE` from an owner-only file; a token on the command line works, with a warning |
 | `ligus serve --remote-relay <url>` / `LIGUS_REMOTE_RELAY` | use a relay for this run only, without `relay.json` |
 | `LIGUS_REMOTE_RELAY=off` | turn remote access off for this run even when `relay.json` enables it |
 | `--insecure-relay` / `LIGUS_REMOTE_INSECURE_RELAY=1` | allow an `http` relay URL. For tests and a relay on loopback only |

@@ -3409,6 +3409,7 @@ dependencies = [
  "tracing",
  "uuid",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -3433,6 +3434,7 @@ dependencies = [
  "url",
  "uuid",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

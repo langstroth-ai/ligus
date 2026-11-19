@@ -31,6 +31,8 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "str
 futures-util = "0.3"
 getrandom = "0.4"
 qrcodegen = "1.8"
+# Wipes secrets read from flags and files (recovery words, seeds) after use.
+zeroize = "1"
 tracing.workspace = true
 time = { workspace = true, features = ["local-offset"] }
 # Relay tunnel (`hive-tunnel/1`, docs/relay-tunnel.md): Noise IK/IKpsk1 (snow),

@@ -97,6 +97,41 @@ run "$TMP/l5" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" uninstall --
 check_json "ligus-local never deletes a data dir it did not create" "$TMP/l5" 4 "$RC" data
 if [ -f "$TMP/notours/keep" ]; then pass "foreign data dir kept"; else fail "foreign data dir deleted"; fi
 
+# ligus-local's systemd unit: ExecStart arguments are quoted, with % and $
+# escaped (systemd specifiers and expansions), and a line break is refused.
+mkdir -p "$TMP/u b%h\$X"
+printf '#!/bin/sh\n' >"$TMP/u b%h\$X/ligus"; chmod +x "$TMP/u b%h\$X/ligus"
+printf "LIGUS_WORKER_LABEL='my %%n \"box\"'\n" >"$TMP/eu"
+set +e
+LIGUS_BIN="$TMP/u b%h\$X/ligus" LIGUS_LOCAL_BWRAP=/nonexistent "$LOCAL" unit --role worker --data-dir "$TMP/du" --env-file "$TMP/eu" >"$TMP/unit1" 2>"$TMP/unit1.err"; RC=$?
+set -e
+want="ExecStart=\"$TMP/u b%%h\$\$X/ligus\" worker --label \"my %%n \\\"box\\\"\""
+if [ "$RC" = 0 ] && grep -qxF "$want" "$TMP/unit1"; then pass "systemd unit quotes ExecStart and escapes % and \$"
+else fail "systemd unit ExecStart: $(grep ExecStart "$TMP/unit1" 2>/dev/null) (want $want; rc $RC $(cat "$TMP/unit1.err"))"; fi
+if grep -qxF "EnvironmentFile=$TMP/eu" "$TMP/unit1" && grep -qxF 'NoNewPrivileges=yes' "$TMP/unit1"; then pass "systemd unit env file and NoNewPrivileges=yes"; else fail "systemd unit env file or NoNewPrivileges"; fi
+set +e
+LIGUS_BIN="$TMP/x
+ExecStartPre=/bin/sh -c id" LIGUS_LOCAL_BWRAP=/nonexistent "$LOCAL" unit --role serve --data-dir "$TMP/du" --env-file "$TMP/eu" >"$TMP/unit2" 2>/dev/null; RC=$?
+set -e
+if [ "$RC" = 2 ] && ! grep -q ExecStartPre "$TMP/unit2"; then pass "systemd unit refuses a line break"; else fail "systemd unit with a line break: rc $RC"; fi
+
+# NoNewPrivileges against a setuid bwrap: relaxed (with the reason in the
+# unit) only when bwrap is setuid and unprivileged user namespaces are off.
+: >"$TMP/bwrap-suid"; chmod 4755 "$TMP/bwrap-suid"; : >"$TMP/bwrap-plain"; chmod 755 "$TMP/bwrap-plain"
+nnp() { # bwrap userns
+  LIGUS_BIN="$TMP/u b%h\$X/ligus" LIGUS_LOCAL_BWRAP=$1 LIGUS_LOCAL_USERNS=$2 "$LOCAL" unit --role serve --data-dir "$TMP/du" --env-file "$TMP/eu" | grep '^NoNewPrivileges='
+}
+if [ -u "$TMP/bwrap-suid" ]; then
+  if [ "$(nnp "$TMP/bwrap-suid" no)" = NoNewPrivileges=no ] \
+    && LIGUS_BIN="$TMP/u b%h\$X/ligus" LIGUS_LOCAL_BWRAP="$TMP/bwrap-suid" LIGUS_LOCAL_USERNS=no "$LOCAL" unit --role serve --data-dir "$TMP/du" --env-file "$TMP/eu" | grep '^# Relaxed by ligus-local: .*setuid root' >/dev/null; then
+    pass "setuid bwrap without user namespaces relaxes NoNewPrivileges, with the reason"
+  else fail "setuid bwrap without user namespaces"; fi
+  if [ "$(nnp "$TMP/bwrap-suid" yes)" = NoNewPrivileges=yes ]; then pass "setuid bwrap with user namespaces keeps NoNewPrivileges"; else fail "setuid bwrap with user namespaces"; fi
+else
+  printf 'skip setuid bwrap checks (no setuid bit on %s)\n' "$TMP"
+fi
+if [ "$(nnp "$TMP/bwrap-plain" no)" = NoNewPrivileges=yes ]; then pass "a non-setuid bwrap keeps NoNewPrivileges"; else fail "non-setuid bwrap"; fi
+
 # ligus-k8s never falls back to the current kube context.
 run "$TMP/c1" "$K8S" verify --json --namespace x --release r
 check_json "ligus-k8s without --context is a usage error" "$TMP/c1" 2 "$RC"

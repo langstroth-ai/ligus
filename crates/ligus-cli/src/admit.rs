@@ -329,9 +329,10 @@ impl ligus_runtime::chat_service::PresenceProvider for RecoveryPresence {
     }
 }
 
+/// The recovery key in a recovery-words file: a regular file only its owner
+/// can read (the words are the person's presence), wiped once parsed.
 fn recovery_from_file(path: &str) -> Result<ligus_core::presence::RecoveryKey> {
-    let words = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
-    ligus_core::presence::RecoveryKey::from_words(&words).map_err(|e| anyhow!(e.0))
+    crate::secret_arg::recovery_key_from_file(Path::new(path))
 }
 
 /// `ligus admit issue`: the headless Admin path.
@@ -352,8 +353,11 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
     let mut svc = crate::open_service(cfg)?;
     svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
     let ws = uuid_of_room(&cfg.room);
-    let (inv, seed) = svc.issue_box_admission(ws, ttl, request.as_ref())?;
-    let code = crate::serve::admission_code(cfg, &svc, inv, &seed)?;
+    let (inv, mut seed) = svc.issue_box_admission(ws, ttl, request.as_ref())?;
+    let code = crate::serve::admission_code(cfg, &svc, inv, &seed);
+    // The redeem seed is in the code now; no other copy is kept.
+    zeroize::Zeroize::zeroize(&mut seed);
+    let code = code?;
     let code = match &request {
         Some(r) => r.seal(&code).map_err(|e| anyhow!(e))?,
         None => code,
@@ -487,10 +491,14 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
     let account = svc.author().account_id.ok_or_else(|| anyhow!("this identity has no account"))?;
     let key = ligus_core::presence::RecoveryKey::generate().map_err(|e| anyhow!(e.0))?;
     let ws = uuid_of_room(&cfg.room);
-    let k2 = ligus_core::presence::RecoveryKey::from_words(&key.words()).map_err(|e| anyhow!(e.0))?;
+    let mut words = key.words();
+    let k2 = ligus_core::presence::RecoveryKey::from_words(&words).map_err(|e| anyhow!(e.0));
     // Words first: a key registered whose words could not be written is a
     // credential nobody holds.
-    write_out(&out, key.words().as_bytes())?;
+    let written = k2.is_ok().then(|| write_out(&out, words.as_bytes()));
+    zeroize::Zeroize::zeroize(&mut words);
+    let k2 = k2?;
+    written.unwrap_or(Ok(()))?;
     if let Err(e) = svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| Ok(k2.assert(&req.challenge))) {
         let _ = std::fs::remove_file(&out);
         return Err(e.into());
@@ -502,6 +510,23 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recovery-words file others can read is refused, not used: the
+    /// words are the person's presence (as the lt app's rule).
+    #[cfg(unix)]
+    #[test]
+    fn a_recovery_words_file_others_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let key = ligus_core::presence::RecoveryKey::generate().unwrap();
+        let f = dir.path().join("words");
+        std::fs::write(&f, key.words()).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(recovery_from_file(f.to_str().unwrap()).is_err(), "a 0644 recovery-words file was used");
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(recovery_from_file(f.to_str().unwrap()).is_ok());
+        assert!(recovery_from_file(dir.path().to_str().unwrap()).is_err());
+    }
 
     #[test]
     fn a_bearer_code_is_never_taken_from_the_command_line() {

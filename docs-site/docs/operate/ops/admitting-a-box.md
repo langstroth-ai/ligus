@@ -185,7 +185,9 @@ first credential with `ligus recovery-key create --out ./recovery-words`. The
 CI job `kind-e2e` uses this path to found a throwaway workspace and admit
 serve and a worker into it. The recovery words are as powerful as your
 passkey: use this only for throwaway or automated workspaces, keep the file
-off shared disks, and prefer the desktop or the phone.
+off shared disks, and prefer the desktop or the phone. The words file must be a regular file only its owner can read
+(`recovery-key create` writes it `0600`): `--recovery-words-file` refuses
+one others can read, a directory or a FIFO.
 
 ## Revoking or replacing a box
 
