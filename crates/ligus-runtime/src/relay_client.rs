@@ -91,6 +91,12 @@ fn http_error_text(e: &reqwest::Error) -> String {
     e.to_string()
 }
 
+/// The longest an envelope or keyring request (fetch a page, push one) may
+/// take, body included. The client sets only a connect timeout (its SSE
+/// streams stay open), so a relay or middlebox that accepts a request and
+/// then stalls would otherwise hang the sync loop until a restart.
+pub const ENVELOPE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Decode a JSON response, mapping non-2xx to a typed error *before* attempting
 /// to parse the body — so a plain-text 401/error page never surfaces as a
 /// confusing "error decoding response body".
@@ -260,6 +266,8 @@ pub struct RelayClient {
     /// A langstroth-auth access token kept fresh in the background. When it holds
     /// a value it is sent instead of `auth` (see `with_auth_cell`).
     auth_cell: Option<crate::ligus_auth::TokenCell>,
+    /// [`ENVELOPE_REQUEST_TIMEOUT`] (shorter in tests).
+    request_timeout: std::time::Duration,
 }
 
 impl RelayClient {
@@ -284,7 +292,15 @@ impl RelayClient {
             base: base.into().trim_end_matches('/').to_string(),
             auth: None,
             auth_cell: None,
+            request_timeout: ENVELOPE_REQUEST_TIMEOUT,
         }
+    }
+
+    /// A shorter envelope request timeout (tests).
+    #[doc(hidden)]
+    pub fn with_request_timeout(mut self, t: std::time::Duration) -> Self {
+        self.request_timeout = t;
+        self
     }
 
     /// A client for a relay someone else chose (a DM invite's): like
@@ -298,7 +314,7 @@ impl RelayClient {
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| ligus_forge::new_http_client());
-        Self { http, base: base.into().trim_end_matches('/').to_string(), auth: None, auth_cell: None }
+        Self { http, base: base.into().trim_end_matches('/').to_string(), auth: None, auth_cell: None, request_timeout: ENVELOPE_REQUEST_TIMEOUT }
     }
 
     /// Set the relay access token (for a token-gated relay). Empty = none.
@@ -398,7 +414,7 @@ impl RelayClient {
         let url = format!("{}/v1/workspaces/{}/envelopes", self.base, workspace);
         let resp = self
             .send_retrying(|| {
-                let rb = self.http.post(&url).json(body);
+                let rb = self.http.post(&url).json(body).timeout(self.request_timeout);
                 match key {
                     Some(k) => rb.header("Idempotency-Key", k),
                     None => rb,
@@ -522,7 +538,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}&limit={}",
             self.base, workspace, after, limit
         );
-        let resp = self.send_retrying(|| self.http.get(&url)).await?;
+        let resp = self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?;
         let header = |name: &str| {
             resp.headers()
                 .get(name)
@@ -533,12 +549,15 @@ impl RelayClient {
         let more = header("x-hive-more").is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
         let next_header = header("x-hive-next-after").and_then(|v| v.parse::<u64>().ok());
         let rows: Vec<serde_json::Value> = json_ok(resp).await?;
+        // A row without a sequence, or at or below the one asked after, is
+        // no row of this page (a hostile or broken relay): a seq of 0 would
+        // collide in the held-refetch table and underflow its page math.
         let rows: Vec<(u64, serde_json::Value)> = rows
             .into_iter()
-            .map(|row| {
-                let seq = row.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            .filter_map(|row| {
+                let seq = row.get("seq").and_then(serde_json::Value::as_u64).filter(|&s| s > after)?;
                 let body = row.get("body").cloned().unwrap_or(serde_json::Value::Null);
-                (seq, body)
+                Some((seq, body))
             })
             .collect();
         // Continue past the highest seq actually received; the header only
@@ -561,7 +580,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         Ok(rows
             .into_iter()
             .map(|row| {
@@ -582,7 +601,7 @@ impl RelayClient {
             "{}/v1/workspaces/{}/envelopes?after={}",
             self.base, workspace, after
         );
-        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let seq = row.get("seq").and_then(serde_json::Value::as_u64).unwrap_or(0);
@@ -775,7 +794,7 @@ impl RelayClient {
         workspace: &str,
     ) -> Result<Vec<ligus_core::e2ee::WorkspaceKeyRotation>, RelayError> {
         let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
-        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url)).await?).await?;
+        let rows: Vec<serde_json::Value> = json_ok(self.send_retrying(|| self.http.get(&url).timeout(self.request_timeout)).await?).await?;
         Ok(rows
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
@@ -916,6 +935,41 @@ mod tests {
         assert_eq!(normalize_access_token("  bob:tok  "), "tok");
         // A mispasted URL is not treated as name:token (rest has '/').
         assert_eq!(normalize_access_token("https://relay.example"), "https://relay.example");
+    }
+
+    /// Final review (area B): rows with no sequence, a zero one or one at
+    /// or below the cursor are dropped, never read as seq 0.
+    #[tokio::test]
+    async fn final_review_fetch_page_drops_rows_without_a_usable_seq() {
+        let router = axum::Router::new().fallback(|| async {
+            axum::Json(serde_json::json!([{"body": {"a": 1}}, {"seq": 0, "body": {}}, {"seq": 2, "body": {}}, {"seq": 5, "body": {"b": 2}}]))
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let c = RelayClient::new(format!("http://{addr}"));
+        let page = c.fetch_page("ws", 3, 10).await.unwrap();
+        assert_eq!(page.rows.iter().map(|(s, _)| *s).collect::<Vec<_>>(), vec![5]);
+        assert_eq!(page.next_after, 5);
+    }
+
+    /// Final review (area B): a relay that accepts a page request and never
+    /// answers doesn't hang sync: the request times out.
+    #[tokio::test]
+    async fn final_review_a_stalled_relay_times_out() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let held = tokio::spawn(async move {
+            let mut conns = Vec::new();
+            loop {
+                let (c, _) = listener.accept().await.unwrap();
+                conns.push(c);
+            }
+        });
+        let c = RelayClient::new(format!("http://{addr}")).with_request_timeout(std::time::Duration::from_millis(300));
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.fetch_page("ws", 0, 10)).await;
+        assert!(matches!(r, Ok(Err(_))), "a stalled relay hung the fetch: {:?}", r.map(|x| x.map(|p| p.rows.len())));
+        held.abort();
     }
 
     async fn spawn_relay() -> String {

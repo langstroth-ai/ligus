@@ -629,7 +629,7 @@ impl SyncEngine {
                 j += 1;
             }
             let span = (due[j] - start + 1) as u32;
-            let page = self.relay.fetch_page(&self.workspace, start - 1, span).await?;
+            let page = self.relay.fetch_page(&self.workspace, start.saturating_sub(1), span).await?;
             let want: std::collections::HashSet<u64> = due[i..=j].iter().copied().collect();
             rows.extend(page.rows.into_iter().filter(|(seq, _)| want.contains(seq)));
             i = j + 1;
