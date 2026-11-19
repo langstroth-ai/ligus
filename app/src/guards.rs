@@ -1658,6 +1658,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         }
         for m in &s.messages {
             if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+                && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
                 *by_agent.entry(m.author.clone()).or_default() += 1;

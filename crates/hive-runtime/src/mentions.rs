@@ -290,6 +290,7 @@ fn recent_agent_broadcast(session: &ChatSession, m: &ChatMessage) -> bool {
     session.messages[..at].iter().rev().any(|p| {
         is_agent_reply(p)
             && !p.is_streaming
+            && !p.superseded
             && (m.created_at.0 - p.created_at.0).whole_seconds() < AGENT_BROADCAST_WINDOW_SECS
             && (m.created_at.0 - p.created_at.0).whole_seconds() >= 0
             && mentions_phrase(&p.body.to_lowercase(), "all")

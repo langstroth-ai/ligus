@@ -3229,7 +3229,7 @@ fn summary_dto(s: &ChatSession, default_chat_ids: &std::collections::HashSet<Str
         id,
         title: s.title.clone(),
         last_activity_at: rfc3339(s.last_activity_at()),
-        message_count: s.messages.len() as u32,
+        message_count: s.messages.iter().filter(|m| !m.superseded).count() as u32,
         archived: s.archived,
     }
 }
@@ -3625,10 +3625,10 @@ fn chat_markdown(session: &ChatSession) -> String {
     };
     let mut out = String::new();
     out.push_str(&format!("# {title}\n\n"));
-    let shown = session.messages.iter().filter(|m| !m.body.trim().is_empty()).count();
+    let shown = session.messages.iter().filter(|m| !m.body.trim().is_empty() && !m.superseded).count();
     out.push_str(&format!("_{shown} message(s) · exported from Ligus_\n\n"));
     for m in &session.messages {
-        if m.body.trim().is_empty() {
+        if m.body.trim().is_empty() || m.superseded {
             continue;
         }
         let who = if m.author.trim().is_empty() {
@@ -4101,7 +4101,7 @@ fn get_context_telemetry(
         system_prompt_tokens: snapshot.system_prompt_tokens as u32,
         history_budget_tokens: snapshot.history_budget_tokens as u32,
         history_tokens: snapshot.history_tokens,
-        message_count: session.messages.len() as u32,
+        message_count: session.messages.iter().filter(|m| !m.superseded).count() as u32,
         kept_message_count: snapshot.plan.kept.len() as u32,
         kept_tokens: snapshot.kept_tokens,
         overflow_message_count: snapshot.plan.overflow.len() as u32,
@@ -4503,14 +4503,17 @@ fn list_mention_states(state: State<AppState>) -> Result<Vec<MentionStateDto>, S
 fn mention_state_for(session: &hive_core::ChatSession, me: &str) -> Option<(u32, u32)> {
     let my_role = session.members.iter().find(|m| m.actor.id == me).map(|m| m.role);
     let mut last_ordinal = 0u32;
-    for (i, msg) in session.messages.iter().enumerate() {
+    let mut count = 0u32;
+    // Ordinals count visible messages only (a superseded duplicate is hidden).
+    for (i, msg) in session.messages.iter().filter(|m| !m.superseded).enumerate() {
+        count += 1;
         // A message you wrote never highlights against you.
         let by_me = msg.actor_identity.as_ref().map(|a| a.id == me).unwrap_or(false);
         if !by_me && message_mentions_me(msg, session, me, my_role) {
             last_ordinal = (i + 1) as u32;
         }
     }
-    (last_ordinal > 0).then_some((last_ordinal, session.messages.len() as u32))
+    (last_ordinal > 0).then_some((last_ordinal, count))
 }
 
 /// Which known workspace a session belongs to, mirroring `session_in_workspace`
@@ -5935,11 +5938,20 @@ async fn request_proposal_changes(
         Ok(g) => g,
         Err(_) => return Err("this chat is busy — try again once the current turn finishes".into()),
     };
-    {
-        let mut svc = state.service.lock().unwrap();
-        let _ = svc.claim_turn(sid, workspace_id, trigger.id);
+    // Through the dispatcher (design repos-and-checkouts 11.5), like every
+    // other turn: another device that already holds the revision's turn runs
+    // it (this one watches its holder).
+    match dispatch_here(&state, sid, workspace_id, trigger.id, None, true, std::time::Duration::ZERO)? {
+        hive_core::dispatch::Step::Run => {}
+        hive_core::dispatch::Step::Wait(d) => {
+            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+            drop(_guard);
+            arm_dispatch_watch(&app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO, stop);
+            return Ok(());
+        }
+        _ => return Ok(()),
     }
-    run_turn(&app, &state, sid, workspace_id, &responder).await?;
+    run_turn_answering(&app, &state, sid, workspace_id, &responder, Some(trigger.id)).await?;
 
     // Link any proposal the revision turn produced to the original (version chain)
     // and mark the original superseded, so the pane folds it under its successor.
@@ -6745,16 +6757,19 @@ fn context_snapshot(
     let guarded = tools_reserve > 0 && dispatch::tool_loop_context_window(rt) > 0;
     let history_budget_tokens =
         history_budget(window_tokens, system_prompt_tokens, tools_reserve, passages_reserve, guarded);
-    let cached = load_summary_entry(state, &summary_key(session_id, &responder.runtime_id), &session.messages);
+    // Plan over the visible transcript: a superseded (fenced duplicate)
+    // answer is never context.
+    let history: Vec<hive_core::ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
+    let cached = load_summary_entry(state, &summary_key(session_id, &responder.runtime_id), &history);
     let hysteresis = hive_core::context_budget::plan_with_hysteresis(
-        &session.messages,
+        &history,
         history_budget_tokens,
         cached.as_ref().and_then(|c| c.boundary),
         COMPACT_HIGH_WATERMARK,
         COMPACT_LOW_WATERMARK,
     );
     let plan = hysteresis.plan;
-    let history_tokens = token_estimator::estimate_messages(&session.messages) as u32;
+    let history_tokens = token_estimator::estimate_messages(&history) as u32;
     let kept_tokens = token_estimator::estimate_messages(&plan.kept) as u32;
     let overflow_tokens = token_estimator::estimate_messages(&plan.overflow) as u32;
     let overflow_ids: Vec<Uuid> = plan.overflow.iter().map(|message| message.id).collect();
@@ -7315,6 +7330,9 @@ async fn windowed_context(
     dispatch::warm_context_probe(&responder.runtime).await;
     let snapshot = context_snapshot(state, session_id, session, responder);
     let plan = snapshot.plan;
+    // The same visible transcript context_snapshot planned over (superseded
+    // duplicates excluded), so the summary cache's fingerprint agrees.
+    let history: Vec<ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
     // Reference vaults: with retrieval configured, the few passages that
     // answer the latest message ride at the END of the prompt (on that user
     // turn) and the system prompt stays byte-stable; otherwise, or on any
@@ -7330,14 +7348,14 @@ async fn windowed_context(
     let cache_key = summary_key(session_id, &responder.runtime_id);
     let summary = if plan.overflow.is_empty() {
         // Nothing to summarize: forget any state (in memory and on disk).
-        if load_summary_entry(state, &cache_key, &session.messages).is_some() {
+        if load_summary_entry(state, &cache_key, &history).is_some() {
             apply_summary_update(state, &cache_key, SummaryCacheUpdate::Remove);
         }
         state.summary_backoff.lock().unwrap().remove(&cache_key);
         None
     } else {
         let overflow_ids: Vec<Uuid> = plan.overflow.iter().map(|m| m.id).collect();
-        let cached = load_summary_entry(state, &cache_key, &session.messages);
+        let cached = load_summary_entry(state, &cache_key, &history);
         let summarizer = summarizer_runtime(responder);
         let instruction = summarize_instruction(state);
         let strategy = summary_strategy(cached.as_ref().map(|c| c.covered.as_slice()), &overflow_ids);
@@ -7686,7 +7704,7 @@ async fn summarize(
         .iter()
         // Skip system notes ("🧩 X added a workflow…") and empty/streaming
         // placeholders so they don't get summarized as if a participant said them.
-        .filter(|m| !(m.role == MessageRole::System || m.is_streaming || m.body.trim().is_empty()))
+        .filter(|m| !(m.role == MessageRole::System || m.is_streaming || m.superseded || m.body.trim().is_empty()))
         .map(|m| format!("{}: {}\n", m.author, m.body))
         .collect();
     let budget = summary_input_budget(runtime.context_window(), token_estimator::estimate_text(instruction));
@@ -8283,8 +8301,17 @@ async fn try_tool_loop(
 
     let message_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?
+        let mid = svc
+            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
+            .map_err(map_err)?;
+        // The placeholder is the dispatcher's commit (design
+        // repos-and-checkouts 11.5): fenced means another device's answer
+        // committed first, so this run stops here.
+        if placeholder_fenced(&svc, session_id, mid) {
+            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
+            return Err(TURN_FENCED.into());
+        }
+        mid
     };
     let ligus = crate::agent_iface::begin(app, &responder.runtime, !egress.is_open(), true, workspace_id, session_id, responder.agent_id, &responder.author, message_id, None);
     let (mut tool_defs, executor) = match mcp {
@@ -8574,7 +8601,7 @@ async fn run_prepared_turn_inner(
     // our reply is appended. Stamped on the reply as the per-request correlation
     // key so two concurrent tasks to the SAME agent don't collapse onto one reply
     // (see ChatMessage::reply_to_message_id / pending_mentions).
-    let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming).map(|m| m.id);
+    let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming && !m.superseded).map(|m| m.id);
     // Who the turn answers (what the reply's `@you` means), named per turn.
     let system = join_system(&system, &prompt::requester_guidance(session, reply_to));
 
@@ -8691,8 +8718,17 @@ async fn run_prepared_turn_inner(
 
     let message_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?
+        let mid = svc
+            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
+            .map_err(map_err)?;
+        // The placeholder is the dispatcher's commit (design
+        // repos-and-checkouts 11.5): fenced means another device's answer
+        // committed first, so this run stops here.
+        if placeholder_fenced(&svc, session_id, mid) {
+            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
+            return Err(TURN_FENCED.into());
+        }
+        mid
     };
 
     // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
@@ -9269,12 +9305,21 @@ fn reset_chat_dispatch(state: State<AppState>, session_id: String) -> Result<(),
     Ok(())
 }
 
+/// Why a turn stopped right after its placeholder: another device's answer
+/// to the same turn committed first.
+const TURN_FENCED: &str = "another device answered this turn first";
+
+/// Whether this device's placeholder `mid` was fenced by the dispatcher.
+fn placeholder_fenced(svc: &hive_runtime::ChatService, session_id: Uuid, mid: Uuid) -> bool {
+    svc.load(session_id).ok().flatten().is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
+}
+
 /// Ask the dispatcher what this desktop does about a turn (design
 /// repos-and-checkouts 11.5): this host's coverage of the chat's repo (its
 /// own gate's check, read-only), which devices beat on the presence channel
 /// now, and the caller's `eligible` (`turn_runs_here`) and `waited`.
 /// Writes the claim the dispatcher calls for; never returns `Claim`.
-fn dispatch_here(
+pub(crate) fn dispatch_here(
     state: &AppState,
     session_id: Uuid,
     workspace_id: Uuid,
@@ -9422,7 +9467,9 @@ async fn run_dispatch_watch(
     };
     // The fallback asks as an eligible device: that is what it is for (an
     // owner no live device can satisfy would otherwise mean silence).
-    match dispatch_here(&state, session_id, workspace_id, trigger_id, agent, true, waited)? {
+    // The service keeps the wait clock per holder (a new holder starts it
+    // over), so the time this watcher has run isn't the holder's silence.
+    match dispatch_here(&state, session_id, workspace_id, trigger_id, agent, true, std::time::Duration::ZERO)? {
         hive_core::dispatch::Step::Run => {}
         hive_core::dispatch::Step::Wait(d) => {
             drop(_guard);
@@ -9607,7 +9654,7 @@ async fn send_message(
             .messages
             .iter()
             .find(|m| m.id == reply_id)
-            .is_some_and(|m| message_mentions_me(m, &reloaded, &local_actor_id, my_role));
+            .is_some_and(|m| !m.superseded && message_mentions_me(m, &reloaded, &local_actor_id, my_role));
         if pinged {
             let _ = app
                 .notification()
@@ -9624,7 +9671,7 @@ async fn send_message(
             .messages
             .iter()
             .rev()
-            .find(|m| m.role != MessageRole::System)
+            .find(|m| m.role != MessageRole::System && !m.superseded)
             .and_then(|m| hive_runtime::cascade_target(&reloaded, m))
             .map(|a| a.id)
             .filter(|id| !visited.contains(id))
@@ -9691,19 +9738,35 @@ async fn regenerate(
     // different workspace is active would otherwise mis-scope its events (matches
     // `send_message`, which uses `session.workspace_id`).
     let workspace_id = session.workspace_id;
-    let last_id = session
+    let (last_id, answered) = session
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent))
-        .map(|m| m.id)
+        .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
+        .map(|m| (m.id, m.reply_to_message_id))
         .ok_or("nothing to regenerate yet")?;
     let responder = responder_for(&state, &session, None);
     {
         let mut svc = state.service.lock().unwrap();
         svc.remove_message(sid, workspace_id, last_id).map_err(map_err)?;
     }
-    let _ = run_turn(&app, &state, sid, workspace_id, &responder).await?;
+    // Removing the committed answer starts the turn over (design
+    // repos-and-checkouts 11.2, rule 6): claim it again through the
+    // dispatcher, so a host that also sees the turn open again doesn't run
+    // it a second time.
+    let trigger = answered.map(|r| hive_core::dispatch::trigger_of(&session, r));
+    if let Some(t) = trigger {
+        match dispatch_here(&state, sid, workspace_id, t, None, true, std::time::Duration::ZERO)? {
+            hive_core::dispatch::Step::Run => {}
+            hive_core::dispatch::Step::Wait(d) => {
+                let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO, stop);
+                return Ok(());
+            }
+            _ => return Ok(()),
+        }
+    }
+    let _ = run_turn_answering(&app, &state, sid, workspace_id, &responder, trigger).await?;
     Ok(())
 }
 
@@ -9787,7 +9850,7 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
             }
             m
         }
-        None => match session.messages.iter().rev().find(|m| m.role != MessageRole::System) {
+        None => match session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
             Some(m) => m,
             None => return Ok(None),
         },
@@ -10038,7 +10101,7 @@ fn notify_mentions(
         let Some(session) = svc.load(sid).map_err(map_err)? else {
             return Ok(());
         };
-        let Some(last) = session.messages.last() else {
+        let Some(last) = session.messages.iter().rev().find(|m| !m.superseded) else {
             return Ok(());
         };
         let authored_by_me = last

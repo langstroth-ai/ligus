@@ -68,12 +68,32 @@ fn base() -> &'static SignedWorld {
 /// there, its config frontier `frontier` (or the config head).
 #[allow(clippy::too_many_arguments)]
 fn draft(w: &SignedWorld, clock: &mut u64, by: &str, chat: Uuid, payload: SessionEvent, local: &[SessionEventEnvelope], frontier: Option<CfgFrontier>, head: Option<Option<CfgFrontier>>) -> SessionEventEnvelope {
+    draft_at(w, clock, by, chat, payload, local, frontier, head, None, false)
+}
+
+thread_local! {
+    /// The simulation's clock (one tick is one second), stamped on every
+    /// envelope as its signed time.
+    static NOW: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+const EPOCH_SECS: i64 = 1_700_000_000;
+
+fn ts(secs: u64) -> Timestamp {
+    Timestamp::from_unix_seconds(EPOCH_SECS + secs as i64)
+}
+
+/// [`draft`] with a chosen signed time (`at`, in ticks; default: now) and,
+/// for a hostile author, no chain link.
+#[allow(clippy::too_many_arguments)]
+fn draft_at(w: &SignedWorld, clock: &mut u64, by: &str, chat: Uuid, payload: SessionEvent, local: &[SessionEventEnvelope], frontier: Option<CfgFrontier>, head: Option<Option<CfgFrontier>>, at: Option<u64>, no_prev: bool) -> SessionEventEnvelope {
     *clock += 1;
     let mut env = SessionEventEnvelope::new(chat, w.wid, 10_000 + *clock as i64, payload);
+    env.timestamp = ts(at.unwrap_or_else(|| NOW.with(|n| n.get())));
     let p = &w.people[by];
     let mut actor = p.actor();
     actor.device_id = Some(p.device_id);
-    let prev = local.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id);
+    let prev = if no_prev { None } else { local.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id) };
     env.actor_stamp = Some(ActorStamp {
         actor,
         recorded_at: Timestamp::epoch(),
@@ -109,6 +129,10 @@ struct Scenario {
     seed: u64,
     /// Revoke this device (never the owner) at this tick.
     revoke: Option<(usize, u64)>,
+    /// A hostile member's device (never the owner, never the revoked one):
+    /// stays live, claims with forged coverage, hands over to itself and
+    /// others with backdated lamports and chosen times, and answers.
+    hostile: Option<(usize, u64)>,
 }
 
 fn scenario() -> impl Strategy<Value = Scenario> {
@@ -120,8 +144,12 @@ fn scenario() -> impl Strategy<Value = Scenario> {
             prop::collection::vec((0..n, 0..n), 0..3),
             Just(seed),
             prop::option::weighted(0.25, (1..n, 0u64..80)),
+            prop::option::weighted(0.3, (1..n, any::<u64>())),
         )
-            .prop_map(|(repo_chat, devs, cuts, seed, revoke)| Scenario { repo_chat, devs, cuts, seed, revoke })
+            .prop_map(|(repo_chat, devs, cuts, seed, revoke, hostile)| {
+                let hostile = hostile.filter(|(h, _)| revoke.is_none_or(|(r, _)| r != *h));
+                Scenario { repo_chat, devs, cuts, seed, revoke, hostile }
+            })
     })
 }
 
@@ -199,7 +227,9 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
 
     let crashed = |d: &Dev, tick: u64| d.spec.crash_at.is_some_and(|c| tick >= c);
 
+    let mut hrng = Rng(sc.hostile.map(|(_, s)| s).unwrap_or(1) | 1);
     for tick in 0..TICKS {
+        NOW.with(|n| n.set(tick));
         // Deliver what is due (a cut pair waits for the heal).
         let mut later = Vec::new();
         for (to, env, due) in wire.drain(..) {
@@ -255,6 +285,42 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                     continue;
                 }
             }
+            // A hostile member's device: never runs the dispatcher honestly.
+            if sc.hostile.is_some_and(|(h, _)| h == i) {
+                if hrng.next() % 5 == 0 {
+                    let s = fold(&devs[i].log, &timeline);
+                    let slot = s.turn_dispatch.get(&trigger).cloned().unwrap_or_default();
+                    let early = hive_core::lamport::plausible_keys(&base_log).last().copied();
+                    let head = if hrng.next().is_multiple_of(2) { Some(early) } else { None };
+                    let since = (slot.since - EPOCH_SECS * 1000).max(0) as u64 / 1000;
+                    let at = match hrng.next() % 4 {
+                        0 => Some(since + 15),
+                        1 => Some(since + hrng.next() % 400),
+                        2 => Some(tick),
+                        _ => Some(hrng.next() % 60),
+                    };
+                    let payload = match hrng.next() % 5 {
+                        0 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: 1, supersedes: None, repo_id: Some(repo) },
+                        1 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: slot.epoch + 1, supersedes: Some(me), repo_id: Some(repo) },
+                        2 | 3 => SessionEvent::TurnClaimed { trigger_id: trigger, device_id: me, epoch: slot.epoch + 1, supersedes: slot.holder, repo_id: Some(repo) },
+                        _ => {
+                            let mut m = ChatMessage::new(MessageRole::Assistant, "hive", "hostile");
+                            m.reply_to_message_id = Some(trigger);
+                            m.origin_device_id = Some(me);
+                            SessionEvent::MessageAppended { message: m }
+                        }
+                    };
+                    let env = draft_at(&w, &mut clock, devs[i].name, chat, payload, &devs[i].log, None, head, at, hrng.next().is_multiple_of(2));
+                    all.insert(env.event_id, env.clone());
+                    devs[i].log.push(env.clone());
+                    for to in 0..n {
+                        if to != i {
+                            wire.push((to, env.clone(), tick + hrng.next() % 6));
+                        }
+                    }
+                }
+                continue;
+            }
             if crashed(&devs[i], tick) || tick < devs[i].wait_until {
                 continue;
             }
@@ -282,7 +348,10 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
                 coverage,
                 waited: Duration::from_secs(tick - since),
                 age: Duration::from_secs(tick),
-                holder_live: holder_idx.is_some_and(|h| !crashed(&devs[h], tick) && !cut(&sc, h, i, tick) && revoked.as_ref().is_none_or(|(k, _)| *k != h)),
+                holder_live: holder_idx.is_some_and(|h| {
+                    let hostile = sc.hostile.is_some_and(|(x, _)| x == h);
+                    (hostile || !crashed(&devs[h], tick)) && !cut(&sc, h, i, tick) && revoked.as_ref().is_none_or(|(k, _)| *k != h)
+                }),
                 holder_gone: holder.is_some_and(|h| dispatch::holder_gone(&roster, h)),
             };
             let chat_repo = s.repo.as_ref().and_then(|r| r.repo_id);
@@ -387,7 +456,13 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
     // chat) means exactly one answer, from a covering device.
     let revoked_idx = revoked.as_ref().map(|(k, _)| *k);
     let able: Vec<usize> = (0..n)
-        .filter(|&i| devs[i].spec.eligible && devs[i].spec.crash_at.is_none() && Some(i) != revoked_idx && (!sc.repo_chat || devs[i].spec.covers))
+        .filter(|&i| {
+            devs[i].spec.eligible
+                && devs[i].spec.crash_at.is_none()
+                && Some(i) != revoked_idx
+                && sc.hostile.is_none_or(|(h, _)| h != i)
+                && (!sc.repo_chat || devs[i].spec.covers)
+        })
         .collect();
     let answers = committed(&final_fold, trigger);
     if !able.is_empty() {
@@ -396,7 +471,7 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
     if let Some(a) = answers.first() {
         let m = final_fold.messages.iter().find(|m| m.id == *a).unwrap();
         let by = devs.iter().position(|d| Some(d.id) == m.origin_device_id).unwrap();
-        if sc.repo_chat {
+        if sc.repo_chat && sc.hostile.is_none_or(|(h, _)| h != by) {
             prop_assert!(devs[by].spec.covers, "a repo chat answered by a device without the repo");
         }
     }
@@ -529,4 +604,65 @@ fn a_removed_members_device_is_gone_and_its_later_claims_never_fold() {
 fn the_chat_repo_set_in_the_fold_is_what_a_claim_covers() {
     let (w, chat, _) = signed_chat(true);
     assert_eq!(w.state(chat).repo, Some(ChatRepo { repo_id: Some(repo_id(WEFIT)), ..Default::default() }));
+}
+
+/// Review (adversarial, prove-then-fix): a member's device slips a hand-over
+/// in by lamport between a holder's claim and the answer it wrote at once,
+/// then answers itself. Before the fix the holder's answer was fenced and
+/// the member's committed; now the hand-over is either too early (ignored)
+/// or signed after the holder's answer, which keeps it.
+#[test]
+fn a_member_cannot_retroactively_take_a_promptly_answered_turn() {
+    let (w, chat, t) = signed_chat(false);
+    let mut clock = 0;
+    let d1 = w.people["d1"].device_id;
+    let d2 = w.people["d2"].device_id;
+    let mut log = w.chats[&chat].clone();
+    let claim = draft_at(&w, &mut clock, "d1", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d1, epoch: 0, supersedes: None, repo_id: None }, &log, None, None, Some(100), false);
+    log.push(claim.clone());
+    let mut m = ChatMessage::new(MessageRole::Assistant, "hive", "real");
+    m.reply_to_message_id = Some(t);
+    m.origin_device_id = Some(d1);
+    let real = m.id;
+    let ans = draft_at(&w, &mut clock, "d1", chat, SessionEvent::MessageAppended { message: m }, &log, None, None, Some(101), false);
+    // d2 holds only up to d1's claim (backdated): its events sort before
+    // d1's answer.
+    let upto_claim = log.clone();
+    log.push(ans.clone());
+    let claim_key = hive_core::lamport::plausible_keys(&upto_claim).last().copied();
+    for when in [102u64, 125] {
+        let mut w2 = w.clone();
+        let mut c2 = clock;
+        // Same lamport as the real answer: the attacker grinds its event id
+        // to sort first.
+        let hand = loop {
+            let h = draft_at(&w2, &mut c2, "d2", chat, SessionEvent::TurnClaimed { trigger_id: t, device_id: d2, epoch: 2, supersedes: Some(d1), repo_id: None }, &upto_claim, None, Some(claim_key), Some(when), true);
+            if h.canonical_key() < ans.canonical_key() {
+                break h;
+            }
+        };
+        let mut mine = upto_claim.clone();
+        mine.push(hand.clone());
+        let mut fake = ChatMessage::new(MessageRole::Assistant, "hive", "forged");
+        fake.reply_to_message_id = Some(t);
+        fake.origin_device_id = Some(d2);
+        let fake_id = fake.id;
+        let fake_env = draft_at(&w2, &mut c2, "d2", chat, SessionEvent::MessageAppended { message: fake }, &mine, None, Some(Some(CfgFrontier { lamport: hand.lamport, event_id: hand.event_id })), Some(when), true);
+        for e in [claim.clone(), ans.clone(), hand, fake_env] {
+            w2.push_env(Some(chat), e);
+        }
+        let s = w2.state(chat);
+        assert!(hand_sorted_before(&w2, chat, real), "the attack's events sort before the real answer");
+        assert_eq!(s.turn_dispatch[&t].answer, Some(real), "hand-over signed at {when}");
+        assert!(s.messages.iter().find(|m| m.id == fake_id).unwrap().superseded);
+    }
+}
+
+fn hand_sorted_before(w: &SignedWorld, chat: Uuid, real: Uuid) -> bool {
+    let mut evs = w.chats[&chat].clone();
+    evs.sort_by_key(|e| e.canonical_key());
+    let pos = |pred: &dyn Fn(&SessionEventEnvelope) -> bool| evs.iter().position(pred);
+    let hand = pos(&|e| matches!(e.payload, SessionEvent::TurnClaimed { epoch: 2, .. }));
+    let ans = pos(&|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == real));
+    hand < ans
 }

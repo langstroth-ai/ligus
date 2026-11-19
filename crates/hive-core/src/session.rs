@@ -155,6 +155,8 @@ impl ChatSession {
         for m in self.messages.iter().rev() {
             match m.role {
                 MessageRole::System => continue,
+                // A fenced duplicate answer isn't a reply in the chain.
+                MessageRole::Assistant | MessageRole::Agent if m.superseded => continue,
                 MessageRole::Assistant | MessageRole::Agent => n += 1,
                 MessageRole::User => break,
             }
@@ -224,7 +226,9 @@ impl ChatSession {
     /// empty. Mirrors Swift's `lastActivityAt`.
     pub fn last_activity_at(&self) -> Timestamp {
         self.messages
-            .last()
+            .iter()
+            .rev()
+            .find(|m| !m.superseded)
             .map(|m| m.created_at)
             .unwrap_or(self.created_at)
     }

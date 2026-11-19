@@ -135,6 +135,11 @@ pub struct ChatService {
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
     stream_hold: std::collections::HashMap<Uuid, String>,
+    /// The dispatcher's wait clock (design repos-and-checkouts 11.4): per
+    /// claim key, the holder and epoch this device last saw and since when,
+    /// so "how long has this holder been silent" restarts at every new
+    /// holder whichever path asks (both gates, the watcher, the worker).
+    dispatch_seen: std::collections::HashMap<Uuid, (Option<Uuid>, u32, std::time::Instant)>,
 }
 
 /// Most bytes of a trailing token held back from the log until more text
@@ -187,6 +192,7 @@ impl ChatService {
             agent_messages: std::collections::HashMap::new(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
+            dispatch_seen: std::collections::HashMap::new(),
         }
     }
 
@@ -1454,6 +1460,22 @@ impl ChatService {
         use hive_core::dispatch::{self as d, Step};
         let key = hive_core::turn_claim_key(trigger, agent);
         let Some(session) = self.load(session_id)? else { return Ok(Step::StandDown) };
+        // How long this device has watched the current holder (or, with no
+        // holder, the unclaimed turn): the caller's word, or this service's
+        // own clock, whichever is longer.
+        if self.dispatch_seen.len() >= 8192 {
+            self.dispatch_seen.clear();
+        }
+        let watched = {
+            let now = std::time::Instant::now();
+            let cur = (session.turn_claims.get(&key).copied(), session.turn_dispatch.get(&key).map(|x| x.epoch).unwrap_or(0));
+            let e = self.dispatch_seen.entry(key).or_insert((cur.0, cur.1, now));
+            if (e.0, e.1) != cur {
+                *e = (cur.0, cur.1, now);
+            }
+            now.duration_since(e.2)
+        };
+        let ctx = DispatchCtx { waited: ctx.waited.max(watched), ..ctx };
         let roster = self.workspace_roster(workspace_id).ok();
         let me = self.device_id;
         let view = |s: &ChatSession| {
@@ -3203,7 +3225,7 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
     // another agent (not itself). It's actionable work for that agent's worker,
     // which — unlike the desktop's inline loop — otherwise never sees it. Bound by
     // cascade depth so an A↔B chain across devices/workers can't loop forever.
-    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System) {
+    if let Some(last) = session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
         if let Some(agent) = cascade_target(session, last) {
             out.retain(|p| p.agent_id != agent.id);
             out.push(PendingMention {
@@ -3243,6 +3265,22 @@ impl<'a> DispatchCtx<'a> {
     pub fn plain(holder_live: &'a dyn Fn(Uuid) -> bool) -> Self {
         Self { eligible: true, coverage: hive_core::dispatch::Coverage::NoRepo, waited: std::time::Duration::ZERO, holder_live }
     }
+}
+
+/// The receiver a pending turn's claim is keyed by
+/// ([`hive_core::turn_claim_key`]), the same on every host: `None` for a user
+/// message's first mentioned agent (what the desktop's gates and older
+/// devices claim), and the agent itself for a hand-off or cascade (an
+/// agent's message, as the desktop's `handoff_turn` and `respond_once`
+/// claim) or for a user message's later mentions, each of which may run on
+/// another host.
+pub fn claim_receiver(session: &ChatSession, pm: &PendingMention) -> Option<Uuid> {
+    let Some(m) = session.messages.iter().find(|m| m.id == pm.message_id) else { return Some(pm.agent_id) };
+    if m.role != MessageRole::User {
+        return Some(pm.agent_id);
+    }
+    let first = crate::mentions::parse_mentions(&m.body, session).agents.first().copied();
+    (first != Some(pm.agent_id)).then_some(pm.agent_id)
 }
 
 pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {

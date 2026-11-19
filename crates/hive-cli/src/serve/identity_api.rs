@@ -602,7 +602,7 @@ impl Shared {
             });
             if let Some(c) = chat {
                 v["chatId"] = json!(c.id);
-                v["updatedAt"] = json!(iso(c.messages.last().map(|m| m.created_at).unwrap_or(c.updated_at)));
+                v["updatedAt"] = json!(iso(c.messages.iter().rev().find(|m| !m.superseded).map(|m| m.created_at).unwrap_or(c.updated_at)));
             }
             if let Some(t) = founded {
                 v["foundedAt"] = json!(iso(t));

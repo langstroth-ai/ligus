@@ -655,6 +655,7 @@ fn match_stage_reply(
         .find(|m| {
             matches!(m.role, MessageRole::Assistant | MessageRole::Agent)
                 && !m.is_streaming
+                && !m.superseded
                 && !m.body.is_empty()
                 // Precise per-request match: this reply answers exactly this
                 // stage's prompt. Falls back to author-name only for legacy

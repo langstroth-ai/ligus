@@ -558,7 +558,7 @@ fn cmd_chats(cfg: &Config) -> Result<()> {
             }
             any = true;
             let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
-            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.len(), ch);
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
         }
     }
     if !any {
@@ -616,7 +616,7 @@ fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usi
     let Some(s) = svc.load(chat_id)? else {
         bail!("unknown chat {chat_id}");
     };
-    for m in s.messages.iter().skip(from) {
+    for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
     }
     Ok(s.messages.len())

@@ -85,9 +85,6 @@ pub struct WorkerCtx<'a> {
 pub struct DrainState {
     /// Mentions whose turn hard-failed here (not retried).
     pub failed: HashSet<Uuid>,
-    /// When this host first saw each turn it is eligible for but doesn't
-    /// hold (the dispatcher's wait clock).
-    pub seen: std::collections::HashMap<Uuid, std::time::Instant>,
 }
 
 /// Where a headless host's chat service lives, for its Ligus MCP server.
@@ -330,9 +327,6 @@ pub async fn drain_tick(
     if failed.len() >= 8192 {
         failed.clear();
     }
-    if drain.seen.len() >= 8192 {
-        drain.seen.clear();
-    }
     let (work, runtimes) = {
         let mut svc = lock(svc);
         // A box that can't write (revoked, or awaiting its owner's approval)
@@ -397,16 +391,12 @@ pub async fn drain_tick(
                 Some(r) => hive_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &hive_runtime::repos::cloning()),
                 None => hive_core::dispatch::Coverage::NoRepo,
             };
-            let first = *drain.seen.entry(pm.message_id).or_insert_with(std::time::Instant::now);
-            let dctx = hive_runtime::DispatchCtx { eligible: true, coverage, waited: first.elapsed(), holder_live: &live };
-            match svc.dispatch_turn(pm.session_id, s.workspace_id, pm.message_id, None, dctx) {
-                Ok(hive_core::dispatch::Step::Run) => {
-                    drain.seen.remove(&pm.message_id);
-                    work.push(pm)
-                }
-                Ok(hive_core::dispatch::Step::StandDown) => {
-                    drain.seen.remove(&pm.message_id);
-                }
+            // The same claim key the desktop uses (a hand-off is keyed by
+            // its receiver), and the service's own wait clock per holder.
+            let receiver = hive_runtime::claim_receiver(&s, &pm);
+            let dctx = hive_runtime::DispatchCtx { eligible: true, coverage, waited: std::time::Duration::ZERO, holder_live: &live };
+            match svc.dispatch_turn(pm.session_id, s.workspace_id, pm.message_id, receiver, dctx) {
+                Ok(hive_core::dispatch::Step::Run) => work.push(pm),
                 Ok(_) => {}
                 Err(e) => eprintln!("worker: claim {} failed: {e}", pm.message_id),
             }

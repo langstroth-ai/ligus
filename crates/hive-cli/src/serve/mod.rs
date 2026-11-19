@@ -630,7 +630,7 @@ impl Shared {
         };
         s.messages[start.min(s.messages.len())..]
             .iter()
-            .filter(|m| m.role != MessageRole::System)
+            .filter(|m| m.role != MessageRole::System && !m.superseded)
             .filter(|m| !(m.role == MessageRole::User && m.actor_identity.as_ref().is_some_and(|a| a.id == me)))
             .count()
     }
@@ -683,7 +683,7 @@ impl Shared {
                             continue;
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         if let Some(text) = m.body.get(from..) {
                             self.hub.emit("message.delta", json!({ "chatId": chat, "messageId": message, "text": text }));
                         }
@@ -694,7 +694,7 @@ impl Shared {
                             self.local_streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&message);
                         }
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
-                        let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
+                        let Some(m) = s.messages.iter().find(|m| m.id == message && !m.superseded) else { continue };
                         let name = if done { "message.done" } else { "message.created" };
                         let me = notify::Me::in_chat(&author, s, &links);
                         let mut dto = api::message_dto(chat, m, viewer);

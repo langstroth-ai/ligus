@@ -1937,17 +1937,35 @@ fn fold_pass(
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.
             if !superseded && !crate::guard::fold_authored(&mut session, payload, author) {
-                session.apply(payload);
+                let ms = crate::admission::envelope_ms(env);
+                if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
+                    // The dispatcher's fold (`crate::dispatch`) with the
+                    // claim's signed time and whether the holder it would
+                    // displace is gone at its position.
+                    let holder_gone = session
+                        .turn_claims
+                        .get(trigger_id)
+                        .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
+                    let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
+                    crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                } else {
+                    session.apply(payload);
+                }
                 // The dispatcher's commit (`crate::dispatch`): an answer whose
                 // origin device is the signer (or certified the signing agent
-                // key) commits its turn or is marked superseded.
+                // key, as the workspace roster at its position holds it)
+                // commits its turn or is marked superseded.
                 if let SessionEvent::MessageAppended { message } = payload {
-                    let origin = message.origin_device_id.filter(|o| {
-                        env.signer_device_id == Some(*o)
-                            || env.signer_device_id.and_then(|k| tracker.state.agent_keys.get(&k)).is_some_and(|k| k.host_device_id == *o)
-                    });
+                    let agent_host = |k: Uuid| {
+                        at.and_then(|r| r.valid_agent_key(k))
+                            .or_else(|| tracker.state.valid_agent_key(k))
+                            .map(|key| key.host_device_id)
+                    };
+                    let origin = message
+                        .origin_device_id
+                        .filter(|o| env.signer_device_id == Some(*o) || env.signer_device_id.and_then(agent_host) == Some(*o));
                     if let Some(o) = origin {
-                        crate::dispatch::note_answer(&mut session, message.id, o);
+                        crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
                     }
                 }
             }
