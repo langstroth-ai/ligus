@@ -23,7 +23,12 @@ Full release notes are on the
   Ligus starts outside a turn (the summarizer, chat titles), run without
   one, and Codex, aider and Hermes, which can't, are refused with a note.
   `ligus doctor --sandbox` and Settings → Sandbox show the effective policy.
-  See [Your home dir is default-deny](../concepts/security.md#home-default-deny)
+  Grants apply on a device only when its user chooses (by default only on
+  the Owner's devices), and a change shows a notice. An MCP server whose
+  tools include a shell is offered only to turns with the shell, and
+  Settings → MCP flags it.
+  See [Your home dir is default-deny](../concepts/security.md#home-default-deny),
+  [Grants on this device](../concepts/security.md#grants-on-this-device)
   and [The shell is the Owner's](../concepts/security.md#owner-only-shell).
 - **The phone acts as you with its own key; one host applies.** Since the
   box is its own service member, what you do as yourself from the phone

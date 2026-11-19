@@ -266,8 +266,9 @@ Only these come back:
 
 - **the turn's worktree** (writable when the turn may write; `.git` and the
   protected config stay read-only), even when it sits under your home;
-- **the turn's scratch dir and its own home** (`$TMPDIR/ligus-turn-…/home`).
-  `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and
+- **the turn's scratch dir and its own home**
+  (`$TMPDIR/ligus-turns-<uid>/ligus-turn-…/home`). `HOME`,
+  `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and
   `XDG_CACHE_HOME` point there, so `~/.npm`, `~/.cache/pip`,
   `~/.cargo/registry` and the like are the turn's own and disappear with it.
   A CLI agent's turn home also holds copies of the config and sign-in files
@@ -280,6 +281,30 @@ Only these come back:
 
 Directories on the way to an allowed path keep their metadata readable on
 macOS (so `stat`, `getcwd` and `realpath` work), but they can't be listed.
+
+**Other turns' scratch dirs stay out.** Every turn dir is made in one
+private dir (`$TMPDIR/ligus-turns-<uid>`, mode 0700, refused if someone
+else made it first), and each executor denies that dir but the turn's own:
+a concurrent turn's home holds its CLI's sign-in (a Copilot `hosts.json`
+is a GitHub token), which another turn could otherwise read from the
+shared temp dir. On bubblewrap the dir is an empty tmpfs, so a turn that
+starts later isn't visible either; on Landlock rules name inodes, so a dir
+made later is outside every rule.
+
+**The real home, whatever `HOME` says.** Ligus also looks your home up in
+the password database (`getpwuid_r`). When `HOME` is unset, that home is
+the one denied; when `HOME` names another dir, both are: the password
+database's home is a hard deny, with its credential dirs, and a worktree
+inside it stays reachable the way one inside a data dir does.
+
+**A protected path that is a symbolic link refuses the turn.** The
+executors keep `.git`, the protected dirs (`.ligus`, `.claude`, `.vscode`,
+...), `ligus.config.toml` and `.envrc` read-only by naming or binding what
+they resolve to, so a link out of the worktree (committed to a repository,
+`.envrc -> ../../.ssh`) would bring its target into the turn, and the
+link itself could be replaced. A turn that may write such a checkout is
+refused with a note naming the path; replace the link with the file or dir
+itself.
 
 **The git identity.** Ligus reads `user.name` and `user.email` from your
 global git config (on the host, outside the sandbox) and writes only those
@@ -357,21 +382,88 @@ every device judges them the same way:
   phone key, sets grants.
 - **A grant never opens Ligus's data dir, a secret file or a credential
   dir**, even one naming it or a dir above it: those stay denied inside it.
+  Credential files beside tool config count too: a grant of `~/.cargo`,
+  `~/.m2` or `~/.gradle` reads what else is there but never
+  `credentials.toml`, `settings.xml` or `gradle.properties`, and `~/.npmrc`,
+  `~/.yarnrc.yml`, `~/.pypirc`, `~/.gem/credentials`, `~/.azure`, `~/.oci`,
+  `~/.config/op`, `~/.password-store`, `~/.vault-token`, `~/.pgpass` and
+  `~/.my.cnf` are hard denies.
   Every path that opens part of the home (a grant, an allow-list entry, a
   `PATH` dir) is judged where it resolves, too: one that is a symlink to
   your home, to a dir above it or into a denied path opens nothing, and a
   grant of a dir above your home (`/home`, `/Users`) opens nothing in it.
 - **A read-write grant never makes writable what runs as you outside the
   sandbox**: a `PATH` or toolchain dir (a planted `git` there would run
-  unconfined the next time you type it), your shell startup files
-  (`.zshrc`, `.bashrc`, `.profile`, fish and nushell config), login items
-  and autostart entries (`~/Library/LaunchAgents`, `~/.config/autostart`,
-  `~/.config/systemd`), and the config of tools that run commands from it
-  (`~/.gitconfig`, `~/.config/git`, `~/.npmrc`, `~/.cargo/config.toml`,
-  editor config). A grant that names one of them, or a dir that holds one
-  (`~/.config`, `~/.cargo`), is applied read-only.
+  unconfined the next time you type it), `~/bin`, `~/.bin` and
+  `~/Applications`, your shell startup files (`.zshrc`, `.bashrc`,
+  `.profile`, `.bash_aliases`, `.zsh`, oh-my-zsh, starship, fish and
+  nushell config), login items and autostart entries
+  (`~/Library/LaunchAgents`, `~/.config/autostart`, `~/.config/systemd`),
+  interpreter startup and user site dirs (`~/.local/lib` and
+  `~/Library/Python`, where a `.pth` file runs on every Python start;
+  `.pythonrc`, `.ipython`, `.irbrc`, `.gem`), package caches a build
+  compiles or installs from (all of `~/.cargo`, whose
+  `registry/src/*/build.rs` runs on your next build; `~/.m2`, `~/.gradle`,
+  `~/go/pkg`, `~/.deno`, `~/.bun`), tool plugins (`~/.docker/cli-plugins`,
+  gh extensions, Terraform providers), the config of tools that run
+  commands from it (`~/.gitconfig`, `~/.config/git`, the dirs your global
+  `core.hooksPath` and `init.templateDir` name, `~/.npmrc`, pip and yarn
+  config, `~/.cargo/config.toml`'s `build.rustc-wrapper`), editors and
+  terminals (VS Code, Cursor and Zed tasks and extensions, vim, emacs,
+  kitty, WezTerm, Ghostty), macOS automation (`~/Library/Services`,
+  `~/Library/Scripts`, `~/Library/Preferences`), and install prefixes you
+  may own outside the home (`/opt/homebrew`, `/usr/local`, `/opt/local`,
+  `/Applications`). A grant that names one of them, or a dir that holds one
+  (`~/.config`, `~/Library`), is applied read-only. Cron tables, systemd timers
+  started over D-Bus, and launchd jobs aren't files under your home, so a
+  grant doesn't reach them; the sandbox's own rules do (on macOS launchd
+  refuses job submissions from a sandboxed process and Apple Events are
+  denied; on Linux unix sockets are filtered and `crontab` runs without
+  its privileges under no-new-privs). A read-write grant of a project dir is
+  still code you will run: an agent can change its `.git/hooks`,
+  `.git/config`, `.envrc`, `.vscode/tasks.json`, `Makefile` or `build.rs`,
+  which run when you next work there. Grant a repository read-write only
+  when you would review what lands in it.
+- **Paths are compared without case on macOS and Windows**, whose file
+  systems ignore it, so `~/.SSH` or `~/Library/launchagents` is judged as
+  `~/.ssh` and `~/Library/LaunchAgents` even before the dir exists.
+- **Judged when planned, checked again when bound.** A path is judged
+  where it resolves when the turn's plan is made, and the plan keeps the
+  resolved path. The Linux executors drop an entry that resolves elsewhere
+  by the time they bind it (a grant swapped for a symlink in between, by
+  an agent with write access beside it), and the Landlock tier opens each
+  path without following a final symlink and keeps it only if the open
+  descriptor still names that path. Seatbelt names paths in a profile the
+  kernel resolves on every access, with the hard denies last. What is left:
+  on the bubblewrap tier, the moments between the last check and
+  bubblewrap's own mount.
   `LIGUS_SANDBOX_READ_ALLOW` and `LIGUS_SANDBOX_WRITE_ALLOW` stay
   device-local, and only the read list may open a credential dir.
+
+#### Grants on this device {#grants-on-this-device}
+
+A grant opens paths, and an agent's shell, on the computer of every member
+whose device runs that agent, so each device decides whether it applies
+them: **Settings → Sandbox → Apply workspace sandbox grants on this
+device**.
+
+- **On by default for the workspace Owner's own devices** (and in the
+  device-local workspace): the Owner grants the shell and stands behind the
+  grants.
+- **Off by default for every other member's device**, including an Admin's
+  who saved the grants: their turns run with the default allow-list and the
+  Owner-only shell until the device's user turns it on. A device that
+  doesn't apply them shows the policy without them, so what the effective
+  policy lists is what runs there.
+- **A headless host** (`ligus worker`, `serve`, `agent`) uses
+  `LIGUS_SANDBOX_GRANTS=apply` or `ignore`; unset, only a host whose user is
+  the workspace Owner applies them. `ligus doctor` prints the decision and
+  why, `ligus doctor --sandbox` lists the grants and whether they are in
+  force here.
+- **A change shows a notice.** When the signed grants differ from what this
+  device's user last saw, a notice says so (and whether this device applies
+  them) until they review it in Settings → Sandbox or dismiss it. Your own
+  change needs no notice.
 
 #### See the effective policy {#effective-policy}
 
@@ -383,8 +475,8 @@ reason, what is denied, the shell rule, and the grants in force. On a box:
 ligus doctor --sandbox [--runtime claude|codex|copilot|agy|aider|pi|hermes|commands] [--agent <agent id>]
 ```
 
-prints the same lines and the signed grants for its workspace. Both are built
-from the plan the executors enforce.
+prints the same lines, the signed grants for its workspace and whether this
+host applies them. Both are built from the plan the executors enforce.
 
 ### What a plain Claude Code turn tries to reach {#refused-optional}
 
@@ -630,7 +722,25 @@ granted that agent the shell in Settings → Sandbox (signed, with a passkey).
 A person who can't be resolved means no shell, and so does a CLI Ligus
 starts outside any turn (the chat summarizer and compaction, a chat title,
 a runtime's Test button): their prompts carry other members' words and no
-Owner stands behind them.
+Owner stands behind them. Such a CLI runs read-only with only its model's
+endpoint (`TurnPolicy::outside_turn`), on every path: Claude Code without
+Bash, an ACP session with `execute` denied, and Copilot, Antigravity and
+pi with their shell switched off by flag. Codex, aider and Hermes have no
+switch, so they keep theirs, confined the same way. The summarizer and the
+titler run in their own scratch dir, not your checkout: a title syncs to
+every member, so it must not be able to carry a file from it.
+
+**An MCP server that offers a shell is a shell.** A tool named `bash`,
+`shell`, `exec`, `run_command`, `terminal`, `powershell` or the like runs
+commands as much as `run_command` does. So a turn without the shell gets
+no such tool: an HTTP model's tool list leaves them out, and a CLI agent
+(Claude Code's MCP config, an ACP session's servers) gets only servers this
+device has seen list their tools with none of them a shell. A server not
+checked yet is listed first, before the turn starts, and left out if it
+can't be. Settings → MCP flags a server that offers a shell ("Owner turns
+only") and checks a server's tools on request. Names are a heuristic: a
+server can call a shell something else, so allow-list only servers whose
+tools you know.
 
 It is a second gate next to the author gate, and stricter on purpose: your
 own message on your own device always clears the tool floor, but in a
