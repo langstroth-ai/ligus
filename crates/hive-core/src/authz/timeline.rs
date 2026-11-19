@@ -60,6 +60,12 @@ pub struct DeviceState {
     /// person's laptop enrolls it) is held by every account that certified
     /// it.
     pub holders: BTreeSet<Uuid>,
+    /// Whether [`DeviceState::holders`] was read from the device's own
+    /// signatures (it vouched for them), rather than being every account
+    /// that certified it. Only then does holding a device more than one
+    /// account certified make it one's own to revoke (R5): a device that
+    /// vouched for no one can't tell its person from an adopter.
+    pub vouched: bool,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
     /// owner's desktop approving `hive serve enroll`), or that a certified,
@@ -169,6 +175,21 @@ impl RosterState {
     /// someone else's device (its key) for itself holds nothing.
     pub fn account_holds_device(&self, account: Uuid, device: Uuid) -> bool {
         self.devices.get(&device).is_some_and(|d| d.holders.contains(&account))
+    }
+
+    /// Whether `device` is `account`'s own to revoke (R5, and a service
+    /// member's own device): `account` holds it, and either the device
+    /// itself vouched for it or no other current member holds it. A device
+    /// more than one member certified that vouched for none of them (a
+    /// phone, a box its person's desktop enrolled) is held by its person and
+    /// any adopter alike, so it is no one's own: it is revoked down the
+    /// ranks over all of them (or by its person once the others are gone).
+    pub fn account_owns_device(&self, account: Uuid, device: Uuid) -> bool {
+        self.devices.get(&device).is_some_and(|d| {
+            d.holders.contains(&account)
+                && (d.vouched
+                    || d.holders.iter().all(|h| *h == account || !self.members.values().any(|m| m.account_id == Some(*h))))
+        })
     }
 
     /// Whether a device is certified (by some undisputed account) and not
@@ -532,6 +553,7 @@ impl RosterTracker {
                 Some(v) => d.accounts.intersection(v).copied().collect(),
                 None => d.accounts.clone(),
             };
+            d.vouched = !d.holders.is_empty() && self.vouched.contains_key(id);
         }
         for d in &fold.guards.revoked_devices {
             devices.entry(*d).or_default().revoked = true;

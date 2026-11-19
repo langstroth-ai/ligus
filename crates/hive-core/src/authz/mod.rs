@@ -564,10 +564,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         // R5: revoking a device your own account holds is self-service (not
-        // someone else's device whose key you certified for yourself).
+        // someone else's device whose key you certified for yourself, nor one
+        // that can't tell you from such an adopter).
         if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-            if account.is_some_and(|a| ctx.running.account_holds_device(a, *device_id)) {
+            if account.is_some_and(|a| ctx.running.account_owns_device(a, *device_id)) {
                 return Decision::Allow;
             }
         }
@@ -1031,7 +1032,7 @@ fn service_member_refusal(
         }
         SessionEvent::DeviceRevoked { device_id, .. } => {
             let own = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-            let mine = roster.is_some_and(|r| own.is_some_and(|a| r.account_holds_device(a, *device_id)));
+            let mine = roster.is_some_and(|r| own.is_some_and(|a| r.account_owns_device(a, *device_id)));
             (!mine).then(|| "a service member revokes only its own device".into())
         }
         SessionEvent::MemberAdded { member, .. } if member.id != author => Some("a service member admits no one".into()),

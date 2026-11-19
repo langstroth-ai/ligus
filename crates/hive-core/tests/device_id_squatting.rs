@@ -231,7 +231,8 @@ fn certifying_someone_elses_device_key_holds_nothing_backdated_or_not() {
 /// for themselves can't sign as it, and its person and the workspace's Owner
 /// still revoke it. (Its person's laptop and the adopter's publish
 /// certificates alike, and the phone vouches for neither on the log, so the
-/// adopter holds it too: a residual, see the threat model.)
+/// adopter holds it too, though not as their own to revoke: see
+/// `an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one`.)
 #[test]
 fn certifying_someone_elses_phone_key_signs_nothing() {
     let mut w = SignedWorld::genesis(&["owner", "con", "mal"], None);
@@ -258,6 +259,90 @@ fn certifying_someone_elses_phone_key_signs_nothing() {
     let mut owner = w.clone();
     let by_owner = owner.push("owner", revoke.clone());
     assert_eq!(owner.verdict(by_owner), Verdict::Allowed, "an Owner can't revoke con's phone after the adoption");
+    // con's own revocation goes down the ranks over the adopter too (see
+    // `an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one`).
     let by_con = w.push("con", revoke);
-    assert_eq!(w.verdict(by_con), Verdict::Allowed, "con can't revoke their own phone after the adoption");
+    assert_eq!(w.verdict(by_con), Verdict::Denied, "con, mal's peer, revoked a phone mal holds too");
+}
+
+/// An adopter of a device that vouched for no one on the log (a phone, a box
+/// its person's desktop enrolled) is one of its holders, as its person is:
+/// the log can't tell the two certificates apart. Holding it that way must
+/// not make it the adopter's to revoke as their own (R5): any member could
+/// then revoke anyone's phone by certifying its key for themselves. A
+/// device more than one account certified, that vouched for none of them,
+/// is revoked down the ranks over all of them; its person still revokes it
+/// once the adopter is gone, and an Owner always can.
+#[test]
+fn an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one() {
+    let mut w = SignedWorld::genesis(&["owner", "con", "mal"], None);
+    w.admit("owner", "con", WorkspaceRole::Contributor);
+    w.admit("owner", "mal", WorkspaceRole::Contributor);
+    let phone = Phone::new();
+    let cert = w.phone_certificate("con", &phone);
+    w.push("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let adopt = w.phone_certificate("mal", &phone);
+    let adopted = w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
+    assert_eq!(w.verdict(adopted), Verdict::Allowed, "control: a well-formed certificate of mal's");
+    let revoke = SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: Vec::new() };
+    let mut by_mal = w.clone();
+    let id = by_mal.push("mal", revoke.clone());
+    assert_eq!(by_mal.verdict(id), Verdict::Denied, "mal revoked con's phone by certifying its key for mal");
+    assert!(!by_mal.roster().devices[&phone.device_id].revoked);
+    // An Owner revokes it.
+    let mut by_owner = w.clone();
+    let id = by_owner.push("owner", revoke.clone());
+    assert_eq!(by_owner.verdict(id), Verdict::Allowed);
+    // Once mal is gone, con revokes it again.
+    let mal_id = w.people["mal"].actor().id;
+    let removed = w.push("owner", SessionEvent::MemberRemoved { member_id: mal_id, watermark: Vec::new() });
+    assert_eq!(w.verdict(removed), Verdict::Allowed, "control: the Owner removes mal");
+    let id = w.push("con", revoke);
+    assert_eq!(w.verdict(id), Verdict::Allowed, "con can't revoke their own phone once the adopter is gone");
+}
+
+/// The same for an Ed25519 device that never signed anything on the config
+/// log (a box enrolled by its person's desktop): an adopter can't revoke it.
+#[test]
+fn an_adopter_cannot_revoke_a_box_that_vouched_for_no_one() {
+    let mut w = SignedWorld::genesis(&["owner", "con", "mal"], None);
+    w.admit("owner", "con", WorkspaceRole::Contributor);
+    w.admit("owner", "mal", WorkspaceRole::Contributor);
+    let boxk = SigningKeypair::generate().unwrap();
+    let enroll = DeviceCertificate::issue(&w.people["con"].account, w.people["con"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    let device = enroll.device_id;
+    w.push("con", SessionEvent::DeviceCertificateAdded { certificate: enroll });
+    let adopt = DeviceCertificate::issue(&w.people["mal"].account, w.people["mal"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
+    let revoke = SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() };
+    let id = w.push("mal", revoke);
+    assert_eq!(w.verdict(id), Verdict::Denied, "mal revoked con's box by certifying its key for mal");
+}
+
+/// A phone certificate never takes over a device in the fold, with or
+/// without presence: one naming a desktop's id or another phone's id with a
+/// new key names an id its key doesn't derive (refused wherever it sorts),
+/// and the only certificate a phone's key derives an existing id for is
+/// that phone's own (a re-publication).
+#[test]
+fn a_phone_certificate_never_takes_over_a_device_in_the_fold() {
+    let mut w = world();
+    let phone = Phone::new();
+    let first = w.phone_certificate("con", &phone);
+    let id = w.push("con", SessionEvent::DeviceCertificateAdded { certificate: first });
+    assert_eq!(w.verdict(id), Verdict::Allowed, "control: con enrolls a phone");
+    let other = Phone::new();
+    let people = w.people.clone();
+    let con = &people["con"];
+    for target in [con.device_id, phone.device_id, people["owner"].device_id] {
+        let cert = DeviceCertificate::issue_p256_for_id(&con.account, con.account_id, target, &other.public_key(), Timestamp::epoch());
+        let with = w.push("con", SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
+        let without = w.push_bare("con", SessionEvent::DeviceCertificateAdded { certificate: cert });
+        assert_eq!((w.verdict(with), w.verdict(without)), (Verdict::Denied, Verdict::Denied), "a phone certificate took over {target}");
+    }
+    let roster = w.roster();
+    assert_eq!(roster.devices[&con.device_id].public_key, con.device.public_key_bytes().to_vec());
+    assert!(!roster.devices[&con.device_id].phone);
+    assert_eq!(roster.devices[&phone.device_id].public_key, phone.public_key());
+    assert!(!roster.devices.contains_key(&other.device_id));
 }
