@@ -26,11 +26,14 @@ Open **Memory** in the [right rail](right-rail.md) (or the command palette).
   most 4000 characters) and up to 8 tags. A note you write from a chat
   records that chat as its source.
 - **Edit** and **Remove** appear on notes you wrote. Admins and Owners can
-  edit or remove anyone's note.
-- **Proposed by agents** lists what agents (and people on their phones)
-  proposed: a new note, an edit, or a removal, with the agent's reason and
-  the chat it came from. **Accept** applies it as your change (the note
-  then shows "proposed by" the agent); **Reject** leaves memory as it was.
+  edit or remove anyone's note. On someone else's note, **Suggest an edit**
+  files your change as a proposal for its author or an Admin to decide.
+- **Proposals** lists what agents, people on their phones and other members
+  proposed: a new note, an edit (with the note it changes), or a removal,
+  with the reason, who proposed it and the chat it came from. An agent's
+  proposal names the agent, and the device it came from when the agent had
+  no key of its own. **Accept** applies it as your change (the note then
+  shows "proposed by" the agent); **Reject** leaves memory as it was.
 
 A Viewer reads memory but doesn't change it.
 
@@ -41,8 +44,10 @@ and an accepted proposal) change the same note at the same time, Ligus keeps
 both: the first change in the workspace's order becomes the note, and the
 other is shown on the note as a **conflict**, with its full text and author.
 Nothing is silently overwritten. Pick **Keep current**, **Use theirs**, or
-**Edit** to merge them by hand; saving settles the conflicts you saw. A note
-holds at most four unsettled conflicts.
+**Edit** to merge them by hand; saving settles the conflicts you saw. If
+someone else changed the note while you were merging, your merge is kept as
+a conflict too, never dropped. A note holds at most four unsettled
+conflicts. A title can't hold invisible or direction-changing characters.
 
 ### Removing a note
 
@@ -80,8 +85,9 @@ the desktop) or read them with `ligus_task_state` (on every host).
 
 A card stays current for two hours after its last update (an agent can ask
 for up to 24 hours), then it is hidden. Only the agent itself, or the host
-it runs on, can write its card; another host's agent with the same name
-can't overwrite it.
+it runs on, can write its card, and each writer has its own card: one host
+can't overwrite another's, so an agent that moves to another host (or gets
+its own signing key) shows a fresh card while the old one expires.
 
 ## On the phone
 
