@@ -463,3 +463,22 @@ fn a_forged_copy_of_a_share_doesnt_drop_the_genuine_one() {
     assert_eq!(w.verdict(id), Verdict::Allowed);
     assert_eq!(w.state(chat).attachments[&a.id].attachment.sha256, H1);
 }
+
+/// Second review: a share authored before the policy went off (or stamped
+/// with a frontier from before it, which an author may name) still folds,
+/// judged at its position. The fold can't do better, so every device also
+/// refuses to fetch, preview, save or hand an agent a file the policy at the
+/// head refuses (`attachment_blob::receivable`).
+#[test]
+fn a_share_from_before_a_policy_off_still_folds_at_its_position() {
+    let mut w = world();
+    on(&mut w);
+    let chat = w.chat("owner", "c");
+    let before_off = w.head();
+    w.push("ada", SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy::default() });
+    assert!(!w.roster().attachments.policy.enabled);
+    let late = w.say(chat, "mara", share(&by(&w, "mara", file("late.pdf", H1, 10))));
+    let a = by(&w, "mara", file("old.pdf", H1, 10));
+    let id = w.write("mara", Some(chat), share(&a), before_off, hive_core::testkit::Proof::None);
+    assert_eq!((w.verdict(late), w.verdict(id)), (Verdict::Denied, Verdict::Allowed));
+}
