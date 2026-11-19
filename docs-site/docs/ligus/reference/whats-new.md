@@ -6,6 +6,23 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **Workspace repositories.** A workspace names the repositories it works on;
+  each device keeps its own checkouts of them, private to that device, and
+  hosts report which ones they have (never where). An Admin adds a repository
+  from a bound folder ("Add WeFit to the workspace?"), Settings →
+  Repositories or `ligus repos add`; the phone, a box and the desktop
+  (**Clone into…**) clone one by id. A chat picks its repository from the chip
+  at its top; a turn runs only on a host with a confirmed checkout of it and
+  otherwise says why, and takes its runtimes, MCP servers and trust from its
+  own chat's folder, never the one on screen. The composer warns when an
+  agent's host lacks the chat's repository and can run that turn here once
+  instead. Chat branches start from a pinned base (the first pin wins; an
+  Admin or the chat's creator can move it, and every host rebuilds its chat
+  branch there or says why it can't), applied proposals replay on every host,
+  and an apply never half-applies; a conflict offers **Ask the agent to
+  rebase** and **Open in editor**. See
+  [Workspace repositories](../features/repositories.md) and
+  [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
 - **Your home dir is off limits to agents; the shell is the Owner's.**
   Every agent process (CLI agents, `run_command`, pre-flight tests, stdio
   MCP servers) now runs with a home of its own for the turn, and your real

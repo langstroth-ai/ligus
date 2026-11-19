@@ -23,6 +23,62 @@ You can set the default from the box's shell with
 `<owner>__<name>` (from github.com) or `<host>__<owner>__<name>` (from any
 other code host; GitLab subgroups are joined with `__`).
 
+## Workspace repositories on the box
+
+When the workspace names its repositories (see
+[Workspace repositories](../../ligus/features/repositories.md)), the box works
+from that list:
+
+- **Clone by id.** `POST /v1/repos/clone {"repoId": …}` (the phone's **Clone
+  here**) clones a workspace repository from the box's own connection for its
+  host. The URL is rebuilt as `https://<canonical>` and never taken from the
+  event; the host's address is checked again and pinned for git right before
+  the clone, so a name that now resolves to a private address is refused
+  unless the connection is marked internal. git follows no redirect on a
+  clone by id (a moved repository fails; update its workspace entry). The
+  folder is
+  `<name>-<first 8 hex of the repo id>` under the repos dir, `origin` is set
+  to the repository's identity, and the clone becomes the workspace default
+  when the box has none. While it runs, the box reports the repository as
+  cloning.
+- **Found checkouts.** At start, and whenever the workspace's repositories
+  change, the box looks in its repos dir and its scan roots for checkouts of
+  them. A found checkout is used only after someone confirms it (**Use it**
+  on the phone, or `ligus repos confirm <repo> <path>`). The box never scans
+  folders it wasn't given.
+- **Earlier bindings.** The workspace default and per-chat entries in
+  `repo-bindings.toml` are mapped to the repository their remote is, on this
+  box only. Nothing is published, and the file is kept as it is.
+- **Turns.** A chat with a repository runs only in the box's confirmed
+  checkout of it, on the chat's branch, brought up to date with the
+  proposals applied in the chat. Without one, the turn doesn't run and the
+  chat says why.
+- **Coverage.** The box's presence beat tells members which repositories it
+  has checked out (no paths). `ligus repos coverage off` stops it.
+- **One manager per checkout.** The box refuses a checkout another Ligus
+  process on the machine manages (the desktop app's folder, for example);
+  clone it separately instead. A reference clone to a local checkout always
+  dissociates, so deleting that checkout never breaks the box's copy.
+
+From the box's shell:
+
+```sh
+ligus repos                          # repositories, this box's checkouts, the repos dir
+ligus repos add <remote|canonical|path> [--name WeFit] [--branch main]   # Admin
+ligus repos bind <repo> <path>       # use a checkout for a repository
+ligus repos confirm <repo> <path>    # use a found checkout
+ligus repos unbind <repo> [path]
+ligus repos roots add <folder>       # scan this folder too
+ligus repos scan
+ligus repos alias github-work github.com   # an SSH host alias, for identity only
+ligus repos chat <chat-id> <repo|none> [--branch B]
+ligus repos coverage on|off|default
+ligus repos takeover <path>          # manage a checkout whose host is gone
+```
+
+A box is a service member, at most Contributor, so it can't add or remove
+workspace repositories; an Admin does that from a desktop or the phone.
+
 ## Connect the box to your code hosts (once)
 
 Listing your repos, cloning private ones, and opening pull or merge requests

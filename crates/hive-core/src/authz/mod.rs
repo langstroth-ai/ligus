@@ -35,6 +35,7 @@
 //! role checks, as before.
 
 pub mod agent;
+pub mod attachments;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
@@ -158,6 +159,14 @@ pub struct AuthzState {
     pub message_authors: BTreeMap<Uuid, String>,
     /// The signed author of each apply request: they (or an Admin) withdraw it.
     pub apply_requesters: BTreeMap<Uuid, String>,
+    /// The turns a person wrote themselves, by their author: a User message
+    /// signed for a human and not a runtime effect, never since rewritten or
+    /// continued by anything else. Only these name local files
+    /// (`[Attached: <path>]`, issue #118): an agent's reply or a runtime
+    /// effect the host signs under its person's identity (an automatic
+    /// pickup posts whatever title someone else filed) is not the person.
+    /// Kept in the device-local workspace too.
+    pub person_messages: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -197,6 +206,9 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
                 | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
+                | SessionEvent::ChatBaseRepinned { .. }
+                | SessionEvent::AttachmentShared { .. }
+                | SessionEvent::AttachmentDeleted { .. }
         )
 }
 
@@ -318,6 +330,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if let Some(why) = stale_epoch(env, ctx, on_config) {
         return Decision::deny(why);
     }
+    // File attachments (issue #118): what holds on every log and tier.
+    if let Some(why) = attachments::payload_refusal(env, on_config, ctx.checked && !on_config, if ctx.checked { ctx.workspace } else { None }, ctx.running) {
+        return Decision::deny(why);
+    }
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
     // A message is its author's (checked chat folds).
@@ -330,6 +346,20 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             SessionEvent::MessageRemoved { message_id } => Some((*message_id, true)),
             _ => None,
         };
+        // An applied proposal's content is what the chat's ledger replays on
+        // every device that hasn't applied it yet
+        // (`workspace_repo::ledger`): it never changes after the apply, or a
+        // re-upsert (its producing agent's own, or anyone's) would have
+        // other devices replay bytes nobody approved. A title edit is fine.
+        if let SessionEvent::ProposalUpserted { proposal } = &env.payload {
+            if let Some(old) = fold.proposals.iter().find(|p| p.id == proposal.id && p.status == crate::proposals::ProposalStatus::Applied) {
+                let mut incoming = proposal.clone();
+                incoming.repo_id = old.repo_id;
+                if votes::diff_digest(old) != votes::diff_digest(&incoming) {
+                    return Decision::deny("an applied proposal's content can't change");
+                }
+            }
+        }
         if let Some((id, removal)) = target {
             if fold.authz.message_authors.get(&id).is_some_and(|orig| orig != author) {
                 let moderator = removal
@@ -844,12 +874,52 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                     return Decision::deny("bad base branch");
                 }
             }
+            SessionEvent::AttachmentShared { attachment } => {
+                if let Err(why) = attachments::share_ok(env, attachment, fold, at, author, role) {
+                    return Decision::deny(why);
+                }
+            }
+            SessionEvent::AttachmentDeleted { attachment_id } => {
+                if let Err(why) = attachments::delete_ok(env, *attachment_id, fold, at, author, role) {
+                    return Decision::deny(why);
+                }
+            }
             SessionEvent::ChatBasePinned { repo_id, commit } => {
                 if !crate::workspace_repo::is_commit_id(commit) {
                     return Decision::deny("malformed commit id");
                 }
                 if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
                     return Decision::deny("pins a base for a repository this chat doesn't use");
+                }
+            }
+            // Review residual 3: re-pinning is explicit, a person's (never an
+            // agent or a runtime effect, through their own device), an
+            // Admin's or the chat's creator's, from the pin in force.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never re-pins a chat's base");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person re-pins a chat's base through their own device");
+                }
+                let creator = !fold.creator_actor_id.is_empty() && fold.creator_actor_id == author;
+                if !creator && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only an Admin or the chat's creator re-pins its base");
+                }
+                if !crate::workspace_repo::is_commit_id(commit) || !crate::workspace_repo::is_commit_id(previous) || commit == previous {
+                    return Decision::deny("malformed re-pin");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("re-pins a base for a repository this chat doesn't use");
+                }
+                let history = fold.repo_bases.get(repo_id);
+                if history.and_then(|h| h.last()) != Some(previous) {
+                    return Decision::deny("re-pins from a base that isn't the one in force");
+                }
+                if history.is_some_and(|h| h.len() >= crate::workspace_repo::MAX_BASE_PINS) {
+                    return Decision::deny("this chat has re-pinned its base too many times");
                 }
             }
             _ => {}

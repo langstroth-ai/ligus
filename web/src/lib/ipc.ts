@@ -81,8 +81,10 @@ export const getChat = (sessionId: string) =>
 export const getContextTelemetry = (sessionId: string) =>
   invoke<ContextTelemetryDto | null>("get_context_telemetry", { sessionId });
 
-export const sendMessage = (sessionId: string, body: string) =>
-  invoke<void>("send_message", { sessionId, body });
+/// `runHere`: "Run here this time" — a message to an agent pinned to a host
+/// without the chat's repository runs on this device instead, once.
+export const sendMessage = (sessionId: string, body: string, runHere?: boolean) =>
+  invoke<void>("send_message", runHere ? { sessionId, body, runHere: true } : { sessionId, body });
 
 /// Stop the in-flight turn for a session (the composer's Stop button). Aborts
 /// generation and kills any CLI subprocess; safe no-op if nothing is running.
@@ -379,16 +381,144 @@ export const exportChat = (sessionId: string) =>
 export const saveAttachment = (name: string, dataBase64: string) =>
   invoke<string>("save_attachment", { name, dataBase64 });
 
-/// Turn a composer attachment into the marker to embed. Relay upload is off in
-/// this release (a code-only guard in the backend, no setting), so this returns
-/// a device-local `[Attached: <path>]` marker (only this device can open it).
+/// Turn a composer attachment into the marker to embed (issue #118). In a
+/// synced workspace whose attachment policy lets this person share, the file
+/// is checked, sealed, uploaded and bound to a signed share, and this resolves
+/// to `[Attachment: <id>]`. Otherwise (policy off, the default; no relay; your
+/// own workspace) it is a device-local `[Attached: <path>]` marker that only
+/// this device can open.
 export const shareAttachment = (sessionId: string, path: string) =>
   invoke<string>("share_attachment", { sessionId, path });
 
-/// Resolve a received blob reference to a local file path (cache hit, or download
-/// + decrypt). Rejects when it can't be fetched (no relay, aged out, wrong key).
-export const resolveAttachmentBlob = (id: string, name: string) =>
-  invoke<string>("resolve_attachment_blob", { id, name });
+export type TypeClass =
+  | "text" | "image" | "audio" | "video" | "document" | "macroDocument" | "archive"
+  | "diskImage" | "installer" | "executable" | "script" | "markup" | "unknown";
+
+/// A shared file as the chat shows it (mirrors `AttachmentView`).
+export interface SharedAttachmentView {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  sha256: string;
+  author: string;
+  sender: string;
+  authorKind: string;
+  deleted: boolean;
+  blocked: boolean;
+  mine: boolean;
+  canDelete: boolean;
+  nameClass: TypeClass;
+  riskyByName: boolean;
+  fromAgentOffer: boolean;
+  /// The sharer's own messages that place it (the only ones that show it).
+  messageIds: string[];
+}
+
+export interface ChatAttachments {
+  shared: SharedAttachmentView[];
+  /// `[Attached: <path>]` markers in this person's own messages.
+  ownLocalPaths: string[];
+}
+
+export const listAttachments = (sessionId: string) =>
+  invoke<ChatAttachments>("list_attachments", { sessionId });
+
+export type ScanResult =
+  | { verdict: "notConfigured" }
+  | { verdict: "clean"; scanner: string }
+  | { verdict: "infected"; scanner: string; detail: string }
+  | { verdict: "failed"; scanner: string; detail: string };
+
+export interface AttachmentCheck {
+  id: string;
+  sha256: string;
+  name: string;
+  size: number;
+  sender: string;
+  assessment: {
+    detected: { ext: string; mime: string; class: TypeClass };
+    nameExt: string;
+    nameClass: TypeClass;
+    mismatch: boolean;
+    doubleExtension: boolean;
+    risky: boolean;
+    warnings: string[];
+    preview: "image" | "text" | null;
+  };
+  archive: {
+    entries: number;
+    totalUncompressed: number;
+    unsafeNames: string[];
+    nestedArchives: number;
+    riskyEntries: number;
+    bomb: string | null;
+    /// Entries Ligus couldn't open (encrypted, or an unsupported
+    /// compression) and inner archives it couldn't list: their types weren't
+    /// checked.
+    opaqueEntries?: number;
+  } | null;
+  scan: ScanResult;
+  blockedType: string | null;
+  refused: string | null;
+  needsConfirmation: boolean;
+}
+
+/// Download, verify against the signed reference and inspect (an explicit
+/// action; nothing is opened or saved).
+export const checkAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentCheck>("check_attachment", { sessionId, attachmentId });
+
+/// Save a checked file via a save dialog, quarantine-marked. `confirmed` is
+/// the second confirmation for risky files. Resolves to the path, or null if
+/// cancelled.
+export const saveReceivedAttachment = (sessionId: string, attachmentId: string, confirmed: boolean) =>
+  invoke<string | null>("save_received_attachment", { sessionId, attachmentId, confirmed });
+
+export interface AttachmentPreview {
+  kind: "image" | "text";
+  mime: string;
+  dataBase64: string;
+}
+
+/// An inert preview (raster image or plain text) of a checked file.
+export const previewAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentPreview>("preview_attachment", { sessionId, attachmentId });
+
+export const deleteAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<void>("delete_attachment", { sessionId, attachmentId });
+
+export const deleteMemberAttachments = (memberId: string) =>
+  invoke<number>("delete_member_attachments", { memberId });
+
+export interface AttachmentPolicy {
+  enabled: boolean;
+  minRole: "owner" | "admin" | "contributor" | "viewer";
+  agents: boolean;
+  services: boolean;
+  maxBytes: number;
+  allowedTypes?: string[];
+  blockedTypes?: string[];
+}
+
+export interface AttachmentRulesView {
+  policy: AttachmentPolicy;
+  recommended: AttachmentPolicy;
+  blocked: string[];
+  canEdit: boolean;
+  canShare: boolean;
+  relay: boolean;
+  localOnly: boolean;
+  hardMaxBytes: number;
+}
+
+export const attachmentRules = () => invoke<AttachmentRulesView>("attachment_rules");
+export const setAttachmentPolicy = (policy: AttachmentPolicy) =>
+  invoke<void>("set_attachment_policy", { policy });
+export const blockAttachmentHash = (sha256: string) =>
+  invoke<void>("block_attachment_hash", { sha256 });
+export const unblockAttachmentHash = (sha256: string) =>
+  invoke<void>("unblock_attachment_hash", { sha256 });
 
 /// Read a local image attachment as a data: URL for inline preview. Rejects when
 /// the file isn't present on this device (e.g. an attachment synced from another
@@ -2012,3 +2142,100 @@ export const forgesDeviceStatus = () => invoke<ForgeDeviceStatus>("forges_device
 export const forgesRepos = (id: string, q?: string, owner?: string, page?: number) =>
   invoke<{ login: string; owners: string[]; repos: ForgeRepo[]; hasMore: boolean }>("forges_repos", { id, q, owner, page });
 export const forgesClone = (id: string, repo: string, parent: string) => invoke<string>("forges_clone", { id, repo, parent });
+
+// ── Workspace repositories (repos-and-checkouts) ─────────────────────────
+
+/// One other host's coverage of a repo (never a path).
+export interface RepoHostCoverage {
+  hostId: string;
+  label: string;
+  kind: "device" | "worker";
+  online: boolean;
+  /// "present" | "cloning" | "missing" | "error" | "unknown"
+  state: string;
+  viaFork: boolean;
+}
+
+export interface WorkspaceRepoDto {
+  id: string;
+  name: string;
+  canonical: string;
+  forgeKind: string;
+  defaultBranch: string;
+  removed: boolean;
+  /// This device: its own checkout path, and folders a scan found.
+  here: { state: string; code: string; viaFork: boolean; path: string | null; found: string[] };
+  hosts: RepoHostCoverage[];
+  /// Same claimed history as this other repo, different canonical.
+  lookalikeOf?: string | null;
+}
+
+export interface WorkspaceReposDto {
+  repos: WorkspaceRepoDto[];
+  canAdmin: boolean;
+  /// The bound folder's remote, when it isn't a workspace repo yet.
+  suggestion: { canonical: string; name: string; viaFork: boolean; path: string } | null;
+  hostLabel: string;
+  coverageReporting: boolean;
+  scanRoots: string[];
+}
+
+export interface ChatWorkspaceRepoDto {
+  id: string;
+  name: string | null;
+  canonical: string | null;
+  removed: boolean;
+  baseBranch: string;
+  basePinned: boolean;
+  /// The pinned base in force (40 or 64 hex), when one is pinned.
+  baseCommit?: string | null;
+  /// This person may move the pinned base (an Admin, or the chat's creator).
+  canRepin?: boolean;
+  /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
+  here: { state: string; reason: string };
+  /// The chat's agents pinned to another host that says it has no checkout
+  /// of this repo (the composer's warning).
+  pinnedElsewhere?: PinnedElsewhere[];
+}
+
+export interface PinnedElsewhere {
+  agentId: string;
+  agentName: string;
+  hostId: string;
+  hostLabel: string;
+  /// This device has the repo, runs the agent's runtime, and the agent is yours.
+  canRunHere: boolean;
+}
+
+export const listWorkspaceRepos = () => invoke<WorkspaceReposDto>("list_workspace_repos");
+export const addWorkspaceRepo = (input: string, opts: { name?: string; kind?: string; branch?: string; path?: string } = {}) =>
+  invoke<{ id: string; canonical: string; name: string }>("add_workspace_repo", {
+    input,
+    name: opts.name ?? null,
+    kind: opts.kind ?? null,
+    branch: opts.branch ?? null,
+    path: opts.path ?? null,
+  });
+export const renameWorkspaceRepo = (repoId: string, name: string, branch?: string) =>
+  invoke<void>("rename_workspace_repo", { repoId, name, branch: branch ?? null });
+export const removeWorkspaceRepo = (repoId: string) => invoke<void>("remove_workspace_repo", { repoId });
+export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
+export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
+export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });
+export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("set_repo_coverage_reporting", { on });
+export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
+export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
+  invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });
+/// "Clone into…": clone a workspace repo by id into `parent` through this
+/// device's connection to its host, and bind it here.
+export const cloneWorkspaceRepo = (repoId: string, parent: string) =>
+  invoke<{ path: string; rootMatches: boolean | null }>("clone_workspace_repo", { repoId, parent });
+/// Move the chat's pinned base (Admin or the chat's creator, with presence):
+/// to `commit`, or with none to the latest of its base branch on this device.
+export const repinChatBase = (sessionId: string, commit?: string) =>
+  invoke<string>("repin_chat_base", commit ? { sessionId, commit } : { sessionId });
+/// Open the chat's folder for its repository with the OS's default handler.
+export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat_checkout", { sessionId });
+/// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
+export const askAgentToRebase = (sessionId: string, proposalId: string) =>
+  invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });
