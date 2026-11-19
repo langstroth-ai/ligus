@@ -45,7 +45,10 @@ are backward compatible.
 The signature is **Ed25519** over a canonical preimage (sorted-key JSON,
 ISO8601 dates) of the envelope's identifying fields + payload. See
 `crates/hive-core/src/{crypto,events}.rs`. Envelopes that fail verification are
-quarantined, not applied.
+quarantined, not applied. Envelopes that can't be judged yet (a signer whose
+certificate or admission hasn't arrived, a disputed account key) are held in
+a bounded device-local table, never applied until they verify, and never
+hold the fetch cursor.
 
 ## 2. Relay sync (HTTP/JSON)
 

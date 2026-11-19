@@ -19,8 +19,10 @@ account, with:
 
 Their devices' encryption keys come from those workspaces' signed logs, not
 from a server, so Ligus can seal things to them without asking anyone who
-they are. Whoever founds a workspace can add any account there with a key of
-their own, so one workspace never overrides the others: Ligus trusts the key
+they are. Inside one workspace, someone else registering a key under their
+account is refused there (their own admission fixes their key), but whoever
+founds a workspace can add any account there with a key of their own, so one
+workspace never overrides the others: Ligus trusts the key
 from a workspace that person founded, else from the workspace you joined
 first that registers one, and ignores a workspace that says otherwise about
 them. Only when every workspace that registers a key for someone disputes it

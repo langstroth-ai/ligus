@@ -55,8 +55,12 @@ protected against key substitution by the relay. For strangers the risk is
 now visible and explicit instead of silent.
 
 What it doesn't: the account key binding inside a shared workspace is itself
-trust on first use per workspace (first `AccountKeyRegistered` wins, a
-conflicting one makes the account disputed). A relay that could already
+trust on first use per workspace: the account's own first word there (the
+device that signed its admission, or the founder's seed) anchors its key, a
+registration nobody of that lineage signed is refused, and only an account
+with no anchor is disputed by a conflicting self-certified registration
+(`hive_core::account_keys`; [phase0-specs](phase0-specs.md), "Held events and
+account-key disputes"). A relay that could already
 inject identity into a shared workspace before the invitee joined it could
 also make its key look verified. The relay also maps handle to `githubId`; a
 relay that maps a handle to a different known account makes the code go to

@@ -6,6 +6,15 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **Events that can't be judged yet no longer stop sync, and nobody can
+  silence a member through their account key.** An event signed by a device
+  whose certificate or admission hasn't arrived waits aside on the device
+  (bounded, counted under Settings → Team sync and in `ligus doctor`) and
+  applies on its own once it does; sync carries on past it, even when it
+  never comes. A key someone else registers under a member's account is
+  refused and attributed to whoever signed it, so the member's events keep
+  folding. See [held events](../../operate/security/threat-model.md#held-events)
+  and [account keys](../../operate/security/threat-model.md#account-keys).
 - **Your home dir is off limits to agents; the shell is the Owner's.**
   Every agent process (CLI agents, `run_command`, pre-flight tests, stdio
   MCP servers) now runs with a home of its own for the turn, and your real

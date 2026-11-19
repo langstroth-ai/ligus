@@ -57,6 +57,26 @@ Notes:
 
 - A single undecryptable or corrupt envelope doesn't stop sync; it is
   skipped and logged.
+- An event this device can't judge yet (signed by a device whose
+  certificate for that person hasn't arrived, by someone not admitted yet,
+  or for an account whose key is disputed) doesn't stop sync either: it
+  waits aside and applies on its own once what it waits for arrives.
+  Settings → Team sync says how many wait ("N events wait for a device
+  certificate or an admission"); on a box, `ligus doctor` prints `held
+  events: N from M device(s), D dropped, E expired` and the reasons. A few
+  that never go away are normal when someone wrote from a device nobody
+  certified (or as someone they aren't). A device keeps at most 1,000 per
+  signing device, 10,000 per workspace, and none past 30 days; anything
+  dropped is counted there.
+- **A person's events stopped appearing everywhere** and they recently
+  re-installed or signed in on a new device: check that the new device was
+  added to their account (Settings → Passkeys & keys, **Confirm this
+  device**). Someone else registering a key under their account can't do
+  this: such a registration is refused and named in the device's guard log
+  (`account_key_refused`), and their events keep folding. Only their own
+  devices asserting two different account keys stops their events (held,
+  never applied); remove the device that registered the second key and
+  re-invite them under a new account.
 - A headless box (`ligus serve`, `ligus worker`) stops seeing new messages
   from desktops after an Admin used **Remove & revoke**: it can't follow a
   key rotation. See [Offboarding](../../operate/security/runbooks.md#offboarding).
