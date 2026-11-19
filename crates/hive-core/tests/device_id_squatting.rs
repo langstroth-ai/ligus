@@ -346,3 +346,47 @@ fn a_phone_certificate_never_takes_over_a_device_in_the_fold() {
     assert_eq!(roster.devices[&phone.device_id].public_key, phone.public_key());
     assert!(!roster.devices.contains_key(&other.device_id));
 }
+
+/// Vouching is bound to this workspace's log: a config event a device
+/// signed in another workspace (stamped for an account there) and replayed
+/// into this log names the other workspace and log in its signed preimage,
+/// so moved here it no longer verifies and vouches for nothing.
+#[test]
+fn a_config_event_replayed_from_another_workspace_vouches_for_nothing() {
+    let mut w1 = SignedWorld::genesis(&["owner", "con", "mal"], None);
+    w1.admit("owner", "con", WorkspaceRole::Contributor);
+    w1.admit("owner", "mal", WorkspaceRole::Contributor);
+    // A box of con's, enrolled by con's desktop here (it signs nothing here),
+    // and certified by mal for mal too: contested, vouched for no one.
+    let boxk = SigningKeypair::generate().unwrap();
+    let people = w1.people.clone();
+    let enroll = DeviceCertificate::issue(&people["con"].account, people["con"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    let device = enroll.device_id;
+    w1.push("con", SessionEvent::DeviceCertificateAdded { certificate: enroll });
+    let adopt = DeviceCertificate::issue(&people["mal"].account, people["mal"].account_id, &boxk.public_key_bytes(), Timestamp::epoch());
+    w1.push("mal", SessionEvent::DeviceCertificateAdded { certificate: adopt });
+    // In another workspace the box signed a config event for mal (say mal
+    // enrolled it there): replayed into this log.
+    let mut w2 = SignedWorld::genesis(&["mal"], None);
+    w2.people = people.clone();
+    let mut there = w2.draft("mal", None, ka(device), None);
+    there.clear_raw();
+    sign_envelope(&mut there, device, &boxk);
+    let mut moved = there.clone();
+    moved.workspace_id = w1.wid;
+    moved.session_id = w1.cfg[0].session_id;
+    let mut log: Vec<&SessionEventEnvelope> = w1.cfg.iter().collect();
+    log.push(&moved);
+    let v = hive_core::authz::RosterTracker::vouched(&log);
+    assert!(v.get(&device).is_none_or(|a| a.is_empty()), "a replayed event vouched: {v:?}");
+    // Control: the same event signed for this log does vouch.
+    let mut here = w1.draft("mal", None, ka(device), None);
+    here.clear_raw();
+    sign_envelope(&mut here, device, &boxk);
+    let mut log: Vec<&SessionEventEnvelope> = w1.cfg.iter().collect();
+    log.push(&here);
+    let v = hive_core::authz::RosterTracker::vouched(&log);
+    assert!(v.get(&device).is_some_and(|a| a.contains(&people["mal"].account_id)), "control: {v:?}");
+    // And unmoved, the other workspace's event verifies there.
+    assert!(hive_core::crypto::verify_envelope(&there, &boxk.public_key_bytes()).is_ok());
+}
