@@ -44,6 +44,13 @@ pub fn diff_digest(p: &ActionProposal) -> String {
         h.update((part.len() as u32).to_le_bytes());
         h.update(part);
     }
+    // An offered file (issue #118): a ninth part only when there is one, so
+    // every proposal without a file keeps the digest it always had.
+    if let Some(a) = &p.attachment {
+        let a = serde_json::to_vec(a).expect("serialize attachment");
+        h.update((a.len() as u32).to_le_bytes());
+        h.update(&a);
+    }
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
