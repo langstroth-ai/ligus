@@ -1,15 +1,13 @@
 //! Track D on the desktop: the Ligus MCP server for this host's agent turns
 //! (agent-signed effects, budgets, audit, ask-the-human), the ACP permission
-//! escalations, and hand-off auto-start. Kept out of `lib.rs`: a turn calls
-//! [`begin`], wraps its dispatch in [`TurnIface::scope`], and calls
-//! [`TurnIface::finish`] after finalizing.
+//! escalations, and hand-off auto-start. Kept out of `lib.rs`; a turn's own
+//! Ligus interface lives in the turn engine.
 
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use hive_core::flow::HumanAsk;
-use hive_runtime::ligus_mcp::{Budgets, LigusHost, LigusMcp, TurnHandle, TurnSpec};
-use hive_runtime::{ChatService, ResolvedRuntime};
+use hive_runtime::ligus_mcp::{LigusHost, LigusMcp};
+use hive_runtime::ChatService;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
@@ -48,116 +46,11 @@ impl LigusHost for AppHost {
 }
 
 /// This app's Ligus MCP server (one per process; its host key never leaves
-/// memory).
-fn server(app: &AppHandle) -> Arc<LigusMcp> {
+/// memory). A turn's interface to it is the turn engine's
+/// (`hive_runtime::turn_engine::ligus`).
+pub(crate) fn server(app: &AppHandle) -> Arc<LigusMcp> {
     static S: OnceLock<Arc<LigusMcp>> = OnceLock::new();
     S.get_or_init(|| LigusMcp::new(Arc::new(AppHost { app: app.clone() }))).clone()
-}
-
-/// One turn's Ligus interface.
-pub(crate) struct TurnIface {
-    pub turn: Option<Arc<TurnHandle>>,
-    /// The socket a CLI agent reaches (allowed through the sandbox).
-    pub socket: Option<PathBuf>,
-    /// The turn runs an in-process tool loop (folded tools).
-    pub tool_loop: bool,
-}
-
-/// Start the Ligus server for a turn when its runtime can use it and the
-/// author gate allows tools. Otherwise the turn keeps the reply directives.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn begin(
-    app: &AppHandle,
-    rt: &ResolvedRuntime,
-    restricted: bool,
-    tools_allowed: bool,
-    workspace_id: Uuid,
-    chat_id: Uuid,
-    agent_id: Option<Uuid>,
-    author: &str,
-    message_id: Uuid,
-    worktree: Option<PathBuf>,
-) -> TurnIface {
-    let none = TurnIface { turn: None, socket: None, tool_loop: false };
-    if !tools_allowed || !hive_runtime::ligus_mcp::offered_for(rt, restricted) {
-        return none;
-    }
-    let ttl = std::time::Duration::from_secs(
-        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|s: &u64| *s > 0).unwrap_or(3600) + 300,
-    );
-    let turn = server(app).begin_turn(TurnSpec {
-        workspace_id,
-        chat_id,
-        agent_id,
-        author: author.to_string(),
-        message_id,
-        worktree,
-        budgets: Budgets::from_env(),
-        ttl,
-    });
-    let cli = rt.provider.is_cli_agent();
-    let socket = if cli {
-        match turn.listen() {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!(target: "ligus_mcp", "Ligus MCP socket unavailable, using directives: {e}");
-                return none;
-            }
-        }
-    } else {
-        None
-    };
-    TurnIface { turn: Some(Arc::new(turn)), socket, tool_loop: !cli }
-}
-
-impl TurnIface {
-    pub fn offered(&self) -> bool {
-        self.turn.is_some()
-    }
-
-    /// The system prompt for this turn: directive teaching replaced by the
-    /// Ligus tools when they're offered (D.4.4).
-    pub fn system(&self, system: String) -> String {
-        if !self.offered() {
-            return system;
-        }
-        hive_runtime::prompt::with_ligus_tools(&system, self.tool_loop, &crate::flow::directive_guidance())
-    }
-
-    /// The agent turn scope for dispatch (MCP attach, pause, spend, the
-    /// ACP permission asker).
-    pub fn scope(&self) -> hive_runtime::agent_turn::AgentTurnScope {
-        match &self.turn {
-            Some(t) => t.agent_scope(),
-            // No Ligus tools this turn: the spend budget still holds.
-            None => hive_runtime::agent_turn::AgentTurnScope {
-                spend: Some(hive_runtime::agent_turn::SpendMeter::new(Budgets::from_env().max_spend_usd)),
-                ..Default::default()
-            },
-        }
-    }
-
-    /// What the tools did (finalize's dedupe; the diff intent).
-    pub fn effects(&self) -> Option<hive_runtime::finalize::McpEffectsLog> {
-        self.turn.as_ref().map(|t| t.effects())
-    }
-
-    /// End the turn: revoke the credential, record the content-free tool
-    /// summary, and show the agent's self-report.
-    pub fn finish(&self, state: &AppState, chat_id: Uuid, workspace_id: Uuid, author: &str, notes: &[String]) {
-        let Some(t) = &self.turn else { return };
-        t.finish();
-        let mut svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        for n in notes {
-            let json = serde_json::json!({ "note": n }).to_string();
-            let _ = svc.record_device_fact(workspace_id, chat_id, "turnNote", &json);
-        }
-        if let Some(r) = t.report() {
-            let files = if r.files_touched.is_empty() { String::new() } else { format!(" Files: {}.", r.files_touched.join(", ")) };
-            let conf = r.confidence.map(|c| format!(" Confidence: {c}.")).unwrap_or_default();
-            let _ = svc.post_system_note(chat_id, workspace_id, format!("\u{1f4cb} {author} reported {}: {}.{files}{conf}", r.status, r.summary.trim_end_matches('.')));
-        }
-    }
 }
 
 /// An open question an agent asked in a chat (D.4.2).
