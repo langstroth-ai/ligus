@@ -115,6 +115,15 @@ Without it, releases build as before: no entitlement, and macOS passkeys use
 the browser. Local builds signed with an Apple Development identity (no
 profile) also use the browser.
 
+The release fails rather than ship an app macOS won't launch
+(`scripts/check-macos-signing.sh`). Before the build, the decoded profile
+(`security cms -D`, read with PlistBuddy) must be for
+`H5H3NNR456.ai.ligus.desktop`, team `H5H3NNR456`, carry the Associated
+Domains entitlement, and not be expired. After signing,
+`codesign -d --entitlements -` on the app must show that app id, team and
+`webcredentials:ligus.ai`, with the profile embedded; a build without the
+secret must show no associated-domains entitlement.
+
 Check a signed build:
 
 ```bash
