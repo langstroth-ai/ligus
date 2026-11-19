@@ -134,6 +134,8 @@ struct Host {
     deltas: Mutex<String>,
     activity: Mutex<Vec<StreamActivity>>,
     phases: Mutex<Vec<Phase>>,
+    /// Finalize fails (the error path's placeholder handling).
+    fail_finalize: bool,
 }
 
 impl TurnHost for Host {
@@ -159,6 +161,22 @@ impl TurnHost for Host {
     }
     fn phase(&self, _m: Uuid, p: Phase, _t: &str) {
         self.phases.lock().unwrap().push(p);
+    }
+    fn finalize(&self, svc: &mut ChatService, a: FinalizeArgs<'_>) -> Result<String, String> {
+        if self.fail_finalize {
+            return Err("finalize failed".into());
+        }
+        let (sid, wid, mid) = (a.ctx.session_id, a.ctx.workspace_id, a.ctx.message_id);
+        let input = crate::finalize::FinalizeInput { ctx: a.ctx, workspace_root: "", full: a.full, edits_in_review: a.edits_in_review, mcp: a.mcp, base_commit: None, apply_flow: true };
+        match crate::finalize::finalize_reply(svc, input) {
+            Ok(f) => Ok(f.cleaned),
+            Err(e) => {
+                if let Some(mid) = mid {
+                    let _ = svc.complete_assistant_message(sid, wid, mid, a.full.to_string());
+                }
+                Err(e.to_string())
+            }
+        }
     }
 }
 
@@ -217,6 +235,7 @@ fn world(servers: Vec<McpServerSpec>) -> World {
         deltas: Default::default(),
         activity: Default::default(),
         phases: Default::default(),
+        fail_finalize: false,
     };
     World { host, ws, chat: chat.id, coder, reviewer, trigger, _dir: dir }
 }
@@ -414,6 +433,8 @@ async fn a_writing_cli_without_a_worktree_is_refused() {
     assert!(exec.0.lock().unwrap().is_empty(), "nothing was spawned");
     let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).unwrap();
     assert!(!reply.is_streaming && reply.body.contains("isolated git worktree"));
+    // The host hears it, so no live placeholder is left in its UI.
+    assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
 }
 
 /// Below the author floor no tools are offered at all: the model streams
@@ -440,4 +461,138 @@ fn decide_gate_fails_closed_for_an_unknown_author() {
     let g = decide_gate(&svc, &session, Uuid::new_v4(), Some(w.coder), runtime("http://127.0.0.1:9/v1/chat/completions"), None).expect("an HTTP model always may");
     assert_eq!(g.gate, GatePlan::ReadOnly);
     assert!(!g.shell_allowed);
+}
+
+/// Worktrees Ligus keeps for `repo` (besides the checkout itself).
+fn turn_worktrees(repo: &Path) -> Vec<String> {
+    let out = hive_core::process_util::git().arg("-C").arg(repo).args(["worktree", "list", "--porcelain"]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .filter(|p| Path::new(p).canonicalize().ok() != repo.canonicalize().ok())
+        .filter(|p| !p.contains("/chat-") && !p.contains("chat-"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A turn stopped after it wrote: nothing partial is filed, the checkout is
+/// untouched, and the turn's worktree is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_turn_files_nothing_partial_and_drops_its_worktree() {
+    let (endpoint, model) = spawn_model(vec![call("c1", "write_file", json!({"path": "half.txt", "content": "half\n"})), vec![HANG.to_string()]]).await;
+    let w = world(Vec::new());
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    i.stop = Some(stop.clone());
+    let (s2, m2) = (stop.clone(), model.clone());
+    tokio::spawn(async move {
+        // Stop once the model was asked again (the write is done).
+        for _ in 0..200 {
+            if m2.bodies.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        s2.notify_waiters();
+    });
+    let err = run(&w.host, i).await.expect_err("stopped");
+    assert!(err.stopped, "{err:?}");
+    let repo = w.host.repo.clone().unwrap();
+    assert!(!repo.join("half.txt").exists(), "never written in place");
+    let s = load(&w);
+    assert!(!s.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff), "a stopped turn files no diff: {:?}", s.proposals);
+    assert!(turn_worktrees(&repo).is_empty(), "the turn's worktree is gone: {:?}", turn_worktrees(&repo));
+}
+
+/// The streaming backstop works the same: a timed-out turn fails, files
+/// nothing and leaves no live placeholder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timed_out_turn_files_nothing_and_completes_its_placeholder() {
+    let (endpoint, _model) = spawn_model(vec![call("c1", "write_file", json!({"path": "late.txt", "content": "late\n"})), vec![HANG.to_string()]]).await;
+    let w = world(Vec::new());
+    let mut i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+    i.timeout = Duration::from_secs(3);
+    let err = run(&w.host, i).await.expect_err("timed out");
+    assert!(!err.stopped && err.message.contains("timed out"), "{err:?}");
+    let s = load(&w);
+    let reply = s.messages.iter().find(|m| Some(m.id) == err.message_id).unwrap();
+    assert!(!reply.is_streaming && reply.body.starts_with("[error]"), "{reply:?}");
+    assert!(!s.proposals.iter().any(|p| p.kind == ProposalKind::FileDiff));
+    assert!(turn_worktrees(w.host.repo.as_ref().unwrap()).is_empty());
+    assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
+}
+
+/// A finalize failure never leaves a live placeholder: the reply is
+/// completed and the host hears the error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finalize_failure_completes_the_placeholder() {
+    let (endpoint, _model) = spawn_model(vec![text("Done.")]).await;
+    let mut w = world(Vec::new());
+    w.host.fail_finalize = true;
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect_err("finalize failed");
+    let reply = load(&w).messages.into_iter().find(|m| Some(m.id) == err.message_id).unwrap();
+    assert!(!reply.is_streaming && reply.body == "Done.", "{reply:?}");
+    assert_eq!(*w.host.phases.lock().unwrap(), vec![Phase::Error]);
+}
+
+/// Listing a turn's MCP tools starts its stdio servers through the turn's
+/// executor (never the host's default), under the turn's policy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_listing_spawns_stdio_servers_through_the_turns_executor() {
+    let (endpoint, _model) = spawn_model(vec![text("No tools needed.")]).await;
+    let server = McpServerSpec { id: "local".into(), transport: McpTransport::Stdio { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }, enabled: true, auth: None };
+    let mut w = world(vec![server]);
+    w.host.repo = None;
+    let exec = Arc::new(Recording::default());
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, exec.clone())).await.expect("the turn runs");
+    assert_eq!(out.body, "No tools needed.");
+    assert!(!exec.0.lock().unwrap().is_empty(), "the stdio server was confined by the turn's executor");
+}
+
+/// Concurrent turns (each with Ligus tool calls, a write and a proposal)
+/// while the UI keeps reading the store: no lock-order inversion between
+/// the engine's callbacks, the Ligus server and the service lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_turns_and_ui_reads_never_deadlock() {
+    let w = Arc::new(world(Vec::new()));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The UI: keep loading the chat (a blocking reader, like a Tauri command).
+    let reader = {
+        let (w, done) = (w.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut n = 0u64;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                let s = w.host.inner.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+                n += s.messages.len() as u64;
+                std::thread::yield_now();
+            }
+            n
+        })
+    };
+    let mut turns = Vec::new();
+    for k in 0..4 {
+        let (endpoint, _model) = spawn_model(vec![
+            call("c1", "ligus_propose", json!({"kind": "decision", "title": format!("Option {k}"), "body": "b"})),
+            call("c2", "write_file", json!({"path": format!("f{k}.txt"), "content": "x\n"})),
+            text(&format!("Turn {k} done.")),
+        ])
+        .await;
+        let w = w.clone();
+        turns.push(tokio::spawn(async move {
+            let i = input(&w, runtime(&endpoint), false, Arc::new(Recording::default()));
+            run(&w.host, i).await
+        }));
+    }
+    let all = tokio::time::timeout(Duration::from_secs(120), futures_util::future::join_all(turns)).await.expect("no deadlock: every turn finished");
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    reader.join().unwrap();
+    for r in all {
+        let out = r.unwrap().expect("the turn runs");
+        assert!(out.body.ends_with("done."), "{}", out.body);
+        assert!(out.proposal.is_some(), "each turn filed its diff");
+    }
+    let s = load(&w);
+    assert_eq!(s.proposals.iter().filter(|p| p.kind == ProposalKind::FileDiff).count(), 4);
+    assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }

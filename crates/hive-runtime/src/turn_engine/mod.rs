@@ -184,8 +184,9 @@ pub trait TurnHost: Sync {
     /// several workspaces pins it to this turn's founder).
     fn pin(&self, _svc: &mut ChatService) {}
 
-    /// The MCP servers the turn may reach (`egress`; without the shell, only
-    /// servers known to offer none). Empty: no MCP tools.
+    /// The MCP servers the turn may reach under `egress` (`shell`: whether
+    /// the turn has the shell; the engine drops shell tools from what the
+    /// servers list either way). Empty: no MCP tools.
     fn mcp_servers(&self, _egress: &EgressPolicy, _shell: bool) -> impl Future<Output = Vec<McpServerSpec>> + Send {
         async { Vec::new() }
     }
@@ -414,6 +415,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         Err(note) => {
             let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
             host.changed();
+            host.phase(mid, Phase::Error, &note);
             return Err(fail(note));
         }
     };
@@ -457,6 +459,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         let note = host.isolation_refusal(&responder.effect_author);
         let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
         host.changed();
+        host.phase(mid, Phase::Error, &note);
         return Err(fail(note));
     }
     let effective_root = worktree.as_ref().map(|w| w.path.to_string_lossy().into_owned()).unwrap_or_else(|| workspace_root.clone());
@@ -533,7 +536,9 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         (None, mcp_tools)
     } else {
         let workflow_tool = if (builtin.is_some() || mcp_tools.is_some()) && folded.is_none() && crate::workflow_tool::wanted(&last_user) {
-            locked(host).load(chat_id).ok().flatten().and_then(|s| host.workflow_tool(&s))
+            // Loaded first: the hook never runs under the service lock.
+            let session = locked(host).load(chat_id).ok().flatten();
+            session.and_then(|s| host.workflow_tool(&s))
         } else {
             None
         };
@@ -711,7 +716,22 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             let notes = turn_notes.lock().map(|n| n.clone()).unwrap_or_default();
             iface.finish(|| locked(host), chat_id, workspace_id, &responder.effect_author, &notes, options.detailed_report);
             host.changed();
-            let body = body.map_err(fail)?;
+            let body = match body {
+                Ok(b) => b,
+                Err(e) => {
+                    // Finalize failed: the reply never stays a live placeholder.
+                    // It keeps what the model wrote unless finalize completed it.
+                    let mut s = locked(host);
+                    let streaming = s.load(chat_id).ok().flatten().is_some_and(|c| c.messages.iter().any(|m| m.id == mid && m.is_streaming));
+                    if streaming {
+                        let _ = s.complete_assistant_message(chat_id, workspace_id, mid, full.clone());
+                    }
+                    drop(s);
+                    host.changed();
+                    host.phase(mid, Phase::Error, &e);
+                    return Err(fail(e));
+                }
+            };
             host.phase(mid, Phase::Completed, &body);
             Ok(TurnOutcome { message_id: mid, body, proposal, empty })
         }
