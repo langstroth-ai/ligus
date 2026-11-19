@@ -1680,7 +1680,8 @@ fn usage() -> ! {
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in ligus metrics panels can show\n\n\
          Setup:\n  \
-         ligus enroll <hivews1:invite> [--token <hrt1>]   one-shot: save the workspace connection\n  \
+         ligus enroll - | --file PATH [--token <hrt1>]   one-shot: save the workspace connection (the invite\n                                       \
+         piped or in a file: it carries the workspace key)\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
          ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
          token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
@@ -1848,10 +1849,18 @@ fn run() -> Result<()> {
             cmd_rm_runtime(&cfg, id)
         }
         "enroll" => {
-            let invite = positional
-                .first()
-                .ok_or_else(|| anyhow!("usage: ligus enroll <hivews1:invite> [--token <access-token>]"))?;
-            cmd_enroll(&cfg, invite, flag_val("--token"))
+            let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), || {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                Ok(s)
+            })?;
+            if on_argv {
+                eprintln!(
+                    "warning: an invite carries the workspace key, and the command line leaks it (ps, shell history): \
+                     next time pipe it to `ligus enroll -` or use `ligus enroll --file PATH`"
+                );
+            }
+            cmd_enroll(&cfg, &invite, flag_val("--token"))
         }
         "join" => {
             let code = positional
@@ -2052,6 +2061,18 @@ fn run() -> Result<()> {
     }
 }
 
+/// The invite `ligus enroll` uses: piped (`-`), from `--file PATH`, or (with a
+/// warning, since it carries the workspace key) on the command line. The bool
+/// is whether it came from the command line.
+fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce() -> std::io::Result<String>) -> Result<(String, bool)> {
+    match (arg, file) {
+        (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
+        (Some(c), None) => Ok((c.trim().to_string(), true)),
+        (None, Some(path)) => Ok((admit::read_code_file(std::path::Path::new(&path))?, false)),
+        _ => bail!("usage: ligus enroll <hivews1:invite> | - | --file <path> [--token <access-token>]"),
+    }
+}
+
 /// Flags that take a value: the value right after one is not a positional
 /// argument (so `agent bot --runtime ws1` gives positional `[bot]`). Every
 /// flag read with `flag_val` must be listed here, or its value is taken as a
@@ -2121,6 +2142,20 @@ fn positional_args(rest: &[String]) -> Vec<&String> {
 
 #[cfg(test)]
 mod cli_tests {
+    /// The invite (which carries the workspace key) can be piped or read
+    /// from a file instead of sitting in argv.
+    #[test]
+    fn enroll_takes_the_invite_from_stdin_or_a_file() {
+        let no_stdin = || -> std::io::Result<String> { panic!("stdin not read") };
+        assert_eq!(super::enroll_invite(Some("-"), None, || Ok("hivews1:x\n".into())).unwrap(), ("hivews1:x".to_string(), false));
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("invite");
+        std::fs::write(&f, "hivews1:y\n").unwrap();
+        assert_eq!(super::enroll_invite(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), ("hivews1:y".to_string(), false));
+        assert_eq!(super::enroll_invite(Some("hivews1:z"), None, no_stdin).unwrap(), ("hivews1:z".to_string(), true));
+        assert!(super::enroll_invite(None, None, no_stdin).is_err());
+    }
+
     /// A data dir the CLI creates (or finds group/world-open and owns) is
     /// owner-only from the start, not only once a later write tightens it:
     /// `ligus.db` holds the decrypted history.

@@ -202,7 +202,7 @@ cmd_preflight() {
     if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
       ac_check workspace pass "a workspace connection is configured"
     else
-      ac_check workspace warn "no workspace connection yet" "HUMAN STEP: in their own terminal, the human runs: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' (the invite carries the workspace key; never paste it into chat). Trials: configure --throwaway-workspace"
+      ac_check workspace warn "no workspace connection yet" "HUMAN STEP: in their own terminal, the human runs: set -a; . $ENVF; set +a; $BIN enroll -, pastes the invite, then Ctrl-D (the invite carries the workspace key; never paste it into chat or onto the command line). Trials: configure --throwaway-workspace"
     fi
   fi
   ac_finish "$AC_TOOL" preflight "$(json_extra)"
@@ -281,7 +281,7 @@ cmd_configure() {
     ac_next "ligus-local start $(inst)"
   else
     ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
-    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' [--token <hrt1...>] (copy the invite from the desktop app: workspace > Copy invite). Then: ligus-local start $(inst)"
+    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll - [--token <hrt1...>], paste the invite, then Ctrl-D (copy the invite from the desktop app: workspace > Copy invite; or save it to a 0600 file and use $BIN enroll --file PATH; it carries the workspace key, so keep it off the command line). Then: ligus-local start $(inst)"
     ac_raise 4
   fi
   ac_finish "$AC_TOOL" configure "$(json_extra)"
