@@ -204,6 +204,10 @@ pub struct Shared {
     pub token_gen: watch::Sender<u64>,
     /// How many times the revocation watch re-checked the roster.
     pub revocation_checks: std::sync::atomic::AtomicU64,
+    /// Wakes the revocation watch at once: a sync round pulled events or
+    /// this process wrote one, so a `DeviceRevoked` it folds in is enforced
+    /// then, not at the next poll ([`revocation_watch`]).
+    pub roster_kick: Notify,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -801,6 +805,7 @@ impl Shared {
     /// After a local write: tell the phone, wake the worker, push to the relay.
     pub fn after_write(&self) {
         self.refresh();
+        self.roster_kick.notify_one();
         self.worker_kick.notify_one();
         self.sync_kick.notify_one();
         self.dm_kick.notify_one();
@@ -1029,6 +1034,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         token: RwLock::new(token),
         token_gen: watch::Sender::new(0),
         revocation_checks: Default::default(),
+        roster_kick: Notify::new(),
         host_id,
         tunnel,
         svc: Mutex::new(svc),
@@ -1145,14 +1151,17 @@ async fn token_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// How often [`revocation_watch`] looks at the store.
+/// How often [`revocation_watch`] looks at the store when nothing in this
+/// process woke it (another process writing the same `hive.db`).
 pub const REVOCATION_WATCH: Duration = Duration::from_millis(500);
 
 /// Enforce phone revocations whatever path the `DeviceRevoked` arrived by (a
 /// sync round, an API write, the phone itself, another process writing the
-/// same `hive.db`): whenever the store gained rows, re-check the roster and
-/// cut the pairings of revoked devices. Bounded: within
-/// [`REVOCATION_WATCH`] of the event landing (plus one roster fold).
+/// same `hive.db`): whenever the store gained config-log rows, re-check the
+/// roster and cut the pairings of revoked devices. A sync round that pulled
+/// events and every local write wake it at once ([`Shared::roster_kick`]), so
+/// a revocation they bring in is cut as soon as it is stored, not at the next
+/// poll; a write by another process is seen within [`REVOCATION_WATCH`].
 async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let config_id = workspace_config_session_id(shared.ws);
     // (events row, equivocations row, registry generation) last looked at.
@@ -1184,6 +1193,7 @@ async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
         }
         tokio::select! {
             _ = tokio::time::sleep(REVOCATION_WATCH) => {}
+            _ = shared.roster_kick.notified() => {}
             _ = stop.wait_for(|s| *s) => return,
         }
     }
@@ -1251,6 +1261,9 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     None => shared.sync_ok(),
                 }
                 if pulled > 0 {
+                    // A pulled DeviceRevoked is enforced now, not at the
+                    // revocation watch's next poll.
+                    shared.roster_kick.notify_one();
                     shared.refresh_standing();
                     shared.refresh();
                     shared.worker_kick.notify_one();
