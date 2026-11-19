@@ -431,3 +431,42 @@ async fn every_envelope_push_carries_its_key() {
     assert_eq!(posts.len(), 2);
     assert!(posts.iter().all(|p| p.idem.as_deref().is_some_and(|k| k.len() == 32) && p.query.is_empty()));
 }
+
+/// The relay's global stream cap answers a plain `503` with no code. The
+/// stream backs off at least a few seconds, at least any `Retry-After`, and
+/// with jitter, so every client a full relay turns away doesn't come back in
+/// the same second (or every second).
+#[tokio::test]
+async fn a_full_relays_plain_503_backs_the_stream_off_with_jitter() {
+    let mut waits = Vec::new();
+    for _ in 0..6 {
+        let (base, _) = spawn(Script { other: [(503, None, json!("too many streams"))].into(), ..Default::default() }).await;
+        let err = RelayClient::new(&base).open_event_stream("room").await.err().expect("refused");
+        let wait = err.retry_after().expect("a 503 backs the stream off");
+        assert!(wait >= Duration::from_secs(5), "{wait:?}");
+        waits.push(wait);
+    }
+    assert!(waits.iter().any(|w| *w != waits[0]), "no jitter: {waits:?}");
+    let (base, _) = spawn(Script { other: [(503, Some("40"), json!(""))].into(), ..Default::default() }).await;
+    let err = RelayClient::new(&base).open_event_stream("room").await.err().expect("refused");
+    assert!(err.retry_after().is_some_and(|w| w >= Duration::from_secs(40)), "{err:?}");
+}
+
+/// The relay's newer `429` codes: `client_inflight` and `blob_inflight` are
+/// short rate limits (retried in place); `pair_codes` (this client holds its
+/// quota of live pairing codes, `Retry-After` a minute) is told to the person
+/// as it is, never as "retrying" when nothing retries it.
+#[tokio::test]
+async fn the_newer_429_codes_map_to_what_they_ask() {
+    for code in ["client_inflight", "blob_inflight"] {
+        let r = crate::relay_refusal::RelayRefusal::parse(429, Some("1"), json!({ "error": code }).to_string().as_bytes()).unwrap();
+        assert_eq!(r.class(), RefusalClass::RateLimited, "{code}");
+    }
+    let (base, fake) = spawn(Script { other: [refusal(429, "pair_codes", "60")].into(), ..Default::default() }).await;
+    let e = RelayClient::new(&base).publish_pairing("payload", None).await.unwrap_err();
+    let r = e.refusal().expect("typed");
+    assert!(!r.class().auto_retry(), "{:?}", r.class());
+    let msg = r.user_message();
+    assert!(msg.contains("pairing code") && !msg.contains("retrying"), "{msg}");
+    assert_eq!(fake.seen("POST", "/v1/pair").len(), 1);
+}

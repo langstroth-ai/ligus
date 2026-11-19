@@ -580,7 +580,7 @@ are unchanged.
 | `hello` / `auth` after challenge | 10 s |
 | `open` → accept attached | 10 s |
 | Phone reconnect | backoff 1, 2, 4 … 30 s, ±20 % jitter. No automatic retry on 4001/4002/4003/4006: the app shows the cause instead |
-| Host control reconnect | backoff 1 … 60 s, ±20 % jitter. 4009: wait ≥ 60 s |
+| Host control reconnect | backoff 1 … 60 s, ±20 % jitter. 4009: wait ≥ 60 s. 4003/4006: wait ≥ 10 min. Stops on 4001 and 4026 |
 | Relay shutdown | close every tunnel socket with `shutting_down` (4011). Clients retry with backoff |
 
 After a reconnect, the phone's SSE resumes with `Last-Event-ID` exactly as on

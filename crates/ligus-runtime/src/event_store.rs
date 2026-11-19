@@ -30,9 +30,29 @@ pub enum EventStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
+    TooLarge { bytes: usize, max: usize },
 }
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
+
+/// The largest envelope (its JSON) this device writes to a synced workspace:
+/// sealed for the relay (its ciphertext a JSON array of byte values, at most
+/// four characters a byte, plus a little), it stays within the relay's
+/// request-body cap
+/// ([`crate::sync_engine::MAX_PUSH_BODY_BYTES`]).
+pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024 - 16 * 1024;
+
+/// Whether `env` can reach the relay at all ([`MAX_ENVELOPE_BYTES`]). A write
+/// to a synced workspace checks it before the envelope is stored: one that
+/// can't be sent would otherwise wait in the outbox for good.
+pub fn syncable(env: &SessionEventEnvelope) -> Result<()> {
+    let bytes = serde_json::to_vec(env)?.len();
+    if bytes > MAX_ENVELOPE_BYTES {
+        return Err(EventStoreError::TooLarge { bytes, max: MAX_ENVELOPE_BYTES });
+    }
+    Ok(())
+}
 
 mod held;
 mod repo_tables;
@@ -429,6 +449,12 @@ impl EventStore {
             out.push(env);
         }
         Ok(out)
+    }
+
+    /// The ids of a log's lamport witnesses (tests).
+    #[cfg(test)]
+    pub(crate) fn witness_ids(&self, session_id: Uuid) -> Result<Vec<Uuid>> {
+        Ok(self.witnesses_of(session_id)?.into_iter().map(|e| e.event_id).collect())
     }
 
     /// Keep `env`, which this device refused at ingest (for whatever reason:
@@ -2110,6 +2136,24 @@ mod tests {
     /// event isn't pushed, so a keyholder who sends one to this device alone
     /// (a peer link, a relay serving it to one device) would otherwise get
     /// this device's honest events held on every device that never met it.
+    /// An envelope too large for any relay to take is refused when it is
+    /// written, with a clear error, instead of waiting in the outbox.
+    #[test]
+    fn an_envelope_too_large_to_sync_is_refused_when_written() {
+        let store = EventStore::open_in_memory().unwrap();
+        let big = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            SessionEvent::MessageAppended { message: ligus_core::ChatMessage::new(ligus_core::MessageRole::User, "Alex", "z".repeat(MAX_ENVELOPE_BYTES)) },
+        );
+        let err = syncable(&big).unwrap_err().to_string();
+        assert!(err.contains("too large"), "{err}");
+        let small = SessionEventEnvelope::new(Uuid::new_v4(), Uuid::new_v4(), 1, SessionEvent::SessionTitleChanged { title: "t".into() });
+        assert!(syncable(&small).is_ok());
+        let _ = store;
+    }
+
     #[test]
     fn a_device_counts_from_what_it_stored_never_from_a_witness() {
         let (mut a, sid, wid) = seeded_store();
