@@ -271,7 +271,7 @@ set `LIGUS_MODEL_GATEWAY*`.
 | `serve.runtimesToml` | empty | Mounted read-only, `LIGUS_RUNTIMES_FILE` |
 | `serve.mcpToml`, `serve.dashboardToml` | empty | Mounted read-only (`LIGUS_MCP_CONFIG`, `LIGUS_DASHBOARD_FILE`) |
 | `serve.workspaceSecrets`, `serve.agentEnv` | empty | Secrets, above |
-| `serve.ntfy.*` | off | Notifications |
+| `serve.ntfy.*` | off | Notifications: `url` must be `https://` unless `allowHttp: true`; generic push text unless `titles: true` |
 | `serve.persistence.*` | 5Gi, `ReadWriteOncePod` | Use an encrypted StorageClass. RWOP needs a CSI driver; `ReadWriteOnce` allows two pods on one node |
 | `serve.home.*` | 2Gi | `HOME`, its own volume |
 | `worker.enabled` / `instances[]` / `permissionMode` | off, `[]` | Named worker hosts: `{name, admission?: {existingSecret, secretKey?}, permissionMode?, resources?}`; each needs its own admission |
