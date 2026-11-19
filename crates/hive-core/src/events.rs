@@ -712,9 +712,16 @@ impl SessionEventEnvelope {
         payload: SessionEvent,
     ) -> Self {
         let scope = payload.scope();
+        // A new memory entry and a memory proposal are known by the event
+        // that made them (`memory::bound_event_id`).
+        let event_id = match &payload {
+            SessionEvent::FlowRecorded { record } => crate::memory::bound_event_id(record),
+            _ => None,
+        }
+        .unwrap_or_else(Uuid::new_v4);
         Self {
             id: Uuid::new_v4(),
-            event_id: Uuid::new_v4(),
+            event_id,
             session_id,
             workspace_id,
             sequence,
@@ -1958,7 +1965,14 @@ fn fold_pass(
             };
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.
-            if !superseded && !crate::guard::fold_authored(&mut session, payload, author) {
+            // Memory and task state fold with their envelope's provenance.
+            let enveloped = match payload {
+                SessionEvent::FlowRecorded { record } => {
+                    crate::memory::apply_enveloped(&mut session.flow, record, &crate::memory::RevCtx::of(env))
+                }
+                _ => false,
+            };
+            if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
                 session.apply(payload);
             }
             session.updated_at = env.timestamp;

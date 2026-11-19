@@ -32,6 +32,8 @@ mod facts;
 mod guards;
 mod keys;
 mod links;
+mod memory;
+pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;

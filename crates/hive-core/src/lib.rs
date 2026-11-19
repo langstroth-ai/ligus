@@ -26,6 +26,7 @@ pub mod identity_link;
 pub mod keys;
 pub mod lamport;
 pub mod lease;
+pub mod memory;
 #[cfg(test)]
 mod lease_projection_tests;
 #[cfg(test)]

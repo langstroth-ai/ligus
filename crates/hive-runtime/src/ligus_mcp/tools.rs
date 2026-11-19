@@ -5,9 +5,12 @@ use serde_json::{json, Value};
 
 /// The full tool set, offered over MCP to agents that take MCP servers.
 /// Release note (0.1): six read-only `ligus_forge_*` tools joined the set,
-/// and `ligus_read` gained the matching `forge.*` reads; `ligus_offer_file`
-/// joined it with secure attachments (issue #118).
-pub const TOOLS: [(&str, &str); 23] = [
+/// and `ligus_read` gained the matching `forge.*` reads; the memory and
+/// task-state tools joined it, with `ligus_propose` kind `memory`,
+/// `ligus_flow` op `taskUpdate` and `ligus_read` `memory`, `memoryEntry`
+/// and `taskState`; `ligus_offer_file` joined it with secure attachments
+/// (issue #118).
+pub const TOOLS: [(&str, &str); 28] = [
     ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),
     ("ligus_propose_decision", include_str!("schema/ligus_propose_decision.json")),
     ("ligus_propose_command", include_str!("schema/ligus_propose_command.json")),
@@ -24,6 +27,12 @@ pub const TOOLS: [(&str, &str); 23] = [
     ("ligus_read_board", include_str!("schema/ligus_read_board.json")),
     ("ligus_ask_human", include_str!("schema/ligus_ask_human.json")),
     ("ligus_report", include_str!("schema/ligus_report.json")),
+    // Workspace memory (search, read, propose) and live task state.
+    ("ligus_memory_search", include_str!("schema/ligus_memory_search.json")),
+    ("ligus_memory_read", include_str!("schema/ligus_memory_read.json")),
+    ("ligus_memory_propose", include_str!("schema/ligus_memory_propose.json")),
+    ("ligus_task_update", include_str!("schema/ligus_task_update.json")),
+    ("ligus_task_state", include_str!("schema/ligus_task_state.json")),
     // Read-only code-host tools (IDENTITY-AND-FORGES 5.5): the token stays
     // in the host process; see `forge_tools`.
     ("ligus_forge_list_prs", include_str!("schema/ligus_forge_list_prs.json")),
@@ -83,6 +92,7 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             "workflow" => "ligus_propose_workflow",
             "alternatives" => "ligus_open_alternatives",
             "assess" => "ligus_assess",
+            "memory" => "ligus_memory_propose",
             other => return Err(format!("unknown proposal kind {other:?}")),
         },
         "ligus_flow" => match field("op").as_str() {
@@ -91,6 +101,7 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             "unmark" => "ligus_unmark",
             "react" => "ligus_react",
             "report" => "ligus_report",
+            "taskUpdate" => "ligus_task_update",
             other => return Err(format!("unknown flow op {other:?}")),
         },
         "ligus_read" => match field("what").as_str() {
@@ -98,6 +109,9 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             "chat" => "ligus_read_chat",
             "proposals" => "ligus_read_proposals",
             "board" => "ligus_read_board",
+            "memory" => "ligus_memory_search",
+            "memoryEntry" => "ligus_memory_read",
+            "taskState" => "ligus_task_state",
             "forge.prs" => "ligus_forge_list_prs",
             "forge.pr" => "ligus_forge_read_pr",
             "forge.issues" => "ligus_forge_list_issues",
@@ -141,12 +155,12 @@ mod tests {
         }
         let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, GOLDEN, "a frozen Ligus tool schema changed");
-        assert_eq!(TOOLS.len(), 23);
+        assert_eq!(TOOLS.len(), 28);
         assert_eq!(FOLDED.len(), 4, "the folded set fits the reserved MCP slots");
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
-    const GOLDEN: &str = "efe57b73d6e71a3f941646d53e554b038082393b5e082ae8d0e203c80a9e5785";
+    const GOLDEN: &str = "5edb7914ccd7eedfc7f7bd637b60de24b16b948710783205821c66e8a506d129";
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {
@@ -163,5 +177,11 @@ mod tests {
         let (n, a) = unfold("ligus_read", &json!({"what": "forge.pr", "number": "7"})).unwrap();
         assert_eq!((n.as_str(), a["number"].as_str()), ("ligus_forge_read_pr", Some("7")));
         assert!(a.get("what").is_none());
+        let (n, a) = unfold("ligus_propose", &json!({"kind": "memory", "op": "create", "title": "t"})).unwrap();
+        assert_eq!((n.as_str(), a["op"].as_str()), ("ligus_memory_propose", Some("create")), "a memory proposal keeps its op");
+        assert_eq!(unfold("ligus_flow", &json!({"op": "taskUpdate"})).unwrap().0, "ligus_task_update");
+        assert_eq!(unfold("ligus_read", &json!({"what": "memory", "query": "x"})).unwrap().0, "ligus_memory_search");
+        assert_eq!(unfold("ligus_read", &json!({"what": "memoryEntry"})).unwrap().0, "ligus_memory_read");
+        assert_eq!(unfold("ligus_read", &json!({"what": "taskState"})).unwrap().0, "ligus_task_state");
     }
 }

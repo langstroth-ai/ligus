@@ -1,5 +1,5 @@
 {
-  "description": "File a proposal for human review (never applied by you). kind: diff (your worktree changes), decision, command (exact argv), workflow, alternatives (a proposal set), assess (score an alternative). Pass the fields of that kind.",
+  "description": "File a proposal for human review (never applied by you). kind: diff (your worktree changes), decision, command (exact argv), workflow, alternatives (a proposal set), assess (score an alternative), memory (op create|edit|remove a workspace memory note: entryId, base, title, body, tags, rationale). Pass the fields of that kind.",
   "inputSchema": {
     "properties": {
       "agentQuorum": {
@@ -14,6 +14,9 @@
         },
         "type": "array"
       },
+      "base": {
+        "type": "string"
+      },
       "body": {
         "type": "string"
       },
@@ -23,6 +26,9 @@
       "definition": {
         "type": "object"
       },
+      "entryId": {
+        "type": "string"
+      },
       "kind": {
         "enum": [
           "diff",
@@ -30,8 +36,12 @@
           "command",
           "workflow",
           "alternatives",
-          "assess"
+          "assess",
+          "memory"
         ],
+        "type": "string"
+      },
+      "op": {
         "type": "string"
       },
       "options": {
@@ -54,6 +64,12 @@
       },
       "setId": {
         "type": "string"
+      },
+      "tags": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
       },
       "taskClass": {
         "type": "string"

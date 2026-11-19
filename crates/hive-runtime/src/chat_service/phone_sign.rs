@@ -189,6 +189,28 @@ impl ChatService {
             PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
                 SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
             }
+            PhoneAction::ProposeMemory { chat_id, op, rationale } => {
+                // A new entry is named by its proposal; the source chat's
+                // egress is recorded (it can only narrow who reads the note).
+                let proposal_id = Uuid::new_v4();
+                let op = match op {
+                    hive_core::memory::MemoryOp::Create { title, body, tags, .. } => {
+                        hive_core::memory::MemoryOp::Create { entry_id: proposal_id, title: title.clone(), body: body.clone(), tags: tags.clone() }
+                    }
+                    other => other.clone(),
+                };
+                let mut source = hive_core::memory::MemorySource { chat_id: Some(*chat_id), ..Default::default() };
+                self.stamp_memory_egress(workspace_id, &mut source);
+                SessionEvent::FlowRecorded {
+                    record: hive_core::flow::FlowRecord::MemoryProposed(hive_core::memory::MemoryProposal {
+                        proposal_id,
+                        op,
+                        proposer: String::new(),
+                        source,
+                        rationale: rationale.clone(),
+                    }),
+                }
+            }
         };
         let session_id = action.session_id(workspace_id);
         let draft = self.draft_for_phone_on(session_id, workspace_id, phone, payload)?;

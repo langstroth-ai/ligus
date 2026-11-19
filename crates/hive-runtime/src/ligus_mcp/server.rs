@@ -36,6 +36,8 @@ pub struct Budgets {
     /// Read-only code-host calls (`ligus_forge_*`), each a request from the
     /// host to the forge on the agent's behalf.
     pub max_forge_calls: u32,
+    /// Workspace memory proposals (`ligus_memory_propose`).
+    pub max_memory_proposals: u32,
     /// Charged from ACP `usage_update` reports and from the API runtimes'
     /// reported token usage ([`crate::spend`]); reaching it cancels the turn.
     pub max_spend_usd: Option<f64>,
@@ -45,7 +47,7 @@ pub struct Budgets {
 
 impl Default for Budgets {
     fn default() -> Self {
-        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_forge_calls: 16, max_spend_usd: None, cascade: CascadeBudgets::default() }
+        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_forge_calls: 16, max_memory_proposals: 4, max_spend_usd: None, cascade: CascadeBudgets::default() }
     }
 }
 
@@ -98,6 +100,7 @@ impl Budgets {
             max_asks: n("LIGUS_MCP_MAX_ASKS", d.max_asks),
             max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
             max_forge_calls: n("LIGUS_MCP_MAX_FORGE_CALLS", d.max_forge_calls),
+            max_memory_proposals: n("LIGUS_MCP_MAX_MEMORY_PROPOSALS", d.max_memory_proposals),
             max_spend_usd: hive_core::compat::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
             cascade: CascadeBudgets::from_env(),
         }
@@ -154,6 +157,7 @@ struct Counters {
     asks: u32,
     read_messages: u32,
     forge_calls: u32,
+    memory_proposals: u32,
     denied: u32,
     budget_exhausted: bool,
     calls: BTreeMap<String, u32>,
@@ -454,6 +458,12 @@ impl LigusMcp {
         }
         if st.spend.exhausted() {
             return Err(exhausted("maxSpendUsd"));
+        }
+        if tool == "ligus_memory_propose" {
+            if c.memory_proposals >= b.max_memory_proposals {
+                return Err(exhausted("maxMemoryProposals"));
+            }
+            c.memory_proposals += 1;
         }
         let kind = match tool {
             "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives"
@@ -806,6 +816,9 @@ impl LigusMcp {
                     .unwrap_or_default();
                 (ToolResult::ok(json!({"header": READ_HEADER, "marks": marks, "handoffs": handoffs, "openAsks": asks})), None)
             }
+            "ligus_memory_search" | "ligus_memory_read" | "ligus_memory_propose" | "ligus_task_update" | "ligus_task_state" => {
+                self.memory_tool(st, tool, args)
+            }
             "ligus_ask_human" => self.ask_human(st, &ctx, args).await,
             "ligus_report" => {
                 let status = s("status");
@@ -886,6 +899,189 @@ impl LigusMcp {
         match r {
             Ok(id) => ToolResult::ok(json!({"ok": true, "proposalId": id.to_string(), "name": offer.name, "message": "Filed for review. The file is shared only after a person approves it."})),
             Err(e) => fail(Outcome::Denied, e.to_string()),
+        }
+    }
+
+    /// The workspace memory and task-state tools. Reads render every entry
+    /// and slot as untrusted, nonce-delimited data
+    /// (`hive_core::memory::render_*`); the only memory write is a proposal,
+    /// filed as the agent's effect; a task update writes the agent's own slot.
+    fn memory_tool(&self, st: &TurnState, tool: &str, args: &Value) -> (ToolResult, Option<Uuid>) {
+        use hive_core::memory::{self as mem, MemoryOp, MemorySource, TaskStateUpdate};
+        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        let strs = |k: &str| -> Vec<String> {
+            args.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+        };
+        let uuid = |k: &str| Uuid::parse_str(&s(k)).ok();
+        let bad = |m: &str| ToolResult::err(Outcome::Error, json!({"error": "failed", "message": m}));
+        let refused = |e: String| {
+            let outcome = if e.to_ascii_lowercase().contains("unauthorized") || e.contains("agent tier") { Outcome::Denied } else { Outcome::Error };
+            ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}))
+        };
+        let ws = st.spec.workspace_id;
+        let nonce = mem::fresh_nonce();
+        match tool {
+            "ligus_memory_search" => {
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, mem::MAX_SEARCH_RESULTS as u64) as usize;
+                let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
+                let visible = self.memory_visibility(st, &m);
+                let hits = mem::search_where(&m, &s("query"), &strs("tags"), limit, |e| visible(e));
+                if let Err(r) = Self::charge_reads(st, hits.len() as u32) {
+                    return (r, None);
+                }
+                let mut text = mem::memory_header(&nonce);
+                for h in &hits {
+                    text.push_str(&mem::render_entry(h.entry, &nonce, true));
+                }
+                let list: Vec<Value> = hits
+                    .iter()
+                    .map(|h| json!({"entryId": h.entry.id.to_string(), "rev": h.entry.head().to_string(), "score": h.score}))
+                    .collect();
+                (ToolResult::ok(json!({"header": READ_HEADER, "count": hits.len(), "entries": list, "content": text})), None)
+            }
+            "ligus_memory_read" => {
+                let Some(id) = uuid("entryId") else { return (bad("entryId is an entry's id"), None) };
+                let m = self.svc(|svc| svc.memory(ws).unwrap_or_default());
+                let Some(e) = m.entries.get(&id).filter(|e| e.live()) else { return (bad("no such memory entry"), None) };
+                if !self.memory_visibility(st, &m)(e) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that note was written under stricter egress than this turn's"})), None);
+                }
+                if let Err(r) = Self::charge_reads(st, 1 + e.conflicts.len() as u32) {
+                    return (r, None);
+                }
+                let mut text = mem::memory_header(&nonce);
+                text.push_str(&mem::render_entry(e, &nonce, true));
+                for c in &e.conflicts {
+                    let shadow = mem::MemoryEntry { id: e.id, current: c.clone(), created_by: e.created_by.clone(), ..Default::default() };
+                    text.push_str(&format!("Unresolved {} (made from rev {}):\n", if c.removal { "removal" } else { "edit" }, c.base.map(|b| b.to_string()).unwrap_or_default()));
+                    text.push_str(&mem::render_entry(&shadow, &nonce, !c.removal));
+                }
+                let source = &e.current.source;
+                (
+                    ToolResult::ok(json!({
+                        "header": READ_HEADER,
+                        "entryId": e.id.to_string(),
+                        "rev": e.head().to_string(),
+                        "revisions": e.revision_count,
+                        "conflicts": e.conflicts.len(),
+                        "sourceChatId": source.chat_id.map(|c| c.to_string()),
+                        "content": text,
+                    })),
+                    None,
+                )
+            }
+            "ligus_memory_propose" => {
+                let entry = uuid("entryId");
+                let base = uuid("base");
+                let (title, body, tags) = (s("title"), args.get("body").and_then(Value::as_str).unwrap_or("").to_string(), strs("tags"));
+                let op = match s("op").as_str() {
+                    "create" => MemoryOp::Create { entry_id: Uuid::new_v4(), title, body, tags },
+                    "edit" => match (entry, base) {
+                        (Some(entry_id), Some(base)) => MemoryOp::Edit { entry_id, base, title, body, tags },
+                        _ => return (bad("an edit names entryId and base (the rev you read)"), None),
+                    },
+                    "remove" => match (entry, base) {
+                        (Some(entry_id), Some(base)) => MemoryOp::Remove { entry_id, base },
+                        _ => return (bad("a removal names entryId and base (the rev you read)"), None),
+                    },
+                    _ => return (bad("op is create, edit or remove"), None),
+                };
+                if let MemoryOp::Create { title, body, tags, .. } | MemoryOp::Edit { title, body, tags, .. } = &op {
+                    if let Err(why) = mem::content_ok(title, body, &mem::normalize_tags(tags)) {
+                        return (bad(why), None);
+                    }
+                }
+                let source = MemorySource { chat_id: Some(st.spec.chat_id), message_id: None, turn_id: Some(st.spec.message_id), egress: None };
+                let rationale = s("rationale");
+                let agent = st.spec.agent_id;
+                match self.svc(|svc| svc.propose_memory_as_agent(ws, agent, op.clone(), &rationale, source.clone())) {
+                    Ok(pid) => (
+                        ToolResult::ok(json!({"ok": true, "proposalId": pid.to_string(), "message": "Filed for a person to accept or reject; memory doesn't change until then."})),
+                        None,
+                    ),
+                    Err(e) => (refused(e.to_string()), None),
+                }
+            }
+            "ligus_task_update" => {
+                let Some(status) = mem::TaskStatus::parse(&s("status")) else {
+                    return (bad("status is working, blocked, waiting, done or abandoned"), None);
+                };
+                let task_id = uuid("taskId").unwrap_or(st.spec.chat_id);
+                let ttl_ms = args.get("ttlSecs").and_then(Value::as_i64).map(|x| x.clamp(60, mem::MAX_TASK_TTL_MS / 1000) * 1000);
+                let update = TaskStateUpdate {
+                    task_id,
+                    agent_key: String::new(),
+                    turn_id: st.spec.message_id,
+                    status,
+                    summary: s("summary"),
+                    progress: args.get("progress").and_then(Value::as_u64).map(|p| p.min(100) as u8),
+                    open_questions: strs("openQuestions"),
+                    partial_results: strs("partialResults"),
+                    ttl_ms,
+                };
+                if let Err(why) = mem::task_shape_ok(&TaskStateUpdate { agent_key: "x".into(), ..update.clone() }) {
+                    return (bad(why), None);
+                }
+                let (chat, agent) = (st.spec.chat_id, st.spec.agent_id);
+                match self.svc(|svc| svc.update_task_state(chat, ws, agent, update.clone())) {
+                    Ok(()) => (ToolResult::ok(json!({"ok": true})), None),
+                    Err(e) => (refused(e.to_string()), None),
+                }
+            }
+            "ligus_task_state" => {
+                let chat = uuid("chatId").unwrap_or(st.spec.chat_id);
+                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|c| c.workspace_id == ws) else {
+                    return (bad("no such chat in this workspace"), None);
+                };
+                if !self.cross_read_allowed(st, &session) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat's egress is stricter than this turn's"})), None);
+                }
+                let now = flow::now_ms();
+                let mut slots: Vec<&mem::TaskSlot> = session.flow.tasks.iter().filter(|t| !t.stale(now)).collect();
+                slots.sort_by_key(|a| std::cmp::Reverse(a.at_ms));
+                if let Err(r) = Self::charge_reads(st, slots.len() as u32) {
+                    return (r, Some(chat));
+                }
+                let mut text = mem::task_header(&nonce);
+                for t in &slots {
+                    text.push_str(&mem::render_slot(t, &nonce));
+                }
+                (
+                    ToolResult::ok(json!({"header": READ_HEADER, "chatId": chat.to_string(), "slots": slots.len(), "content": text})),
+                    (chat != st.spec.chat_id).then_some(chat),
+                )
+            }
+            _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
+        }
+    }
+
+    /// Which memory entries this turn may see (design R10): an entry's
+    /// tier is the strictest egress it was recorded under, tightened by its
+    /// source chats' egress now (a lockdown raised after the note was
+    /// written still counts); the turn sees it only when its own chat's
+    /// egress is at least as strict (the cross-chat read rule). An entry
+    /// with no recorded tier and no source chat is the workspace default,
+    /// which every turn satisfies.
+    fn memory_visibility(&self, st: &TurnState, m: &hive_core::memory::MemoryState) -> impl Fn(&hive_core::memory::MemoryEntry) -> bool {
+        use hive_core::sandbox::{envelope_for_session, EgressPolicy};
+        let ws = st.spec.workspace_id;
+        let chats: std::collections::BTreeSet<Uuid> = m.live().flat_map(hive_core::memory::source_chats).collect();
+        let (reader, now) = self.svc(|svc| {
+            let reader = svc.load(st.spec.chat_id).ok().flatten().map(|c| envelope_for_session(&c).egress).unwrap_or(EgressPolicy::Open);
+            let now: std::collections::BTreeMap<Uuid, EgressPolicy> = chats
+                .iter()
+                .filter_map(|c| svc.load(*c).ok().flatten().filter(|s| s.workspace_id == ws).map(|s| (*c, envelope_for_session(&s).egress)))
+                .collect();
+            (reader, now)
+        });
+        move |e| {
+            let mut tier = e.egress.clone().unwrap_or(EgressPolicy::Open);
+            for c in hive_core::memory::source_chats(e) {
+                if let Some(x) = now.get(&c) {
+                    tier = tier.stricter(x);
+                }
+            }
+            hive_core::memory::egress_allows(&reader, &tier)
         }
     }
 

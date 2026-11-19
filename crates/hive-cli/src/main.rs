@@ -45,6 +45,7 @@ mod forge_cmd;
 mod gateway_check;
 mod hardening;
 mod mcp_config;
+mod memory_cmd;
 mod selftest;
 mod reply;
 mod repos;
@@ -1530,6 +1531,9 @@ fn usage() -> ! {
          ligus phones certify <ligusphone1:code> | --code-file PATH --recovery-words-file PATH --fingerprint F\n                                       \
          certify a phone's key as one of your devices (headless \"Add this phone\")\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
+         ligus memory list | search <words…> | show <id> | add <title> | edit <id> | rm <id> | proposals | accept|reject <id>\n                                       \
+         the workspace memory (shared notes); bodies from --body or stdin, --tag a,b, --json\n  \
+         ligus task-state <chat-id> [--json]   what the agents on a chat report about their work in progress\n  \
          ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
@@ -1649,6 +1653,11 @@ fn run() -> Result<()> {
         "--client-id",
         "--expect-tier",
         "--health-listen",
+        "--tag",
+        "--title",
+        "--body",
+        "--note",
+        "--base",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1851,6 +1860,18 @@ fn run() -> Result<()> {
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"),
             }
         }
+        "memory" => {
+            let flags = memory_cmd::Flags {
+                tags: hive_core::memory::normalize_tags(&flag_val("--tag").map(|t| t.split(',').map(str::to_string).collect::<Vec<_>>()).unwrap_or_default()),
+                title: flag_val("--title"),
+                body: flag_val("--body"),
+                note: flag_val("--note"),
+                base: flag_val("--base"),
+                json: has("--json"),
+            };
+            memory_cmd::run(&cfg, &positional, flags)
+        }
+        "task-state" => memory_cmd::task_state(&cfg, positional.first().map(|s| s.as_str()), has("--json")),
         "facts" => {
             if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
                 bail!("usage: ligus facts export --jsonl [--since <cursor | unix ms>]");

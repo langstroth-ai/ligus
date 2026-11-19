@@ -1,3 +1,4 @@
+import { TaskStatePanel } from "@/components/TaskStatePanel";
 import { responderBadge } from "@/lib/responderBadge";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -1234,6 +1235,7 @@ export function ChatView({
               </div>
             </div>
           )}
+          <TaskStatePanel sessionId={sessionId} />
           <PeopleTyping presence={presence.data} sessionId={sessionId} />
           {waitingForFounder && (
             <div className="tt-note" role="status" aria-live="polite">

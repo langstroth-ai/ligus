@@ -893,6 +893,13 @@ fn run_purpose(e: &dyn TurnExecutor, f: &Fixture, purpose: Purpose, script: &str
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_denies_login_keychain_search() {
+    // Opt-in only: the probe opens the real login keychain, and the bridging
+    // check copies a signed-in Claude Code credential into a temp turn home.
+    // Run it deliberately, on a machine where that's acceptable.
+    if std::env::var_os("LIGUS_TEST_KEYCHAIN").is_none() {
+        eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to probe the real login keychain");
+        return;
+    }
     let Some(e) = real_executor() else { return };
     let f = Fixture::new();
     let Some(home) = home_dir() else { return };
