@@ -321,10 +321,23 @@ fn check(r: &Run) -> Result<(), String> {
 
     // 4. Allowed redemptions of box admissions follow their terms; one each.
     let mut redeemed: BTreeMap<Uuid, BTreeSet<String>> = BTreeMap::new();
+    // A member already in (an earlier allowed add, in the fold's order)
+    // re-adding itself joins nothing: the fold keeps its kind and account.
+    let mut ordered: Vec<&SessionEventEnvelope> = w.cfg.iter().filter(|e| allowed(e)).collect();
+    ordered.sort_by_key(|e| e.canonical_key());
+    let mut joined: BTreeSet<String> = BTreeSet::new();
+    let mut re_adds: BTreeSet<Uuid> = BTreeSet::new();
+    for env in &ordered {
+        if let SessionEvent::MemberAdded { member, .. } = &env.payload {
+            if !joined.insert(member.id.clone()) {
+                re_adds.insert(env.event_id);
+            }
+        }
+    }
     for env in w.cfg.iter().filter(|e| allowed(e)) {
         let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &env.payload else { continue };
         let Some(terms) = admission_of(&config, *id) else {
-            if member.actor.kind == ActorKind::Service && member.id == member.actor.id {
+            if member.actor.kind == ActorKind::Service && member.id == member.actor.id && !re_adds.contains(&env.event_id) {
                 return Err(format!("{} joined as a service through a person's invite", member.id));
             }
             continue;
