@@ -5030,9 +5030,14 @@ mod tests {
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
         assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
-        // The same stamp on an agent's reply caps nothing upward either.
-        let r = agent_reply(&mut con, chat, wid, Some(Uuid::new_v4()), Some(honest), "@coder go");
-        assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
+        // The same stamp on an agent's reply caps nothing upward either:
+        // every fold (authoring included) refuses an event whose stamp
+        // names an account its signer isn't certified for, and one written
+        // anyway gets no Owner tier.
+        if let Ok(r) = con.begin_assistant_message(chat, wid, "coder", "rt", Some(Uuid::new_v4()), Some(honest)) {
+            let _ = con.complete_assistant_message(chat, wid, r, "@coder go");
+            assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
+        }
     }
 
     /// C1.4: a Ligus secret split across two streamed chunks must not reach

@@ -553,7 +553,9 @@ mod flow_tests {
         let alex = mac.svc.author().clone();
         let mut rogue = Dev::open(&tmp.path().join("sff"), "ligus-cli", &relay, ws);
         rogue.svc.act_as_owner_device(alex.clone());
-        rogue.svc.post_user_message(chat, ws, "forged as Alex").unwrap();
+        // Its own fold refuses to author it (the device isn't certified
+        // for Alex); were it written anyway, every peer drops it.
+        assert!(rogue.svc.post_user_message(chat, ws, "forged as Alex").is_err());
         rogue.sync().await;
         drop(rogue);
         mac.sync().await;

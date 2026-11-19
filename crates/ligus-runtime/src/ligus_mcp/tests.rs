@@ -639,8 +639,12 @@ async fn permission_escalation_needs_the_hosts_own_person() {
                 svc.add_member(chat, wid, member).unwrap();
                 svc.set_author_account(bob, "Bob", None);
             }
-            svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1 }))
-                .unwrap();
+            let answered = svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1 }));
+            // The host's device writing as another member (Bob) is refused
+            // by the fold outright: it isn't certified for Bob's account.
+            if answerer != "bob" {
+                answered.unwrap();
+            }
             if answerer == "bob" {
                 svc.set_author_account(host_id, "Alex", None);
             }
