@@ -24,6 +24,23 @@ pub fn clone_target(repo: &WorkspaceRepo) -> Result<(String, RepoRef), String> {
     Ok((host.to_string(), spec.repo))
 }
 
+/// The transport overrides of a clone or fetch by repo id (review F12):
+/// the DNS pin (`http.curloptResolve`, from
+/// `hive_forge::conn::git_resolve_pin`) when there is one, and never a
+/// redirect. git follows a redirect of its first request to any host by
+/// default (`http.followRedirects=initial`), resolving that host itself, so
+/// a server at the pinned address could send the clone to an internal one
+/// and the pin would be moot. A moved repository fails instead; its
+/// workspace entry should name the new place anyway.
+pub fn by_id_transport_args(pin: Option<&str>) -> Vec<String> {
+    let mut v = Vec::new();
+    if let Some(p) = pin {
+        v.extend(["-c".to_string(), format!("http.curloptResolve={p}")]);
+    }
+    v.extend(["-c".to_string(), "http.followRedirects=false".to_string()]);
+    v
+}
+
 /// The `git clone` for `url` into `dest`: hardened git, the optional DNS
 /// pin (`http.curloptResolve`, from `hive_forge::conn::git_resolve_pin`),
 /// `--reference-if-able <other checkout> --dissociate` when one is given,
@@ -31,8 +48,8 @@ pub fn clone_target(repo: &WorkspaceRepo) -> Result<(String, RepoRef), String> {
 /// connection's helper, never argv or env) and runs it.
 pub fn clone_command(url: &str, dest: &Path, reference: Option<&Path>, pin: Option<&str>, auth: &[String]) -> Command {
     let mut c = hive_core::process_util::git();
-    if let Some(p) = pin {
-        c.arg("-c").arg(format!("http.curloptResolve={p}"));
+    if pin.is_some() {
+        c.args(by_id_transport_args(pin));
     }
     c.args(auth);
     c.args(["clone", "--progress", "--no-recurse-submodules"]);
@@ -97,6 +114,56 @@ mod tests {
         for bad in ["local:0123456789abcdef0123456789abcdef01234567", "h.example/-x/y", "h.example/a/..", "h.example/a b/c"] {
             assert!(clone_target(&r(bad)).is_err(), "{bad}");
         }
+    }
+
+    /// The DNS pin only holds if git never leaves the pinned host (review
+    /// F12): a server at the pinned address that answers with a redirect to
+    /// another host (an internal one) must not be followed, or the pin is
+    /// moot. Local sockets only.
+    #[test]
+    fn pinned_clone_never_follows_a_redirect() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let elsewhere = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let b = elsewhere.local_addr().unwrap().port();
+        elsewhere.set_nonblocking(true).unwrap();
+        let hit = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (hit2, stop2) = (hit.clone(), stop.clone());
+        let watcher = std::thread::spawn(move || {
+            while !stop2.load(Ordering::SeqCst) {
+                if let Ok((mut c, _)) = elsewhere.accept() {
+                    hit2.store(true, Ordering::SeqCst);
+                    let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let pinned = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = pinned.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let Ok((mut c, _)) = pinned.accept() else { break };
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{b}/o/n.git/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = c.write_all(resp.as_bytes());
+                if String::from_utf8_lossy(&buf).contains("info/refs") {
+                    break;
+                }
+            }
+        });
+        let t = tempfile::tempdir().unwrap();
+        let mut c = clone_command(&format!("http://localhost:{a}/o/n.git"), &t.path().join("d"), None, Some(&format!("localhost:{a}:127.0.0.1")), &[]);
+        c.env("GIT_TERMINAL_PROMPT", "0").env_remove("http_proxy").env_remove("HTTP_PROXY").env_remove("ALL_PROXY").env_remove("all_proxy");
+        let out = c.output().unwrap();
+        stop.store(true, Ordering::SeqCst);
+        watcher.join().unwrap();
+        drop(server);
+        assert!(!out.status.success());
+        assert!(!hit.load(Ordering::SeqCst), "git followed the redirect off the pinned host: {}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]

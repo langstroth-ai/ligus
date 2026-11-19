@@ -1035,8 +1035,8 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
         let _cloning = workspace_repo.as_ref().map(|w| hive_runtime::repos::start_cloning(w.id));
         let plan = rt.block_on(fork_plan(&shared.repos, &h, &repo));
         let mut auth = h.forge.git_auth_args();
-        if let Some(p) = &pin {
-            auth.splice(0..0, ["-c".to_string(), format!("http.curloptResolve={p}")]);
+        if workspace_repo.is_some() {
+            auth.splice(0..0, hive_runtime::repos::clone::by_id_transport_args(pin.as_deref()));
         }
         let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, auth.clone())
             .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &auth))
