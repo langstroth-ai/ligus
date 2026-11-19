@@ -277,7 +277,7 @@ impl ChatService {
         sign_envelope(&mut env, self.device_id, &self.keypair);
         let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store.append_envelope(&env)?;
+        self.store_authored(&env)?;
         self.changes.local(&env);
         Ok(env)
     }
@@ -308,7 +308,7 @@ impl ChatService {
         sign_envelope(&mut env, self.device_id, &self.keypair);
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store.append_envelope(&env)?;
+        self.store_authored(&env)?;
         self.changes.local(&env);
         Ok(env)
     }

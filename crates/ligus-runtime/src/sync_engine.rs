@@ -26,6 +26,10 @@ use crate::relay_refusal::{human_duration, RefusalClass, RelayRefusal};
 /// with more history than this catches up over several rounds
 /// ([`SyncEngine::is_behind`] says another round is due), so one round never
 /// holds the store or memory for an unbounded download.
+/// The relay's request-body cap (`LANGSTROTH_RELAY_MAX_BODY_BYTES`, 4 MiB by
+/// default): a sealed envelope past it is never accepted.
+pub const MAX_PUSH_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 pub const PULL_PAGES_PER_ROUND: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
@@ -824,10 +828,25 @@ impl SyncEngine {
                     return Err(e);
                 }
             };
+            // One the relay can never take (past its request-body cap; this
+            // device refuses to write one, but an older build or a peer may
+            // have) is set aside instead of holding the outbox: every event
+            // after it would wait for good.
+            let size = serde_json::to_vec(&body).map(|b| b.len()).unwrap_or(usize::MAX);
+            if size > MAX_PUSH_BODY_BYTES {
+                self.set_aside(env, &format!("{size} bytes sealed, past the relay's {MAX_PUSH_BODY_BYTES}-byte cap"));
+                continue;
+            }
             // The key makes a re-push (after a refusal or a lost answer) the
             // same write to the relay, not a second copy.
             let key = self.push_key(env.event_id);
             if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
+                // `413`: this relay's cap is lower than this envelope; it never
+                // will take it. Set aside, as above, and go on.
+                if matches!(&e, RelayError::Status(413)) || e.refusal().is_some_and(|r| r.status == 413) {
+                    self.set_aside(env, "the relay refused it as too large (413)");
+                    continue;
+                }
                 for unsent in &envelopes[i..] {
                     self.seen.remove(&unsent.event_id);
                 }
@@ -855,6 +874,14 @@ impl SyncEngine {
             self.write_pause = None;
         }
         Ok(())
+    }
+
+    /// Never push `env` (the relay can't take it): it is recorded as done,
+    /// so neither this round nor a restart retries it, and the outbox moves
+    /// on. It stays in this device's store.
+    fn set_aside(&mut self, env: &SessionEventEnvelope, why: &str) {
+        tracing::error!(target: "sync", room = %self.workspace, event_id = %env.event_id, "an event too large for the relay is not sent: {why}");
+        self.pending.push(env.event_id);
     }
 
     /// Whether relay pushes will be sealed (a key is configured). `false` means
@@ -1631,6 +1658,50 @@ mod tests {
         let mut sync_c = SyncEngine::unscoped(RelayClient::new(&base), &workspace)
             .with_key(ligus_core::derive_workspace_key("wrong"));
         assert_eq!(sync_c.pull(&mut store_c).await.unwrap(), 0);
+    }
+
+    /// An envelope the relay can never take (larger than its request-body
+    /// cap: refused with a plain `413`, or too large to send at all) never
+    /// blocks the room's outbox: it is set aside and the events after it go
+    /// out. Every round after that is quiet.
+    #[tokio::test]
+    async fn an_envelope_the_relay_cant_take_never_blocks_the_outbox() {
+        let base = spawn_relay().await; // the mock's body cap is 2 MiB
+        let key = ligus_core::derive_workspace_key("big room");
+        let mut store = EventStore::open_in_memory().unwrap();
+        let (sid, wid) = seed_chat(&mut store);
+        let msg = |seq: i64, body: String| {
+            SessionEventEnvelope::new(sid, wid, seq, SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) })
+        };
+        // Sent and refused (413), then never sent (past the real relay's cap).
+        store.ingest_next(&msg(2, "x".repeat(2_500_000))).unwrap();
+        store.ingest_next(&msg(3, "y".repeat(5_000_000))).unwrap();
+        store.ingest_next(&msg(4, "after the big ones".into())).unwrap();
+        let room = Uuid::new_v4().to_string();
+        let mut eng = SyncEngine::unscoped(RelayClient::new(&base), &room).with_key(key);
+        for _ in 0..3 {
+            let _ = eng.push_new(&store).await;
+        }
+        let raw = RelayClient::new(&base).fetch_values(&room, 0).await.unwrap();
+        let bodies: Vec<String> = raw
+            .iter()
+            .map(|(_, b)| {
+                let sealed: SealedEnvelope = serde_json::from_value(b.clone()).unwrap();
+                String::from_utf8(open_symmetric(&key, &sealed).unwrap()).unwrap()
+            })
+            .collect();
+        assert!(bodies.iter().any(|b| b.contains("after the big ones")), "the outbox is blocked behind an envelope the relay refuses");
+        assert_eq!(eng.push_new(&store).await.unwrap(), 0, "nothing is retried forever");
+    }
+
+    /// The local cap leaves room for sealing: an envelope at it seals to a
+    /// body the relay's request cap takes.
+    #[test]
+    fn an_envelope_at_the_local_cap_seals_within_the_relays() {
+        let key = ligus_core::derive_workspace_key("cap");
+        let plain = vec![b'a'; crate::event_store::MAX_ENVELOPE_BYTES];
+        let sealed = ligus_core::e2ee::seal_symmetric_kid(&key, u32::MAX, &"k".repeat(64), &plain).unwrap();
+        assert!(serde_json::to_vec(&sealed).unwrap().len() <= MAX_PUSH_BODY_BYTES);
     }
 
     #[tokio::test]

@@ -79,6 +79,27 @@ async fn refusal(status: u16, resp: reqwest::Response) -> RelayError {
     }
 }
 
+/// A `503` from the blob channel (a relay at capacity) as a refusal that
+/// keeps its `Retry-After` (at least a few seconds), so the caller waits it.
+fn unavailable(resp: &reqwest::Response) -> RelayError {
+    RelayError::Refused(RelayRefusal {
+        status: 503,
+        code: "unavailable".into(),
+        message: String::new(),
+        retry_after: retry_after_header(resp).unwrap_or(std::time::Duration::from_secs(5)).max(std::time::Duration::from_secs(1)),
+    })
+}
+
+/// A response's `Retry-After` in whole seconds, if it has one (capped as a
+/// refusal's is).
+pub(crate) fn retry_after_header(resp: &reqwest::Response) -> Option<std::time::Duration> {
+    resp.headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.trim().parse::<u64>().ok())
+        .map(|s| std::time::Duration::from_secs(s).min(crate::relay_refusal::MAX_RETRY_AFTER))
+}
+
 /// A transport error's text. A builder error means the request URL itself
 /// was unusable — almost always an empty or non-http(s) relay URL — so it
 /// says that instead of reqwest's bare "builder error".
@@ -433,6 +454,9 @@ impl RelayClient {
         if matches!(status, 401 | 403) {
             return Err(RelayError::Unauthorized);
         }
+        if status == 503 {
+            return Err(unavailable(&resp));
+        }
         Err(refusal(status, resp).await)
     }
 
@@ -449,6 +473,9 @@ impl RelayClient {
         }
         if matches!(resp.status().as_u16(), 401 | 403) {
             return Err(RelayError::Unauthorized);
+        }
+        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            return Err(unavailable(&resp));
         }
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -629,6 +656,9 @@ impl RelayClient {
             return Err(match status.as_u16() {
                 404 => SseConnectError::Unsupported,
                 401 | 403 => SseConnectError::Unauthorized,
+                // The relay's global stream cap: a plain `503` (no code),
+                // perhaps with a `Retry-After`.
+                503 => SseConnectError::Busy(retry_after_header(&resp)),
                 c => match RelayRefusal::from_response(resp).await {
                     Ok(r) => SseConnectError::Refused(r),
                     Err(_) => SseConnectError::Status(c),

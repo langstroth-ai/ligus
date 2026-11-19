@@ -120,6 +120,20 @@ pub enum SseConnectError {
     /// A `429`/`507` refusal (`sse_streams`: too many open streams from this
     /// client): back off at least its `Retry-After`.
     Refused(crate::relay_refusal::RelayRefusal),
+    /// A plain `503`: the relay is at its stream cap for everyone (no code),
+    /// with its `Retry-After` if it sent one.
+    Busy(Option<Duration>),
+}
+
+/// The least wait after a relay at capacity turns the stream away.
+pub const BUSY_MIN_WAIT: Duration = Duration::from_secs(5);
+
+/// `d` stretched by a random 0 to 100 %: clients a full relay turned away
+/// together don't all come back together.
+fn jittered(d: Duration) -> Duration {
+    let mut b = [0u8; 2];
+    let r = if getrandom::fill(&mut b).is_ok() { u16::from_le_bytes(b) } else { (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos() & 0xffff) as u16 };
+    d.mul_f64(1.0 + f64::from(r) / f64::from(u16::MAX))
 }
 
 impl SseConnectError {
@@ -127,6 +141,9 @@ impl SseConnectError {
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
             SseConnectError::Refused(r) => Some(r.retry_after),
+            // Never sooner than a few seconds, never in step with every other
+            // client the relay turned away.
+            SseConnectError::Busy(after) => Some(jittered(after.unwrap_or_default().max(BUSY_MIN_WAIT))),
             _ => None,
         }
     }
@@ -140,6 +157,7 @@ impl std::fmt::Display for SseConnectError {
             SseConnectError::Status(c) => write!(f, "relay returned HTTP {c}"),
             SseConnectError::Transport(e) => write!(f, "could not reach the relay: {e}"),
             SseConnectError::Refused(r) => write!(f, "{r}"),
+            SseConnectError::Busy(_) => write!(f, "the relay has as many live streams open as it takes (HTTP 503)"),
         }
     }
 }

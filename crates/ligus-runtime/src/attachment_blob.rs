@@ -184,6 +184,8 @@ pub enum BlobError {
     NotFound,
     #[error("couldn't reach the relay: {0}")]
     Transport(String),
+    #[error("the relay is busy; try again in {}", crate::relay_refusal::human_duration(*.0))]
+    Busy(std::time::Duration),
     #[error("the file couldn't be decrypted with this workspace's keys (corrupted or swapped by the relay)")]
     CantOpen,
     #[error("the file is not the size its sender signed ({got} bytes, expected {want}); it was cut short or swapped")]
@@ -243,6 +245,9 @@ pub async fn download_verified(client: &RelayClient, workspace: &str, ring: &Key
         Ok(Some(framed)) => verify(a, &framed, ring),
         Ok(None) => Err(BlobError::NotFound),
         Err(RelayError::Message(m)) => Err(BlobError::Refused(m)),
+        // Turned away for a while (a `429` past the in-place retries, a
+        // `503`): its `Retry-After` stays with the error.
+        Err(RelayError::Refused(r)) => Err(BlobError::Busy(r.retry_after)),
         Err(e) => Err(BlobError::Transport(e.to_string())),
     }
 }
@@ -300,7 +305,14 @@ pub async fn fetch_verified(
     if let Some(b) = cached(cache_dir, a) {
         return Ok(b);
     }
-    let b = download_verified(client, workspace, ring, a).await?;
+    let b = match download_verified(client, workspace, ring, a).await {
+        // A short `Retry-After` is waited out once, here.
+        Err(BlobError::Busy(wait)) if wait <= crate::relay_refusal::MAX_INLINE_WAIT => {
+            tokio::time::sleep(wait).await;
+            download_verified(client, workspace, ring, a).await?
+        }
+        r => r?,
+    };
     let _ = cache_verified(cache_dir, a, &b);
     Ok(b)
 }
@@ -578,6 +590,42 @@ mod tests {
         assert_eq!(receivable(&s, &head), Err(BlobError::Blocked));
         s.deleted = true;
         assert_eq!(receivable(&s, &rules()), Err(BlobError::Deleted));
+    }
+
+    /// A blob refusal's `Retry-After` is honoured: a download the relay
+    /// turns away for a moment (`503`, or a `429` past the in-place retries)
+    /// waits it out and tries again, and says how long otherwise.
+    #[tokio::test]
+    async fn a_busy_relays_retry_after_is_honoured() {
+        let ring = ring();
+        let good = b"quarterly numbers".to_vec();
+        let a = reference(&good, "q.txt");
+        let honest = seal_with_ring(&ring, &good).unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n = calls.clone();
+        let router = axum::Router::new().route(
+            "/v1/workspaces/{ws}/blobs/{id}",
+            axum::routing::get(move || {
+                let n = n.clone();
+                let honest = honest.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    if n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        (axum::http::StatusCode::SERVICE_UNAVAILABLE, [("retry-after", "1")], Vec::new()).into_response()
+                    } else {
+                        (axum::http::StatusCode::OK, honest).into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let c = RelayClient::new(format!("http://{addr}"));
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(fetch_verified(&c, "ws", &ring, dir.path(), &a).await.unwrap(), good);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.abort();
     }
 
     /// The download path against a fake relay that tampers: nothing is

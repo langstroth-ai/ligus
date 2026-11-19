@@ -285,7 +285,7 @@ impl ChatService {
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store.append_envelope(&env)?;
+        self.store_authored(&env)?;
         self.changes.local(&env);
         Ok(Some(env))
     }
@@ -733,9 +733,20 @@ impl ChatService {
                 r => r?,
             }
         }
-        self.store.append_envelope(&env)?;
+        self.store_authored(&env)?;
         self.changes.local(&env);
         Ok(env)
+    }
+
+    /// Store an envelope this device authored. One for a synced workspace
+    /// must fit what the relay takes ([`crate::event_store::syncable`]): it is
+    /// refused here, with a clear error, instead of waiting in the outbox.
+    pub(crate) fn store_authored(&self, env: &SessionEventEnvelope) -> Result<()> {
+        if self.local_workspace_id != Some(env.workspace_id) {
+            crate::event_store::syncable(env)?;
+        }
+        self.store.append_envelope(env)?;
+        Ok(())
     }
 
     /// Build and sign an envelope as this device's author would append it
