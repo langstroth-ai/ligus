@@ -1,5 +1,5 @@
 {
-  "description": "Coordinate: op handoff (to + parcel; starts the receiver now), mark, unmark, react, report.",
+  "description": "Coordinate: op handoff (to + parcel; starts the receiver now), mark, unmark, react, report, taskUpdate (status, summary, progress, openQuestions, partialResults: your live progress, seen by people and other agents).",
   "inputSchema": {
     "properties": {
       "confidence": {
@@ -53,12 +53,28 @@
           "mark",
           "unmark",
           "react",
-          "report"
+          "report",
+          "taskUpdate"
         ],
         "type": "string"
       },
+      "openQuestions": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "partialResults": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "path": {
         "type": "string"
+      },
+      "progress": {
+        "type": "integer"
       },
       "ruledOut": {
         "items": {
@@ -72,8 +88,14 @@
       "summary": {
         "type": "string"
       },
+      "taskId": {
+        "type": "string"
+      },
       "to": {
         "type": "string"
+      },
+      "ttlSecs": {
+        "type": "integer"
       }
     },
     "required": [

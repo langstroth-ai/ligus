@@ -121,6 +121,9 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::WorkspaceRepoRemoved { .. }
             | SessionEvent::WorkspaceRepoAliasesSet { .. }
             | SessionEvent::WorkspaceHostAliasSet { .. }
+            | SessionEvent::AttachmentPolicySet { .. }
+            | SessionEvent::AttachmentHashBlocked { .. }
+            | SessionEvent::AttachmentHashUnblocked { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
@@ -308,6 +311,9 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::WorkspaceHostAliasSet { .. } => WorkspaceRole::Admin,
         // Using a listed repo in a chat is a member's.
         SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => WorkspaceRole::Contributor,
+        // Moving a chat's pinned base: an Admin's, or the chat's creator's
+        // (a Contributor at least; `authz::authorize` checks which).
+        SessionEvent::ChatBaseRepinned { .. } => WorkspaceRole::Contributor,
         // A host certifying an agent key: a member's act, plus the
         // certificate's own checks (`authz::authorize`).
         SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,
@@ -323,6 +329,13 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Linked identities: an account's own (see `authz::links`); removing
         // someone else's is an Admin's.
         SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => WorkspaceRole::Viewer,
+        // The attachment policy and blocklist are an Admin's (issue #118).
+        SessionEvent::AttachmentPolicySet { .. }
+        | SessionEvent::AttachmentHashBlocked { .. }
+        | SessionEvent::AttachmentHashUnblocked { .. } => WorkspaceRole::Admin,
+        // Who may share is the policy's call (`authz::attachments`), and a
+        // deletion is its sharer's or an Admin's.
+        SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,

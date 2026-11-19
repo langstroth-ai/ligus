@@ -34,6 +34,16 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "Uuid::new_v5(&agent_id, signing_public_key)",
         "agent key id: names an agent signing key, not a room, chat or invite",
     ),
+    (
+        "crates/hive-core/src/attachment.rs",
+        "Uuid::new_v5(&signer_device, format!(\"ligus-attachment/blob/{blob_id}\").as_bytes())",
+        "attachment id: binds a shared file to its signing device and its random relay blob id (so no one else can claim it), not a room, chat or invite",
+    ),
+    (
+        "crates/hive-core/src/attachment.rs",
+        "Uuid::new_v5(&host_device, format!(\"ligus-attachment/offer/{proposal_id}\").as_bytes())",
+        "offered attachment id: binds an agent's offer to its host and its random proposal id, not a room, chat or invite",
+    ),
 ];
 
 fn workspace_root() -> PathBuf {

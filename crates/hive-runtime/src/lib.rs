@@ -16,11 +16,13 @@ pub mod agent_tools;
 pub mod agent_turn;
 pub mod apply_host;
 pub mod attachment_blob;
+pub mod attachment_safety;
 pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;
+pub mod connection_settings;
 pub mod context;
 pub mod device_enroll;
 pub mod directory_trust;
@@ -50,6 +52,7 @@ pub mod identity_verifier;
 pub mod invite_sig;
 pub mod keyring;
 pub mod lease_presence;
+pub mod lockdown_view;
 pub mod ligus_auth;
 pub mod ligus_mcp;
 pub mod mcp;
@@ -58,6 +61,7 @@ pub mod mentions;
 pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
+pub mod phone_enroll;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
 pub mod private_file;
@@ -66,6 +70,7 @@ pub mod repos;
 pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;
+pub mod relay_refusal;
 pub mod remote_manifest;
 pub mod retrieval;
 pub mod review;
@@ -76,14 +81,19 @@ pub mod secret_redact;
 pub mod secret_store;
 pub mod sse;
 pub mod sync_engine;
+pub mod sync_service;
 pub mod tool_loop;
+pub mod turn_dispatch;
 pub mod vault_fetcher;
 pub mod workflow_directive;
 pub mod workflow_tool;
+pub mod workspace_invite;
 pub mod workspace_trust;
 
-#[cfg(test)]
-mod test_relay;
+// The in-process mock relay: this crate's tests, and other clients' tests
+// through the `test-relay` feature (a dev-dependency only).
+#[cfg(any(test, feature = "test-relay"))]
+pub mod test_relay;
 #[cfg(test)]
 mod dearth_roster_tests;
 #[cfg(test)]
@@ -92,6 +102,8 @@ mod ligus_auth_membership_tests;
 mod keyring_tests;
 #[cfg(test)]
 mod presence_tests;
+#[cfg(test)]
+mod relay_refusal_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
@@ -107,10 +119,11 @@ pub use relay_client::{
     EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
     RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
 };
+pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;
 pub use sse::{next_backoff, parse_seq, SseConnectError, SseDecoder, SseStream};
 pub use host_presence::HostPresence;
-pub use sync_engine::{SyncEngine, SyncError};
+pub use sync_engine::{SyncAttention, SyncEngine, SyncError};
 pub use provider::dispatch::{self, ResolvedRuntime};
 pub use provider::{AnthropicClient, ChatTurn, OpenAiClient, ProviderError};
 

@@ -81,8 +81,10 @@ export const getChat = (sessionId: string) =>
 export const getContextTelemetry = (sessionId: string) =>
   invoke<ContextTelemetryDto | null>("get_context_telemetry", { sessionId });
 
-export const sendMessage = (sessionId: string, body: string) =>
-  invoke<void>("send_message", { sessionId, body });
+/// `runHere`: "Run here this time" — a message to an agent pinned to a host
+/// without the chat's repository runs on this device instead, once.
+export const sendMessage = (sessionId: string, body: string, runHere?: boolean) =>
+  invoke<void>("send_message", runHere ? { sessionId, body, runHere: true } : { sessionId, body });
 
 /// Stop the in-flight turn for a session (the composer's Stop button). Aborts
 /// generation and kills any CLI subprocess; safe no-op if nothing is running.
@@ -379,16 +381,144 @@ export const exportChat = (sessionId: string) =>
 export const saveAttachment = (name: string, dataBase64: string) =>
   invoke<string>("save_attachment", { name, dataBase64 });
 
-/// Turn a composer attachment into the marker to embed. Relay upload is off in
-/// this release (a code-only guard in the backend, no setting), so this returns
-/// a device-local `[Attached: <path>]` marker (only this device can open it).
+/// Turn a composer attachment into the marker to embed (issue #118). In a
+/// synced workspace whose attachment policy lets this person share, the file
+/// is checked, sealed, uploaded and bound to a signed share, and this resolves
+/// to `[Attachment: <id>]`. Otherwise (policy off, the default; no relay; your
+/// own workspace) it is a device-local `[Attached: <path>]` marker that only
+/// this device can open.
 export const shareAttachment = (sessionId: string, path: string) =>
   invoke<string>("share_attachment", { sessionId, path });
 
-/// Resolve a received blob reference to a local file path (cache hit, or download
-/// + decrypt). Rejects when it can't be fetched (no relay, aged out, wrong key).
-export const resolveAttachmentBlob = (id: string, name: string) =>
-  invoke<string>("resolve_attachment_blob", { id, name });
+export type TypeClass =
+  | "text" | "image" | "audio" | "video" | "document" | "macroDocument" | "archive"
+  | "diskImage" | "installer" | "executable" | "script" | "markup" | "unknown";
+
+/// A shared file as the chat shows it (mirrors `AttachmentView`).
+export interface SharedAttachmentView {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  sha256: string;
+  author: string;
+  sender: string;
+  authorKind: string;
+  deleted: boolean;
+  blocked: boolean;
+  mine: boolean;
+  canDelete: boolean;
+  nameClass: TypeClass;
+  riskyByName: boolean;
+  fromAgentOffer: boolean;
+  /// The sharer's own messages that place it (the only ones that show it).
+  messageIds: string[];
+}
+
+export interface ChatAttachments {
+  shared: SharedAttachmentView[];
+  /// `[Attached: <path>]` markers in this person's own messages.
+  ownLocalPaths: string[];
+}
+
+export const listAttachments = (sessionId: string) =>
+  invoke<ChatAttachments>("list_attachments", { sessionId });
+
+export type ScanResult =
+  | { verdict: "notConfigured" }
+  | { verdict: "clean"; scanner: string }
+  | { verdict: "infected"; scanner: string; detail: string }
+  | { verdict: "failed"; scanner: string; detail: string };
+
+export interface AttachmentCheck {
+  id: string;
+  sha256: string;
+  name: string;
+  size: number;
+  sender: string;
+  assessment: {
+    detected: { ext: string; mime: string; class: TypeClass };
+    nameExt: string;
+    nameClass: TypeClass;
+    mismatch: boolean;
+    doubleExtension: boolean;
+    risky: boolean;
+    warnings: string[];
+    preview: "image" | "text" | null;
+  };
+  archive: {
+    entries: number;
+    totalUncompressed: number;
+    unsafeNames: string[];
+    nestedArchives: number;
+    riskyEntries: number;
+    bomb: string | null;
+    /// Entries Ligus couldn't open (encrypted, or an unsupported
+    /// compression) and inner archives it couldn't list: their types weren't
+    /// checked.
+    opaqueEntries?: number;
+  } | null;
+  scan: ScanResult;
+  blockedType: string | null;
+  refused: string | null;
+  needsConfirmation: boolean;
+}
+
+/// Download, verify against the signed reference and inspect (an explicit
+/// action; nothing is opened or saved).
+export const checkAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentCheck>("check_attachment", { sessionId, attachmentId });
+
+/// Save a checked file via a save dialog, quarantine-marked. `confirmed` is
+/// the second confirmation for risky files. Resolves to the path, or null if
+/// cancelled.
+export const saveReceivedAttachment = (sessionId: string, attachmentId: string, confirmed: boolean) =>
+  invoke<string | null>("save_received_attachment", { sessionId, attachmentId, confirmed });
+
+export interface AttachmentPreview {
+  kind: "image" | "text";
+  mime: string;
+  dataBase64: string;
+}
+
+/// An inert preview (raster image or plain text) of a checked file.
+export const previewAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<AttachmentPreview>("preview_attachment", { sessionId, attachmentId });
+
+export const deleteAttachment = (sessionId: string, attachmentId: string) =>
+  invoke<void>("delete_attachment", { sessionId, attachmentId });
+
+export const deleteMemberAttachments = (memberId: string) =>
+  invoke<number>("delete_member_attachments", { memberId });
+
+export interface AttachmentPolicy {
+  enabled: boolean;
+  minRole: "owner" | "admin" | "contributor" | "viewer";
+  agents: boolean;
+  services: boolean;
+  maxBytes: number;
+  allowedTypes?: string[];
+  blockedTypes?: string[];
+}
+
+export interface AttachmentRulesView {
+  policy: AttachmentPolicy;
+  recommended: AttachmentPolicy;
+  blocked: string[];
+  canEdit: boolean;
+  canShare: boolean;
+  relay: boolean;
+  localOnly: boolean;
+  hardMaxBytes: number;
+}
+
+export const attachmentRules = () => invoke<AttachmentRulesView>("attachment_rules");
+export const setAttachmentPolicy = (policy: AttachmentPolicy) =>
+  invoke<void>("set_attachment_policy", { policy });
+export const blockAttachmentHash = (sha256: string) =>
+  invoke<void>("block_attachment_hash", { sha256 });
+export const unblockAttachmentHash = (sha256: string) =>
+  invoke<void>("unblock_attachment_hash", { sha256 });
 
 /// Read a local image attachment as a data: URL for inline preview. Rejects when
 /// the file isn't present on this device (e.g. an attachment synced from another
@@ -1089,6 +1219,26 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+
+/// A phone's `ligusphone1:` code, checked (nothing written).
+export interface PhoneCodeDto {
+  /// The phone's workspace device id, as the phone presents it.
+  deviceId: string;
+  label: string;
+  /// Compare with the phone's screen (Settings > This phone).
+  fingerprint: string;
+  standing: "new" | "alreadyMine" | "revoked" | "conflict";
+  /// Why it can't be certified (revoked, conflict).
+  problem: string | null;
+  workspaceId: string;
+}
+/// Check a phone code: its signature, key and where the device stands here.
+export const inspectPhoneCode = (code: string) => invoke<PhoneCodeDto>("inspect_phone_code", { code });
+/// "Add this phone": certify the phone as one of your devices (the phone
+/// tier). Opens the passkey sheet; refused without your passkey. Returns the
+/// certified device id.
+export const certifyPhoneCode = (code: string, fingerprint: string, workspaceId: string) =>
+  invoke<string>("certify_phone_code", { code, fingerprint, workspaceId });
 /// Hosts naming you as their owner that you haven't approved yet.
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.
@@ -1155,9 +1305,11 @@ export const onChatActivity = (
 export type { ChatActivityEvent };
 
 /// Real connection health for the relay sync loop, updated on every sync
-/// attempt: `live` (last sync ok), `error` (last sync failed — see `lastError`),
-/// or `offline` (not syncing / no relay).
-export type ConnectionState = "live" | "error" | "offline" | "needs_key";
+/// attempt: `live` (last sync ok), `limited` (syncing, but the relay refused
+/// this workspace's writes, e.g. "workspace full", or the room is truncated;
+/// see `lastError`), `error` (last sync failed — see `lastError`), or
+/// `offline` (not syncing / no relay).
+export type ConnectionState = "live" | "limited" | "error" | "offline" | "needs_key";
 
 export interface SyncStatusDto {
   relayConfigured: boolean;
@@ -1861,8 +2013,16 @@ export type SecurityStatusDto = {
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
 };
-/** What the "Confirm with passkey" sheet shows while the browser is open. */
-export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
+/** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
+ * `browser` (the hand-off page is open), `native` (the system passkey dialog
+ * is up), `dismissed` (the person closed the system dialog). */
+export type PresencePromptDto = {
+  kind: string;
+  summary: string;
+  digestShort: string;
+  op: "get" | "create";
+  via?: "browser" | "native" | "dismissed";
+};
 
 export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
 export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
@@ -1875,8 +2035,11 @@ export const deviceConfirm = () => invoke<boolean>("device_confirm");
 export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
-/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */
-export const presenceUseRecovery = (words: string) => invoke<void>("presence_use_recovery", { words });
+/** Use the browser hand-off instead of the system passkey dialog. */
+export const presenceUseBrowser = () => invoke<void>("presence_use_browser");
+/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored).
+ * `digest` is the short digest the sheet shows: the key answers only that request. */
+export const presenceUseRecovery = (words: string, digest: string) => invoke<void>("presence_use_recovery", { words, digest });
 export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise<UnlistenFn> =>
   listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
 export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>
@@ -1993,8 +2156,24 @@ export interface ChatWorkspaceRepoDto {
   removed: boolean;
   baseBranch: string;
   basePinned: boolean;
+  /// The pinned base in force (40 or 64 hex), when one is pinned.
+  baseCommit?: string | null;
+  /// This person may move the pinned base (an Admin, or the chat's creator).
+  canRepin?: boolean;
   /// "present" | "cloning" | a refusal code ("no_checkout", "remote_mismatch", …)
   here: { state: string; reason: string };
+  /// The chat's agents pinned to another host that says it has no checkout
+  /// of this repo (the composer's warning).
+  pinnedElsewhere?: PinnedElsewhere[];
+}
+
+export interface PinnedElsewhere {
+  agentId: string;
+  agentName: string;
+  hostId: string;
+  hostLabel: string;
+  /// This device has the repo, runs the agent's runtime, and the agent is yours.
+  canRunHere: boolean;
 }
 
 export const listWorkspaceRepos = () => invoke<WorkspaceReposDto>("list_workspace_repos");
@@ -2025,3 +2204,16 @@ export const setRepoCoverageReporting = (on: boolean | null) => invoke<void>("se
 export const chatWorkspaceRepo = (sessionId: string) => invoke<ChatWorkspaceRepoDto | null>("chat_workspace_repo", { sessionId });
 export const setChatWorkspaceRepo = (sessionId: string, repoId: string | null, baseBranch = "") =>
   invoke<void>("set_chat_workspace_repo", { sessionId, repoId, baseBranch });
+/// "Clone into…": clone a workspace repo by id into `parent` through this
+/// device's connection to its host, and bind it here.
+export const cloneWorkspaceRepo = (repoId: string, parent: string) =>
+  invoke<{ path: string; rootMatches: boolean | null }>("clone_workspace_repo", { repoId, parent });
+/// Move the chat's pinned base (Admin or the chat's creator, with presence):
+/// to `commit`, or with none to the latest of its base branch on this device.
+export const repinChatBase = (sessionId: string, commit?: string) =>
+  invoke<string>("repin_chat_base", commit ? { sessionId, commit } : { sessionId });
+/// Open the chat's folder for its repository with the OS's default handler.
+export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat_checkout", { sessionId });
+/// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
+export const askAgentToRebase = (sessionId: string, proposalId: string) =>
+  invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });

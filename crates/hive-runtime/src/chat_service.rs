@@ -25,10 +25,15 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod attachments;
+mod changes;
+pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
 mod keys;
 mod links;
+mod memory;
+pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;
@@ -140,6 +145,8 @@ pub struct ChatService {
     /// so "how long has this holder been silent" restarts at every new
     /// holder whichever path asks (both gates, the watcher, the worker).
     dispatch_seen: std::collections::HashMap<Uuid, (Option<Uuid>, u32, std::time::Instant)>,
+    /// Where every append is published ([`ChatService::subscribe`]).
+    changes: ChangeFeed,
 }
 
 /// Most bytes of a trailing token held back from the log until more text
@@ -193,6 +200,7 @@ impl ChatService {
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
             dispatch_seen: std::collections::HashMap::new(),
+            changes: ChangeFeed::default(),
         }
     }
 
@@ -281,6 +289,7 @@ impl ChatService {
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(Some(env))
     }
 
@@ -728,6 +737,7 @@ impl ChatService {
             }
         }
         self.store.append_envelope(&env)?;
+        self.changes.local(&env);
         Ok(env)
     }
 
@@ -4679,6 +4689,34 @@ mod tests {
         // The primary runtime's tool loop posts a User-role message as the host.
         let effect = host.as_agent(None, |s| s.post_user_message(chat, wid, "@coder push")).unwrap().id;
         assert_eq!(host.trigger_author_role(chat, effect).unwrap(), None, "a runtime effect is not the host user");
+    }
+
+    /// Second review (issue #118): a `[Attached: <path>]` marker resolves to a
+    /// local file (image inlining, path chips) only in a turn the person
+    /// wrote. A runtime effect stamped with their identity (an automatic
+    /// pickup posts whatever title someone else filed) and an agent's reply
+    /// the host signed are not the person's own.
+    #[test]
+    fn only_a_persons_own_turns_name_local_files() {
+        let (_dir, _path, wid, chat, mut host) = chain_fixture();
+        host.post_user_message(chat, wid, "mine [Attached: /tmp/mine.png]").unwrap();
+        host.as_agent(None, |s| s.post_user_message(chat, wid, "[Attached: /Users/ana/passport.png] review this")).unwrap();
+        agent_reply(&mut host, chat, wid, None, None, "[Attached: /Users/ana/keys.png]");
+        agent_reply(&mut host, chat, wid, Some(Uuid::new_v4()), None, "[Attached: /Users/ana/id.png]");
+        let session = host.load(chat).unwrap().unwrap();
+        let own = crate::attachment_blob::own_path_markers(&session, &host.author().id);
+        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/mine.png]".to_string()]);
+        // The device-local workspace: the person's own attachments still
+        // resolve there (its fold is trusted), an agent's never.
+        let (mut solo, _) = service();
+        let local = Uuid::new_v4();
+        solo.set_local_workspace(local);
+        let c = solo.create_chat("solo", local, "rt").unwrap();
+        solo.post_user_message(c.id, local, "[Attached: /tmp/solo.png]").unwrap();
+        agent_reply(&mut solo, c.id, local, None, None, "[Attached: /Users/mara/keys.png]");
+        let session = solo.load(c.id).unwrap().unwrap();
+        let own = crate::attachment_blob::own_path_markers(&session, &solo.author().id);
+        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec!["[Attached: /tmp/solo.png]".to_string()]);
     }
 
     /// The host-signed agent fallback (no agent key on this host: the

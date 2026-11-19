@@ -171,6 +171,20 @@ pub struct RefinementDto {
 }
 
 /// A proposal in the review queue, with computed quorum state.
+/// The file an agent's proposal offers (issue #118).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct OfferedFileDto {
+    pub name: String,
+    pub size: u64,
+    /// The type detected from the content when the agent offered it.
+    pub content_type: String,
+    pub sha256: String,
+    /// Its name says it can run code, or hides a second extension.
+    pub risky: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -264,6 +278,11 @@ pub struct ProposalDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub producing_agent_id: Option<String>,
+    /// A file an agent offers to share (issue #118): what the reviewer is
+    /// approving. Nothing is shared until a person approves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offered_file: Option<OfferedFileDto>,
     /// Apply on a host (Phase B): every request a person filed for it, and
     /// how each ended. At most one is `open` at a time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -943,5 +962,6 @@ mod tests {
         MentionStateDto::export_all(&cfg).unwrap();
         LspServerDto::export_all(&cfg).unwrap();
         ProposalSetDto::export_all(&cfg).unwrap();
+        OfferedFileDto::export_all(&cfg).unwrap();
     }
 }

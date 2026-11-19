@@ -51,6 +51,13 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
             TurnCheckout::NoRepo => {
                 let repo_root = RepoBindings::load(data_dir).resolve(&repos_dir(data_dir), s.id);
                 if let Some(r) = repo_root.as_deref().filter(|r| hive_runtime::git_worktree::is_git_repo(r)) {
+                    // A legacy binding to a checkout another host on this
+                    // machine manages (the desktop) never runs here: its
+                    // chat worktrees and branches are that host's.
+                    let me = lock(svc).device_id();
+                    if let Some(label) = rr::marker::managed_elsewhere(r, me) {
+                        return Err(format!("{} on {host_label} is managed by {label}; give this chat a workspace repository and clone it separately here", r.display()));
+                    }
                     crate::repos::ensure_chat_base(r);
                 }
                 return Ok(RepoTurn { repo_root, context: crate::repos::turn_context(data_dir, s.id), base: None });

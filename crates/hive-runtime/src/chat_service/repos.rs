@@ -190,6 +190,38 @@ impl ChatService {
     }
 }
 
+impl ChatService {
+    /// Move a chat's pinned base for `repo` to `commit` (`ChatBaseRepinned`,
+    /// review residual 3): from the pin in force, as this person (never an
+    /// agent or a runtime effect), an Admin's or the chat's creator's, with
+    /// presence under rules v2. Every host with the chat's branch follows
+    /// on its next turn (`repos::prepare_chat`) or refuses it visibly.
+    pub fn repin_chat_base(&mut self, chat: Uuid, workspace_id: Uuid, repo: Uuid, commit: &str) -> Result<()> {
+        if !hive_core::workspace_repo::is_commit_id(commit) {
+            return Err(ChatError::Unauthorized("that isn't a commit id".into()));
+        }
+        let session = self.load(chat)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
+            return Err(ChatError::Unauthorized("this chat doesn't work in that repository".into()));
+        }
+        let previous = session
+            .repo_bases
+            .get(&repo)
+            .and_then(|h| h.last())
+            .cloned()
+            .ok_or_else(|| ChatError::Unauthorized("this chat has no pinned base yet: its first turn pins one".into()))?;
+        if previous == commit {
+            return Err(ChatError::Unauthorized("the chat is already pinned there".into()));
+        }
+        let agent = self.acting_agent.take();
+        let effect = std::mem::replace(&mut self.runtime_effect, false);
+        let r = self.append_signed(chat, workspace_id, SessionEvent::ChatBaseRepinned { repo_id: repo, commit: commit.into(), previous });
+        self.acting_agent = agent;
+        self.runtime_effect = effect;
+        r.map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +255,16 @@ mod tests {
         let c = s.load(chat.id).unwrap().unwrap();
         let cr = c.repo.unwrap();
         assert_eq!((cr.repo_id, cr.base_branch.as_str(), cr.base_commit.as_deref()), (Some(r.id), "main", Some("a".repeat(40).as_str())));
+        // A second pin (another host, or a member) doesn't move it; a re-pin
+        // by the chat's creator, with presence, does.
+        s.pin_chat_base(chat.id, ws, r.id, &"b".repeat(40)).unwrap();
+        assert_eq!(s.load(chat.id).unwrap().unwrap().repo.unwrap().base_commit, Some("a".repeat(40)));
+        assert!(s.repin_chat_base(chat.id, ws, r.id, "HEAD").is_err());
+        assert!(s.repin_chat_base(chat.id, ws, r.id, &"a".repeat(40)).is_err(), "already there");
+        s.repin_chat_base(chat.id, ws, r.id, &"c".repeat(40)).unwrap();
+        let c = s.load(chat.id).unwrap().unwrap();
+        assert_eq!(c.repo.unwrap().base_commit, Some("c".repeat(40)));
+        assert_eq!(c.repo_bases[&r.id], vec!["a".repeat(40), "c".repeat(40)]);
         s.remove_workspace_repo(ws, r.id).unwrap();
         assert!(s.workspace_repos(ws).unwrap()[0].removed);
         assert!(s.set_chat_repo(chat.id, ws, Some(r.id), "").is_err(), "a removed repo can't be chosen");

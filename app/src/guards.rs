@@ -592,6 +592,17 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
         roots.push((bound, None));
     }
+    // Never a checkout another host on this machine manages (its marker,
+    // review residual 6): its chat worktrees and branches are that host's,
+    // and sweeping them would remove its live trees.
+    let me = state.service.lock().unwrap().device_id();
+    roots.retain(|(p, _)| match hive_runtime::repos::marker::managed_elsewhere(p, me) {
+        Some(label) => {
+            tracing::info!(target: "worktree", "hygiene skips {}: managed by {label}", p.display());
+            false
+        }
+        None => true,
+    });
     if roots.is_empty() {
         *state.guards.hygiene.lock().unwrap() = report.clone();
         return report;
@@ -812,13 +823,13 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
-    filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+    filter_mcp_servers(state, servers.to_vec(), egress)
         .into_iter()
         .filter(|s| s.enabled && s.auth.is_none())
         .map(|s| {
@@ -831,14 +842,16 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
         .collect()
 }
 
-/// How the turn's runtime honors the envelope (extra flags, or a refusal).
-pub(crate) fn enforcement_for(
+/// How the turn's runtime honors the envelope (extra flags, or a refusal),
+/// with the turn's own MCP catalog (review F14).
+pub(crate) fn enforcement_for_servers(
     state: &AppState,
     provider: hive_core::ModelProviderKind,
     envelope: &hive_core::sandbox::SandboxEnvelope,
+    servers: &[hive_runtime::McpServerSpec],
 ) -> hive_runtime::sandbox::Enforcement {
     let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
-        claude_mcp_entries(state, &envelope.egress)
+        claude_mcp_entries(state, servers, &envelope.egress)
     } else {
         Vec::new()
     };
@@ -847,13 +860,15 @@ pub(crate) fn enforcement_for(
 
 /// The OS-sandbox policy for one turn on this desktop: the envelope, the
 /// author gate's plan, and the endpoints of the MCP servers the envelope
-/// lets this chat reach (their hosts join the egress allow-list).
-pub(crate) fn turn_sandbox_policy(
+/// lets this chat reach (their hosts join the egress allow-list), from the
+/// turn's own MCP catalog (review F14), never the window's.
+pub(crate) fn turn_sandbox_policy_with(
     state: &AppState,
     session: &hive_core::ChatSession,
     envelope: &hive_core::sandbox::SandboxEnvelope,
     gate: &hive_runtime::author_gate::GatePlan,
     isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
 ) -> hive_runtime::executor::TurnPolicy {
     let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
@@ -861,7 +876,7 @@ pub(crate) fn turn_sandbox_policy(
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
-    for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+    for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
         }
@@ -1238,9 +1253,9 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
     let session = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
-    let signals = session
-        .guards
-        .lockdowns_of(sid)
+    let view = hive_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
+    let signals = view
+        .signals
         .iter()
         .map(|l| hive_proto::LockdownSignalDto {
             signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
@@ -1253,7 +1268,7 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
     Ok(hive_proto::ChatLockdownDto {
         active: !signals.is_empty(),
         signals,
-        can_clear: hive_core::guard::is_human_member(&session.members, &me),
+        can_clear: view.can_clear,
     })
 }
 

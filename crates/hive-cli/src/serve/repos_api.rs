@@ -1107,8 +1107,7 @@ fn bind_clone(s: &Shared, w: &hive_core::workspace_repo::WorkspaceRepo, dest: &F
     // The clone's origin names the repo's identity; when the connection
     // cloned from a different URL (a mirror, an internal address), git keeps
     // using that one for transport (a local insteadOf).
-    hive_runtime::repos::clone::set_identity_origin(dest, w)?;
-    if hive_runtime::repos::clone::verify_claimed_root(dest, w) == Some(false) {
+    if hive_runtime::repos::clone::finish_clone(dest, w)? == Some(false) {
         eprintln!("repos: {} doesn't contain the root commit the workspace entry claims", w.display_name);
     }
     {

@@ -99,6 +99,12 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
         E::ChatRepoSet { .. } => "chatRepoSet",
         E::ChatBasePinned { .. } => "chatBasePinned",
+        E::ChatBaseRepinned { .. } => "chatBaseRepinned",
+        E::AttachmentPolicySet { .. } => "attachmentPolicySet",
+        E::AttachmentHashBlocked { .. } => "attachmentHashBlocked",
+        E::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
+        E::AttachmentShared { .. } => "attachmentShared",
+        E::AttachmentDeleted { .. } => "attachmentDeleted",
         E::Unknown => "unknown",
     }
 }
@@ -121,7 +127,8 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "proposalApplyWithdrawn", "workspaceRepoAliasesSet", "workspaceHostAliasSet",
+    "proposalApplyWithdrawn", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
+    "attachmentDeleted",
 ];
 
 #[test]
@@ -502,4 +509,188 @@ fn repos_v2_goldens() {
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }
     std::fs::write(path, out).unwrap();
+}
+
+/// Writes the re-pin line (review residual 3): `chatBaseRepinned`, a
+/// chat's pinned base moved from the pin in force to another commit. Run
+/// with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn repin_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let payload = SessionEvent::ChatBaseRepinned {
+        repo_id: repo_id("github.com/zazulam/wefit"),
+        commit: "89abcdef0123456789abcdef0123456789abcdef".into(),
+        previous: "0123456789abcdef0123456789abcdef01234567".into(),
+    };
+    let mut e = SessionEventEnvelope::new(chat, ws, 501, payload);
+    e.id = u(0x6010);
+    e.event_id = u(0x6011);
+    e.lamport = 901;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x6002)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+}
+
+/// Writes the file-attachment lines (issue #118): the policy, the blocklist,
+/// a share, an agent's approved offer carried out, and a deletion. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn attachment_goldens() {
+    use hive_core::attachment::{AttachmentPolicy, AttachmentRef};
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let file = AttachmentRef {
+        id: u(0x6001),
+        blob_id: "q2Xk7d0Rk1n3V6t1yq0gq8Bv8m8i2C0u4K0z0sVQ5aE".into(),
+        sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+        size: 4,
+        content_type: "text/plain".into(),
+        name: "notes v2.txt".into(),
+        message_id: Some(u(0x6002)),
+        proposal_id: None,
+    };
+    let offered = AttachmentRef { id: u(0x6003), proposal_id: Some(u(0x6004)), message_id: None, name: "report.pdf".into(), content_type: "application/pdf".into(), ..file.clone() };
+    let cases = [
+        ("attachmentPolicySet", 0u64, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy { agents: true, ..AttachmentPolicy::recommended() } }),
+        ("attachmentPolicySet/off", 1, cfg, SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy::default() }),
+        ("attachmentHashBlocked", 2, cfg, SessionEvent::AttachmentHashBlocked { sha256: "ab".repeat(32) }),
+        ("attachmentHashUnblocked", 3, cfg, SessionEvent::AttachmentHashUnblocked { sha256: "ab".repeat(32) }),
+        ("attachmentShared", 4, chat, SessionEvent::AttachmentShared { attachment: file }),
+        ("attachmentShared/proposal", 5, chat, SessionEvent::AttachmentShared { attachment: offered }),
+        ("attachmentDeleted", 6, chat, SessionEvent::AttachmentDeleted { attachment_id: u(0x6001) }),
+    ];
+    let mut out = String::new();
+    for (label, i, sid, payload) in cases {
+        let mut e = SessionEventEnvelope::new(sid, ws, 501 + i as i64, payload);
+        e.id = u(0x6010 + 2 * i as u128);
+        e.event_id = u(0x6011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6000) }),
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 50 + i, event_id: u(0x6005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the workspace-memory and task-state lines
+/// (`docs/design/v2/workspace-memory.md`): one `flowRecorded` vector per new
+/// record type. Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append.
+#[test]
+#[ignore]
+fn memory_goldens() {
+    use hive_core::flow::FlowRecord;
+    use hive_core::memory::*;
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let source = MemorySource { chat_id: Some(chat), message_id: Some(u(0x6031)), turn_id: Some(u(0x6032)), egress: None };
+    let cases = [
+        ("flowRecorded/memoryWritten", cfg, FlowRecord::MemoryWritten(MemoryWrite {
+            entry_id: u(0x6001),
+            base: Some(u(0x6011)),
+            title: "Relay ports".into(),
+            body: "The team relay listens on 8443.".into(),
+            tags: vec!["infra".into()],
+            source: source.clone(),
+            resolves: vec![u(0x6012)],
+        })),
+        ("flowRecorded/memoryRemoved", cfg, FlowRecord::MemoryRemoved(MemoryRemoval { entry_id: u(0x6001), base: u(0x6013), source: MemorySource::default(), resolves: vec![] })),
+        ("flowRecorded/memoryProposed", cfg, FlowRecord::MemoryProposed(MemoryProposal {
+            proposal_id: u(0x6021),
+            op: MemoryOp::Edit { entry_id: u(0x6001), base: u(0x6011), title: "Relay ports".into(), body: "8443, and 443 behind the proxy.".into(), tags: vec![] },
+            proposer: u(0x81).to_string(),
+            source,
+            rationale: "seen in the deploy chat".into(),
+        })),
+        ("flowRecorded/memoryProposalDecided", cfg, FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: u(0x6021), accepted: true, note: "thanks".into(), resolves: vec![] })),
+        ("flowRecorded/taskState", chat, FlowRecord::TaskState(TaskStateUpdate {
+            task_id: chat,
+            agent_key: u(0x81).to_string(),
+            turn_id: u(0x6032),
+            status: TaskStatus::Blocked,
+            summary: "Waiting on the schema decision".into(),
+            progress: Some(40),
+            open_questions: vec!["Keep the v1 route?".into()],
+            partial_results: vec!["Drafted the migration".into()],
+            ttl_ms: Some(3_600_000),
+        })),
+    ];
+    let mut out = String::new();
+    for (i, (label, sid, record)) in cases.into_iter().enumerate() {
+        let mut e = SessionEventEnvelope::new(sid, ws, 501 + i as i64, SessionEvent::FlowRecorded { record });
+        e.id = u(0x6100 + 2 * i as u128);
+        e.event_id = u(0x6101 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6050) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x6051)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6052) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// The memory and task-state vectors are present and decode to their types.
+#[test]
+fn memory_goldens_are_present() {
+    for t in ["memoryWritten", "memoryRemoved", "memoryProposed", "memoryProposalDecided", "taskState"] {
+        let line = GOLDEN
+            .lines()
+            .find(|l| l.contains(&format!("\"label\":\"flowRecorded/{t}\"")))
+            .unwrap_or_else(|| panic!("no golden vector for {t}"));
+        let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
+        let env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
+        let SessionEvent::FlowRecorded { record } = env.payload else { panic!("{t}") };
+        assert_eq!(record.type_str(), t);
+    }
 }

@@ -26,6 +26,7 @@ column says which. The relay's own variables are on
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |
 | `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 0.1: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
+| `LIGUS_NATIVE_PASSKEYS` | on | desktop | `0`: passkey prompts always use the browser hand-off instead of the macOS or Windows passkey dialog ([native passkeys](../security/native-passkeys.md)) |
 | `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../../ligus/concepts/identity.md#key-storage)) |
 
 On the desktop, the connection variables only **seed** `settings.json` the

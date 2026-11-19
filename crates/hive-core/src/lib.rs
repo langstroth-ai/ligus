@@ -3,6 +3,7 @@
 //! session projector. No IO — orchestration lives in `hive-runtime`.
 
 pub mod admission;
+pub mod attachment;
 pub mod agent;
 pub mod authorization;
 pub mod authz;
@@ -26,6 +27,7 @@ pub mod identity_link;
 pub mod keys;
 pub mod lamport;
 pub mod lease;
+pub mod memory;
 #[cfg(test)]
 mod lease_projection_tests;
 #[cfg(test)]

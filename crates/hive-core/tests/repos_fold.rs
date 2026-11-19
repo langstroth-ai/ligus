@@ -321,3 +321,188 @@ fn an_applied_proposals_content_never_changes_under_the_ledger() {
     assert_eq!(w.verdict(t), Verdict::Allowed);
     assert_eq!(w.state(chat).proposals[0].status, ProposalStatus::Applied);
 }
+
+// ---- the chat's pinned base: first pin wins; re-pins are explicit (review residual 3) ----
+
+const SHA3: &str = "fedcba9876543210fedcba9876543210fedcba98";
+const SHA4: &str = "aaaabbbbccccddddeeeeffff0000111122223333";
+const POOL: [&str; 4] = [SHA, SHA2, SHA3, SHA4];
+const INFRA: &str = "github.com/zazulam/infra";
+
+/// A chat created by `creator`, on WeFit (Infra also listed).
+fn pinned_chat(w: &mut SignedWorld, creator: &str) -> Uuid {
+    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo(WEFIT) });
+    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo(INFRA) });
+    let chat = w.chat(creator, "c");
+    w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: Some(repo_id(WEFIT)), base_branch: String::new() });
+    chat
+}
+
+fn repin(commit: &str, previous: &str) -> SessionEvent {
+    SessionEvent::ChatBaseRepinned { repo_id: repo_id(WEFIT), commit: commit.into(), previous: previous.into() }
+}
+
+fn base_of(w: &SignedWorld, chat: Uuid) -> Option<String> {
+    w.state(chat).repo.and_then(|r| r.base_commit)
+}
+
+#[test]
+fn the_first_pin_wins_and_switching_repos_never_clears_it() {
+    let mut w = world();
+    let chat = pinned_chat(&mut w, "owner");
+    let first = w.say(chat, "mara", SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: SHA.into() });
+    // Another host (or a member) pinning later changes nothing.
+    let later = w.say(chat, "ada", SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: SHA2.into() });
+    assert_eq!((w.verdict(first), w.verdict(later)), (Verdict::Allowed, Verdict::Allowed));
+    assert_eq!(base_of(&w, chat).as_deref(), Some(SHA));
+    // Away to Infra and back: WeFit's pin is still the first one, and a
+    // pin written in between doesn't take.
+    w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: Some(repo_id(INFRA)), base_branch: String::new() });
+    assert_eq!(base_of(&w, chat), None, "Infra has no pin yet");
+    w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: None, base_branch: String::new() });
+    w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: Some(repo_id(WEFIT)), base_branch: "dev".into() });
+    w.say(chat, "mara", SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: SHA3.into() });
+    assert_eq!(base_of(&w, chat).as_deref(), Some(SHA));
+    assert_eq!(w.state(chat).repo_bases[&repo_id(WEFIT)], vec![SHA.to_string()]);
+}
+
+#[test]
+fn a_repin_is_an_admins_or_the_creators_with_presence_from_the_pin_in_force() {
+    let mut w = world();
+    let chat = pinned_chat(&mut w, "owner");
+    w.say(chat, "mara", SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: SHA.into() });
+    // A Contributor who didn't create the chat: refused, presence or not.
+    let by_contributor = w.write("mara", Some(chat), repin(SHA2, SHA), None, Proof::Recovery);
+    // An Admin without presence: refused.
+    let bare = w.write("ada", Some(chat), repin(SHA2, SHA), None, Proof::None);
+    // From a pin that isn't the one in force, or onto itself: refused.
+    let stale = w.write("ada", Some(chat), repin(SHA2, SHA3), None, Proof::Recovery);
+    let same = w.write("ada", Some(chat), repin(SHA, SHA), None, Proof::Recovery);
+    let malformed = w.write("ada", Some(chat), repin("HEAD", SHA), None, Proof::Recovery);
+    // A runtime effect: refused.
+    let mut env = w.draft("ada", Some(chat), repin(SHA2, SHA), None);
+    env.actor_stamp.as_mut().unwrap().runtime_effect = true;
+    w.finish(&mut env, "ada", None);
+    let a = w.recovery_presence("ada", &env);
+    w.finish(&mut env, "ada", Some(a));
+    let by_runtime = w.push_env(Some(chat), env);
+    // The Admin with presence: moved.
+    let ok = w.write("ada", Some(chat), repin(SHA2, SHA), None, Proof::Recovery);
+    let v = w.verdicts();
+    assert_eq!(
+        [v[&by_contributor], v[&bare], v[&stale], v[&same], v[&malformed], v[&by_runtime], v[&ok]],
+        [Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Allowed]
+    );
+    assert_eq!(base_of(&w, chat).as_deref(), Some(SHA2));
+    // The chat's creator (the Owner here) may too, from the new pin.
+    let by_creator = w.write("owner", Some(chat), repin(SHA3, SHA2), None, Proof::Recovery);
+    assert_eq!(w.verdict(by_creator), Verdict::Allowed);
+    assert_eq!(w.state(chat).repo_bases[&repo_id(WEFIT)], vec![SHA.to_string(), SHA2.to_string(), SHA3.to_string()]);
+    // A Contributor's own chat: they may re-pin it.
+    let mut w2 = world();
+    let mine = pinned_chat(&mut w2, "mara");
+    w2.say(mine, "mara", SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: SHA.into() });
+    let own = w2.write("mara", Some(mine), repin(SHA4, SHA), None, Proof::Recovery);
+    assert_eq!(w2.verdict(own), Verdict::Allowed);
+    assert_eq!(base_of(&w2, mine).as_deref(), Some(SHA4));
+    // Nothing pinned yet: nothing to re-pin.
+    let mut w3 = world();
+    let fresh = pinned_chat(&mut w3, "owner");
+    let early = w3.write("ada", Some(fresh), repin(SHA2, SHA), None, Proof::Recovery);
+    assert_eq!(w3.verdict(early), Verdict::Denied);
+}
+
+/// One step of a chat's repo history in the property tests.
+#[derive(Debug, Clone)]
+enum Step {
+    /// Point the chat at WeFit (0), Infra (1) or no repo (2).
+    Set(u8),
+    /// `who` pins `POOL[c]` for WeFit.
+    Pin(u8, usize),
+    /// `who` re-pins WeFit from `POOL[prev]` to `POOL[c]`, with presence or not.
+    Repin(u8, usize, usize, bool),
+}
+
+const WHO: [&str; 3] = ["owner", "ada", "mara"];
+
+fn step() -> impl Strategy<Value = Step> {
+    prop_oneof![
+        (0u8..3).prop_map(Step::Set),
+        (0u8..3, 0usize..4).prop_map(|(w, c)| Step::Pin(w, c)),
+        (0u8..3, 0usize..4, 0usize..4, any::<bool>()).prop_map(|(w, c, p, pr)| Step::Repin(w, c, p, pr)),
+    ]
+}
+
+/// Runs `steps` on a fresh chat created by the owner, and an independent
+/// model of the rules: WeFit's pins (first pin wins; a re-pin by the
+/// owner or Ada with presence from the pin in force appends) and the
+/// chat's current repo.
+fn run(steps: &[Step]) -> (SignedWorld, Uuid, Vec<String>, Option<u8>) {
+    let mut w = world();
+    let chat = pinned_chat(&mut w, "owner");
+    let mut pins: Vec<String> = Vec::new();
+    let mut current = Some(0u8);
+    for s in steps {
+        match s.clone() {
+            Step::Set(r) => {
+                let id = [Some(repo_id(WEFIT)), Some(repo_id(INFRA)), None][r as usize];
+                w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: id, base_branch: String::new() });
+                current = (r < 2).then_some(r);
+            }
+            Step::Pin(who, c) => {
+                w.say(chat, WHO[who as usize], SessionEvent::ChatBasePinned { repo_id: repo_id(WEFIT), commit: POOL[c].into() });
+                if current == Some(0) && pins.is_empty() {
+                    pins.push(POOL[c].into());
+                }
+            }
+            Step::Repin(who, c, p, presence) => {
+                let proof = if presence { Proof::Recovery } else { Proof::None };
+                w.write(WHO[who as usize], Some(chat), repin(POOL[c], POOL[p]), None, proof);
+                let may = who < 2 && presence;
+                if may && current == Some(0) && c != p && pins.last().map(String::as_str) == Some(POOL[p]) {
+                    pins.push(POOL[c].into());
+                }
+            }
+        }
+    }
+    (w, chat, pins, current)
+}
+
+proptest! {
+    /// Whoever pins and whatever the chat's repo does in between, WeFit's
+    /// pin is the first one written while the chat was on it, until an
+    /// allowed re-pin; the chat's base is always its repo's last pin.
+    #[test]
+    fn prop_first_pin_wins(steps in prop::collection::vec(step(), 1..14)) {
+        let (w, chat, pins, current) = run(&steps);
+        let s = w.state(chat);
+        prop_assert_eq!(s.repo_bases.get(&repo_id(WEFIT)).cloned().unwrap_or_default(), pins.clone());
+        let expect = if current == Some(0) { pins.last().cloned() } else { None };
+        prop_assert_eq!(s.repo.and_then(|r| r.base_commit), expect);
+    }
+
+    /// A re-pin lands exactly when the model says: an Admin or the chat's
+    /// creator, with presence, from the pin in force, while the chat is on
+    /// the repo. Two re-pins naming the same `previous` never both land.
+    #[test]
+    fn prop_repin_is_a_compare_and_swap(steps in prop::collection::vec(step(), 1..14), racers in (0usize..4, 0usize..4)) {
+        let (mut w, chat, mut pins, current) = run(&steps);
+        // Two people re-pin concurrently from the pin they both see.
+        if let Some(prev) = pins.last().cloned() {
+            let (a, b) = (POOL[racers.0], POOL[racers.1]);
+            w.write("ada", Some(chat), repin(a, &prev), None, Proof::Recovery);
+            w.write("owner", Some(chat), repin(b, &prev), None, Proof::Recovery);
+            if current == Some(0) {
+                if a != prev {
+                    pins.push(a.into());
+                } else if b != prev {
+                    pins.push(b.into());
+                }
+            }
+        }
+        let s = w.state(chat);
+        let history = s.repo_bases.get(&repo_id(WEFIT)).cloned().unwrap_or_default();
+        prop_assert_eq!(&history, &pins);
+        prop_assert!(history.windows(2).all(|p| p[0] != p[1]));
+    }
+}

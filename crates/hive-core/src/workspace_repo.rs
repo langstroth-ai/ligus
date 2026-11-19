@@ -162,6 +162,10 @@ pub struct RepoEntry {
     pub removed: bool,
 }
 
+/// How many bases one chat may pin for one repo (the first pin and its
+/// re-pins): a bound on the fold's history, far above any real chat's.
+pub const MAX_BASE_PINS: usize = 64;
+
 /// A chat's repository (`ChatRepoSet`), folded onto the chat.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

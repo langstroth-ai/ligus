@@ -117,6 +117,19 @@ pub enum SseConnectError {
     Status(u16),
     /// A transport-level failure (DNS/connect/TLS) before a response arrived.
     Transport(String),
+    /// A `429`/`507` refusal (`sse_streams`: too many open streams from this
+    /// client): back off at least its `Retry-After`.
+    Refused(crate::relay_refusal::RelayRefusal),
+}
+
+impl SseConnectError {
+    /// The least the caller should wait before opening the stream again.
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            SseConnectError::Refused(r) => Some(r.retry_after),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for SseConnectError {
@@ -126,6 +139,7 @@ impl std::fmt::Display for SseConnectError {
             SseConnectError::Unauthorized => write!(f, "relay rejected the access token"),
             SseConnectError::Status(c) => write!(f, "relay returned HTTP {c}"),
             SseConnectError::Transport(e) => write!(f, "could not reach the relay: {e}"),
+            SseConnectError::Refused(r) => write!(f, "{r}"),
         }
     }
 }

@@ -13,6 +13,7 @@ vertical icon strip you click to switch contents. Nine sections:
 | Skills    | Instruction bundles injected into participants' prompts         |
 | Workflows | Agent-written pipelines: read-only definitions (run, pause, delete, ask an agent to change), live runs, gates. See [Agentic workflows](workflows.md) |
 | Flow      | The task board, review queue and hand-off waits, workspace marks, routing, careers, path zones and the home beacon. See [Flow](flow.md) |
+| Memory    | The workspace memory: shared notes agents read and propose changes to, and the proposals waiting for a person. See [Workspace memory and task state](memory.md) |
 | Activity  | Streaming runtime activity for the workspace                    |
 
 <!-- Screenshot pending (Right rail with the Tools pane active): images/right-rail.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->

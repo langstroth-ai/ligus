@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RepositoriesSection, RepoSuggestionBanner, coverageLabel } from "./RepositoriesSection";
-import { ChatRepoChip, repoWarning } from "@/components/ChatRepoChip";
+import { ChatRepoChip, PinnedHostWarning, pinnedWarning, repoWarning } from "@/components/ChatRepoChip";
 import * as ipc from "@/lib/ipc";
 
 const data = (over: Partial<ipc.WorkspaceReposDto> = {}): ipc.WorkspaceReposDto => ({
@@ -43,8 +43,10 @@ vi.mock("@/lib/ipc", () => ({
   rescanRepos: vi.fn(async () => 0),
   setRepoCoverageReporting: vi.fn(async () => undefined),
   pickWorkspaceFolder: vi.fn(async () => null),
+  cloneWorkspaceRepo: vi.fn(async () => ({ path: "/Users/me/code/wefit-1a2b3c4d", rootMatches: true })),
   chatWorkspaceRepo: vi.fn(),
   setChatWorkspaceRepo: vi.fn(async () => undefined),
+  repinChatBase: vi.fn(async () => "89abcdef0123456789abcdef0123456789abcdef"),
 }));
 
 function wrap(ui: React.ReactNode) {
@@ -115,6 +117,24 @@ describe("RepositoriesSection", () => {
     expect(ipc.addWorkspaceRepo).toHaveBeenCalledWith("github.com/zazulam/wefit", { name: "WeFit", path: "/Users/me/apps/WeFit" });
   });
 
+  it("clones a repo that isn't here into a picked folder, by id", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
+    vi.mocked(ipc.pickWorkspaceFolder).mockResolvedValueOnce("/Users/me/code");
+    wrap(<RepositoriesSection />);
+    await userEvent.click(await screen.findByText("Clone into…"));
+    expect(ipc.cloneWorkspaceRepo).toHaveBeenCalledWith("r1", "/Users/me/code");
+  });
+
+  it("doesn't offer to clone a local-only repo, or when the picker is cancelled", async () => {
+    const d = data();
+    d.repos[0].canonical = `local:${"a".repeat(40)}`;
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(d);
+    wrap(<RepositoriesSection />);
+    expect(await screen.findByText("Bind folder…")).toBeTruthy();
+    expect(screen.queryByText("Clone into…")).toBeNull();
+    expect(ipc.cloneWorkspaceRepo).not.toHaveBeenCalled();
+  });
+
   it("words coverage states", () => {
     expect(coverageLabel("present", true)).toBe("checked out (via a fork)");
     expect(coverageLabel("quantum")).toBe("unknown (doesn't report)");
@@ -141,6 +161,31 @@ describe("ChatRepoChip", () => {
     expect(ipc.setChatWorkspaceRepo).toHaveBeenCalledWith("s1", null);
   });
 
+  it("offers moving the pinned base only to an Admin or the chat's creator", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
+    const dto = (canRepin: boolean): ipc.ChatWorkspaceRepoDto => ({
+      id: "r1",
+      name: "WeFit",
+      canonical: "github.com/zazulam/wefit",
+      removed: false,
+      baseBranch: "main",
+      basePinned: true,
+      baseCommit: "0123456789abcdef0123456789abcdef01234567",
+      canRepin,
+      here: { state: "present", reason: "" },
+    });
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(dto(false));
+    const first = wrap(<ChatRepoChip sessionId="s1" />);
+    await userEvent.click(await screen.findByLabelText("Chat repository"));
+    expect(screen.queryByText(/Move the base/)).toBeNull();
+    first.unmount();
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(dto(true));
+    wrap(<ChatRepoChip sessionId="s2" />);
+    await userEvent.click(await screen.findByLabelText("Chat repository"));
+    await userEvent.click(screen.getByText("Move the base to the latest main"));
+    expect(ipc.repinChatBase).toHaveBeenCalledWith("s2");
+  });
+
   it("is hidden while there are no repos", async () => {
     vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ repos: [] }));
     vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(null);
@@ -148,5 +193,48 @@ describe("ChatRepoChip", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(container.textContent).toBe("");
     expect(repoWarning(null, "x")).toBeNull();
+  });
+});
+
+const pinned = (canRunHere: boolean): ipc.ChatWorkspaceRepoDto => ({
+  id: "r1",
+  name: "WeFit",
+  canonical: "github.com/zazulam/wefit",
+  removed: false,
+  baseBranch: "main",
+  basePinned: true,
+  here: { state: "present", reason: "" },
+  pinnedElsewhere: [{ agentId: "a1", agentName: "ScoutBee", hostId: "h1", hostLabel: "mac-test", canRunHere }],
+});
+
+describe("PinnedHostWarning", () => {
+  it("names the agent's host and the actions for a draft to that agent", async () => {
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(pinned(true));
+    const onRunHere = vi.fn();
+    wrap(<PinnedHostWarning sessionId="s1" routeHandle="scoutbee" runHere={false} onRunHere={onRunHere} />);
+    expect(await screen.findByText("ScoutBee runs on mac-test, which has no WeFit.")).toBeTruthy();
+    // Cloning on another host is the phone's: the desktop says how.
+    await userEvent.click(screen.getByText("Clone there"));
+    expect(screen.getByText(/from the Ligus phone app connected to it/)).toBeTruthy();
+    await userEvent.click(screen.getByText("Run here this time"));
+    expect(onRunHere).toHaveBeenCalledWith(true);
+  });
+
+  it("says when it runs here, and can undo", async () => {
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(pinned(true));
+    const onRunHere = vi.fn();
+    wrap(<PinnedHostWarning sessionId="s1" routeHandle="ScoutBee" runHere onRunHere={onRunHere} />);
+    await userEvent.click(await screen.findByText("Undo"));
+    expect(onRunHere).toHaveBeenCalledWith(false);
+  });
+
+  it("can't run here without the repo, the runtime or ownership; silent for other recipients", async () => {
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(pinned(false));
+    wrap(<PinnedHostWarning sessionId="s1" routeHandle="ScoutBee" runHere={false} onRunHere={() => {}} />);
+    const btn = (await screen.findByText("Run here this time")) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(pinnedWarning(pinned(true), "primary")).toBeNull();
+    expect(pinnedWarning({ ...pinned(true), removed: true }, "ScoutBee")).toBeNull();
+    expect(pinnedWarning(null, "ScoutBee")).toBeNull();
   });
 });

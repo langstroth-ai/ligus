@@ -148,12 +148,18 @@ impl DeviceEnrollment {
     }
 }
 
-/// `XXXX-XXXX-XXXX`: the first 6 bytes of SHA-256(key), upper-case hex.
+/// `XXXX-XXXX-XXXX-XXXX-XXXX`: the first 10 bytes (80 bits) of
+/// SHA-256(key), upper-case hex in five groups of four. A person compares it
+/// to decide which key becomes theirs, so a key made to collide with it has
+/// to cost about 2^80 work, not the 2^48 a 6-byte one did.
 pub fn fingerprint(key: &[u8]) -> String {
     let d = Sha256::digest(key);
-    let hex: String = d[..6].iter().map(|b| format!("{b:02X}")).collect();
-    format!("{}-{}-{}", &hex[0..4], &hex[4..8], &hex[8..12])
+    let hex: String = d[..FINGERPRINT_BYTES].iter().map(|b| format!("{b:02X}")).collect();
+    hex.as_bytes().chunks(4).map(|g| std::str::from_utf8(g).expect("hex is ASCII")).collect::<Vec<_>>().join("-")
 }
+
+/// How much of SHA-256(key) a device fingerprint shows.
+pub const FINGERPRINT_BYTES: usize = 10;
 
 /// Where a device stands in a workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,7 +367,7 @@ mod tests {
         let back = DeviceEnrollment::decode(&wrapped).unwrap();
         assert_eq!(back, e);
         assert_eq!(back.fingerprint(), fingerprint(&kp.public_key_bytes()));
-        assert_eq!(back.fingerprint().len(), 14);
+        assert_eq!(back.fingerprint().len(), 24, "five groups of four");
     }
 
     #[test]
