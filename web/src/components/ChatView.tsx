@@ -18,7 +18,6 @@ import {
   shareAttachment,
   listAttachments,
   readImageDataUrl,
-  openExternal,
   readWorkspaceFile,
   listWorkspaceFiles,
   sendMessage,
@@ -1775,7 +1774,6 @@ function MessageBody({
   const unplaced = attachmentIds.filter((id) => !shown.some((v) => v.id === id));
   const attItems = (path: string): import("@/components/ContextMenu").MenuItemSpec[] => [
     { label: "Open", onClick: () => editorStore.requestOpen(path) },
-    { label: "Open with default app", onClick: () => void openExternal(`file://${path}`) },
     { type: "separator" },
     { label: "Copy filename", onClick: () => void navigator.clipboard?.writeText(fileBaseName(path)) },
     { label: "Copy path", onClick: () => void navigator.clipboard?.writeText(path) },

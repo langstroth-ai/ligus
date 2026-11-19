@@ -289,7 +289,7 @@ pub fn presence_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAs
 
 /// A `create` for a new passkey, natively when this OS serves the
 /// workspace's RP, else through the browser.
-fn presence_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Result<PresenceAssertion, String> {
+fn presence_create(app: &AppHandle, req: &PresenceRequest, user_id: &[u8], user_name: &str) -> Result<PresenceAssertion, String> {
     let prompt = PresencePrompt {
         kind: "passkeyRegistered".into(),
         summary: "Create a Ligus passkey".into(),
@@ -298,7 +298,7 @@ fn presence_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> R
         via: String::new(),
     };
     let events = SheetEvents { app, prompt };
-    crate::passkey_native::run_create(crate::passkey_native::platform(app), req, user_name, &SIGNALS, WAIT, &events, || browser_create(app, req, user_name))
+    crate::passkey_native::run_create(crate::passkey_native::platform(app), req, user_id, user_name, &SIGNALS, WAIT, &events, || browser_create(app, req, user_id, user_name))
 }
 
 /// `navigator.credentials.get` over `challenge` in the browser.
@@ -330,12 +330,12 @@ fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAsserti
 
 /// `navigator.credentials.create` over `challenge`: the new credential and
 /// its proof (the attestation object rides in `authenticator_data`).
-fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Result<PresenceAssertion, String> {
+fn browser_create(app: &AppHandle, req: &PresenceRequest, user_id: &[u8], user_name: &str) -> Result<PresenceAssertion, String> {
     let fragment = format!(
         "op=create&rp={}&c={}&u={}&un={}&x={}",
         urlencode(&req.policy.rp_id),
         b64url(&req.challenge),
-        b64url(req.account_id.as_bytes()),
+        b64url(user_id),
         urlencode(user_name),
         urlencode(&req.credential_ids.join(",")),
     );
@@ -464,7 +464,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             summary: "Create a Ligus passkey".into(),
             policy: policy.clone(),
         };
-        let att = presence_create(&app, &create_req, &name)?;
+        let att = presence_create(&app, &create_req, &crate::passkey_native::user_handle(account, ws), &name)?;
         let (id, alg, pk) = policy.with(|p| presence::verify_create(&att, &challenge, p)).map_err(|e| e.0)?;
         let new_id = b64url(&id);
         let credential = PasskeyCredential {

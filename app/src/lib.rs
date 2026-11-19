@@ -124,6 +124,11 @@ struct AppState {
     /// The workspace whose chats are currently shown. Defaults to the local id
     /// each launch; switched to a room id when the user opens a joined room.
     active_workspace: Mutex<Uuid>,
+    /// Held for a whole workspace switch: the switch writes the live relay,
+    /// room and key, the active id and the founder pin in separate steps,
+    /// and since the commands moved off the main thread two switches could
+    /// interleave (active A, synced room B, B's founder trusted for A).
+    switching: Mutex<()>,
     workspace_root: Mutex<String>,
     /// Per-session, per-runtime compaction state: the fixed boundary plus the
     /// incremental summary of everything before it (see [`SummaryCacheEntry`]
@@ -2419,6 +2424,15 @@ impl Viewer {
     }
 }
 
+/// A name, title or label someone else chose, as the UI shows it: bidi
+/// overrides and isolates, zero-width and other invisible characters and
+/// controls removed (so `Ana\u{202E}` can't reorder what follows it in a
+/// header, a member row or a confirm), whitespace collapsed. Every DTO field
+/// that carries a peer's name or a title goes through it.
+pub(crate) fn shown(raw: &str) -> String {
+    ligus_proto::names::clean_display_name(raw)
+}
+
 fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> ChatMessageDto {
     // Resolve the author's avatar. A named agent (in the roster) uses its roster
     // avatar/color. Otherwise — a human, or the primary "ligus" (not a roster
@@ -2434,7 +2448,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
     let responder_name = if m.role == MessageRole::Assistant && roster_agent.is_none() {
         m.actor_identity
             .as_ref()
-            .map(|a| a.display_name.clone())
+            .map(|a| shown(&a.display_name))
             .filter(|n| !n.trim().is_empty())
     } else {
         None
@@ -2443,7 +2457,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
     ChatMessageDto {
         id: m.id.to_string(),
         role: role_str(m.role).to_string(),
-        author: m.author.clone(),
+        author: shown(&m.author),
         body: m.body.clone(),
         is_streaming: m.is_streaming,
         created_at: rfc3339(m.created_at),
@@ -2453,7 +2467,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
             .map(|r| ReactionDto {
                 emoji: r.emoji.clone(),
                 actor_id: r.actor_id.clone(),
-                actor_display_name: r.actor_display_name.clone(),
+                actor_display_name: shown(&r.actor_display_name),
             })
             .collect(),
         tool_calls: m
@@ -2507,7 +2521,7 @@ fn proposal_dto(p: &ActionProposal, members: &[ligus_core::identity::WorkspaceMe
         members
             .iter()
             .find(|m| m.id == actor_id)
-            .map(|m| m.actor.display_name.clone())
+            .map(|m| shown(&m.actor.display_name))
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| {
                 let short = actor_id.get(..8).unwrap_or(actor_id);
@@ -2527,7 +2541,7 @@ fn proposal_dto(p: &ActionProposal, members: &[ligus_core::identity::WorkspaceMe
     };
     ProposalDto {
         id: p.id.to_string(),
-        title: p.title.clone(),
+        title: shown(&p.title),
         body: p.body.clone(),
         author_actor_id: p.author_actor_id.clone(),
         kind: kind.to_string(),
@@ -3100,9 +3114,9 @@ fn member_dto(m: &WorkspaceMember, self_actor_id: &str) -> WorkspaceMemberDto {
     WorkspaceMemberDto {
         id: m.id.clone(),
         actor_id: m.actor.id.clone(),
-        display_name: m.actor.display_name.clone(),
+        display_name: shown(&m.actor.display_name),
         role: role_name(m.role).to_string(),
-        title: m.title.clone(),
+        title: shown(&m.title),
         index: m.index,
         is_self: m.actor.id == self_actor_id,
         avatar_url: m.actor.avatar_url.clone(),
@@ -3152,7 +3166,7 @@ fn summary_dto(s: &ChatSession, default_chat_ids: &std::collections::HashSet<Str
         is_channel_default: default_chat_ids.contains(&id),
         channel_id: s.channel_id.clone(),
         id,
-        title: s.title.clone(),
+        title: shown(&s.title),
         last_activity_at: rfc3339(s.last_activity_at()),
         message_count: s.messages.iter().filter(|m| !m.superseded).count() as u32,
         archived: s.archived,
@@ -3786,8 +3800,8 @@ pub(crate) fn create_chat_sync(state: State<AppState>, title: String) -> Result<
 fn channel_dto(c: &ligus_core::Channel) -> ChannelDto {
     ChannelDto {
         id: c.id.clone(),
-        name: c.name.clone(),
-        purpose: c.purpose.clone(),
+        name: shown(&c.name),
+        purpose: c.purpose.as_deref().map(shown),
         position: c.position,
         archived: c.archived,
         default_chat_id: c.default_chat_id.clone(),
@@ -5033,11 +5047,16 @@ async fn remove_and_revoke(
 /// config log is behind. Admin+ (and passkey presence under rules v2).
 async fn rotate_active_workspace_key(state: &AppState) -> Result<RevokeResultDto, String> {
     let ws = state.active_workspace_id();
-    let issued = state.service.lock().unwrap().rotate_workspace_key(ws).map_err(map_err)?;
     let (relay_url, room) = {
         let s = state.settings.lock().unwrap();
         (s.relay_url.clone().filter(|u| !u.trim().is_empty()), s.sync_room.clone())
     };
+    rotate_workspace_key_for(state, ws, relay_url, room).await
+}
+
+/// Rotate `ws`'s key and publish the rotation to `room` on `relay_url`.
+async fn rotate_workspace_key_for(state: &AppState, ws: Uuid, relay_url: Option<String>, room: String) -> Result<RevokeResultDto, String> {
+    let issued = state.service.lock().unwrap().rotate_workspace_key(ws).map_err(map_err)?;
     if let Some(url) = relay_url {
         let client = state.relay_client(&url);
         if let Err(e) = ligus_runtime::keyring::publish_rotation(&client, &room, &issued.rotation).await {
@@ -9202,7 +9221,7 @@ async fn send_message(
                 .notification()
                 .builder()
                 .title("Ligus")
-                .body(format!("{} mentioned you", responder.author))
+                .body(format!("{} mentioned you", shown(&responder.author)))
                 .show();
         }
 
@@ -9660,7 +9679,7 @@ pub(crate) fn notify_mentions_sync(
                 .notification()
                 .builder()
                 .title("Ligus")
-                .body(format!("{who} mentioned you"))
+                .body(format!("{} mentioned you", shown(&who)))
                 .show();
         }
     }
@@ -9876,13 +9895,36 @@ struct FileDiffSidesDto {
     is_binary: bool,
 }
 
+/// Whether `rel` names something inside the workspace: only plain names (and
+/// `.`), never a root, a drive or UNC prefix (`C:\x`, `\\host\share`,
+/// which `Path::join` lets replace the workspace root on Windows) or `..`.
+fn is_plain_relative(rel: &str) -> bool {
+    use std::path::Component;
+    !rel.contains("..")
+        && !rel.starts_with(['/', '\\'])
+        && !rel.contains(':')
+        && std::path::Path::new(rel).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+#[cfg(test)]
+mod plain_relative_tests {
+    #[test]
+    fn only_paths_inside_the_workspace() {
+        use super::is_plain_relative as ok;
+        assert!(ok("src/main.rs") && ok("") && ok("./a"));
+        for bad in ["/etc/passwd", "../x", "a/../../x", "C:\\Windows\\x", "C:x", "\\\\host\\share\\f", "\\x", "c:/x"] {
+            assert!(!ok(bad), "{bad}");
+        }
+    }
+}
+
 #[tauri::command]
 fn get_file_diff_sides(state: State<AppState>, path: String) -> Result<FileDiffSidesDto, String> {
     let root = state.workspace_root.lock().unwrap().clone();
     let rel = path.trim();
     // The path comes from our own diff list, but re-validate anyway: it must
     // stay inside the workspace.
-    if rel.is_empty() || rel.starts_with('/') || rel.contains("..") {
+    if rel.is_empty() || !is_plain_relative(rel) {
         return Err("invalid path".into());
     }
     let original = ligus_core::process_util::git()
@@ -9965,7 +10007,7 @@ fn open_path_in_editor(
         .ok_or_else(|| format!("unknown editor {editor_id}"))?;
     let root = state.workspace_root.lock().unwrap().clone();
     let rel = path.trim();
-    if rel.starts_with('/') || rel.contains("..") {
+    if !is_plain_relative(rel) {
         return Err("invalid path".into());
     }
     let target = if rel.is_empty() {
@@ -11037,16 +11079,84 @@ fn open_external(url: String) -> Result<(), String> {
     open_url_in_browser(url).map_err(map_err)
 }
 
-/// Launch the system default browser at `url`. Shared by `open_external` and the
-/// MCP OAuth flow (which must open the authorization page).
-pub(crate) fn open_url_in_browser(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    let (program, args): (&str, Vec<&str>) = ("open", vec![url]);
+/// Launch the system default browser at `target`: an http(s) URL, or the
+/// absolute path of a local page (the passkey hand-off). Shared by
+/// `open_external` and the MCP OAuth flow (which must open the authorization
+/// page).
+pub(crate) fn open_url_in_browser(target: &str) -> std::io::Result<()> {
+    browser_command(target)?.spawn().map(|_| ())
+}
+
+/// What the OS is asked to open: the URL as `url` re-serializes it (spaces,
+/// quotes and other unsafe characters percent-encoded), or a local file as a
+/// `file://` URL. Anything else is refused.
+pub(crate) fn browser_target(target: &str) -> std::io::Result<String> {
+    let bad = |m: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, m.to_string());
+    let t = target.trim();
+    let u = if t.starts_with("https://") || t.starts_with("http://") {
+        url::Url::parse(t).map_err(|_| bad("not a valid URL"))?
+    } else {
+        url::Url::from_file_path(t).map_err(|_| bad("only http(s) URLs and local pages can be opened"))?
+    };
+    if !matches!(u.scheme(), "http" | "https" | "file") {
+        return Err(bad("only http(s) URLs and local pages can be opened"));
+    }
+    Ok(u.to_string())
+}
+
+/// The command that opens `target` in the default browser. Never a shell:
+/// on Windows `cmd /C start` read `&`, `|` and `^` in a URL as more commands
+/// (an MCP server's authorization endpoint `https://x/?a&calc` ran calc), so
+/// it is `rundll32 url.dll,FileProtocolHandler` with the re-serialized URL.
+pub(crate) fn browser_command(target: &str) -> std::io::Result<std::process::Command> {
+    let url = browser_target(target)?;
     #[cfg(target_os = "windows")]
-    let (program, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", url]);
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let (program, args): (&str, Vec<&str>) = ("xdg-open", vec![url]);
-    ligus_core::process_util::command(program).args(&args).spawn().map(|_| ())
+    {
+        use std::os::windows::process::CommandExt;
+        let mut c = ligus_core::process_util::command("rundll32");
+        c.raw_arg(format!("url.dll,FileProtocolHandler {url}"));
+        Ok(c)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let program = "open";
+        #[cfg(not(target_os = "macos"))]
+        let program = "xdg-open";
+        let mut c = ligus_core::process_util::command(program);
+        c.arg(url);
+        Ok(c)
+    }
+}
+
+#[cfg(test)]
+mod browser_command_tests {
+    use super::{browser_command, browser_target};
+
+    #[test]
+    fn a_url_never_reaches_a_shell() {
+        let hostile = "https://x.example/a?b=1&calc.exe&c=\"d e\"|whoami^";
+        let t = browser_target(hostile).unwrap();
+        // No quote or space: the URL stays one argument however it is quoted.
+        assert!(!t.contains('"') && !t.contains(' '), "{t}");
+        assert!(t.starts_with("https://x.example/a?b=1&calc.exe&c="), "{t}");
+        let c = browser_command(hostile).unwrap();
+        let program = c.get_program().to_string_lossy().to_ascii_lowercase();
+        assert!(!program.contains("cmd") && !program.contains("powershell"), "{program}");
+        #[cfg(target_os = "windows")]
+        assert!(program.contains("rundll32"), "{program}");
+    }
+
+    #[test]
+    fn only_web_urls_and_local_pages_open() {
+        assert!(browser_target("javascript:alert(1)").is_err());
+        assert!(browser_target("file:///etc/passwd").is_err(), "file URLs come only from a local path");
+        assert!(browser_target("relative/page.html").is_err());
+        #[cfg(unix)]
+        assert_eq!(browser_target("/tmp/a b/p.html").unwrap(), "file:///tmp/a%20b/p.html");
+        #[cfg(windows)]
+        assert!(browser_target(r"C:\Users\A B\p.html").unwrap().starts_with("file:///C:/Users/A%20B/p.html"));
+    }
 }
 
 /// macOS launch-health signals that predict silent agent stalls. Ligus spawns
@@ -11792,6 +11902,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         device_name: stored.device.device_name.clone(),
         local_workspace_id,
         active_workspace: Mutex::new(local_workspace_id),
+        switching: Mutex::new(()),
         workspace_root: Mutex::new(workspace_root),
         summary_cache: Mutex::new(HashMap::new()),
         summary_backoff: Mutex::new(HashMap::new()),
@@ -12637,7 +12748,7 @@ fn list_workspaces(state: State<AppState>) -> Vec<WorkspaceInfoDto> {
         let id = w.id();
         out.push(WorkspaceInfoDto {
             id: id.to_string(),
-            name: w.display_name(),
+            name: shown(&w.display_name()),
             kind: "room".to_string(),
             active: active == id,
             icon_url: w.icon.clone(),
@@ -12655,6 +12766,7 @@ async fn set_active_workspace(ligus_app: tauri::AppHandle, workspace_id: String)
 
 pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
+    let _switching = state.switching.lock().unwrap_or_else(|p| p.into_inner());
     let default_rt = state.current_default_runtime_id();
     if id == state.local_workspace_id {
         // The local workspace has no out-of-band invite/founder; clear any pin
@@ -12847,7 +12959,7 @@ pub(crate) fn create_workspace_sync(state: State<AppState>, name: String, relay_
     set_active_workspace_sync(state.clone(), conn.id().to_string())?;
     Ok(WorkspaceInfoDto {
         id: conn.id().to_string(),
-        name: conn.display_name(),
+        name: shown(&conn.display_name()),
         kind: "room".to_string(),
         active: true,
         icon_url: conn.icon.clone(),
@@ -12884,6 +12996,14 @@ pub(crate) fn join_workspace_sync(state: State<AppState>, invite: String) -> Res
 fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn, redeem: Option<[u8; 32]>) -> Result<WorkspaceInfoDto, String> {
     // The invite's signature was for the reader's check; never kept.
     conn.sig = None;
+    // An invite for a workspace this device already joined never replaces
+    // its relay, key or founder (anyone who knows the room could forge one).
+    {
+        let s = state.settings.lock().unwrap();
+        if let Some(existing) = s.workspaces.iter().find(|w| w.room == conn.room) {
+            same_workspace_conn(existing, &conn)?;
+        }
+    }
     // The invite this device redeems to enroll itself, with its redeem key
     // (kept device-local, not in settings: it is single-use).
     if let Some(inv) = conn.inv.take().and_then(|i| Uuid::parse_str(&i).ok()) {
@@ -12893,21 +13013,84 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn, redeem: 
     }
     {
         let mut s = state.settings.lock().unwrap();
-        if let Some(existing) = s.workspaces.iter_mut().find(|w| w.room == conn.room) {
-            *existing = conn.clone(); // refresh relay/key from the invite
-        } else {
-            s.workspaces.push(conn.clone());
+        match s.workspaces.iter().find(|w| w.room == conn.room) {
+            // Already joined (and the same, checked above): keep what is saved.
+            Some(existing) => {
+                same_workspace_conn(existing, &conn)?;
+                conn = existing.clone();
+            }
+            None => s.workspaces.push(conn.clone()),
         }
         save_settings(&state.data_dir, &s);
     }
     set_active_workspace_sync(state.clone(), conn.id().to_string())?;
     Ok(WorkspaceInfoDto {
         id: conn.id().to_string(),
-        name: conn.display_name(),
+        name: shown(&conn.display_name()),
         kind: "room".to_string(),
         active: true,
         icon_url: conn.icon.clone(),
     })
+}
+
+/// Whether an invite for a room this device already joined is that same
+/// workspace: the same relay, key, founder and founder key. A re-pasted
+/// invite used to overwrite all four, so anyone who knew the room (a former
+/// member) could send "the new invite" pointing it at their relay, their key
+/// and themselves as founder. A relay move is made under Settings → Team sync.
+fn same_workspace_conn(existing: &WorkspaceConn, invite: &WorkspaceConn) -> Result<(), String> {
+    let relay = |w: &WorkspaceConn| w.relay_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    if existing.key != invite.key || existing.founder_actor_id != invite.founder_actor_id || existing.fk != invite.fk {
+        return Err(format!(
+            "you've already joined {} and this invite doesn't match it (a different key or founder): it isn't from that workspace",
+            existing.display_name()
+        ));
+    }
+    if relay(existing) != relay(invite) {
+        return Err(format!(
+            "you've already joined {} on another relay: to move it, change the relay under Settings → Team sync",
+            existing.display_name()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod rejoin_tests {
+    use super::*;
+
+    /// Final review J1: an invite for a room already joined replaced its
+    /// relay, key and founder.
+    #[test]
+    fn a_forged_invite_never_replaces_a_joined_workspace() {
+        let joined = WorkspaceConn {
+            name: "Team".into(),
+            relay_url: "https://relay.example".into(),
+            room: "r".into(),
+            key: Some("k".into()),
+            founder_actor_id: Some("founder".into()),
+            fk: Some("aa".into()),
+            icon: None,
+            dm_account: None,
+            inv: None,
+            ek: Vec::new(),
+            sig: None,
+        };
+        assert!(same_workspace_conn(&joined, &joined).is_ok());
+        let mut again = joined.clone();
+        again.relay_url = "https://RELAY.example/".into();
+        again.name = "renamed".into();
+        assert!(same_workspace_conn(&joined, &again).is_ok(), "the same workspace, re-pasted");
+        for forge in [
+            WorkspaceConn { key: Some("k2".into()), ..joined.clone() },
+            WorkspaceConn { founder_actor_id: Some("eve".into()), ..joined.clone() },
+            WorkspaceConn { fk: Some("bb".into()), ..joined.clone() },
+            WorkspaceConn { fk: None, ..joined.clone() },
+            WorkspaceConn { relay_url: "https://evil.example".into(), ..joined.clone() },
+        ] {
+            assert!(same_workspace_conn(&joined, &forge).is_err(), "{forge:?}");
+        }
+    }
 }
 
 /// The typed error `workspace_invite` returns for a workspace with no usable
@@ -13610,8 +13793,15 @@ async fn workspace_remove_member(
     state: State<'_, AppState>,
     account: String,
 ) -> Result<RevokeResultDto, String> {
+    // The workspace, relay and room are taken once, before any await: a
+    // workspace switch during the relay call must not move the roster
+    // removal or the key rotation (B1) to the newly active workspace.
+    let ws = state.active_workspace_id();
     let relay = configured_relay(&state)?;
     let room = state.settings.lock().unwrap().sync_room.clone();
+    if ligus_core::room_workspace_id(&room) != ws {
+        return Err("this workspace isn't the one being synced yet: try again in a moment".into());
+    }
     let client = state.relay_client(&relay);
 
     // 1. Remove server-side membership first (authorization enforced relay-side).
@@ -13622,7 +13812,6 @@ async fn workspace_remove_member(
     let removed_id = ligus_account_id_for(&account);
     {
         let mut svc = state.service.lock().unwrap();
-        let ws = state.active_workspace_id();
         let config_id = ligus_core::workspace_config_session_id(ws);
         let members: Vec<String> = svc
             .load(config_id)
@@ -13644,7 +13833,7 @@ async fn workspace_remove_member(
     }
 
     // 3. Rotate the workspace key to everyone who remains (B1).
-    rotate_active_workspace_key(&state).await
+    rotate_workspace_key_for(&state, ws, Some(relay), room).await
 }
 
 /// What's available on this machine, to drive first-run onboarding defaults.
@@ -17885,5 +18074,34 @@ mod responder_place_tests {
         let dto = message_dto(&forged, &[], Viewer::of(&desktop));
         assert_eq!(dto.responder_device, None);
         assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
+    }
+}
+
+#[cfg(test)]
+mod shown_name_tests {
+    use super::*;
+
+    /// Final review: peer-chosen names and titles reached the UI raw, so an
+    /// RLO in a display name reordered transcript headers, member rows and
+    /// the "Remove X?" confirm.
+    #[test]
+    fn peer_names_reach_the_ui_cleaned() {
+        let evil = "Ana\u{202E}txet\u{200B}\u{2066}";
+        let hidden = |t: &str| t.chars().any(ligus_proto::names::is_hidden_name_char);
+        let member = WorkspaceMember {
+            id: "m".into(),
+            actor: ActorIdentity::new("a", evil, ActorKind::Human),
+            role: WorkspaceRole::Contributor,
+            title: evil.into(),
+            index: 1,
+            joined_at: Default::default(),
+        };
+        let d = member_dto(&member, "me");
+        assert_eq!(d.display_name, "Anatxet");
+        assert!(!hidden(&d.title), "{:?}", d.title);
+        let mut c = ligus_core::Channel::new("c", evil);
+        c.purpose = Some(evil.into());
+        let d = channel_dto(&c);
+        assert!(!hidden(&d.name) && !hidden(d.purpose.as_deref().unwrap()), "{:?}", d.name);
     }
 }

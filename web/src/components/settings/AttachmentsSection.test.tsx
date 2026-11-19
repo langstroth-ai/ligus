@@ -28,6 +28,14 @@ function renderIt() {
 describe("AttachmentsSection", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // Final review: a failed load showed "Loading…" forever.
+  it("says when the rules can't be loaded", async () => {
+    vi.mocked(ipc.attachmentRules).mockRejectedValue(new Error("the service is busy"));
+    renderIt();
+    expect(await screen.findByRole("alert")).toHaveTextContent("the service is busy");
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
   it("is off by default and only an Admin can change it", async () => {
     vi.mocked(ipc.attachmentRules).mockResolvedValue({ policy: off, recommended, blocked: [], canEdit: false, canShare: false, relay: true, localOnly: false, hardMaxBytes: 100 * 1024 * 1024 });
     renderIt();

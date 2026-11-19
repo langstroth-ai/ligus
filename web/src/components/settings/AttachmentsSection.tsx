@@ -46,6 +46,15 @@ export function AttachmentsSection() {
   const unblock = useMutation({ mutationFn: unblockAttachmentHash, onSuccess: refresh, onError: (e) => toast.error(errMsg(e)) });
 
   const r = rules.data;
+  if (rules.isError) {
+    return (
+      <Section title="File attachments">
+        <p role="alert" className="text-sm" style={{ color: "var(--ligus-danger-ink)" }}>
+          Couldn't load the attachment rules: {errMsg(rules.error)}
+        </p>
+      </Section>
+    );
+  }
   if (!r || !draft) return <Section title="File attachments">Loading…</Section>;
   if (r.localOnly) {
     return (

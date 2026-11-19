@@ -56,17 +56,30 @@ pub struct PresenceDraft {
     pub request: PresenceRequest,
 }
 
+/// A name or label someone else chose, as the confirmation sheet shows it:
+/// bidi and invisible characters removed (so it can't reorder the sentence
+/// around it), quoted (so `Eve as Viewer;` can't pass for the role), at most
+/// 64 characters.
+fn shown(raw: &str) -> String {
+    let clean = ligus_proto::names::clean_display_name(raw);
+    let mut s: String = clean.chars().take(64).collect();
+    if s.len() < clean.len() {
+        s.push('…');
+    }
+    format!("\u{201C}{s}\u{201D}")
+}
+
 /// A short description of what an event authorizes (the confirmation sheet).
 pub fn summarize(payload: &SessionEvent) -> String {
     match payload {
-        SessionEvent::MemberAdded { member, .. } => format!("Add {} as {:?}", member.actor.display_name, member.role),
+        SessionEvent::MemberAdded { member, .. } => format!("Add {} as {:?}", shown(&member.actor.display_name), member.role),
         SessionEvent::MemberRemoved { member_id, .. } => format!("Remove member {member_id}"),
         SessionEvent::MemberRoleChanged { change, .. } => format!("Change {}'s role to {:?}", change.member_id, change.new_role),
         SessionEvent::DeviceRevoked { device_id, .. } => format!("Revoke device {device_id}"),
         SessionEvent::WorkspaceKeyRotated { rotation } => {
             format!("Rotate the workspace key to version {} ({} devices)", rotation.version, rotation.sealed.len())
         }
-        SessionEvent::PasskeyRegistered { credential } => format!("Register passkey \"{}\"", credential.label),
+        SessionEvent::PasskeyRegistered { credential } => format!("Register passkey {}", shown(&credential.label)),
         SessionEvent::PasskeyRemoved { .. } => "Remove a passkey".into(),
         // The relying party decides where every later passkey ceremony
         // happens: the sheet names it, never just the version.
@@ -112,7 +125,7 @@ pub fn summarize(payload: &SessionEvent) -> String {
         SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:") => {
             "Let someone join with a single-use invite".into()
         }
-        SessionEvent::JoinApproved { subject, .. } => format!("Let {subject} join"),
+        SessionEvent::JoinApproved { subject, .. } => format!("Let {} join", shown(subject)),
         other => format!("Confirm {}", other.kind_str()),
     }
 }
@@ -436,6 +449,7 @@ impl ChatService {
 #[cfg(test)]
 mod summary_tests {
     use super::summarize;
+    use ligus_core::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
     use ligus_core::SessionEvent;
 
     /// Review P-A5: confirming a relying-party change shows the new RP,
@@ -445,5 +459,28 @@ mod summary_tests {
         let e = SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(ligus_core::presence::PresencePolicy::for_rp("evil.example")) };
         let s = summarize(&e);
         assert!(s.contains("evil.example"), "{s}");
+    }
+
+    /// The joiner chooses their own name, and the approver reads it on the
+    /// passkey sheet: it must not reorder the sentence or fake the role.
+    #[test]
+    fn a_joiners_name_cannot_rewrite_the_sheet() {
+        let ev = |name: &str| SessionEvent::MemberAdded {
+            invite: None,
+            proof: None,
+            member: WorkspaceMember {
+                id: "m".into(),
+                actor: ActorIdentity::new("a", name, ActorKind::Human),
+                role: WorkspaceRole::Admin,
+                title: String::new(),
+                index: 0,
+                joined_at: Default::default(),
+            },
+        };
+        let s = summarize(&ev("Eve as Viewer;\u{202E} \u{200B}x"));
+        assert!(!s.chars().any(ligus_proto::names::is_hidden_name_char), "{s:?}");
+        assert_eq!(s, "Add \u{201C}Eve as Viewer; x\u{201D} as Admin");
+        let long = summarize(&ev(&"n".repeat(500)));
+        assert!(long.chars().count() < 100, "{long}");
     }
 }

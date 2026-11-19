@@ -182,7 +182,7 @@ fn no_native_or_unserved_rp_uses_the_hand_off() {
     assert_eq!(run_get(None, &req, &sig, WAIT, &log, browser_marker).unwrap().credential_id, "from-the-browser");
     let m = Mock::not_serving();
     assert_eq!(run_get(as_native(&m), &req, &sig, WAIT, &log, browser_marker).unwrap().credential_id, "from-the-browser");
-    assert_eq!(run_create(as_native(&m), &req, "Ana", &sig, WAIT, &log, browser_marker).unwrap().credential_id, "from-the-browser");
+    assert_eq!(run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &sig, WAIT, &log, browser_marker).unwrap().credential_id, "from-the-browser");
     assert_eq!(m.calls.load(Ordering::SeqCst), 0);
     assert!(log.take().is_empty(), "the hand-off emits its own events");
 }
@@ -196,7 +196,7 @@ fn native_failure_falls_back_to_the_hand_off() {
         let log = Log::default();
         let out = run_get(as_native(&m), &req, &Signals::new(), WAIT, &log, browser_marker).unwrap();
         assert_eq!(out.credential_id, "from-the-browser", "{mode:?}");
-        let out = run_create(as_native(&m), &req, "Ana", &Signals::new(), WAIT, &log, browser_marker).unwrap();
+        let out = run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &Signals::new(), WAIT, &log, browser_marker).unwrap();
         assert_eq!(out.credential_id, "from-the-browser", "{mode:?}");
         assert_eq!(m.calls.load(Ordering::SeqCst), 2);
     }
@@ -208,7 +208,7 @@ fn a_refusal_is_an_error() {
     let m = Mock::new(Mode::Refused);
     let req = request(vec![]);
     let log = Log::default();
-    let e = run_create(as_native(&m), &req, "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap_err();
+    let e = run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap_err();
     assert!(e.contains("already registered"), "{e}");
     assert_eq!(log.take(), ["Native", "done:false"]);
 }
@@ -222,7 +222,7 @@ fn a_wrong_challenge_is_refused() {
     let e = run_get(as_native(&m), &req, &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap_err();
     assert!(e.contains("different challenge"), "{e}");
     assert_eq!(log.take(), ["Native", "done:false"]);
-    let e = run_create(as_native(&m), &req, "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap_err();
+    let e = run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap_err();
     assert!(e.contains("different challenge"), "{e}");
 }
 
@@ -314,7 +314,7 @@ fn a_dismissed_dialog_waits_for_the_sheet() {
         std::thread::sleep(Duration::from_millis(100));
         s2.cancel();
     });
-    assert_eq!(run_create(as_native(&m), &req, "Ana", &sig, WAIT, &log, || panic!("no browser")).unwrap_err(), "cancelled");
+    assert_eq!(run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &sig, WAIT, &log, || panic!("no browser")).unwrap_err(), "cancelled");
     t.join().unwrap();
 }
 
@@ -335,12 +335,26 @@ fn a_hung_native_call_times_out() {
 /// does: the account id as user handle, the name, the existing credentials
 /// to exclude; its result reads out with the same `verify_create`.
 #[test]
+fn one_account_gets_a_passkey_per_workspace() {
+    let account = uuid::Uuid::new_v4();
+    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    assert_ne!(user_handle(account, a), user_handle(account, b), "a passkey in B must not replace A's");
+    assert_eq!(user_handle(account, a), user_handle(account, a));
+    assert!(user_handle(account, a).len() <= 64, "WebAuthn caps the user handle at 64 bytes");
+    let m = Mock::new(Mode::Answer);
+    let req = request(vec![]);
+    let h = user_handle(req.account_id, b);
+    run_create(as_native(&m), &req, &h, "Ana", &Signals::new(), WAIT, &Log::default(), || panic!("no browser")).unwrap();
+    assert_eq!(m.seen_create.lock().unwrap().clone().unwrap().user_id, h);
+}
+
+#[test]
 fn native_create_matches_the_page() {
     let m = Mock::new(Mode::Answer);
     let existing = SoftAuthenticator::es256();
     let req = request(vec![b64url(&existing.credential_id)]);
     let log = Log::default();
-    let att = run_create(as_native(&m), &req, "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap();
+    let att = run_create(as_native(&m), &req, req.account_id.as_bytes(), "Ana", &Signals::new(), WAIT, &log, || panic!("no browser")).unwrap();
     let (id, alg, pk) = req.policy.with(|p| presence::verify_create(&att, &req.challenge, p)).unwrap();
     assert_eq!((id, alg, pk), (m.soft.credential_id.clone(), presence::ES256, m.soft.public_key()));
     let c = m.seen_create.lock().unwrap().clone().unwrap();
@@ -377,7 +391,7 @@ fn native_ceremonies_pass_the_fold() {
         summary: String::new(),
         policy: policy.clone(),
     };
-    let att = run_create(as_native(&m), &create_req, "Ana", &Signals::new(), WAIT, &Log::default(), || panic!("no browser")).unwrap();
+    let att = run_create(as_native(&m), &create_req, create_req.account_id.as_bytes(), "Ana", &Signals::new(), WAIT, &Log::default(), || panic!("no browser")).unwrap();
     let (id, alg, public_key) = policy.with(|p| presence::verify_create(&att, &[5u8; 32], p)).unwrap();
     let new_id = b64url(&id);
     let cred = PasskeyCredential {
@@ -546,7 +560,7 @@ fn ceremonies_never_overlap() {
     let sig = Arc::new(Signals::new());
     let creating = Mock::new(Mode::Hang);
     let (c2, s2, r2) = (creating.clone(), sig.clone(), req.clone());
-    let create = std::thread::spawn(move || run_create(as_native(&c2), &r2, "Ana", &s2, WAIT, &Log::default(), || panic!("no browser")));
+    let create = std::thread::spawn(move || run_create(as_native(&c2), &r2, r2.account_id.as_bytes(), "Ana", &s2, WAIT, &Log::default(), || panic!("no browser")));
     while creating.calls.load(Ordering::SeqCst) == 0 {
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -636,4 +650,14 @@ fn recovery_words_for_another_ceremony_are_dropped() {
     let r = run_get(as_native(&m), &pending, &sig, WAIT, &Log::default(), || panic!("no browser"));
     t.join().unwrap();
     assert_eq!(r.map(|a| a.signature.is_empty()).unwrap_err(), "cancelled", "the words confirmed a ceremony the sheet didn't show");
+}
+
+/// Final review P2: Windows ran a native ceremony for whatever RP the
+/// workspace rules named.
+#[test]
+fn windows_runs_natively_only_for_ligus_own_rp() {
+    assert!(windows_serves(&PresencePolicy::default()));
+    for rp in ["google.com", "github.com", "com", "ligus.ai.evil.example"] {
+        assert!(!windows_serves(&PresencePolicy::for_rp(rp)), "{rp}");
+    }
 }

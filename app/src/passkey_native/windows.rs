@@ -182,7 +182,7 @@ impl WinAuthenticator {
 
 impl NativeAuthenticator for WinAuthenticator {
     fn origin(&self, policy: &PresencePolicy) -> Option<String> {
-        Some(policy.page_origin())
+        super::windows_serves(policy).then(|| policy.page_origin())
     }
 
     fn get(&self, req: &GetRequest) -> Result<RawAssertion, NativeError> {

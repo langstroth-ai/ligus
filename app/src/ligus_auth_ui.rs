@@ -24,6 +24,17 @@ static STARTED: Once = Once::new();
 struct Pending {
     auth_url: String,
     device_code: String,
+    /// The relay the sign-in is for: the one configured when it started
+    /// (E-5), not whichever workspace is active when the approval lands.
+    relay_origin: Option<String>,
+}
+
+/// Clear `pending` only when it is still the sign-in `device_code` belongs
+/// to: a slow poll of an older sign-in must not cancel a newer one.
+fn finish_pending(pending: &mut Option<Pending>, device_code: &str) {
+    if pending.as_ref().is_some_and(|p| p.device_code == device_code) {
+        *pending = None;
+    }
 }
 
 /// The relay bearer to use: the langstroth-auth access token when signed in,
@@ -101,9 +112,11 @@ pub async fn ligus_auth_start(
     let ds = ligus_auth::start_device(&ligus_auth::http_client(), &base, CLIENT_ID, &label)
         .await
         .map_err(|e| e.to_string())?;
+    let relay_origin = state.settings.lock().unwrap().relay_url.as_deref().and_then(ligus_auth::origin_of);
     *PENDING.lock().unwrap() = Some(Pending {
         auth_url: base,
         device_code: ds.device_code.clone(),
+        relay_origin,
     });
     Ok(LigusAuthStartDto {
         user_code: ds.user_code,
@@ -117,11 +130,11 @@ pub async fn ligus_auth_start(
 /// One poll: "pending" | "slowDown" | "denied" | "expired" | "success" | "none".
 #[tauri::command]
 pub async fn ligus_auth_poll(state: State<'_, AppState>) -> Result<String, String> {
-    let Some((url, code)) = PENDING
+    let Some((url, code, relay_origin)) = PENDING
         .lock()
         .unwrap()
         .as_ref()
-        .map(|p| (p.auth_url.clone(), p.device_code.clone()))
+        .map(|p| (p.auth_url.clone(), p.device_code.clone(), p.relay_origin.clone()))
     else {
         return Ok("none".into());
     };
@@ -141,16 +154,16 @@ pub async fn ligus_auth_poll(state: State<'_, AppState>) -> Result<String, Strin
         Poll::Denied => "denied",
         Poll::Expired => "expired",
         Poll::SignedIn(s) => {
-            // Bound to the relay configured now (E-5).
+            // Bound to the relay configured when the sign-in started (E-5).
             let mut s = *s;
-            s.relay_origin = state.settings.lock().unwrap().relay_url.as_deref().and_then(ligus_auth::origin_of);
+            s.relay_origin = relay_origin;
             ligus_auth::save_session(&state.data_dir, &s).map_err(|e| e.to_string())?;
             CELL.set_session(&s);
             "success"
         }
     };
     if status != "pending" && status != "slowDown" {
-        *PENDING.lock().unwrap() = None;
+        finish_pending(&mut PENDING.lock().unwrap(), &code);
     }
     Ok(status.into())
 }
@@ -161,4 +174,19 @@ pub async fn ligus_auth_sign_out(state: State<'_, AppState>) -> Result<(), Strin
     ligus_auth::sign_out(&ligus_auth::http_client(), &state.data_dir).await;
     CELL.set(None);
     Ok(())
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::{finish_pending, Pending};
+
+    #[test]
+    fn an_old_poll_never_cancels_a_newer_sign_in() {
+        let p = |code: &str| Some(Pending { auth_url: "https://auth.example".into(), device_code: code.into(), relay_origin: Some("https://relay-a.example".into()) });
+        let mut pending = p("new");
+        finish_pending(&mut pending, "old");
+        assert!(pending.is_some());
+        finish_pending(&mut pending, "new");
+        assert!(pending.is_none());
+    }
 }

@@ -2,7 +2,23 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Markdown, nodeText } from "./Markdown";
 
+const openExternal = vi.fn((_url: string) => Promise.resolve());
+vi.mock("@/lib/ipc", () => ({ openExternal: (url: string) => openExternal(url) }));
+
 describe("Markdown", () => {
+  // Final review: links called window.open, which never reaches the OS
+  // browser from the Tauri webview, so a chat link did nothing on click.
+  it("opens a clicked link in the system browser", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    openExternal.mockClear();
+    render(<Markdown content={"[site](https://example.com/a?b=1) ![pic](https://img.example/p.png)"} />);
+    fireEvent.click(screen.getByRole("link", { name: "site" }));
+    fireEvent.click(screen.getByRole("link", { name: /image: pic/ }));
+    expect(openExternal.mock.calls.map((c) => c[0])).toEqual(["https://example.com/a?b=1", "https://img.example/p.png"]);
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
   it("keeps single newlines as line breaks", () => {
     const { container } = render(<Markdown content={"line one\nline two\nline three"} />);
     expect(container.querySelectorAll("br")).toHaveLength(2);
