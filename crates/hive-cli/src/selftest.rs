@@ -2,7 +2,7 @@
 //! what its sandbox lets it do.
 //!
 //! The turn is the same path `ligus worker` and `ligus serve` take for an
-//! HTTP model with local tools ([`crate::reply::generate_reply_streaming`]):
+//! HTTP model with local tools (the turn engine, `hive_runtime::turn_engine`):
 //! a Custom (OpenAI-wire) runtime, Ligus's built-in tools with `run_command`
 //! on, a per-turn git worktree, and every command spawned through this host's
 //! agent sandbox. The model is a stub served in process on loopback: its first

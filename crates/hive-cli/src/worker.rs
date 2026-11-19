@@ -6,7 +6,7 @@
 //! A turn runs on the agent's workspace runtime (spec §12.5 — never a personal
 //! key). HTTP model runtimes that may front a local server get the offline
 //! harness's tool loop (built-in file tools + MCP tools, see
-//! [`reply::generate_reply_streaming`]); file-mutating subprocess agents run in
+//! `hive_runtime::turn_engine`); file-mutating subprocess agents run in
 //! an eagerly cut worktree as before. Either way, a turn's file changes come
 //! back as a review-gated `FileDiff` proposal on the chat, synced like the
 //! desktop's per-turn proposals.
@@ -617,8 +617,11 @@ async fn run_turn(
     tool_settings.run_command &= enforcement.allow_run_command && shell_allowed;
 
     // The MCP servers this turn may reach (`LIGUS_MCP_CONFIG`, narrowed by
-    // the envelope); a broken config fails the turn, as before.
-    let mcp_servers: Vec<_> = if allow_tools {
+    // the envelope), read only for a runtime that lists them (the Anthropic
+    // tool loop, an HTTP runtime that runs the tool loop): a broken config
+    // fails such a turn, as before, and never a CLI agent's.
+    let lists_mcp = (rt.provider == ModelProviderKind::Anthropic && rt.api_key.is_some()) || rt.runs_agent_tools();
+    let mcp_servers: Vec<_> = if allow_tools && lists_mcp {
         crate::mcp_config::load_from_env()?.into_iter().filter(|s| envelope.egress.allows_mcp(&s.id)).collect()
     } else {
         Vec::new()
