@@ -131,12 +131,30 @@ fn is_json_object(b: &[u8]) -> bool {
 /// Whether `kind`'s sign-in is a file in the turn home `home` (so the turn
 /// doesn't need the login keychain).
 pub fn signed_in_by_file(kind: ModelProviderKind, home: &Path) -> bool {
-    let f = match kind {
-        ModelProviderKind::ClaudeCode => CLAUDE_CREDENTIALS,
-        ModelProviderKind::Codex => ".codex/auth.json",
-        _ => return false,
-    };
-    std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file())
+    sign_in_file(kind).is_some_and(|f| std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file()))
+}
+
+/// The file `kind` signs in with, relative to its home.
+pub fn sign_in_file(kind: ModelProviderKind) -> Option<&'static str> {
+    match kind {
+        ModelProviderKind::ClaudeCode => Some(CLAUDE_CREDENTIALS),
+        ModelProviderKind::Codex => Some(".codex/auth.json"),
+        _ => None,
+    }
+}
+
+/// Whether a turn of `kind` will be signed in by a file in its turn home
+/// (and so run without the login keychain): the CLI's credentials file is
+/// under `real_home`, or (macOS) Claude Code keeps its sign-in in the
+/// keychain item [`populate_with`] bridges into one. For `ligus doctor
+/// --sandbox` and Settings; it reads no keychain item.
+pub fn expects_file_sign_in(kind: ModelProviderKind, real_home: &Path) -> bool {
+    let Some(f) = sign_in_file(kind) else { return false };
+    #[cfg(target_os = "macos")]
+    let bridged = kind == ModelProviderKind::ClaudeCode && is_user_home(real_home);
+    #[cfg(not(target_os = "macos"))]
+    let bridged = false;
+    bridged || real_path(kind, real_home, f).is_file()
 }
 
 /// The login keychain through `/usr/bin/security` (the tool Claude Code

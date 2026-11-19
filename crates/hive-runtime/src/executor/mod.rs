@@ -1810,7 +1810,20 @@ pub fn effective_policy_in(
     };
     let wt = PathBuf::from("<the turn's worktree>");
     let tmp = PathBuf::from("<the turn's scratch dir>");
-    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| tmp.join("home"));
+    // A CLI that will be signed in by a file in its turn home loses the
+    // login keychain (`EnvelopeEnforcer::plan`): a scratch stand-in holding
+    // just that file's name shows it so. No keychain item is read.
+    let stand_in = match purpose {
+        Purpose::Agent(k) if cli_home::expects_file_sign_in(k, home) => cli_home::sign_in_file(k).and_then(|f| {
+            let d = make_turn_tmp().ok()?;
+            let p = d.path().join(f);
+            std::fs::create_dir_all(p.parent()?).ok()?;
+            std::fs::write(&p, b"").ok()?;
+            Some(d)
+        }),
+        _ => None,
+    };
+    let cli_home = matches!(purpose, Purpose::Agent(_)).then(|| stand_in.as_ref().map(|d| d.path().to_path_buf()).unwrap_or_else(|| tmp.join("home")));
     let plan = EnvelopeEnforcer::plan(&PlanInputs {
         host: HostKind::Desktop,
         envelope: &SandboxEnvelope::workspace_default(),
@@ -1872,6 +1885,8 @@ pub fn effective_policy_in(
     for d in &plan.deny_read {
         let why = if host.data_dirs.contains(d) {
             "Ligus's data (keys, settings, the event log)"
+        } else if d.ends_with("Library/Keychains") && kind.is_some_and(|k| runtime_home_read(Purpose::Agent(k), home, false).iter().any(|(p, _)| p == d)) {
+            "the login keychain: this CLI is signed in by a file in its turn home, so its turns run without it"
         } else if host.secret_files.contains(d) {
             "a Ligus secret file"
         } else {
