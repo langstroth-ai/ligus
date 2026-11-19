@@ -3067,7 +3067,7 @@ async fn phone_vote_attribution() {
 async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let rounds = vec![
         streamed_call("c1", "ligus_propose", r#"{"kind":"decision","title":"Use sqlite","body":"smaller footprint"}"#),
-        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":60}"#),
+        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":600}"#),
         streamed_call("c3", "ligus_flow", r#"{"op":"handoff","to":"reviewer","keyFiles":["README.md"],"notes":"check it"}"#),
         vec![delta(json!({"content": "Asked and handed off.\n[[propose: {\"title\": \"Use sqlite\", \"kind\": \"decision\"}]]\n[[mark: {\"kind\": \"claim\", \"path\": \"README.md\"}]]"}))],
         vec![delta(json!({"content": "Reviewed."}))],
@@ -3088,13 +3088,17 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     sync_once(&h.desktop).await.unwrap();
     let host = this_host(&h).await;
     bind_here(&h, &host, &[h.agent_id, reviewer_id]).await;
+    // The phone that answers, certified up front: nothing slow happens while
+    // the agent's question waits (its 600 s timeout is never what decides).
+    let (phone, account) = certified_phone(&h).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let mut rx = h.events(None).await;
     h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder pick a database" }))).await;
 
-    // The question reaches the phone; answer it there.
-    let seen = collect_until(&mut rx, 30, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
+    // The question reaches the phone; answer it there. Each wait ends on its
+    // event; the bound only catches a hang (a loaded CI box ran past 30 s).
+    let seen = collect_until(&mut rx, 180, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
     let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
     assert_eq!(ask["question"], "Which database?");
     assert_eq!(ask["kind"], "question", "the ask says what it is; the phone doesn't parse its text");
@@ -3104,7 +3108,6 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     assert_eq!(listed["asks"][0]["kind"], "question");
     // The box never answers as itself: the phone does, as its person.
     assert_gone(&h, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 })), "answer").await;
-    let (phone, account) = certified_phone(&h).await;
     let answer = hive_core::phone_action::PhoneAction::Answer {
         chat_id: Uuid::parse_str(&chat_id).unwrap(),
         ask_id: Uuid::parse_str(&ask_id).unwrap(),
@@ -3117,7 +3120,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     assert_eq!(listed["asks"][0]["answer"], "postgres", "{listed}");
 
     // The receiver's turn starts on this host and answers once.
-    let seen = collect_until(&mut rx, 60, |evs| {
+    let seen = collect_until(&mut rx, 180, |evs| {
         evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed.")
     })
     .await;
