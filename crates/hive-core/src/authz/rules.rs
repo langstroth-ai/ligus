@@ -101,6 +101,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // Repos: adding or removing one steers clones and chats (repos
         // review F7); renaming is cosmetic; using one in a chat is content.
         SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
+        // Aliases change identity matching (repos review F6, R2): as add.
+        SessionEvent::WorkspaceRepoAliasesSet { .. } | SessionEvent::WorkspaceHostAliasSet { .. } => true,
         SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
         // Moving a chat's pinned base rewrites every host's chat branch.
         SessionEvent::ChatBaseRepinned { .. } => true,

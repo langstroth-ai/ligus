@@ -75,6 +75,11 @@ pub struct ChatSession {
     /// Ephemeral coordination state; empty on legacy sessions.
     #[serde(default)]
     pub turn_claims: BTreeMap<Uuid, Uuid>,
+    /// The dispatcher's per-turn state (`crate::dispatch`): epoch, signed
+    /// coverage and the committed answer, by claim key. Fold state; left out
+    /// when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub turn_dispatch: BTreeMap<Uuid, crate::dispatch::TurnSlot>,
     /// Channels defined on the workspace. Only populated when this session IS
     /// the workspace-config log (§11); empty on ordinary chats.
     #[serde(default)]
@@ -163,6 +168,8 @@ impl ChatSession {
         for m in self.messages.iter().rev() {
             match m.role {
                 MessageRole::System => continue,
+                // A fenced duplicate answer isn't a reply in the chain.
+                MessageRole::Assistant | MessageRole::Agent if m.superseded => continue,
                 MessageRole::Assistant | MessageRole::Agent => n += 1,
                 MessageRole::User => break,
             }
@@ -211,6 +218,7 @@ impl ChatSession {
             archived: false,
             creator_actor_id: String::new(),
             turn_claims: BTreeMap::new(),
+            turn_dispatch: BTreeMap::new(),
             channels: Vec::new(),
             channel_id: String::new(),
             workspace_runtimes: Vec::new(),
@@ -233,7 +241,9 @@ impl ChatSession {
     /// empty. Mirrors Swift's `lastActivityAt`.
     pub fn last_activity_at(&self) -> Timestamp {
         self.messages
-            .last()
+            .iter()
+            .rev()
+            .find(|m| !m.superseded)
             .map(|m| m.created_at)
             .unwrap_or(self.created_at)
     }

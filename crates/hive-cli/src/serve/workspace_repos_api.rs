@@ -29,7 +29,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::api::{load_chat, ApiError, ApiResult};
-use super::repos_api::ensure_can_write;
+use super::repos_api::{ensure_can_write, owner_gate};
+use super::tunnel::TunnelPeer;
+use axum::Extension;
 use super::Shared;
 
 type S = State<Arc<Shared>>;
@@ -50,7 +52,7 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
     let reports = rr::host_reports(&roster, &hosts, &s.presence);
     let entries = rr::workspace_repos(&roster);
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
-    let mine = rr::coverage(svc.store(), s.ws, &live, &rr::cloning());
+    let mine = rr::coverage_in(svc.store(), s.ws, &roster, &rr::cloning());
     let maps = svc.store().repo_mappings(s.ws).map_err(hive_runtime::chat_service::ChatError::from)?;
     let looks = hive_core::workspace_repo::lookalikes(&live);
     let repos: Vec<Value> = entries
@@ -90,10 +92,13 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                 },
                 "hosts": hosts,
                 "lookalikeOf": lookalike_of,
+                // Synced aliases (design 12): names only.
+                "aliases": roster.repo_aliases.get(&r.id).cloned().unwrap_or_default(),
             })
         })
         .collect();
-    Ok(json!({ "repos": repos, "hostId": s.host_id, "label": s.opts.label }))
+    let host_aliases: Vec<Value> = roster.host_aliases.iter().map(|(a, h)| json!({ "alias": a, "host": h })).collect();
+    Ok(json!({ "repos": repos, "hostAliases": host_aliases, "hostId": s.host_id, "label": s.opts.label }))
 }
 
 pub async fn list(State(s): S) -> ApiResult<Json<Value>> {
@@ -130,8 +135,9 @@ pub struct RenameReq {
     branch: Option<String>,
 }
 
-pub async fn rename(State(s): S, Path(id): Path<String>, Json(req): Json<RenameReq>) -> ApiResult<Json<Value>> {
+pub async fn rename(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<RenameReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     let branch = match req.branch {
         Some(b) => b,
@@ -156,8 +162,9 @@ pub struct ConfirmReq {
 }
 
 /// "Found WeFit on this host as WeFit. Use it?": confirm by folder name.
-pub async fn confirm(State(s): S, Path(id): Path<String>, Json(req): Json<ConfirmReq>) -> ApiResult<Json<Value>> {
+pub async fn confirm(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<ConfirmReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let id = parse_repo(&id)?;
     let sh = s.clone();
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
@@ -178,7 +185,8 @@ pub async fn confirm(State(s): S, Path(id): Path<String>, Json(req): Json<Confir
     Ok(Json(listing(&s)?))
 }
 
-pub async fn rescan(State(s): S) -> ApiResult<Json<Value>> {
+pub async fn rescan(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+    owner_gate(&s, peer.as_deref())?;
     let sh = s.clone();
     let _ = tokio::task::spawn_blocking(move || super::repos_refresh(&sh)).await;
     Ok(Json(listing(&s)?))
@@ -193,9 +201,10 @@ pub struct SetChatRepo {
     base_branch: String,
 }
 
-pub async fn set_chat_repo(State(s): S, Path(id): Path<String>, Json(req): Json<SetChatRepo>) -> ApiResult<Json<Value>> {
+pub async fn set_chat_repo(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<SetChatRepo>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     ensure_can_write(&s, Some(&chat))?;
+    owner_gate(&s, peer.as_deref())?;
     s.lock().set_chat_repo(chat.id, chat.workspace_id, req.repo_id, &req.base_branch)?;
     s.after_write();
     Ok(Json(chat_repo(&s, chat.id)?))

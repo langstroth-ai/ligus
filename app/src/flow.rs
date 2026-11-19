@@ -1161,6 +1161,14 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
         _ => return,
     };
     let Some(reply) = session.messages.iter().find(|m| m.id == message_id).cloned() else { return };
+    // A superseded reply is a fenced duplicate: hidden, never an answer, so it
+    // tags nothing, applies no mark directives and hands nothing on. Drain its
+    // per-turn stashes so they don't linger.
+    if reply.superseded {
+        let _ = take_activity(message_id);
+        let _ = take_stashed(message_id);
+        return;
+    }
     let responder = facts.responder;
     let me = flow::agent_key(responder.agent_id);
     let trigger = trigger_of(&session, &reply);
@@ -1354,7 +1362,7 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     if state.responding.lock().unwrap().len() > 1 {
         return None;
     }
-    let mut svc = state.service.lock().unwrap();
+    let svc = state.service.lock().unwrap();
     let session = svc.load(session_id).ok().flatten()?;
     if session.turn_claims.contains_key(&prompt_id) {
         return None;
@@ -1372,11 +1380,15 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
         return None;
     }
     let workspace_id = session.workspace_id;
-    if !svc.claim_turn(session_id, workspace_id, prompt_id).ok()? {
+    drop(svc);
+    // Through the dispatcher (design repos-and-checkouts 11.5): the claim
+    // carries this device's signed coverage of the chat's repo, and the
+    // host's worker claims the same prompt key, so whoever folds first runs
+    // it and the other watches.
+    if crate::dispatch_here(state, session_id, workspace_id, prompt_id, None, true, std::time::Duration::ZERO).ok()? != hive_core::dispatch::Step::Run {
         return None;
     }
     let from_host = agent.host_id.clone();
-    drop(svc);
     let now = flow::now_ms();
     let mut r = recruit("idle_host", &flow::tremble::GateQueue::default(), now);
     r.from_host = from_host;
@@ -1807,7 +1819,7 @@ fn record_handoff(
         .iter()
         .rev()
         .take_while(|m| m.role != MessageRole::User)
-        .filter(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent))
+        .filter(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
         .count() as u32;
     let card = HandoffCard {
         id: Uuid::new_v4(),

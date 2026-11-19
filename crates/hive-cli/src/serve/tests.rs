@@ -4458,3 +4458,30 @@ async fn add_repo_on_desktop(h: &Harness, input: &str, name: &str) -> Uuid {
     }
     panic!("the box never saw the repo");
 }
+
+/// Repos review residual 2: the `serve.token` bearer counts as the owner
+/// only on a loopback listener (every paired phone can fetch the token, and
+/// over the network it is any of them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_owner_actions_refuse_the_bearer_off_loopback() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/workspace-repos/rescan".to_string(), json!({})),
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        (reqwest::Method::PATCH, format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/workspace-repo"), json!({ "repoId": null })),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat}/repo"), json!({})),
+    ] {
+        let (c, v) = status_of(&h, m.clone(), &p, Some(b)).await;
+        assert_eq!(c, 403, "{m} {p}: {v}");
+        assert!(v.to_string().contains("owner_required"), "{v}");
+    }
+    // The same box on loopback: the operator.
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/workspace-repos/rescan", Some(json!({}))).await;
+    assert_eq!(c, 200, "{v}");
+}

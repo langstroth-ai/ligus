@@ -2646,7 +2646,8 @@ fn session_dto(s: &ChatSession, viewer: Viewer, me: &str) -> ChatSessionDto {
         id: s.id.to_string(),
         title: s.title.clone(),
         runtime_id: s.runtime_id.clone(),
-        messages: s.messages.iter().map(|m| message_dto_in(s, m, viewer, me)).collect(),
+        // A duplicate answer the dispatcher fenced (`superseded`) isn't shown.
+        messages: s.messages.iter().filter(|m| !m.superseded).map(|m| message_dto_in(s, m, viewer, me)).collect(),
     }
 }
 
@@ -3154,7 +3155,7 @@ fn summary_dto(s: &ChatSession, default_chat_ids: &std::collections::HashSet<Str
         id,
         title: s.title.clone(),
         last_activity_at: rfc3339(s.last_activity_at()),
-        message_count: s.messages.len() as u32,
+        message_count: s.messages.iter().filter(|m| !m.superseded).count() as u32,
         archived: s.archived,
     }
 }
@@ -3585,10 +3586,10 @@ fn chat_markdown(session: &ChatSession) -> String {
     };
     let mut out = String::new();
     out.push_str(&format!("# {title}\n\n"));
-    let shown = session.messages.iter().filter(|m| !m.body.trim().is_empty()).count();
+    let shown = session.messages.iter().filter(|m| !m.body.trim().is_empty() && !m.superseded).count();
     out.push_str(&format!("_{shown} message(s) · exported from Ligus_\n\n"));
     for m in &session.messages {
-        if m.body.trim().is_empty() {
+        if m.body.trim().is_empty() || m.superseded {
             continue;
         }
         let who = if m.author.trim().is_empty() {
@@ -3948,7 +3949,7 @@ fn get_context_telemetry(
         system_prompt_tokens: snapshot.system_prompt_tokens as u32,
         history_budget_tokens: snapshot.history_budget_tokens as u32,
         history_tokens: snapshot.history_tokens,
-        message_count: session.messages.len() as u32,
+        message_count: session.messages.iter().filter(|m| !m.superseded).count() as u32,
         kept_message_count: snapshot.plan.kept.len() as u32,
         kept_tokens: snapshot.kept_tokens,
         overflow_message_count: snapshot.plan.overflow.len() as u32,
@@ -4350,14 +4351,17 @@ fn list_mention_states(state: State<AppState>) -> Result<Vec<MentionStateDto>, S
 fn mention_state_for(session: &hive_core::ChatSession, me: &str) -> Option<(u32, u32)> {
     let my_role = session.members.iter().find(|m| m.actor.id == me).map(|m| m.role);
     let mut last_ordinal = 0u32;
-    for (i, msg) in session.messages.iter().enumerate() {
+    let mut count = 0u32;
+    // Ordinals count visible messages only (a superseded duplicate is hidden).
+    for (i, msg) in session.messages.iter().filter(|m| !m.superseded).enumerate() {
+        count += 1;
         // A message you wrote never highlights against you.
         let by_me = msg.actor_identity.as_ref().map(|a| a.id == me).unwrap_or(false);
         if !by_me && message_mentions_me(msg, session, me, my_role) {
             last_ordinal = (i + 1) as u32;
         }
     }
-    (last_ordinal > 0).then_some((last_ordinal, session.messages.len() as u32))
+    (last_ordinal > 0).then_some((last_ordinal, count))
 }
 
 /// Which known workspace a session belongs to, mirroring `session_in_workspace`
@@ -5824,11 +5828,20 @@ async fn run_revision_turn(
         Ok(g) => g,
         Err(_) => return Err("this chat is busy — try again once the current turn finishes".into()),
     };
-    {
-        let mut svc = state.service.lock().unwrap();
-        let _ = svc.claim_turn(sid, workspace_id, trigger.id);
+    // Through the dispatcher (design repos-and-checkouts 11.5), like every
+    // other turn: another device that already holds the revision's turn runs
+    // it (this one watches its holder).
+    match dispatch_here(state, sid, workspace_id, trigger.id, None, true, std::time::Duration::ZERO)? {
+        hive_core::dispatch::Step::Run => {}
+        hive_core::dispatch::Step::Wait(d) => {
+            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+            drop(_guard);
+            arm_dispatch_watch(app, sid, workspace_id, trigger.id, None, d, std::time::Duration::ZERO, stop);
+            return Ok(());
+        }
+        _ => return Ok(()),
     }
-    run_turn(app, state, sid, workspace_id, &responder).await?;
+    run_turn_answering(app, state, sid, workspace_id, &responder, Some(trigger.id)).await?;
 
     // Link any proposal the revision turn produced to the original (version chain)
     // and mark the original superseded, so the pane folds it under its successor.
@@ -6772,16 +6785,19 @@ fn context_snapshot(
     let guarded = tools_reserve > 0 && dispatch::tool_loop_context_window(rt) > 0;
     let history_budget_tokens =
         history_budget(window_tokens, system_prompt_tokens, tools_reserve, passages_reserve, guarded);
-    let cached = load_summary_entry(state, &summary_key(session_id, &responder.runtime_id), &session.messages);
+    // Plan over the visible transcript: a superseded (fenced duplicate)
+    // answer is never context.
+    let history: Vec<hive_core::ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
+    let cached = load_summary_entry(state, &summary_key(session_id, &responder.runtime_id), &history);
     let hysteresis = hive_core::context_budget::plan_with_hysteresis(
-        &session.messages,
+        &history,
         history_budget_tokens,
         cached.as_ref().and_then(|c| c.boundary),
         COMPACT_HIGH_WATERMARK,
         COMPACT_LOW_WATERMARK,
     );
     let plan = hysteresis.plan;
-    let history_tokens = token_estimator::estimate_messages(&session.messages) as u32;
+    let history_tokens = token_estimator::estimate_messages(&history) as u32;
     let kept_tokens = token_estimator::estimate_messages(&plan.kept) as u32;
     let overflow_tokens = token_estimator::estimate_messages(&plan.overflow) as u32;
     let overflow_ids: Vec<Uuid> = plan.overflow.iter().map(|message| message.id).collect();
@@ -7101,7 +7117,7 @@ fn owns_responder(local_actor_id: &str, responder: &Responder) -> bool {
 #[allow(unused_imports)]
 use hive_runtime::turn_dispatch::{
     deferred_turn_unanswered, dispatch_target, host_binding, human_member_count, runs_here_linked, synced_user_triggers,
-    turn_runs_here, user_turn_answered, DispatchTarget, HostBinding, DEFERRED_CLAIM_TIMEOUT,
+    turn_runs_here, turn_still_open, user_turn_answered, DispatchTarget, HostBinding, DEFERRED_CLAIM_TIMEOUT,
 };
 
 /// Whether the host `host_id` beat recently on the relay's presence channel
@@ -7175,6 +7191,9 @@ async fn windowed_context(
     dispatch::warm_context_probe(&responder.runtime).await;
     let snapshot = context_snapshot(state, session_id, session, responder);
     let plan = snapshot.plan;
+    // The same visible transcript context_snapshot planned over (superseded
+    // duplicates excluded), so the summary cache's fingerprint agrees.
+    let history: Vec<ChatMessage> = session.messages.iter().filter(|m| !m.superseded).cloned().collect();
     // Reference vaults: with retrieval configured, the few passages that
     // answer the latest message ride at the END of the prompt (on that user
     // turn) and the system prompt stays byte-stable; otherwise, or on any
@@ -7190,14 +7209,14 @@ async fn windowed_context(
     let cache_key = summary_key(session_id, &responder.runtime_id);
     let summary = if plan.overflow.is_empty() {
         // Nothing to summarize: forget any state (in memory and on disk).
-        if load_summary_entry(state, &cache_key, &session.messages).is_some() {
+        if load_summary_entry(state, &cache_key, &history).is_some() {
             apply_summary_update(state, &cache_key, SummaryCacheUpdate::Remove);
         }
         state.summary_backoff.lock().unwrap().remove(&cache_key);
         None
     } else {
         let overflow_ids: Vec<Uuid> = plan.overflow.iter().map(|m| m.id).collect();
-        let cached = load_summary_entry(state, &cache_key, &session.messages);
+        let cached = load_summary_entry(state, &cache_key, &history);
         let summarizer = summarizer_runtime(responder);
         let instruction = summarize_instruction(state);
         let strategy = summary_strategy(cached.as_ref().map(|c| c.covered.as_slice()), &overflow_ids);
@@ -7561,7 +7580,7 @@ async fn summarize(
         .iter()
         // Skip system notes ("🧩 X added a workflow…") and empty/streaming
         // placeholders so they don't get summarized as if a participant said them.
-        .filter(|m| !(m.role == MessageRole::System || m.is_streaming || m.body.trim().is_empty()))
+        .filter(|m| !(m.role == MessageRole::System || m.is_streaming || m.superseded || m.body.trim().is_empty()))
         .map(|m| format!("{}: {}\n", m.author, m.body))
         .collect();
     let budget = summary_input_budget(runtime.context_window(), token_estimator::estimate_text(instruction));
@@ -8241,8 +8260,17 @@ async fn try_tool_loop(
 
     let message_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?
+        let mid = svc
+            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
+            .map_err(map_err)?;
+        // The placeholder is the dispatcher's commit (design
+        // repos-and-checkouts 11.5): fenced means another device's answer
+        // committed first, so this run stops here.
+        if placeholder_fenced(&svc, session_id, mid) {
+            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
+            return Err(TURN_FENCED.into());
+        }
+        mid
     };
     let ligus = crate::agent_iface::begin(app, &responder.runtime, !egress.is_open(), true, workspace_id, session_id, responder.agent_id, &responder.author, message_id, None);
     let (mut tool_defs, executor) = match mcp {
@@ -8533,7 +8561,7 @@ async fn run_prepared_turn_inner(
     // our reply is appended. Stamped on the reply as the per-request correlation
     // key so two concurrent tasks to the SAME agent don't collapse onto one reply
     // (see ChatMessage::reply_to_message_id / pending_mentions).
-    let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming).map(|m| m.id);
+    let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming && !m.superseded).map(|m| m.id);
     // Who the turn answers (what the reply's `@you` means), named per turn.
     let system = join_system(&system, &prompt::requester_guidance(session, reply_to));
 
@@ -8629,13 +8657,26 @@ async fn run_prepared_turn_inner(
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason);
     }
+    // The children this turn spawns before its stream (the shell probe, the
+    // MCP tool listing, the API tool loop's MCP calls) run under the turn's
+    // own policy, as the stream's do: never the out-of-turn baseline.
+    let child_policy = crate::guards::turn_child_policy(
+        state,
+        session,
+        &envelope,
+        &gate_plan,
+        false,
+        &scope.catalog.mcp,
+        shell_allowed,
+        grants.paths_for(responder.agent_id),
+    );
     // An MCP server that offers a shell (`bash`, `exec`, `run_command`, ...)
     // is a shell: a turn without the shell gets only servers this device has
     // seen list no such tool (it lists the others' tools first).
     let enforcement = if shell_allowed || !responder.runtime.provider.is_cli_agent() {
         enforcement
     } else {
-        crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress).await;
+        hive_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
         crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, false)
     };
     let tools_allowed = gate_plan.allows_tools();
@@ -8644,9 +8685,11 @@ async fn run_prepared_turn_inner(
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
     if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
-        if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp, &scope.dir, shell_allowed)
-                .await?
+        if let Some(outcome) = hive_runtime::executor::with_turn(
+            child_policy.clone(),
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp, &scope.dir, shell_allowed),
+        )
+        .await?
         {
             return Ok(outcome);
         }
@@ -8661,7 +8704,7 @@ async fn run_prepared_turn_inner(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp, shell_allowed).await
+        hive_runtime::executor::with_turn(child_policy.clone(), mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp, shell_allowed)).await
     } else {
         None
     };
@@ -8707,8 +8750,17 @@ async fn run_prepared_turn_inner(
 
     let message_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
-            .map_err(map_err)?
+        let mid = svc
+            .begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
+            .map_err(map_err)?;
+        // The placeholder is the dispatcher's commit (design
+        // repos-and-checkouts 11.5): fenced means another device's answer
+        // committed first, so this run stops here.
+        if placeholder_fenced(&svc, session_id, mid) {
+            let _ = svc.complete_assistant_message(session_id, workspace_id, mid, "");
+            return Err(TURN_FENCED.into());
+        }
+        mid
     };
 
     let repo_turn = &scope.repo;
@@ -8956,12 +9008,18 @@ async fn run_prepared_turn_inner(
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
-    let mut sandbox_policy = crate::guards::turn_sandbox_policy_with(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some(), &scope.catalog.mcp);
-    sandbox_policy.shell_allowed = shell_allowed;
-    if !shell_allowed {
-        sandbox_policy.mcp_ids.retain(|id| crate::guards::mcp_known_shell_free(state, id));
-    }
-    sandbox_policy.grants = grants.paths_for(responder.agent_id);
+    let mut sandbox_policy = crate::guards::turn_child_policy(
+        state,
+        session,
+        &envelope,
+        &gate_plan,
+        worktree.is_some() || lazy_worktree.is_some(),
+        &scope.catalog.mcp,
+        shell_allowed,
+        grants.paths_for(responder.agent_id),
+    );
+    // One list of refused endpoints for the whole turn.
+    sandbox_policy.denials = child_policy.denials.clone();
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
@@ -9271,18 +9329,82 @@ fn reset_chat_dispatch(state: State<AppState>, session_id: String) -> Result<(),
     Ok(())
 }
 
+/// Why a turn stopped right after its placeholder: another device's answer
+/// to the same turn committed first.
+const TURN_FENCED: &str = "another device answered this turn first";
+
+/// Whether this device's placeholder `mid` was fenced by the dispatcher.
+fn placeholder_fenced(svc: &hive_runtime::ChatService, session_id: Uuid, mid: Uuid) -> bool {
+    svc.load(session_id).ok().flatten().is_some_and(|s| s.messages.iter().any(|m| m.id == mid && m.superseded))
+}
+
+/// Ask the dispatcher what this desktop does about a turn (design
+/// repos-and-checkouts 11.5): this host's coverage of the chat's repo (its
+/// own gate's check, read-only), which devices beat on the presence channel
+/// now, and the caller's `eligible` (`turn_runs_here`) and `waited`.
+/// Writes the claim the dispatcher calls for; never returns `Claim`.
+pub(crate) fn dispatch_here(
+    state: &AppState,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    trigger_id: Uuid,
+    agent: Option<Uuid>,
+    eligible: bool,
+    waited: std::time::Duration,
+) -> Result<hive_core::dispatch::Step, String> {
+    let has_repo = {
+        let svc = state.service.lock().unwrap();
+        svc.load(session_id).ok().flatten().is_some_and(|s| s.repo.as_ref().and_then(|r| r.repo_id).is_some())
+    };
+    if has_repo {
+        crate::repos_ui::migrate_bound_folder(state, workspace_id);
+    }
+    let online: std::collections::HashSet<Uuid> = {
+        let svc = state.service.lock().unwrap();
+        let now = hive_core::Timestamp::now();
+        svc.list_hosts(workspace_id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|h| state.host_presence.is_online(h, &now))
+            .filter_map(|h| Uuid::parse_str(&h.id).ok())
+            .collect()
+    };
+    let mut svc = state.service.lock().unwrap();
+    let coverage = match svc.load(session_id) {
+        Ok(Some(session)) => crate::repos_ui::dispatch_coverage(&svc, &session),
+        _ => hive_core::dispatch::Coverage::NoRepo,
+    };
+    let live = |d: Uuid| online.contains(&d);
+    let ctx = hive_runtime::DispatchCtx { eligible, coverage, waited, holder_live: &live };
+    svc.dispatch_turn(session_id, workspace_id, trigger_id, agent, ctx).map_err(map_err)
+}
+
 /// Arm the bounded-deferral fallback for a turn we just handed to another
-/// device: wait out [`DEFERRED_CLAIM_TIMEOUT`], then answer here if nothing
-/// claimed or answered the trigger in the meantime.
-///
-/// Spawned rather than awaited inline so `send_message` still returns straight
-/// away — a healthy multi-device room defers on every turn and must not pay the
-/// timeout each time.
+/// device: wait out [`DEFERRED_CLAIM_TIMEOUT`], then ask the dispatcher as an
+/// eligible device (it claims an unclaimed turn, or hands over one whose
+/// holder went silent).
 fn arm_deferred_claim_fallback(
     app: &AppHandle,
     session_id: Uuid,
     workspace_id: Uuid,
     trigger_id: Uuid,
+    stop: Arc<tokio::sync::Notify>,
+) {
+    arm_dispatch_watch(app, session_id, workspace_id, trigger_id, None, DEFERRED_CLAIM_TIMEOUT, std::time::Duration::ZERO, stop);
+}
+
+/// Look at a turn again after `after` (the dispatcher said to wait, or this
+/// device lost the claim and watches its holder): spawned, so the caller
+/// returns straight away. `agent` is a hand-off receiver's claim key.
+#[allow(clippy::too_many_arguments)]
+fn arm_dispatch_watch(
+    app: &AppHandle,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    trigger_id: Uuid,
+    agent: Option<Uuid>,
+    after: std::time::Duration,
+    waited: std::time::Duration,
     stop: Arc<tokio::sync::Notify>,
 ) {
     let app = app.clone();
@@ -9292,11 +9414,9 @@ fn arm_deferred_claim_fallback(
         tokio::select! {
             biased;
             _ = stop.notified() => return,
-            _ = tokio::time::sleep(DEFERRED_CLAIM_TIMEOUT) => {}
+            _ = tokio::time::sleep(after) => {}
         }
-        if let Err(e) =
-            run_deferred_claim_fallback(&app, session_id, workspace_id, trigger_id).await
-        {
+        if let Err(e) = run_dispatch_watch(&app, session_id, workspace_id, trigger_id, agent, waited + after, stop).await {
             tracing::warn!(
                 target: "dispatch",
                 error = %e,
@@ -9306,74 +9426,90 @@ fn arm_deferred_claim_fallback(
     });
 }
 
-/// The fallback body: re-read the session, re-resolve the responder from the
-/// trigger, and answer only if the turn is still going begging.
-async fn run_deferred_claim_fallback(
+/// The watcher's body: re-read the session, re-resolve the responder, and
+/// let the dispatcher decide (claim, hand over, wait again, or stand down).
+async fn run_dispatch_watch(
     app: &AppHandle,
     session_id: Uuid,
     workspace_id: Uuid,
     trigger_id: Uuid,
+    agent: Option<Uuid>,
+    waited: std::time::Duration,
+    stop: Arc<tokio::sync::Notify>,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let local_only = state.is_local_only_ws(workspace_id);
-    // Re-resolve rather than capture: over the timeout the relay may have been
-    // cleared, the roster may have changed, and — the case this exists for — the
-    // owner's device may have answered after all.
-    let responder = {
+    // Re-resolve rather than capture: over the wait the relay may have been
+    // cleared, the roster may have changed, and the owner's device may have
+    // answered after all.
+    let (responder, claimed) = {
         let svc = state.service.lock().unwrap();
         let Some(session) = svc.load(session_id).map_err(map_err)? else {
             return Ok(());
         };
-        if !deferred_turn_unanswered(&session, trigger_id) {
+        if !turn_still_open(&session, trigger_id) {
             return Ok(());
         }
         let Some(trigger) = session.messages.iter().find(|m| m.id == trigger_id) else {
             return Ok(());
         };
+        let claimed = session.turn_claims.contains_key(&hive_core::turn_claim_key(trigger_id, agent));
         let links = device_links_of(&svc, session.workspace_id);
-        match flow::routed_target(&state, &svc, &session, trigger_id, &trigger.body, local_only, &links).0 {
-            Some(DispatchTarget::Agent(id)) => session
-                .workspace_agents
-                .iter()
-                .find(|a| a.id == id)
-                .cloned()
-                .map(|a| responder_for(&state, &session, Some(&a))),
-            Some(DispatchTarget::Primary) => Some(responder_for(&state, &session, None)),
-            None => None,
-        }
+        let responder = match agent {
+            Some(a) => session.workspace_agents.iter().find(|x| x.id == a).cloned().map(|x| responder_for(&state, &session, Some(&x))),
+            None => match flow::routed_target(&state, &svc, &session, trigger_id, &trigger.body, local_only, &links).0 {
+                Some(DispatchTarget::Agent(id)) => session
+                    .workspace_agents
+                    .iter()
+                    .find(|a| a.id == id)
+                    .cloned()
+                    .map(|a| responder_for(&state, &session, Some(&a))),
+                Some(DispatchTarget::Primary) => Some(responder_for(&state, &session, None)),
+                None => None,
+            },
+        };
+        (responder, claimed)
     };
     let Some(responder) = responder else { return Ok(()) };
-    // The agent's host came online (or the agent was sent to one) while we
-    // waited: it answers.
-    if host_binding(&responder.host_id, &state.local_host_id()) == HostBinding::Elsewhere
+    // An unclaimed turn of an agent whose host came online (or was sent to
+    // one) while we waited: it answers.
+    if !claimed
+        && host_binding(&responder.host_id, &state.local_host_id()) == HostBinding::Elsewhere
         && host_online(&state, workspace_id, &responder.host_id)
     {
         return Ok(());
     }
 
     // Same double-dispatch guard `maybe_respond` takes — a sync tick may be
-    // dispatching this very chat right now.
+    // dispatching this very chat right now: look again shortly.
     let _guard = match crate::workflows::SessionBusyGuard::acquire(app, session_id) {
         Ok(g) => g,
-        Err(_) => return Ok(()),
-    };
-    // Final gate before we commit. A peer that claimed while we were resolving
-    // still wins, and this is a genuine first claim — the deferral above breaks
-    // *before* `send_message`'s own claim block, so nothing claimed on our behalf.
-    {
-        let mut svc = state.service.lock().unwrap();
-        if !svc.claim_turn(session_id, workspace_id, trigger_id).map_err(map_err)? {
+        Err(_) => {
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, std::time::Duration::from_secs(5), waited, stop);
             return Ok(());
         }
+    };
+    // The fallback asks as an eligible device: that is what it is for (an
+    // owner no live device can satisfy would otherwise mean silence).
+    // The service keeps the wait clock per holder (a new holder starts it
+    // over), so the time this watcher has run isn't the holder's silence.
+    match dispatch_here(&state, session_id, workspace_id, trigger_id, agent, true, std::time::Duration::ZERO)? {
+        hive_core::dispatch::Step::Run => {}
+        hive_core::dispatch::Step::Wait(d) => {
+            drop(_guard);
+            arm_dispatch_watch(app, session_id, workspace_id, trigger_id, agent, d, waited, stop);
+            return Ok(());
+        }
+        _ => return Ok(()),
     }
     tracing::info!(
         target: "dispatch",
         responder = %responder.author,
         owner = %responder.owner_actor_id,
-        after_secs = DEFERRED_CLAIM_TIMEOUT.as_secs(),
-        "deferred turn went unclaimed — answering locally"
+        after_secs = waited.as_secs(),
+        "deferred turn went unanswered — answering locally"
     );
-    run_turn(app, &state, session_id, workspace_id, &responder).await.map(|_| ())
+    run_turn_answering(app, &state, session_id, workspace_id, &responder, Some(trigger_id)).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -9506,13 +9642,23 @@ async fn send_message(
         // Claim the initial (user-message) turn so only one of the owner's
         // devices answers it; back off if another device won. Cascaded turns
         // (depth > 0) are single-device continuations and aren't claimed.
+        // The device-keyed dispatcher (design repos-and-checkouts 11): this
+        // device is eligible (the gate above); it claims with its signed
+        // coverage of the chat's repo, waits while a covering host claims
+        // first, or watches a holder that won the claim so a silent one is
+        // handed over.
         if depth == 0 {
-            let mut svc = state.service.lock().unwrap();
-            if !svc.claim_turn(sid, workspace_id, trigger_id).map_err(map_err)? {
-                tracing::info!(target: "dispatch", session = %sid, "send_message: another device claimed the turn, backing off");
-                break;
+            match dispatch_here(&state, sid, workspace_id, trigger_id, None, true, std::time::Duration::ZERO)? {
+                hive_core::dispatch::Step::Run => {
+                    tracing::info!(target: "dispatch", session = %sid, "send_message: claimed turn");
+                }
+                hive_core::dispatch::Step::Wait(d) => {
+                    tracing::info!(target: "dispatch", session = %sid, "send_message: another device holds the turn, or a covering host goes first; watching");
+                    arm_dispatch_watch(&app, sid, workspace_id, trigger_id, None, d, std::time::Duration::ZERO, stop.clone());
+                    break;
+                }
+                _ => break,
             }
-            tracing::info!(target: "dispatch", session = %sid, "send_message: claimed turn");
         }
 
         // Race the turn against the Stop signal. On stop we break out of the
@@ -9548,7 +9694,7 @@ async fn send_message(
             .messages
             .iter()
             .find(|m| m.id == reply_id)
-            .is_some_and(|m| message_mentions_me(m, &reloaded, &local_actor_id, my_role));
+            .is_some_and(|m| !m.superseded && message_mentions_me(m, &reloaded, &local_actor_id, my_role));
         if pinged {
             let _ = app
                 .notification()
@@ -9565,7 +9711,7 @@ async fn send_message(
             .messages
             .iter()
             .rev()
-            .find(|m| m.role != MessageRole::System)
+            .find(|m| m.role != MessageRole::System && !m.superseded)
             .and_then(|m| hive_runtime::cascade_target(&reloaded, m))
             .map(|a| a.id)
             .filter(|id| !visited.contains(id))
@@ -9659,19 +9805,35 @@ async fn regenerate(
     // different workspace is active would otherwise mis-scope its events (matches
     // `send_message`, which uses `session.workspace_id`).
     let workspace_id = session.workspace_id;
-    let last_id = session
+    let (last_id, answered) = session
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent))
-        .map(|m| m.id)
+        .find(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && !m.superseded)
+        .map(|m| (m.id, m.reply_to_message_id))
         .ok_or("nothing to regenerate yet")?;
     let responder = responder_for(&state, &session, None);
     {
         let mut svc = state.service.lock().unwrap();
         svc.remove_message(sid, workspace_id, last_id).map_err(map_err)?;
     }
-    let _ = run_turn(&app, &state, sid, workspace_id, &responder).await?;
+    // Removing the committed answer starts the turn over (design
+    // repos-and-checkouts 11.2, rule 6): claim it again through the
+    // dispatcher, so a host that also sees the turn open again doesn't run
+    // it a second time.
+    let trigger = answered.map(|r| hive_core::dispatch::trigger_of(&session, r));
+    if let Some(t) = trigger {
+        match dispatch_here(&state, sid, workspace_id, t, None, true, std::time::Duration::ZERO)? {
+            hive_core::dispatch::Step::Run => {}
+            hive_core::dispatch::Step::Wait(d) => {
+                let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+                arm_dispatch_watch(&app, sid, workspace_id, t, None, d, std::time::Duration::ZERO, stop);
+                return Ok(());
+            }
+            _ => return Ok(()),
+        }
+    }
+    let _ = run_turn_answering(&app, &state, sid, workspace_id, &responder, trigger).await?;
     Ok(())
 }
 
@@ -9707,15 +9869,14 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
     let m = match trigger {
         Some(t) => {
             let Some(m) = session.messages.iter().find(|m| m.id == t) else { return Ok(None) };
-            if m.role != MessageRole::User
-                || session.turn_claims.get(&t).is_some_and(|d| *d != svc.device_id())
-                || user_turn_answered(&session, t)
-            {
+            // Another device's claim is no reason to skip: the dispatcher
+            // (`respond_once`) watches its holder.
+            if m.role != MessageRole::User || user_turn_answered(&session, t) {
                 return Ok(None);
             }
             m
         }
-        None => match session.messages.iter().rev().find(|m| m.role != MessageRole::System) {
+        None => match session.messages.iter().rev().find(|m| m.role != MessageRole::System && !m.superseded) {
             Some(m) => m,
             None => return Ok(None),
         },
@@ -9813,21 +9974,29 @@ async fn respond_once(
     }
     let (workspace_id, responder, trigger_id) = plan;
     // Cross-device single-answer: ownership is account-scoped, so all of the
-    // owner's online devices would otherwise answer. Claim the turn; if another
-    // device already won the claim, back off. An agent reply hands the turn
-    // to an agent: that claim is per receiver (a reply can start several, on
-    // several devices), the same key `handoff_turn` claims.
-    {
-        let mut svc = state.service.lock().unwrap();
+    // owner's online devices would otherwise answer. The dispatcher (design
+    // repos-and-checkouts 11) claims the turn with this host's signed
+    // coverage, or says to watch the device that holds it (a silent holder
+    // is handed over). An agent reply hands the turn to an agent: that claim
+    // is per receiver (a reply can start several, on several devices), the
+    // same key `handoff_turn` claims.
+    let receiver = {
+        let svc = state.service.lock().unwrap();
         let from_agent = svc
             .load(sid)
             .map_err(map_err)?
             .and_then(|s| s.messages.iter().find(|m| m.id == trigger_id).map(|m| m.role != MessageRole::User))
             .unwrap_or(false);
-        let receiver = if from_agent { responder.agent_id } else { None };
-        if !svc.claim_turn_for(sid, workspace_id, trigger_id, receiver).map_err(map_err)? {
+        if from_agent { responder.agent_id } else { None }
+    };
+    match dispatch_here(state, sid, workspace_id, trigger_id, receiver, true, std::time::Duration::ZERO)? {
+        hive_core::dispatch::Step::Run => {}
+        hive_core::dispatch::Step::Wait(d) => {
+            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+            arm_dispatch_watch(app, sid, workspace_id, trigger_id, receiver, d, std::time::Duration::ZERO, stop);
             return Ok(());
         }
+        _ => return Ok(()),
     }
     tracing::info!(target: "dispatch", session = %sid, ms = started.elapsed().as_millis() as u64, "claimed turn");
     flow::record_route_if_missing(state, sid, trigger_id);
@@ -9852,7 +10021,7 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
     let plan = {
         let local_actor_id = state.local_actor_id();
         let local_host_id = state.local_host_id();
-        let mut svc = state.service.lock().unwrap();
+        let svc = state.service.lock().unwrap();
         let Some(session) = svc.load(sid).map_err(map_err)? else { return Ok(()) };
         let pending = hive_runtime::pending_turns(&session).iter().any(|p| p.agent_id == agent_id && p.message_id == trigger);
         let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id).cloned() else { return Ok(()) };
@@ -9866,14 +10035,21 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
         if !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
             return Ok(());
         }
-        // Keyed by (trigger, receiver): one reply can hand off to several
-        // agents, each of which may run on a different device.
-        if !svc.claim_turn_for(sid, session.workspace_id, trigger, Some(agent_id)).map_err(map_err)? {
-            return Ok(());
-        }
         (session.workspace_id, responder)
     };
     let (workspace_id, responder) = plan;
+    // Keyed by (trigger, receiver): one reply can hand off to several
+    // agents, each of which may run on a different device. The dispatcher
+    // claims it or says to watch its holder.
+    match dispatch_here(&state, sid, workspace_id, trigger, Some(agent_id), true, std::time::Duration::ZERO)? {
+        hive_core::dispatch::Step::Run => {}
+        hive_core::dispatch::Step::Wait(d) => {
+            let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
+            arm_dispatch_watch(app, sid, workspace_id, trigger, Some(agent_id), d, std::time::Duration::ZERO, stop);
+            return Ok(());
+        }
+        _ => return Ok(()),
+    }
     run_turn_answering(app, &state, sid, workspace_id, &responder, Some(trigger)).await.map(|_| ())
 }
 
@@ -9904,7 +10080,7 @@ fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uu
         let triggers = {
             let svc = state.service.lock().unwrap();
             match svc.load(sid) {
-                Ok(Some(s)) if s.workspace_id == active => synced_user_triggers(&s, &ids, my_device),
+                Ok(Some(s)) if s.workspace_id == active => synced_user_triggers(&s, &ids),
                 _ => continue,
             }
         };
@@ -9951,7 +10127,7 @@ fn notify_mentions(
         let Some(session) = svc.load(sid).map_err(map_err)? else {
             return Ok(());
         };
-        let Some(last) = session.messages.last() else {
+        let Some(last) = session.messages.iter().rev().find(|m| !m.superseded) else {
             return Ok(());
         };
         let authored_by_me = last
@@ -12292,13 +12468,15 @@ async fn run_device_host_loop(app: AppHandle) {
         };
         if due {
             let coverage = crate::repos_ui::beat_coverage(&state, ws);
-            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &host_id, coverage).await {
+            let beat = state.service.lock().unwrap().signed_beat(ws, coverage);
+            match hive_runtime::host_presence::publish_beat(&relay, &room, &ring, &beat).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
         if let Ok(beats) = hive_runtime::host_presence::fetch_beats(&relay, &room, &ring).await {
-            state.host_presence.merge_beats(beats);
+            let verified = state.service.lock().unwrap().beat_verifier(ws);
+            state.host_presence.merge_beats(beats, verified);
         }
     }
 }
@@ -15260,6 +15438,9 @@ pub fn run() {
             repos_ui::add_workspace_repo,
             repos_ui::rename_workspace_repo,
             repos_ui::remove_workspace_repo,
+            repos_ui::set_repo_aliases,
+            repos_ui::set_host_alias,
+            repos_ui::accept_repo_alias,
             repos_ui::bind_repo_checkout,
             repos_ui::unbind_repo_checkout,
             repos_ui::rescan_repos,
@@ -17785,7 +17966,7 @@ mod synced_dispatch_tests {
         s.messages = vec![earlier, earlier_reply, hive, coder];
 
         // Both arrived, neither answered nor claimed yet: both, in order.
-        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id], me), vec![hive_id, coder_id]);
+        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id]), vec![hive_id, coder_id]);
 
         // The box claimed @coder's turn and its reply synced in the same pull:
         // only @hive is left for this device.
@@ -17793,17 +17974,16 @@ mod synced_dispatch_tests {
         s.messages.push(reply("coder", coder_id));
         assert!(!user_turn_answered(&s, hive_id), "a reply to the later post doesn't answer the earlier one");
         assert!(user_turn_answered(&s, coder_id));
-        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id], me), vec![hive_id]);
+        assert_eq!(synced_user_triggers(&s, &[hive_id, coder_id]), vec![hive_id]);
 
         // Answered once: never again.
         s.turn_claims.insert(hive_id, me);
         s.messages.push(reply("Hive", hive_id));
-        assert!(synced_user_triggers(&s, &[hive_id, coder_id], me).is_empty());
+        assert!(synced_user_triggers(&s, &[hive_id, coder_id]).is_empty());
     }
 
     #[test]
     fn only_the_pull_and_only_user_turns_are_considered() {
-        let me = Uuid::new_v4();
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
         let old = user("an old unanswered message");
         let new = user("@hive new");
@@ -17812,21 +17992,28 @@ mod synced_dispatch_tests {
         s.messages = vec![old, new, agent];
         // History outside the pull is left alone; agent replies are the
         // trailing-message path's job, not a user trigger.
-        assert_eq!(synced_user_triggers(&s, &[new_id, agent_id], me), vec![new_id]);
-        assert!(!synced_user_triggers(&s, &[old_id], me).is_empty(), "the old one only when it arrived now");
+        assert_eq!(synced_user_triggers(&s, &[new_id, agent_id]), vec![new_id]);
+        assert!(!synced_user_triggers(&s, &[old_id]).is_empty(), "the old one only when it arrived now");
     }
 
     #[test]
-    fn claimed_elsewhere_is_skipped_claimed_here_is_rechecked() {
+    fn claimed_elsewhere_is_watched_not_dropped() {
         let me = Uuid::new_v4();
         let mut s = ChatSession::new("t", Uuid::nil(), "rt");
         let a = user("@hive a");
         let a_id = a.id;
         s.messages = vec![a];
+        // Another device's claim: the dispatcher watches it (a silent holder
+        // is handed over), so the trigger is still considered here.
         s.turn_claims.insert(a_id, Uuid::new_v4());
-        assert!(synced_user_triggers(&s, &[a_id], me).is_empty());
+        assert_eq!(synced_user_triggers(&s, &[a_id]), vec![a_id]);
         s.turn_claims.insert(a_id, me);
-        assert_eq!(synced_user_triggers(&s, &[a_id], me), vec![a_id]);
+        assert_eq!(synced_user_triggers(&s, &[a_id]), vec![a_id]);
+        // A duplicate answer the dispatcher fenced doesn't answer it.
+        let mut dup = reply("Hive", a_id);
+        dup.superseded = true;
+        s.messages.push(dup);
+        assert_eq!(synced_user_triggers(&s, &[a_id]), vec![a_id]);
     }
 
     #[test]

@@ -949,6 +949,33 @@ pub(crate) fn turn_sandbox_policy_with(
     policy
 }
 
+/// The policy every child of one turn runs under (the CLI, stdio MCP
+/// servers, `run_command`), before its stream starts (the shell probe, the
+/// MCP tool listing, the API tool loop's MCP calls) and during it: the
+/// turn's envelope, gate and own MCP catalog, the shell only when
+/// [`hive_runtime::author_gate::shell_allowed`] said so (and then MCP
+/// servers this device hasn't seen list no shell stay out of the CLI's
+/// set), and the agent's grants. Never the out-of-turn baseline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn turn_child_policy(
+    state: &AppState,
+    session: &hive_core::ChatSession,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    gate: &hive_runtime::author_gate::GatePlan,
+    isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
+    shell_allowed: bool,
+    grants: hive_core::sandbox::PathGrants,
+) -> hive_runtime::executor::TurnPolicy {
+    let mut policy = turn_sandbox_policy_with(state, session, envelope, gate, isolated, servers);
+    policy.shell_allowed = shell_allowed;
+    if !shell_allowed {
+        policy.mcp_ids.retain(|id| mcp_known_shell_free(state, id));
+    }
+    policy.grants = grants;
+    policy
+}
+
 // ---------------------------------------------------------------------------
 // Egress presets
 // ---------------------------------------------------------------------------
@@ -1896,6 +1923,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         }
         for m in &s.messages {
             if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+                && !m.superseded
                 && m.created_at.inner().unix_timestamp() >= week_ago
             {
                 *by_agent.entry(m.author.clone()).or_default() += 1;
@@ -1941,6 +1969,34 @@ mod tests {
             },
         );
         t.into_values().next().unwrap()
+    }
+
+    /// Every child a desktop turn spawns runs under the turn's policy: the
+    /// shell probe, the MCP tool listing and the API tool loop (whose MCP
+    /// calls spawn their servers) before the stream, and the stream itself
+    /// (the CLI, stdio MCP servers, `run_command`). Outside a turn scope a
+    /// stdio MCP server would fall back to the baseline, not this turn's
+    /// envelope, shell and grants.
+    #[test]
+    fn every_spawn_in_a_desktop_turn_is_in_the_turns_policy() {
+        let src = include_str!("lib.rs");
+        let start = src.find("async fn run_prepared_turn_inner(").expect("run_prepared_turn_inner");
+        let end = start + src[start..].find("\n}\n").expect("its end");
+        let body = &src[start..end];
+        let lines: Vec<&str> = body.lines().collect();
+        let mut seen = 0;
+        for call in ["probe_mcp_shells(", "mcp_tool_set(", "try_tool_loop(", "stream_with_tools("] {
+            for (i, line) in lines.iter().enumerate().filter(|(_, l)| l.contains(call)) {
+                let window = lines[i.saturating_sub(2)..=i].join("\n");
+                assert!(window.contains("executor::with_turn("), "{call} outside a turn scope: {line}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 4, "every spawning call was found ({seen})");
+        // Both policies come from the one builder, so the shell gate and the
+        // grants are applied to each.
+        assert_eq!(body.matches("crate::guards::turn_child_policy(").count(), 2);
+        assert!(!body.contains("turn_sandbox_policy_with("), "a policy built without the shell gate");
     }
 
     #[test]

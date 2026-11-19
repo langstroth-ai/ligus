@@ -508,7 +508,7 @@ fn cmd_chats(cfg: &Config) -> Result<()> {
             }
             any = true;
             let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
-            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.len(), ch);
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&s.title, 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
         }
     }
     if !any {
@@ -566,7 +566,7 @@ fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usi
     let Some(s) = svc.load(chat_id)? else {
         bail!("unknown chat {chat_id}");
     };
-    for m in s.messages.iter().skip(from) {
+    for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
     }
     Ok(s.messages.len())
@@ -1002,7 +1002,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 })
                 .filter(|m| {
                     // Already answered (by another `ligus agent`, or the desktop).
-                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && r.reply_to_message_id == Some(m.id))
+                    !s.messages.iter().any(|r| r.role == MessageRole::Assistant && !r.superseded && r.reply_to_message_id == Some(m.id))
                 })
                 .cloned()
                 .collect();
@@ -1257,11 +1257,13 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         host_label: &host_label,
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
+        presence: None,
     };
     // Registered, store open, interrupted turns recovered: ready for work.
     ready.store(true, std::sync::atomic::Ordering::Relaxed);
-    // Mentions whose reply hard-failed, so we don't retry them every tick.
-    let mut failed: HashSet<Uuid> = HashSet::new();
+    // Mentions whose reply hard-failed (not retried every tick) and the
+    // dispatcher's wait clock.
+    let mut drain = worker::DrainState::default();
     // Exponential backoff on repeated relay-sync failures, so a relay outage
     // isn't hammered every 3s. Resets to the base cadence on the first success.
     let mut sync_fails: u32 = 0;
@@ -1288,7 +1290,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         // A transient store/DB error inside a tick must NOT kill the daemon —
         // log it and retry on the next tick (bare `?` here used to abort the loop).
         worker::apply_tick(&ctx, &svc);
-        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
+        if let Err(e) = worker::drain_tick(&ctx, &svc, &mut drain, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
         if cfg.relay_url.is_some() {
@@ -1623,6 +1625,9 @@ fn usage() -> ! {
          ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>\n                                       this host's checkout of a repository (device-local)\n  \
          ligus repos scan | roots [add|remove <path>] | alias <ssh-host> <host> [--remove]\n                                       find checkouts under scan roots; SSH host aliases for identity\n  \
          ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default\n  \
+         ligus repos aliases | repo-alias <repo> [names…] | host-alias <alias> <host>|--remove\n                                       \
+         workspace-synced aliases, names only (Admin, passkey)\n  \
+         ligus repos accept <alias> [--revoke]   use a synced alias for identity on this host\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \

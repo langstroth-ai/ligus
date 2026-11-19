@@ -1166,6 +1166,68 @@ async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
     h.handle.shutdown();
 }
 
+/// Repos review residual 2 and F12: clone, rename, set-chat-repo, rescan and
+/// confirm are the box owner's. A paired phone that isn't certified to the
+/// account of the person who admitted the box is refused; once the founder
+/// (who admitted it) certifies the phone for their account, it may; once
+/// that phone is revoked, it may not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_actions_need_the_box_owners_certified_phone() {
+    use tower::ServiceExt;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (_t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    let call = |method: &str, uri: &str, body: serde_json::Value| {
+        let mut req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri.to_string())
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
+        let shared = h.handle.shared.clone();
+        async move { crate::serve::api::router(shared).oneshot(req).await.unwrap().status().as_u16() }
+    };
+    let gated = [
+        ("POST", "/v1/workspace-repos/rescan".to_string(), json!({})),
+        ("POST", "/v1/repos/clone".to_string(), json!({ "repoId": Uuid::new_v4() })),
+        ("PATCH", format!("/v1/workspace-repos/{}", Uuid::new_v4()), json!({ "name": "x" })),
+        ("POST", format!("/v1/workspace-repos/{}/confirm", Uuid::new_v4()), json!({ "checkout": "nowhere" })),
+    ];
+    for (m, u, b) in &gated {
+        assert_eq!(call(m, u, b.clone()).await, 403, "{m} {u} from a phone that isn't the owner's");
+    }
+    let founder = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the certificate", Duration::from_secs(15), || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_ok()
+    })
+    .await;
+    assert_eq!(h.handle.shared.lock().box_owner_accounts(ws).unwrap(), std::collections::BTreeSet::from([founder]), "the founder admitted the box");
+    assert_eq!(call("POST", "/v1/workspace-repos/rescan", json!({})).await, 200, "the owner's certified phone");
+    // An unknown repo id is now a 404, not the owner refusal.
+    assert_ne!(call("POST", "/v1/repos/clone", json!({ "repoId": Uuid::new_v4() })).await, 403);
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the revocation", Duration::from_secs(15), || {
+        h.handle.shared.sync_kick.notify_one();
+        h.handle.shared.lock().phone_person(ws, phone.device_id).is_err()
+    })
+    .await;
+    // The pairing itself is cut too (401 from the auth middleware), or the
+    // gate refuses: never allowed.
+    let st = call("POST", "/v1/workspace-repos/rescan", json!({})).await;
+    assert!(st == 401 || st == 403, "{st}");
+    h.handle.shutdown();
+}
+
 // ── "Add this phone" (certify, then pair, then GET /v1/me) ─────────────────
 
 /// End to end, with the box's real roster (no test trust): a phone that

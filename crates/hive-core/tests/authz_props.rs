@@ -1819,9 +1819,9 @@ fn a_turn_claim_counts_only_from_the_device_it_names() {
     let mut w = World::new();
     let (a, b) = (Uuid::from_u128(0xDA), Uuid::from_u128(0xDB));
     let trigger = Uuid::from_u128(0x77);
-    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a });
+    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a, epoch: 0, supersedes: None, repo_id: None });
     w.chat.iter_mut().find(|e| e.event_id == forged).unwrap().signer_device_id = Some(b);
-    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b });
+    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b, epoch: 0, supersedes: None, repo_id: None });
     w.chat.iter_mut().find(|e| e.event_id == honest).unwrap().signer_device_id = Some(b);
     let v = w.verdicts();
     assert_eq!(v[&forged], Verdict::Denied);
@@ -2141,3 +2141,34 @@ fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
     }
 }
 
+
+/// The dispatcher (review, prove-then-fix): an answer signed by an agent key
+/// commits for the host device that certified the key. The key lives on the
+/// workspace config log, so the chat's own roster never has it: before the
+/// fix such an answer neither committed nor was fenced.
+#[test]
+fn an_agent_key_answer_commits_for_its_certifying_host() {
+    let (mut w, a) = agent_world("mara");
+    let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"mara-device");
+    let trigger = hive_core::ChatMessage::new(hive_core::MessageRole::User, "mara", "@coder go");
+    let t = trigger.id;
+    w.chat_push("mara", SessionEvent::MessageAppended { message: trigger });
+    w.agent_push(&a, SessionEvent::TurnClaimed { trigger_id: t, device_id: host, epoch: 0, supersedes: None, repo_id: None });
+    let (id, mut reply) = agent_reply(&a, 0xA11);
+    if let SessionEvent::MessageAppended { message } = &mut reply {
+        message.reply_to_message_id = Some(t);
+        message.origin_device_id = Some(host);
+    }
+    w.agent_push(&a, reply);
+    let s = w.state();
+    assert_eq!(s.turn_claims.get(&t), Some(&host));
+    assert_eq!(s.turn_dispatch[&t].answer, Some(id), "the agent's answer commits");
+    // A second agent-signed answer to the same turn is fenced.
+    let (dup, mut again) = agent_reply(&a, 0xA12);
+    if let SessionEvent::MessageAppended { message } = &mut again {
+        message.reply_to_message_id = Some(t);
+        message.origin_device_id = Some(host);
+    }
+    w.agent_push(&a, again);
+    assert!(w.state().messages.iter().find(|m| m.id == dup).unwrap().superseded);
+}

@@ -2164,10 +2164,27 @@ export interface WorkspaceRepoDto {
   defaultBranch: string;
   removed: boolean;
   /// This device: its own checkout path, and folders a scan found.
-  here: { state: string; code: string; viaFork: boolean; path: string | null; found: string[] };
+  /// `viaAlias`: the checkout matches only through an accepted synced alias.
+  here: { state: string; code: string; viaFork: boolean; viaAlias?: boolean; path: string | null; found: string[] };
   hosts: RepoHostCoverage[];
   /// Same claimed history as this other repo, different canonical.
   lookalikeOf?: string | null;
+  /// Synced aliases (other spellings of this repo), and whether this device
+  /// accepted each. Names only: they never change where git connects.
+  aliases?: RepoAliasDto[];
+}
+
+/// One synced alias and whether a person on this device accepted it.
+export interface RepoAliasDto {
+  alias: string;
+  accepted: boolean;
+}
+
+/// One synced host alias (an SSH host a forge serves from → its host).
+export interface HostAliasDto {
+  alias: string;
+  host: string;
+  accepted: boolean;
 }
 
 export interface WorkspaceReposDto {
@@ -2178,6 +2195,7 @@ export interface WorkspaceReposDto {
   hostLabel: string;
   coverageReporting: boolean;
   scanRoots: string[];
+  hostAliases?: HostAliasDto[];
 }
 
 export interface ChatWorkspaceRepoDto {
@@ -2219,6 +2237,15 @@ export const addWorkspaceRepo = (input: string, opts: { name?: string; kind?: st
 export const renameWorkspaceRepo = (repoId: string, name: string, branch?: string) =>
   invoke<void>("rename_workspace_repo", { repoId, name, branch: branch ?? null });
 export const removeWorkspaceRepo = (repoId: string) => invoke<void>("remove_workspace_repo", { repoId });
+/// Admin, with a passkey: replace a repo's synced aliases.
+export const setRepoAliases = (repoId: string, aliases: string[]) => invoke<string[]>("set_repo_aliases", { repoId, aliases });
+/// Admin, with a passkey: map a host alias to a repository host ("" clears it).
+export const setHostAlias = (alias: string, host: string) => invoke<void>("set_host_alias", { alias, host });
+/// This device only: use a synced alias here (or stop using it).
+/// `target`: the repo id or host shown with the alias; the device refuses if
+/// the workspace has since pointed the alias elsewhere.
+export const acceptRepoAlias = (alias: string, accept: boolean, target?: string) =>
+  invoke<string>("accept_repo_alias", { alias, accept, target: target ?? null });
 export const bindRepoCheckout = (repoId: string, path: string) => invoke<void>("bind_repo_checkout", { repoId, path });
 export const unbindRepoCheckout = (repoId: string, path: string) => invoke<void>("unbind_repo_checkout", { repoId, path });
 export const rescanRepos = (root?: string) => invoke<number>("rescan_repos", { root: root ?? null });

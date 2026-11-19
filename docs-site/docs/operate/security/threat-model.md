@@ -104,12 +104,23 @@ config events; checkouts and their paths never leave a device.
   agent (or a runtime effect) can't set a chat's repository or pin its base.
   A proposal's repository comes from the chat when it is filed and never
   changes; its base commit is in the vote, so re-basing it clears the votes.
-- **A host's coverage** rides its sealed presence beat and isn't signed, so
-  any member could forge one. It is advisory only: the host that runs a turn
-  checks its own confirmed checkout (by remote, without `insteadOf` or
-  includes) before every turn and refuses otherwise. A forged "present" can
-  at most send a turn to a host that then refuses it. Readers drop coverage
-  from a revoked device or a removed member's host.
+- **A host's coverage** rides its sealed presence beat, and the host signs
+  the report with its own device key. A reader uses a report only when the
+  signature verifies against that device as the workspace roster has it
+  (certified, not revoked, not a phone, acting for a current member), so a
+  member who holds the workspace key can't report another host's coverage:
+  a beat it seals for that host keeps its liveness and loses the coverage.
+  Coverage stays advisory: the host that runs a turn checks its own
+  confirmed checkout (by remote, without `insteadOf` or includes) before
+  every turn and refuses otherwise.
+- **Driving the box's repositories from a phone** (clone by name or by id,
+  rename, picking a chat's repository, rescan, confirming a found checkout)
+  spends the box's own code-host access, so only the box owner can: a phone
+  certified to the account of the Admin who admitted the box, over its own
+  pairing, or the `serve.token` bearer when the box listens on loopback (on
+  a network listener the bearer is refused: every paired phone can fetch
+  it). Anyone else gets `owner_required`. A request carried on the log never
+  starts a clone.
 - **A hostile repository** found by a scan is never used until a person
   confirms it on that device; its hooks, `core.fsmonitor`, submodules and
   file-protocol URLs stay off (every git call runs with those overridden),
@@ -147,10 +158,12 @@ config events; checkouts and their paths never leave a device.
 - **A remote URL** with `#`, `?` or a backslash has no identity: git connects
   to the host before them, so `https://evil.example#@github.com/o/n` never
   reads as github.com's repository.
-- **Limits:** coverage is self-reported and only sealed with the workspace
-  key, so any member can forge any host's coverage (a beat claiming a future
-  sequence number is ignored, so a forgery can't pin it). A forged "missing"
-  drops that host's agents from routing and workflow pre-flight. A person who
+- **Limits:** coverage is self-reported: a host can sign "present" and
+  then refuse its turns. Liveness on the beat isn't signed, so a member can
+  make a dead host look online for a while; the dispatcher still hands a
+  turn whose holder hasn't answered over after two minutes. A replayed old
+  signed report counts on a reader that restarted until the host's next
+  beat. A person who
   writes a commit with a real `Ligus-Proposal` trailer in a chat's worktree
   makes that host's replay skip that proposal there. The repository list is
   visible to every member, Viewers included.

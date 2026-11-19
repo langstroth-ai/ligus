@@ -68,7 +68,24 @@ pub enum SessionEvent {
     /// deterministically on every device (see `ChatSession::turn_claims`); a
     /// device that has synced another device's winning claim backs off. Benign
     /// coordination — not projection-gated.
-    TurnClaimed { trigger_id: Uuid, device_id: Uuid },
+    ///
+    /// The device-keyed dispatcher (`crate::dispatch`, design
+    /// repos-and-checkouts 11) adds three optional fields, all absent on a
+    /// plain first claim (which then folds exactly as before): `epoch`, the
+    /// claim generation (absent = 1); `supersedes`, the holder a hand-over
+    /// takes the turn from (required past epoch 1); and `repo_id`, the
+    /// claiming device's signed statement that it holds a confirmed checkout
+    /// of the chat's repo (a covering claim displaces a non-covering holder).
+    TurnClaimed {
+        trigger_id: Uuid,
+        device_id: Uuid,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        epoch: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        supersedes: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+    },
     MemberAdded {
         member: WorkspaceMember,
         /// The Admin-issued invite a self-enrollment redeems (an id whose
@@ -446,6 +463,27 @@ pub enum SessionEvent {
     /// Remove a repository (config log; Admin, presence). A tombstone until a
     /// later add of the same id.
     WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Name other spellings of a live repo (config log; Admin, presence;
+    /// never an agent): normal-form canonicals the same repo also goes by
+    /// (an old owner, a case split on a case-sensitive forge). Replaces the
+    /// repo's list; at most 8; disjoint from every live canonical and alias
+    /// and no look-alike of one (`workspace_repo::repo_aliases_ok`). Names
+    /// only: identity matching on a device that accepted them, never where a
+    /// clone connects (design repos-and-checkouts 12).
+    WorkspaceRepoAliasesSet {
+        repo_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aliases: Vec<String>,
+    },
+    /// Map a host name (an SSH host a forge serves from, say) to a live
+    /// repo's canonical host for identity matching (config log; Admin,
+    /// presence; never an agent). `host` empty clears the alias. At most 16;
+    /// never shadows a live repo's host (`workspace_repo::host_alias_ok`).
+    WorkspaceHostAliasSet {
+        alias: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host: String,
+    },
     /// Pick this chat's repository (chat log; Contributor; never an agent).
     /// `None` = no repo. Must name a live repo at the author's position.
     ChatRepoSet {
@@ -607,6 +645,8 @@ impl SessionEvent {
             SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
             SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::WorkspaceRepoAliasesSet { .. } => "workspaceRepoAliasesSet",
+            SessionEvent::WorkspaceHostAliasSet { .. } => "workspaceHostAliasSet",
             SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
             SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
             SessionEvent::ChatBaseRepinned { .. } => "chatBaseRepinned",
@@ -657,6 +697,8 @@ impl SessionEvent {
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. }
             | SessionEvent::AttachmentPolicySet { .. }
             | SessionEvent::AttachmentHashBlocked { .. }
             | SessionEvent::AttachmentHashUnblocked { .. } => EventScope::Workspace,
@@ -775,10 +817,14 @@ impl ChatSession {
         match event {
             SessionEvent::SessionSnapshot { .. } => {}
             SessionEvent::MessageAppended { message } => {
+                // `superseded` is fold state (`crate::dispatch::note_answer`),
+                // never the author's.
+                let mut message = message.clone();
+                message.superseded = false;
                 if let Some(idx) = self.message_index(message.id) {
-                    self.messages[idx] = message.clone();
+                    self.messages[idx] = message;
                 } else {
-                    self.messages.push(message.clone());
+                    self.messages.push(message);
                 }
             }
             SessionEvent::MessageChunkReceived { message_id, chunk } => {
@@ -795,11 +841,17 @@ impl ChatSession {
             }
             SessionEvent::MessageRemoved { message_id } => {
                 self.messages.retain(|m| &m.id != message_id);
+                crate::dispatch::note_removed(self, *message_id);
             }
-            SessionEvent::TurnClaimed { trigger_id, device_id } => {
-                // First claim in canonical fold order wins; later claims for the
-                // same trigger are ignored. Deterministic across devices.
-                self.turn_claims.entry(*trigger_id).or_insert(*device_id);
+            SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } => {
+                // The dispatcher's fold (`crate::dispatch`): a plain first
+                // claim wins in canonical order as it always did; a covering
+                // claim or a hand-over may move the turn. Deterministic.
+                crate::dispatch::fold_claim(
+                    self,
+                    *trigger_id,
+                    crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id },
+                );
             }
             SessionEvent::MemberAdded { member, invite, .. } => {
                 if let Some(id) = invite {
@@ -963,7 +1015,9 @@ impl ChatSession {
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
-            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
+            | SessionEvent::WorkspaceRepoRemoved { .. }
+            | SessionEvent::WorkspaceRepoAliasesSet { .. }
+            | SessionEvent::WorkspaceHostAliasSet { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -1178,6 +1232,10 @@ impl ChatSession {
 }
 
 /// The proposal-set view of a `SessionEvent`, for [`crate::proposal_sets::apply`].
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
 fn set_change(event: &SessionEvent) -> Option<SetChange<'_>> {
     Some(match event {
         SessionEvent::ProposalSetOpened { set } => SetChange::Opened(set),
@@ -2023,7 +2081,37 @@ fn fold_pass(
                 _ => false,
             };
             if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
-                session.apply(payload);
+                let ms = crate::admission::envelope_ms(env);
+                if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
+                    // The dispatcher's fold (`crate::dispatch`) with the
+                    // claim's signed time and whether the holder it would
+                    // displace is gone at its position.
+                    let holder_gone = session
+                        .turn_claims
+                        .get(trigger_id)
+                        .is_some_and(|h| at.is_some_and(|r| crate::dispatch::holder_gone(r, *h)));
+                    let claim = crate::dispatch::Claim { device: *device_id, epoch: *epoch, supersedes: *supersedes, repo_id: *repo_id };
+                    crate::dispatch::fold_claim_at(&mut session, *trigger_id, claim, crate::dispatch::ClaimAt { ms: Some(ms), holder_gone });
+                } else {
+                    session.apply(payload);
+                }
+                // The dispatcher's commit (`crate::dispatch`): an answer whose
+                // origin device is the signer (or certified the signing agent
+                // key, as the workspace roster at its position holds it)
+                // commits its turn or is marked superseded.
+                if let SessionEvent::MessageAppended { message } = payload {
+                    let agent_host = |k: Uuid| {
+                        at.and_then(|r| r.valid_agent_key(k))
+                            .or_else(|| tracker.state.valid_agent_key(k))
+                            .map(|key| key.host_device_id)
+                    };
+                    let origin = message
+                        .origin_device_id
+                        .filter(|o| env.signer_device_id == Some(*o) || env.signer_device_id.and_then(agent_host) == Some(*o));
+                    if let Some(o) = origin {
+                        crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
+                    }
+                }
             }
             session.updated_at = env.timestamp;
         }
@@ -2558,12 +2646,12 @@ mod tests {
         let trigger = Uuid::new_v4();
         let device_a = Uuid::new_v4();
         let device_b = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a });
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_a, epoch: 0, supersedes: None, repo_id: None });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: trigger, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&trigger), Some(&device_a), "first claim wins");
         // A different trigger claims independently.
         let t2 = Uuid::new_v4();
-        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b });
+        s.apply(&SessionEvent::TurnClaimed { trigger_id: t2, device_id: device_b, epoch: 0, supersedes: None, repo_id: None });
         assert_eq!(s.turn_claims.get(&t2), Some(&device_b));
     }
 

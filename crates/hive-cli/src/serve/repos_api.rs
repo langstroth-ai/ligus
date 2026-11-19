@@ -496,6 +496,39 @@ pub(super) fn ensure_can_write(s: &Shared, chat: Option<&ChatSession>) -> ApiRes
     Ok(())
 }
 
+/// The refusal code of [`owner_gate`].
+pub const OWNER_REQUIRED: &str = "owner_required";
+
+/// Repos review F12 and residual 2: what spends this box's own forge access
+/// or steers its checkouts (a clone by spec or by id, renaming a repo,
+/// setting a chat's repo, a rescan, confirming a found checkout) is the box
+/// owner's: a phone certified to the account of the person who admitted the
+/// box (`ChatService::box_owner_accounts`), through its own pairing, or the
+/// `serve.token` bearer on a loopback listener (the operator on the box).
+/// Any other paired phone, and the bearer over the network (every phone can
+/// fetch it), is refused with [`OWNER_REQUIRED`]. Never a request carried on
+/// the log.
+pub(super) fn owner_gate(s: &Shared, peer: Option<&super::tunnel::TunnelPeer>) -> ApiResult<()> {
+    let ok = match peer {
+        None => s.opts.listen.ip().is_loopback(),
+        Some(p) => {
+            let device = s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)).filter(|r| r.is_active()).and_then(|r| r.device_id);
+            device.is_some_and(|d| {
+                let svc = s.lock();
+                svc.box_owner_accounts(s.ws).is_ok_and(|owners| svc.phone_of_accounts(s.ws, d, &owners))
+            })
+        }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(err(
+            StatusCode::FORBIDDEN,
+            format!("{OWNER_REQUIRED}: only the phone of the person who admitted this box (certified to their account), or the operator on the box itself, can do this"),
+        ))
+    }
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> ApiResult<T> {
     tokio::task::spawn_blocking(f).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
@@ -929,8 +962,9 @@ fn resolve_by_id(s: &Shared, id: Uuid) -> ApiResult<(hive_core::workspace_repo::
     Ok((wr, h, rref))
 }
 
-pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
+pub async fn clone_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
+    owner_gate(&s, peer.as_deref())?;
     let by_id = match req.repo_id {
         Some(id) => Some(resolve_by_id(&s, id)?),
         None => None,
@@ -1229,7 +1263,8 @@ pub struct SetRepo {
     repo: Option<String>,
 }
 
-pub async fn put_chat_repo(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+pub async fn put_chat_repo(State(s): S, peer: Option<axum::Extension<super::tunnel::TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+    owner_gate(&s, peer.as_deref())?;
     let req: SetRepo = if body.iter().all(u8::is_ascii_whitespace) {
         SetRepo::default()
     } else {

@@ -117,6 +117,62 @@ pub fn match_repo(remotes: &BTreeMap<String, Vec<String>>, repo: &WorkspaceRepo,
     }
 }
 
+/// The aliases a device matches with (design 12): its own SSH host
+/// aliases, plus the workspace-synced host and repo aliases a person here
+/// accepted (and the workspace still names). Identity only: nothing here is
+/// ever used to build a clone or fetch URL.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Aliases {
+    /// This device's own SSH host aliases (never synced).
+    pub device: BTreeMap<String, String>,
+    /// Accepted synced host aliases (alias host → canonical host).
+    pub hosts: BTreeMap<String, String>,
+    /// Accepted synced repo aliases, by repo id.
+    pub repos: BTreeMap<uuid::Uuid, Vec<String>>,
+}
+
+impl From<BTreeMap<String, String>> for Aliases {
+    fn from(device: BTreeMap<String, String>) -> Self {
+        Self { device, ..Default::default() }
+    }
+}
+
+impl Aliases {
+    /// Every host alias in force here (the device's own win a conflict).
+    pub fn all_hosts(&self) -> BTreeMap<String, String> {
+        let mut m = self.hosts.clone();
+        m.extend(self.device.clone());
+        m
+    }
+}
+
+/// [`match_repo`] with synced aliases: `(how, via_alias)`, where
+/// `via_alias` says an accepted synced alias was needed (shown "via alias").
+pub fn match_repo_via(remotes: &BTreeMap<String, Vec<String>>, repo: &WorkspaceRepo, aliases: &Aliases) -> Option<(MatchVia, bool)> {
+    if let Some(v) = match_repo(remotes, repo, &aliases.device) {
+        return Some((v, false));
+    }
+    if repo.canonical.starts_with("local:") {
+        return None;
+    }
+    let hosts = aliases.all_hosts();
+    let names: Vec<&String> = std::iter::once(&repo.canonical).chain(aliases.repos.get(&repo.id).into_iter().flatten()).collect();
+    let is = |name: &str| {
+        remotes
+            .get(name)
+            .filter(|urls| urls.len() == 1)
+            .and_then(|urls| canonical_repo(&urls[0], &repo.forge_kind, &hosts).ok())
+            .is_some_and(|c| names.iter().any(|n| **n == c))
+    };
+    if is("origin") {
+        Some((MatchVia::Origin, true))
+    } else if is("upstream") {
+        Some((MatchVia::Upstream, true))
+    } else {
+        None
+    }
+}
+
 /// The canonical of a checkout's `origin` (or, for a fork, `upstream`)
 /// with no case hint: what to suggest when proposing a new repo.
 pub fn suggested_canonical(dir: &Path, aliases: &BTreeMap<String, String>) -> Option<(String, bool)> {

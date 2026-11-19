@@ -332,7 +332,7 @@ fn requires_presence_exhaustive() {
     let no = [
         SessionEvent::MemberAdded { member: member("me", WorkspaceRole::Viewer), invite: Some(Uuid::nil()), proof: None },
         SessionEvent::MessageRemoved { message_id: Uuid::nil() },
-        SessionEvent::TurnClaimed { trigger_id: Uuid::nil(), device_id: Uuid::nil() },
+        SessionEvent::TurnClaimed { trigger_id: Uuid::nil(), device_id: Uuid::nil(), epoch: 0, supersedes: None, repo_id: None },
         SessionEvent::DeviceKeyAgreementPublished { device_id: Uuid::nil(), ka_public: vec![] },
         SessionEvent::WorkspaceRepoUpdated { repo_id: Uuid::nil(), display_name: "x".into(), default_branch: String::new() },
         SessionEvent::ChatRepoSet { repo_id: None, base_branch: String::new() },

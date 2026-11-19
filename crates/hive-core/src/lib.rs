@@ -14,6 +14,7 @@ pub mod config;
 pub mod context_budget;
 pub mod crypto;
 pub mod device_link;
+pub mod dispatch;
 pub mod e2ee;
 pub mod endpoint;
 pub mod envelope_wire;

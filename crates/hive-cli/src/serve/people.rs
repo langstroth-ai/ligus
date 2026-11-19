@@ -192,6 +192,9 @@ pub fn participants(s: &ChatSession, cap: usize) -> Vec<Value> {
         if out.len() >= cap {
             break;
         }
+        if m.superseded {
+            continue;
+        }
         let (kind, id, name) = match m.role {
             MessageRole::System => continue,
             MessageRole::User => match &m.actor_identity {
@@ -322,7 +325,8 @@ fn default_responder(
 /// A coarse context-budget estimate (the desktop's Context pane plans the real
 /// prompt; this box only knows the transcript, skills and the model name).
 fn context_estimate(chat: &ChatSession, model: Option<&str>) -> Value {
-    let history = token_estimator::estimate_messages(&chat.messages) as u64;
+    let visible = || chat.messages.iter().filter(|m| !m.superseded);
+    let history: u64 = visible().map(|m| token_estimator::estimate_message(m) as u64).sum();
     let skills: u64 = chat.loaded_skills.iter().map(|k| token_estimator::estimate_text(&k.instructions) as u64).sum();
     let window = model
         .filter(|m| !m.trim().is_empty())
@@ -335,7 +339,7 @@ fn context_estimate(chat: &ChatSession, model: Option<&str>) -> Value {
         "usedTokens": used,
         "historyTokens": history,
         "skillTokens": skills,
-        "messageCount": chat.messages.len(),
+        "messageCount": visible().count(),
         // Over budget the oldest turns are summarized, as on the desktop.
         "compacting": used > window,
     });
