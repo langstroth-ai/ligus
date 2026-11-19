@@ -696,5 +696,5 @@ fn a_repin_the_branch_cant_follow_changes_nothing_and_says_why() {
     set_bases(&mut s, &[&a, &c]);
     let r = prepare_chat(&ready, &s, "h").unwrap();
     assert!(r.chat_worktree.join("other.txt").exists());
-    assert_eq!(std::fs::read_to_string(r.chat_worktree.join("README.md")).unwrap(), "changed\n");
+    assert_eq!(std::fs::read_to_string(r.chat_worktree.join("README.md")).unwrap().trim_end(), "changed", "core.autocrlf may add a CR");
 }
