@@ -513,7 +513,8 @@ fn clone_into_is_the_safe_clone_by_id() {
     let c = super::clone::clone_into(&repo, &url, &parent, None, &[]).unwrap();
     assert_eq!(c.path.file_name().unwrap().to_string_lossy(), clone_dir_name(&repo));
     assert_eq!(c.root_matches, Some(true));
-    assert_eq!(sh(&c.path, &["remote", "get-url", "origin"]), "https://github.com/zazulam/wefit.git");
+    // The configured URL (`get-url` would show the insteadOf rewrite).
+    assert_eq!(sh(&c.path, &["config", "--get", "remote.origin.url"]), "https://github.com/zazulam/wefit.git");
     // Fetches still reach the source (a local insteadOf); identity doesn't follow it.
     sh(&c.path, &["fetch", "-q", "origin"]);
     let aliases = Default::default();
