@@ -225,6 +225,53 @@ permissions on an untrusted repository. Runtimes Ligus can't confine from
 outside (aider, pi, Hermes, Antigravity, Copilot) are refused whenever
 egress is restricted, but run with their own permissions otherwise.
 
+### Shared files {#shared-files}
+
+Shared files are one of the easiest ways for an intruder, or a compromised
+member device, to spread malware to a whole workspace. Files are end-to-end
+encrypted, so the relay can't scan them: every content check runs on
+members' devices ([Sharing files](../../ligus/features/attachments.md)).
+
+| Threat | Defence |
+|---|---|
+| A member shares a program, script, macro document, disguised type or archive bomb | Sharing is off until an Admin sets the attachment policy (Admin and passkey presence; the recommended policy blocks programs, installers, disk images and scripts). Every device detects the type from the content, not the name, and refuses a blocked type on receipt too. Nothing opens or previews automatically; risky types need a second confirmation naming the sender; saved files carry the OS quarantine marking (Gatekeeper, SmartScreen). Archives are inspected without extracting anything, and a likely bomb isn't saved. An optional local scanner can refuse the save. |
+| A known-bad file keeps circulating | An Admin blocks its SHA-256 (no presence needed: it only narrows). Every device refuses to share, fetch or save it, including copies shared before the block. |
+| A stolen or revoked device, or a removed member, keeps posting files | A share is a signed chat event judged by the workspace fold at its author's position: a revoked device's later events never fold, and a removed member's are judged as of the removal (not a member). Removing a member can also delete everything they shared. |
+| An agent shares a file, or is tricked into it | Agents never sign a share. With the policy's agent switch on, an agent's file is filed as a proposal; it is shared only after a person approves it, by the host that produced it, and every device checks the shared file is the approved one (same hash, size, name and type). |
+| The relay swaps, truncates, replays or withholds a file | The signed reference binds the file's SHA-256 and size; a download that doesn't open to exactly those bytes is refused and nothing is kept. Withholding can't be prevented: the card says the file isn't available. |
+| Filename tricks (right-to-left override, double extensions, traversal, reserved names) | Names are cleaned when shared and checked by the fold: one path component, no control, bidirectional or invisible characters, no leading dots, Windows device names prefixed, at most 200 bytes. A double extension (`report.pdf.exe`) is flagged. Saving never overwrites a file or follows a symlink and never sets an executable bit. |
+| A preview runs code | Previews exist only for PNG, JPEG, GIF, WebP, BMP and plain text, rendered in an empty-sandbox frame whose policy blocks every load. SVG, HTML and PDF are never previewed. |
+| A shared file carries a prompt injection | Agents get shared files only as delimited untrusted data (text content up to 64 KB, otherwise only a description), never as instructions and never as a path they could run. |
+| A member uses the relay as free storage or a distribution point | The relay authenticates uploads, mints random non-enumerable ids, refuses past per-file, per-workspace, per-member, per-tenant and relay-wide quotas and an upload rate, and expires files (30 days by default). See [File attachments on the relay](../networking/self-host.md#file-attachments). |
+| A path in someone else's message opens something on your device | A device-local `[Attached: <path>]` marker becomes a clickable chip only in your own messages; in anyone else's it is text. |
+
+Residual risks:
+
+- **Metadata.** The relay sees each file's size, when it was uploaded and
+  fetched, and by which token or address.
+- **Policy before content.** The fold can only judge what a share declares
+  (its name, size and hash); the content checks run on each receiving device.
+  A member on a modified client can upload any bytes; receivers still refuse
+  them by content.
+- **Relay deletion is best effort, and a capability.** A deleted or expired
+  file stops being offered on every device once the signed deletion folds,
+  but a relay that ignores deletes keeps its ciphertext (which it can't
+  read). The relay deletes a blob for anyone with write access to the
+  workspace who knows its id, so a member (or someone who kept an id after
+  leaving, on a relay without membership) can remove a file's ciphertext
+  early; the signed event says who may delete, and only clients enforce it.
+- **Deleting a message doesn't delete its files.** Delete the file from its
+  card, or remove the member and their files.
+- **Quotas on an open relay** count per token subject, or per address when
+  there is no token. Per-member quotas are on by default (128 MiB and 500
+  files per workspace).
+- **Linux** has no quarantine marking to set.
+- **Scanning is optional** and depends on the scanner the person installed.
+- **The phone app doesn't show shared files yet**, and `ligus serve` and
+  worker boxes can't keep agents' file offers.
+- **Older builds** without attachment support show the marker as text and
+  don't fetch anything.
+
 ### Endpoint redirection (model gateways) {#endpoint-redirection}
 
 Where an operator routes agents through an LLM gateway

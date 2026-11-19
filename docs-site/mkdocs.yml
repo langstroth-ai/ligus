@@ -207,6 +207,7 @@ nav:
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
+          - Sharing files: ligus/features/attachments.md
           - Flow (routing, hand-offs, task board): ligus/features/flow.md
           - Ligus on your phone: ligus/features/phone-app.md
           - Host dashboard: ligus/features/dashboard.md
