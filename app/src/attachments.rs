@@ -303,7 +303,7 @@ pub(crate) async fn check_attachment(state: State<'_, AppState>, session_id: Str
         None
     };
     let needs_confirmation =
-        assessment.risky || archive.as_ref().is_some_and(|r| !r.unsafe_names.is_empty() || r.risky_entries > 0 || r.hidden_entries);
+        assessment.risky || archive.as_ref().is_some_and(|r| !r.unsafe_names.is_empty() || r.risky_entries > 0 || r.hidden_entries || r.opaque_entries > 0);
     let check = AttachmentCheck {
         id: a.id.to_string(),
         sha256: a.sha256.clone(),

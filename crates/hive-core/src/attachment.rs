@@ -973,6 +973,44 @@ pub struct ZipEntry {
     pub uncompressed: u64,
     /// Where its local header claims to be.
     pub local_offset: u64,
+    /// Its compression method (0 stored, 8 deflate, …).
+    pub method: u16,
+    /// Its general-purpose flags (bit 0: encrypted).
+    pub flags: u16,
+    /// Other names its directory entry gives it: an Info-ZIP Unicode Path
+    /// field (0x7075), which Info-ZIP, 7-Zip and libarchive extract under
+    /// instead of the plain name.
+    pub alt_names: Vec<String>,
+}
+
+/// The names an Info-ZIP Unicode Path extra field (0x7075) gives, in an
+/// extra-field block.
+fn unicode_path_names(extra: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut x = 0usize;
+    while x + 4 <= extra.len() {
+        let id = u16le(extra, x).unwrap_or(0);
+        let len = u16le(extra, x + 2).unwrap_or(0) as usize;
+        let body = extra.get(x + 4..(x + 4).saturating_add(len).min(extra.len())).unwrap_or(&[]);
+        if id == 0x7075 && body.len() > 5 {
+            out.push(String::from_utf8_lossy(&body[5..]).into_owned());
+        }
+        x = x.saturating_add(4 + len);
+    }
+    out
+}
+
+/// Where an entry's data starts, from its local header (its own name and
+/// extra lengths), if the header is there.
+pub fn zip_local_data(b: &[u8], e: &ZipEntry) -> Option<usize> {
+    let at = usize::try_from(e.local_offset).ok()?;
+    if u32le(b, at) != Some(0x0403_4b50) {
+        return None;
+    }
+    let n = u16le(b, at + 26)? as usize;
+    let m = u16le(b, at + 28)? as usize;
+    let start = at.checked_add(30 + n + m)?;
+    (start <= b.len()).then_some(start)
 }
 
 /// A zip's central directory.
@@ -1004,6 +1042,11 @@ pub struct ArchiveReport {
     /// More local entries than the directory lists: an extractor that reads
     /// local headers may see files this inspection didn't.
     pub hidden_entries: bool,
+    /// Entries this inspection couldn't open (encrypted, or compressed in a
+    /// format it doesn't read), and archives inside it whose contents it
+    /// couldn't list: their types weren't checked against the policy.
+    #[serde(default)]
+    pub opaque_entries: usize,
 }
 
 fn u16le(b: &[u8], i: usize) -> Option<u16> {
@@ -1050,6 +1093,8 @@ pub fn zip_entries(b: &[u8]) -> Result<ZipListing, String> {
         if u32le(b, i) != Some(0x0201_4b50) {
             break;
         }
+        let flags = u16le(b, i + 8).ok_or("short")?;
+        let method = u16le(b, i + 10).ok_or("short")?;
         let mut compressed = u32le(b, i + 20).ok_or("short")? as u64;
         let mut uncompressed = u32le(b, i + 24).ok_or("short")? as u64;
         let name_len = u16le(b, i + 28).ok_or("short")? as usize;
@@ -1082,7 +1127,9 @@ pub fn zip_entries(b: &[u8]) -> Result<ZipListing, String> {
             }
         }
         let local_offset = u32le(b, i + 42).ok_or("short")? as u64;
-        entries.push(ZipEntry { name, compressed, uncompressed, local_offset });
+        let extra = b.get(i + 46 + name_len..(i + 46 + name_len + extra_len).min(b.len())).unwrap_or(&[]);
+        let alt_names = unicode_path_names(extra);
+        entries.push(ZipEntry { name, compressed, uncompressed, local_offset, method, flags, alt_names });
         i = i.checked_add(46 + name_len + extra_len + comment_len).ok_or("bad entry")?;
         n += 1;
     }
@@ -1116,22 +1163,6 @@ pub fn inspect_zip(b: &[u8], limits: &ArchiveLimits) -> ArchiveReport {
     let compressed_total: u64 = listing.entries.iter().map(|e| e.compressed).fold(0u64, |a, c| a.saturating_add(c));
     for e in &listing.entries {
         r.total_uncompressed = r.total_uncompressed.saturating_add(e.uncompressed);
-        let ext = extension(e.name.rsplit('/').next().unwrap_or(""));
-        let class = class_of_extension(&ext);
-        if class == TypeClass::Archive || class == TypeClass::DiskImage {
-            r.nested_archives += 1;
-        }
-        if matches!(class, TypeClass::Executable | TypeClass::Script | TypeClass::Installer) {
-            r.risky_entries += 1;
-        }
-        let base = e.name.rsplit('/').next().unwrap_or("");
-        if !base.is_empty() {
-            for t in type_tokens(base, None) {
-                if r.entry_types.len() < 256 && !r.entry_types.contains(&t) {
-                    r.entry_types.push(t);
-                }
-            }
-        }
         // The directory must agree with the local header it points at:
         // signature and name.
         let at = e.local_offset as usize;
@@ -1142,8 +1173,37 @@ pub fn inspect_zip(b: &[u8], limits: &ArchiveLimits) -> ArchiveReport {
         if !local_ok && bomb.is_none() {
             bomb = Some("its directory doesn't match its contents".into());
         }
-        if unsafe_entry_name(&e.name) && r.unsafe_names.len() < 20 {
-            r.unsafe_names.push(sanitize_filename(&e.name.replace(['/', '\\'], "_")));
+        // Every name an extractor might use: the plain one, and the Unicode
+        // Path names in the directory and the local header (second review).
+        let mut names = vec![e.name.clone()];
+        let local_extra = u16le(b, at + 26).zip(u16le(b, at + 28)).and_then(|(n, m)| {
+            let start = at.checked_add(30 + n as usize)?;
+            b.get(start..start.checked_add(m as usize)?)
+        });
+        for n in e.alt_names.iter().cloned().chain(local_extra.map(unicode_path_names).unwrap_or_default()) {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        let classes: Vec<TypeClass> = names.iter().map(|n| class_of_extension(&extension(n.rsplit(['/', '\\']).next().unwrap_or("")))).collect();
+        if classes.iter().any(|c| matches!(c, TypeClass::Archive | TypeClass::DiskImage)) {
+            r.nested_archives += 1;
+        }
+        if classes.iter().any(|c| matches!(c, TypeClass::Executable | TypeClass::Script | TypeClass::Installer)) {
+            r.risky_entries += 1;
+        }
+        for name in &names {
+            let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+            if !base.is_empty() {
+                for t in type_tokens(base, None) {
+                    if r.entry_types.len() < 256 && !r.entry_types.contains(&t) {
+                        r.entry_types.push(t);
+                    }
+                }
+            }
+            if unsafe_entry_name(name) && r.unsafe_names.len() < 20 {
+                r.unsafe_names.push(sanitize_filename(&name.replace(['/', '\\'], "_")));
+            }
         }
         if e.uncompressed > 1024 * 1024 && e.uncompressed / e.compressed.max(1) > limits.max_ratio && bomb.is_none() {
             bomb = Some(format!("an entry expands more than {}x", limits.max_ratio));

@@ -122,6 +122,8 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
         <div className="opacity-80" data-testid="attachment-check">
           Verified against what {check.sender} signed. Content: {check.assessment.detected.ext} ({check.assessment.detected.mime}).
           {check.archive && ` Archive: ${check.archive.entries} entries${check.archive.bomb ? `, ${check.archive.bomb}` : ""}.`}
+          {check.archive && (check.archive.opaqueEntries ?? 0) > 0 &&
+            ` ${check.archive.opaqueEntries} of its entries couldn't be opened (encrypted or in a format Ligus doesn't read), so their types weren't checked.`}
           {check.scan.verdict === "clean" && ` ${check.scan.scanner}: no threat found.`}
           {check.scan.verdict === "infected" && ` ${check.scan.scanner}: ${check.scan.detail}`}
           {check.scan.verdict === "failed" && ` ${check.scan.scanner} couldn't scan it (${check.scan.detail}).`}

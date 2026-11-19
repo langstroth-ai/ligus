@@ -451,6 +451,10 @@ export interface AttachmentCheck {
     nestedArchives: number;
     riskyEntries: number;
     bomb: string | null;
+    /// Entries Ligus couldn't open (encrypted, or an unsupported
+    /// compression) and inner archives it couldn't list: their types weren't
+    /// checked.
+    opaqueEntries?: number;
   } | null;
   scan: ScanResult;
   blockedType: string | null;
