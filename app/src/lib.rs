@@ -4060,25 +4060,63 @@ async fn delete_chat(ligus_app: tauri::AppHandle, session_id: String) -> Result<
 
 pub(crate) fn delete_chat_sync(state: State<AppState>, session_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
-    {
+    let (workspace_id, me) = {
         let mut svc = state.service.lock().unwrap();
+        let ws = svc.load(id).ok().flatten().map(|s| s.workspace_id);
         svc.delete_chat(id).map_err(map_err)?;
-    }
+        (ws.unwrap_or_else(|| state.active_workspace_id()), svc.device_id())
+    };
     // Phase 2a: best-effort teardown of the chat's persistent base worktree and
-    // its `ligus/chat/<id>` branch. Only meaningful in a git workspace; a failure
-    // (or non-git root) just leaves a stale entry a later same-id ensure clears.
-    let repo_root = state.workspace_repo_root();
-    if !repo_root.trim().is_empty()
-        && ligus_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root))
-    {
-        if let Err(e) = ligus_runtime::git_worktree::remove_chat_worktree(
-            std::path::Path::new(&repo_root),
-            &id.to_string(),
-        ) {
+    // its `ligus/chat/<id>` branch in its workspace's bound folder. Only
+    // meaningful in a git workspace; a failure (or non-git root) just leaves a
+    // stale entry a later same-id ensure clears.
+    let bound = workspace_dir_for(&state.settings.lock().unwrap().workspace_dirs, &workspace_id.to_string());
+    if let Some(root) = chat_teardown_root(&bound, me) {
+        if let Err(e) = ligus_runtime::git_worktree::remove_chat_worktree(&root, &id.to_string()) {
             tracing::warn!(target: "worktree", "chat worktree cleanup failed: {e}");
         }
     }
     Ok(())
+}
+
+/// The checkout a deleted chat's worktree and branch are removed from: the
+/// bound folder when it is a git checkout this host may change. Never one
+/// another host on this machine manages (its marker, review residual 6):
+/// that host's `ligus/chat/<id>` branch and tree are its own.
+pub(crate) fn chat_teardown_root(bound: &str, me: Uuid) -> Option<std::path::PathBuf> {
+    let root = Path::new(bound);
+    if bound.trim().is_empty() || !ligus_runtime::git_worktree::is_git_repo(root) {
+        return None;
+    }
+    if let Some(label) = ligus_runtime::repos::marker::managed_elsewhere(root, me) {
+        tracing::info!(target: "worktree", "chat cleanup skips {}: managed by {label}", root.display());
+        return None;
+    }
+    Some(root.to_path_buf())
+}
+
+#[cfg(test)]
+mod chat_teardown_tests {
+    use super::*;
+
+    /// Runtime review: deleting a chat removed its `ligus/chat/<id>` branch
+    /// and worktree from the bound folder even when `ligus serve` manages
+    /// that checkout (its marker), cutting that host's live branch.
+    #[test]
+    fn deleting_a_chat_leaves_a_checkout_another_host_manages() {
+        let dir = std::env::temp_dir().join(format!("ligus-teardown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = ligus_core::process_util::git().arg("-C").arg(&dir).args(["init", "-q"]).status().unwrap().success();
+        assert!(ok);
+        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let bound = dir.to_string_lossy().into_owned();
+        assert_eq!(chat_teardown_root(&bound, me), Some(dir.clone()), "unclaimed: ours to clean");
+        assert_eq!(chat_teardown_root("", me), None);
+        ligus_runtime::repos::marker::claim(&dir, other, "home box").unwrap();
+        assert_eq!(chat_teardown_root(&bound, me), None, "managed by another host");
+        assert_eq!(chat_teardown_root(&bound, other), Some(dir.clone()), "the managing host cleans its own");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[tauri::command]
