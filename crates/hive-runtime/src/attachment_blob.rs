@@ -406,10 +406,12 @@ pub fn sender_label(s: &SharedAttachment) -> String {
     if name.is_empty() { id } else { format!("{name} ({id})") }
 }
 
-/// The `[Attached: <path>]` markers in messages this device's author signed.
+/// The `[Attached: <path>]` markers in turns this device's person wrote
+/// themselves (`AuthzState::person_messages`): never an agent's reply or a
+/// runtime effect signed under their identity (second review).
 pub fn own_path_markers(session: &hive_core::ChatSession, me: &str) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    for m in session.messages.iter().filter(|m| session.authz.message_authors.get(&m.id).is_some_and(|a| a == me)) {
+    for m in session.messages.iter().filter(|m| session.authz.person_messages.get(&m.id).is_some_and(|a| a == me)) {
         let mut rest = m.body.as_str();
         while let Some(i) = rest.find("[Attached: ") {
             let after = &rest[i..];

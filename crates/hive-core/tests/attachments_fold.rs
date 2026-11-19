@@ -482,3 +482,38 @@ fn a_share_from_before_a_policy_off_still_folds_at_its_position() {
     let id = w.write("mara", Some(chat), share(&a), before_off, hive_core::testkit::Proof::None);
     assert_eq!((w.verdict(late), w.verdict(id)), (Verdict::Denied, Verdict::Allowed));
 }
+
+/// Second review: only a turn the person wrote themselves names local files
+/// (`[Attached: <path>]`). The chat's runtime may post a User turn under the
+/// person's identity (an automatic pickup posts a title someone else filed),
+/// and a host signs agents' replies, so neither counts; a runtime rewrite of
+/// the person's turn takes it out.
+#[test]
+fn only_a_persons_own_turns_are_theirs() {
+    let mut w = world();
+    let chat = w.chat("owner", "c");
+    let runtime = |w: &mut SignedWorld, m: ChatMessage| {
+        let mut env = w.draft("mara", Some(chat), SessionEvent::MessageAppended { message: m }, None);
+        env.actor_stamp.as_mut().unwrap().runtime_effect = true;
+        env.clear_raw();
+        sign_envelope(&mut env, w.people["mara"].device_id, &w.people["mara"].device);
+        w.push_env(Some(chat), env);
+    };
+    let mut mine = ChatMessage::new(MessageRole::User, "mara", "[Attached: /tmp/mine.png]");
+    mine.created_at = Timestamp::epoch();
+    w.say(chat, "mara", SessionEvent::MessageAppended { message: mine.clone() });
+    let mut pickup = ChatMessage::new(MessageRole::User, "mara", "[Attached: /Users/mara/passport.png]");
+    pickup.created_at = Timestamp::epoch();
+    runtime(&mut w, pickup.clone());
+    let mut reply = ChatMessage::new(MessageRole::Assistant, "assistant", "[Attached: /Users/mara/keys.png]");
+    reply.created_at = Timestamp::epoch();
+    runtime(&mut w, reply.clone());
+    let s = w.state(chat);
+    assert_eq!(s.authz.person_messages.get(&mine.id).map(String::as_str), Some("mara"));
+    assert!(!s.authz.person_messages.contains_key(&pickup.id) && !s.authz.person_messages.contains_key(&reply.id));
+    // The runtime rewrites the person's turn: it isn't theirs any more.
+    let mut rewritten = mine.clone();
+    rewritten.body = "[Attached: /Users/mara/id.png]".into();
+    runtime(&mut w, rewritten);
+    assert!(!w.state(chat).authz.person_messages.contains_key(&mine.id));
+}

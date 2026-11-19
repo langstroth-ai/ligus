@@ -176,7 +176,9 @@ pub(crate) fn list_attachments(state: State<AppState>, session_id: String) -> Re
     let signed_by = |mid: &Uuid| session.authz.message_authors.get(mid).cloned();
     let own_local_paths = {
         let mut out = Vec::new();
-        for m in session.messages.iter().filter(|m| signed_by(&m.id).as_deref() == Some(me.as_str())) {
+        // Only turns the person wrote themselves (never an agent's reply or
+        // a runtime effect signed under their identity).
+        for m in session.messages.iter().filter(|m| session.authz.person_messages.get(&m.id) == Some(&me)) {
             let mut rest = m.body.as_str();
             while let Some(i) = rest.find("[Attached: ") {
                 let after = &rest[i + "[Attached: ".len()..];

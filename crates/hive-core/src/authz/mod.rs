@@ -159,6 +159,14 @@ pub struct AuthzState {
     pub message_authors: BTreeMap<Uuid, String>,
     /// The signed author of each apply request: they (or an Admin) withdraw it.
     pub apply_requesters: BTreeMap<Uuid, String>,
+    /// The turns a person wrote themselves, by their author: a User message
+    /// signed for a human and not a runtime effect, never since rewritten or
+    /// continued by anything else. Only these name local files
+    /// (`[Attached: <path>]`, issue #118): an agent's reply or a runtime
+    /// effect the host signs under its person's identity (an automatic
+    /// pickup posts whatever title someone else filed) is not the person.
+    /// Kept in the device-local workspace too.
+    pub person_messages: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
