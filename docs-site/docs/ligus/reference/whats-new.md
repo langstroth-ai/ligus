@@ -13,8 +13,14 @@ Full release notes are on the
   applies on its own once it does; sync carries on past it, even when it
   never comes. A key someone else registers under a member's account is
   refused and attributed to whoever signed it, so the member's events keep
-  folding. See [held events](../../operate/security/threat-model.md#held-events)
+  folding. A held event a flood pushed out is fetched again from the relay
+  once what it waited for arrives. See [held events](../../operate/security/threat-model.md#held-events)
   and [account keys](../../operate/security/threat-model.md#account-keys).
+- **Only the person you invite can use the invite.** A new invite (to a
+  workspace or a DM) carries a redeem key whose secret is only in the code,
+  so another member who sees the invite on the workspace log can't redeem it
+  in that person's place. Invites made by an older version still work as
+  before; send a new one if you're unsure who saw the old one.
 - **One agent-turn engine on every host.** The desktop, `ligus worker` /
   `ligus serve` and the `lt` terminal client run agent turns through the
   same engine, so an agent in `lt` can use tools, edit in a per-turn

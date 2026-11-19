@@ -12297,7 +12297,10 @@ struct SyncStatus {
     held_events: i64,
     /// Signing devices among them.
     held_signers: i64,
-    /// Held events this device dropped (a cap or the 30-day limit).
+    /// Held events this device gave up on (past every cap and its tries at
+    /// fetching them again, or older than 30 days): missing here. One
+    /// dropped by a cap is fetched again from the relay once what it waited
+    /// for arrives, so it isn't counted.
     held_dropped: i64,
 }
 
@@ -12319,7 +12322,7 @@ fn sync_status(state: State<AppState>) -> SyncStatus {
         last_error: health.last_error,
         held_events: held.held,
         held_signers: held.signers,
-        held_dropped: held.dropped + held.expired,
+        held_dropped: held.lost + held.expired,
     }
 }
 
@@ -12631,6 +12634,7 @@ fn create_workspace(state: State<AppState>, name: String, relay_url: Option<Stri
 #[tauri::command]
 fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&invite)?;
+    let redeem = hive_runtime::box_admission::redeem_key_of(&invite);
     // A relayless invite would add a workspace that never syncs.
     if conn.dm_account.is_none() && invite_relay_problem(&conn.relay_url).is_some() {
         return Err("This invite's workspace has no relay, so it can't be joined. Ask whoever sent it to set a \
@@ -12642,17 +12646,21 @@ fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInf
     if conn.dm_account.is_some() {
         people::admit_dm_invite(&state, &mut conn, false)?;
     }
-    join_workspace_conn(state, conn)
+    join_workspace_conn(state, conn, redeem)
 }
 
-/// Join from an already-checked connection.
-fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Result<WorkspaceInfoDto, String> {
+/// Join from an already-checked connection. `redeem`: the invite's redeem
+/// key seed (`box_admission::redeem_key_of` of its code), which proves the
+/// redemption (`hive_core::admission`).
+fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn, redeem: Option<[u8; 32]>) -> Result<WorkspaceInfoDto, String> {
     // The invite's signature was for the reader's check; never kept.
     conn.sig = None;
-    // The invite this device redeems to enroll itself (kept device-local, not
-    // in settings: it is single-use).
+    // The invite this device redeems to enroll itself, with its redeem key
+    // (kept device-local, not in settings: it is single-use).
     if let Some(inv) = conn.inv.take().and_then(|i| Uuid::parse_str(&i).ok()) {
-        state.service.lock().unwrap().store().set_join_invite(conn.id(), inv).map_err(map_err)?;
+        let svc = state.service.lock().unwrap();
+        svc.store().set_join_invite(conn.id(), inv).map_err(map_err)?;
+        svc.store().set_join_redeem(conn.id(), redeem.as_ref()).map_err(map_err)?;
     }
     {
         let mut s = state.settings.lock().unwrap();
@@ -12714,7 +12722,17 @@ fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<Stri
         .issue_invite(id)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
     conn.inv = Some(invite.to_string());
-    Ok(encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))))
+    with_invite_redeem_key(&state, id, invite, encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))))
+}
+
+/// `code` (the `hivews1:` code of person invite `invite` to `ws`) with the
+/// invite's redeem key seed, which this device kept when it issued it: what
+/// lets the code's holder, and only them, redeem it (`hive_core::admission`).
+pub(crate) fn with_invite_redeem_key(state: &AppState, ws: Uuid, invite: Uuid, code: String) -> Result<String, String> {
+    match state.service.lock().unwrap().take_invite_redeem_seed(ws, invite).map_err(map_err)? {
+        Some(seed) => hive_runtime::box_admission::with_redeem_key(&code, &seed),
+        None => Ok(code),
+    }
 }
 
 /// A box's join request, as the desktop shows it before approving.

@@ -29,7 +29,10 @@
 //!    itself** (nobody else can sign as that device, so someone who certifies
 //!    the device's key under a key of their own gains nothing). Every other
 //!    key is then judged against the anchored lineage, wherever it sorts: a
-//!    registration backdated before the account's own is refused too.
+//!    registration backdated before the account's own is refused too. Until
+//!    the anchor device's own certificate is on the log (it follows the
+//!    admission, or sits on a log this reader doesn't fold), the account
+//!    has no key here: nothing else pins it meanwhile.
 //! 3. **Lineage.** Once an account has a key, a registration of a different
 //!    key counts only when the account's own device signed it: a device that
 //!    published its own certificate under the account's current key. That is
@@ -37,9 +40,11 @@
 //!    keys) and the account fails closed. Anyone else's registration is
 //!    refused and attributed to its signer ([`KeyBook::refused`]).
 //! 4. **Rotation.** `AccountKeyRotated` moves the account to a new key when
-//!    the current key signed it. One signed by a key the account already
-//!    rotated away from is a fork (that key designated two successors): a
-//!    genuine dispute. Anything else (no key yet, a signature no key of the
+//!    the current key signed it. One to a key the account already held is a
+//!    replay of a step its lineage took (anyone can publish it again) and
+//!    changes nothing. One signed by a key the account already rotated away
+//!    from, to a key it never held, is a fork (that key designated two
+//!    successors): a genuine dispute. Anything else (no key yet, a signature no key of the
 //!    account made) is refused, never a dispute.
 //! 5. **Unanchored accounts** (a member an Admin added directly, who never
 //!    self-enrolled; a log with no allowed admission of the account) have no
@@ -102,6 +107,10 @@ pub struct KeyIndex {
     /// account → its self-evident registrations in canonical order:
     /// (signing device, key). Filled on first ask.
     evident: std::sync::Mutex<BTreeMap<Uuid, Evident>>,
+    /// (event id, signer) of key events and certificates one signer
+    /// equivocated on (two different copies under one id): left out
+    /// everywhere, as every fold leaves them out (`crate::copies`).
+    equivocated: BTreeSet<(Uuid, Option<Uuid>)>,
 }
 
 impl KeyIndex {
@@ -113,6 +122,20 @@ impl KeyIndex {
             .collect();
         ordered.sort_by_key(|e| e.canonical_key());
         let mut idx = Self::default();
+        let mut copies: BTreeMap<(Uuid, Option<Uuid>), crate::copies::CopyKey> = BTreeMap::new();
+        for e in &ordered {
+            let k = crate::copies::copy_key(e);
+            match copies.get(&(e.event_id, e.signer_device_id)) {
+                Some(prev) if *prev != k => {
+                    idx.equivocated.insert((e.event_id, e.signer_device_id));
+                }
+                Some(_) => {}
+                None => {
+                    copies.insert((e.event_id, e.signer_device_id), k);
+                }
+            }
+        }
+        let ordered: Vec<&SessionEventEnvelope> = ordered.into_iter().filter(|e| !idx.equivocated.contains(&(e.event_id, e.signer_device_id))).collect();
         for e in ordered {
             match &e.payload {
                 SessionEvent::DeviceCertificateAdded { certificate: c } if e.signer_device_id == Some(c.device_id) => {
@@ -125,6 +148,11 @@ impl KeyIndex {
             }
         }
         idx
+    }
+
+    /// Whether `env`'s signer equivocated on its id (left out everywhere).
+    pub fn is_equivocated(&self, env: &SessionEventEnvelope) -> bool {
+        self.equivocated.contains(&(env.event_id, env.signer_device_id))
     }
 
     /// The certificates `device` published of itself for `account` (checked
@@ -200,6 +228,14 @@ impl KeyIndex {
         self.own_certs(account, device)
             .iter()
             .any(|c| keys.iter().any(|k| c.verify(k).is_ok()) && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok())
+    }
+
+    /// Whether `device` vouches for `account` under `key`: it registered
+    /// `key` itself, published its own certificate for the account under
+    /// it, and `env` verifies under the device's key.
+    pub fn device_vouches_under(&self, env: &SessionEventEnvelope, account: Uuid, device: Uuid, key: &[u8]) -> bool {
+        self.evident(account).iter().any(|(d, k)| *d == device && k == key)
+            && self.own_certs(account, device).iter().any(|c| c.verify(key).is_ok() && crate::crypto::verify_envelope(env, &c.device_public_key).is_ok())
     }
 
     /// The keys `device` registered for `account` (self-evident ones).
@@ -404,6 +440,12 @@ impl KeyBook {
 
     fn apply_new(&mut self, account: Uuid, ev: KeyEvent) -> KeyVerdict {
         let index = Arc::clone(&self.index);
+        // A signer's two different copies under one id: neither counts.
+        if let KeyEvent::Register { env, .. } | KeyEvent::Rotate { env, .. } = &ev {
+            if index.is_equivocated(env) {
+                return KeyVerdict::Ignored;
+            }
+        }
         let pin = self.pin;
         let st = self.accounts.entry(account).or_default();
         st.events.push(ev.clone());
@@ -468,6 +510,12 @@ fn judge(
             if st.lineage.iter().any(|k| k == key) {
                 return KeyVerdict::Same;
             }
+            // Anchored, but the anchor device's own certificate isn't on this
+            // log: nothing else pins the account meanwhile, or a registration
+            // someone made in advance would.
+            if st.anchor.is_some() && anchored.is_none() {
+                return KeyVerdict::Refused("the account's anchor device published no key of its own here yet");
+            }
             // The key the account's lineage is judged against: its current
             // key, or (before the anchored registration sorts) the anchored
             // key itself.
@@ -507,6 +555,12 @@ fn judge(
             if crate::crypto::verify(&current, new_key, sig).is_ok() {
                 st.lineage.push(new_key.clone());
                 return KeyVerdict::Rotated;
+            }
+            // A key the account already held: a copy of a step its lineage
+            // already took (anyone can publish a rotation the log carries
+            // again, stamped as the account), never a second successor.
+            if st.lineage.contains(new_key) {
+                return KeyVerdict::Same;
             }
             let superseded = &st.lineage[..st.lineage.len() - 1];
             if superseded.iter().any(|k| crate::crypto::verify(k, new_key, sig).is_ok()) {
@@ -628,6 +682,33 @@ mod tests {
         let (keys, disputed) = run(&envs, None, 0);
         assert_eq!(keys.get(&account), Some(&k.public_key_bytes().to_vec()));
         assert!(disputed.is_empty());
+    }
+
+    #[test]
+    fn a_replayed_rotation_is_the_same_step_not_a_fork() {
+        // K0 -> K1 -> K2, then K0 -> K1 published again (a copy anyone can
+        // make): the account stays at K2, undisputed.
+        let owner = dev();
+        let account = Uuid::new_v4();
+        let k0 = SigningKeypair::generate().unwrap();
+        let (k1, k2) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
+        let mut envs = identity(&owner, account, &k0, 1);
+        let rot = |from: &SigningKeypair, to: &SigningKeypair| SessionEvent::AccountKeyRotated {
+            account_id: account,
+            new_signing_public_key: to.public_key_bytes().to_vec(),
+            succession_signature: from.sign(&to.public_key_bytes()).to_vec(),
+        };
+        envs.push(signed(&owner, account, 10, rot(&k0, &k1)));
+        envs.push(signed(&owner, account, 11, rot(&k1, &k2)));
+        envs.push(signed(&dev(), account, 12, rot(&k0, &k1)));
+        let (keys, disputed) = run(&envs, Some((account, owner.id)), 0);
+        assert!(disputed.is_empty());
+        assert_eq!(keys.get(&account), Some(&k2.public_key_bytes().to_vec()));
+        // A genuine fork (K0 designating a key the account never held) still
+        // disputes it.
+        let k3 = SigningKeypair::generate().unwrap();
+        envs.push(signed(&owner, account, 13, rot(&k0, &k3)));
+        assert!(run(&envs, Some((account, owner.id)), 0).1.contains(&account));
     }
 
     proptest! {

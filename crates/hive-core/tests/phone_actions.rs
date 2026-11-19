@@ -457,7 +457,7 @@ fn governance(f: &Fixture, i: usize) -> (Option<Uuid>, SessionEvent) {
         2 => (None, SessionEvent::MemberAdded { member: f.w.member_of("ada", WorkspaceRole::Viewer), invite: None, proof: None }),
         3 => (None, SessionEvent::DeviceRevoked { device_id: owner.1, watermark: vec![] }),
         4 => (None, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }),
-        5 => (None, SessionEvent::JoinApproved { subject: format!("invite:{}", Uuid::new_v4()), admission: None }),
+        5 => (None, SessionEvent::JoinApproved { subject: format!("invite:{}", Uuid::new_v4()), admission: None, redeem_key: None }),
         6 => (None, SessionEvent::AdmissionClosed { invite: Uuid::new_v4(), redeemed: None }),
         _ => (Some(f.chat), SessionEvent::ProposalApplied {
             proposal_id: f.pid,

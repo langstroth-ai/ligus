@@ -351,7 +351,13 @@ pub fn finish_invite(s: &Shared, mut conn: InviteConn, inv: Uuid, cfg: &crate::C
         };
         conn.sig = sig;
     }
-    conn.encode()
+    let code = conn.encode();
+    // The invite's redeem key seed, kept when it was issued: only the code's
+    // holder can redeem it (`hive_core::admission`).
+    match s.lock().take_invite_redeem_seed(conn.workspace_id(), inv).ok().flatten() {
+        Some(seed) => hive_runtime::box_admission::with_redeem_key(&code, &seed).unwrap_or(code),
+        None => code,
+    }
 }
 
 /// The box's workspace as an invite names it (no `inv` yet).
@@ -469,7 +475,7 @@ pub async fn inspect(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req)
 
 /// Join a DM from its (checked) invite: pin its founder, keep the invite to
 /// redeem, save it, and start syncing. Returns the DM's JSON.
-fn join_dm(s: &Shared, conn: InviteConn, confirmed: bool) -> ApiResult<Value> {
+fn join_dm(s: &Shared, conn: InviteConn, redeem: Option<[u8; 32]>, confirmed: bool) -> ApiResult<Value> {
     ensure_can_write(s)?;
     let trust = conn.trust(&s.co_members());
     let peer = s.dm_refusal(&conn, trust, confirmed).map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
@@ -480,6 +486,7 @@ fn join_dm(s: &Shared, conn: InviteConn, confirmed: bool) -> ApiResult<Value> {
         let store = svc.store();
         if let Some(inv) = conn.inv.as_deref().and_then(|i| Uuid::parse_str(i.trim()).ok()) {
             store.set_join_invite(ws, inv).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
+            store.set_join_redeem(ws, redeem.as_ref()).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
         }
         store.set_workspace_pin(ws, &founder, &fk).map_err(|e| ApiError::from(anyhow::Error::from(e)))?;
     }
@@ -511,7 +518,7 @@ pub async fn join(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): J
         ));
     }
     dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    Ok(Json(join_dm(&s, conn, req.confirm_safety_code)?))
+    Ok(Json(join_dm(&s, conn, hive_runtime::box_admission::redeem_key_of(&req.code), req.confirm_safety_code)?))
 }
 
 /// `GET /v1/invites/pending` → `{contacts, invites}` (codes stay on the box).
@@ -552,7 +559,7 @@ pub async fn accept_pending(State(s): S, Json(req): Json<DropRef>) -> ApiResult<
         ));
     }
     dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
-    let out = join_dm(&s, conn, req.confirm_safety_code)?;
+    let out = join_dm(&s, conn, hive_runtime::box_admission::redeem_key_of(&code), req.confirm_safety_code)?;
     contacts_api::accepted(&s, &req.relay, req.seq);
     s.pending_codes.remove(&req.relay, req.seq);
     Ok(Json(out))

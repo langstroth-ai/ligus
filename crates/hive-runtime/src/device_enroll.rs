@@ -472,6 +472,7 @@ mod flow_tests {
             admin.sync().await;
             self.sync().await;
             self.svc.store().set_join_invite(ws, invite).unwrap();
+            self.svc.store().set_join_redeem(ws, admin.svc.take_invite_redeem_seed(ws, invite).unwrap().as_ref()).unwrap();
             self.svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
         }
 

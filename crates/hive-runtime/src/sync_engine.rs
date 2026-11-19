@@ -183,6 +183,11 @@ pub struct SyncEngine {
     /// Per workspace, the trust rows ([`EventStore::trust_rows_sig`]) held
     /// events were last judged against: a change makes them due again.
     held_sig: std::collections::HashMap<Uuid, (i64, i64)>,
+    /// Per workspace, the trust rows dropped held events were last checked
+    /// against for fetching again (`event_store::held`).
+    refetch_sig: std::collections::HashMap<Uuid, (i64, i64)>,
+    /// Applying events fetched again by sequence (`apply_refetched`).
+    in_refetch: bool,
     /// A body couldn't be opened (or no seal key is held): fetch the keyring
     /// route on the next round.
     rows_wanted: bool,
@@ -227,6 +232,9 @@ enum Decoded {
     Malformed(String),
     NotYetOpenable(String),
 }
+
+/// Dropped held events fetched again per pull round, at most.
+const REFETCH_PER_ROUND: usize = 256;
 
 /// Unix milliseconds now (held events' ages).
 fn now_ms() -> i64 {
@@ -280,6 +288,8 @@ impl SyncEngine {
             in_held_retry: false,
             held_checked: None,
             held_sig: std::collections::HashMap::new(),
+            refetch_sig: std::collections::HashMap::new(),
+            in_refetch: false,
             rows_wanted: false,
             ring_built_from: None,
             #[cfg(test)]
@@ -596,7 +606,87 @@ impl SyncEngine {
                 break;
             }
         }
+        applied += self.refetch_dropped(store).await?;
         Ok(applied)
+    }
+
+    /// Fetch again, by relay sequence, held events this device dropped whose
+    /// wait is over (`event_store::held`): the relay still has them, so a
+    /// flood of the held table doesn't make this device miss them. A bounded
+    /// number per round; contiguous sequences share a page.
+    pub async fn refetch_dropped(&mut self, store: &mut EventStore) -> Result<usize, SyncError> {
+        let due = self.refetch_due(store)?;
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let mut rows: Vec<(u64, Value)> = Vec::new();
+        let mut i = 0;
+        while i < due.len() {
+            // A run of sequences within one page.
+            let start = due[i];
+            let mut j = i;
+            while j + 1 < due.len() && due[j + 1] - start < u64::from(self.page_limit) {
+                j += 1;
+            }
+            let span = (due[j] - start + 1) as u32;
+            let page = self.relay.fetch_page(&self.workspace, start - 1, span).await?;
+            let want: std::collections::HashSet<u64> = due[i..=j].iter().copied().collect();
+            rows.extend(page.rows.into_iter().filter(|(seq, _)| want.contains(seq)));
+            i = j + 1;
+        }
+        self.apply_refetched(store, &due, &rows)
+    }
+
+    /// Relay sequences due for fetching again (at most a page's worth).
+    pub fn refetch_due(&mut self, store: &EventStore) -> Result<Vec<u64>, SyncError> {
+        self.ensure_loaded(store)?;
+        Ok(store.held_refetch_due(self.room_workspace(), REFETCH_PER_ROUND)?)
+    }
+
+    /// Apply `rows`, the bodies at `tried` fetched again: judged by the one
+    /// gate (`apply_fetched`), without moving the cursor or the page walk.
+    /// Each sequence tried spends one of its tries; one judged now (applied
+    /// or refused) is done; one dropped again waits for the next roster
+    /// change, until its tries run out.
+    pub fn apply_refetched(&mut self, store: &mut EventStore, tried: &[u64], rows: &[(u64, Value)]) -> Result<usize, SyncError> {
+        let ws = self.room_workspace();
+        store.held_refetch_tried(ws, tried)?;
+        let (walk_hold, behind, page_after) = (self.walk_hold, self.behind, self.page_after);
+        self.in_refetch = true;
+        let r = self.apply_fetched(store, rows);
+        self.in_refetch = false;
+        (self.walk_hold, self.behind, self.page_after) = (walk_hold, behind, page_after);
+        let applied = r?;
+        // Gone from the relay (expired, trimmed): nothing to wait for.
+        let got: std::collections::HashSet<u64> = rows.iter().map(|(s, _)| *s).collect();
+        for s in tried.iter().filter(|s| !got.contains(s)) {
+            store.held_refetch_done(ws, *s)?;
+        }
+        store.prune_held_refetch(ws)?;
+        Ok(applied)
+    }
+
+    /// Mark the dropped events of `ws` whose signer now signs for the
+    /// account they claimed (what they waited for arrived) due for fetching
+    /// again; checked once per change of the workspace's trust rows.
+    fn mark_refetch(&mut self, store: &EventStore, ws: Uuid) -> Result<(), SyncError> {
+        let sig = store.trust_rows_sig(ws)?;
+        if self.refetch_sig.get(&ws) == Some(&sig) {
+            return Ok(());
+        }
+        let rows = store.held_refetch_candidates(ws)?;
+        if !rows.is_empty() {
+            let pin = store.workspace_pin(ws)?;
+            let roster = crate::envelope_verifier::roster_with_batch(store.trust_envelopes(ws)?, &[], pin.as_ref());
+            let due: Vec<u64> = rows
+                .iter()
+                .filter(|r| r.signer.is_some_and(|d| crate::envelope_verifier::may_judge_now(&roster, d, r.claimed)))
+                .map(|r| r.seq)
+                .collect();
+            store.mark_refetch_due(ws, &due)?;
+        }
+        self.refetch_sig.insert(ws, sig);
+        Ok(())
     }
 
     /// Pull rounds until caught up, or `max_rounds` rounds have run. For
@@ -937,8 +1027,11 @@ impl SyncEngine {
             // Every judged event lets the cursor pass: a held one waits in the
             // held table, never before the cursor.
             resolved.push(*seq);
-            if let Judgement::Held(reason) = outcome {
-                to_hold.push(crate::event_store::HoldItem { env, reason });
+            match outcome {
+                Judgement::Held(reason) => to_hold.push(crate::event_store::HoldItem { env, reason, seq: Some(*seq) }),
+                // Fetched again and judged now: nothing more to fetch.
+                _ if self.in_refetch => store.held_refetch_done(self.room_workspace_scope(std::slice::from_ref(env)), *seq)?,
+                _ => {}
             }
         }
         if !to_hold.is_empty() {
@@ -959,6 +1052,10 @@ impl SyncEngine {
                     self.held_sig.insert(*ws, store.trust_rows_sig(*ws)?);
                 }
             }
+        }
+        if roster_relevant && !self.in_held_retry {
+            let ws = self.room_workspace_scope(&decoded);
+            self.mark_refetch(store, ws)?;
         }
 
         // B1: a rotation may have arrived on the config log; rebuild the ring
@@ -1202,6 +1299,7 @@ impl SyncEngine {
                 }
             }
             self.held_sig.insert(ws, store.trust_rows_sig(ws)?);
+            self.mark_refetch(store, ws)?;
         }
         Ok(applied)
     }

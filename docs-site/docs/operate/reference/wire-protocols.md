@@ -48,7 +48,17 @@ ISO8601 dates) of the envelope's identifying fields + payload. See
 quarantined, not applied. Envelopes that can't be judged yet (a signer whose
 certificate or admission hasn't arrived, a disputed account key) are held in
 a bounded device-local table, never applied until they verify, and never
-hold the fetch cursor.
+hold the fetch cursor; one dropped by a cap is fetched again by its relay
+sequence once what it waited for arrives.
+
+A person's invite (`joinApproved` of `invite:<id>`) may carry `redeemKey`
+(a 32-byte Ed25519 public key, as a JSON array; left out when absent; never
+beside `admission`). Its redemption (`memberAdded` with `invite`) then needs
+`proof`: that key's signature over `ligus-person-invite-redeem-v1\0` ‖
+workspace id ‖ invite id ‖ member id length (u32, little-endian) ‖ member id ‖
+redeeming device id (`hive_core::admission::person_redemption_message`).
+The key's 32-byte seed rides in the `hivews1:` code as hex under `"ak"`,
+outside the invite's signed claims, as a box admission's does.
 
 ## 2. Relay sync (HTTP/JSON)
 

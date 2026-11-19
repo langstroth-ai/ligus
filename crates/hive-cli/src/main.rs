@@ -226,6 +226,8 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
     if let Some(inv) = inv {
         store.set_join_invite(uuid_of_room(&room), inv)?;
+        // Its redeem key proves the redemption (`hive_core::admission`).
+        store.set_join_redeem(uuid_of_room(&room), hive_runtime::box_admission::redeem_key_of(invite).as_ref())?;
     }
     if let Some((founder, fk)) = pin {
         store.set_workspace_pin(uuid_of_room(&room), &founder, &fk)?;
@@ -1555,8 +1557,8 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
     if let Ok(svc) = open_service(cfg) {
         if let Ok(h) = svc.store().held_stats(uuid_of_room(&cfg.room)) {
             println!(
-                "held events: {} from {} device(s), {} dropped, {} expired (they apply on their own once what they wait for arrives)",
-                h.held, h.signers, h.dropped, h.expired
+                "held events: {} from {} device(s), {} dropped by a cap ({} to fetch again from the relay), {} given up, {} expired (they apply on their own once what they wait for arrives)",
+                h.held, h.signers, h.dropped, h.refetch, h.lost, h.expired
             );
             for (reason, n) in &h.reasons {
                 println!("  - {n}: {reason}");

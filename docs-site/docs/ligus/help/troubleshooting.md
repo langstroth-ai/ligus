@@ -63,11 +63,14 @@ Notes:
   waits aside and applies on its own once what it waits for arrives.
   Settings → Team sync says how many wait ("N events wait for a device
   certificate or an admission"); on a box, `ligus doctor` prints `held
-  events: N from M device(s), D dropped, E expired` and the reasons. A few
-  that never go away are normal when someone wrote from a device nobody
-  certified (or as someone they aren't). A device keeps at most 1,000 per
-  signing device, 10,000 per workspace, and none past 30 days; anything
-  dropped is counted there.
+  events: N from M device(s), D dropped by a cap (R to fetch again from the
+  relay), L given up, E expired` and the reasons. A few that never go away
+  are normal when someone wrote from a device nobody certified (or as
+  someone they aren't). A device keeps at most 1,000 per signing device,
+  10,000 per workspace, and none past 30 days. One dropped by a cap is
+  fetched again from the relay once what it waited for arrives; only what
+  is given up (past every limit) is missing on that device, and it is
+  counted there.
 - **A person's events stopped appearing everywhere** and they recently
   re-installed or signed in on a new device: check that the new device was
   added to their account (Settings → Passkeys & keys, **Confirm this

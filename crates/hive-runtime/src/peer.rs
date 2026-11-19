@@ -286,7 +286,7 @@ impl PeerSync {
                 tracing::debug!(reason, event_id = %env.event_id, "holding a peer event until the roster can judge it");
                 let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
                 store
-                    .hold_events(env.workspace_id, &[crate::event_store::HoldItem { env: &env, reason }], now_ms)
+                    .hold_events(env.workspace_id, &[crate::event_store::HoldItem { env: &env, reason, seq: None }], now_ms)
                     .map_err(|e| PeerError::Store(e.to_string()))?;
                 // A lamport witness meanwhile (as on the relay path).
                 store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;

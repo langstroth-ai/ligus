@@ -1330,7 +1330,9 @@ export interface SyncStatusDto {
   heldEvents?: number;
   /// Signing devices among the held events.
   heldSigners?: number;
-  /// Held events dropped (a cap, or older than 30 days).
+  /// Held events given up (past every cap and refetch try, or older than
+  /// 30 days): missing on this device. One dropped by a cap is fetched
+  /// again from the relay once what it waited for arrives.
   heldDropped?: number;
 }
 

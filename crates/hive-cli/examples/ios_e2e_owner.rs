@@ -69,11 +69,13 @@ async fn main() -> Result<()> {
             let ka = ids.key_agreement(stored.device.id)?;
             let _ = svc.publish_key_agreement(ws, ka.public_key_bytes());
             let inv = svc.issue_invite(ws)?;
+            let ak: String = svc.take_invite_redeem_seed(ws, inv)?.map(|s| s.iter().map(|b| format!("{b:02x}")).collect()).unwrap_or_default();
             drop(svc);
             sync(&dir, relay, room, key, stored.device.id).await?;
             let conn = serde_json::json!({
                 "name": format!("{arg}'s workspace"), "relay_url": relay, "room": room, "key": key,
                 "icon": null, "dm_account": null, "founder_actor_id": account.to_string(), "fk": fk, "inv": inv.to_string(),
+                "ak": ak,
             });
             let code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&conn)?);
             println!("hivews1:{code}");

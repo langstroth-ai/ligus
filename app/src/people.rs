@@ -386,6 +386,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
     set_active_workspace(state.clone(), ws_id.to_string())?;
     let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
     let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
+    let invite = crate::with_invite_redeem_key(&state, ws_id, inv, invite)?;
     // Delivered now, or held (sealed on this device) and delivered once their
     // contact id arrives.
     let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
@@ -482,7 +483,7 @@ pub(crate) fn join_dm(state: State<AppState>, code: String, confirm_safety_code:
         return Err("not a direct message invite".into());
     }
     admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
-    join_workspace_conn(state, conn)
+    join_workspace_conn(state, conn, hive_runtime::box_admission::redeem_key_of(&code))
 }
 
 #[derive(serde::Serialize)]
@@ -536,6 +537,7 @@ pub(crate) async fn co_member_invite(
         .issue_invite(ws)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
     let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
+    let invite = crate::with_invite_redeem_key(&state, ws, inv, invite)?;
     let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
     Ok(CoMemberInviteDto {
         invite,
@@ -988,7 +990,7 @@ pub(crate) fn accept_pending_invite(
     } else if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
         return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
     }
-    let joined = join_workspace_conn(state.clone(), conn)?;
+    let joined = join_workspace_conn(state.clone(), conn, hive_runtime::box_admission::redeem_key_of(&code))?;
     mark_handled(&state, &relay, seq);
     Ok(joined)
 }

@@ -677,12 +677,17 @@ struct CfgFold {
 }
 
 /// Whether an `AccountKeyRotated` for `account` is left out of the roster:
-/// its workspace is on rules v2, the account holds a passkey or a recovery
-/// key, and the rotation isn't one its config log allowed.
+/// its workspace is on rules v2 and the rotation isn't one its config log
+/// allowed. Under rules v2 every rotation needs its account's presence
+/// (`authz::rules`), so the config fold never moves an account without a
+/// passkey (a box) or one rotated off the config log: neither does the
+/// roster, or ingest and the fold would hold different keys for it (and a
+/// copy of such a rotation, which anyone can publish again, would count).
 fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) -> bool {
+    let _ = account;
     let Some(c) = cfg.iter().find(|c| c.ws == env.workspace_id) else { return false };
     let head = c.timeline.current();
-    if head.rules < 2 || head.passkeys.get(&account).is_none_or(|m| m.is_empty()) {
+    if head.rules < 2 {
         return false;
     }
     let on_config = env.session_id == hive_core::workspace_config_session_id(c.ws);
@@ -780,13 +785,35 @@ pub fn roster_with_batch(
 }
 
 /// Whether `env` is signed by a device whose certificate chains to `account`.
-fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid) -> bool {
+///
+/// For a self-enrollment the device's own certificate for the account counts
+/// too, under a key it registered itself, even while the account's key is
+/// disputed: the admission is what anchors the key
+/// (`hive_core::account_keys`), and it still has to be allowed by the fold
+/// (a redeemable invite, its redeem key's proof). Never for a founding seed
+/// (`seed`): any device can vouch for any account id that way, and a seed
+/// that joins can become the roster's base (earliest seed) and anchor the
+/// founder to its signer. A seed's signer vouches only under the founder
+/// pin's key (`fk`), or chains under the account's roster key.
+fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid, seed: Option<Option<&FounderPin>>) -> bool {
     let Some(device) = env.signer_device_id else { return false };
-    // The device's own certificate for the account counts too, under a key
-    // it registered itself, even while the account's key is disputed: a
-    // self-enrollment is what anchors the key (`hive_core::account_keys`).
-    if roster.key_index.as_ref().is_some_and(|i| i.device_vouches(env, account, device)) {
-        return true;
+    match seed {
+        None => {
+            if roster.key_index.as_ref().is_some_and(|i| i.device_vouches(env, account, device)) {
+                return true;
+            }
+        }
+        Some(Some(pin)) => {
+            let pinned = roster.key_index.as_ref().is_some_and(|i| {
+                i.registered_by(account, device)
+                    .iter()
+                    .any(|k| FounderPin::fingerprint(k) == pin.fk && i.device_vouches_under(env, account, device, k))
+            });
+            if pinned {
+                return true;
+            }
+        }
+        Some(None) => {}
     }
     let Some((key, accounts)) = roster.chained.get(&device) else { return false };
     // Not `is_revoked`: before its account is a member, the roster lists such
@@ -813,13 +840,13 @@ fn self_validating(roster: &WorkspaceRoster, env: &SessionEventEnvelope, pin: Op
                 && owners.len() == 1
                 && owners[0].id == author
                 && pin.is_none_or(|p| p.founder_account == account)
-                && signed_as(roster, env, account)
+                && signed_as(roster, env, account, Some(pin))
         }
         SessionEvent::MemberAdded { member, .. } => {
             member.id == author
                 && member.actor.account_id == Some(account)
                 && member.role.rank() < hive_core::WorkspaceRole::Admin.rank()
-                && signed_as(roster, env, account)
+                && signed_as(roster, env, account, None)
         }
         _ => false,
     }
@@ -889,8 +916,42 @@ fn key_publication_ok(env: &SessionEventEnvelope) -> bool {
     env.signer_device_id.is_some() && env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account)
 }
 
+/// Whether an event `signer` signed, stamped as `claimed` (if anything), that
+/// ingest held could be judged otherwise now: its signer isn't waiting for a
+/// dearth-mode approval, and it signs for the account it claims (an
+/// undisputed one), or is certified when it claims none. What a dropped held
+/// event is fetched again for (`event_store::held`); one from a device
+/// nobody certifies never is.
+pub fn may_judge_now(roster: &WorkspaceRoster, signer: Uuid, claimed: Option<Uuid>) -> bool {
+    if roster.pending.iter().any(|(_, d, _)| *d == signer) {
+        return false;
+    }
+    if roster.agent_keys.contains_key(&signer) {
+        return true;
+    }
+    match claimed {
+        Some(a) => !roster.is_disputed(a) && roster.device_signs_for(signer, a),
+        None => roster.is_certified(signer),
+    }
+}
+
 /// Classify an envelope against the roster (see [`Verdict`]).
+///
+/// An account key registration, rotation or device certificate that can't be
+/// judged yet is never held: it is accepted inert and the account-key rules
+/// (`hive_core::account_keys`) judge it in every roster and fold. Holding one
+/// (its account disputed by a forgery that arrived first, say) would leave
+/// only the forgery stored, so an unanchored account would take the
+/// forger's key on that device while one that met them in the other order
+/// disputes it.
 pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
+    match verdict_inner(roster, env) {
+        Verdict::Unverifiable(_) if is_trust_bootstrap(env) => Verdict::Unverifiable(QuarantineReason::UnknownDevice),
+        v => v,
+    }
+}
+
+fn verdict_inner(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
     if !key_publication_ok(env) {
         return Verdict::Quarantine(QuarantineReason::Impersonation);
     }

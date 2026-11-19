@@ -88,7 +88,7 @@ describe("Team sync limited state", () => {
 describe("Team sync held events", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("says how many events wait for a certificate or admission, and how many were dropped", async () => {
+  it("says how many events wait for a certificate or admission, and how many were given up", async () => {
     vi.mocked(ipc.syncStatus).mockResolvedValue({
       relayConfigured: true,
       relayUrl: "https://relay.example",
@@ -109,7 +109,7 @@ describe("Team sync held events", () => {
     const line = await screen.findByTestId("held-events");
     expect(line.textContent).toMatch(/3 events wait for a device\s+certificate or an admission \(2 devices\)/);
     expect(line.textContent).toMatch(/don't hold up sync/);
-    expect(line.textContent).toMatch(/1 dropped/);
+    expect(line.textContent).toMatch(/1 given up/);
   });
 
   it("shows nothing when nothing waits", async () => {

@@ -313,6 +313,16 @@ impl RosterTracker {
         }
     }
 
+    /// An account key registration that sorts before the log's base seed:
+    /// the fold doesn't reach it, but the account-key rules read every
+    /// registration wherever it sorts (as the ingest roster does), so the
+    /// book judges it before the fold starts.
+    pub fn register_key_before_base(&mut self, env: &SessionEventEnvelope) {
+        if matches!(env.payload, SessionEvent::AccountKeyRegistered { .. }) {
+            self.book.register(env);
+        }
+    }
+
     /// Every account's anchor so far: account → the device of its first word
     /// (see [`crate::account_keys`]).
     pub fn key_anchors(&self) -> BTreeMap<Uuid, Uuid> {

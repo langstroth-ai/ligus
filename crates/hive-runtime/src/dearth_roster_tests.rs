@@ -136,13 +136,13 @@ fn a_device_certified_during_dearth_needs_another_admins_approval() {
     assert_eq!(r.pending_devices(), &[(log.ws, new_box, owner.account)]);
 
     // The owner approving their own device again: still one account.
-    log.push(&owner, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
+    log.push(&owner, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None, redeem_key: None });
     // A Contributor's approval is dropped by ingest authorization.
-    log.push(&alice, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
+    log.push(&alice, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None, redeem_key: None });
     assert!(build_roster(&log.envs).public_key(new_box).is_none());
 
     // A second Admin, another account: admitted.
-    log.push(&admin2, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
+    log.push(&admin2, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None, redeem_key: None });
     let r = build_roster(&log.envs);
     assert!(r.public_key(new_box).is_some());
     assert!(r.pending_devices().is_empty());

@@ -803,6 +803,7 @@ async fn cli_host_reads_and_seals_after_rotation() {
     // serve joins with the invite (passphrase only), enrolls, publishes its key.
     let (mut serve, serve_ka, serve_dev) = service(&serve_db, "serve-box");
     serve.store().set_join_invite(wid, invite).unwrap();
+    serve.store().set_join_redeem(wid, desk.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
     pin_like_an_invite(&serve, &desk, wid);
     let mut serve_sync = engine(&relay, room, serve_dev, &serve_ka, &[]);
     round(&mut serve_sync, &serve_db).await;
@@ -841,6 +842,7 @@ async fn cli_host_reads_and_seals_after_rotation() {
     round(&mut desk_sync, &desk_db).await;
     let (mut worker, worker_ka, worker_dev) = service(&worker_db, "worker-box");
     worker.store().set_join_invite(wid, invite).unwrap();
+    worker.store().set_join_redeem(wid, desk.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
     pin_like_an_invite(&worker, &desk, wid);
     let mut worker_sync = engine(&relay, room, worker_dev, &worker_ka, &delivered);
     round(&mut worker_sync, &worker_db).await;
@@ -1173,6 +1175,7 @@ async fn forged_dm_founder_never_gets_writes() {
     // Alice joins from the forged invite: pinned to Bob, as the invite says.
     let (mut alice, alice_ka, alice_dev) = service(&alice_db, "alice");
     alice.store().set_join_invite(wid, invite).unwrap();
+    alice.store().set_join_redeem(wid, mal.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
     pin_like_an_invite(&alice, &bob, wid);
     alice.set_trusted_founder(Some(bob.author().account_id.unwrap().to_string()));
     let mut alice_sync = engine(&relay, room, alice_dev, &alice_ka, &[]);
@@ -1332,6 +1335,7 @@ async fn genuine_founder_verifies_and_joiner_writes() {
 
     let (mut alice, alice_ka, alice_dev) = service(&alice_db, "alice");
     alice.store().set_join_invite(wid, invite).unwrap();
+    alice.store().set_join_redeem(wid, bob.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
     pin_like_an_invite(&alice, &bob, wid);
     alice.set_trusted_founder(Some(bob.author().account_id.unwrap().to_string()));
     let mut alice_sync = engine(&relay, room, alice_dev, &alice_ka, &[]);

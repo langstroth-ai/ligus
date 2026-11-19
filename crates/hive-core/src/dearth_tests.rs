@@ -63,7 +63,7 @@ fn self_enrollment_is_suspended() {
     let envs = vec![seed(&s), ev(&s, 2, "eve", None, add("eve"))];
     assert!(!project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
     let invite = uuid::Uuid::new_v4();
-    let issue = SessionEvent::JoinApproved { subject: crate::authorization::invite_subject(invite), admission: None };
+    let issue = SessionEvent::JoinApproved { subject: crate::authorization::invite_subject(invite), admission: None, redeem_key: None };
     let redeem = SessionEvent::MemberAdded { invite: Some(invite), proof: None, member: member("eve", WorkspaceRole::Contributor) };
     let envs = vec![seed(&s), ev(&s, 1, "owner", None, issue), ev(&s, 2, "eve", None, redeem)];
     assert!(project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
@@ -77,13 +77,13 @@ fn a_new_member_needs_two_different_admins() {
     assert!(!p.members.iter().any(|m| m.id == "bob"));
     assert_eq!(p.guards.pending_members.len(), 1);
     // The adder approving their own add doesn't count.
-    envs.push(ev(&s, 3, "owner", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None }));
+    envs.push(ev(&s, 3, "owner", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None, redeem_key: None }));
     assert!(!project(&envs).unwrap().members.iter().any(|m| m.id == "bob"));
     // A Contributor's approval is dropped on ingest.
-    envs.push(ev(&s, 4, "alice", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None }));
+    envs.push(ev(&s, 4, "alice", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None, redeem_key: None }));
     assert!(!project(&envs).unwrap().members.iter().any(|m| m.id == "bob"));
     // A second Admin admits.
-    envs.push(ev(&s, 5, "admin2", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None }));
+    envs.push(ev(&s, 5, "admin2", None, SessionEvent::JoinApproved { subject: "bob".into(), admission: None, redeem_key: None }));
     let p = project(&envs).unwrap();
     assert!(p.members.iter().any(|m| m.id == "bob"));
     assert!(p.guards.pending_members.is_empty());

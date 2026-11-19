@@ -121,6 +121,11 @@ pub struct GuardState {
     /// refused). Config log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub service_invites: BTreeMap<Uuid, crate::admission::Admission>,
+    /// Person invites issued with a redeem key: invite id → the key (the
+    /// first one folded). A redemption must carry its signature
+    /// ([`crate::admission::person_redemption_message`]). Config log.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub invite_keys: BTreeMap<Uuid, Vec<u8>>,
     /// Closed box admissions: invite id → the redemption each allowed
     /// `AdmissionClosed` named (none: nobody). Config log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -224,9 +229,12 @@ pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEve
             session.guards.pending_members.push(PendingMember { member: member.clone(), added_by: author.to_string() });
             true
         }
-        SessionEvent::JoinApproved { subject, admission } => {
+        SessionEvent::JoinApproved { subject, admission, redeem_key } => {
             if let (Some(a), Some(id)) = (admission, crate::admission::invite_of_subject(subject)) {
                 session.guards.service_invites.entry(id).or_insert_with(|| a.clone());
+            }
+            if let (None, Some(k), Some(id)) = (admission, redeem_key, crate::admission::invite_of_subject(subject)) {
+                session.guards.invite_keys.entry(id).or_insert_with(|| k.clone());
             }
             session.guards.join_approvals.entry(subject.clone()).or_default().insert(author.to_string());
             if let Some(i) = session

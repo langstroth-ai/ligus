@@ -205,7 +205,9 @@ function SyncSection() {
             {s?.heldEvents ?? 0} {(s?.heldEvents ?? 0) === 1 ? "event waits" : "events wait"} for a device
             certificate or an admission ({s?.heldSigners ?? 0} {(s?.heldSigners ?? 0) === 1 ? "device" : "devices"}).
             They don't hold up sync and apply on their own once it arrives.
-            {(s?.heldDropped ?? 0) > 0 ? ` ${s?.heldDropped} dropped (over the limit or older than 30 days).` : ""}
+            {(s?.heldDropped ?? 0) > 0
+              ? ` ${s?.heldDropped} given up (over every limit or older than 30 days), so missing on this device.`
+              : ""}
           </div>
         ) : null}
       </div>

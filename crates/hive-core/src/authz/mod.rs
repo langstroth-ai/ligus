@@ -410,11 +410,13 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         // certified at this position (a box publishes its identity after it
         // joins, so usually it isn't), the fold checks it too: certified for
         // the stamp's account, not revoked, and the signature verifies.
-        if member.id == author && invite.is_some_and(|id| crate::admission::admission_of(fold, id).is_some()) {
+        if member.id == author
+            && invite.is_some_and(|id| crate::admission::admission_of(fold, id).is_some() || fold.guards.invite_keys.contains_key(&id))
+        {
             let known = env.signer_device_id.is_some_and(|d| ctx.running.devices.contains_key(&d));
             if known {
                 if let Err(why) = certified_signer(env, ctx.running) {
-                    return Decision::deny(format!("a box admission is redeemed by its own certified device: {why}"));
+                    return Decision::deny(format!("an admission is redeemed by its own certified device: {why}"));
                 }
             }
         }

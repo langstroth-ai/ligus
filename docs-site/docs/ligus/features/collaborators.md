@@ -34,7 +34,9 @@ From a person's row you can:
 - **Message** them (a direct message, below);
 - **Invite to…** another workspace you administer. The invite is sealed to
   their verified devices and dropped into their contact box (below). If it
-  can't be delivered, you get a single-use link to send them yourself.
+  can't be delivered, you get a single-use link to send them yourself. The
+  link carries the key that redeems it, so only whoever holds it can join
+  with it, not another member who sees the invite on the workspace log.
 
 ## Direct messages
 

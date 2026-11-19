@@ -104,6 +104,19 @@ pub fn redemption_message(workspace_id: Uuid, invite: Uuid, member_id: &str, dev
     m
 }
 
+/// The signing context of a person invite's redemption proof. Frozen: never
+/// rename it.
+pub const PERSON_REDEEM_CONTEXT: &[u8] = b"ligus-person-invite-redeem-v1\0";
+
+/// What a person invite's redemption proof signs: the workspace, the invite,
+/// the member it adds and the device that signs the redemption (as
+/// [`redemption_message`], under its own context).
+pub fn person_redemption_message(workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
+    let mut m = redemption_message(workspace_id, invite, member_id, device_id);
+    m.splice(..REDEEM_CONTEXT.len(), PERSON_REDEEM_CONTEXT.iter().copied());
+    m
+}
+
 /// The secret half of an admission's redeem key (the issuer puts its seed in
 /// the admission code and keeps nothing).
 pub struct RedeemKey(crate::crypto::SigningKeypair);
@@ -124,6 +137,11 @@ impl RedeemKey {
     /// The proof that redeems `invite` for `member_id` through `device_id`.
     pub fn prove(&self, workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
         self.0.sign(&redemption_message(workspace_id, invite, member_id, device_id)).to_vec()
+    }
+    /// The proof that redeems person invite `invite` for `member_id` through
+    /// `device_id`.
+    pub fn prove_person(&self, workspace_id: Uuid, invite: Uuid, member_id: &str, device_id: Uuid) -> Vec<u8> {
+        self.0.sign(&person_redemption_message(workspace_id, invite, member_id, device_id)).to_vec()
     }
 }
 
@@ -148,8 +166,24 @@ pub fn admission_of(fold: &ChatSession, id: Uuid) -> Option<&Admission> {
 /// [`MAX_ADMISSION_TTL_MS`]. A plain `JoinApproved` may not re-issue a box
 /// admission's invite as a person's.
 pub fn issuance_refusal(env: &SessionEventEnvelope, fold: &ChatSession, on_config: bool) -> Option<&'static str> {
-    let SessionEvent::JoinApproved { subject, admission } = &env.payload else { return None };
+    let SessionEvent::JoinApproved { subject, admission, redeem_key } = &env.payload else { return None };
     let invite = invite_of_subject(subject);
+    if let Some(k) = redeem_key {
+        // A person invite's redeem key: on an invite, well formed, and never
+        // beside a box admission's terms (which carry their own).
+        if admission.is_some() {
+            return Some("a box admission carries its redeem key in its terms");
+        }
+        if invite.is_none() {
+            return Some("a redeem key belongs to an invite");
+        }
+        if k.len() != 32 {
+            return Some("an invite's redeem key is malformed");
+        }
+        if !on_config {
+            return Some("an invite is issued on the workspace config log");
+        }
+    }
     let Some(a) = admission else {
         return invite
             .filter(|id| fold.guards.service_invites.contains_key(id))
@@ -222,7 +256,21 @@ pub fn redemption_refusal(
         return None;
     }
     let Some(terms) = terms else {
-        return (member.actor.kind == ActorKind::Service).then_some("a service member joins only through a box admission");
+        if member.actor.kind == ActorKind::Service {
+            return Some("a service member joins only through a box admission");
+        }
+        // A person invite issued with a redeem key: its code's holder,
+        // through this device. The invite id alone (on the log for every
+        // member) admits no one, before or after the invitee's redemption.
+        if let Some((id, key)) = invite.and_then(|id| fold.guards.invite_keys.get(&id).map(|k| (id, k))) {
+            let (Some(device), Some(proof)) = (env.signer_device_id, proof) else {
+                return Some("an invite is redeemed with its code's proof");
+            };
+            if crate::crypto::verify(key, &person_redemption_message(env.workspace_id, id, &member.id, device), proof).is_err() {
+                return Some("that redemption's proof doesn't verify");
+            }
+        }
+        return None;
     };
     if member.actor.kind != terms.kind {
         return Some("a box admission admits only a service member");
@@ -369,7 +417,7 @@ pub fn check_phone_admission_preimage(
     if p.session_id != crate::channel::workspace_config_session_id(workspace_id) {
         return Err("not on this workspace's config log");
     }
-    let SessionEvent::JoinApproved { subject, admission: Some(terms) } = p.event else {
+    let SessionEvent::JoinApproved { subject, admission: Some(terms), .. } = p.event else {
         return Err("not a box admission");
     };
     let invite = invite_of_subject(&subject).ok_or("not a box admission")?;

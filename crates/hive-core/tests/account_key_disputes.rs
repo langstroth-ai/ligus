@@ -23,7 +23,7 @@ fn world() -> SignedWorld {
     w.write(
         "owner",
         None,
-        SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite), admission: None },
+        SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite), admission: None, redeem_key: None },
         None,
         Proof::Recovery,
     );

@@ -251,6 +251,7 @@ async fn two_boxes_on(
         let store = hive_runtime::EventStore::open(b_dir.join("hive.db")).unwrap();
         let ws = conn.workspace_id();
         store.set_join_invite(ws, Uuid::parse_str(conn.inv.as_deref().unwrap()).unwrap()).unwrap();
+        store.set_join_redeem(ws, hive_runtime::box_admission::redeem_key_of(&code).as_ref()).unwrap();
         store.set_workspace_pin(ws, conn.founder_actor_id.as_deref().unwrap(), conn.fk.as_deref().unwrap()).unwrap();
     }
     let mut b_cfg = cfg_for(&b_dir, &conn.relay_url, &conn.room, conn.key.clone());
@@ -552,12 +553,14 @@ async fn names_are_cleaned_and_look_alikes_flagged() {
     let (relay, _c) = spawn_relay().await;
     let room = format!("names-{}", Uuid::new_v4());
     let a = Box_::start(cfg_for(&tmp.path().join("a"), &relay, &room, Some("p".into())), "Ada").await;
-    let inv = InviteConn::decode(a.post("/v1/invites", json!({})).await["code"].as_str().unwrap()).unwrap();
+    let code = a.post("/v1/invites", json!({})).await["code"].as_str().unwrap().to_string();
+    let inv = InviteConn::decode(&code).unwrap();
     let b_dir = tmp.path().join("b");
     std::fs::create_dir_all(&b_dir).unwrap();
     {
         let store = hive_runtime::EventStore::open(b_dir.join("hive.db")).unwrap();
         store.set_join_invite(inv.workspace_id(), Uuid::parse_str(inv.inv.as_deref().unwrap()).unwrap()).unwrap();
+        store.set_join_redeem(inv.workspace_id(), hive_runtime::box_admission::redeem_key_of(&code).as_ref()).unwrap();
         store.set_workspace_pin(inv.workspace_id(), inv.founder_actor_id.as_deref().unwrap(), inv.fk.as_deref().unwrap()).unwrap();
     }
     // B calls itself "Ada" with a Cyrillic a and a right-to-left override.

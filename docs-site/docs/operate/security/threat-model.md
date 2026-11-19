@@ -100,12 +100,22 @@ nothing: the owner's events keep folding. A forged rotation (one the
 account's current key didn't sign) is refused the same way. The account
 fails closed (its events are held, never applied) only when its own key
 material asserts two keys: its own device registering another key, or a
-key it rotated away from designating a second successor. Limits: a member
-an Admin added directly (no self-enrollment) has no anchor, so a forged
-registration whose signer also certified itself under that key still
-disputes them, fail closed; and a person invite's id is on the log, so a
-member who backdates a redemption of someone's invite before theirs takes
-that admission, and with it the account's anchor in that workspace.
+key it rotated away from designating a second successor (a copy of a
+rotation the account already made changes nothing). Until the anchor
+device's own certificate is on the log, the account has no key there, so a
+registration made in advance doesn't take its place. A founding seed signed
+by anyone but a device of the founder's pinned key never joins the roster,
+so nobody can anchor the founder to a device of theirs. A person invite
+carries a redeem key whose secret rides only in the invite code: the
+invite's id is on the log for every member, but a redemption counts only
+with that key's signature over the workspace, the invite, the new member and
+the redeeming device, so nobody can take someone's invite, or the anchor
+that comes with it. Limits: an invite issued before redeem keys is still
+redeemed by whoever's redemption sorts first; and an account an Admin added
+directly has no anchor, so a forged registration whose signer also
+certified itself under that key still disputes it, fail closed (no Ligus
+client adds an account that way: the desktop's Add member writes a
+placeholder with no account, so this is left to older logs).
 
 <a id="held-events"></a>**They can't stall your sync with events nobody can
 judge.** An event a device can't judge yet (a device not certified for the
@@ -118,10 +128,13 @@ had arrived after what it waited for. The table is bounded (1,000 events per
 signing device and workspace, 10,000 events and 32 MiB per workspace,
 50,000 events and 128 MiB per device, 30 days); past a cap the heaviest
 signer gives way only to one holding fewer, so a later flood can't push out
-what already waits. `ligus doctor` and Settings > Team sync show how many
-wait and how many were dropped. A held event dropped by a cap or its age is
-gone from that device; if what it waited for arrives later, that device
-misses it until it syncs the room again from the start.
+what already waits. A held event dropped by a cap isn't lost: the relay
+still has it, so the device remembers its sequence (no body) and, once what
+it waited for arrives (its signer now signs for the account it claims),
+fetches it again and judges it like any other, at most three times. A flood
+from devices nobody certified is never fetched again. `ligus doctor` and
+Settings > Team sync show how many wait and how many were given up (past
+100,000 remembered per workspace, three fetches, or 30 days).
 
 ### Workspace repositories {#repositories}
 
@@ -282,6 +295,10 @@ an admission to keep a box out (a closure that names no real redemption of
 it admits no one through it and changes nothing else), and two Admins'
 closures that name different redemptions admit neither. The box forgets the
 redeem key once its redemption is written. See the known limitation below.
+A person's invite works the same way: it names a redeem key whose secret
+rides only in the invite code, and the redemption carries that key's
+signature over the workspace, the invite, the new member and the redeeming
+device ([account keys](#account-keys)).
 
 **Apply on a host: one applier.** A person (desktop or phone) asks one named
 host to apply an approved proposal (`proposalApplyRequested`). The fold, on
@@ -978,6 +995,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 
 | Core (device-id squatting) | Device ids were chosen by the device, so a member could certify another member's device id (or one that would be theirs) under their own account with a key of their own. The fold then checked the victim's key events against the squatter's key, and the trust roster took whichever certificate sorted first (a backdated copy did): every event of the victim's device was refused everywhere, and the squatter could sign as the victim, or certify a key for an agent hosted on the victim's device, through its id. Revoking a device the squatter's account had certified was self-service, so any Contributor could revoke anyone's device, the founder's included | Refused by construction: a device id is derived from the device's first signing key (UUIDv8 of `SHA-256("ligus-device-id-v1\0" ‖ alg ‖ "\0" ‖ key)`, every device kind, phones from their Secure Enclave key), and a certificate whose id isn't its key's never verifies, so it is refused in the fold, at ingest and in the roster wherever it sorts. One device id names one key, and only that device signs under it. Certifying someone else's real device key for your own account signs nothing, and who holds a device is read from the whole log (the accounts the device itself vouched for), never from a position: such an account can't revoke the device as theirs, run an unbound agent on it, or make the device's own account's events wait or fail for good. A device several members certified that vouched for none of them (a phone, a box its person's desktop enrolled) is no one's own to revoke: it goes down the ranks over all of them (final review: an adopter could revoke anyone's phone, `an_adopter_cannot_revoke_a_phone_that_vouched_for_no_one`). Verified by `a_backdated_squat_is_refused_wherever_it_sorts`, `a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id`, `a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device`, `a_squatter_cannot_revoke_the_victims_device_as_their_own`, `certifying_someone_elses_device_key_holds_nothing_backdated_or_not`, `a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim`, `a_backdated_squat_neither_erases_nor_impersonates_at_ingest`, `a_victims_event_before_its_certificate_is_held_not_refused_after_an_adoption` and `device_id_vectors_derive_as_frozen` |
 | Core (held events, dispute DoS) | An event ingest held (a certificate or admission not here yet) pinned the sync cursor until it could be judged, so one whose certificate or admission never comes (a forged room founder, a member signing as an account that never certifies them, a removed member never re-admitted) stopped a device from syncing anything after it, for good. And a member could register a second key under anyone's account id from a fresh device (or forge a rotation): the account became disputed and every event its owner signed was refused, a one-event way to silence any member | Held events wait in a bounded device-local table (1,000 per signer, 10,000 and 32 MiB per workspace, 50,000 and 128 MiB per device, 30 days; first come stays, drops counted in `ligus doctor` and Settings > Team sync) and the cursor moves past them; they are judged again by the same gate when the roster changes and on a timer, so a released event folds as if it arrived in order. Account keys follow one rule set everywhere (`hive_core::account_keys`): a registration counts only when its signer published its own certificate under that key; the account's first word (the founder's seed, its own admission) anchors its key; any other key is refused and attributed to its signer, wherever it sorts, and never disputes the account. Only the account's own lineage asserting two keys (its own device registering another key, a key designating two successors) is a dispute, and a dispute holds rather than refuses. An uncertified device's event claiming any account is held (it was accepted while the account wasn't known yet). Verified by `prop_devices_converge_whatever_arrives_first`, `a_member_cannot_silence_another_by_registering_a_key_for_them`, `events_whose_certificate_never_comes_do_not_stall_sync`, `a_flood_of_held_events_is_bounded`, `a_registration_of_someone_elses_account_is_refused_wherever_it_sorts`, `prop_forgeries_never_dispute_or_take_a_self_enrolled_account` and `prop_a_late_anchor_ends_where_an_early_one_does` |
+| Core (held events and account keys, review) | The review of the fix above found six more. A founding seed signed by any device that certified itself for the founder's account joined the trust roster, and one with a smaller event id became its base: without a founder pin the founder's account was anchored to that member's device (they signed as the Owner), with one the founder had no key and a fresh device held the whole workspace. A copy of a rotation the account already made (K0 to K1, after K1 to K2) read as K0 designating a second successor: the account was disputed at ingest and its owner's events held, and the ingest roster counted rotations under rules v2 that the config fold denies. An account whose admission arrived before its own certificate took a key someone registered in advance. A member flooding the held table from 10,000 fresh device ids made later honest holds drop, so that device never applied them while others did. A key registration whose account a forgery had disputed first was held rather than stored, the config fold skipped registrations sorting before its seed, and ingest read a signer's equivocated copies of a registration the fold leaves out, so devices (and ingest and the fold) could hold different keys for an Admin-added account. And a person invite's id is on the log, so a member who backdated a redemption of someone's invite took that admission and the account's anchor | A founding seed joins the roster only when its signer vouches under the founder pin's key, or chains under the account's key. A rotation to a key the account already held changes nothing, and under rules v2 only a rotation its config log allowed counts at ingest, as in the fold. An anchored account has no key until its anchor device's own certificate is on the log. A dropped held event that came from the relay keeps a bodyless row (its sequence) and is fetched again, at most three times, once its signer signs for the account it claims. Account key events and certificates are never held (stored inert, judged by the rules everywhere), the fold judges registrations before its seed as ingest does, and equivocated copies count for no reader. Person invites carry a redeem key (`JoinApproved.redeemKey`, additive; the redemption proof under `ligus-person-invite-redeem-v1`), whose secret rides only in the invite code. Verified by `a_competing_founding_seed_never_anchors_the_founder_to_someone_else`, `a_replayed_rotation_never_disputes_the_account`, `a_replayed_rotation_is_the_same_step_not_a_fork`, `an_anchor_whose_key_has_not_arrived_pins_nothing_else`, `a_flood_never_loses_an_honest_held_event`, `a_member_cannot_steal_a_keyed_person_invite` and `prop_the_readers_of_account_keys_agree` |
 
 ### Open {#findings-open}
 
@@ -995,11 +1013,11 @@ by someone who outranks both, or by its person once that member is
 removed, and its pairing names no one until then), an Admin revoking a device that isn't
 certified on the workspace yet (a device id is derived from its key, so
 one who knows the key can name the device before it joins), a member who
-backdates a redemption of someone's person invite before theirs taking that
-admission and with it the account's key anchor there, members an Admin
-added directly having no anchor (a forged self-certified registration still
-disputes them, fail closed), held events dropped by a cap or the 30-day
-limit, what lamport bounds leave to an author (backdating,
+backdates a redemption of a person invite issued before redeem keys taking
+that admission and with it the account's key anchor there, accounts an Admin
+added directly (only in older logs) having no anchor (a forged
+self-certified registration still disputes them, fail closed), held events
+given up past every cap, three refetches or the 30-day limit, what lamport bounds leave to an author (backdating,
 concurrent writes that apply to everything before them, holds), human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through

@@ -1383,14 +1383,19 @@ impl ChatService {
             // invite, kept in this device's store); key possession alone
             // never admits anyone.
             let invite = self.store.join_invite(workspace_id)?;
-            // A box admission is redeemed with its code's proof, for this
-            // member through this device (`hive_core::admission`).
+            // A box admission, or a person invite issued with a redeem key,
+            // is redeemed with its code's proof, for this member through this
+            // device (`hive_core::admission`).
             let proof = match (invite, self.store.join_redeem_key(workspace_id)?) {
-                (Some(id), Some(seed)) => Some(
-                    hive_core::admission::RedeemKey::from_seed(&seed[..])
-                        .map_err(|e| ChatError::Unauthorized(format!("the admission's redeem key: {e}")))?
-                        .prove(workspace_id, id, &member.id, self.device_id),
-                ),
+                (Some(id), Some(seed)) => {
+                    let key = hive_core::admission::RedeemKey::from_seed(&seed[..])
+                        .map_err(|e| ChatError::Unauthorized(format!("the admission's redeem key: {e}")))?;
+                    Some(if config.guards.service_invites.contains_key(&id) {
+                        key.prove(workspace_id, id, &member.id, self.device_id)
+                    } else {
+                        key.prove_person(workspace_id, id, &member.id, self.device_id)
+                    })
+                }
                 _ => None,
             };
             let config_id = self.ensure_workspace_config(workspace_id)?;
@@ -2338,14 +2343,34 @@ impl ChatService {
 
     /// [`issue_invite`](Self::issue_invite) with a chosen id. Ids are random:
     /// never derive one from a public identifier.
+    ///
+    /// The invite names a fresh redeem key (`hive_core::admission`): its seed
+    /// rides only in the invite code ([`ChatService::take_invite_redeem_seed`],
+    /// `box_admission::with_redeem_key`), and the redemption must carry its
+    /// signature, so a member who reads the invite id on the log can't
+    /// redeem it in the invitee's place. The seed is kept on this device
+    /// until the code is built (a passkey confirmation can come between).
     pub fn issue_invite_as(&mut self, workspace_id: Uuid, id: Uuid) -> Result<Uuid> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
+        let key = hive_core::admission::RedeemKey::generate().map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
+        self.store.set_issued_invite_key(workspace_id, id, &key.seed())?;
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id), admission: None },
+            SessionEvent::JoinApproved {
+                subject: hive_core::authorization::invite_subject(id),
+                admission: None,
+                redeem_key: Some(key.public().to_vec()),
+            },
         )?;
         Ok(id)
+    }
+
+    /// The redeem key seed of person invite `id` this device issued, for its
+    /// code (`box_admission::with_redeem_key`); forgotten here once taken
+    /// (the code carries it).
+    pub fn take_invite_redeem_seed(&self, workspace_id: Uuid, id: Uuid) -> Result<Option<[u8; 32]>> {
+        Ok(self.store.take_issued_invite_key(workspace_id, id)?)
     }
 
     /// Issue a box admission (Phase B, `hive_core::admission`): a fresh
@@ -3618,7 +3643,7 @@ pub(crate) fn box_admission_payload(ttl_ms: i64, request: Option<&crate::box_adm
         admission: Some(match request {
             Some(r) => hive_core::admission::Admission::service(now + ttl, Some(r.account_id), key.public()).for_device(&r.device_public_key),
             None => hive_core::admission::Admission::service(now + ttl, None, key.public()),
-        }),
+        }), redeem_key: None,
     };
     Ok((payload, id, key.seed()))
 }
@@ -4246,6 +4271,7 @@ mod tests {
         owner.ensure_workspace_config(wid).unwrap();
         let invite = owner.issue_invite(wid).unwrap();
         owner.store().set_join_invite(wid, invite).unwrap();
+        owner.store().set_join_redeem(wid, owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
         let mut boxed = svc_on(&path, "y", "Phone");
         boxed.set_author_account(box_id.clone(), "Phone", None);
         boxed.ensure_self_member(cfg, wid).unwrap();
@@ -4301,6 +4327,7 @@ mod tests {
             .register_host(wid, hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "prod"))
             .is_err());
         worker.store().set_join_invite(wid, invite).unwrap();
+        worker.store().set_join_redeem(wid, worker.store().issued_invite_key(wid, invite).unwrap().as_ref()).unwrap();
         worker.ensure_self_member(workspace_config_session_id(wid), wid).unwrap();
         // register_host stamps owner_actor_id = self → allowed via the carve-out.
         worker
@@ -4387,6 +4414,7 @@ mod tests {
             a.ensure_workspace_config(wid).unwrap();
             let invite = a.issue_invite(wid).unwrap();
             a.store().set_join_invite(wid, invite).unwrap();
+            a.store().set_join_redeem(wid, a.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
             (ca.id, cb.id)
         };
 
@@ -5119,6 +5147,7 @@ mod tests {
             a.ensure_workspace_config(wid).unwrap();
             let invite = a.issue_invite(wid).unwrap();
             a.store().set_join_invite(wid, invite).unwrap();
+            a.store().set_join_redeem(wid, a.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
             chat.id
         };
         let mut eve = svc_on(&path, "eve", "Eve");

@@ -196,9 +196,10 @@ async fn harness_with(
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
         let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
-        (id, crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap(), svc.issue_invite(ws).unwrap())
+        let person = svc.issue_invite(ws).unwrap();
+        (id, crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap(), (person, svc.take_invite_redeem_seed(ws, person).unwrap()))
     };
-    let (agent_id, admission, person_invite) = agent_id;
+    let (agent_id, admission, (person_invite, person_seed)) = agent_id;
     sync_once(&desktop).await.unwrap();
 
     let serve_dir = tmp.path().join("serve");
@@ -231,7 +232,9 @@ async fn harness_with(
     tweak(&mut opts);
     if opts.test_person {
         // A person box (tests of person-only flows): a person's invite.
-        hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db")).unwrap().set_join_invite(ws, person_invite).unwrap();
+        let store = hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db")).unwrap();
+        store.set_join_invite(ws, person_invite).unwrap();
+        store.set_join_redeem(ws, person_seed.as_ref()).unwrap();
     } else {
         // The box joins as its own service member with the desktop's box
         // admission (Phase B), as `ligus admit redeem` would.
