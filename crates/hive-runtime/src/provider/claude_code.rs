@@ -708,6 +708,9 @@ mod tests {
         assert!(!Confine::current().shell, "a claude outside any turn keeps Bash");
         assert!(!crate::executor::turn_shell_allowed());
         assert!(!crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop).shell_allowed);
+        // Nor writes, the web tools or MCP: it only has to answer in text.
+        let c = Confine::current();
+        assert!(!c.writes_allowed && !c.egress_open && !c.connectors, "{c:?}");
         let (a, _) = confine(&[], Confine::current());
         assert!(!values_after(&a, "--tools").iter().any(|t| t == "Bash"), "{a:?}");
         assert!(values_after(&a, "--disallowedTools").contains(&"Bash".to_string()), "{a:?}");

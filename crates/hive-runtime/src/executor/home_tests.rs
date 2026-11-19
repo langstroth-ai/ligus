@@ -531,3 +531,25 @@ fn review_effective_policy_shows_the_keychain_denied_for_file_sign_in() {
         assert!(p.entries.iter().any(|e| e.path == kc && e.access == "denied"), "{kind:?}: {p:?}");
     }
 }
+
+/// An agent CLI Ligus starts outside any turn (the chat summarizer and
+/// compaction, a chat title, a runtime's Test) reads a prompt other members
+/// wrote, in the workspace checkout itself: it writes nothing there and
+/// reaches nothing but its model, whatever tier its runtime args name.
+#[cfg(unix)]
+#[test]
+fn review_agent_outside_a_turn_is_read_only_live() {
+    let Some(e) = super::tests::real_executor() else { return };
+    assert!(current_turn().is_none());
+    let d = DecoyHome::new();
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Copilot] {
+        let spec = SpawnSpec::new(Purpose::Agent(kind), "/bin/sh", ["-c", "echo x > planted.txt && echo WROTE", "sh", "--permission-mode", "acceptEdits", "--mode", "auto"])
+            .cwd(Some(&d.worktree));
+        let mut p = prepare_in(&*e, spec, &d.home, d.host()).expect("prepare");
+        assert!(!matches!(p.guard.plan().egress, EgressPlan::Open), "{kind:?}: open egress outside a turn");
+        let out = p.command.output().expect("spawn");
+        drop(p.guard);
+        let out = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(!out.contains("WROTE") && !d.worktree.join("planted.txt").exists(), "{kind:?} wrote the checkout outside a turn: {out}");
+    }
+}
