@@ -4194,3 +4194,78 @@ async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
     let _ = account;
     h.handle.shutdown();
 }
+
+// ── "Add this phone" headless, and GET /v1/me on loopback ───────────────────
+
+/// `ligus phones certify`: a CLI person certifies the code a phone shows,
+/// confirming with their recovery key; without it (or with a fingerprint
+/// that doesn't match) nothing is written, and a box can't certify anyone.
+/// `GET /v1/me` on loopback then describes that phone (`?deviceId=`), and
+/// refuses an uncertified one with `device_not_certified`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phones_certify_headless_then_me_on_loopback() {
+    use hive_runtime::phone_enroll::PhoneCode;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let words = h._tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    // The person's recovery key (the harness desktop already registered its
+    // test recovery key), as the 24 words a person keeps offline.
+    let account = open_service(&h.desktop).unwrap().author().account_id.unwrap();
+    std::fs::write(&words, hive_core::testkit::test_recovery_key(account).words()).unwrap();
+    let phone = hive_core::testkit::Phone::new();
+    let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| hive_core::crypto::sign_p256(&phone.key, m));
+    let certs = || {
+        hive_runtime::event_store::EventStore::open(h.desktop.data_dir.join("hive.db"))
+            .unwrap()
+            .list(workspace_config_session_id(ws))
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(&e.payload, hive_core::SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == phone.device_id))
+            .count()
+    };
+    // No recovery key: refused. A wrong fingerprint: refused.
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000".into())).is_err());
+    // A box can't.
+    let box_cfg = h.handle.shared.cfg.clone();
+    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), None).is_err());
+    assert_eq!(certs(), 0);
+
+    // Not certified yet: 403 device_not_certified.
+    let (status, v) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+    assert_eq!((status, v["error"].as_str()), (403, Some("device_not_certified")), "{v}");
+    let (status, v) = status_of(&h, reqwest::Method::GET, "/v1/me", None).await;
+    assert_eq!(status, 400, "{v}");
+
+    // The code from a file, the fingerprint checked: certified once.
+    let f = h._tmp.path().join("phone.code");
+    std::fs::write(&f, format!("{}\n", code.encode())).unwrap();
+    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()))
+        .unwrap();
+    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None).unwrap();
+    assert_eq!(certs(), 1, "certifying again writes nothing");
+    sync_once(&h.desktop).await.unwrap();
+    let mut v = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (status, got) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+        if status == 200 {
+            v = got;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(v["device"]["id"], json!(phone.device_id), "{v}");
+    assert_eq!(v["device"]["tier"], "phone");
+    assert_eq!(v["workspaceId"], json!(ws));
+    assert_eq!(v["configLogId"], json!(workspace_config_session_id(ws)));
+    assert_eq!(v["room"], json!(h.desktop.room));
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    assert_eq!(v["account"]["id"], json!(owner.account_id));
+    assert_eq!(v["account"]["memberId"], json!(owner.id));
+    assert!(v["account"]["role"].is_string(), "{v}");
+    assert!(v["rpId"].as_str().is_some_and(|r| !r.is_empty()), "{v}");
+    h.handle.shutdown();
+}

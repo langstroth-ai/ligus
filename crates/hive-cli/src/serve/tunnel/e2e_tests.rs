@@ -1164,3 +1164,108 @@ async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
     assert_eq!(h.handle.shared.token(), rotated);
     h.handle.shutdown();
 }
+
+// ── "Add this phone" (certify, then pair, then GET /v1/me) ─────────────────
+
+/// End to end, with the box's real roster (no test trust): a phone that
+/// isn't certified yet is refused at pairing with the typed close
+/// `4040 device_not_certified`, not a silent close; its person certifies the
+/// code the phone shows on their desktop (with their passkey); once the box
+/// synced the certificate the same phone pairs, and `GET /v1/me` through the
+/// tunnel tells it its workspace, config log, account, role, tier and
+/// relying party with no manual setup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn add_this_phone_then_pair_and_ask_who_am_i() {
+    use hive_runtime::phone_enroll::PhoneCode;
+    let relay = FakeRelay::start().await;
+    let (endpoint, _) = spawn_model(vec![]).await;
+    let r = relay.url.clone();
+    let h = harness_with(&endpoint, "m", &[("README.md", "hi\n")], move |o| {
+        o.remote = Some(RelaySettings::new(&r, None, true).unwrap());
+    })
+    .await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let ws = h.handle.shared.ws;
+    let info = host_info(&h, &relay.url);
+    let keys = PhoneKeys::generate();
+
+    // Not certified: the refusal says so.
+    let ps = open_window(&h, &relay).await;
+    let err = testkit::phone_enroll(&info, &keys, &ps, "Ana's iPhone").await.err().expect("refused");
+    let closed = err.downcast_ref::<testkit::Closed>().unwrap_or_else(|| panic!("{err:#}"));
+    assert_eq!((closed.0, closed.1.as_str()), (4040, "device_not_certified"));
+    assert!(t.registry.list().iter().all(|r| !r.is_active()), "no pairing left behind");
+
+    // The phone shows its code; the person certifies it on the desktop.
+    let phone = keys.device.clone();
+    let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| hive_core::crypto::sign_p256(&phone.key, m)).encode();
+    let (account, member_id) = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        let c = PhoneCode::decode(&code).unwrap();
+        assert_eq!(desk.certify_phone_code(ws, &c).unwrap(), phone.device_id, "the id the phone presents");
+        (desk.author().account_id.unwrap(), desk.author().id.clone())
+    };
+    crate::sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        if matches!(h.handle.shared.device_lookup(phone.device_id), tun::device_bind::DeviceLookup::Certified { phone: true, .. }) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Now it pairs, and asks who it is.
+    let ps = open_window(&h, &relay).await;
+    let (mut c, pid, _) = testkit::phone_enroll(&info, &keys, &ps, "Ana's iPhone").await.unwrap();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(phone.device_id));
+    let me = c.request("GET", "/v1/me", None).await.unwrap();
+    assert_eq!(me.status, 200, "{:?}", me.json());
+    let v = me.json();
+    assert_eq!(v["workspaceId"], json!(ws));
+    assert_eq!(v["configLogId"], json!(workspace_config_session_id(ws)));
+    assert_eq!(v["device"]["id"], json!(phone.device_id));
+    assert_eq!(v["device"]["tier"], "phone");
+    assert_eq!(v["device"]["fingerprint"], json!(hive_runtime::device_enroll::fingerprint(&phone.public_key())));
+    assert_eq!(v["account"]["id"], json!(account));
+    assert_eq!(v["account"]["memberId"], json!(member_id));
+    let role = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap().role_of(&member_id);
+    assert_eq!(v["account"]["role"], json!(role));
+    let rp = h.handle.shared.lock().workspace_presence_policy(ws).unwrap();
+    assert_eq!(v["rpId"], json!(rp.rp_id));
+    assert_eq!(v["origins"], json!(rp.origins));
+    // A query can't make the tunnel describe another device.
+    let other = c.request("GET", &format!("/v1/me?deviceId={}", Uuid::new_v4()), None).await.unwrap();
+    assert_eq!(other.json()["device"]["id"], json!(phone.device_id));
+    h.handle.shutdown();
+}
+
+/// Every msg1 refusal has its own documented close code (relay-tunnel.md
+/// §12): no claim and a claim for another pairing are `4042
+/// device_claim_invalid`, a revoked device is `4041 device_revoked`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_pairings_say_why() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let info = host_info(&h, &relay.url);
+    let code_of = |e: anyhow::Error| e.downcast_ref::<testkit::Closed>().map(|c| (c.0, c.1.clone())).unwrap_or_else(|| panic!("{e:#}"));
+
+    let ps = open_window(&h, &relay).await;
+    let e = testkit::phone_enroll_with_device(&info, &PhoneKeys::generate(), &ps, "x", None).await.err().unwrap();
+    assert_eq!(code_of(e), (4042, "device_claim_invalid".to_string()));
+    let victim = PhoneKeys::generate();
+    let ps = open_window(&h, &relay).await;
+    let e = testkit::phone_enroll_with_device(&info, &PhoneKeys::generate(), &ps, "x", Some(victim.device_claim(t.host_id()))).await.err().unwrap();
+    assert_eq!(code_of(e), (4042, "device_claim_invalid".to_string()));
+
+    let (t, info, keys, pid, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    let ps = open_window(&h, &relay).await;
+    let e = testkit::phone_enroll(&info, &keys, &ps, "again").await.err().unwrap();
+    assert_eq!(code_of(e), (4041, "device_revoked".to_string()));
+    h.handle.shutdown();
+}

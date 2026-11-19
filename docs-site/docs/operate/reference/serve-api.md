@@ -43,6 +43,28 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 {"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
 ```
 
+### Who am I {#me}
+
+The phone's setup in one call: after [Add this phone](../../ligus/features/phone-app.md#add-this-phone)
+and pairing, the app asks the box who it is and needs nothing typed in.
+Through the relay tunnel or on a loopback listener only (a LAN or tailnet
+bind answers `403 {"error":"secure_channel_required"}`).
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/me` | through the tunnel: nothing (the phone is the workspace device its pairing proved; a `deviceId` in the query is ignored). On loopback: `?deviceId=<uuid>` | `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`. `configLogId` is the workspace config log's session id; `role` is the person's (`owner`, `admin`, `contributor`, `viewer`), which caps the phone; `rpId` and `origins` are the passkey relying party every presence ceremony uses. `403 {"error":"device_not_certified","message"}` when the box doesn't know the device as a certified phone of a member yet (certify it on the desktop, let the box sync); `400 {"error":"device_id_required"}` on loopback without `deviceId` |
+
+```console
+$ curl -s "http://127.0.0.1:8787/v1/me?deviceId=6f1c…" -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
+{"account":{"displayName":"Ana","id":"0b6e…","memberId":"0b6e…","role":"owner"},"configLogId":"9d2a…","device":{"fingerprint":"3F1A-9C0B-77D2","id":"6f1c…","tier":"phone"},"origins":["https://ligus.ai"],"room":"acme","rpId":"ligus.ai","workspaceId":"c41e…","workspaceName":""}
+```
+
+A pairing refused because the phone isn't certified yet closes with the
+WebSocket code `4040` and reason `device_not_certified` (see
+[`docs/relay-tunnel.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/relay-tunnel.md)
+§12, "Host enrollment refusals"; `4041 device_revoked` and
+`4042 device_claim_invalid` are the other two).
+
 ### Chats and people
 
 | Method + path | Request | Notes |

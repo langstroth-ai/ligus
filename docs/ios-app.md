@@ -73,6 +73,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 
 | Method | Path | Response |
 |---|---|---|
+| GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate |
 | GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?}`. `workspace` (room name), `deviceLabel` and `identity` appear only when authorized. `identity = {mode: "owner"\|"member"\|"pending"\|"revoked", actorId, displayName, deviceFingerprint}`: who the phone acts as (see "Your own device" below) |
 | GET | `/v1/chats` | `{chats: [{id, title, updatedAt, preview, unread: int, channelId, participants: [Participant]}]}`, newest first |
 | POST | `/v1/chats` `{title?}` | `{chat}` |
@@ -394,6 +395,62 @@ itself: https in front of it counts only when the box listens on loopback.
   foreign-workspace cleanup.
 - The box publishes a contact record (relay v0.3) when it holds its account's
   key, announcing its id with one host beat when the log doesn't carry it.
+
+### Add this phone: implementation spec (0.1)
+
+The phone's P-256 Secure Enclave key becomes one of its person's devices
+before it pairs or signs anything. Reference implementation:
+`hive_runtime::phone_enroll` (`PhoneCode`, `preimage`, `check_device_id`).
+
+**1. The phone's code.** Generate the Secure Enclave key once
+(`SecureEnclave.P256.Signing.PrivateKey`, access control
+`.privateKeyUsage`, kept in the Keychain as `kSecAttrTokenIDSecureEnclave`)
+and a device id. Show, on **Settings > This phone**, the code as a QR code
+and as copyable text, and the fingerprint:
+
+```
+code        = "ligusphone1:" + b64u( device_id(16) ‖ pubkey(65) ‖ sig(64) ‖ label(UTF-8, ≤ 64 bytes) )
+pubkey      = the key's x963Representation (65 bytes, 0x04 ‖ X ‖ Y)
+sig         = ECDSA P-256 / SHA-256 over
+              "ligus-phone-code-v1\0" ‖ device_id(16, RFC 4122 bytes) ‖ pubkey(65) ‖ label
+              as r ‖ s (64 bytes, low S: s := n − s when s > n/2)
+label       = trimmed, no control characters, ≤ 64 bytes (cut at a character boundary)
+fingerprint = upper-case hex of SHA-256(pubkey)[0..6], as XXXX-XXXX-XXXX
+b64u        = base64url without padding
+```
+
+The device id is whatever the phone presents. A coming change derives it
+from the device's first signing key; `check_device_id` is where that rule
+lands, so derive it as specified then and keep it stable across reinstalls
+(it lives with the key).
+
+**2. The desktop certifies it.** The person pastes the code into **My
+devices > Add this phone** on their desktop (or runs `ligus phones certify
+<code> --recovery-words-file PATH [--fingerprint F]` on a CLI identity of
+theirs), compares the fingerprint with the phone's screen and confirms with
+their passkey. The desktop appends `DeviceCertificateAdded` with a P-256
+certificate (`alg: "p256"`): the phone tier, capped by the person's role.
+Refused: a code whose signature doesn't verify, a device id already certified
+with another key or as a desktop or box, a revoked device id (the phone needs
+a new key and id).
+
+**3. Pair.** Scan `ligus pair` as before; the enrollment's device claim
+(`device: {id, sig}`, [`relay-tunnel.md`](relay-tunnel.md) §7.2 E3a) names
+this device. Until the box has synced the certificate the host closes the
+enrollment WebSocket with close code **4040**, reason `device_not_certified`:
+show "Add this phone on your desktop first" with the code and fingerprint,
+and offer to pair again once the desktop has synced (the same link works
+for its 10 minutes, five attempts in all; then run `ligus pair` again). **4041** `device_revoked` and **4042** `device_claim_invalid` are
+final: show them, don't retry. A close without a reason is any other refusal
+(a wrong or used pairing secret).
+
+**4. Ask who you are.** After pairing, `GET /v1/me` (through the tunnel)
+answers the workspace id and room, the config log id, the account and member
+id this phone acts for, the person's role, the tier (`phone`), and the
+passkey relying party (`rpId`, `origins`). Store them with the host profile;
+use `account.memberId` to recognise your own messages and `rpId`/`origins`
+for every `ASAuthorization` request. Nothing is typed in. Call it again after
+a `403 device_not_certified` from any phone-action route.
 
 ### Phone actions: implementation spec (0.1)
 
