@@ -1153,6 +1153,17 @@ impl TurnPolicy {
         Self { envelope, gate, shell_allowed: false, ..Self::baseline(host) }
     }
 
+    /// An agent CLI started outside any turn (the chat summarizer and
+    /// compaction, a chat title, a runtime's Test): its prompt carries other
+    /// members' words, and it only has to answer in text. Read-only, no
+    /// shell, and no egress but its model, whatever tier its runtime args
+    /// name.
+    pub fn outside_turn(host: HostKind) -> Self {
+        let mut envelope = SandboxEnvelope::workspace_default();
+        envelope.egress = hive_core::sandbox::EgressPolicy::Closed;
+        Self { envelope, gate: GatePlan::ReadOnly, ..Self::baseline(host) }
+    }
+
     /// Endpoints refused so far in this turn.
     pub fn egress_denials(&self) -> Vec<HostPort> {
         self.denials.lock().map(|d| d.clone()).unwrap_or_default()
@@ -1232,7 +1243,13 @@ pub fn current_turn() -> Option<Arc<TurnPolicy>> {
 /// Whether the turn in scope may use a shell; none in scope, none (fail
 /// closed: an agent spawned outside a turn has no Owner behind it).
 pub fn turn_shell_allowed() -> bool {
-    current_turn().is_some_and(|p| p.shell_allowed)
+    agent_policy().shell_allowed
+}
+
+/// The policy an agent CLI runs under: the turn's, or with no turn in scope
+/// [`TurnPolicy::outside_turn`].
+pub fn agent_policy() -> Arc<TurnPolicy> {
+    current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::outside_turn(HostKind::Desktop)))
 }
 
 /// What a spawn site asks for.
@@ -1577,7 +1594,13 @@ pub fn prepare_in(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>, home: &Path,
         };
         return Err(refuse(no_sandbox_refusal(&what)));
     }
-    let policy = current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop)));
+    // No turn in scope: an agent CLI runs read-only with only its model
+    // (`TurnPolicy::outside_turn`); a command or pre-flight test, which a
+    // person started, runs under the baseline.
+    let policy = match spec.purpose {
+        Purpose::Agent(_) => agent_policy(),
+        _ => current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop))),
+    };
     let rt = current_runtime().unwrap_or_default();
     let agent = matches!(spec.purpose, Purpose::Agent(_));
     let provider_key = spec.provider_key.or(rt.provider_key.as_deref().filter(|_| agent));

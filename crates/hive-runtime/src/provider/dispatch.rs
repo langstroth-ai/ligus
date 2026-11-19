@@ -393,7 +393,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
         rt.provider,
         ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot
     ) {
-        let restricted = crate::executor::current_turn().is_some_and(|p| !p.envelope.egress.is_open());
+        let restricted = !crate::executor::agent_policy().envelope.egress.is_open();
         match super::acp::resolve(rt, restricted) {
             Ok(cmd) => {
                 let turn = super::acp::AcpTurn {

@@ -288,19 +288,20 @@ pub struct Confine {
 }
 
 impl Confine {
-    /// From the turn in scope (the baseline policy when there is none).
+    /// From the turn in scope (`TurnPolicy::outside_turn` when there is
+    /// none: read-only, no shell, only the model).
     pub fn current() -> Self {
-        let p = crate::executor::current_turn();
-        let open = p.as_ref().is_none_or(|p| p.envelope.egress.is_open());
+        let p = crate::executor::agent_policy();
+        let open = p.envelope.egress.is_open();
         Self {
             egress_open: open,
-            user_config: p.as_ref().is_some_and(|p| p.cli_user_config),
-            writes_allowed: p.as_ref().is_none_or(|p| p.gate.allows_writes()),
+            user_config: p.cli_user_config,
+            writes_allowed: p.gate.allows_writes(),
             connectors: open && {
                 let c = crate::egress::EgressPreset::ClaudeConnectors;
-                p.as_ref().is_some_and(|p| p.egress_presets.contains(&c)) || crate::executor::host_paths().egress_presets.contains(&c)
+                p.egress_presets.contains(&c) || crate::executor::host_paths().egress_presets.contains(&c)
             },
-            shell: p.as_ref().is_some_and(|p| p.shell_allowed),
+            shell: p.shell_allowed,
         }
     }
 }
@@ -777,7 +778,9 @@ mod tests {
         // A write tier, so the (sandboxed) fake may write its env file into
         // its working dir.
         let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
-        let _ = stream_reply(fake.to_str().unwrap(), &args, dir.path().to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        // In a write turn (outside one, a CLI is read-only).
+        let turn = crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop);
+        let _ = crate::executor::with_turn(turn, stream_reply(fake.to_str().unwrap(), &args, dir.path().to_str(), &[], None, &[], |_| {}, |_| {})).await;
         std::env::remove_var("LIGUS_SCRUBTEST_WORKSPACE_KEY");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let env = std::fs::read_to_string(&out).unwrap();
@@ -818,7 +821,8 @@ mod tests {
         std::fs::write(&fake, script).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
-        let _ = stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        let turn = crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop);
+        let _ = crate::executor::with_turn(turn, stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {})).await;
         let report = std::fs::read_to_string(wt.join("out/report.txt")).expect("the stub ran and wrote its worktree");
         assert!(report.contains("done"), "{report}");
         for secret in ["SEED-SECRET", "SETTINGS-SECRET", "SERVE-TOKEN-SECRET"] {

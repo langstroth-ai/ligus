@@ -787,7 +787,7 @@ pub async fn stream_reply(
 ) -> Result<String, AcpFailure> {
     let label = super::cli_agent::display_for(t.kind);
     let mode = tier_from_args(t.kind, t.tier_args);
-    let gate_writes = crate::executor::current_turn().is_none_or(|p| p.gate.allows_writes());
+    let gate_writes = crate::executor::agent_policy().gate.allows_writes();
     let tier_writes = gate_writes && mode != "default";
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(t.kind), t.command.program.as_str(), &t.command.args)
         .cwd(t.working_dir.map(Path::new))
@@ -814,7 +814,7 @@ pub async fn stream_reply(
     let mut conn = Conn { stdin, lines: super::bounded::BoundedLines::new(BufReader::new(stdout)), next_id: 1 };
     let scope = crate::agent_turn::current();
     let egress_open = matches!(guard.plan().egress, crate::executor::EgressPlan::Open)
-        || crate::executor::current_turn().is_none_or(|p| p.envelope.egress.is_open());
+        || crate::executor::agent_policy().envelope.egress.is_open();
     let mut h = Handler {
         on_delta,
         on_activity,
