@@ -184,6 +184,9 @@ pub struct HostPaths {
     /// Toolchain root variables (`RUSTUP_HOME`, `PYENV_ROOT`, ...) pointing at
     /// the real dirs, set for children whose `HOME` is a per-turn home.
     pub toolchain_env: Vec<(String, PathBuf)>,
+    /// Every absolute `PATH` entry of this host: a signed read-write grant
+    /// never makes one writable (a planted `git` there runs as the user).
+    pub path_dirs: Vec<PathBuf>,
     /// The binary that carries the Linux pre-exec helper (default: this
     /// executable).
     pub helper_exe: Option<PathBuf>,
@@ -237,6 +240,7 @@ impl HostPaths {
             h.toolchain_read = t.read.into_iter().map(|(p, _)| p).collect();
             h.toolchain_env = t.env;
         }
+        h.path_dirs = std::env::var_os("PATH").map(|v| std::env::split_paths(&v).filter(|d| d.is_absolute()).collect()).unwrap_or_default();
         h
     }
 }
@@ -330,6 +334,56 @@ pub fn toolchain_allow(home: &Path, path_var: Option<&OsStr>, env: &dyn Fn(&str)
         }
     }
     t
+}
+
+/// Paths under the home whose contents run as the user outside the sandbox:
+/// shell startup files, login items and autostart entries, and the config of
+/// tools that run commands from it (git aliases and hooks, npm's
+/// `script-shell`, cargo's `rustc-wrapper`, editors). A signed read-write
+/// grant that names one, or a dir holding one, is read-only
+/// ([`EnvelopeEnforcer::plan`]); so are the toolchain and `PATH` dirs.
+pub fn home_exec_paths(home: &Path) -> Vec<PathBuf> {
+    [
+        ".profile",
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".bash_logout",
+        ".zshrc",
+        ".zshenv",
+        ".zprofile",
+        ".zlogin",
+        ".zlogout",
+        ".config/fish",
+        ".config/nushell",
+        ".config/powershell",
+        ".config/autostart",
+        ".config/systemd",
+        ".config/environment.d",
+        ".config/git",
+        ".config/direnv",
+        ".config/nvim",
+        ".config/pip",
+        ".gitconfig",
+        ".npmrc",
+        ".cargo/config",
+        ".cargo/config.toml",
+        ".envrc",
+        ".pam_environment",
+        ".xprofile",
+        ".xinitrc",
+        ".xsession",
+        ".vimrc",
+        ".vim",
+        ".emacs",
+        ".emacs.d",
+        ".tmux.conf",
+        ".local/share/applications",
+        "Library/LaunchAgents",
+    ]
+    .iter()
+    .map(|r| home.join(r))
+    .collect()
 }
 
 /// The paths under the home a runtime reads on top of the toolchains, with
@@ -654,22 +708,59 @@ impl EnvelopeEnforcer {
         // grant never opens a denied path (Ligus's data, secret files, the
         // credential dirs): only the device-local list may open a credential
         // dir, and nothing opens the data dir.
+        //
+        // Each path is judged where it resolves too (the executors bind and
+        // allow the resolved path): one that resolves to the home or above
+        // it, or into a denied path, opens nothing (a symlinked
+        // `~/.local/bin` pointing at the home, a grant through a link into
+        // `~/.ssh`, a grant of `/home`). And a signed read-write grant never
+        // makes writable what runs as the user outside the sandbox
+        // ([`home_exec_paths`], the toolchain and `PATH` dirs): it is
+        // read-only there.
         let in_denied = |p: &Path| deny_read.iter().any(|d| p.starts_with(d));
+        // Resolved through the file system only when the home is on this
+        // disk (a plan for another host's paths has nothing to resolve);
+        // a path that doesn't exist opens nothing on any tier.
+        let on_disk = i.home.is_dir();
+        let resolve = |p: &Path| if on_disk { std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()) } else { p.to_path_buf() };
+        let real_home = resolve(i.home);
+        let denied_real: Vec<PathBuf> = if on_disk { deny_read.iter().map(|d| resolve(d)).collect() } else { Vec::new() };
+        let resolves_ok = |p: &Path| {
+            let c = resolve(p);
+            !i.home.starts_with(p) && !real_home.starts_with(&c) && !denied_real.iter().any(|d| c.starts_with(d))
+        };
         let mut home_read: Vec<PathBuf> = Vec::new();
         for (p, _) in runtime_home_read(i.purpose, i.home, i.user_config) {
             home_read.push(p);
         }
         home_read.extend(host_paths.toolchain_read.iter().cloned());
-        home_read.extend(host_paths.home_read_allow.iter().cloned());
         home_read.extend(i.extra_home_read.iter().cloned());
         let granted = |l: &[String]| -> Vec<PathBuf> {
             l.iter().filter_map(|g| expand_grant(g, i.home)).filter(|p| !in_denied(p) && p.as_path() != i.home).collect()
         };
         home_read.extend(granted(&i.grants.read_only));
-        home_read.retain(|p| !in_denied(p) || host_paths.home_read_allow.contains(p));
+        let rw_granted = granted(&i.grants.read_write);
+        let mut exec: Vec<PathBuf> = Vec::new();
+        if !rw_granted.is_empty() {
+            exec.extend(home_exec_paths(i.home));
+            exec.extend(host_paths.toolchain_read.iter().chain(host_paths.path_dirs.iter()).cloned());
+            if on_disk {
+                let real: Vec<PathBuf> = exec.iter().map(|x| resolve(x)).collect();
+                exec.extend(real);
+            }
+        }
+        let runs_outside = |p: &Path| {
+            let c = resolve(p);
+            exec.iter().any(|x| p.starts_with(x) || x.starts_with(p) || c.starts_with(x) || x.starts_with(&c))
+        };
+        let (rw_code, rw_ok): (Vec<PathBuf>, Vec<PathBuf>) = rw_granted.into_iter().partition(|p| runs_outside(p));
+        home_read.extend(rw_code);
+        home_read.retain(|p| !in_denied(p) && resolves_ok(p));
+        // The device-local list is the user's own: it may open a credential dir.
+        home_read.extend(host_paths.home_read_allow.iter().cloned());
         home_read.sort();
         home_read.dedup();
-        write_extra.extend(granted(&i.grants.read_write));
+        write_extra.extend(rw_ok.into_iter().filter(|p| resolves_ok(p)));
         // Never write where reading is denied.
         write_extra.retain(|w| !deny_read.iter().any(|d| w.starts_with(d)));
         write_extra.sort();
