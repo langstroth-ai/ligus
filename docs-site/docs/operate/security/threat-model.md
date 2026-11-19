@@ -123,7 +123,10 @@ config events; checkouts and their paths never leave a device.
   commit's trailer block (never its subject, which carries the proposal's
   agent-written title) and only on commits since the chat's pinned base. A
   host whose chat branch wasn't cut from the pinned base refuses the chat's
-  turns instead of replaying onto a different base.
+  turns instead of replaying onto a different base. An applied proposal's
+  content can't change afterwards (a re-upsert that would is refused), so a
+  replay only ever applies the approved bytes. A host fulfilling a person's
+  "Apply on" request uses the same checkout check as a turn.
 - **A remote URL** with `#`, `?` or a backslash has no identity: git connects
   to the host before them, so `https://evil.example#@github.com/o/n` never
   reads as github.com's repository.
