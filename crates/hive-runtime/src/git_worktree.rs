@@ -82,30 +82,106 @@ pub fn is_git_repo(root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Concurrent `git worktree` / `git branch` commands in one repository race:
-/// one `worktree add` can read another's half-written
-/// `.git/worktrees/<id>/` (`failed to read .../commondir`) and fail, and a
-/// turn whose cut fails files no diff. This device's worktree and branch
-/// commands therefore run one at a time.
-static WORKTREE_CMD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// ---------------------------------------------------------------------------
+// Repo-wide serialization of worktree and branch mutations.
+//
+// Concurrent `git worktree` / `git branch` commands in one repository race:
+// one `worktree add` can read another's half-written `.git/worktrees/<id>/`
+// (`failed to read .../commondir`) and fail, and a turn whose cut fails files
+// no diff. Every module that adds, removes or prunes worktrees or creates,
+// moves or deletes branches (this one, the hygiene sweep, the repos runtime's
+// apply, `ligus serve`'s repo endpoints) takes [`repo_lock`] around each such
+// command. The lock is per repository, keyed by its common git dir (shared by
+// all its worktrees): different repositories never wait on each other.
+// ---------------------------------------------------------------------------
+
+fn held_repos() -> &'static (std::sync::Mutex<std::collections::HashSet<PathBuf>>, std::sync::Condvar) {
+    static HELD: std::sync::OnceLock<(std::sync::Mutex<std::collections::HashSet<PathBuf>>, std::sync::Condvar)> = std::sync::OnceLock::new();
+    HELD.get_or_init(Default::default)
+}
+
+/// Held while one worktree or branch mutation runs in a repository. Not
+/// reentrant: take it around single commands, never across a call that takes
+/// it again.
+#[must_use = "the lock is released when this is dropped"]
+#[derive(Debug)]
+pub struct RepoLock {
+    key: PathBuf,
+}
+
+impl Drop for RepoLock {
+    fn drop(&mut self) {
+        let (held, cv) = held_repos();
+        held.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
+        cv.notify_all();
+    }
+}
+
+/// The repository `dir` belongs to: its common git dir (the same for a
+/// checkout and all its worktrees), else `dir` itself.
+pub fn repo_key(dir: &Path) -> PathBuf {
+    let out = hive_core::process_util::git().arg("-C").arg(dir).args(["rev-parse", "--git-common-dir"]).output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let p = PathBuf::from(&raw);
+            canonical(&if p.is_absolute() { p } else { dir.join(p) })
+        }
+        _ => canonical(dir),
+    }
+}
+
+/// Wait for, and take, the mutation lock of the repository `dir` belongs to.
+pub fn repo_lock(dir: &Path) -> RepoLock {
+    lock_key(repo_key(dir))
+}
+
+fn lock_key(key: PathBuf) -> RepoLock {
+    let (held, cv) = held_repos();
+    let mut set = held.lock().unwrap_or_else(|e| e.into_inner());
+    while set.contains(&key) {
+        set = cv.wait(set).unwrap_or_else(|e| e.into_inner());
+    }
+    set.insert(key.clone());
+    RepoLock { key }
+}
+
+/// Whether `git <args>` changes a repository's worktree registrations or
+/// branches (state every worktree of it shares). Reads count as mutations
+/// when in doubt: a read under the lock only waits.
+pub fn mutates_worktrees_or_branches(args: &[&str]) -> bool {
+    let rest = args.get(1..).unwrap_or_default();
+    match args.first().copied() {
+        Some("worktree") => rest.first().is_none_or(|sub| *sub != "list"),
+        Some("branch") => !(rest.is_empty() || rest.iter().any(|a| matches!(*a, "--list" | "-l" | "--show-current"))),
+        Some("update-ref") => true,
+        Some("checkout") | Some("switch") => rest.iter().any(|a| matches!(*a, "-b" | "-B" | "-c" | "-C" | "--orphan")),
+        Some("fetch") => rest.iter().any(|a| a.contains(":refs/heads/")),
+        _ => false,
+    }
+}
+
+/// [`repo_lock`] when `git <args>` mutates worktrees or branches.
+pub fn lock_if_mutating(dir: &Path, args: &[&str]) -> Option<RepoLock> {
+    mutates_worktrees_or_branches(args).then(|| repo_lock(dir))
+}
 
 /// Concurrent [`chat_worktree`] calls for a fresh chat would each see no
 /// branch, and the loser's stale-registration cleanup would remove the
-/// winner's new checkout: creating a chat's base worktree is one step.
-static CHAT_WORKTREE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn worktree_cmd_lock() -> std::sync::MutexGuard<'static, ()> {
-    WORKTREE_CMD.lock().unwrap_or_else(|e| e.into_inner())
+/// winner's new checkout: creating a chat's base worktree is one step, per
+/// repository.
+fn chat_worktree_lock(repo_root: &Path) -> RepoLock {
+    lock_key(repo_key(repo_root).join("ligus-chat-worktree"))
 }
 
 /// `git worktree remove --force <path>` in `repo_root`, best effort.
 fn force_remove_worktree(repo_root: &Path, path: &Path) {
-    let _guard = worktree_cmd_lock();
+    let _guard = repo_lock(repo_root);
     let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "remove", "--force"]).arg(path).output();
 }
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<String> {
-    let _guard = matches!(args.first(), Some(&"worktree") | Some(&"branch")).then(worktree_cmd_lock);
+    let _guard = lock_if_mutating(dir, args);
     let out = hive_core::process_util::git().arg("-C").arg(dir).args(args).output()?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
@@ -166,7 +242,7 @@ pub fn chat_worktree_at(repo_root: &Path, chat_id: &str, base: &str) -> io::Resu
     if base.starts_with('-') {
         return Err(io::Error::other("bad base"));
     }
-    let _chat = CHAT_WORKTREE.lock().unwrap_or_else(|e| e.into_inner());
+    let _chat = chat_worktree_lock(repo_root);
     let branch = chat_branch(chat_id);
     if branch_exists(repo_root, &branch) {
         return chat_worktree_locked(repo_root, chat_id);
@@ -198,11 +274,11 @@ fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
 /// first). A repo with no `HEAD` has nothing to branch from and returns `Err` —
 /// callers treat that as "run in the workspace root", exactly as for [`create`].
 pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
-    let _chat = CHAT_WORKTREE.lock().unwrap_or_else(|e| e.into_inner());
+    let _chat = chat_worktree_lock(repo_root);
     chat_worktree_locked(repo_root, chat_id)
 }
 
-/// [`chat_worktree`], with [`CHAT_WORKTREE`] held by the caller.
+/// [`chat_worktree`], with the chat worktree lock held by the caller.
 fn chat_worktree_locked(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     let branch = chat_branch(chat_id);
     let path = chat_worktree_path(repo_root, chat_id)?;
@@ -730,6 +806,85 @@ mod tests {
         run(&dir, "git", &["add", "-A"]);
         run(&dir, "git", &["commit", "-qm", "init"]);
         dir
+    }
+
+    #[test]
+    fn mutations_are_classified() {
+        for m in [&["worktree", "add", "x"][..], &["worktree", "prune"], &["branch", "-D", "b"], &["branch", "new"], &["update-ref", "refs/heads/x", "a", "b"], &["checkout", "-q", "-B", "b", "base"], &["fetch", ".", "a:refs/heads/main"]] {
+            assert!(mutates_worktrees_or_branches(m), "{m:?}");
+        }
+        for r in [&["worktree", "list", "--porcelain"][..], &["branch"], &["branch", "--list", "hive/*"], &["rev-parse", "HEAD"], &["checkout", "-q", "--detach"], &["fetch", "--prune", "origin"], &["status"]] {
+            assert!(!mutates_worktrees_or_branches(r), "{r:?}");
+        }
+    }
+
+    /// The lock is per repository (keyed by its common git dir): a worktree
+    /// of a repo waits for that repo, and another repo never waits.
+    #[test]
+    fn the_mutation_lock_is_per_repository() {
+        let (a, b) = (temp_repo(), temp_repo());
+        let wt = Worktree::create(&a, "00000000-lockkey").unwrap();
+        assert_eq!(repo_key(&a), repo_key(&wt.path), "a worktree shares its repo's key");
+        assert_ne!(repo_key(&a), repo_key(&b));
+        let held = repo_lock(&a);
+        let other = std::thread::spawn(move || {
+            let _g = repo_lock(&b);
+        });
+        let t0 = std::time::Instant::now();
+        while !other.is_finished() {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(10), "another repo waited");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let path = wt.path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let same = std::thread::spawn(move || {
+            let _g = repo_lock(&path);
+            tx.send(()).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "the same repo waits");
+        drop(held);
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("released");
+        same.join().unwrap();
+        wt.remove().unwrap();
+    }
+
+    /// Worktree cuts from every module at once in one repo: the turn engine's
+    /// cuts and chat worktrees, the repos runtime's scratch trees, the
+    /// hygiene prune. None fails (`failed to read .../commondir`).
+    #[test]
+    fn concurrent_cuts_across_modules_never_race() {
+        let repo = temp_repo();
+        let mut threads = Vec::new();
+        for k in 0..8 {
+            let r = repo.clone();
+            threads.push(std::thread::spawn(move || {
+                for i in 0..4 {
+                    let wt = cut_turn_worktree(&r, &format!("chat-{k}"), &format!("{k:08}-turn-{i}")).expect("turn cut");
+                    wt.remove().expect("turn removed");
+                }
+            }));
+            let r = repo.clone();
+            threads.push(std::thread::spawn(move || {
+                for i in 0..8 {
+                    let scratch = std::env::temp_dir().join(format!("ligus-lock-scratch-{}-{k}-{i}", std::process::id()));
+                    let s = scratch.to_string_lossy().into_owned();
+                    crate::repos::git::git(&r, &["worktree", "add", "-q", "--detach", &s, "HEAD"]).expect("scratch add");
+                    crate::repos::git::git(&r, &["worktree", "remove", "--force", &s]).expect("scratch remove");
+                }
+            }));
+            let r = repo.clone();
+            threads.push(std::thread::spawn(move || {
+                for i in 0..3 {
+                    chat_worktree(&r, &format!("chat-{k}-{i}")).expect("chat worktree");
+                    crate::hygiene::prune(&r);
+                }
+            }));
+        }
+        for t in threads {
+            t.join().expect("no thread failed");
+        }
+        let list = String::from_utf8(command("git").arg("-C").arg(&repo).args(["worktree", "list", "--porcelain"]).output().unwrap().stdout).unwrap();
+        assert_eq!(list.lines().filter(|l| l.starts_with("worktree ") && l.contains("/chat-")).count(), 32, "8 chats of the turns, 24 of their own: {list}");
     }
 
     /// A file-write-only agent plants a hook in its turn tree (husky-style

@@ -137,7 +137,11 @@ pub fn slug(id: &str) -> String {
 /// Carry out one step. Returns whether something was removed. Never deletes a
 /// chat branch, and saves a turn worktree's uncommitted edits first.
 pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
-    let git = |dir: &Path, args: &[&str]| hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout));
+    // Worktree and branch mutations take the repo-wide lock, like a turn's cut.
+    let git = |dir: &Path, args: &[&str]| {
+        let _lock = crate::git_worktree::lock_if_mutating(dir, args);
+        hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout))
+    };
     match action {
         SweepAction::RemoveTurnWorktree { path, branch } => {
             if path.exists() {
@@ -170,6 +174,7 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
 
 /// Prune worktree records whose directory is gone.
 pub fn prune(repo_root: &Path) {
+    let _lock = crate::git_worktree::repo_lock(repo_root);
     let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "prune"]).output();
 }
 
