@@ -65,6 +65,19 @@ pub fn open_host_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now
     open_beats(blobs, ring, now).into_iter().map(|(h, b)| (h, b.at)).collect()
 }
 
+/// How far ahead of this device's clock a beat's `seq` (its sender's clock,
+/// in milliseconds) may be.
+const SEQ_SKEW_MS: u64 = 10 * 60 * 1000;
+
+/// Whether a beat's `seq` could be its sender's clock now: a beat sealed
+/// with a `seq` from the far future (by any workspace key holder, or by a
+/// host whose clock jumped ahead) would otherwise win over every genuine
+/// later beat and pin that host's coverage until every reader restarts.
+fn seq_plausible(seq: u64, now_secs: i64) -> bool {
+    let now_ms = u64::try_from(now_secs).unwrap_or(0).saturating_mul(1000);
+    seq <= now_ms.saturating_add(SEQ_SKEW_MS)
+}
+
 /// Like [`open_host_beats`], with each host's whole beat (coverage
 /// included). Of several beats for one host, the highest `seq` wins (ties
 /// by `at`); a beat whose coverage breaks the bounds keeps its liveness and
@@ -88,8 +101,9 @@ pub fn open_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64
         }
         let mut beat = beat;
         beat.at = beat.at.min(now);
-        if !beat.coverage_ok() {
+        if !beat.coverage_ok() || !seq_plausible(beat.seq, now) {
             beat.coverage.clear();
+            beat.seq = 0;
         }
         match out.get(&beat.host_id) {
             Some(old) if (old.seq, old.at) >= (beat.seq, beat.at) => {}
@@ -167,7 +181,7 @@ impl HostPresence {
     /// last coverage alone).
     pub fn record_beat(&self, beat: &Beat) {
         self.record(&beat.host_id, beat.at);
-        if beat.coverage.is_empty() || !beat.coverage_ok() {
+        if beat.coverage.is_empty() || !beat.coverage_ok() || !seq_plausible(beat.seq, Timestamp::now().inner().unix_timestamp()) {
             return;
         }
         let mut c = self.coverage.lock().unwrap_or_else(|p| p.into_inner());
@@ -290,6 +304,28 @@ mod tests {
         let opened = open_beats(&blobs, &k, 1_000);
         assert!(opened["big"].coverage.is_empty());
         assert_eq!(HostPresence::new().coverage_of("nobody"), None);
+    }
+
+    /// A beat whose `seq` is from the far future (a forged beat sealed by any
+    /// workspace key holder, or a host whose clock jumped ahead) must not pin
+    /// a host's coverage forever: the host's genuine later beats still win.
+    #[test]
+    fn far_future_seq_never_pins_coverage() {
+        use hive_core::workspace_repo::{CoverageEntry, HostBeat};
+        let entry = |state: &str| CoverageEntry { repo_id: uuid::Uuid::nil(), state: state.into(), code: String::new(), via_fork: false };
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let forged = HostBeat { host_id: "box".into(), at: 1, seq: u64::MAX, coverage: vec![entry("missing")] };
+        let real = HostBeat { host_id: "box".into(), at: 2, seq: now_ms, coverage: vec![entry("present")] };
+        let p = HostPresence::new();
+        p.record_beat(&forged);
+        p.record_beat(&real);
+        assert_eq!(p.coverage_of("box").unwrap()[0].state, "present");
+        // Opened from the relay: the same.
+        let k = key("room secret");
+        let mut blobs = HashMap::new();
+        blobs.insert(host_presence_slot("box"), seal_beat(&k, &forged).unwrap());
+        let opened = open_beats(&blobs, &k, (now_ms / 1000) as i64);
+        assert!(opened.get("box").is_none_or(|b| b.coverage.is_empty()), "a far-future seq carries no coverage");
     }
 
     #[tokio::test]
