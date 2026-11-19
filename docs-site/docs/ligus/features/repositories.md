@@ -61,6 +61,52 @@ If you reach a forge through an SSH alias (`Host github-work` in
 `~/.ssh/config`), tell this device what the alias means:
 `ligus repos alias github-work github.com`. The alias map stays on the device.
 
+### Aliases the workspace shares
+
+Some names belong to the whole workspace rather than one device: the old
+owner of a repository that moved (`github.com/old-org/wefit` for WeFit), a
+different spelling on a case-sensitive server (`git.example.com/ops/infra`
+for `git.example.com/Ops/Infra`), or the SSH host a self-hosted forge serves
+from (`ssh.git.example.com` for `git.example.com`). An Admin can name them
+once for everyone:
+
+- **Repository aliases**: **Aliases…** on a repository in **Settings →
+  Repositories**, or `ligus repos repo-alias <repo> <name>…`. At most eight
+  per repository.
+- **Host aliases**: the **Host aliases** section, or
+  `ligus repos host-alias <alias-host> <repository-host>`. The target must be
+  the host of a repository in the workspace. At most sixteen.
+
+Each change needs an Admin's passkey (rules v2), like adding a repository.
+Agents and phones can't make one.
+
+Aliases are **names only**. They change how a device recognizes a checkout,
+never where git connects: a clone always uses the repository's own canonical
+name through this device's code-host connection, and an alias never carries a
+scheme, user, port or address.
+
+A shared alias changes nothing on a device until someone there accepts it:
+**accept here** next to the alias, or `ligus repos accept <alias>`. Accepting
+records what the alias points to, so if an Admin later points it somewhere
+else, it stops counting here until someone accepts it again; if the Admin
+removes it, it stops counting everywhere. A checkout that matches only through
+an alias shows "via alias", and a checkout found by a scan still needs
+**Use it**.
+
+Ligus refuses an alias that would make two repositories hard to tell apart:
+
+- an alias that is already a repository's name or another repository's alias;
+- a look-alike of either (Ligus compares names with `0`/`o`, `1`/`l`/`i`,
+  `rn`/`m` and `vv`/`w` folded and `.`, `-`, `_` ignored), except a spelling
+  that differs from the repository's own name only in upper and lower case;
+- a host alias for a host a repository already uses, or a look-alike of one;
+- a new repository whose name an alias already holds, or that sits on an
+  aliased host.
+
+When two Admins set clashing aliases at once, the one the log orders first
+wins on every device and the other has no effect. Removing a repository drops
+its aliases.
+
 ### Forks
 
 A fork is not a separate repository. A checkout covers WeFit when its
@@ -119,6 +165,32 @@ While a host is cloning the repository, a turn it has already claimed waits
 for the clone (up to ten minutes). Coverage shown elsewhere is a hint: the
 router skips an agent whose host says it lacks the chat's repository, and a
 workflow names the stage whose host has none before it starts.
+
+### Which device answers
+
+When several devices could answer a turn (your laptop and your desktop for
+your own agents, or a box and a desktop that both have the repository), they
+settle it through the chat itself:
+
+- Each device that may answer writes a signed claim. A device that has a
+  confirmed checkout of the chat's repository says so in its claim, and a
+  device without one waits a few seconds first, so a host that has the code
+  claims first. A claim from a host with the code takes the turn from one
+  without it.
+- Every device reads the claims in the same order and agrees on one holder.
+  Only the holder's answer counts: if two devices answered at once (for
+  example during a network split), every device keeps the first and hides
+  the other.
+- If the holder goes quiet (no answer within about 25 seconds and no longer
+  online), another device that may answer takes the turn over and answers
+  it. A device that was revoked, or whose person left the workspace, loses
+  its turns at once, and nothing it writes afterwards counts.
+- A device on its own (no relay, or a workspace with only you in it) always
+  answers its own turns.
+- While devices run mixed versions, an older build reads a hand-over as a
+  plain claim and keeps the first holder, so it may show a duplicate answer
+  the newer devices hide (design notes:
+  `docs/design/v2/repos-and-checkouts.md`, section 11.6).
 
 ## Applying proposals across devices
 

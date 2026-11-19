@@ -5,8 +5,10 @@ Status: **implemented in Ligus 0.1.0 with the review's required changes**
 `docs-site/docs/ligus/features/repositories.md`). Where this design and the
 review differ, the review's required changes won: no digest v2 (the sticky
 repo and the digest parts already bind it), coverage on the presence beat
-rather than the log, workspace-synced aliases dropped (SSH host aliases are
-device-local), the host is the only turn gate. What is left is listed in the
+rather than the log, the host is the only turn gate. Workspace-synced
+aliases, first dropped (SSH host aliases are device-local), came back in
+section 12 with the review's R2 rules, and the device-keyed dispatcher the
+review sequenced Phase 2 after is section 11. What is left is listed in the
 implementation notes at the end. Written 2026-11-16 against
 `release/v2.0.0` (Ligus is short for *ligustica*, the Italian honeybee).
 Citations are `file:line` or `file` + function name; line numbers drift, and
@@ -836,9 +838,15 @@ review keeps driving another host phone-only), the composer warning naming a
 pinned agent's host, per-turn catalog and trust resolution for a chat whose
 repo differs from the viewed one (the turn's directory is per chat; MCP and
 runtime catalogs still follow the viewed folder), workspace-synced repo and
-host aliases (Phase 4, presence-gated, review R2), the device-keyed
-dispatcher the review sequences Phase 2 after (architecture-review 4.9), and
-renaming the `hive/` branch prefix.
+and renaming the `hive/` branch prefix.
+
+Built since (2026-11-18, branch `feat/device-dispatcher`): the device-keyed
+dispatcher (section 11: `hive_core::dispatch`, `ChatService::dispatch_turn`,
+both desktop gates, the deferred claim, hand-offs and the worker) and
+workspace-synced repo and host aliases (section 12). Still open from those:
+workflow stage claims (`offer_stage_here`) and the desktop's regenerate and
+revision turns still use the plain first claim, and the phone app shows the
+aliases the box API now lists only once the phone repository adopts them.
 
 ---
 

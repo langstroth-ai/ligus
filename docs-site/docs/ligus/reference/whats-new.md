@@ -17,6 +17,19 @@ Full release notes are on the
   apply never half-applies. See
   [Workspace repositories](../features/repositories.md) and
   [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
+- **One answer per turn, from a device that has the code.** When several
+  devices could answer a turn, they agree through signed claims: a host with
+  a checkout of the chat's repository claims first and takes the turn from
+  one without it, a duplicate answer from a network split is hidden on every
+  device, a holder that goes quiet is replaced after about 25 seconds, and a
+  revoked device loses its turns at once. See
+  [Which device answers](../features/repositories.md#which-device-answers).
+- **Shared repository and host aliases.** An Admin can name a repository's
+  other spellings (an old owner, a case split) and a forge's SSH host once for
+  the whole workspace, with a passkey. They are names only, never where git
+  connects, refuse look-alikes, and count on a device only after someone
+  there accepts them. See
+  [Aliases the workspace shares](../features/repositories.md#aliases-the-workspace-shares).
 - **The phone acts as you with its own key; one host applies.** Since the
   box is its own service member, what you do as yourself from the phone
   (post, approve or reject, answer an agent's question, clear a lockdown,

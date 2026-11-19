@@ -70,14 +70,23 @@ ligus repos confirm <repo> <path>    # use a found checkout
 ligus repos unbind <repo> [path]
 ligus repos roots add <folder>       # scan this folder too
 ligus repos scan
-ligus repos alias github-work github.com   # an SSH host alias, for identity only
+ligus repos alias github-work github.com   # this box's own SSH host alias, for identity only
+ligus repos aliases                  # the workspace's shared aliases, and which this box accepted
+ligus repos accept ssh.git.example.com      # use a shared alias here (names only)
 ligus repos chat <chat-id> <repo|none> [--branch B]
 ligus repos coverage on|off|default
 ligus repos takeover <path>          # manage a checkout whose host is gone
 ```
 
 A box is a service member, at most Contributor, so it can't add or remove
-workspace repositories; an Admin does that from a desktop or the phone.
+workspace repositories or change their shared aliases; an Admin does that from
+a desktop or the phone. The box does decide, like every host, whether it
+accepts a shared alias for itself.
+
+When the box and a desktop could both answer a turn, the one with a checkout
+of the chat's repository claims it first, and if the holder goes quiet the
+other takes it over (see
+[Which device answers](../../ligus/features/repositories.md#which-device-answers)).
 
 ## Connect the box to your code hosts (once)
 

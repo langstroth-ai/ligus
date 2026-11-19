@@ -514,6 +514,8 @@ The relay operator can do the same without M. This defeats "the key is never on 
 
 **Status (code, 2026-11-16).** Not yet met for chat turns. `TurnClaimed` resolves deterministically (the first claim in canonical fold order wins, `ChatService::claim_turn`), and a device that has synced a competing claim backs off, but two devices that both claim within one sync round trip can both run and post; the streaming placeholder is the second-line guard.
 
+**Status (code, 2026-11-18).** Met for committed results ([repos-and-checkouts](repos-and-checkouts.md) section 11). The dispatcher (`hive_core::dispatch`) is keyed by **device id**: a claim is signed by the device it names and may carry an epoch, the holder it supersedes and signed coverage of the chat's repo; the answer (a reply whose verified origin is that device) is the commit, and every other answer to the turn is marked superseded in the fold. Both dispatch gates, the deferred claim, hand-offs and the worker call `ChatService::dispatch_turn`. Tested by `prop_dispatch_converges_and_commits_at_most_once` (N devices, partitions, crashes, reorderings, a revoked device writing backdated claims). Executions are not exactly-once: a partition can still run a turn twice; only one result commits.
+
 **Hidden assumptions.**
 - Actor id identifies a device (broken by delegation).
 - Only the desktop answers unbound agents.
