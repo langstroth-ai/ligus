@@ -516,7 +516,14 @@ impl Scanner {
 }
 
 fn find_on_path(bin: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(bin)).find(|c| c.is_file()))
+    find_in(bin, &std::env::var_os("PATH")?)
+}
+
+/// `bin` in the absolute directories of a `PATH` value. A relative entry
+/// (`.`, an empty one) would resolve against wherever Ligus was started,
+/// such as a repository a scanner of the same name could be planted in.
+fn find_in(bin: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path).filter(|d| d.is_absolute()).map(|d| d.join(bin)).find(|c| c.is_file())
 }
 
 #[cfg(test)]
@@ -757,5 +764,18 @@ mod tests {
         let missing = Scanner { program: dir.path().join("nope"), args: vec![], timeout: Duration::from_secs(1) };
         assert!(matches!(missing.scan(&file), ScanResult::Failed { .. }));
         assert!(!dir.path().join("pwned").exists(), "the path never reached a shell");
+        // Second review: "auto" never finds a scanner through a relative PATH
+        // entry (the directory Ligus was started in).
+        let cwd = std::env::current_dir().unwrap();
+        let rel = dir.path().strip_prefix(&cwd).map(|p| p.to_path_buf()).unwrap_or_else(|_| {
+            let mut up = PathBuf::new();
+            for _ in cwd.components().skip(1) {
+                up.push("..");
+            }
+            up.join(dir.path().strip_prefix("/").unwrap())
+        });
+        assert!(rel.is_relative());
+        assert!(find_in("clean.sh", rel.as_os_str()).is_none(), "{rel:?}");
+        assert_eq!(find_in("clean.sh", dir.path().as_os_str()), Some(dir.path().join("clean.sh")));
     }
 }
