@@ -10,6 +10,7 @@
 //! in the way), or `update-ref <new> <old>` when no worktree is checked out.
 //! Either the branch moves to exactly one new commit, or nothing changes.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -168,10 +169,29 @@ pub fn apply_to_chat_branch(
     Ok(Applied { base: tip, commit, tree, three_way })
 }
 
-/// Whether the chat branch carries a commit with `trailer: id`.
+/// The values of `trailer` in the **trailer blocks** of the chat branch's
+/// commits (each message's last paragraph, never its subject or body),
+/// only on commits since `base` when one is given (the chat's pinned base:
+/// nothing before it is a Ligus apply for this chat). An apply commit's
+/// subject carries the proposal's title, which its producing agent wrote,
+/// so a plain message grep would let a title such as "Ligus-Revert: <id>"
+/// make a replay skip another proposal or its revert.
+pub fn branch_trailer_values(checkout: &Path, chat_id: &str, trailer: &str, base: Option<&str>) -> HashSet<String> {
+    let branch = branch_ref(chat_id);
+    let range = match base.filter(|b| hive_core::workspace_repo::is_commit_id(b)) {
+        Some(b) => format!("{b}..{branch}"),
+        None => branch,
+    };
+    let format = format!("--format=%(trailers:key={trailer},valueonly,separator=%x0a)");
+    git(checkout, &["log", &format, &range, "--"])
+        .map(|out| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Whether the chat branch carries a commit whose trailer block has
+/// `trailer: id` ([`branch_trailer_values`]).
 pub fn branch_has_trailer(checkout: &Path, chat_id: &str, trailer: &str, id: Uuid) -> bool {
-    let grep = format!("--grep={trailer}: {id}");
-    git(checkout, &["log", "-1", "--format=%H", "--fixed-strings", &grep, &branch_ref(chat_id)]).is_ok_and(|c| !c.is_empty())
+    branch_trailer_values(checkout, chat_id, trailer, None).contains(&id.to_string())
 }
 
 /// The message of an apply commit for proposal `id` (with extra trailers).
@@ -190,22 +210,27 @@ pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String 
 /// crash mid-way picks up at the next one. A patch whose content is already
 /// on the branch (applied before trailers existed) counts as present.
 /// Returns how many commits it made; an entry that conflicts stops it.
-pub fn replay_ledger(checkout: &Path, chat_id: &str, entries: &[LedgerEntry]) -> Result<usize, String> {
+pub fn replay_ledger(checkout: &Path, chat_id: &str, entries: &[LedgerEntry], base: Option<&str>) -> Result<usize, String> {
+    let mut applied_ids = branch_trailer_values(checkout, chat_id, PROPOSAL_TRAILER, base);
+    let mut reverted_ids = branch_trailer_values(checkout, chat_id, REVERT_TRAILER, base);
     let mut made = 0;
     for e in entries {
-        let applied = branch_has_trailer(checkout, chat_id, PROPOSAL_TRAILER, e.proposal_id);
+        let id = e.proposal_id.to_string();
+        let applied = applied_ids.contains(&id);
         if !e.reverted && !applied {
             let tip = git(checkout, &["rev-parse", &branch_ref(chat_id)])?;
             if tree_for(checkout, &tip, &e.diff, true).is_ok() && tree_for(checkout, &tip, &e.diff, false).is_err() {
                 continue; // already there, without a trailer
             }
             apply_to_chat_branch(checkout, chat_id, &e.diff, &apply_message("replayed from the chat's ledger", e.proposal_id, &[]), false, None)
-                .map_err(|err| format!("proposal {} ({err})", &e.proposal_id.to_string()[..8]))?;
+                .map_err(|err| format!("proposal {} ({err})", &id[..8]))?;
+            applied_ids.insert(id);
             made += 1;
-        } else if e.reverted && applied && !branch_has_trailer(checkout, chat_id, REVERT_TRAILER, e.proposal_id) {
+        } else if e.reverted && applied && !reverted_ids.contains(&id) {
             let msg = format!("Revert proposal\n\n{REVERT_TRAILER}: {}\n", e.proposal_id);
             apply_to_chat_branch(checkout, chat_id, &e.diff, &msg, true, None)
-                .map_err(|err| format!("reverting proposal {} ({err})", &e.proposal_id.to_string()[..8]))?;
+                .map_err(|err| format!("reverting proposal {} ({err})", &id[..8]))?;
+            reverted_ids.insert(id);
             made += 1;
         }
     }

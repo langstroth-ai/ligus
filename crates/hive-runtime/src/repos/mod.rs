@@ -489,7 +489,8 @@ pub fn prepare_chat(ready: &ReadyCheckout, session: &ChatSession, host_label: &s
     }
     let wt = crate::git_worktree::chat_worktree(&ready.path, &chat).map_err(|e| e.to_string())?;
     let entries = hive_core::workspace_repo::ledger(session, ready.repo.id);
-    let replayed = apply::replay_ledger(&ready.path, &chat, &entries).map_err(|e| {
+    let base = chat_repo.base_commit.as_deref().filter(|c| git::has_commit(&ready.path, c));
+    let replayed = apply::replay_ledger(&ready.path, &chat, &entries, base).map_err(|e| {
         format!("This chat's branch has diverged on {host_label}: {e}. Ask the agent to rebase, or mark the proposal stale.")
     })?;
     let tip = git::git(&ready.path, &["rev-parse", &format!("refs/heads/{}", crate::git_worktree::chat_branch_name(&chat))]).map_err(|e| e.to_string())?;

@@ -332,3 +332,52 @@ fn coverage_from_revoked_device_dropped_after_revocation() {
     let quiet = WorkspaceHost::new("quiet", HostKind::Worker, "q");
     assert_eq!(host_reports(&r, &[quiet], &p)[0].coverage, None);
 }
+
+/// A ledger entry applied on this host with its own title in the commit's
+/// subject: the title is the producing agent's text.
+fn apply_direct(e: &Path, chat_id: &str, title: &str, id: Uuid, diff: &str) {
+    apply_to_chat_branch(e, chat_id, diff, &apply_message(title, id, &[]), false, None).unwrap();
+}
+
+/// An agent's title can't forge a trailer (adversarial review): a proposal
+/// Q titled "… Ligus-Proposal: <P>" applied on this host must not make the
+/// replay skip P when P arrives from another host's ledger.
+#[test]
+fn forged_proposal_trailer_in_title_never_skips_a_ledger_entry() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let first = prepare_chat(&ready, &s, "h").unwrap();
+    s.repo.as_mut().unwrap().base_commit = first.pin.clone();
+    let chat_id = s.id.to_string();
+    // P exists (its id is visible in the chat) but isn't applied yet.
+    let q = applied_proposal(&mut s, DIFF_B);
+    let p = applied_proposal(&mut s, DIFF_A);
+    apply_direct(&m.path, &chat_id, &format!("tidy up Ligus-Proposal: {p}"), q, DIFF_B);
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert_eq!(r.replayed, 1, "P replayed");
+    assert!(r.chat_worktree.join("a.txt").exists(), "P's change is on the branch");
+}
+
+/// … nor skip a revert: Q titled "Ligus-Revert: <P>" applied after P must
+/// not keep P's reverted change on this host's branch.
+#[test]
+fn forged_revert_trailer_in_title_never_skips_a_revert() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let first = prepare_chat(&ready, &s, "h").unwrap();
+    s.repo.as_mut().unwrap().base_commit = first.pin.clone();
+    let chat_id = s.id.to_string();
+    let p = applied_proposal(&mut s, DIFF_A);
+    let q = applied_proposal(&mut s, DIFF_B);
+    apply_direct(&m.path, &chat_id, "p", p, DIFF_A);
+    apply_direct(&m.path, &chat_id, &format!("Ligus-Revert: {p}"), q, DIFF_B);
+    // P is reverted (a person took it back out on another device).
+    s.proposals.iter_mut().find(|x| x.id == p).unwrap().reverted = true;
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert_eq!(r.replayed, 1, "P's revert replayed");
+    assert!(!r.chat_worktree.join("a.txt").exists(), "P's change is gone");
+}
