@@ -665,7 +665,15 @@ async fn peer_names_reach_the_api_cleaned() {
     assert!(!hidden(&one), "{one}");
     let channels = h.get("/v1/channels").await;
     assert!(!hidden(&channels), "{channels}");
-    let details = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    // The workflow run can land a sync round after the chat itself.
+    let mut details = Value::Null;
+    for _ in 0..50 {
+        details = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+        if details["workflowRuns"].as_array().is_some_and(|r| !r.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     assert_eq!(details["workflowRuns"][0]["name"], "Shipgnp.exe x");
     assert!(!hidden(&details), "{details}");
     let chats = h.get("/v1/chats").await;
