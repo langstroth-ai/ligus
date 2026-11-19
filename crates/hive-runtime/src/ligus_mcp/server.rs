@@ -869,7 +869,8 @@ impl LigusMcp {
             return fail(Outcome::Denied, e);
         }
         let offer = hive_core::attachment::AttachmentRef {
-            id: Uuid::new_v4(),
+            // Bound to this host and the proposal when it is filed.
+            id: Uuid::nil(),
             blob_id: String::new(),
             sha256: prepared.sha256.clone(),
             size: prepared.plaintext.len() as u64,

@@ -284,6 +284,22 @@ pub fn parse_markers(body: &str) -> Vec<Uuid> {
     out
 }
 
+/// The id a share of `blob_id` signed by `signer_device` carries. An
+/// attachment id is bound to the device that shares it, so no other member
+/// can claim (squat) someone's id with a share of their own sorted first: a
+/// member may name an older log head, so "the first share of an id wins"
+/// alone would let any sharer suppress anyone's file (second review).
+pub fn share_id(signer_device: Uuid, blob_id: &str) -> Uuid {
+    Uuid::new_v5(&signer_device, format!("ligus-attachment/blob/{blob_id}").as_bytes())
+}
+
+/// The id an agent's offer (proposal `proposal_id`, produced on
+/// `host_device`) names, and the share that carries it out keeps: bound to
+/// the producing host, which alone may share it.
+pub fn offer_id(host_device: Uuid, proposal_id: Uuid) -> Uuid {
+    Uuid::new_v5(&host_device, format!("ligus-attachment/offer/{proposal_id}").as_bytes())
+}
+
 /// Whether `s` is a lowercase hex SHA-256.
 pub fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))

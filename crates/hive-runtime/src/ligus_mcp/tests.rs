@@ -1115,6 +1115,7 @@ async fn an_agent_offers_files_only_as_proposals_and_only_when_allowed() {
     let p = session.proposals.iter().find(|p| p.id == pid).unwrap();
     let a = p.attachment.as_deref().unwrap();
     assert_eq!((a.name.as_str(), a.blob_id.as_str(), p.produced_on), ("report.md", "", Some(svc.device_id())));
+    assert_eq!(a.id, hive_core::attachment::offer_id(svc.device_id(), pid), "the offer's id is bound to its host");
     assert_eq!(p.status, hive_core::ProposalStatus::Open, "nothing is shared until a person approves");
     assert!(session.attachments.is_empty());
     assert_eq!(w.host.staged.lock().unwrap()[0].0, a.sha256);

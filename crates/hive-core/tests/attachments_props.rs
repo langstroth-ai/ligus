@@ -14,7 +14,8 @@
 //! 4. one attachment id is one file; a deletion is its sharer's or an
 //!    Admin's;
 //! 5. only an Admin with presence changes the policy or lifts a block;
-//! 6. a revoked device's later shares never fold.
+//! 6. a revoked device's later shares never fold;
+//! 7. an allowed share's id is bound to the device that signed it.
 //!
 //! Plus the pure checks: a cleaned name is always one safe component and
 //! cleaning is idempotent; type detection, assessment and zip inspection
@@ -47,7 +48,8 @@ enum Op {
     Block { by: u8, hash: u8 },
     Unblock { by: u8, hash: u8, presence: bool },
     Share { by: u8, chat: u8, name: u8, hash: u8, kb: u16, slot: u8 },
-    Delete { by: u8, chat: u8, slot: u8 },
+    /// `by` deletes the file `of` shared in `slot`.
+    Delete { by: u8, chat: u8, slot: u8, of: u8 },
     Revoke { who: u8 },
     Remove { who: u8 },
 }
@@ -59,7 +61,7 @@ fn op() -> impl Strategy<Value = Op> {
         (0u8..5, 0u8..3).prop_map(|(by, hash)| Op::Block { by, hash }),
         (0u8..5, 0u8..3, any::<bool>()).prop_map(|(by, hash, presence)| Op::Unblock { by, hash, presence }),
         (0u8..5, 0u8..2, 0u8..6, 0u8..3, 1u16..2048, 0u8..6).prop_map(|(by, chat, name, hash, kb, slot)| Op::Share { by, chat, name, hash, kb, slot }),
-        (0u8..5, 0u8..2, 0u8..6).prop_map(|(by, chat, slot)| Op::Delete { by, chat, slot }),
+        (0u8..5, 0u8..2, 0u8..6, 0u8..5).prop_map(|(by, chat, slot, of)| Op::Delete { by, chat, slot, of }),
         (2u8..4).prop_map(|who| Op::Revoke { who }),
         (2u8..4).prop_map(|who| Op::Remove { who }),
     ]
@@ -95,7 +97,6 @@ fn run(ops: &[Op]) -> Run {
     w.admit("owner", "mara", WorkspaceRole::Contributor);
     w.admit("owner", "vic", WorkspaceRole::Viewer);
     let chats = [w.chat("owner", "one"), w.chat("adm", "two")];
-    let ids: Vec<Uuid> = (0..6).map(|i| Uuid::from_u128(0xa000 + i)).collect();
     let mut r = Run { w, chats, shares: vec![], deletes: vec![], governance: vec![], revoked: BTreeMap::new(), cut: BTreeSet::new() };
     for o in ops {
         match *o {
@@ -123,9 +124,12 @@ fn run(ops: &[Op]) -> Run {
             }
             Op::Share { by, chat, name, hash, kb, slot } => {
                 let by = WHO[by as usize];
+                let blob_id = format!("{:0>43}", slot);
                 let a = AttachmentRef {
-                    id: ids[slot as usize],
-                    blob_id: format!("{:0>43}", slot),
+                    // Bound to the sharer's device (a second share of a
+                    // slot by one device reuses the id and is refused).
+                    id: attachment::share_id(r.w.people[by].device_id, &blob_id),
+                    blob_id,
                     sha256: HASHES[hash as usize].into(),
                     size: kb as u64 * 1024,
                     content_type: "application/octet-stream".into(),
@@ -137,11 +141,12 @@ fn run(ops: &[Op]) -> Run {
                 let id = r.w.say(c, by, SessionEvent::AttachmentShared { attachment: a.clone() });
                 r.shares.push((id, c, by.into(), a));
             }
-            Op::Delete { by, chat, slot } => {
+            Op::Delete { by, chat, slot, of } => {
                 let by = WHO[by as usize];
                 let c = r.chats[chat as usize];
-                let id = r.w.say(c, by, SessionEvent::AttachmentDeleted { attachment_id: ids[slot as usize] });
-                r.deletes.push((id, c, by.into(), ids[slot as usize]));
+                let target = attachment::share_id(r.w.people[WHO[of as usize]].device_id, &format!("{:0>43}", slot));
+                let id = r.w.say(c, by, SessionEvent::AttachmentDeleted { attachment_id: target });
+                r.deletes.push((id, c, by.into(), target));
             }
             Op::Revoke { who } => {
                 let who = WHO[who as usize];
@@ -201,6 +206,8 @@ proptest! {
             // 2. Never an outsider.
             prop_assert_ne!(author.as_str(), "eve");
             let env = w.chats[chat].iter().find(|e| e.event_id == *id).unwrap();
+            // 7. Its id is bound to the device that signed it (no squatting).
+            prop_assert_eq!(a.id, attachment::share_id(env.signer_device_id.unwrap(), &a.blob_id));
             // 6. A revoked device's shares after its revocation never fold.
             if let Some(n) = r.revoked.get(&env.signer_device_id.unwrap()) {
                 prop_assert!(i < *n, "a revoked device's later share folded");

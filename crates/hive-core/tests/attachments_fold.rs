@@ -29,7 +29,8 @@ fn on(w: &mut SignedWorld) -> Uuid {
 fn file(name: &str, sha: &str, size: u64) -> AttachmentRef {
     AttachmentRef {
         id: Uuid::new_v4(),
-        blob_id: "b".repeat(43),
+        // A fresh relay blob per file (the relay mints one per upload).
+        blob_id: format!("{:b>43}", Uuid::new_v4().simple()),
         sha256: sha.into(),
         size,
         content_type: "application/octet-stream".into(),
@@ -37,6 +38,13 @@ fn file(name: &str, sha: &str, size: u64) -> AttachmentRef {
         message_id: None,
         proposal_id: None,
     }
+}
+
+/// `a` under the id bound to `who`'s device and its blob (what an honest
+/// sharer's device signs).
+fn by(w: &SignedWorld, who: &str, mut a: AttachmentRef) -> AttachmentRef {
+    a.id = hive_core::attachment::share_id(w.people[who].device_id, &a.blob_id);
+    a
 }
 
 fn share(a: &AttachmentRef) -> SessionEvent {
@@ -60,7 +68,7 @@ fn the_policy_is_an_admins_with_presence_and_off_by_default() {
     let mut w = world();
     assert!(!w.roster().attachments.policy.enabled, "attachments must start off");
     let chat = w.chat("owner", "c");
-    let early = w.say(chat, "mara", share(&file("a.pdf", H1, 10)));
+    let early = w.say(chat, "mara", share(&by(&w, "mara", file("a.pdf", H1, 10))));
     assert_eq!(w.verdict(early), Verdict::Denied, "a share before any policy folds");
     let p = SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy::recommended() };
     let by_contributor = w.push("mara", p.clone());
@@ -82,15 +90,15 @@ fn who_may_share_and_what() {
     let mut w = world();
     on(&mut w);
     let chat = w.chat("owner", "c");
-    let ok = w.say(chat, "mara", share(&file("report.pdf", H1, 10)));
-    let viewer = w.say(chat, "vic", share(&file("v.pdf", H1, 10)));
-    let outsider = w.say(chat, "bea", share(&file("b.pdf", H1, 10)));
-    let exe = w.say(chat, "mara", share(&file("tool.exe", H1, 10)));
-    let script = w.say(chat, "mara", share(&file("run.sh", H1, 10)));
-    let big = w.say(chat, "mara", share(&file("big.pdf", H1, AttachmentPolicy::recommended().max_bytes + 1)));
-    let dirty = w.say(chat, "mara", share(&file("../../etc/passwd", H1, 10)));
-    let bidi = w.say(chat, "mara", share(&file("x\u{202E}fdp.exe", H1, 10)));
-    let bad_hash = w.say(chat, "mara", share(&file("a.pdf", "nothex", 10)));
+    let ok = w.say(chat, "mara", share(&by(&w, "mara", file("report.pdf", H1, 10))));
+    let viewer = w.say(chat, "vic", share(&by(&w, "vic", file("v.pdf", H1, 10))));
+    let outsider = w.say(chat, "bea", share(&by(&w, "bea", file("b.pdf", H1, 10))));
+    let exe = w.say(chat, "mara", share(&by(&w, "mara", file("tool.exe", H1, 10))));
+    let script = w.say(chat, "mara", share(&by(&w, "mara", file("run.sh", H1, 10))));
+    let big = w.say(chat, "mara", share(&by(&w, "mara", file("big.pdf", H1, AttachmentPolicy::recommended().max_bytes + 1))));
+    let dirty = w.say(chat, "mara", share(&by(&w, "mara", file("../../etc/passwd", H1, 10))));
+    let bidi = w.say(chat, "mara", share(&by(&w, "mara", file("x\u{202E}fdp.exe", H1, 10))));
+    let bad_hash = w.say(chat, "mara", share(&by(&w, "mara", file("a.pdf", "nothex", 10))));
     let mut no_blob = file("a.pdf", H1, 10);
     no_blob.blob_id = "../x".into();
     let bad_blob = w.say(chat, "mara", share(&no_blob));
@@ -121,14 +129,14 @@ fn one_id_one_file_and_equivocation_drops_both() {
     let mut w = world();
     on(&mut w);
     let chat = w.chat("owner", "c");
-    let a = file("a.pdf", H1, 10);
+    let a = by(&w, "mara", file("a.pdf", H1, 10));
     let first = w.say(chat, "mara", share(&a));
     // Same attachment id, other content: refused (first wins).
     let second = w.say(chat, "ada", share(&AttachmentRef { sha256: H2.into(), ..a.clone() }));
     assert_eq!((w.verdict(first), w.verdict(second)), (Verdict::Allowed, Verdict::Denied));
     assert_eq!(w.state(chat).attachments[&a.id].attachment.sha256, H1);
     // Two signed envelopes under one event id with different files: neither folds.
-    let b = file("b.pdf", H1, 10);
+    let b = by(&w, "mara", file("b.pdf", H1, 10));
     let e1 = w.draft("mara", Some(chat), share(&b), None);
     let mut e2 = e1.clone();
     e2.payload = share(&AttachmentRef { sha256: H2.into(), ..b.clone() });
@@ -145,7 +153,7 @@ fn the_blocklist_is_an_admins_and_bites_at_its_position() {
     let mut w = world();
     on(&mut w);
     let chat = w.chat("owner", "c");
-    let before = w.say(chat, "mara", share(&file("a.pdf", H1, 10)));
+    let before = w.say(chat, "mara", share(&by(&w, "mara", file("a.pdf", H1, 10))));
     let by_contributor = w.push_bare("mara", SessionEvent::AttachmentHashBlocked { sha256: H1.into() });
     let bad = w.push_bare("ada", SessionEvent::AttachmentHashBlocked { sha256: "XYZ".into() });
     // Blocking only narrows: no presence needed.
@@ -155,13 +163,13 @@ fn the_blocklist_is_an_admins_and_bites_at_its_position() {
         [Verdict::Denied, Verdict::Denied, Verdict::Allowed]
     );
     assert!(w.roster().attachments.blocked.contains(H1));
-    let after = w.say(chat, "mara", share(&file("b.pdf", H1, 10)));
+    let after = w.say(chat, "mara", share(&by(&w, "mara", file("b.pdf", H1, 10))));
     assert_eq!((w.verdict(before), w.verdict(after)), (Verdict::Allowed, Verdict::Denied));
     // Lifting a block widens the rules: Admin and presence.
     let lift_bare = w.push_bare("ada", SessionEvent::AttachmentHashUnblocked { sha256: H1.into() });
     let lift = w.push("ada", SessionEvent::AttachmentHashUnblocked { sha256: H1.into() });
     assert_eq!((w.verdict(lift_bare), w.verdict(lift)), (Verdict::Denied, Verdict::Allowed));
-    let again = w.say(chat, "mara", share(&file("c.pdf", H1, 10)));
+    let again = w.say(chat, "mara", share(&by(&w, "mara", file("c.pdf", H1, 10))));
     assert_eq!(w.verdict(again), Verdict::Allowed);
 }
 
@@ -170,12 +178,12 @@ fn a_revoked_device_and_a_removed_member_share_nothing_past_their_watermark() {
     let mut w = world();
     on(&mut w);
     let chat = w.chat("owner", "c");
-    let kept = w.say(chat, "mara", share(&file("kept.pdf", H1, 10)));
+    let kept = w.say(chat, "mara", share(&by(&w, "mara", file("kept.pdf", H1, 10))));
     let wm = honest_watermark(&w, "mara");
     w.push("ada", SessionEvent::DeviceRevoked { device_id: w.people["mara"].device_id, watermark: wm });
-    let after_revoke = w.say(chat, "mara", share(&file("late.pdf", H1, 10)));
+    let after_revoke = w.say(chat, "mara", share(&by(&w, "mara", file("late.pdf", H1, 10))));
     // A backdated share from the revoked device (an old frontier): never folds.
-    let mut env = w.draft("mara", Some(chat), share(&file("backdated.pdf", H1, 10)), w.cfg.get(3).map(|e| hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id }));
+    let mut env = w.draft("mara", Some(chat), share(&by(&w, "mara", file("backdated.pdf", H1, 10))), w.cfg.get(3).map(|e| hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id }));
     env.clear_raw();
     sign_envelope(&mut env, w.people["mara"].device_id, &w.people["mara"].device);
     let backdated = w.push_env(Some(chat), env);
@@ -185,16 +193,16 @@ fn a_revoked_device_and_a_removed_member_share_nothing_past_their_watermark() {
     let mut w = world();
     on(&mut w);
     let chat = w.chat("owner", "c");
-    let kept = w.say(chat, "mara", share(&file("kept.pdf", H1, 10)));
+    let kept = w.say(chat, "mara", share(&by(&w, "mara", file("kept.pdf", H1, 10))));
     let wm = honest_watermark(&w, "mara");
     w.push("ada", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: wm });
-    let after_removal = w.say(chat, "mara", share(&file("late.pdf", H1, 10)));
+    let after_removal = w.say(chat, "mara", share(&by(&w, "mara", file("late.pdf", H1, 10))));
     assert_eq!((w.verdict(kept), w.verdict(after_removal)), (Verdict::Allowed, Verdict::Denied));
     // With an empty watermark nothing of theirs is vouched for.
     let mut w2 = world();
     on(&mut w2);
     let chat = w2.chat("owner", "c");
-    let uncovered = w2.say(chat, "mara", share(&file("x.pdf", H1, 10)));
+    let uncovered = w2.say(chat, "mara", share(&by(&w2, "mara", file("x.pdf", H1, 10))));
     w2.push("ada", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: vec![] });
     assert_eq!(w2.verdict(uncovered), Verdict::Denied);
 }
@@ -205,8 +213,8 @@ fn deletion_is_the_sharers_or_an_admins() {
     on(&mut w);
     w.admit("owner", "bea", WorkspaceRole::Contributor);
     let chat = w.chat("owner", "c");
-    let a = file("a.pdf", H1, 10);
-    let b = file("b.pdf", H1, 10);
+    let a = by(&w, "mara", file("a.pdf", H1, 10));
+    let b = by(&w, "mara", file("b.pdf", H1, 10));
     w.say(chat, "mara", share(&a));
     w.say(chat, "mara", share(&b));
     let by_peer = w.say(chat, "bea", SessionEvent::AttachmentDeleted { attachment_id: a.id });
@@ -234,10 +242,10 @@ fn a_share_names_only_its_sharers_own_message() {
     m.created_at = Timestamp::epoch();
     let mid = m.id;
     w.say(chat, "ada", SessionEvent::MessageAppended { message: m });
-    let mut a = file("a.pdf", H1, 10);
+    let mut a = by(&w, "mara", file("a.pdf", H1, 10));
     a.message_id = Some(mid);
     let theirs = w.say(chat, "mara", share(&a));
-    let mut b = file("b.pdf", H1, 10);
+    let mut b = by(&w, "ada", file("b.pdf", H1, 10));
     b.message_id = Some(mid);
     let own = w.say(chat, "ada", share(&b));
     assert_eq!((w.verdict(theirs), w.verdict(own)), (Verdict::Denied, Verdict::Allowed));
@@ -249,7 +257,7 @@ fn runtimes_phones_and_services_dont_share_by_default() {
     on(&mut w);
     let chat = w.chat("owner", "c");
     // The chat's runtime (a host-signed effect) can't share.
-    let mut env = w.draft("mara", Some(chat), share(&file("a.pdf", H1, 10)), None);
+    let mut env = w.draft("mara", Some(chat), share(&by(&w, "mara", file("a.pdf", H1, 10))), None);
     env.actor_stamp.as_mut().unwrap().runtime_effect = true;
     env.clear_raw();
     sign_envelope(&mut env, w.people["mara"].device_id, &w.people["mara"].device);
@@ -263,15 +271,20 @@ fn runtimes_phones_and_services_dont_share_by_default() {
     assert_eq!(w.verdict(by_phone), Verdict::Denied);
 }
 
-fn agent_offer(w: &mut SignedWorld, chat: Uuid, agent: Uuid, a: &AttachmentRef) -> (Uuid, Uuid) {
+/// mara's host files `agent`'s offer of `a` (under the id bound to her
+/// device and the proposal); returns the proposal, the event and the bound
+/// reference.
+fn agent_offer(w: &mut SignedWorld, chat: Uuid, agent: Uuid, a: &AttachmentRef) -> (Uuid, Uuid, AttachmentRef) {
     let mut p = ActionProposal::new("Share report", ProposalKind::Decision, agent.to_string());
     p.created_at = Timestamp::epoch();
     p.producing_agent_id = Some(agent);
     p.produced_on = Some(w.people["mara"].device_id);
+    let mut a = a.clone();
+    a.id = hive_core::attachment::offer_id(w.people["mara"].device_id, p.id);
     p.attachment = Some(Box::new(a.clone()));
     let pid = p.id;
     let ev = w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: p });
-    (pid, ev)
+    (pid, ev, a)
 }
 
 #[test]
@@ -283,16 +296,23 @@ fn an_agents_file_is_a_proposal_a_person_approves() {
     let mut offered = file("report.pdf", H1, 10);
     offered.blob_id = String::new();
     // Agents off (the recommended policy): the offer doesn't fold.
-    let (_, refused) = agent_offer(&mut w, chat, agent, &offered);
+    let (_, refused, _) = agent_offer(&mut w, chat, agent, &offered);
     assert_eq!(w.verdict(refused), Verdict::Denied);
     w.push("ada", SessionEvent::AttachmentPolicySet { policy: AttachmentPolicy { agents: true, ..AttachmentPolicy::recommended() } });
     // A blocked type stays blocked for agents too.
     let mut exe = offered.clone();
-    exe.id = Uuid::new_v4();
     exe.name = "x.exe".into();
-    let (_, exe_offer) = agent_offer(&mut w, chat, agent, &exe);
+    let (_, exe_offer, _) = agent_offer(&mut w, chat, agent, &exe);
     assert_eq!(w.verdict(exe_offer), Verdict::Denied);
-    let (pid, offer) = agent_offer(&mut w, chat, agent, &offered);
+    // An offer whose file id isn't bound to its host and proposal: refused.
+    let mut p = ActionProposal::new("Share report", ProposalKind::Decision, agent.to_string());
+    p.created_at = Timestamp::epoch();
+    p.producing_agent_id = Some(agent);
+    p.produced_on = Some(w.people["mara"].device_id);
+    p.attachment = Some(Box::new(offered.clone()));
+    let unbound = w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: p });
+    assert_eq!(w.verdict(unbound), Verdict::Denied);
+    let (pid, offer, offered) = agent_offer(&mut w, chat, agent, &offered);
     assert_eq!(w.verdict(offer), Verdict::Allowed);
     let mut shared = offered.clone();
     shared.blob_id = "c".repeat(43);
@@ -389,4 +409,57 @@ fn an_offer_names_its_own_signing_host_and_an_agent() {
     q.attachment = Some(Box::new(offered));
     let humans = w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: q });
     assert_eq!((w.verdict(forged), w.verdict(humans)), (Verdict::Denied, Verdict::Denied));
+}
+
+/// Second review: another member can't take over (squat) someone's attachment
+/// id by backdating a share of their own to sort first. A member may name an
+/// older log head (an offline device does), so "first share of an id wins"
+/// alone lets any sharer suppress anyone's file, an approved agent offer
+/// included.
+#[test]
+fn a_backdated_share_cant_squat_anothers_attachment_id() {
+    let mut w = world();
+    on(&mut w);
+    w.admit("owner", "bea", WorkspaceRole::Contributor);
+    let chat = w.chat("owner", "c");
+    let before = w.chats[&chat].len();
+    let a = by(&w, "mara", file("a.pdf", H1, 10));
+    let victim = w.say(chat, "mara", share(&a));
+    // bea saw mara's share and drafts her own under its id, counting from
+    // the log head before it, so it sorts first.
+    let squat = AttachmentRef { sha256: H2.into(), blob_id: "s".repeat(43), ..a.clone() };
+    let mut env = w.draft("bea", Some(chat), share(&squat), None);
+    hive_core::lamport::stamp_after(&mut env, &w.chats[&chat][..before]);
+    env.clear_raw();
+    sign_envelope(&mut env, w.people["bea"].device_id, &w.people["bea"].device);
+    let squatter = w.push_env(Some(chat), env);
+    assert_eq!(w.verdict(victim), Verdict::Allowed, "mara's own file stays hers");
+    assert_eq!(w.verdict(squatter), Verdict::Denied);
+    assert_eq!(w.state(chat).attachments[&a.id].author, "mara");
+}
+
+/// Second review: a forged copy (another signer's envelope under the event id
+/// of a genuine share) is no equivocation: the genuine share stays. On this
+/// base every two envelopes under one id drop out whoever signed them, so a
+/// member can suppress any share (or any event) by forging a copy; the
+/// same-signer-only rule lands with the forged-copy work
+/// (fix/forged-equivocation), which this test then holds to.
+#[test]
+#[ignore = "needs the same-signer-only equivocation rule (fix/forged-equivocation)"]
+fn a_forged_copy_of_a_share_doesnt_drop_the_genuine_one() {
+    let mut w = world();
+    on(&mut w);
+    w.admit("owner", "bea", WorkspaceRole::Contributor);
+    let chat = w.chat("owner", "c");
+    let a = by(&w, "mara", file("a.pdf", H1, 10));
+    let genuine = w.draft("mara", Some(chat), share(&a), None);
+    let mut forged = genuine.clone();
+    forged.payload = share(&AttachmentRef { sha256: H2.into(), ..a.clone() });
+    forged.actor_stamp.as_mut().unwrap().actor = w.people["bea"].actor();
+    forged.clear_raw();
+    sign_envelope(&mut forged, w.people["bea"].device_id, &w.people["bea"].device);
+    let id = w.push_env(Some(chat), genuine);
+    w.push_env(Some(chat), forged);
+    assert_eq!(w.verdict(id), Verdict::Allowed);
+    assert_eq!(w.state(chat).attachments[&a.id].attachment.sha256, H1);
 }

@@ -7,7 +7,9 @@
 //! * `AttachmentShared` lives on a chat log and is judged against the
 //!   workspace roster at its author's position: the policy in force there
 //!   (on, the author's kind and role, size, types), the blocklist there, a
-//!   fresh attachment id, the author's own certified device. A share that
+//!   fresh attachment id bound to the signing device
+//!   (`attachment::share_id`, or `attachment::offer_id` for an agent's
+//!   offer), the author's own certified device. A share that
 //!   carries out an agent's proposal must match the approved proposal's
 //!   file exactly, be signed by the host that produced it, and the policy
 //!   must let agents offer files.
@@ -83,6 +85,9 @@ pub fn payload_refusal(env: &SessionEventEnvelope, on_config: bool, checked: boo
             if proposal.produced_on.is_none() || proposal.produced_on != host {
                 return Some("an offered file names the host that produced it, which signs the offer".into());
             }
+            if host.is_none_or(|h| a.id != attachment::offer_id(h, proposal.id)) {
+                return Some("an offered file's id is bound to its host and proposal".into());
+            }
             let rules = &at.attachments;
             if !rules.policy.enabled || !rules.policy.agents {
                 return Some("agents can't offer files in this workspace".into());
@@ -119,10 +124,14 @@ pub fn share_ok(env: &SessionEventEnvelope, a: &AttachmentRef, fold: &ChatSessio
         }
     }
     match a.proposal_id {
-        // A person (or an allowed service) shares from their own device.
+        // A person (or an allowed service) shares from their own device,
+        // under the id bound to that device and the blob.
         None => {
             if !own_device(env, at) {
                 return Err("a file is shared from its sharer's own certified device".into());
+            }
+            if env.signer_device_id.is_none_or(|d| a.id != attachment::share_id(d, &a.blob_id)) {
+                return Err("an attachment id is bound to the device that shares it".into());
             }
         }
         // Carrying out an agent's approved offer.
