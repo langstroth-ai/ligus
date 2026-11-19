@@ -35,7 +35,7 @@ command); it prints to stderr and exits with status 2.
 |---|---|
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus whoami` | prints account id, device id, name, data dir and room |
-| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md) |
+| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md). Also prints the room's held events (`held events: N from M device(s), D dropped by a cap (R to fetch again from the relay), L given up, E expired` and their reasons): events this device can't judge yet, which never stop sync ([held events](../../operate/security/threat-model.md#held-events)) |
 
 ```console
 $ ligus whoami

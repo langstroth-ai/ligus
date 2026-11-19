@@ -95,7 +95,9 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         invite: Option<Uuid>,
         /// Redeeming a box admission (Phase B): the admission's redeem key's
-        /// signature over [`crate::admission::redemption_message`]. Left out
+        /// signature over [`crate::admission::redemption_message`]; redeeming
+        /// a person invite issued with a `redeemKey`: that key's signature
+        /// over [`crate::admission::person_redemption_message`]. Left out
         /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proof: Option<Vec<u8>>,
@@ -347,10 +349,19 @@ pub enum SessionEvent {
     /// `subject` `invite:<id>` issues a single-use invite; with `admission`
     /// it is a box admission (Phase B, [`crate::admission`]): it admits only
     /// a service member, until it expires. Left out when absent.
+    /// `redeemKey` (a person's invite, never with `admission`, which carries
+    /// its own): the Ed25519 public key whose secret rides only in the
+    /// invite code; the redemption must carry its signature
+    /// ([`crate::admission::person_redemption_message`]), so a member who
+    /// reads the invite id on the log can't redeem it in the invitee's place.
+    /// Left out when absent (an invite issued before it existed redeems as it
+    /// always did).
     JoinApproved {
         subject: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         admission: Option<crate::admission::Admission>,
+        #[serde(default, rename = "redeemKey", skip_serializing_if = "Option::is_none")]
+        redeem_key: Option<Vec<u8>>,
     },
     /// An Admin closes box admission `invite` (Phase B,
     /// [`crate::admission`]): `redeemed` names the one redemption the closer
@@ -1869,6 +1880,20 @@ fn fold_pass(
         }
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
+    // The account-key rules (`crate::account_keys`) read the whole log's
+    // certificates and registrations, never a position.
+    if ordered
+        .iter()
+        .any(|e| matches!(e.payload, SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. }))
+    {
+        tracker.set_key_index(std::sync::Arc::new(crate::account_keys::KeyIndex::of(ordered.iter().copied())), ordered[base]);
+        // Registrations sorting before the base (backdated to the log's
+        // start) count as they do at ingest: the rules read them wherever
+        // they sort. Plausible ones only, as everywhere.
+        for e in ordered[..base].iter().filter(|e| bounds.of_env(e) == crate::lamport::Plausibility::Plausible) {
+            tracker.register_key_before_base(e);
+        }
+    }
     // Whom each device vouched for anywhere on this log: who holds a device
     // never depends on a position (see `authz::DeviceState::holders`).
     if ordered.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
@@ -2225,6 +2250,9 @@ fn fold_pass(
         if let Some(t) = timeline.as_deref_mut() {
             t.push(env.canonical_key(), &tracker.state, changed);
         }
+    }
+    if let Some(t) = timeline.as_deref_mut() {
+        t.set_anchors(tracker.key_anchors());
     }
     session.authz.rules = match workspace {
         WorkspaceAuthz::Timeline(t) => t.current().rules,

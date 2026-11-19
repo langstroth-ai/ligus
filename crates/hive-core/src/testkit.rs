@@ -44,6 +44,13 @@ impl Person {
         .with_test_recovery()
     }
 
+    /// This person under account `id` (their actor id stays their name);
+    /// their test recovery key follows.
+    pub fn with_account_id(mut self, id: Uuid) -> Self {
+        self.account_id = id;
+        self.with_test_recovery()
+    }
+
     fn with_test_recovery(mut self) -> Self {
         self.recovery = test_recovery_key(self.account_id);
         self
@@ -94,9 +101,15 @@ impl SignedWorld {
     /// (the genesis `WorkspaceRulesSet`). The other people exist but aren't
     /// members; add them with [`SignedWorld::admit`].
     pub fn genesis(names: &[&str], policy: Option<PresencePolicy>) -> Self {
-        let people: BTreeMap<String, Person> = names.iter().map(|n| (n.to_string(), Person::new(n))).collect();
+        Self::genesis_of(names.iter().map(|n| Person::new(n)).collect(), policy)
+    }
+
+    /// [`SignedWorld::genesis`] with these people (the first founds).
+    pub fn genesis_of(people: Vec<Person>, policy: Option<PresencePolicy>) -> Self {
+        let founder_name = people[0].name.clone();
+        let people: BTreeMap<String, Person> = people.into_iter().map(|p| (p.name.clone(), p)).collect();
         let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), chats: BTreeMap::new(), people: Arc::new(people), kinds: BTreeMap::new() };
-        let founder = names[0];
+        let founder = founder_name.as_str();
         let mut seed = ChatSession::new("", w.wid, "");
         seed.id = workspace_config_session_id(w.wid);
         seed.creator_actor_id = founder.into();

@@ -56,7 +56,7 @@ fn world() -> SignedWorld {
 
 /// `by` issues a box admission for invite `id` (with presence).
 fn issue(w: &mut SignedWorld, by: &str, id: Uuid, admission: Admission) -> Uuid {
-    w.push(by, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(admission) })
+    w.push(by, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(admission), redeem_key: None })
 }
 
 /// `name` publishes its identity and redeems invite `id` as itself, at
@@ -128,7 +128,7 @@ fn a_person_invite_never_admits_a_box_and_an_admission_never_admits_a_person() {
     let mut w = world();
     // A person's invite.
     let person = Uuid::new_v4();
-    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(person), admission: None });
+    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(person), admission: None, redeem_key: None });
     let r = redeem(&mut w, "box", person, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Denied, "a box joins only through a box admission");
     // Nor without any invite.
@@ -166,7 +166,7 @@ fn issuing_an_admission_is_an_admins_with_presence_and_bounded() {
     let by_mara = issue(&mut w, "mara", id, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(by_mara), Verdict::Denied);
     // No presence: no.
-    let bare = w.push_bare("adm", SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())) });
+    let bare = w.push_bare("adm", SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None });
     assert_eq!(w.verdict(bare), Verdict::Denied);
     // Expiry before issuing, or beyond the bound: no.
     let past = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() - HOUR_MS, None, key().public()));
@@ -176,18 +176,18 @@ fn issuing_an_admission_is_an_admins_with_presence_and_bounded() {
     let human = issue(&mut w, "adm", Uuid::new_v4(), Admission { kind: ActorKind::Human, ..Admission::service(soon, None, key().public()) });
     assert_eq!(w.verdict(human), Verdict::Denied);
     // Not an invite subject: no.
-    let odd = w.push("adm", SessionEvent::JoinApproved { subject: "bob".into(), admission: Some(Admission::service(soon, None, key().public())) });
+    let odd = w.push("adm", SessionEvent::JoinApproved { subject: "bob".into(), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None });
     assert_eq!(w.verdict(odd), Verdict::Denied);
     // One admission per invite, and a person invite can't take its id.
     let id = Uuid::new_v4();
     let first = issue(&mut w, "adm", id, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(first), Verdict::Allowed);
     let twice = issue(&mut w, "owner", id, Admission::service(soon, Some(Uuid::new_v4()), key().public()));
-    let as_person = w.push("owner", SessionEvent::JoinApproved { subject: invite_subject(id), admission: None });
+    let as_person = w.push("owner", SessionEvent::JoinApproved { subject: invite_subject(id), admission: None, redeem_key: None });
     assert_eq!((w.verdict(twice), w.verdict(as_person)), (Verdict::Denied, Verdict::Denied));
     // A person invite's id can't become an admission.
     let p = Uuid::new_v4();
-    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(p), admission: None });
+    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(p), admission: None, redeem_key: None });
     let upgrade = issue(&mut w, "adm", p, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(upgrade), Verdict::Denied);
     // On a chat log: no.
@@ -195,7 +195,7 @@ fn issuing_an_admission_is_an_admins_with_presence_and_bounded() {
     let in_chat = w.write(
         "adm",
         Some(chat),
-        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())) },
+        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None },
         None,
         hive_core::testkit::Proof::Recovery,
     );
@@ -212,10 +212,10 @@ fn an_admin_admits_a_box_from_the_phone_with_presence() {
     let soon = now_ms() + HOUR_MS;
     let id = Uuid::new_v4();
     // Without presence: refused.
-    let bare = w.phone_write("adm", &phone, None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) });
+    let bare = w.phone_write("adm", &phone, None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None });
     assert_eq!(w.verdict(bare), Verdict::Denied);
     // With the person's presence over the phone-signed event: allowed.
-    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) }, None);
+    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None }, None);
     if let Some(s) = env.actor_stamp.as_mut() {
         s.actor.device_id = Some(phone.device_id);
         s.prev = w.cfg.iter().rev().find(|e| e.signer_device_id == Some(phone.device_id)).map(|e| e.event_id);
@@ -231,7 +231,7 @@ fn an_admin_admits_a_box_from_the_phone_with_presence() {
     let r = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Allowed);
     // The phone still issues no person invite and adds no one.
-    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None }, None);
+    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None, redeem_key: None }, None);
     env.actor_stamp.as_mut().unwrap().actor.device_id = Some(phone.device_id);
     let a = w.recovery_presence("adm", &env);
     env.actor_stamp.as_mut().unwrap().presence = Some(a);
@@ -255,8 +255,8 @@ fn a_service_member_cuts_no_one_and_admits_no_one() {
         },
         SessionEvent::DeviceRevoked { device_id: eve_device, watermark: vec![] },
         SessionEvent::MemberAdded { member: w.member_of("box2", WorkspaceRole::Viewer), invite: None, proof: None },
-        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None },
-        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(now_ms() + HOUR_MS, None, key().public())) },
+        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None, redeem_key: None },
+        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(now_ms() + HOUR_MS, None, key().public())), redeem_key: None },
     ];
     for e in cuts {
         let kind = e.kind_str();
@@ -320,15 +320,15 @@ fn a_service_members_device_is_revoked_like_any_device() {
 
 #[test]
 fn admission_terms_round_trip_and_stay_off_the_wire_when_absent() {
-    let plain = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: None };
+    let plain = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: None, redeem_key: None };
     assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"kind":"joinApproved","subject":"invite:x"}"#);
     let mut terms = Admission::service(5, None, key().public());
     terms.redeem_key = None;
-    let a = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(terms) };
+    let a = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(terms), redeem_key: None };
     let j = serde_json::to_string(&a).unwrap();
     assert_eq!(j, r#"{"kind":"joinApproved","subject":"invite:x","admission":{"kind":"service","expiresMs":5}}"#);
     assert_eq!(serde_json::from_str::<SessionEvent>(&j).unwrap(), a);
-    let keyed = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(Admission::service(5, None, key().public())) };
+    let keyed = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(Admission::service(5, None, key().public())), redeem_key: None };
     let j = serde_json::to_string(&keyed).unwrap();
     assert!(j.contains(r#""redeemKey":["#), "{j}");
     assert_eq!(serde_json::from_str::<SessionEvent>(&j).unwrap(), keyed);
@@ -534,7 +534,7 @@ fn a_phone_signs_only_the_admission_its_passkey_confirmed() {
         env
     };
     let id = Uuid::new_v4();
-    let mut env = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) });
+    let mut env = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None });
     let challenge = hive_core::presence::challenge(&env);
     env.actor_stamp.as_mut().unwrap().presence = Some(w.recovery_presence("adm", &env));
     env.clear_raw();
@@ -548,7 +548,7 @@ fn a_phone_signs_only_the_admission_its_passkey_confirmed() {
     // relays it swapping in its own device key).
     assert!(check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, Some(&[3; 32])).is_err());
     // Another admission than the passkey confirmed (a longer one, say).
-    let mut other = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon + 5 * HOUR_MS, None, key().public())) });
+    let mut other = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon + 5 * HOUR_MS, None, key().public())), redeem_key: None });
     other.actor_stamp.as_mut().unwrap().presence = env.actor_stamp.as_ref().unwrap().presence.clone();
     other.clear_raw();
     let swapped = hive_core::crypto::envelope_preimage(&other);

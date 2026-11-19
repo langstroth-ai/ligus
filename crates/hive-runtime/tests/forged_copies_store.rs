@@ -195,7 +195,8 @@ fn a_members_events_that_arrive_before_their_admission_are_not_refused() {
     d.deliver(&w.chats[&chat]);
     d.deliver(&admission);
     while d.fetch() {}
-    assert_eq!(d.engine.cursor(), d.relay.len() as u64, "nothing is held");
+    assert_eq!(d.engine.cursor(), d.relay.len() as u64, "the cursor reached the head");
+    assert!(d.store.held_events(w.wid).unwrap().is_empty(), "nothing is held");
     let got = d.chat(&w, chat);
     assert_eq!(got.title, "honest");
     assert_eq!(got.messages.len(), 1, "the message sent before the admission arrived is kept");
@@ -263,6 +264,14 @@ proptest! {
             while d.fetch() {
                 passes += 1;
                 prop_assert!(passes <= 3, "still held after {} re-fetches (cursor {} of {})", passes, d.engine.cursor(), d.relay.len());
+            }
+            // Held events never pin the cursor, and every honest one was
+            // released once what it waited for arrived.
+            prop_assert_eq!(d.engine.cursor(), d.relay.len() as u64);
+            // A stranger's forgery waits (its signer is never certified for
+            // the account it claims); nothing honest does.
+            for h in d.store.held_events(w.wid).unwrap() {
+                prop_assert!(h.env.signer_device_id == Some(w.people["eve"].device_id), "an honest event is still held: {}", h.env.payload.kind_str());
             }
             let got = d.chat(&w, chat);
             prop_assert_eq!(&got.title, &want.title);

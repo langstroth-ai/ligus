@@ -34,7 +34,9 @@ pub enum EventStoreError {
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
 
+mod held;
 mod repo_tables;
+pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
 pub use repo_tables::{CheckoutSource, RepoMapping};
 
 /// A chat responder's compaction state as kept on this device: the first
@@ -159,10 +161,21 @@ impl EventStore {
             );
 
             -- Device-local (Phase B): the redeem key seed of the box
-            -- admission this box redeems (from its admission code).
+            -- admission (or person invite) this device redeems (from its
+            -- code).
             CREATE TABLE IF NOT EXISTS join_redeem_keys (
                 workspace_id TEXT PRIMARY KEY,
                 seed         TEXT NOT NULL
+            );
+
+            -- Device-local: the redeem key seed of each person invite this
+            -- Admin's device issued, until its code is built (a passkey
+            -- confirmation can come between issuing and the code).
+            CREATE TABLE IF NOT EXISTS issued_invite_keys (
+                workspace_id TEXT NOT NULL,
+                invite_id    TEXT NOT NULL,
+                seed         TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, invite_id)
             );
 
             -- Device-local: the issue time (unix ms) of the newest contact
@@ -294,6 +307,7 @@ impl EventStore {
             "#,
         )?;
         repo_tables::init(&conn)?;
+        held::init(&conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn
@@ -1643,6 +1657,51 @@ impl EventStore {
             rusqlite::params![workspace_id.to_string(), hex],
         )?;
         Ok(())
+    }
+
+    /// Keep (or, with `None`, forget) the redeem key seed of the invite this
+    /// device redeems to join `workspace_id`: set with the invite, so a seed
+    /// from an earlier code never proves a later one.
+    pub fn set_join_redeem(&self, workspace_id: Uuid, seed: Option<&[u8; 32]>) -> Result<()> {
+        match seed {
+            Some(seed) => self.set_join_redeem_key(workspace_id, seed),
+            None => self.clear_join_redeem_key(workspace_id),
+        }
+    }
+
+    /// Keep the redeem key seed of person invite `invite_id` this device
+    /// issued, for its code.
+    pub fn set_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid, seed: &[u8; 32]) -> Result<()> {
+        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO issued_invite_keys (workspace_id, invite_id, seed) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace_id.to_string(), invite_id.to_string(), hex],
+        )?;
+        Ok(())
+    }
+
+    /// The redeem key seed of person invite `invite_id` this device issued,
+    /// forgotten here: its code carries it from now on.
+    pub fn take_issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
+        let seed = self.issued_invite_key(workspace_id, invite_id)?;
+        self.conn.execute(
+            "DELETE FROM issued_invite_keys WHERE workspace_id = ?1 AND invite_id = ?2",
+            rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
+        )?;
+        Ok(seed)
+    }
+
+    /// The redeem key seed of person invite `invite_id` this device issued.
+    pub fn issued_invite_key(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<Option<[u8; 32]>> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT seed FROM issued_invite_keys WHERE workspace_id = ?1 AND invite_id = ?2",
+                rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v.and_then(|h| crate::box_admission::seed_from_hex(&h)))
     }
 
     /// Forget the redeem key seed once the redemption it proved is written:

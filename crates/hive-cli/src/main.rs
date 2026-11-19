@@ -226,6 +226,8 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
     if let Some(inv) = inv {
         store.set_join_invite(uuid_of_room(&room), inv)?;
+        // Its redeem key proves the redemption (`hive_core::admission`).
+        store.set_join_redeem(uuid_of_room(&room), hive_runtime::box_admission::redeem_key_of(invite).as_ref())?;
     }
     if let Some((founder, fk)) = pin {
         store.set_workspace_pin(uuid_of_room(&room), &founder, &fk)?;
@@ -1574,6 +1576,19 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
         let (signed, here) = signed_grants_here(cfg, hive_runtime::sandbox::grants_setting_from_env());
         let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
         println!("workspace sandbox grants: {} ({n} signed; ligus doctor --sandbox lists them)", here.why);
+    }
+    // Events held aside until this device can judge them (a certificate or
+    // admission not here yet, a disputed account key): they never stop sync.
+    if let Ok(svc) = open_service(cfg) {
+        if let Ok(h) = svc.store().held_stats(uuid_of_room(&cfg.room)) {
+            println!(
+                "held events: {} from {} device(s), {} dropped by a cap ({} to fetch again from the relay), {} given up, {} expired (they apply on their own once what they wait for arrives)",
+                h.held, h.signers, h.dropped, h.refetch, h.lost, h.expired
+            );
+            for (reason, n) in &h.reasons {
+                println!("  - {n}: {reason}");
+            }
+        }
     }
     if (require_confined || turn_test) && unconfined {
         eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");

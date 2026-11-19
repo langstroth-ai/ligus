@@ -344,7 +344,7 @@ fn phase_b_goldens() {
     let cases = [
         ("joinApprovedAdmission/redeemKey", 0, SessionEvent::JoinApproved {
             subject: format!("invite:{}", u(0x71)),
-            admission: Some(hive_core::admission::Admission::service(3_600_000, Some(u(0x72)), redeem.public()).for_device(&[0x33; 32])),
+            admission: Some(hive_core::admission::Admission::service(3_600_000, Some(u(0x72)), redeem.public()).for_device(&[0x33; 32])), redeem_key: None,
         }),
         ("memberAdded/redemption", 1, SessionEvent::MemberAdded {
             member: WorkspaceMember { id: svc.id.clone(), actor: svc.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 4, joined_at: Timestamp::epoch() },
@@ -370,6 +370,60 @@ fn phase_b_goldens() {
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x3001)),
+            sig_alg: SigAlg::Ed25519, log_head: None,
+        });
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the person-invite redeem key lines (fix/held-and-dispute): an
+/// invite issued with its `redeemKey`, and its redemption with the proof
+/// over `person_redemption_message`. Run with `LIGUS_GOLDEN_OUT=<path>
+/// --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn person_invite_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let redeem = hive_core::admission::RedeemKey::from_seed(&[0x5b; 32]).unwrap();
+    let person = {
+        let mut a = ActorIdentity::new(u(0x75).to_string(), "Vic", ActorKind::Human);
+        a.account_id = Some(u(0x75));
+        a
+    };
+    let cases = [
+        ("joinApproved/redeemKey", 0, SessionEvent::JoinApproved {
+            subject: format!("invite:{}", u(0x74)),
+            admission: None,
+            redeem_key: Some(redeem.public().to_vec()),
+        }),
+        ("memberAdded/personRedemption", 1, SessionEvent::MemberAdded {
+            member: WorkspaceMember { id: person.id.clone(), actor: person.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 5, joined_at: Timestamp::epoch() },
+            invite: Some(u(0x74)),
+            proof: Some(redeem.prove_person(ws, u(0x74), &person.id, u(1))),
+        }),
+    ];
+    let mut out = String::new();
+    for (label, i, payload) in cases {
+        let mut e = SessionEventEnvelope::new(hive_core::workspace_config_session_id(ws), ws, 301 + i, payload);
+        e.id = u(0x3110 + 2 * i as u128);
+        e.event_id = u(0x3111 + 2 * i as u128);
+        e.lamport = 701 + i as u64;
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 700 + i as u64, event_id: u(0x3101) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x3101)),
             sig_alg: SigAlg::Ed25519, log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);

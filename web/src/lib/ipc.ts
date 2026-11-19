@@ -1325,6 +1325,16 @@ export interface SyncStatusDto {
   connectionState: ConnectionState;
   /// Actionable message from the last failed sync (null when healthy).
   lastError: string | null;
+  /// Events of the active workspace held aside until this device can judge
+  /// them (a certificate or admission not here yet, a disputed account key).
+  /// They never stop sync and apply on their own once it arrives.
+  heldEvents?: number;
+  /// Signing devices among the held events.
+  heldSigners?: number;
+  /// Held events given up (past every cap and refetch try, or older than
+  /// 30 days): missing on this device. One dropped by a cap is fetched
+  /// again from the relay once what it waited for arrives.
+  heldDropped?: number;
 }
 
 export const syncStatus = () => invoke<SyncStatusDto>("sync_status");

@@ -85,27 +85,30 @@ impl SignerDirectory {
     ///
     /// Anyone able to deliver events controls how many keys, rotations and
     /// certificates there are, so building this stays near-linear in them:
-    /// each account holds at most [`MAX_ACCOUNT_KEYS`] keys here, taken in
-    /// the log's canonical order, and every (key, rotation) pair is checked
-    /// at most once. A cap only stops further keys from telling copies apart
-    /// (no honest account rotates that often).
+    /// a certificate is checked only against the keys its own device or its
+    /// publisher registered and the account's rotations, rotations chain
+    /// only up to [`MAX_ACCOUNT_KEYS`] keys per account, and every (key,
+    /// rotation) pair is checked at most once. A cap only stops further
+    /// rotations from telling copies apart (no honest account rotates that
+    /// often).
     pub fn of(envelopes: &[SessionEventEnvelope]) -> Self {
         let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
         ordered.sort_by_key(|e| e.canonical_key());
-        let mut keys: BTreeMap<Uuid, Vec<Vec<u8>>> = BTreeMap::new();
-        for e in &ordered {
-            if let SessionEvent::AccountKeyRegistered { account_id, signing_public_key } = &e.payload {
-                push_unique(keys.entry(*account_id).or_default(), signing_public_key.clone());
-            }
-        }
-        // Two different registrations of one account (not a rotation):
-        // which is genuine can't be told, so neither attests, as the roster
-        // disputes the account (anyone can publish a registration under
-        // someone else's account id).
-        keys.retain(|_, ks| ks.len() == 1);
+        // Only a self-evident registration (signed by a device that
+        // published its own certificate under that key for that account,
+        // `crate::account_keys`) names a key here: a registration anyone else
+        // published under someone's account id adds nothing and takes
+        // nothing away. Every self-evident one counts, whoever's it is: a key
+        // here only lets the devices it certified attest their *own*
+        // signatures (a device id is its key's), so a second lineage under
+        // an account (the roster refuses or disputes it) can't make the
+        // genuine one's copies unattested.
+        let index = crate::account_keys::KeyIndex::of(ordered.iter().copied());
+        let registered = index.registered_keys();
         // A rotation counts once a key of its account signed it (rotations
         // chain): each newly known key is checked against the rotations
-        // still pending for its account, once.
+        // still pending for its account, once, and only while the account
+        // holds fewer than MAX_ACCOUNT_KEYS keys (so this stays linear).
         // Account → (new key, succession signature) of each rotation.
         type Rotations<'r> = Vec<(&'r [u8], &'r [u8])>;
         let mut pending: BTreeMap<Uuid, Rotations<'_>> = BTreeMap::new();
@@ -114,8 +117,12 @@ impl SignerDirectory {
                 pending.entry(*account_id).or_default().push((new_signing_public_key, succession_signature));
             }
         }
+        // Account → the keys rotations reached.
+        let mut rotated: BTreeMap<Uuid, Vec<Vec<u8>>> = BTreeMap::new();
         for (account, mut rotations) in pending {
-            let Some(known) = keys.get_mut(&account) else { continue };
+            let Some(regs) = registered.get(&account) else { continue };
+            let mut known: Vec<Vec<u8>> = regs.iter().take(MAX_ACCOUNT_KEYS).cloned().collect();
+            let base = known.len();
             let mut next = 0;
             while next < known.len() && !rotations.is_empty() && known.len() < MAX_ACCOUNT_KEYS {
                 let k = known[next].clone();
@@ -131,6 +138,7 @@ impl SignerDirectory {
                     true
                 });
             }
+            rotated.insert(account, known.split_off(base));
         }
         let mut out = Self::default();
         for e in &ordered {
@@ -140,8 +148,20 @@ impl SignerDirectory {
                 if out.devices.get(&c.device_id).is_some_and(|(_, a)| a.contains(&c.account_id)) {
                     continue;
                 }
-                // `verify` refuses an id its key doesn't derive.
-                if keys.get(&c.account_id).is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok())) {
+                // The keys it may be under: the ones the certified device
+                // registered, the ones the device that published it
+                // registered (an enrollment), and the account's rotations.
+                // A few each, so this stays linear however many keys others
+                // registered under the account. `verify` refuses an id its key
+                // doesn't derive.
+                let publisher = e.signer_device_id.unwrap_or_default();
+                let ok = index
+                    .registered_by(c.account_id, c.device_id)
+                    .iter()
+                    .chain(index.registered_by(c.account_id, publisher).iter())
+                    .chain(rotated.get(&c.account_id).into_iter().flatten())
+                    .any(|k| c.verify(k).is_ok());
+                if ok {
                     let entry = out.devices.entry(c.device_id).or_insert_with(|| (c.device_public_key.clone(), BTreeSet::new()));
                     entry.1.insert(c.account_id);
                 }

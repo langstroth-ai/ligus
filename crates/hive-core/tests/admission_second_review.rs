@@ -40,7 +40,7 @@ fn world() -> SignedWorld {
 }
 
 fn issue(w: &mut SignedWorld, id: Uuid, a: Admission) -> Uuid {
-    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(a) })
+    w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(a), redeem_key: None })
 }
 
 /// `name` redeems `id` with `proof`, its member record edited by `edit`.
@@ -318,7 +318,7 @@ fn a_phone_checks_strictly_what_it_signs() {
         env.clear_raw();
         (env, challenge)
     };
-    let admission = SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) };
+    let admission = SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())), redeem_key: None };
     let (env, challenge) = draft(&mut w, None, admission.clone());
     let good = hive_core::crypto::envelope_preimage(&env);
     assert!(check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, None).is_ok());
@@ -336,7 +336,7 @@ fn a_phone_checks_strictly_what_it_signs() {
     let (env, _) = draft(&mut w, None, SessionEvent::AdmissionClosed { invite: id, redeemed: None });
     let mut json: serde_json::Value = serde_json::to_value(&SessionEvent::JoinApproved {
         subject: invite_subject(id),
-        admission: Some(Admission::service(soon, None, key().public())),
+        admission: Some(Admission::service(soon, None, key().public())), redeem_key: None,
     })
     .unwrap();
     json["admission"]["role"] = serde_json::json!("owner");
@@ -477,7 +477,7 @@ fn play(w: &mut SignedWorld, slots: &[Uuid; 3], ops: &[Op]) {
                 if bind_device {
                     a = a.for_device(&w.people["box"].device.public_key_bytes());
                 }
-                w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(slots[slot as usize % 3]), admission: Some(a) });
+                w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(slots[slot as usize % 3]), admission: Some(a), redeem_key: None });
             }
             Op::Redeem { who, slot, holds, back } => {
                 let who = REDEEMERS[who as usize % 4];

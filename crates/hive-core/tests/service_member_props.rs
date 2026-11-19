@@ -157,7 +157,7 @@ fn play(r: &mut Run, ops: &[Op]) {
                 let account = bind.map(|b| r.w.people[BOXES[b as usize % 2]].account_id);
                 let e = SessionEvent::JoinApproved {
                     subject: invite_subject(r.slots[slot as usize % 3]),
-                    admission: Some(Admission::service(now + ttl_min as i64 * 60_000, account, key().public())),
+                    admission: Some(Admission::service(now + ttl_min as i64 * 60_000, account, key().public())), redeem_key: None,
                 };
                 config_write(&mut r.w, by, e, presence, None);
             }
@@ -217,10 +217,10 @@ fn play(r: &mut Run, ops: &[Op]) {
                     },
                     2 => SessionEvent::DeviceRevoked { device_id: r.w.people[t].device_id, watermark: vec![] },
                     3 => SessionEvent::MemberAdded { member: r.w.member_of(t, WorkspaceRole::Viewer), invite: None, proof: None },
-                    4 => SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None },
+                    4 => SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None, redeem_key: None },
                     _ => SessionEvent::JoinApproved {
                         subject: invite_subject(Uuid::new_v4()),
-                        admission: Some(Admission::service(now + HOUR_MS, None, key().public())),
+                        admission: Some(Admission::service(now + HOUR_MS, None, key().public())), redeem_key: None,
                     },
                 };
                 config_write(&mut r.w, b, e, presence, None);

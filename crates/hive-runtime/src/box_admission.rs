@@ -145,12 +145,13 @@ pub fn open_admission(code: &str, ka: &hive_core::KeyAgreementKeypair) -> Result
     Ok(s.to_string())
 }
 
-/// The key in a `hivews1:` code's JSON that carries a box admission's
-/// redeem key seed (hex). Left out of every other code.
+/// The key in a `hivews1:` code's JSON that carries the redeem key seed
+/// (hex) of a box admission or of a person invite issued with one. Outside
+/// the invite's signed claims; left out of every other code.
 pub const REDEEM_KEY_FIELD: &str = "ak";
 
-/// `invite` (a `hivews1:` code) with a box admission's redeem key seed
-/// added: what lets its holder redeem the admission
+/// `invite` (a `hivews1:` code) with its redeem key seed added: what lets its
+/// holder redeem the box admission or person invite
 /// (`hive_core::admission`).
 pub fn with_redeem_key(invite: &str, seed: &[u8; 32]) -> Result<String, String> {
     let mut v = invite_json(invite)?;
@@ -160,7 +161,7 @@ pub fn with_redeem_key(invite: &str, seed: &[u8; 32]) -> Result<String, String> 
     Ok(format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
 }
 
-/// The redeem key seed a `hivews1:` code carries, if it is a box admission's.
+/// The redeem key seed a `hivews1:` code carries, if any.
 pub fn redeem_key_of(invite: &str) -> Option<[u8; 32]> {
     invite_json(invite).ok()?.get(REDEEM_KEY_FIELD)?.as_str().and_then(seed_from_hex)
 }

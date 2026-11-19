@@ -145,7 +145,7 @@ pub struct SyncEngine {
     page_after: Option<u64>,
     /// The relay said more envelopes remain past the last page fetched.
     behind: bool,
-    /// Lowest held (not-yet-openable / identity-pending) seq seen on an earlier
+    /// Lowest not-yet-openable seq (no key source to park it) seen on an earlier
     /// page of the current multi-page walk. `apply_fetched` caps the cursor
     /// below it, so a later page that holds nothing can't advance the durable
     /// cursor past a held body on an earlier page (which would skip it).
@@ -176,6 +176,18 @@ pub struct SyncEngine {
     parked_ring: Option<Vec<u8>>,
     /// Replaying parked bodies now (no nested replay).
     in_retry: bool,
+    /// Judging held events again now (no nested replay).
+    in_held_retry: bool,
+    /// When held events were last judged again on the timer.
+    held_checked: Option<std::time::Instant>,
+    /// Per workspace, the trust rows ([`EventStore::trust_rows_sig`]) held
+    /// events were last judged against: a change makes them due again.
+    held_sig: std::collections::HashMap<Uuid, (i64, i64)>,
+    /// Per workspace, the trust rows dropped held events were last checked
+    /// against for fetching again (`event_store::held`).
+    refetch_sig: std::collections::HashMap<Uuid, (i64, i64)>,
+    /// Applying events fetched again by sequence (`apply_refetched`).
+    in_refetch: bool,
     /// A body couldn't be opened (or no seal key is held): fetch the keyring
     /// route on the next round.
     rows_wanted: bool,
@@ -221,6 +233,32 @@ enum Decoded {
     NotYetOpenable(String),
 }
 
+/// Dropped held events fetched again per pull round, at most.
+const REFETCH_PER_ROUND: usize = 256;
+
+/// Unix milliseconds now (held events' ages).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// What ingest made of one decoded event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Judgement {
+    /// Accepted (stored, or already held).
+    Applied,
+    /// Provably bad: refused for good (a lamport witness).
+    Refused,
+    /// Can't be judged yet: waits in the held table.
+    Held(&'static str),
+}
+
+/// The outcome of judging a batch: one judgement per event, and how many
+/// were newly stored.
+struct Judged {
+    outcomes: Vec<Judgement>,
+    applied: usize,
+}
+
 impl SyncEngine {
     pub fn new(relay: RelayClient, workspace: impl Into<String>) -> Self {
         let workspace = workspace.into();
@@ -247,6 +285,11 @@ impl SyncEngine {
             rows_fetched: None,
             parked_ring: None,
             in_retry: false,
+            in_held_retry: false,
+            held_checked: None,
+            held_sig: std::collections::HashMap::new(),
+            refetch_sig: std::collections::HashMap::new(),
+            in_refetch: false,
             rows_wanted: false,
             ring_built_from: None,
             #[cfg(test)]
@@ -563,7 +606,87 @@ impl SyncEngine {
                 break;
             }
         }
+        applied += self.refetch_dropped(store).await?;
         Ok(applied)
+    }
+
+    /// Fetch again, by relay sequence, held events this device dropped whose
+    /// wait is over (`event_store::held`): the relay still has them, so a
+    /// flood of the held table doesn't make this device miss them. A bounded
+    /// number per round; contiguous sequences share a page.
+    pub async fn refetch_dropped(&mut self, store: &mut EventStore) -> Result<usize, SyncError> {
+        let due = self.refetch_due(store)?;
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let mut rows: Vec<(u64, Value)> = Vec::new();
+        let mut i = 0;
+        while i < due.len() {
+            // A run of sequences within one page.
+            let start = due[i];
+            let mut j = i;
+            while j + 1 < due.len() && due[j + 1] - start < u64::from(self.page_limit) {
+                j += 1;
+            }
+            let span = (due[j] - start + 1) as u32;
+            let page = self.relay.fetch_page(&self.workspace, start - 1, span).await?;
+            let want: std::collections::HashSet<u64> = due[i..=j].iter().copied().collect();
+            rows.extend(page.rows.into_iter().filter(|(seq, _)| want.contains(seq)));
+            i = j + 1;
+        }
+        self.apply_refetched(store, &due, &rows)
+    }
+
+    /// Relay sequences due for fetching again (at most a page's worth).
+    pub fn refetch_due(&mut self, store: &EventStore) -> Result<Vec<u64>, SyncError> {
+        self.ensure_loaded(store)?;
+        Ok(store.held_refetch_due(self.room_workspace(), REFETCH_PER_ROUND)?)
+    }
+
+    /// Apply `rows`, the bodies at `tried` fetched again: judged by the one
+    /// gate (`apply_fetched`), without moving the cursor or the page walk.
+    /// Each sequence tried spends one of its tries; one judged now (applied
+    /// or refused) is done; one dropped again waits for the next roster
+    /// change, until its tries run out.
+    pub fn apply_refetched(&mut self, store: &mut EventStore, tried: &[u64], rows: &[(u64, Value)]) -> Result<usize, SyncError> {
+        let ws = self.room_workspace();
+        store.held_refetch_tried(ws, tried)?;
+        let (walk_hold, behind, page_after) = (self.walk_hold, self.behind, self.page_after);
+        self.in_refetch = true;
+        let r = self.apply_fetched(store, rows);
+        self.in_refetch = false;
+        (self.walk_hold, self.behind, self.page_after) = (walk_hold, behind, page_after);
+        let applied = r?;
+        // Gone from the relay (expired, trimmed): nothing to wait for.
+        let got: std::collections::HashSet<u64> = rows.iter().map(|(s, _)| *s).collect();
+        for s in tried.iter().filter(|s| !got.contains(s)) {
+            store.held_refetch_done(ws, *s)?;
+        }
+        store.prune_held_refetch(ws)?;
+        Ok(applied)
+    }
+
+    /// Mark the dropped events of `ws` whose signer now signs for the
+    /// account they claimed (what they waited for arrived) due for fetching
+    /// again; checked once per change of the workspace's trust rows.
+    fn mark_refetch(&mut self, store: &EventStore, ws: Uuid) -> Result<(), SyncError> {
+        let sig = store.trust_rows_sig(ws)?;
+        if self.refetch_sig.get(&ws) == Some(&sig) {
+            return Ok(());
+        }
+        let rows = store.held_refetch_candidates(ws)?;
+        if !rows.is_empty() {
+            let pin = store.workspace_pin(ws)?;
+            let roster = crate::envelope_verifier::roster_with_batch(store.trust_envelopes(ws)?, &[], pin.as_ref());
+            let due: Vec<u64> = rows
+                .iter()
+                .filter(|r| r.signer.is_some_and(|d| crate::envelope_verifier::may_judge_now(&roster, d, r.claimed)))
+                .map(|r| r.seq)
+                .collect();
+            store.mark_refetch_due(ws, &due)?;
+        }
+        self.refetch_sig.insert(ws, sig);
+        Ok(())
     }
 
     /// Pull rounds until caught up, or `max_rounds` rounds have run. For
@@ -788,11 +911,19 @@ impl SyncEngine {
     /// resolved sequence that sits *below the lowest not-yet-openable body*:
     /// - `Malformed`/quarantined bodies are provably bad and stable — we skip them
     ///   and let the cursor advance past them (re-fetching can't help).
+    /// - An event ingest **holds** (a device not certified yet for the account it
+    ///   claims, an account not admitted yet, a pending dearth-mode approval, a
+    ///   disputed account key) is moved to the device's held table
+    ///   ([`crate::event_store::HoldItem`]) and the cursor moves past it: an event
+    ///   whose certificate or admission never comes can't stop this device from
+    ///   syncing what follows. It is judged again when the roster changes and on
+    ///   a slow timer ([`SyncEngine::retry_held`]).
     /// - A `NotYetOpenable` body (well-formed sealed body under an epoch key we
-    ///   lack) becomes the **retry point**: the cursor is held just before the
-    ///   lowest such sequence so a later pull re-fetches it once its key arrives —
-    ///   but every openable event *after* it is still applied this pass (deduped,
-    ///   idempotent), so a missing-key body can't strand readable events behind it.
+    ///   lack) is parked when the ring is rebuilt from the config log (A-13);
+    ///   otherwise (the passphrase-only case) it becomes the **retry point**: the
+    ///   cursor is held just before the lowest such sequence so a later pull
+    ///   re-fetches it once its key arrives — but every openable event *after* it
+    ///   is still applied this pass (deduped, idempotent).
     ///
     /// A genuinely un-openable-forever body under a *held* epoch (foreign/tampered
     /// ciphertext) is `Malformed`, so it advances and cannot permanently wedge.
@@ -810,7 +941,8 @@ impl SyncEngine {
         // may pass (openable or provably-bad); `retry_at` = lowest sequence we must
         // re-fetch later (a not-yet-openable body), which caps how far the cursor
         // may advance this pass.
-        let mut decoded: Vec<(u64, SessionEventEnvelope)> = Vec::new();
+        let mut seqs: Vec<u64> = Vec::new();
+        let mut decoded: Vec<SessionEventEnvelope> = Vec::new();
         let mut resolved: Vec<u64> = Vec::new();
         let mut retry_at: Option<u64> = None;
         let mut parked_now: Vec<u64> = Vec::new();
@@ -826,7 +958,10 @@ impl SyncEngine {
                     foreign += 1;
                     resolved.push(*seq);
                 }
-                Decoded::Ready(env) => decoded.push((*seq, *env)),
+                Decoded::Ready(env) => {
+                    seqs.push(*seq);
+                    decoded.push(*env);
+                }
                 Decoded::Malformed(reason) => {
                     tracing::warn!(seq = *seq, reason, "skipping a malformed relay body; advancing the cursor past it");
                     resolved.push(*seq);
@@ -860,105 +995,68 @@ impl SyncEngine {
             retry_at = Some(retry_at.map_or(h, |r| r.min(h)));
         }
 
-        // Verify-on-ingest (S1): build the trust roster from what we already hold
-        // plus the trust events in this batch, then classify each envelope. The
-        // policy is non-bricking: reject only the *provably bad* (bad signature,
-        // revoked device, impersonation); merely-unverifiable events (unsigned,
-        // or from a device whose cert we haven't seen yet) are accepted and
-        // re-checked as the roster grows — never dropped.
-        //
-        // Under `IdentityMode::GithubSigningKeys` (Option C) the identity gate
-        // folds in a GitHub `ssh_signing_keys` check: a roster-valid event whose
-        // account isn't GitHub-verified **yet** is *held* exactly like a
-        // not-yet-openable body (the cursor is held before it, so it's re-fetched
-        // and re-classified once verification completes) — never dropped, so two
-        // devices at different verification states can't diverge in applied state.
-        // Only a *provably-bad* identity (GitHub fetched, key not listed) is
-        // quarantined. `Relay` mode (Option A, default) never holds on identity —
-        // it is byte-for-byte the pre-existing policy.
-        // P0.4: one roster per workspace, from its own stored trust events plus
-        // this batch's trust events only once they verify (batch fixpoint).
-        let batch: Vec<&SessionEventEnvelope> = decoded.iter().map(|(_, e)| e).collect();
-        let rosters = crate::envelope_verifier::rosters_for_batch(store, &batch)?;
-        let empty = crate::envelope_verifier::WorkspaceRoster::default();
-        // Recover from a poisoned lock instead of panicking the sync task: the
-        // identity cache holds only best-effort verification results (rebuilt/
-        // re-fetched), so a panic in a prior holder shouldn't crash every future
-        // sync pass. This path is network-input-adjacent — fail soft, not hard.
-        let identity = self
-            .identity_cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        // The authorized head this device folds now (B1 ingest rule).
-        let head = self.head_roster(store)?;
-        let mut applied = 0;
-        // Guard signals (device-local, content-free): every rejection, and one
-        // accept per signing device per batch.
-        let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
-        for (seq, env) in &decoded {
-            let roster = rosters.get(&env.workspace_id).unwrap_or(&empty);
-            let base = verdict_for(roster, env);
-            // The account this event is authored as — `verdict_for` has already
-            // confirmed the signing device is cert-verified for it (else it's
-            // quarantined as impersonation), so it's the right account to run the
-            // Option-C GitHub identity gate against. Fall back to the device's
-            // account for events that carry no stamp (e.g. some trust events).
-            let signer_account = env
-                .actor_stamp
-                .as_ref()
-                .and_then(|s| s.actor.account_id)
-                .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
-            let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
-            match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
-                IngestAction::Quarantine(reason) => {
-                    tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    // Kept as a lamport witness, whatever the reason: whether
-                    // an event is refused depends on what this device's roster
-                    // holds when it arrives (a revocation, a removal, a rebound
-                    // agent key, a certificate not here yet), so another device
-                    // may have accepted it and counted from it. The witness is
-                    // structural (id, lamport, log head, chain link), inert, and
-                    // never pushed (`hive_core::lamport`).
-                    store.note_lamport_witness(env)?;
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
-                    // Provably bad and stable — advance past it (re-fetching won't help).
-                    resolved.push(*seq);
-                }
-                IngestAction::Hold(reason) => {
-                    // Can't verify yet (Option C: GitHub identity pending/unreachable).
-                    // Hold the cursor before it and retry, mirroring NotYetOpenable —
-                    // NEVER drop, so a peer that later verifies converges to the same
-                    // applied state. Not ingested this pass.
-                    tracing::debug!(reason, seq = *seq, event_id = %env.event_id, "holding a fetched event for identity re-verification");
-                    retry_at = Some(retry_at.map_or(*seq, |r| r.min(*seq)));
-                }
-                IngestAction::Accept if late_from_outsider(head.as_deref(), env) => {
-                    // B1: sealed under an older key by someone who is no
-                    // longer (or not yet) a member: a removed member writing
-                    // with the key they kept. Refused for good.
-                    tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
-                    // Refused: a lamport witness (see above).
-                    store.note_lamport_witness(env)?;
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
-                    resolved.push(*seq);
-                }
-                IngestAction::Accept => {
-                    if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
-                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
-                    }
-                    self.seen.insert(env.event_id);
-                    // This event is now on the relay (we received it from there): queue
-                    // it for the durable `pushed` set so a restart never bounces it back.
-                    self.pending.push(env.event_id);
-                    if store.ingest_sealed(env, env.sealed_epoch())? {
-                        applied += 1;
-                    }
-                    resolved.push(*seq);
+        // A batch that can change the roster (a trust or config event) is
+        // judged together with what this room holds: one roster build, and a
+        // held event the batch completes (its certificate, its admission) is
+        // released in the same pass, as if it had arrived after it.
+        let roster_relevant = decoded.iter().any(|e| {
+            crate::envelope_verifier::is_trust_kind(&e.payload) || e.session_id == hive_core::workspace_config_session_id(e.workspace_id)
+        });
+        let mut held_in: Vec<(Uuid, crate::event_store::HeldEvent)> = Vec::new();
+        if roster_relevant && !self.in_held_retry {
+            for ws in store.held_workspaces()?.into_iter().filter(|w| self.in_scope(*w)) {
+                held_in.extend(store.held_events(ws)?.into_iter().map(|h| (ws, h)));
+            }
+        }
+        let batch_len = decoded.len();
+        decoded.extend(held_in.iter().map(|(_, h)| h.env.clone()));
+        let judged = self.judge(store, &decoded, batch_len)?;
+        decoded.truncate(batch_len);
+        let mut released: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
+        for ((ws, h), outcome) in held_in.iter().zip(&judged.outcomes[batch_len..]) {
+            if !matches!(outcome, Judgement::Held(_)) {
+                released.entry(*ws).or_default().push(h.digest.clone());
+            }
+        }
+        for (ws, digests) in &released {
+            store.release_held(*ws, digests)?;
+        }
+        let mut applied = judged.applied;
+        let mut to_hold: Vec<crate::event_store::HoldItem<'_>> = Vec::new();
+        for ((seq, env), outcome) in seqs.iter().zip(&decoded).zip(&judged.outcomes[..batch_len]) {
+            // Every judged event lets the cursor pass: a held one waits in the
+            // held table, never before the cursor.
+            resolved.push(*seq);
+            match outcome {
+                Judgement::Held(reason) => to_hold.push(crate::event_store::HoldItem { env, reason, seq: Some(*seq) }),
+                // Fetched again and judged now: nothing more to fetch.
+                _ if self.in_refetch => store.held_refetch_done(self.room_workspace_scope(std::slice::from_ref(env)), *seq)?,
+                _ => {}
+            }
+        }
+        if !to_hold.is_empty() {
+            let ws = self.room_workspace_scope(&decoded);
+            let n = store.hold_events(ws, &to_hold, now_ms())?;
+            tracing::debug!(room = %self.workspace, held = n, "holding fetched events until the roster can judge them");
+            // Nothing else to do: a held trust or config event was judged
+            // together with every other held event just now (a batch that
+            // carries one is judged with the held table), and content can't
+            // unblock anything.
+        }
+        // The held events judged with this batch saw the roster this batch
+        // makes: not due again until it changes.
+        if !held_in.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            for (ws, _) in &held_in {
+                if seen.insert(*ws) {
+                    self.held_sig.insert(*ws, store.trust_rows_sig(*ws)?);
                 }
             }
         }
-        drop(identity);
+        if roster_relevant && !self.in_held_retry {
+            let ws = self.room_workspace_scope(&decoded);
+            self.mark_refetch(store, ws)?;
+        }
 
         // B1: a rotation may have arrived on the config log; rebuild the ring
         // so this page's held bodies open on the next pass. A body we couldn't
@@ -997,7 +1095,218 @@ impl SyncEngine {
             store.unpark(&self.workspace, seq)?;
         }
         applied += self.retry_parked(store)?;
+        applied += self.retry_held(store)?;
         Ok(applied)
+    }
+
+    /// The workspace a batch's held events are filed under: the room's own
+    /// workspace (every in-scope event carries it), or for an unscoped test
+    /// engine the batch's.
+    fn room_workspace_scope(&self, decoded: &[SessionEventEnvelope]) -> Uuid {
+        #[cfg(test)]
+        if self.any_workspace {
+            if let Some(e) = decoded.first() {
+                return e.workspace_id;
+            }
+        }
+        let _ = decoded;
+        self.room_workspace()
+    }
+
+    /// Judge `envs` (decoded, in scope) with the ingest gate and ingest the
+    /// accepted ones: the one path fetched and held events go through, so an
+    /// event applied from the held table is judged exactly as if it had
+    /// arrived then.
+    ///
+    /// `envs[held_from..]` come from the held table: one that arrived over P2P
+    /// (unsealed) isn't marked as on the relay when applied, so this device
+    /// still pushes it.
+    fn judge(&mut self, store: &mut EventStore, envs: &[SessionEventEnvelope], held_from: usize) -> Result<Judged, SyncError> {
+        // Verify-on-ingest (S1): build the trust roster from what we already hold
+        // plus the trust events in this batch, then classify each envelope.
+        // Reject only the *provably bad* (bad signature, revoked device,
+        // impersonation); hold what can't be judged yet (a device whose cert we
+        // haven't seen for the account it claims, a disputed account key) in the
+        // held table until the roster can judge it — never dropped, so two
+        // devices that see the same events in a different order converge.
+        // P0.4: one roster per workspace, from its own stored trust events plus
+        // this batch's trust events only once they verify (batch fixpoint).
+        let batch: Vec<&SessionEventEnvelope> = envs.iter().collect();
+        let rosters = crate::envelope_verifier::rosters_for_batch(store, &batch)?;
+        let empty = crate::envelope_verifier::WorkspaceRoster::default();
+        // Recover from a poisoned lock instead of panicking the sync task: the
+        // identity cache holds only best-effort verification results (rebuilt/
+        // re-fetched), so a panic in a prior holder shouldn't crash every future
+        // sync pass. This path is network-input-adjacent — fail soft, not hard.
+        let identity = self
+            .identity_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // The authorized head this device folds now (B1 ingest rule).
+        let head = self.head_roster(store)?;
+        let mut out = Judged { outcomes: Vec::with_capacity(envs.len()), applied: 0 };
+        // Guard signals (device-local, content-free): every rejection, and one
+        // accept per signing device per batch.
+        let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
+        for (i, env) in envs.iter().enumerate() {
+            let from_relay = i < held_from || env.sealed_epoch().is_some();
+            let roster = rosters.get(&env.workspace_id).unwrap_or(&empty);
+            let base = verdict_for(roster, env);
+            // The account this event is authored as — `verdict_for` has already
+            // confirmed the signing device is cert-verified for it (else it's
+            // quarantined as impersonation), so it's the right account to run the
+            // Option-C GitHub identity gate against. Fall back to the device's
+            // account for events that carry no stamp (e.g. some trust events).
+            let signer_account = env
+                .actor_stamp
+                .as_ref()
+                .and_then(|s| s.actor.account_id)
+                .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
+            let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
+            let outcome = match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
+                IngestAction::Quarantine(reason) => {
+                    tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
+                    // Kept as a lamport witness, whatever the reason: whether
+                    // an event is refused depends on what this device's roster
+                    // holds when it arrives (a revocation, a removal, a rebound
+                    // agent key, a certificate not here yet), so another device
+                    // may have accepted it and counted from it. The witness is
+                    // structural (id, lamport, log head, chain link), inert, and
+                    // never pushed (`hive_core::lamport`).
+                    store.note_lamport_witness(env)?;
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
+                    Judgement::Refused
+                }
+                IngestAction::Hold(reason) => {
+                    // Can't judge yet: held aside (never dropped), and judged
+                    // again when the roster changes, so a device that sees its
+                    // certificate later converges to the same applied state.
+                    // A lamport witness meanwhile, as a refused event is:
+                    // another device may have applied it and counted from it,
+                    // and those later events must not wait on it here.
+                    tracing::debug!(reason, event_id = %env.event_id, "holding a fetched event until the roster can judge it");
+                    store.note_lamport_witness(env)?;
+                    Judgement::Held(reason)
+                }
+                IngestAction::Accept if late_from_outsider(head.as_deref(), env) => {
+                    // B1: sealed under an older key by someone who is no
+                    // longer (or not yet) a member: a removed member writing
+                    // with the key they kept. Refused for good.
+                    tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
+                    // Refused: a lamport witness (see above).
+                    store.note_lamport_witness(env)?;
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
+                    Judgement::Refused
+                }
+                IngestAction::Accept => {
+                    if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
+                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
+                    }
+                    // A key registration or rotation the roster refused is
+                    // stored (inert: the account-key rules refuse it in every
+                    // fold, wherever it sorts) and attributed to its signer.
+                    if roster.refused_keys().iter().any(|r| r.event_id == env.event_id) {
+                        tracing::warn!(event_id = %env.event_id, signer = ?env.signer_device_id, "an account key event its account's lineage didn't sign: refused, attributed to its signer");
+                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "account_key_refused"));
+                    }
+                    if from_relay {
+                        self.seen.insert(env.event_id);
+                        // This event is now on the relay (we received it from there): queue
+                        // it for the durable `pushed` set so a restart never bounces it back.
+                        self.pending.push(env.event_id);
+                    }
+                    if store.ingest_sealed(env, env.sealed_epoch())? {
+                        out.applied += 1;
+                    }
+                    Judgement::Applied
+                }
+            };
+            out.outcomes.push(outcome);
+        }
+        Ok(out)
+    }
+
+    /// Judge the held events again (see [`SyncEngine::apply_fetched`]) when
+    /// this device's roster may have changed since the last look (a trust or
+    /// config event stored, here or fetched) or [`crate::event_store::HELD_RETRY_EVERY`]
+    /// has passed; drops held events older than 30 days. Returns how many
+    /// were newly applied.
+    pub fn retry_held(&mut self, store: &mut EventStore) -> Result<usize, SyncError> {
+        self.retry_held_inner(store, false)
+    }
+
+    /// [`SyncEngine::retry_held`] now, whatever changed (`ligus doctor`,
+    /// tests).
+    pub fn retry_held_now(&mut self, store: &mut EventStore) -> Result<usize, SyncError> {
+        self.retry_held_inner(store, true)
+    }
+
+    fn retry_held_inner(&mut self, store: &mut EventStore, force: bool) -> Result<usize, SyncError> {
+        if self.in_retry || self.in_held_retry {
+            return Ok(0);
+        }
+        let now = std::time::Instant::now();
+        let timer = force || self.held_checked.is_none_or(|t| now.duration_since(t) >= crate::event_store::HELD_RETRY_EVERY);
+        if timer {
+            self.held_checked = Some(now);
+            let n = store.expire_held(now_ms())?;
+            if n > 0 {
+                tracing::warn!(room = %self.workspace, expired = n, "dropped held events that waited longer than 30 days");
+            }
+        }
+        let workspaces: Vec<Uuid> = store.held_workspaces()?.into_iter().filter(|w| self.in_scope(*w)).collect();
+        self.in_held_retry = true;
+        let r = self.rejudge_held(store, &workspaces, timer);
+        self.in_held_retry = false;
+        let applied = r?;
+        self.persist_pending(store)?;
+        if applied > 0 {
+            self.refresh_keyring(store)?;
+        }
+        Ok(applied)
+    }
+
+    /// Judge the held events of `workspaces` again (those whose trust rows
+    /// changed since the last look, or all of them when `all`).
+    fn rejudge_held(&mut self, store: &mut EventStore, workspaces: &[Uuid], all: bool) -> Result<usize, SyncError> {
+        let mut applied = 0;
+        for &ws in workspaces {
+            let sig = store.trust_rows_sig(ws)?;
+            if !all && self.held_sig.get(&ws) == Some(&sig) {
+                continue;
+            }
+            // Releasing one event can let another through (a held
+            // certificate, then that device's events): again while something
+            // is released, a bounded number of times.
+            for _ in 0..8 {
+                let held = store.held_events(ws)?;
+                if held.is_empty() {
+                    break;
+                }
+                let envs: Vec<SessionEventEnvelope> = held.iter().map(|h| h.env.clone()).collect();
+                let judged = self.judge(store, &envs, 0)?;
+                let release: Vec<String> = held
+                    .iter()
+                    .zip(&judged.outcomes)
+                    .filter(|(_, o)| !matches!(o, Judgement::Held(_)))
+                    .map(|(h, _)| h.digest.clone())
+                    .collect();
+                store.release_held(ws, &release)?;
+                applied += judged.applied;
+                if release.is_empty() {
+                    break;
+                }
+            }
+            self.held_sig.insert(ws, store.trust_rows_sig(ws)?);
+            self.mark_refetch(store, ws)?;
+        }
+        Ok(applied)
+    }
+
+    /// What this room's workspace holds (sync diagnostics).
+    pub fn held_stats(&self, store: &EventStore) -> Result<crate::event_store::HeldStats, SyncError> {
+        Ok(store.held_stats(self.room_workspace())?)
     }
 
     /// Replay parked bodies when the keyring changed since the last replay
@@ -1705,7 +2014,14 @@ mod tests {
                 hive_core::sign_envelope(&mut e, device_id, &device);
                 e
             },
-            plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
+            {
+                // The device publishes its own certificate, as
+                // `publish_identity` does.
+                let mut e = plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert });
+                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+                hive_core::sign_envelope(&mut e, device_id, &device);
+                e
+            },
             good.clone(),
             tampered.clone(),
             spoof.clone(),
@@ -2073,21 +2389,27 @@ mod tests {
         // dropped. Trust events themselves are unsigned → also held under Option C.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
         assert!(!store.has_event(content.event_id).unwrap(), "unverified content is held, not applied");
-        assert_eq!(eng.cursor(), 0, "cursor held at the front for retry (nothing resolved)");
+        // Held events no longer pin the cursor: they wait in the held table.
+        assert_eq!(eng.cursor(), batch.len() as u64, "the cursor moves past held events");
+        let held = store.held_events(Uuid::nil()).unwrap();
+        assert!(held.iter().any(|h| h.env.event_id == content.event_id), "the content waits in the held table");
 
         // Deterministic: replaying the same batch changes nothing while unverified.
         assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0);
         assert!(!store.has_event(content.event_id).unwrap());
+        assert_eq!(store.held_events(Uuid::nil()).unwrap().len(), held.len(), "a re-delivery is one held row");
 
-        // GitHub verification completes → the held event is promoted on re-fetch.
+        // GitHub verification completes → the held event is promoted when the
+        // held table is judged again (the slow timer, or now).
         cache.lock().unwrap().put(
             p.account_id,
             p.account_key.clone(),
             IdentityVerdict::Verified,
             std::time::Duration::from_secs(600),
         );
-        eng.apply_fetched(&mut store, &batch).unwrap();
+        eng.retry_held_now(&mut store).unwrap();
         assert!(store.has_event(content.event_id).unwrap(), "promoted once verified");
+        assert!(store.held_events(Uuid::nil()).unwrap().is_empty(), "released from the held table");
     }
 
     #[test]

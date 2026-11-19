@@ -25,9 +25,10 @@
 //!   applied-vs-dropped state — that is the divergence we must not create.
 //!
 //! Because GitHub is a shared authoritative source, all devices *eventually*
-//! reach the identical verified set → convergence in the limit. The hold is
-//! implemented exactly like a missing epoch key: the sync cursor is held before
-//! the event so it is re-fetched and re-classified once verification completes.
+//! reach the identical verified set → convergence in the limit. A held event
+//! waits in the device's held table (`event_store::HoldItem`), never before
+//! the sync cursor, and is judged again when the roster changes and on a slow
+//! timer (`SyncEngine::retry_held`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -91,8 +92,9 @@ pub enum IngestAction {
     Accept,
     /// Provably bad — drop it (advance the cursor past it; re-fetching won't help).
     Quarantine(QuarantineReason),
-    /// Can't decide yet — hold the cursor before it and retry (never drop). The
-    /// `&'static str` is a log reason.
+    /// Can't decide yet — held in the device's held table and judged again
+    /// later (never dropped, never before the sync cursor). The
+    /// `&'static str` is the reason, kept with the held event.
     Hold(&'static str),
 }
 
@@ -198,6 +200,11 @@ pub fn gate_ingest(
             // until the certificate arrives (or forever, for a forgery).
             Verdict::Unverifiable(QuarantineReason::UncertifiedDevice) => {
                 IngestAction::Hold("device not certified for the member it claims")
+            }
+            // The account's key is disputed: held, never applied, until (if
+            // ever) the dispute resolves.
+            Verdict::Unverifiable(QuarantineReason::DisputedAccountKey) => {
+                IngestAction::Hold("the account's key is disputed")
             }
             Verdict::Valid | Verdict::Unverifiable(_) => IngestAction::Accept,
             Verdict::Quarantine(r) => IngestAction::Quarantine(r),

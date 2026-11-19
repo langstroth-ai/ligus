@@ -216,7 +216,9 @@ fn a_fresh_workspace_verifies_in_one_batch() {
 /// The invite pins the founder's key fingerprint: a registration of the
 /// founder's account under another key (sorted first) is rejected, so the
 /// founder's real devices verify and the forger's don't. Without the pin the
-/// account is merely disputed (everyone's events under it are refused).
+/// device that signed the base seed anchors the founder's key
+/// (`hive_core::account_keys`): the forgery is refused there too, and no
+/// longer disputes the founder (which silenced them).
 #[test]
 fn founder_pin_disputes_forged_founder_key() {
     let founder = Principal::new("founder");
@@ -234,7 +236,9 @@ fn founder_pin_disputes_forged_founder_key() {
     events.push(forger.sign(ws, 0, SessionEvent::DeviceCertificateAdded { certificate: fcert }));
 
     let unpinned = build_roster(&events);
-    assert!(unpinned.is_disputed(founder.account_id), "without a pin the binding is contested");
+    assert!(!unpinned.is_disputed(founder.account_id), "the seed's signer anchors the founder's key");
+    assert_eq!(unpinned.account_signing_key(founder.account_id), Some(&founder.account.public_key_bytes()[..]));
+    assert!(unpinned.refused_keys().iter().any(|r| r.signer_device_id == Some(forger.device_id)), "attributed to the forger");
 
     let fk = FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
     let pin = FounderPin::parse(&founder.account_id.to_string(), &fk).unwrap();
@@ -353,10 +357,16 @@ fn only_an_account_registers_its_own_key() {
             verdict_for(&roster, env)
         );
     }
-    // Had it been stored, mara would be locked out.
-    let mut poisoned = stored.clone();
-    poisoned.push(unsigned);
-    assert_ne!(verdict_for(&build_roster(&poisoned), &mara.content(ws, 120)), Verdict::Valid);
+    // Even had either been stored, it would dispute nothing: a registration
+    // not signed by a device of the account's own lineage is refused
+    // (`hive_core::account_keys`), so mara keeps her key.
+    for forged in [by_member, unsigned] {
+        let mut poisoned = stored.clone();
+        poisoned.push(forged);
+        let r = build_roster(&poisoned);
+        assert!(!r.is_disputed(mara.account_id));
+        assert_eq!(verdict_for(&r, &mara.content(ws, 120)), Verdict::Valid);
+    }
     // Her own registration (idempotent) stays fine.
     let own = mara.sign(ws, 130, SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: mara.account.public_key_bytes().to_vec() });
     assert_eq!(verdict_for(&roster, &own), Verdict::Valid);

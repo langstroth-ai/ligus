@@ -265,8 +265,9 @@ impl RosterState {
 #[derive(Debug, Clone, Default)]
 pub struct RosterTracker {
     pub state: RosterState,
-    account_keys: BTreeMap<Uuid, Vec<u8>>,
-    disputed: BTreeSet<Uuid>,
+    /// The log's account keys ([`crate::account_keys`]): registrations,
+    /// rotations and the anchors the fold found.
+    book: crate::account_keys::KeyBook,
     certs: Vec<crate::crypto::DeviceCertificate>,
     /// (device, account) certificates the device published itself (the
     /// envelope's signer is the certified device).
@@ -300,6 +301,32 @@ impl RosterTracker {
         }
         t.refresh(session);
         t
+    }
+
+    /// Index the log's certificates and registrations for the account-key
+    /// rules (whole log, any position: a fold sets it before folding), and
+    /// anchor the founder to the device that signed the base seed.
+    pub fn set_key_index(&mut self, index: Arc<crate::account_keys::KeyIndex>, seed: &SessionEventEnvelope) {
+        self.book = crate::account_keys::KeyBook::new(index, None);
+        if let Some((account, device)) = crate::account_keys::seed_anchor(seed) {
+            self.book.anchor(account, device);
+        }
+    }
+
+    /// An account key registration that sorts before the log's base seed:
+    /// the fold doesn't reach it, but the account-key rules read every
+    /// registration wherever it sorts (as the ingest roster does), so the
+    /// book judges it before the fold starts.
+    pub fn register_key_before_base(&mut self, env: &SessionEventEnvelope) {
+        if matches!(env.payload, SessionEvent::AccountKeyRegistered { .. }) {
+            self.book.register(env);
+        }
+    }
+
+    /// Every account's anchor so far: account → the device of its first word
+    /// (see [`crate::account_keys`]).
+    pub fn key_anchors(&self) -> BTreeMap<Uuid, Uuid> {
+        self.book.anchors()
     }
 
     /// Record whom each device vouched for ([`RosterTracker::vouched`]); a
@@ -368,37 +395,28 @@ impl RosterTracker {
     pub fn observe(&mut self, env: &SessionEventEnvelope, allowed: bool, fold: &ChatSession) -> bool {
         let before = self.state.clone();
         if allowed {
+            // An account's own admission (its device signed the
+            // self-enrollment that made it a member) anchors its key
+            // (`crate::account_keys`), before the roster refresh below
+            // rebuilds the devices.
+            if let SessionEvent::MemberAdded { member, .. } = &env.payload {
+                let was_member = self.state.members.contains_key(&member.id);
+                if let Some((account, device)) = crate::account_keys::admission_anchor(env, was_member) {
+                    self.book.anchor(account, device);
+                }
+            }
             self.note_grant(&env.payload);
         }
         match &env.payload {
-            SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
-                match self.account_keys.get(account_id) {
-                    Some(k) if k != signing_public_key => {
-                        self.disputed.insert(*account_id);
-                    }
-                    Some(_) => {}
-                    None => {
-                        self.account_keys.insert(*account_id, signing_public_key.clone());
-                    }
-                }
+            // Self-validating: judged by the account-key rules, not by role.
+            SessionEvent::AccountKeyRegistered { .. } => {
+                self.book.register(env);
                 self.rebuild_devices(fold);
             }
             // A rotation the log refused (under rules v2, one without the
             // account's presence) re-pins nothing.
-            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } if allowed => {
-                match self.account_keys.get(account_id) {
-                    Some(k) if k == new_signing_public_key => {}
-                    Some(k) => {
-                        if crate::crypto::verify(k, new_signing_public_key, succession_signature).is_ok() {
-                            self.account_keys.insert(*account_id, new_signing_public_key.clone());
-                        } else {
-                            self.disputed.insert(*account_id);
-                        }
-                    }
-                    None => {
-                        self.disputed.insert(*account_id);
-                    }
-                }
+            SessionEvent::AccountKeyRotated { .. } if allowed => {
+                self.book.rotate(env, true);
                 self.rebuild_devices(fold);
             }
             // Only a certificate the log allowed certifies (under rules v2 a
@@ -561,10 +579,8 @@ impl RosterTracker {
     fn rebuild_devices(&mut self, fold: &ChatSession) {
         let mut devices: BTreeMap<Uuid, DeviceState> = BTreeMap::new();
         for cert in &self.certs {
-            if self.disputed.contains(&cert.account_id) {
-                continue;
-            }
-            let Some(key) = self.account_keys.get(&cert.account_id) else { continue };
+            // A disputed account certifies nothing.
+            let Some(key) = self.book.key(cert.account_id) else { continue };
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
@@ -594,8 +610,7 @@ impl RosterTracker {
             devices.entry(*d).or_default().revoked = true;
         }
         self.state.devices = devices;
-        self.state.account_keys =
-            self.account_keys.iter().filter(|(a, _)| !self.disputed.contains(a)).map(|(a, k)| (*a, k.clone())).collect();
+        self.state.account_keys = self.book.keys();
     }
 }
 
@@ -651,6 +666,9 @@ pub struct ConfigTimeline {
     /// Every allowed removal, demotion and revocation, with its watermark
     /// (Phase A, item 2; see [`Cut`]).
     cuts: Vec<Cut>,
+    /// Each account's anchor on this log (`crate::account_keys`): the device
+    /// that signed its first word (the founder's seed, or its own admission).
+    anchors: BTreeMap<Uuid, Uuid>,
     fingerprint: u64,
 }
 
@@ -760,6 +778,17 @@ impl ConfigTimeline {
     /// Every allowed removal, demotion and revocation, in canonical order.
     pub fn cuts(&self) -> &[Cut] {
         &self.cuts
+    }
+
+    /// Record the accounts' key anchors the fold found.
+    pub fn set_anchors(&mut self, anchors: BTreeMap<Uuid, Uuid>) {
+        self.anchors = anchors;
+    }
+
+    /// Each account's key anchor on this log: account → device (see
+    /// [`crate::account_keys`]).
+    pub fn anchors(&self) -> &BTreeMap<Uuid, Uuid> {
+        &self.anchors
     }
 
     /// Record the state after the folded event `key` (`changed` = a new state).

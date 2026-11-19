@@ -19,8 +19,10 @@ account, with:
 
 Their devices' encryption keys come from those workspaces' signed logs, not
 from a server, so Ligus can seal things to them without asking anyone who
-they are. Whoever founds a workspace can add any account there with a key of
-their own, so one workspace never overrides the others: Ligus trusts the key
+they are. Inside one workspace, someone else registering a key under their
+account is refused there (their own admission fixes their key), but whoever
+founds a workspace can add any account there with a key of their own, so one
+workspace never overrides the others: Ligus trusts the key
 from a workspace that person founded, else from the workspace you joined
 first that registers one, and ignores a workspace that says otherwise about
 them. Only when every workspace that registers a key for someone disputes it
@@ -32,7 +34,9 @@ From a person's row you can:
 - **Message** them (a direct message, below);
 - **Invite to…** another workspace you administer. The invite is sealed to
   their verified devices and dropped into their contact box (below). If it
-  can't be delivered, you get a single-use link to send them yourself.
+  can't be delivered, you get a single-use link to send them yourself. The
+  link carries the key that redeems it, so only whoever holds it can join
+  with it, not another member who sees the invite on the workspace log.
 
 ## Direct messages
 

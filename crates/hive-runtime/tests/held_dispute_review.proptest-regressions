@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f8763188b9201f9bafa2f35aa4431dd53855ed8718f552e428b77b09fc861b19 # shrinks to order = 1962607852773057279, chunks = 1, pick = [false, false, false, false, false, false, false, false, false, false, true, true, false, false, false]
+cc 6af6b6bb1798e9eae1b6b50db39e8caffb94ad3e34b80f44733b51c6e65839ad # shrinks to order = 0, chunks = 1, pick = [false, false, true, true, false, false, false, false, false, false, false, false, false, false, false]
+cc 15b7fb5334c60d37eb16432e4f9b6cbab090a47170ddd6db82871a96e60f309f # shrinks to order = 14410729455705701731, chunks = 4, pick = [true, false, true, true, false, true, true, true, true, false, false, true, true, false, false]
+cc fcb2af432920865e37c251480ff5a6214b90a3643bf5280a8125e4ffde22c3da # shrinks to order = 1809996430833038821, chunks = 2, pick = [true, false, true, true, false, true, false, false, false, true, false, false, false, true, true]
