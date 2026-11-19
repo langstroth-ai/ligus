@@ -107,6 +107,16 @@ taskState            { taskId, agentKey, turnId, status, summary, progress?,
 of the envelope that made it (the create, the edit, or the accepting
 decision). Optional fields are left out when empty (rule 3 of the spec).
 
+A direct create's `entryId` and a proposal's `proposalId` are **the id of the
+event that carries them** (`memory::bound_event_id`; `SessionEventEnvelope::new`
+sets it, and every fold checks it), as a lockdown is known by the event that
+raised it. Otherwise a member could file a backdated record claiming an id an
+honest one already used and sort first: taking a new entry and its
+authorship over, or swapping their own operation into a proposal a person
+already accepted (which the fold would then apply with the decider's
+authority). With the binding, a second record under the id is a second
+event under one event id, which every fold denies as an equivocation.
+
 Provenance is never taken from the payload where the envelope can say it:
 the author's id, display name and kind come from the signed actor stamp, the
 time from the signed envelope timestamp, the revision id from the event id.
@@ -120,18 +130,19 @@ Fold rules (`authz::bounds`), so every device drops the same over-limit event:
 
 | Bound | Value |
 |---|---|
-| Title | 1 to 120 characters after trimming, no control characters |
+| Title | 1 to 120 characters after trimming, no control characters, no invisible or direction-changing characters (zero-width, bidi overrides and isolates) |
 | Body | 1 to 4000 characters (newlines and tabs allowed, other control characters not) |
 | Tags | at most 8, each 1 to 32 characters of `a-z 0-9 - _ . :` |
 | Live entries | at most 1000 |
 | Entry ids ever used (live plus tombstones) | at most 10 000; a create past it is refused |
 | Revision ids remembered per entry | the newest 32; an edit whose base is older is refused ("edited from a version too old") |
 | Unresolved conflicts per entry | at most 4; a fifth concurrent edit is refused |
-| Open memory proposals | at most 256 in the workspace and 32 per proposer |
+| Open memory proposals | at most 256 in the workspace and 32 per signer (a device or an agent key, whatever proposer it names) |
 | Decided proposals kept in the fold | the newest 512 (the oldest decided ones drop from the projection; the log keeps them) |
 | Proposal rationale, decision note | at most 500 characters |
 | Task-state summary | at most 400 characters |
 | Open questions, partial results | at most 8 each; 300 and 600 characters per item |
+| Task-state slots per signer per chat | at most 8; a new slot past it replaces that signer's least recently updated slot |
 | Task-state slots per chat | at most 64; a new slot past it evicts the oldest finished slot (`done` or `abandoned`, by signed time, then id), and is refused if none is finished |
 | Task-state lifetime | `ttlMs` at most 24 hours, default 2 hours |
 
@@ -159,14 +170,18 @@ Rules, in canonical `(lamport, event_id)` order:
    - `base` is an older revision (someone else's edit sorted in between, so
      this author didn't see it): the edit is kept as a **conflict** on the
      entry, with its full text and provenance. The head doesn't change.
-     Nothing is lost and nothing is silently overwritten.
+     Nothing is lost and nothing is silently overwritten. This holds for a
+     resolving edit too: one that raced another change is kept as a
+     conflict (never refused), and settles the conflicts it names that are
+     still open, since their text is in it.
 3. **Remove** (`memoryRemoved`, or an accepted `remove`): the entry must be
    live. With `base` at the head, it becomes a **tombstone**: the content is
    dropped from the fold, the id stays used forever (no resurrection), and
    who removed it and when are kept. With an older `base`, the removal is kept
    as a conflict ("removed while someone edited it"), and the entry stays.
 4. **Resolving.** An edit or removal at the head may name, in `resolves`,
-   conflicts it has seen; those are cleared. A person resolves in the app by
+   conflicts it has seen; those are cleared (from the head, each named
+   conflict must exist). A person resolves in the app by
    picking a version (or merging by hand) and saving, which writes an edit
    at the head with `resolves`. A conflict it doesn't name stays.
 5. **Who.** Creating needs a human member at Contributor or above. Editing,
@@ -201,7 +216,10 @@ Gates, all fold rules on every device:
   an agent key and the chat's runtime are refused. This is the same "a
   person decides" rule as set decisions and applying.
 - `memoryProposed` is in the Agent tier (an agent's own key, with `proposer`
-  equal to its own agent id), the runtime tier (`proposer` is `primary`),
+  equal to its own agent id), the runtime tier (`proposer` is `primary`, or
+  an agent bound to the signing device for the host's fallback; never empty
+  or free text, so a runtime effect can't read as the host person's own
+  proposal or rotate names past the per-proposer bound),
   the phone tier (its person, `proposer` empty) and open to any human or
   service member at Contributor or above.
 - An agent's proposal is signed with its own certified key (A3). When the
@@ -227,9 +245,16 @@ narrower task (a board item or a workflow run node) by giving its own id.
   write the slot of an agent bound to the signing device
   (`RosterState::agent_bound_to`) at its position. Nobody else, people
   included: a person talks in the chat.
-- A slot is **single-writer**: the signer (device or agent key id) of its
-  first update owns it, and an update from any other signer is refused. So
-  one host can't overwrite another host's slot for the same agent.
+- A slot is **single-writer** by construction: slots are keyed by
+  `(taskId, agentKey)` **and the signer** (device or agent key id), and an
+  update replaces only its own signer's slot. One host can't overwrite
+  another host's slot for the same agent, and no signer can take a slot
+  over, a backdated first update included (an earlier rule, "the first
+  signer owns the slot", let any member's device stamp a backdated runtime
+  effect and lock the chat's runtime out of `primary`, and locked an agent
+  out of its own slot once its key was certified after its host wrote
+  first). An agent that moves hosts, or gets its own key, gets a fresh slot;
+  the old one expires at read time. At most 8 slots per signer per chat.
 
 **Updates.** Each `taskState` replaces the slot's content (it's one writer's
 latest word about its own work, not a shared list). The fold keeps the
@@ -311,8 +336,13 @@ agent's proposal, once accepted, is text a model produced.
   ```
 
   Any occurrence of the nonce, of `<<<` or `>>>`, and of directive openers
-  (`[[`) in the content is neutralised before rendering, so content can't
-  close its own block or forge a directive the host would parse.
+  (`[[`, `]]`) in the content is neutralised before rendering, so content
+  can't close its own block or forge a directive the host would parse.
+  Invisible characters (zero-width, word joiners, the byte-order mark, bidi
+  overrides and isolates) are dropped first, fullwidth and small bracket
+  forms are read as brackets, and the replacement runs to a fixed point
+  (one pass over `[[[` would leave `[[`). Task state in the flow context
+  goes through the same rendering (`render_slot`).
 - Provenance is shown with each entry (author kind, proposer, source chat),
   so a reader can weigh an agent-proposed note differently from a person's.
 - Writes go through a person: an injected agent can file a proposal, never
@@ -336,12 +366,14 @@ fixtures with marker strings in every text field and asserts none leaves.
 |---|---|---|
 | T1 | A Viewer, a stranger or a removed member writes or edits memory | Config records are re-authorized at fold time against the roster at their position; Contributor floor; the creator-or-Admin rule for edits and removals |
 | T2 | A phone, a service box or an agent writes memory directly | Direct writes and decisions need a human stamp, no `runtime_effect`, a non-phone device; the agent and runtime tiers allow only `memoryProposed`; service members are refused |
-| T3 | An agent's proposal is read as its host person's write | Agent key (A3), or `runtime_effect` on the host fallback, never a plain host stamp |
+| T3 | An agent's proposal is read as its host person's write | Agent key (A3), or `runtime_effect` on the host fallback naming an agent bound to that host, never a plain host stamp; the pane names the agent and the device it came from |
 | T4 | Silent overwrite of a concurrent edit | Per-entry revisions with `base`; stale-base edits become visible conflicts; tombstones only from the head |
 | T5 | A removed entry comes back | Entry ids are used once; a create on a used id is refused |
 | T6 | Memory used as a prompt-injection channel | Section 8 |
 | T7 | Memory flooding the config log or the fold | Section 3 bounds, as fold rules |
-| T8 | Forging another agent's task-state slot | Agent-key or bound-host writer, single-writer slots |
+| T8 | Forging another agent's task-state slot | Agent-key or bound-host writer; slots per signer, so none can be taken over (backdated or not) |
+| T11 | A backdated record claiming an honest record's id (an entry, a proposal: bait and switch on an accepted proposal) | Ids bound to the event id; a second record under one is an equivocation |
+| T12 | One device flooding proposals by cycling proposer names | Proposer bound to the signer; the per-proposer bound counts per signer |
 | T9 | Content leaking into telemetry | Counts-only facts; content-free audit |
 | T10 | A backdated or withheld edit | Lamport and `logHead` bounds: an edit sorts where it was drafted; a stale base becomes a conflict, never a rewrite of later history |
 
@@ -398,3 +430,18 @@ fixtures with marker strings in every text field and asserts none leaves.
   signed.
 - **R6 Local stores are plaintext** to the device's own OS account, as for
   every log; E2EE protects the wire and the relay.
+- **R7 Entry ids run out.** The 10 000-ids-ever bound counts tombstones, so a
+  Contributor who creates and removes notes in a loop can use every id and
+  stop new notes for the whole workspace; only compaction (R2) undoes it.
+- **R8 Equivocation as denial.** A member who copies a proposal's or a new
+  entry's event id into their own record makes both copies denied (the
+  general forged-equivocation issue, fixed separately): a denial of that
+  record, never a takeover.
+- **R9 An edit after a removal is refused.** A removal at the head that
+  sorts before a concurrent edit tombstones the entry; the edit's text is in
+  the log only, not shown as a conflict (tombstones never resurrect).
+- **R10 Memory crosses egress tiers.** A note's source chat may be stricter
+  than a turn that reads it; memory is workspace-wide by design.
+- **R11 The device-local workspace skips role and identity checks** (it never
+  syncs); there the "agents only propose" rule rests on `ChatService` and
+  the MCP server, not on the fold.

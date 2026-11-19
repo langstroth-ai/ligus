@@ -229,7 +229,7 @@ word until the phone has read it; refuse to sign unless all of these hold:
     - `withdrawApply`: `requestId` and `proposalId` as asked;
     - `proposeMemory`: a memory proposal whose `op` and `rationale` are
       exactly as asked, `proposer` empty (the person's own), and `source`
-      exactly `{chatId}` (the proposal's `proposalId` is the box's).
+      exactly `{chatId}`; its `proposalId` is the event id (the box picks it, and every fold requires the two to match).
 
 The box may choose only what grants nothing: the event id, sequence, the log
 head it counts from (and so the lamport, one past it), timestamps, its config
