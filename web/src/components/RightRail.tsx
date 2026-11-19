@@ -60,7 +60,9 @@ import {
   type QueuedWorkDto,
   type WorkspaceHostDto,
   type WorkspaceAgentDto,
+  deleteMemberAttachments,
 } from "@/lib/ipc";
+import { confirmDialog } from "@/components/Dialog";
 import { groupProposals, isSettled, isVotable } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
@@ -1411,6 +1413,22 @@ function ProposalCard({
           ) : (
             proposal.body && <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.body}</p>
           )}
+          {/* Issue #118: an agent's file offer. The reviewer sees exactly
+              what approving shares (its content was checked when offered; the
+              host uploads only this file, by hash). */}
+          {proposal.offeredFile && (
+            <div
+              data-testid="offered-file"
+              className="mt-2 rounded-md border px-2 py-1.5 text-xs"
+              style={{ borderColor: proposal.offeredFile.risky ? "var(--hive-danger)" : "var(--hive-line)" }}
+            >
+              <div className="font-medium">Shares the file “{proposal.offeredFile.name}” with this chat</div>
+              <div className="text-ink-soft">
+                {proposal.offeredFile.contentType} · {proposal.offeredFile.size} bytes · SHA-256 {proposal.offeredFile.sha256.slice(0, 16)}…
+              </div>
+              {proposal.offeredFile.risky && <div role="alert">Its type can run code when opened.</div>}
+            </div>
+          )}
           {/* A fileDiff proposal (from an agent's isolated worktree) carries a
               unified diff. It's cramped in this narrow pane, so offer opening it
               full-width in the Diff canvas; the inline per-file view stays as a
@@ -1948,11 +1966,28 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     },
     onError: (e) => toast.error(`Couldn't re-grant: ${errMsg(e)}`),
   });
+  // Issue #118: a removal can also take the member's shared files down (a
+  // signed deletion of each, then their blobs off the relay).
+  const offerFileCleanup = async (id: string) => {
+    const ok = await confirmDialog("Also delete the files they shared in this workspace? Everyone stops seeing them and their encrypted copies leave the relay.", {
+      title: "Their shared files",
+      confirmLabel: "Delete their files",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const n = await deleteMemberAttachments(id);
+      toast.success(n === 1 ? "Deleted 1 file." : `Deleted ${n} files.`);
+    } catch (e) {
+      toast.error(`Couldn't delete their files: ${errMsg(e)}`);
+    }
+  };
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeMember(sessionId, id),
-    onSuccess: () => {
+    onSuccess: (_r, id) => {
       setError(null);
       refresh();
+      void offerFileCleanup(id);
     },
     onError: (e) => setError(String(e)),
   });
@@ -1960,9 +1995,10 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   // lose access to new messages.
   const revokeMutation = useMutation({
     mutationFn: (id: string) => removeAndRevoke(sessionId, id),
-    onSuccess: (r) => {
+    onSuccess: (r, id) => {
       setError(null);
       refresh();
+      void offerFileCleanup(id);
       toast.success(
         r.rotated
           ? `Removed and revoked — key rotated to ${r.recipients} member${r.recipients === 1 ? "" : "s"}.`

@@ -50,6 +50,7 @@ mod passkey_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
+mod attachments;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -2654,6 +2655,16 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
         reverted: p.reverted,
         argv: p.command.as_ref().map(|c| c.argv.clone()),
         producing_agent_id: p.producing_agent_id.map(|id| id.to_string()),
+        offered_file: p.attachment.as_deref().map(|a| {
+            let class = hive_core::attachment::class_of_extension(&hive_core::attachment::extension(&a.name));
+            hive_proto::OfferedFileDto {
+                name: a.name.clone(),
+                size: a.size,
+                content_type: a.content_type.clone(),
+                sha256: a.sha256.clone(),
+                risky: class.risky() || class == hive_core::attachment::TypeClass::Unknown || hive_core::attachment::double_extension(&a.name),
+            }
+        }),
         ..Default::default()
     }
 }
@@ -3747,28 +3758,6 @@ fn read_image_data_url(path: String) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
-/// Where decrypted attachment blobs are cached locally, keyed by blob id.
-fn blob_cache_dir(data_dir: &std::path::Path) -> PathBuf {
-    attachments_dir(data_dir).join("blobs")
-}
-
-fn content_type_for(path: &std::path::Path) -> String {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "pdf" => "application/pdf",
-        "txt" | "md" | "log" => "text/plain",
-        "json" => "application/json",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
-
 /// The relay room + workspace keyring needed for the blob channel. `None` when
 /// no relay is configured or no workspace key is held → attachments stay
 /// local-only. Blobs seal under the ring's seal key (the authorized head, B1)
@@ -3795,97 +3784,6 @@ pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&Workspa
     let src = key_source_for(state, conn);
     let svc = state.service.lock().unwrap();
     hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
-}
-
-/// Share a composer attachment. Relay upload is off in this release
-/// (`RELAY_ATTACHMENT_UPLOAD_ENABLED`), so this returns the device-local
-/// `[Attached: <path>]` marker. With the guard on: seal the
-/// file with the workspace key, upload the ciphertext to the relay's blob channel,
-/// and return the `[Attached-blob: …]` marker to embed in the message. When no
-/// relay is configured, falls back to today's local-only `[Attached: <path>]`
-/// marker (only this device can open it). The sender also caches the plaintext so
-/// its own view resolves the blob without a round-trip.
-#[tauri::command]
-async fn share_attachment(
-    state: State<'_, AppState>,
-    session_id: String,
-    path: String,
-) -> Result<String, String> {
-    let p = std::path::PathBuf::from(path.trim());
-    let bytes = std::fs::read(&p).map_err(|e| format!("read attachment: {e}"))?;
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-
-    // A chat in the device-local workspace never syncs, so there's no member to
-    // deliver to — keep the local path marker and skip the (pointless) upload,
-    // even when a relay is configured for the user's rooms.
-    if let Ok(sid) = Uuid::parse_str(&session_id) {
-        if let Ok(svc) = state.service.lock() {
-            if let Ok(Some(session)) = svc.load(sid) {
-                if state.is_local_only_ws(session.workspace_id) {
-                    return Ok(format!("[Attached: {}]", p.display()));
-                }
-            }
-        }
-    }
-
-    // Relay attachment upload is off in this release (one guard, no setting):
-    // keep the device-local path marker. See
-    // hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED.
-    if !hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED {
-        return Ok(format!("[Attached: {}]", p.display()));
-    }
-    let Some((url, room, ring)) = blob_transport(&state) else {
-        // Local-only: no relay, so keep the path marker (unchanged behavior).
-        return Ok(format!("[Attached: {}]", p.display()));
-    };
-    let content_type = content_type_for(&p);
-    let id = Uuid::new_v4().to_string();
-    let client = state.relay_client(&url);
-    let blob_ref =
-        hive_runtime::attachment_blob::upload(&client, &room, &ring, &id, &name, &content_type, &bytes)
-            .await
-            .map_err(|e| format!("upload attachment: {e}"))?;
-    // Cache the plaintext locally so the sender resolves it with no download.
-    let cache = blob_cache_dir(&state.data_dir);
-    let _ = std::fs::create_dir_all(&cache);
-    let _ = std::fs::write(
-        cache.join(hive_runtime::attachment_blob::cache_filename(&id, &name)),
-        &bytes,
-    );
-    Ok(blob_ref.marker())
-}
-
-/// Resolve a blob reference to a local file path — cache hit, or download +
-/// decrypt into the cache. Used by the UI to preview a received attachment (and,
-/// on the agent side, materialized into the prompt). Errors if the blob can't be
-/// fetched/opened (e.g. no relay, aged out, wrong key).
-#[tauri::command]
-async fn resolve_attachment_blob(
-    state: State<'_, AppState>,
-    id: String,
-    name: String,
-) -> Result<String, String> {
-    if !hive_runtime::attachment_blob::valid_blob_id(&id) {
-        return Err("invalid attachment id".into());
-    }
-    let cache = blob_cache_dir(&state.data_dir);
-    let path = cache.join(hive_runtime::attachment_blob::cache_filename(&id, &name));
-    if path.exists() {
-        return Ok(path.to_string_lossy().into_owned());
-    }
-    let Some((url, room, ring)) = blob_transport(&state) else {
-        return Err("no relay configured — this attachment is only on the sender's device".into());
-    };
-    let client = state.relay_client(&url);
-    match hive_runtime::attachment_blob::download(&client, &room, &ring, &id).await {
-        Ok(Some(bytes)) => {
-            std::fs::create_dir_all(&cache).map_err(map_err)?;
-            std::fs::write(&path, &bytes).map_err(map_err)?;
-            Ok(path.to_string_lossy().into_owned())
-        }
-        Ok(None) => Err("attachment not found on the relay (it may have aged out)".into()),
-        Err(e) => Err(format!("fetch attachment: {e}")),
-    }
 }
 
 /// Read the tail of today's app log for the in-app Diagnostics view — the
@@ -7321,17 +7219,32 @@ async fn windowed_context(
 
     let mut turns =
         turns_with_summary(&plan.kept, responder.agent_id, &responder.author, summary.as_deref());
-    // Materialize any `[Attached-blob: …]` references to local files so the agent
-    // (which reads paths) can open attachments other members shared over the relay.
-    // No-op for turns without blob markers, or when no relay/key is configured.
-    if let Some((url, room, ring)) = blob_transport(state) {
-        let client = state.relay_client(&url);
-        let cache = blob_cache_dir(&state.data_dir);
+    // Files shared over the relay reach the agent only as delimited untrusted
+    // data (issue #118): text files' verified content, anything else its
+    // description; never a path. No-op for turns without attachment markers.
+    // A local path in a turn resolves (image inlining) only when this
+    // person wrote it in one of their own messages; anyone else's, or one a
+    // shared file carries, is defused (issue #118).
+    {
+        let me = state.service.lock().unwrap().author().id.clone();
+        let own = hive_runtime::attachment_blob::own_path_markers(session, &me);
         for t in turns.iter_mut() {
-            if t.content.contains("[Attached-blob:") {
-                t.content =
-                    hive_runtime::attachment_blob::materialize_body(&t.content, &client, &room, &ring, &cache)
-                        .await;
+            t.content = hive_runtime::attachment_blob::defuse_foreign_path_markers(&t.content, &own);
+        }
+    }
+    if turns.iter().any(|t| t.content.contains("[Attachment: ")) {
+        let placed = hive_runtime::attachment_blob::placed_attachments(session);
+        let head = state.service.lock().unwrap().attachment_rules(session.workspace_id).unwrap_or_default();
+        let transport = blob_transport(state).filter(|(_, room, _)| room_workspace_id(room) == session.workspace_id);
+        let cache = hive_runtime::attachment_blob::verified_cache_dir(&state.data_dir);
+        let client = transport.as_ref().map(|(url, _, _)| state.relay_client(url));
+        let (room, ring) = match &transport {
+            Some((_, room, ring)) => (room.clone(), ring.clone()),
+            None => (String::new(), hive_runtime::keyring::KeyringEngine::default()),
+        };
+        for t in turns.iter_mut() {
+            if t.content.contains("[Attachment: ") {
+                t.content = hive_runtime::attachment_blob::materialize_for_agent(&t.content, &placed, &head, client.as_ref(), &room, &ring, &cache).await;
             }
         }
     }
@@ -12344,6 +12257,7 @@ async fn sync_pull_once(
                     tracing::warn!(target: "sync", "closing settled box admissions: {e}");
                 }
                 fulfil_apply_requests(app);
+                attachments::share_approved_offers(app);
             }
             if pulled > 0 {
                 let _ = app.emit("workspace://synced", pulled);
@@ -15198,8 +15112,17 @@ pub fn run() {
             probe_relay_at,
             export_chat,
             save_attachment,
-            share_attachment,
-            resolve_attachment_blob,
+            attachments::share_attachment,
+            attachments::list_attachments,
+            attachments::check_attachment,
+            attachments::save_received_attachment,
+            attachments::preview_attachment,
+            attachments::delete_attachment,
+            attachments::delete_member_attachments,
+            attachments::attachment_rules,
+            attachments::set_attachment_policy,
+            attachments::block_attachment_hash,
+            attachments::unblock_attachment_hash,
             read_image_data_url,
             read_recent_logs,
             log_dir_path,
