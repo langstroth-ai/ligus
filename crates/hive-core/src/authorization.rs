@@ -304,6 +304,9 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::WorkspaceRepoRemoved { .. } => WorkspaceRole::Admin,
         // Using a listed repo in a chat is a member's.
         SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => WorkspaceRole::Contributor,
+        // Moving a chat's pinned base: an Admin's, or the chat's creator's
+        // (a Contributor at least; `authz::authorize` checks which).
+        SessionEvent::ChatBaseRepinned { .. } => WorkspaceRole::Contributor,
         // A host certifying an agent key: a member's act, plus the
         // certificate's own checks (`authz::authorize`).
         SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,

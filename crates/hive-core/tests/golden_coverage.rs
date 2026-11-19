@@ -97,6 +97,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
         E::ChatRepoSet { .. } => "chatRepoSet",
         E::ChatBasePinned { .. } => "chatBasePinned",
+        E::ChatBaseRepinned { .. } => "chatBaseRepinned",
         E::Unknown => "unknown",
     }
 }
@@ -119,7 +120,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "proposalApplyWithdrawn",
+    "proposalApplyWithdrawn", "chatBaseRepinned",
 ];
 
 #[test]
@@ -454,4 +455,42 @@ fn lamport_bounds_goldens() {
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }
     std::fs::write(path, out).unwrap();
+}
+
+/// Writes the re-pin line (review residual 3): `chatBaseRepinned`, a
+/// chat's pinned base moved from the pin in force to another commit. Run
+/// with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn repin_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let payload = SessionEvent::ChatBaseRepinned {
+        repo_id: repo_id("github.com/zazulam/wefit"),
+        commit: "89abcdef0123456789abcdef0123456789abcdef".into(),
+        previous: "0123456789abcdef0123456789abcdef01234567".into(),
+    };
+    let mut e = SessionEventEnvelope::new(chat, ws, 501, payload);
+    e.id = u(0x6010);
+    e.event_id = u(0x6011);
+    e.lamport = 901;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x6002)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"chatBaseRepinned\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
 }

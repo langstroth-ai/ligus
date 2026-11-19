@@ -449,6 +449,14 @@ pub enum SessionEvent {
     /// Pin the commit this chat's branch was cut from, for its repo (chat
     /// log; Contributor; never an agent).
     ChatBasePinned { repo_id: Uuid, commit: String },
+    /// Move this chat's pinned base for its repo from `previous` to `commit`
+    /// (chat log; Admin or the chat's creator, a human through their own
+    /// device, with presence under rules v2). The only way a pin changes:
+    /// `ChatBasePinned` is first-pin-wins. `previous` must be the pin in
+    /// force, so two re-pins racing can't both land. Every host with a chat
+    /// branch on an earlier pin rebases it onto `commit` by replaying the
+    /// chat's ledger there, or refuses the chat's turns visibly.
+    ChatBaseRepinned { repo_id: Uuid, commit: String, previous: String },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
@@ -570,6 +578,7 @@ impl SessionEvent {
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
             SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
             SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
+            SessionEvent::ChatBaseRepinned { .. } => "chatBaseRepinned",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -869,14 +878,39 @@ impl ChatSession {
                     self.apply_outcomes.entry(*request_id).or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
                 }
             }
+            // A chat's pin is per repo and outlives switching repos: pointing
+            // the chat away and back restores the repo's pin, never clears
+            // it (else any Contributor could re-pin by switching twice,
+            // review residual 3).
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {
-                let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
-                let base_commit = if same { self.repo.as_ref().and_then(|r| r.base_commit.clone()) } else { None };
+                let base_commit = repo_id.and_then(|r| self.repo_bases.get(&r)).and_then(|h| h.last().cloned());
                 self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
             }
+            // First pin wins: a later `ChatBasePinned` for a repo that has a
+            // pin (two hosts cutting the branch at once, or a member trying
+            // to move it) changes nothing. Moving it is `ChatBaseRepinned`.
             SessionEvent::ChatBasePinned { repo_id, commit } => {
-                if let Some(r) = self.repo.as_mut().filter(|r| r.repo_id == Some(*repo_id)) {
-                    r.base_commit = Some(commit.clone());
+                if !self.repo_bases.contains_key(repo_id) && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    self.repo_bases.insert(*repo_id, vec![commit.clone()]);
+                    if let Some(r) = self.repo.as_mut() {
+                        r.base_commit = Some(commit.clone());
+                    }
+                }
+            }
+            // A re-pin lands only on the pin it names as `previous` (a
+            // compare-and-swap in the fold; authz checks the same), and
+            // keeps the earlier pins: a host's branch on any of them
+            // follows by rebasing.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                let current = self.repo_bases.get(repo_id).and_then(|h| h.last());
+                if current == Some(previous) && commit != previous && self.repo.as_ref().is_some_and(|r| r.repo_id == Some(*repo_id)) {
+                    let history = self.repo_bases.entry(*repo_id).or_default();
+                    if history.len() < crate::workspace_repo::MAX_BASE_PINS {
+                        history.push(commit.clone());
+                        if let Some(r) = self.repo.as_mut() {
+                            r.base_commit = Some(commit.clone());
+                        }
+                    }
                 }
             }
             // Read by the roster tracker (authz::timeline), not the session.

@@ -100,6 +100,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // review F7); renaming is cosmetic; using one in a chat is content.
         SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
         SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
+        // Moving a chat's pinned base rewrites every host's chat branch.
+        SessionEvent::ChatBaseRepinned { .. } => true,
         // Everything else is content, coordination or a self-validating
         // publication.
         SessionEvent::SessionSnapshot { .. }

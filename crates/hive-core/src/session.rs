@@ -106,6 +106,13 @@ pub struct ChatSession {
     /// form).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<crate::workspace_repo::ChatRepo>,
+    /// Every base this chat has pinned for each repo, oldest first; the last
+    /// is the one in force (`ChatBasePinned` sets the first, first pin
+    /// wins; `ChatBaseRepinned` appends). Kept across repo switches, and so
+    /// hosts with a branch on an earlier pin can follow a re-pin. Skipped
+    /// when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repo_bases: BTreeMap<Uuid, Vec<String>>,
     /// Apply requests (`ProposalApplyRequested`) by id: a human asked a host
     /// to apply an approved proposal. Skipped when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -205,6 +212,7 @@ impl ChatSession {
             guards: Default::default(),
             flow: crate::flow::FlowState::default(),
             repo: None,
+            repo_bases: BTreeMap::new(),
             apply_requests: BTreeMap::new(),
             apply_outcomes: BTreeMap::new(),
             applied_order: Vec::new(),

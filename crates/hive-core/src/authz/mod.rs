@@ -197,6 +197,7 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
                 | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
+                | SessionEvent::ChatBaseRepinned { .. }
         )
 }
 
@@ -816,6 +817,36 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 }
                 if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
                     return Decision::deny("pins a base for a repository this chat doesn't use");
+                }
+            }
+            // Review residual 3: re-pinning is explicit, a person's (never an
+            // agent or a runtime effect, through their own device), an
+            // Admin's or the chat's creator's, from the pin in force.
+            SessionEvent::ChatBaseRepinned { repo_id, commit, previous } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never re-pins a chat's base");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person re-pins a chat's base through their own device");
+                }
+                let creator = !fold.creator_actor_id.is_empty() && fold.creator_actor_id == author;
+                if !creator && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only an Admin or the chat's creator re-pins its base");
+                }
+                if !crate::workspace_repo::is_commit_id(commit) || !crate::workspace_repo::is_commit_id(previous) || commit == previous {
+                    return Decision::deny("malformed re-pin");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("re-pins a base for a repository this chat doesn't use");
+                }
+                let history = fold.repo_bases.get(repo_id);
+                if history.and_then(|h| h.last()) != Some(previous) {
+                    return Decision::deny("re-pins from a base that isn't the one in force");
+                }
+                if history.is_some_and(|h| h.len() >= crate::workspace_repo::MAX_BASE_PINS) {
+                    return Decision::deny("this chat has re-pinned its base too many times");
                 }
             }
             _ => {}
