@@ -174,6 +174,10 @@ struct AppState {
     /// the last time this device listed its tools (no entry: not yet). A
     /// server with one is offered only to turns that have the shell.
     mcp_shell_tools: Mutex<HashMap<String, Vec<String>>>,
+    /// MCP servers whose tools couldn't be listed, and when: not listed
+    /// again before a turn for ten minutes (they stay out of turns without
+    /// the shell meanwhile).
+    mcp_probe_failed: Mutex<HashMap<String, std::time::Instant>>,
     /// Live relay connection health, updated by the background sync loop's
     /// error/success arms so the UI can distinguish "Live" from a dead relay /
     /// expired token / wrong key instead of showing "Live" forever.
@@ -5132,7 +5136,11 @@ async fn inspect_mcp_server(state: State<'_, AppState>, server_id: String) -> Re
         .map_err(|_| "the server didn't list its tools in time".to_string())?
         .map_err(|e| e.to_string())?;
     let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (server_id.clone(), t)).collect();
+    if tagged.is_empty() {
+        state.mcp_shell_tools.lock().unwrap().insert(server_id.clone(), Vec::new());
+    }
     crate::guards::record_mcp_tools(&state, &tagged);
+    state.mcp_probe_failed.lock().unwrap().remove(&server_id);
     Ok(state.mcp_shell_tools.lock().unwrap().get(&server_id).cloned().unwrap_or_default())
 }
 
@@ -11816,6 +11824,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         ollama_pulls: Mutex::new(HashMap::new()),
         turn_stops: Mutex::new(HashMap::new()),
         mcp_shell_tools: Mutex::new(HashMap::new()),
+        mcp_probe_failed: Mutex::new(HashMap::new()),
         conn_health: Mutex::new(ConnHealth::default()),
         active_membership: Mutex::new(None),
         app_handle: app.clone(),

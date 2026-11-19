@@ -852,19 +852,27 @@ pub(crate) fn mcp_known_shell_free(state: &AppState, id: &str) -> bool {
 /// judge them.
 pub(crate) async fn probe_mcp_shells(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) {
     state.ensure_fresh_mcp_tokens().await;
+    const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
     let unknown: Vec<hive_runtime::McpServerSpec> = filter_mcp_servers(state, state.combined_mcp_servers(), egress)
         .into_iter()
         .filter(|s| s.enabled && !state.mcp_shell_tools.lock().unwrap().contains_key(&s.id))
+        .filter(|s| state.mcp_probe_failed.lock().unwrap().get(&s.id).is_none_or(|t| t.elapsed() > RETRY))
         .collect();
     for s in unknown {
         let id = s.id.clone();
         let registry = hive_runtime::McpRegistry::new(vec![s]);
-        if let Ok(Ok(tools)) = tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
-            let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
-            if tagged.is_empty() {
-                state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
+        match tokio::time::timeout(std::time::Duration::from_secs(15), registry.list_tools(&id)).await {
+            Ok(Ok(tools)) => {
+                let tagged: Vec<(String, hive_runtime::McpTool)> = tools.into_iter().map(|t| (id.clone(), t)).collect();
+                if tagged.is_empty() {
+                    state.mcp_shell_tools.lock().unwrap().insert(id.clone(), Vec::new());
+                }
+                record_mcp_tools(state, &tagged);
+                state.mcp_probe_failed.lock().unwrap().remove(&id);
             }
-            record_mcp_tools(state, &tagged);
+            _ => {
+                state.mcp_probe_failed.lock().unwrap().insert(id, std::time::Instant::now());
+            }
         }
     }
 }
