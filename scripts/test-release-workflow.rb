@@ -34,6 +34,7 @@ require "json"
 require "minitest/autorun"
 require "open3"
 require "tmpdir"
+require "fileutils"
 require "yaml"
 
 ROOT = File.expand_path("..", __dir__)
@@ -448,6 +449,157 @@ class MacosSigning < Minitest::Test
         refute ok, "#{opts} passed"
         assert_includes out, why
       end
+    end
+  end
+end
+
+# Every job that builds or checks a release must build the tag itself, also
+# on a manual dispatch (which otherwise checks out the dispatching branch).
+class BuildsTheTag < Minitest::Test
+  TAG_REF = "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+
+  def checkouts(workflow)
+    workflow.fetch("jobs").flat_map do |name, job|
+      job.fetch("steps").select { |s| s["uses"].to_s.start_with?("actions/checkout@") }.map { |s| [name, s] }
+    end
+  end
+
+  def test_every_release_checkout_is_the_tag
+    [RELEASE, RELEASE_CLI].each do |wf|
+      checkouts(wf).each do |job, step|
+        assert_equal TAG_REF, step.dig("with", "ref"), "#{job} would build the dispatching branch, not the tag"
+      end
+    end
+  end
+
+  def test_cli_release_checks_the_tag_against_the_version_first
+    run = steps(RELEASE_CLI, "build").map { |s| s["run"].to_s }.join("\n")
+    refute_nil run.index("check-release-config.sh"), "release-cli never checks the tag matches the version"
+    assert_operator run.index("check-release-config.sh"), :<, run.index("cargo build")
+  end
+end
+
+# The CLI binaries ship with a SHA-256 file each, and install.sh refuses a
+# binary that does not match it.
+class CliChecksums < Minitest::Test
+  INSTALL = File.join(ROOT, "install.sh")
+
+  def test_release_cli_attaches_a_checksum_per_binary
+    step = steps(RELEASE_CLI, "build").find { |s| s["uses"].to_s.start_with?("softprops/action-gh-release@") }
+    files = step.dig("with", "files").to_s
+    assert_includes files, "ligus-${{ matrix.target }}.sha256"
+    stage = steps(RELEASE_CLI, "build").find { |s| s["name"] == "Stage asset" }["run"]
+    assert_match(/sha256/, stage)
+  end
+
+  # Run install.sh against a fake curl that serves files from a directory.
+  def install(assets, env = {})
+    Dir.mktmpdir do |dir|
+      bin = File.join(dir, "bin")
+      Dir.mkdir(bin)
+      srv = File.join(dir, "srv")
+      Dir.mkdir(srv)
+      assets.each { |name, body| File.write(File.join(srv, name), body) }
+      File.write(File.join(bin, "curl"), <<~SH)
+        #!/bin/sh
+        out=""; url=""
+        while [ $# -gt 0 ]; do
+          case "$1" in -o) out="$2"; shift ;; --proto|--tlsv1.2) [ "$1" = --proto ] && shift ;; -*) ;; *) url="$1" ;; esac
+          shift
+        done
+        echo "$url" >> "#{dir}/urls"
+        f="#{srv}/$(basename "$url")"
+        [ -f "$f" ] || exit 22
+        if [ -n "$out" ]; then cp "$f" "$out"; else cat "$f"; fi
+      SH
+      File.chmod(0o755, File.join(bin, "curl"))
+      dest = File.join(dir, "dest")
+      full_env = { "PATH" => "#{bin}:#{ENV.fetch("PATH")}", "HOME" => dir, "LIGUS_INSTALL_DIR" => dest }.merge(env)
+      out, err, status = Open3.capture3(full_env, "sh", INSTALL)
+      urls = File.exist?(File.join(dir, "urls")) ? File.read(File.join(dir, "urls")).split("\n") : []
+      yield status.success?, out + err, File.exist?(File.join(dest, "ligus")), urls
+    end
+  end
+
+  def target
+    os = RbConfig::CONFIG["host_os"]
+    arch = `uname -m`.strip
+    if os.include?("darwin")
+      arch == "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
+    else
+      arch == "x86_64" ? "x86_64-unknown-linux-musl" : "aarch64-unknown-linux-musl"
+    end
+  end
+
+  def sha(body)
+    require "digest"
+    Digest::SHA256.hexdigest(body)
+  end
+
+  def test_good_checksum_installs
+    body = "#!/bin/sh\necho ligus\n"
+    install({ "ligus-#{target}" => body, "ligus-#{target}.sha256" => "#{sha(body)}  ligus-#{target}\n" }) do |ok, out, installed, _|
+      assert ok, out
+      assert installed
+    end
+  end
+
+  def test_bad_checksum_is_refused
+    install({ "ligus-#{target}" => "tampered", "ligus-#{target}.sha256" => "#{sha("original")}  ligus-#{target}\n" }) do |ok, out, installed, _|
+      refute ok, out
+      refute installed, "a binary that fails its checksum was installed"
+      assert_includes out, "checksum"
+    end
+  end
+
+  def test_missing_checksum_is_refused
+    install({ "ligus-#{target}" => "x" }) do |ok, out, installed, _|
+      refute ok, out
+      refute installed
+    end
+  end
+
+  def test_version_without_v_prefix_is_normalised
+    body = "bin"
+    assets = { "ligus-#{target}" => body, "ligus-#{target}.sha256" => "#{sha(body)}  ligus-#{target}\n" }
+    install(assets, "LIGUS_VERSION" => "0.1.0") do |ok, out, _, urls|
+      assert ok, out
+      assert(urls.all? { |u| u.include?("/releases/download/v0.1.0/") }, urls.inspect)
+    end
+  end
+
+  def test_malformed_version_is_refused
+    install({}, "LIGUS_VERSION" => "../../evil") do |ok, _out, installed, urls|
+      refute ok
+      refute installed
+      assert_empty urls
+    end
+  end
+end
+
+# Every version in the release must be the tag's version, not just tauri.conf.
+class AllVersionsMatch < Minitest::Test
+  SCRIPT = File.expand_path("check-release-config.sh", __dir__)
+
+  def test_a_crate_or_package_version_mismatch_fails
+    Dir.mktmpdir do |dir|
+      %w[app web].each { |d| Dir.mkdir(File.join(dir, d)) }
+      FileUtils.cp(File.join(ROOT, "app/tauri.conf.json"), File.join(dir, "app/tauri.conf.json"))
+      version = TAURI_CONF.fetch("version")
+      File.write(File.join(dir, "web/package.json"), JSON.generate({ "version" => version }))
+      lock = File.read(File.join(ROOT, "Cargo.lock"))
+      File.write(File.join(dir, "Cargo.lock"), lock)
+      out, _e, st = Open3.capture3({ "LIGUS_RELEASE_ROOT" => dir }, SCRIPT, "v#{version}", File.join(dir, "app/tauri.conf.json"))
+      assert st.success?, out
+      File.write(File.join(dir, "Cargo.lock"), lock.sub(/(name = "ligus-cli"\nversion = ")[^"]+/, '\19.9.9'))
+      out, _e, st = Open3.capture3({ "LIGUS_RELEASE_ROOT" => dir }, SCRIPT, "v#{version}", File.join(dir, "app/tauri.conf.json"))
+      refute st.success?
+      assert_includes out, "ligus-cli"
+      File.write(File.join(dir, "Cargo.lock"), lock)
+      File.write(File.join(dir, "web/package.json"), JSON.generate({ "version" => "9.9.9" }))
+      out, _e, st = Open3.capture3({ "LIGUS_RELEASE_ROOT" => dir }, SCRIPT, "v#{version}", File.join(dir, "app/tauri.conf.json"))
+      refute st.success?
+      assert_includes out, "package.json"
     end
   end
 end

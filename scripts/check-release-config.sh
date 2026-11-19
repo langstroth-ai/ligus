@@ -8,15 +8,18 @@
 #   it, so shipping the placeholder would strand them.
 # - The updater endpoint must be this repo's latest.json.
 # - The tag must be a plain release tag, v<version>, matching the app version
-#   (for example v0.1.0 for version 0.1.0).
+#   (for example v0.1.0 for version 0.1.0), and every ligus crate in
+#   Cargo.lock and web/package.json must carry that same version.
+#   LIGUS_RELEASE_ROOT (default: the repo) is where those two files live.
 set -euo pipefail
 
 tag="${1:?usage: check-release-config.sh <tag> [tauri.conf.json]}"
 conf="${2:-app/tauri.conf.json}"
+root="${LIGUS_RELEASE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-python3 -I - "$tag" "$conf" <<'PY'
-import json, re, sys
-tag, conf = sys.argv[1], sys.argv[2]
+python3 -I - "$tag" "$conf" "$root" <<'PY'
+import json, os, re, sys
+tag, conf, root = sys.argv[1], sys.argv[2], sys.argv[3]
 c = json.load(open(conf))
 errs = []
 up = c.get("plugins", {}).get("updater", {})
@@ -31,6 +34,18 @@ if not m:
     errs.append("tag %r is not a plain release tag like v0.1.0" % tag)
 elif m.group(1) != c.get("version"):
     errs.append("tag %s does not match the app version %s" % (tag, c.get("version")))
+else:
+    want_v = m.group(1)
+    lock = open(os.path.join(root, "Cargo.lock")).read()
+    crates = re.findall(r'\[\[package\]\]\nname = "(ligus-[^"]+)"\nversion = "([^"]+)"', lock)
+    if not crates:
+        errs.append("no ligus crates found in %s/Cargo.lock" % root)
+    for name, v in crates:
+        if v != want_v:
+            errs.append("crate %s is %s in Cargo.lock, not %s" % (name, v, want_v))
+    web = json.load(open(os.path.join(root, "web/package.json"))).get("version")
+    if web != want_v:
+        errs.append("web/package.json version is %s, not %s" % (web, want_v))
 for e in errs:
     print("::error::" + e)
 sys.exit(1 if errs else 0)

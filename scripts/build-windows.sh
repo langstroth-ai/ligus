@@ -52,10 +52,10 @@ docker run --rm \
         cargo install tauri-cli --version "^2" --locked 2>/dev/null || true
         export PATH="/usr/local/cargo/bin:$PATH"
         # Dedicated build dir so a concurrent Linux/native build (sharing the
-        # repo mount) doesn't make us block on the cargo build-directory lock.
+        # repo mount) does not make us block on the cargo build-directory lock.
         export CARGO_TARGET_DIR=/work/target/cross-windows
         # --no-default-features drops the (default-on) `p2p` feature so iroh —
-        # whose `wmi` crate (Windows COM) can't cross-compile via cargo-xwin —
+        # whose `wmi` crate (Windows COM) cannot cross-compile via cargo-xwin —
         # is excluded. Works because the workspace root declares ligus-runtime
         # with default-features = false. The Windows installer therefore ships
         # WITHOUT direct P2P; build natively on Windows (or via CI) to include
