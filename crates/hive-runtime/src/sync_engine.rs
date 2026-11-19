@@ -20,6 +20,7 @@ use crate::keyring::{KeyringEngine, KeySource};
 use crate::envelope_verifier::verdict_for;
 use crate::identity_verifier::{gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache};
 use crate::relay_client::{RelayClient, RelayError, ENVELOPE_PAGE_LIMIT};
+use crate::relay_refusal::{human_duration, RefusalClass, RelayRefusal};
 
 /// Most relay pages one [`SyncEngine::pull_round`] fetches and applies. A room
 /// with more history than this catches up over several rounds
@@ -48,6 +49,65 @@ pub enum SyncError {
     /// would be refused by every peer. An Admin rotates to include it.
     #[error("waiting for the workspace key: this device isn't a recipient of key version {0} yet")]
     NotARecipient(u32),
+}
+
+impl SyncError {
+    /// The least the caller should wait before the next round, when the
+    /// relay said so (a `429`/`507` with `Retry-After`).
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            SyncError::Relay(e) => e.refusal().map(|r| r.retry_after),
+            _ => None,
+        }
+    }
+}
+
+/// Something about this room's sync a person should see, while sync itself
+/// goes on (reads keep flowing; nothing loops).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncAttention {
+    /// The relay refused this device's writes to the room (it's full, the
+    /// organisation's quota is reached, the relay is full or rate limiting,
+    /// or this client's quota is used up). New events wait in the local
+    /// store; one push is tried again at `until` (for a client quota, an
+    /// hour at least).
+    WritesPaused { refusal: RelayRefusal, until: Option<std::time::Instant> },
+    /// A fresh fold (cursor 0) whose first envelope isn't seq 1: the relay
+    /// expired the room or trimmed its front, so this device can't rebuild
+    /// the workspace from the founder's seed.
+    RoomTruncated { first_seq: u64 },
+}
+
+impl SyncAttention {
+    /// A sentence for the person.
+    pub fn message(&self) -> String {
+        match self {
+            SyncAttention::WritesPaused { refusal, until } => {
+                let mut r = refusal.clone();
+                if let Some(u) = until {
+                    r.retry_after = u.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_secs(1));
+                }
+                let msg = r.user_message();
+                if until.is_none() {
+                    msg
+                } else if r.class() == RefusalClass::ClientQuota {
+                    format!("{msg} (checked again in {})", human_duration(r.retry_after))
+                } else {
+                    format!("{msg} (sync paused for writes, {} left)", human_duration(r.retry_after))
+                }
+            }
+            SyncAttention::RoomTruncated { first_seq } => format!(
+                "room expired or truncated: the relay's history for this workspace starts at envelope {first_seq}, not 1, so this device \
+                 can't rebuild the workspace from its founding. Ask a member whose device still holds it to re-invite you, or move \
+                 the workspace to a relay that keeps the whole log"
+            ),
+        }
+    }
+
+    /// Whether this pauses this room's writes.
+    pub fn is_write_pause(&self) -> bool {
+        matches!(self, SyncAttention::WritesPaused { .. })
+    }
 }
 
 /// Drives one workspace's relay sync. Holds cursors so repeated rounds only
@@ -131,6 +191,19 @@ pub struct SyncEngine {
     /// GitHub-identity verdict cache (Option C). Populated out-of-band by an async
     /// task that hits GitHub; read synchronously on ingest. Unused in `Relay` mode.
     identity_cache: SharedIdentityCache,
+    /// The relay refused writes to this room (see [`SyncAttention`]): the
+    /// push scan sends nothing until `until` (`None`: until the engine is
+    /// rebuilt or [`SyncEngine::resume_writes`]).
+    write_pause: Option<(RelayRefusal, Option<std::time::Instant>)>,
+    /// A fresh fold's first envelope was past seq 1 (that seq).
+    truncated_at: Option<u64>,
+    /// A read was refused with a `Retry-After` longer than a request waits
+    /// in place: no round before this.
+    round_hold: Option<std::time::Instant>,
+    /// This engine's secret in its pushes' `Idempotency-Key`s
+    /// ([`crate::relay_client::idempotency_key`]): no other writer to the
+    /// room can compute them.
+    push_secret: [u8; 32],
 }
 
 /// Outcome of decoding one fetched relay body. Separating the two failure
@@ -179,6 +252,59 @@ impl SyncEngine {
             #[cfg(test)]
             identity_mode: IdentityMode::Relay,
             identity_cache: shared_cache(),
+            write_pause: None,
+            truncated_at: None,
+            round_hold: None,
+            push_secret: {
+                let mut b = [0u8; 32];
+                getrandom::fill(&mut b).expect("os rng");
+                b
+            },
+        }
+    }
+
+    /// How long the relay asked this device to wait before its next round
+    /// (a refused read's `Retry-After`), if that time hasn't come.
+    pub fn hold_left(&mut self) -> Option<std::time::Duration> {
+        let until = self.round_hold?;
+        let now = std::time::Instant::now();
+        if until <= now {
+            self.round_hold = None;
+            return None;
+        }
+        Some(until - now)
+    }
+
+    /// What a person should know about this room's sync (writes paused by a
+    /// relay refusal, or a truncated room), if anything. A write pause wins.
+    pub fn attention(&self) -> Option<SyncAttention> {
+        if let Some((refusal, until)) = &self.write_pause {
+            return Some(SyncAttention::WritesPaused { refusal: refusal.clone(), until: *until });
+        }
+        self.truncated_at.map(|first_seq| SyncAttention::RoomTruncated { first_seq })
+    }
+
+    /// The `Idempotency-Key` this engine pushes `event_id` under.
+    pub fn push_key(&self, event_id: Uuid) -> String {
+        crate::relay_client::idempotency_key(&self.push_secret, event_id)
+    }
+
+    /// Lift a write pause now (the person freed space, or asked to retry):
+    /// the next round pushes again.
+    pub fn resume_writes(&mut self) {
+        self.write_pause = None;
+    }
+
+    /// Whether writes are paused right now (a pause whose time came is
+    /// lifted here, so the next scan tries one push again).
+    fn writes_paused(&mut self) -> bool {
+        match &self.write_pause {
+            None => false,
+            Some((_, Some(until))) if std::time::Instant::now() >= *until => {
+                self.write_pause = None;
+                false
+            }
+            Some(_) => true,
         }
     }
 
@@ -423,7 +549,15 @@ impl SyncEngine {
         self.refresh_keyring(store)?;
         let mut applied = 0;
         for _ in 0..PULL_PAGES_PER_ROUND {
-            let fetched = self.fetch_new().await?;
+            let fetched = match self.fetch_new().await {
+                Ok(f) => f,
+                Err(e) => {
+                    if let Some(wait) = e.retry_after() {
+                        self.round_hold = Some(std::time::Instant::now() + wait);
+                    }
+                    return Err(e);
+                }
+            };
             applied += self.apply_fetched(store, &fetched)?;
             if !self.behind {
                 break;
@@ -504,6 +638,12 @@ impl SyncEngine {
         self.persist_pending(store)?;
         self.refresh_keyring(store)?;
         let mut out = Vec::new();
+        // A refused room (full, over quota, rate limited): send nothing and
+        // scan nothing until the pause ends; what was stored meanwhile is
+        // found by the next scan (rows only grow).
+        if self.writes_paused() {
+            return Ok(out);
+        }
         if self.scanned_row > 0 {
             // Incremental: only rows stored since the last scan. Everything at
             // or below `scanned_row` was already collected (or seen), and a
@@ -561,17 +701,35 @@ impl SyncEngine {
                     return Err(e);
                 }
             };
-            if let Err(e) = self.relay.push_value(&self.workspace, &body).await {
+            // The key makes a re-push (after a refusal or a lost answer) the
+            // same write to the relay, not a second copy.
+            let key = self.push_key(env.event_id);
+            if let Err(e) = self.relay.push_value_keyed(&self.workspace, &body, Some(&key)).await {
                 for unsent in &envelopes[i..] {
                     self.seen.remove(&unsent.event_id);
                 }
                 self.scanned_row = 0;
+                // A refusal of writes pauses this room's writes (the events
+                // stay in the outbox) instead of failing the round, so pulls
+                // go on and nothing loops against a full room.
+                if let RelayError::Refused(r) = &e {
+                    if r.class().pauses_writes() {
+                        // Every pause ends (a client quota rechecks after an
+                        // hour at least), so one refusal can't stop this
+                        // room's writes until a restart.
+                        let until = Some(std::time::Instant::now() + r.class().write_pause(r.retry_after));
+                        tracing::warn!(target: "sync", room = %self.workspace, code = %r.code, "relay refused writes: {}", r.user_message());
+                        self.write_pause = Some((r.clone(), until));
+                        return Ok(());
+                    }
+                }
                 return Err(e.into());
             }
             // Delivered: queue it for the durable `pushed` table so a restart
             // won't re-push it. Only reached AFTER a successful relay write, so a
             // failed push (handled above) never marks its events pushed.
             self.pending.push(env.event_id);
+            self.write_pause = None;
         }
         Ok(())
     }
@@ -606,6 +764,14 @@ impl SyncEngine {
             }
         };
         let page = self.relay.fetch_page(&self.workspace, after, self.page_limit).await?;
+        // A fresh fold starts at the founder's seed (seq 1). A first envelope
+        // past it means the relay expired or trimmed the room: say so.
+        if after == 0 {
+            if let Some(first) = page.rows.iter().map(|(seq, _)| *seq).min().filter(|s| *s > 1) {
+                tracing::warn!(target: "sync", room = %self.workspace, first, "room expired or truncated: its log starts past seq 1");
+                self.truncated_at = Some(first);
+            }
+        }
         self.behind = page.more;
         self.page_after = page.more.then_some(page.next_after);
         Ok(page.rows)

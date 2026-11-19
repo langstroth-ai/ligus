@@ -3067,7 +3067,7 @@ async fn phone_vote_attribution() {
 async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let rounds = vec![
         streamed_call("c1", "ligus_propose", r#"{"kind":"decision","title":"Use sqlite","body":"smaller footprint"}"#),
-        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":60}"#),
+        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":600}"#),
         streamed_call("c3", "ligus_flow", r#"{"op":"handoff","to":"reviewer","keyFiles":["README.md"],"notes":"check it"}"#),
         vec![delta(json!({"content": "Asked and handed off.\n[[propose: {\"title\": \"Use sqlite\", \"kind\": \"decision\"}]]\n[[mark: {\"kind\": \"claim\", \"path\": \"README.md\"}]]"}))],
         vec![delta(json!({"content": "Reviewed."}))],
@@ -3088,13 +3088,17 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     sync_once(&h.desktop).await.unwrap();
     let host = this_host(&h).await;
     bind_here(&h, &host, &[h.agent_id, reviewer_id]).await;
+    // The phone that answers, certified up front: nothing slow happens while
+    // the agent's question waits (its 600 s timeout is never what decides).
+    let (phone, account) = certified_phone(&h).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let mut rx = h.events(None).await;
     h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder pick a database" }))).await;
 
-    // The question reaches the phone; answer it there.
-    let seen = collect_until(&mut rx, 30, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
+    // The question reaches the phone; answer it there. Each wait ends on its
+    // event; the bound only catches a hang (a loaded CI box ran past 30 s).
+    let seen = collect_until(&mut rx, 180, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
     let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
     assert_eq!(ask["question"], "Which database?");
     assert_eq!(ask["kind"], "question", "the ask says what it is; the phone doesn't parse its text");
@@ -3104,7 +3108,6 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     assert_eq!(listed["asks"][0]["kind"], "question");
     // The box never answers as itself: the phone does, as its person.
     assert_gone(&h, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 })), "answer").await;
-    let (phone, account) = certified_phone(&h).await;
     let answer = hive_core::phone_action::PhoneAction::Answer {
         chat_id: Uuid::parse_str(&chat_id).unwrap(),
         ask_id: Uuid::parse_str(&ask_id).unwrap(),
@@ -3117,7 +3120,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     assert_eq!(listed["asks"][0]["answer"], "postgres", "{listed}");
 
     // The receiver's turn starts on this host and answers once.
-    let seen = collect_until(&mut rx, 60, |evs| {
+    let seen = collect_until(&mut rx, 180, |evs| {
         evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed.")
     })
     .await;
@@ -4192,5 +4195,97 @@ async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": a["prepareId"], "signature": "AAAA" }))).await;
     assert_eq!(code, 404);
     let _ = account;
+    h.handle.shutdown();
+}
+
+// ── "Add this phone" headless, and GET /v1/me on loopback ───────────────────
+
+/// `ligus phones certify`: a CLI person certifies the code a phone shows,
+/// confirming with their recovery key; without it (or with a fingerprint
+/// that doesn't match) nothing is written, and a box can't certify anyone.
+/// `GET /v1/me` on loopback then describes that phone (`?deviceId=`), and
+/// refuses an uncertified one with `device_not_certified`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phones_certify_headless_then_me_on_loopback() {
+    use hive_runtime::phone_enroll::PhoneCode;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let words = h._tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    // The person's recovery key (the harness desktop already registered its
+    // test recovery key), as the 24 words a person keeps offline.
+    let account = open_service(&h.desktop).unwrap().author().account_id.unwrap();
+    std::fs::write(&words, hive_core::testkit::test_recovery_key(account).words()).unwrap();
+    let phone = hive_core::testkit::Phone::new();
+    let code = PhoneCode::new_signed(phone.device_id, phone.public_key(), "Ana's iPhone", |m| hive_core::crypto::sign_p256(&phone.key, m));
+    let certs = || {
+        hive_runtime::event_store::EventStore::open(h.desktop.data_dir.join("hive.db"))
+            .unwrap()
+            .list(workspace_config_session_id(ws))
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(&e.payload, hive_core::SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == phone.device_id))
+            .count()
+    };
+    // No recovery key: refused. A wrong fingerprint: refused.
+    let fp = || Some(code.fingerprint());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, None, fp(), None).is_err());
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), Some("0000-0000-0000-0000-0000".into()), None).is_err());
+    // No fingerprint and nobody at a terminal to confirm it: refused, saying
+    // how to pass it.
+    let err = crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, None).unwrap_err();
+    assert!(err.to_string().contains("--fingerprint"), "{err}");
+    // A person at a terminal who doesn't confirm it (or answers anything but
+    // yes): refused; the prompt was shown this code.
+    let mut shown = Vec::new();
+    let mut say_no = |p: &hive_runtime::phone_enroll::PhoneCode| {
+        shown.push(p.fingerprint());
+        Ok(false)
+    };
+    assert!(crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_no)).is_err());
+    assert_eq!(shown, vec![code.fingerprint()]);
+    assert_eq!(code.fingerprint().len(), 24, "five groups of four");
+    // A box can't.
+    let box_cfg = h.handle.shared.cfg.clone();
+    assert!(crate::admit::cmd_phones_certify(&box_cfg, Some(&code.encode()), None, Some(w.clone()), fp(), None).is_err());
+    assert_eq!(certs(), 0);
+
+    // Not certified yet: 403 device_not_certified.
+    let (status, v) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+    assert_eq!((status, v["error"].as_str()), (403, Some("device_not_certified")), "{v}");
+    let (status, v) = status_of(&h, reqwest::Method::GET, "/v1/me", None).await;
+    assert_eq!(status, 400, "{v}");
+
+    // The code from a file, the fingerprint checked: certified once.
+    let f = h._tmp.path().join("phone.code");
+    std::fs::write(&f, format!("{}\n", code.encode())).unwrap();
+    crate::admit::cmd_phones_certify(&h.desktop, None, Some(f.to_string_lossy().into_owned()), Some(w.clone()), Some(code.fingerprint().to_lowercase()), None)
+        .unwrap();
+    // Confirmed at a terminal instead of --fingerprint.
+    let mut say_yes = |_: &hive_runtime::phone_enroll::PhoneCode| Ok(true);
+    crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes)).unwrap();
+    assert_eq!(certs(), 1, "certifying again writes nothing");
+    sync_once(&h.desktop).await.unwrap();
+    let mut v = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (status, got) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+        if status == 200 {
+            v = got;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(v["device"]["id"], json!(phone.device_id), "{v}");
+    assert_eq!(v["device"]["tier"], "phone");
+    assert_eq!(v["workspaceId"], json!(ws));
+    assert_eq!(v["configLogId"], json!(workspace_config_session_id(ws)));
+    assert_eq!(v["room"], json!(h.desktop.room));
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    assert_eq!(v["account"]["id"], json!(owner.account_id));
+    assert_eq!(v["account"]["memberId"], json!(owner.id));
+    assert!(v["account"]["role"].is_string(), "{v}");
+    assert!(v["rpId"].as_str().is_some_and(|r| !r.is_empty()), "{v}");
     h.handle.shutdown();
 }

@@ -588,6 +588,7 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
 pub fn router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/me", get(super::me_api::me))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
         .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/admissions/prepare", post(super::admissions_api::prepare))

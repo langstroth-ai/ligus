@@ -434,6 +434,11 @@ async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
     if engine.is_behind() {
         pulled += engine.catch_up(&mut store, SYNC_ONCE_MAX_ROUNDS).await?;
     }
+    // Writes the relay refused (workspace full, a quota) or a truncated
+    // room: the sync went through, but say why events still wait.
+    if let Some(att) = engine.attention() {
+        eprintln!("sync: {}", att.message());
+    }
     Ok((pushed, pulled))
 }
 
@@ -1576,6 +1581,8 @@ fn usage() -> ! {
          phone remote access through a relay tunnel (off by default)\n  \
          ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
+         ligus phones certify <ligusphone1:code> | --code-file PATH --recovery-words-file PATH --fingerprint F\n                                       \
+         certify a phone's key as one of your devices (headless \"Add this phone\")\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
          ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
@@ -1927,7 +1934,22 @@ fn run() -> Result<()> {
                         .unwrap_or_else(|| cfg.data_dir.join("serve.token"));
                     cli::phones_revoke(&cfg.data_dir, positional.get(1).map(|s| s.as_str()), &token_file, has("--keep-token"))
                 }
-                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke"),
+                Some("certify") => {
+                    // Without --fingerprint, only a person at a terminal can
+                    // confirm it; non-interactive use must pass it.
+                    let mut ask = admit::confirm_phone_fingerprint_on_tty;
+                    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    admit::cmd_phones_certify(
+                        &cfg,
+                        positional.get(1).map(|s| s.as_str()),
+                        flag_val("--code-file"),
+                        flag_val("--recovery-words-file"),
+                        flag_val("--fingerprint"),
+                        interactive.then_some(&mut ask as admit::ConfirmFingerprint<'_>),
+                    )
+                    .map(|_| ())
+                }
+                Some(other) => bail!("unknown `ligus phones {other}`: use list|revoke|certify"),
             }
         }
         "dashboard" => match positional.first().map(|s| s.as_str()) {

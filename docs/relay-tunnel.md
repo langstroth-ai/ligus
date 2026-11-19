@@ -422,7 +422,9 @@ Host rules:
   roster and refuses (no msg2, the attempt counts) a missing claim, a
   device it doesn't know yet (the phone pairs again once the box has synced
   its certificate), a revoked device, a non-phone device, and a bad
-  signature. It checks the device again when it stores the pairing (E4), so
+  signature. Each refusal closes the WebSocket with its own close code and
+  the code's name as the reason (§12, "Host enrollment refusals"), which the
+  relay passes through to the phone (§6.5). It checks the device again when it stores the pairing (E4), so
   a revocation folded in between still refuses it. The host also refuses an
   enrollment whose static or auth key belonged to a pairing of a revoked
   device. A pairing's device never changes.
@@ -625,6 +627,19 @@ Relay close codes, sent with `{"t":"error","code":…}` first:
 | 4029 | `rate_limited` | §11 | back off ≥ 30 s |
 | 1009 | (WS standard) | message too big | bug |
 | 1011 | `internal` (WS standard) | relay-side failure, e.g. its store is unreachable | treat like 4011: retry with backoff |
+
+Host enrollment refusals (§7.2, E3a). The host closes the enrollment
+WebSocket after msg1, without msg2, with one of these codes and the code's
+name as the close reason; the relay passes them through (§6.5). Only a phone
+that knew the pairing secret gets them: they come after msg1 decrypted under
+the window's psk. Any other refusal (a wrong pairing secret, an unknown
+static in session mode) stays a plain close without a reason.
+
+| Close | reason | Meaning | Phone action |
+|---|---|---|---|
+| 4040 | `device_not_certified` | this box doesn't know the claimed workspace device as a certified phone yet | show "Add this phone on your desktop first" (the phone's code and fingerprint); once certified, wait for the box to sync and pair again with a fresh `ligus pair` link |
+| 4041 | `device_revoked` | the device, or the pairing keys of one, is revoked | don't retry: show it; a new device key and id are needed |
+| 4042 | `device_claim_invalid` | no device claim, a signature that doesn't verify, or a device that isn't a phone | don't retry: an app bug or the wrong box |
 
 Mux RESET codes: 0 `cancel`, 1 `refused`, 2 `protocol`, 3 `flow_control`,
 4 `internal`.

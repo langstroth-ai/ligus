@@ -368,6 +368,91 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
     Ok(())
 }
 
+/// Asks the person at a terminal whether the phone shows this code's
+/// fingerprint ([`confirm_phone_fingerprint_on_tty`]); `Ok(true)` is yes.
+pub type ConfirmFingerprint<'a> = &'a mut dyn FnMut(&hive_runtime::phone_enroll::PhoneCode) -> Result<bool>;
+
+/// `ligus phones certify`: "Add this phone" for a headless identity. Certify
+/// the phone whose code (`ligusphone1:…`, from the app's Settings > This
+/// phone) is given, as a phone of this CLI identity's person, confirming with
+/// their recovery key (`--recovery-words-file`). The check the desktop's
+/// sheet asks a person to do is required: `--fingerprint` (the code is
+/// refused unless its key has that fingerprint), or, without it, `confirm`
+/// (asking the person at a terminal to compare it with the phone's screen).
+/// With neither (not a terminal) it refuses. Never from a box. Sync to
+/// publish.
+pub fn cmd_phones_certify(
+    cfg: &Config,
+    code: Option<&str>,
+    code_file: Option<String>,
+    words: Option<String>,
+    fingerprint: Option<String>,
+    confirm: Option<ConfirmFingerprint<'_>>,
+) -> Result<hive_runtime::phone_enroll::PhoneCode> {
+    use hive_runtime::phone_enroll::{PhoneCode, PhoneStanding};
+    let usage = "usage: ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX";
+    let text = match (code, code_file) {
+        (Some(c), None) => c.to_string(),
+        (None, Some(path)) => read_code_file(Path::new(&path))?,
+        _ => bail!(usage),
+    };
+    let phone = PhoneCode::decode(&text).map_err(|e| anyhow!(e))?;
+    match (fingerprint, confirm) {
+        (Some(f), _) => {
+            if !f.trim().eq_ignore_ascii_case(&phone.fingerprint()) {
+                bail!("the phone code's fingerprint is {}, not {}: don't certify it", phone.fingerprint(), f.trim());
+            }
+        }
+        (None, Some(ask)) => {
+            if !ask(&phone)? {
+                bail!("not certified: the fingerprint wasn't confirmed against the phone's screen");
+            }
+        }
+        (None, None) => bail!(
+            "compare the fingerprint with the phone's screen (Settings > This phone) and pass it: --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX (or run this at a terminal to confirm it there)"
+        ),
+    }
+    let Some(words) = words else {
+        bail!("certifying a phone needs its person's presence: use the desktop (My devices > Add this phone), or pass --recovery-words-file");
+    };
+    if identity(cfg).load()?.is_some_and(|s| s.service) {
+        bail!("this data dir is a box (a service member); a phone is certified by its own person's identity");
+    }
+    let mut svc = crate::open_service(cfg)?;
+    svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
+    let ws = uuid_of_room(&cfg.room);
+    if svc.phone_standing(ws, &phone)? == PhoneStanding::AlreadyMine {
+        println!("phone {} ({}) is already one of your devices", phone.device_id, phone.fingerprint());
+        return Ok(phone);
+    }
+    let id = svc.certify_phone_code(ws, &phone)?;
+    println!(
+        "certified phone '{}' ({id}, fingerprint {}) as one of your devices (the phone tier). Sync to publish it; then pair the phone with your box.",
+        phone.label,
+        phone.fingerprint()
+    );
+    Ok(phone)
+}
+
+/// `ligus phones certify` at a terminal without `--fingerprint`: show the
+/// phone's fingerprint and ask the person to confirm the phone's screen shows
+/// the same one. Anything but yes is no.
+pub fn confirm_phone_fingerprint_on_tty(phone: &hive_runtime::phone_enroll::PhoneCode) -> Result<bool> {
+    use std::io::Write;
+    let mut err = std::io::stderr();
+    write!(
+        err,
+        "Phone '{}' ({})\nFingerprint: {}\nDoes the phone's screen (Settings > This phone) show this same fingerprint? [y/N] ",
+        phone.label,
+        phone.device_id,
+        phone.fingerprint()
+    )?;
+    err.flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
 /// Write a secret the user asked for (`--out PATH`) owner-only (0600) and
 /// atomically. Unlike the data-dir writer it never creates or chmods the
 /// parent directory: that directory is the user's (a home dir, `/tmp`, a

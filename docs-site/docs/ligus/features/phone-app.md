@@ -24,6 +24,41 @@ The box's own votes never count as your approval
 ([Running ligus serve](../../operate/ops/serve-box.md)). For the whole
 setup end to end, see [Personal fleet](../../operate/deploy/personal-fleet.md).
 
+## Add this phone {#add-this-phone}
+
+Before the phone can pair with your box or sign anything, your desktop
+certifies the phone's own device key (a P-256 key in the Secure Enclave) as
+one of **your** devices:
+
+1. In the app, open **Settings > This phone**. It shows the phone's code
+   (`ligusphone1:…`, as a QR code and as text to copy) and its fingerprint
+   (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four).
+2. On your desktop, open **Settings > Profile > My devices > Add this phone**
+   and paste the code (copy it on the phone and paste on the Mac with the
+   shared clipboard, or scan the QR code with the phone's camera app and
+   paste what it reads).
+3. Check that the fingerprint the desktop shows is the one on the phone,
+   tick the box, and choose **Add this phone**. Your passkey confirms it;
+   the passkey sheet names the same fingerprint. The phone is added to the
+   workspace you checked the code in: if you switch workspaces before
+   confirming, the desktop refuses and asks you to check the code again.
+
+A phone code can't take over a device: a code naming a device id that is
+already one of the workspace's desktops or boxes, or a phone with another
+key, is refused by the desktop and by every member's fold.
+
+The phone is certified at the **phone tier**: it can post, react, vote,
+answer an agent's question, clear a lockdown and ask a host to apply, as you
+and capped by your role; it never changes members, devices or keys. Without
+a desktop, `ligus phones certify` does the same on a CLI identity of yours
+with your recovery key ([CLI reference](../reference/cli.md)).
+
+A phone that tries to pair before the box has synced its certificate is
+refused with `device_not_certified` (the app says to add the phone first);
+pair again once the desktop has synced. After pairing, the app asks the box
+`GET /v1/me` and fills in the workspace, your account, your role and the
+passkey relying party by itself.
+
 ## Pairing: direct or through the relay
 
 The app connects to a box in one of two ways, and a host profile can use
@@ -52,7 +87,8 @@ Each host profile has a **path** setting:
 
 The app can hold several host profiles, each stored as its own Keychain
 item. Credentials live in the iOS Keychain; the phone never holds a
-workspace key or a device key.
+workspace key. Its own device key lives in the Secure Enclave and never
+leaves it ([Add this phone](#add-this-phone)).
 
 ## Host path policy
 

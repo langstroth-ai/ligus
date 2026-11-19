@@ -1089,6 +1089,26 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+
+/// A phone's `ligusphone1:` code, checked (nothing written).
+export interface PhoneCodeDto {
+  /// The phone's workspace device id, as the phone presents it.
+  deviceId: string;
+  label: string;
+  /// Compare with the phone's screen (Settings > This phone).
+  fingerprint: string;
+  standing: "new" | "alreadyMine" | "revoked" | "conflict";
+  /// Why it can't be certified (revoked, conflict).
+  problem: string | null;
+  workspaceId: string;
+}
+/// Check a phone code: its signature, key and where the device stands here.
+export const inspectPhoneCode = (code: string) => invoke<PhoneCodeDto>("inspect_phone_code", { code });
+/// "Add this phone": certify the phone as one of your devices (the phone
+/// tier). Opens the passkey sheet; refused without your passkey. Returns the
+/// certified device id.
+export const certifyPhoneCode = (code: string, fingerprint: string, workspaceId: string) =>
+  invoke<string>("certify_phone_code", { code, fingerprint, workspaceId });
 /// Hosts naming you as their owner that you haven't approved yet.
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.
@@ -1155,9 +1175,11 @@ export const onChatActivity = (
 export type { ChatActivityEvent };
 
 /// Real connection health for the relay sync loop, updated on every sync
-/// attempt: `live` (last sync ok), `error` (last sync failed — see `lastError`),
-/// or `offline` (not syncing / no relay).
-export type ConnectionState = "live" | "error" | "offline" | "needs_key";
+/// attempt: `live` (last sync ok), `limited` (syncing, but the relay refused
+/// this workspace's writes, e.g. "workspace full", or the room is truncated;
+/// see `lastError`), `error` (last sync failed — see `lastError`), or
+/// `offline` (not syncing / no relay).
+export type ConnectionState = "live" | "limited" | "error" | "offline" | "needs_key";
 
 export interface SyncStatusDto {
   relayConfigured: boolean;

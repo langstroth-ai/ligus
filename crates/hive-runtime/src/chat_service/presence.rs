@@ -75,7 +75,12 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::WorkspaceRulesSet { version, .. } => format!("Switch the workspace to rules version {version}"),
         SessionEvent::DeviceCertificateAdded { certificate } if certificate.alg == hive_core::crypto::SigAlg::P256 => {
-            format!("Enroll phone {} as one of your devices", certificate.device_id)
+            // The fingerprint the person compared with the phone's screen.
+            format!(
+                "Enroll phone {} (key {}) as one of your devices",
+                certificate.device_id,
+                crate::device_enroll::fingerprint(&certificate.device_public_key)
+            )
         }
         SessionEvent::DeviceCertificateAdded { certificate } => format!("Add device {} to your account", certificate.device_id),
         SessionEvent::ProposalApplyRequested { request } => {

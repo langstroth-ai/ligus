@@ -58,6 +58,7 @@ pub mod mentions;
 pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
+pub mod phone_enroll;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
 pub mod private_file;
@@ -65,6 +66,7 @@ pub mod prompt;
 pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;
+pub mod relay_refusal;
 pub mod remote_manifest;
 pub mod retrieval;
 pub mod review;
@@ -91,6 +93,8 @@ mod ligus_auth_membership_tests;
 mod keyring_tests;
 #[cfg(test)]
 mod presence_tests;
+#[cfg(test)]
+mod relay_refusal_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
@@ -106,10 +110,11 @@ pub use relay_client::{
     EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
     RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
 };
+pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;
 pub use sse::{next_backoff, parse_seq, SseConnectError, SseDecoder, SseStream};
 pub use host_presence::HostPresence;
-pub use sync_engine::{SyncEngine, SyncError};
+pub use sync_engine::{SyncAttention, SyncEngine, SyncError};
 pub use provider::dispatch::{self, ResolvedRuntime};
 pub use provider::{AnthropicClient, ChatTurn, OpenAiClient, ProviderError};
 

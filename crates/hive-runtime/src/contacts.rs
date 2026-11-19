@@ -79,11 +79,26 @@ pub enum ContactsError {
     TooLarge,
     #[error("{0}")]
     Transport(String),
+    /// A `429`/`507` the relay sent (a contact rate limit already retried in
+    /// place, or `contacts_full`); see [`crate::relay_refusal`].
+    #[error("{0}")]
+    Refused(crate::relay_refusal::RelayRefusal),
 }
 
 impl From<reqwest::Error> for ContactsError {
     fn from(e: reqwest::Error) -> Self {
         Self::Transport(e.to_string())
+    }
+}
+
+impl From<crate::relay_client::RelayError> for ContactsError {
+    fn from(e: crate::relay_client::RelayError) -> Self {
+        match e {
+            crate::relay_client::RelayError::Refused(r) => Self::Refused(r),
+            crate::relay_client::RelayError::Unauthorized => Self::Unauthorized,
+            crate::relay_client::RelayError::Status(c) => status_err(c, false),
+            other => Self::Transport(other.to_string()),
+        }
     }
 }
 
@@ -189,7 +204,7 @@ impl RelayClient {
         let url = self.contact_url(cid, "")?;
         let write_key = &relay_write_key(write_key, self.base_url());
         let body = PutBody { record, write_key: first.then_some(write_key.as_str()) };
-        let resp = self.authed(self.http_client().put(url)).header(CONTACT_KEY_HEADER, write_key).json(&body).send().await?;
+        let resp = self.send_retrying(|| self.http_client().put(&url).header(CONTACT_KEY_HEADER, write_key).json(&body)).await?;
         let code = resp.status().as_u16();
         if !resp.status().is_success() {
             return Err(status_err(code, true));
@@ -201,7 +216,7 @@ impl RelayClient {
     /// has no contact routes: a reader can't tell, and needn't).
     pub async fn contact_get(&self, cid: &str) -> Result<Option<ContactRecordResponse>, ContactsError> {
         let url = self.contact_url(cid, "")?;
-        let resp = self.authed(self.http_client().get(url)).send().await?;
+        let resp = self.send_retrying(|| self.http_client().get(&url)).await?;
         match resp.status().as_u16() {
             200..=299 => Ok(Some(json_capped(resp, MAX_RECORD_BODY).await?)),
             404 => Ok(None),
@@ -213,7 +228,7 @@ impl RelayClient {
     pub async fn contact_delete(&self, cid: &str, write_key: &str) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, "")?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self.authed(self.http_client().delete(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
+        let resp = self.send_retrying(|| self.http_client().delete(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -225,7 +240,7 @@ impl RelayClient {
     pub async fn contact_drop(&self, cid: &str, blob: &serde_json::Value) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, "/drop")?;
         let body = serde_json::json!({ "blob": blob });
-        let resp = self.authed(self.http_client().post(url)).json(&body).send().await?;
+        let resp = self.send_retrying(|| self.http_client().post(&url).json(&body)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -236,7 +251,7 @@ impl RelayClient {
     pub async fn contact_drops(&self, cid: &str, write_key: &str, after: u64) -> Result<ContactDropPage, ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?after={after}"))?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self.authed(self.http_client().get(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
+        let resp = self.send_retrying(|| self.http_client().get(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
@@ -265,7 +280,7 @@ impl RelayClient {
     pub async fn contact_drops_ack(&self, cid: &str, write_key: &str, through: u64) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?through={through}"))?;
         let write_key = relay_write_key(write_key, self.base_url());
-        let resp = self.authed(self.http_client().delete(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
+        let resp = self.send_retrying(|| self.http_client().delete(&url).header(CONTACT_KEY_HEADER, &write_key)).await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }

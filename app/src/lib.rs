@@ -48,6 +48,7 @@ pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_native;
 mod passkey_ui;
+mod phones_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
@@ -12312,6 +12313,11 @@ async fn sync_pull_once(
     store: &mut EventStore,
     last_sync_err: &mut Option<String>,
 ) -> bool {
+    // The relay asked for a pause (a refused read's Retry-After): no
+    // request until it passes. The health already says why.
+    if eng.hold_left().is_some() {
+        return false;
+    }
     // Split steps keep the store's borrow out of any `.await`.
     let before_row = store.max_row_id().unwrap_or(i64::MAX);
     let outcome: Result<usize, hive_runtime::SyncError> = async {
@@ -12325,12 +12331,27 @@ async fn sync_pull_once(
     .await;
     match outcome {
         Ok(pulled) => {
-            if last_sync_err.take().is_some() {
-                eprintln!("sync: recovered");
+            // Sync works, but something needs the person (the relay refused
+            // this room's writes: workspace full, organisation quota; or the
+            // room was truncated): a "limited" state with the reason, shown
+            // once, never a loop.
+            if let Some(att) = eng.attention() {
+                let msg = att.message();
+                if last_sync_err.as_deref() != Some(msg.as_str()) {
+                    tracing::warn!(target: "sync", "{msg}");
+                    *last_sync_err = Some(msg.clone());
+                    let _ = app.emit("workspace://sync-error", msg.clone());
+                }
+                *app.state::<AppState>().conn_health.lock().unwrap() =
+                    ConnHealth { state: "limited".to_string(), last_error: Some(msg) };
+            } else {
+                if last_sync_err.take().is_some() {
+                    eprintln!("sync: recovered");
+                }
+                // Record health so the UI can trust "Live".
+                *app.state::<AppState>().conn_health.lock().unwrap() =
+                    ConnHealth { state: "live".to_string(), last_error: None };
             }
-            // Record health so the UI can trust "Live".
-            *app.state::<AppState>().conn_health.lock().unwrap() =
-                ConnHealth { state: "live".to_string(), last_error: None };
             // Box admissions (Phase B): an Admin's device closes the ones
             // that settled (redeemed, or lapsed unredeemed), so a holder of
             // the code can't slot a backdated redemption in later. Cheap when
@@ -12583,7 +12604,8 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                         // Couldn't open (auth / status / transport): back off the
                         // stream; the pull below still surfaces health and syncs.
                         Err(e) => {
-                            let delay = hive_runtime::next_backoff(sse_attempt);
+                            // A refusal (`sse_streams`) waits at least its Retry-After.
+                            let delay = hive_runtime::next_backoff(sse_attempt).max(e.retry_after().unwrap_or_default());
                             next_sse_attempt = std::time::Instant::now() + delay;
                             sse_attempt = sse_attempt.saturating_add(1);
                             eprintln!(
@@ -12716,7 +12738,9 @@ struct SyncStatus {
     relay_url: String,
     room: String,
     encrypted: bool,
-    /// Coarse connection health from the sync loop: "live" | "error" | "offline".
+    /// Coarse connection health from the sync loop: "live" | "limited" |
+    /// "error" | "offline" | "needs_key". "limited": syncing, but the relay
+    /// refused this room's writes (or the room is truncated); see `last_error`.
     connection_state: String,
     /// Last actionable sync error (unauthorized, unreachable, decrypt), if any.
     last_error: Option<String>,
@@ -15023,6 +15047,8 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_start,
             ligus_auth_ui::ligus_auth_poll,
             ligus_auth_ui::ligus_auth_sign_out,
+            phones_ui::inspect_phone_code,
+            phones_ui::certify_phone_code,
             passkey_ui::security_status,
             passkey_ui::passkey_register,
             passkey_ui::recovery_key_create,
