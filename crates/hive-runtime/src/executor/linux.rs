@@ -971,33 +971,32 @@ fn apply_landlock_tier(r: &super::landlock_rules::LandlockRules) -> io::Result<(
 /// still resolves to that path (`/proc/self/fd`): a path swapped for a link,
 /// or under a parent swapped for one, between the rules and here (a
 /// concurrent turn with write access beside it) opens nothing rather than
-/// the link's target. Without `/proc` the paths are opened as given.
+/// the link's target. Without `/proc` the paths are opened as given. Lazy,
+/// like `path_beneath_rules`: one descriptor open at a time (a carved rule
+/// set runs to thousands of paths, past the descriptor limit).
 fn verified_rules(
     paths: &[PathBuf],
     access: landlock::BitFlags<landlock::AccessFs>,
     abi: landlock::ABI,
-) -> Vec<Result<landlock::PathBeneath<std::os::fd::OwnedFd>, landlock::RulesetError>> {
+) -> impl Iterator<Item = Result<landlock::PathBeneath<std::os::fd::OwnedFd>, landlock::RulesetError>> + '_ {
     use landlock::{AccessFs, PathBeneath};
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
     let proc_ok = Path::new("/proc/self/fd").is_dir();
     let file_access = access & AccessFs::from_file(abi);
-    paths
-        .iter()
-        .filter_map(|p| {
-            let flags = libc::O_PATH | libc::O_CLOEXEC | if proc_ok { libc::O_NOFOLLOW } else { 0 };
-            let f = std::fs::OpenOptions::new().read(true).custom_flags(flags).open(p).ok()?;
-            let meta = f.metadata().ok()?;
-            if meta.file_type().is_symlink() {
-                return None;
-            }
-            if proc_ok && std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok()? != *p {
-                return None;
-            }
-            let a = if meta.is_dir() { access } else { file_access };
-            Some(Ok(PathBeneath::new(std::os::fd::OwnedFd::from(f), a)))
-        })
-        .collect()
+    paths.iter().filter_map(move |p| {
+        let flags = libc::O_PATH | libc::O_CLOEXEC | if proc_ok { libc::O_NOFOLLOW } else { 0 };
+        let f = std::fs::OpenOptions::new().read(true).custom_flags(flags).open(p).ok()?;
+        let meta = f.metadata().ok()?;
+        if meta.file_type().is_symlink() {
+            return None;
+        }
+        if proc_ok && std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok()? != *p {
+            return None;
+        }
+        let a = if meta.is_dir() { access } else { file_access };
+        Some(Ok(PathBeneath::new(std::os::fd::OwnedFd::from(f), a)))
+    })
 }
 
 /// The Landlock tier: no bubblewrap around us. Apply Landlock and seccomp
