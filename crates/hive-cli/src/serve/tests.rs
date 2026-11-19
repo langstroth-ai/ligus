@@ -4289,3 +4289,67 @@ async fn phones_certify_headless_then_me_on_loopback() {
     assert!(v["rpId"].as_str().is_some_and(|r| !r.is_empty()), "{v}");
     h.handle.shutdown();
 }
+
+// ── Workspace memory and task state for the phone ───────────────────────────
+
+/// The phone reads memory and task state, and proposes a memory note signed
+/// by its own key; the box (a service member) can't write memory itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_reads_memory_and_task_state_and_proposes_a_note() {
+    use hive_core::memory::{MemoryOp, TaskStateUpdate, TaskStatus};
+    use hive_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Standup" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+
+    // A person's note, written on the desktop, reaches the phone's box.
+    let (entry, _) = open_service(&h.desktop)
+        .unwrap()
+        .write_memory(ws, hive_runtime::chat_service::MemoryDraft { title: "Relay ports".into(), body: "8443 for the team relay".into(), tags: vec!["infra".into()], ..Default::default() })
+        .unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    let mut found = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        found = h.get("/v1/memory?q=relay%208443").await;
+        if found["total"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(found["entries"][0]["entry"]["id"], json!(entry), "{found}");
+    assert_eq!(h.get("/v1/memory?q=zebra").await["entries"], json!([]));
+    let one = h.get(&format!("/v1/memory/{entry}")).await;
+    assert_eq!(one["entry"]["current"]["author"]["id"], json!(person));
+
+    // The box can't write memory: it is a service member.
+    let refused = h.handle.shared.lock().write_memory(ws, hive_runtime::chat_service::MemoryDraft { title: "t".into(), body: "b".into(), ..Default::default() });
+    assert!(refused.is_err(), "a service member writes no memory");
+
+    // The phone proposes a note as its person.
+    let op = MemoryOp::Create { entry_id: Uuid::new_v4(), title: "Deploy day".into(), body: "We ship on Thursdays.".into(), tags: vec![] };
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ProposeMemory { chat_id, op, rationale: "said in standup".into() }).await;
+    assert_eq!(code, 200, "{done}");
+    let pid = done["proposalId"].as_str().unwrap().to_string();
+    let ps = h.get("/v1/memory/proposals").await;
+    let p = &ps["proposals"][0]["proposal"];
+    assert_eq!(p["proposal"]["proposalId"], json!(pid), "{ps}");
+    assert_eq!(p["by"]["id"], json!(person));
+    assert_eq!(p["proposal"]["source"]["chatId"], json!(chat_id));
+    assert!(p.get("decision").is_none(), "open until a person decides on a desktop");
+
+    // Task state: the chat's runtime reports, the phone reads it.
+    h.handle
+        .shared
+        .lock()
+        .update_task_state(chat_id, ws, None, TaskStateUpdate { task_id: chat_id, turn_id: Uuid::new_v4(), status: TaskStatus::Blocked, summary: "Waiting on review".into(), ..Default::default() })
+        .unwrap();
+    let ts = h.get(&format!("/v1/chats/{chat_id}/task-state")).await;
+    assert_eq!(ts["slots"][0]["slot"]["update"]["summary"], json!("Waiting on review"), "{ts}");
+    assert_eq!(ts["slots"][0]["agentName"], json!("Ligus"));
+    assert_eq!(ts["slots"][0]["active"], json!(true));
+}
