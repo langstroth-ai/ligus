@@ -49,7 +49,11 @@ fn standing_dto(s: PhoneStanding) -> (String, Option<String>) {
 /// Check a phone code (signature, key, where the device stands) without
 /// writing anything.
 #[tauri::command]
-pub(crate) fn inspect_phone_code(state: State<AppState>, code: String) -> Result<PhoneCodeDto, String> {
+pub(crate) async fn inspect_phone_code(ligus_app: tauri::AppHandle, code: String) -> Result<PhoneCodeDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_phone_code_sync(tauri::Manager::state::<AppState>(ligus_app), code)).await
+}
+
+pub(crate) fn inspect_phone_code_sync(state: State<AppState>, code: String) -> Result<PhoneCodeDto, String> {
     let c = decode(&code)?;
     let ws = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
@@ -86,7 +90,11 @@ fn confirm_matches_preview(
 /// be the active one. Blocks on the person's passkey (the presence sheet);
 /// refused without it.
 #[tauri::command(async)]
-pub(crate) fn certify_phone_code(
+pub(crate) async fn certify_phone_code(ligus_app: tauri::AppHandle, code: String, fingerprint: String, workspace_id: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| certify_phone_code_sync(tauri::Manager::state::<AppState>(ligus_app), code, fingerprint, workspace_id)).await
+}
+
+pub(crate) fn certify_phone_code_sync(
     state: State<AppState>,
     code: String,
     fingerprint: String,

@@ -34,7 +34,7 @@ use hive_runtime::contacts::{self, ContactsError};
 
 use crate::{
     decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32, random_token,
-    save_settings, set_active_workspace, sign_invite, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
+    save_settings, set_active_workspace_sync, sign_invite, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
 };
 
 /// This device's account: id, key fingerprint (when it holds the key).
@@ -73,7 +73,11 @@ pub(crate) struct FounderStatusDto {
 /// founder is a claim until the founder's signed founding is on this device,
 /// and nothing is written there before.
 #[tauri::command]
-pub(crate) fn founder_status(state: State<AppState>, session_id: String) -> Result<FounderStatusDto, String> {
+pub(crate) async fn founder_status(ligus_app: tauri::AppHandle, session_id: String) -> Result<FounderStatusDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| founder_status_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn founder_status_sync(state: State<AppState>, session_id: String) -> Result<FounderStatusDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let waiting = {
         let svc = state.service.lock().unwrap();
@@ -107,7 +111,11 @@ pub(crate) struct ProfileDto {
 
 /// Your profile: name, picture, safety code and commit email.
 #[tauri::command]
-pub(crate) fn my_profile(state: State<AppState>) -> Result<ProfileDto, String> {
+pub(crate) async fn my_profile(ligus_app: tauri::AppHandle) -> Result<ProfileDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| my_profile_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn my_profile_sync(state: State<AppState>) -> Result<ProfileDto, String> {
     let (account, fk) = me(&state);
     let loaded = state.identity.load().map_err(map_err)?;
     let (display_name, avatar_url) = {
@@ -159,7 +167,11 @@ pub(crate) struct CoMemberDto {
 /// Everyone you share a workspace with, keyed by account id. Two people may
 /// share a name; their safety codes tell them apart.
 #[tauri::command]
-pub(crate) fn list_co_members(state: State<AppState>) -> Vec<CoMemberDto> {
+pub(crate) async fn list_co_members(ligus_app: tauri::AppHandle) -> Vec<CoMemberDto> {
+    crate::off_main(ligus_app, move |ligus_app| list_co_members_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_co_members_sync(state: State<AppState>) -> Vec<CoMemberDto> {
     let list = co_members_of(&state);
     let chips: BTreeMap<Uuid, Vec<crate::links_ui::LinkChipDto>> =
         list.iter().map(|c| (c.account_id, crate::links_ui::chips_for(&state, c.account_id))).collect();
@@ -264,7 +276,11 @@ pub(crate) fn is_archived_dm(state: &AppState, workspace_id: Uuid) -> bool {
 /// Your direct messages: one per person (the kept one), each linking the
 /// archived ones.
 #[tauri::command]
-pub(crate) fn list_dms(state: State<AppState>) -> Vec<DmDto> {
+pub(crate) async fn list_dms(ligus_app: tauri::AppHandle) -> Vec<DmDto> {
+    crate::off_main(ligus_app, move |ligus_app| list_dms_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub(crate) fn list_dms_sync(state: State<AppState>) -> Vec<DmDto> {
     resolve_concurrent_dms(&state);
     let people: BTreeMap<String, CoMember> = co_members_of(&state).into_iter().map(|c| (c.account_id.to_string(), c)).collect();
     let conns: Vec<WorkspaceConn> = state.settings.lock().unwrap().workspaces.iter().filter(|w| w.dm_account.is_some()).cloned().collect();
@@ -351,7 +367,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
         existing.into_iter().find(|id| svc.founder_verified(*id).unwrap_or(false))
     };
     if let Some(id) = existing {
-        set_active_workspace(state.clone(), id.to_string())?;
+        set_active_workspace_sync(state.clone(), id.to_string())?;
         let held = held(&state).get(id);
         return Ok(OpenDmDto {
             workspace_id: id.to_string(),
@@ -383,7 +399,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
         conn
     };
     let ws_id = conn.id();
-    set_active_workspace(state.clone(), ws_id.to_string())?;
+    set_active_workspace_sync(state.clone(), ws_id.to_string())?;
     let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
     let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     // Delivered now, or held (sealed on this device) and delivered once their
@@ -423,7 +439,11 @@ pub(crate) struct InviteInfoDto {
 
 /// What an invite says about who sent it, before joining.
 #[tauri::command]
-pub(crate) fn inspect_invite(state: State<AppState>, code: String) -> Result<InviteInfoDto, String> {
+pub(crate) async fn inspect_invite(ligus_app: tauri::AppHandle, code: String) -> Result<InviteInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_invite_sync(tauri::Manager::state::<AppState>(ligus_app), code)).await
+}
+
+pub(crate) fn inspect_invite_sync(state: State<AppState>, code: String) -> Result<InviteInfoDto, String> {
     let conn = decode_workspace_invite(&code)?;
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
@@ -476,7 +496,11 @@ pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety
 /// Join a DM from its invite. `confirm_safety_code` is for someone you share
 /// no workspace with, after you compared their safety code out of band.
 #[tauri::command]
-pub(crate) fn join_dm(state: State<AppState>, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
+pub(crate) async fn join_dm(ligus_app: tauri::AppHandle, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| join_dm_sync(tauri::Manager::state::<AppState>(ligus_app), code, confirm_safety_code)).await
+}
+
+pub(crate) fn join_dm_sync(state: State<AppState>, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&code)?;
     if conn.dm_account.is_none() {
         return Err("not a direct message invite".into());
@@ -812,7 +836,11 @@ pub(crate) fn held_dm_invite(state: State<AppState>, workspace_id: String) -> Re
 /// was opened): deliver to their current verified devices. `safety_code` is
 /// the code the opener compared; refused unless it is theirs now.
 #[tauri::command]
-pub(crate) fn confirm_dm_invite(state: State<AppState>, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
+pub(crate) async fn confirm_dm_invite(ligus_app: tauri::AppHandle, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
+    crate::off_main(ligus_app, move |ligus_app| confirm_dm_invite_sync(tauri::Manager::state::<AppState>(ligus_app), workspace_id, safety_code)).await
+}
+
+pub(crate) fn confirm_dm_invite_sync(state: State<AppState>, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
     let ws = held_ws(&state, &workspace_id)?;
     let store = held(&state);
     let account = store.get(ws).map(|h| h.account_id).ok_or("no invite waits for delivery in this DM")?;
@@ -975,7 +1003,11 @@ fn mark_handled(state: &AppState, relay: &str, seq: u64) {
 /// comparing codes); a workspace invite whose founder's key contradicts what
 /// shared workspaces register is refused.
 #[tauri::command]
-pub(crate) fn accept_pending_invite(
+pub(crate) async fn accept_pending_invite(ligus_app: tauri::AppHandle, relay: String, seq: u64, code: String, confirm_safety_code: bool) -> Result<WorkspaceInfoDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| accept_pending_invite_sync(tauri::Manager::state::<AppState>(ligus_app), relay, seq, code, confirm_safety_code)).await
+}
+
+pub(crate) fn accept_pending_invite_sync(
     state: State<AppState>,
     relay: String,
     seq: u64,

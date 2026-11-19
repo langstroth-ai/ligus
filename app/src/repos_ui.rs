@@ -192,7 +192,11 @@ fn ws_of(state: &AppState) -> Uuid {
 /// of each (its own path), every other host's coverage, whether this person
 /// may add or remove, and a suggestion from the bound folder.
 #[tauri::command]
-pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
+pub async fn list_workspace_repos(ligus_app: tauri::AppHandle) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workspace_repos_sync(tauri::Manager::state::<AppState>(ligus_app))).await
+}
+
+pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String> {
     let ws = ws_of(&state);
     migrate_bound_folder(&state, ws);
     let folder = crate::workspace_dir_for(&state.settings.lock().unwrap().workspace_dirs, &ws.to_string());
@@ -284,7 +288,11 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
 /// Add a repo (Admin; the passkey prompt comes from the service). With
 /// `path`, the folder is bound for it on this device too.
 #[tauri::command]
-pub fn add_workspace_repo(state: State<AppState>, input: String, name: Option<String>, kind: Option<String>, branch: Option<String>, path: Option<String>) -> Result<Value, String> {
+pub async fn add_workspace_repo(ligus_app: tauri::AppHandle, input: String, name: Option<String>, kind: Option<String>, branch: Option<String>, path: Option<String>) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |ligus_app| add_workspace_repo_sync(tauri::Manager::state::<AppState>(ligus_app), input, name, kind, branch, path)).await
+}
+
+pub fn add_workspace_repo_sync(state: State<AppState>, input: String, name: Option<String>, kind: Option<String>, branch: Option<String>, path: Option<String>) -> Result<Value, String> {
     let ws = ws_of(&state);
     let dir = path.as_deref().map(str::trim).filter(|p| !p.is_empty()).map(PathBuf::from);
     let root = dir.as_deref().and_then(rr::git::root_commit);
@@ -323,7 +331,11 @@ fn parse(id: &str) -> Result<Uuid, String> {
 }
 
 #[tauri::command]
-pub fn rename_workspace_repo(state: State<AppState>, repo_id: String, name: String, branch: Option<String>) -> Result<(), String> {
+pub async fn rename_workspace_repo(ligus_app: tauri::AppHandle, repo_id: String, name: String, branch: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| rename_workspace_repo_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, name, branch)).await
+}
+
+pub fn rename_workspace_repo_sync(state: State<AppState>, repo_id: String, name: String, branch: Option<String>) -> Result<(), String> {
     let ws = ws_of(&state);
     let id = parse(&repo_id)?;
     let mut svc = state.service.lock().unwrap();
@@ -335,7 +347,11 @@ pub fn rename_workspace_repo(state: State<AppState>, repo_id: String, name: Stri
 }
 
 #[tauri::command]
-pub fn remove_workspace_repo(state: State<AppState>, repo_id: String) -> Result<(), String> {
+pub async fn remove_workspace_repo(ligus_app: tauri::AppHandle, repo_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_workspace_repo_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id)).await
+}
+
+pub fn remove_workspace_repo_sync(state: State<AppState>, repo_id: String) -> Result<(), String> {
     let ws = ws_of(&state);
     state.service.lock().unwrap().remove_workspace_repo(ws, parse(&repo_id)?).map_err(map_err)
 }
@@ -344,7 +360,11 @@ pub fn remove_workspace_repo(state: State<AppState>, repo_id: String) -> Result<
 /// passkey prompt comes from the service): other spellings of the same
 /// repo, names only.
 #[tauri::command]
-pub fn set_repo_aliases(state: State<AppState>, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn set_repo_aliases(ligus_app: tauri::AppHandle, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_aliases_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, aliases)).await
+}
+
+pub fn set_repo_aliases_sync(state: State<AppState>, repo_id: String, aliases: Vec<String>) -> Result<Vec<String>, String> {
     let ws = ws_of(&state);
     state.service.lock().unwrap().set_repo_aliases(ws, parse(&repo_id)?, &aliases).map_err(map_err)
 }
@@ -352,14 +372,22 @@ pub fn set_repo_aliases(state: State<AppState>, repo_id: String, aliases: Vec<St
 /// Map a host alias to a repository host for the workspace, or clear it
 /// with an empty `host` (Admin, with presence).
 #[tauri::command]
-pub fn set_host_alias(state: State<AppState>, alias: String, host: String) -> Result<(), String> {
+pub async fn set_host_alias(ligus_app: tauri::AppHandle, alias: String, host: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_host_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, host)).await
+}
+
+pub fn set_host_alias_sync(state: State<AppState>, alias: String, host: String) -> Result<(), String> {
     let ws = ws_of(&state);
     state.service.lock().unwrap().set_host_alias(ws, &alias, &host).map_err(map_err)
 }
 
 /// Accept a synced alias on this device (or stop using it). Device-local.
 #[tauri::command]
-pub fn accept_repo_alias(state: State<AppState>, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+pub async fn accept_repo_alias(ligus_app: tauri::AppHandle, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| accept_repo_alias_sync(tauri::Manager::state::<AppState>(ligus_app), alias, accept, target)).await
+}
+
+pub fn accept_repo_alias_sync(state: State<AppState>, alias: String, accept: bool, target: Option<String>) -> Result<String, String> {
     let ws = ws_of(&state);
     state.service.lock().unwrap().accept_alias_for(ws, &alias, target.as_deref(), accept).map_err(map_err)
 }
@@ -372,7 +400,11 @@ fn live_repo(state: &AppState, ws: Uuid, id: Uuid) -> Result<hive_core::workspac
 /// Bind a folder on this device for a repo ("Bind folder…"), or confirm a
 /// found one ("Use it").
 #[tauri::command]
-pub fn bind_repo_checkout(state: State<AppState>, repo_id: String, path: String) -> Result<(), String> {
+pub async fn bind_repo_checkout(ligus_app: tauri::AppHandle, repo_id: String, path: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| bind_repo_checkout_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, path)).await
+}
+
+pub fn bind_repo_checkout_sync(state: State<AppState>, repo_id: String, path: String) -> Result<(), String> {
     let ws = ws_of(&state);
     let repo = live_repo(&state, ws, parse(&repo_id)?)?;
     let svc = state.service.lock().unwrap();
@@ -380,7 +412,11 @@ pub fn bind_repo_checkout(state: State<AppState>, repo_id: String, path: String)
 }
 
 #[tauri::command]
-pub fn unbind_repo_checkout(state: State<AppState>, repo_id: String, path: String) -> Result<(), String> {
+pub async fn unbind_repo_checkout(ligus_app: tauri::AppHandle, repo_id: String, path: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| unbind_repo_checkout_sync(tauri::Manager::state::<AppState>(ligus_app), repo_id, path)).await
+}
+
+pub fn unbind_repo_checkout_sync(state: State<AppState>, repo_id: String, path: String) -> Result<(), String> {
     let ws = ws_of(&state);
     let svc = state.service.lock().unwrap();
     rr::unbind(svc.store(), svc.device_id(), ws, parse(&repo_id)?, Path::new(&path)).map_err(map_err)
@@ -388,7 +424,11 @@ pub fn unbind_repo_checkout(state: State<AppState>, repo_id: String, path: Strin
 
 /// Scan this device's roots (adding `root` first when given).
 #[tauri::command]
-pub fn rescan_repos(state: State<AppState>, root: Option<String>) -> Result<usize, String> {
+pub async fn rescan_repos(ligus_app: tauri::AppHandle, root: Option<String>) -> Result<usize, String> {
+    crate::off_main(ligus_app, move |ligus_app| rescan_repos_sync(tauri::Manager::state::<AppState>(ligus_app), root)).await
+}
+
+pub fn rescan_repos_sync(state: State<AppState>, root: Option<String>) -> Result<usize, String> {
     let ws = ws_of(&state);
     let svc = state.service.lock().unwrap();
     if let Some(r) = root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
@@ -403,7 +443,11 @@ pub fn rescan_repos(state: State<AppState>, root: Option<String>) -> Result<usiz
 }
 
 #[tauri::command]
-pub fn set_repo_coverage_reporting(state: State<AppState>, on: Option<bool>) -> Result<(), String> {
+pub async fn set_repo_coverage_reporting(ligus_app: tauri::AppHandle, on: Option<bool>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_repo_coverage_reporting_sync(tauri::Manager::state::<AppState>(ligus_app), on)).await
+}
+
+pub fn set_repo_coverage_reporting_sync(state: State<AppState>, on: Option<bool>) -> Result<(), String> {
     let ws = ws_of(&state);
     let svc = state.service.lock().unwrap();
     rr::set_coverage_reporting(svc.store(), ws, on).map_err(map_err)
@@ -412,7 +456,11 @@ pub fn set_repo_coverage_reporting(state: State<AppState>, on: Option<bool>) -> 
 /// The chat's repo chip: the repo, its base branch, and whether this device
 /// can run a turn in it (and why not).
 #[tauri::command]
-pub fn chat_workspace_repo(state: State<AppState>, session_id: String) -> Result<Value, String> {
+pub async fn chat_workspace_repo(ligus_app: tauri::AppHandle, session_id: String) -> Result<Value, String> {
+    crate::off_main(ligus_app, move |ligus_app| chat_workspace_repo_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> Result<Value, String> {
     let sid = parse(&session_id)?;
     let svc = state.service.lock().unwrap();
     let Some(s) = svc.load(sid).map_err(map_err)? else { return Ok(Value::Null) };
@@ -468,7 +516,11 @@ fn pinned_elsewhere(state: &AppState, session: &ChatSession, repo: Uuid, me: &st
 
 /// Point a chat at a workspace repo (`None`: no repo), Contributor+.
 #[tauri::command]
-pub fn set_chat_workspace_repo(state: State<AppState>, session_id: String, repo_id: Option<String>, base_branch: Option<String>) -> Result<(), String> {
+pub async fn set_chat_workspace_repo(ligus_app: tauri::AppHandle, session_id: String, repo_id: Option<String>, base_branch: Option<String>) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_chat_workspace_repo_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, repo_id, base_branch)).await
+}
+
+pub fn set_chat_workspace_repo_sync(state: State<AppState>, session_id: String, repo_id: Option<String>, base_branch: Option<String>) -> Result<(), String> {
     let sid = parse(&session_id)?;
     let repo = repo_id.as_deref().map(parse).transpose()?;
     let mut svc = state.service.lock().unwrap();
@@ -483,7 +535,11 @@ pub fn set_chat_workspace_repo(state: State<AppState>, session_id: String, repo_
 /// branch rebuilds it on the new base from the chat's ledger on its next
 /// turn, or refuses that turn and says why. Returns the new base.
 #[tauri::command]
-pub fn repin_chat_base(state: State<AppState>, session_id: String, commit: Option<String>) -> Result<String, String> {
+pub async fn repin_chat_base(ligus_app: tauri::AppHandle, session_id: String, commit: Option<String>) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| repin_chat_base_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, commit)).await
+}
+
+pub fn repin_chat_base_sync(state: State<AppState>, session_id: String, commit: Option<String>) -> Result<String, String> {
     let sid = parse(&session_id)?;
     let (s, roster) = {
         let svc = state.service.lock().unwrap();
@@ -557,7 +613,11 @@ pub(crate) async fn clone_repo_into(
 /// the OS default handler for folders. No shell, no editor command line,
 /// and only a real folder inside the checkout ([`openable_dir`]).
 #[tauri::command]
-pub fn open_chat_checkout(state: State<AppState>, session_id: String) -> Result<String, String> {
+pub async fn open_chat_checkout(ligus_app: tauri::AppHandle, session_id: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| open_chat_checkout_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub fn open_chat_checkout_sync(state: State<AppState>, session_id: String) -> Result<String, String> {
     let sid = parse(&session_id)?;
     let checkout = chat_checkout(&state, sid).ok_or("this chat has no repository checkout on this device")?;
     let wt = hive_runtime::git_worktree::chat_worktree_path_of(&checkout, &sid.to_string()).filter(|p| std::fs::symlink_metadata(p).is_ok());

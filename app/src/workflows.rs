@@ -936,7 +936,11 @@ pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunD
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub(crate) fn list_workflows(
+pub(crate) async fn list_workflows(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkflowDefinitionDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workflows_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_workflows_sync(
     state: State<AppState>,
     session_id: String,
 ) -> Result<Vec<WorkflowDefinitionDto>, String> {
@@ -950,7 +954,11 @@ pub(crate) fn list_workflows(
 }
 
 #[tauri::command(async)]
-pub(crate) fn remove_workflow(
+pub(crate) async fn remove_workflow(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_workflow_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id)).await
+}
+
+pub(crate) fn remove_workflow_sync(
     state: State<AppState>,
     session_id: String,
     workflow_id: String,
@@ -964,7 +972,11 @@ pub(crate) fn remove_workflow(
 /// Pause (`enabled: false`) or resume a workflow. A paused workflow stays
 /// listed but can't start a run; runs already going are unaffected.
 #[tauri::command]
-pub(crate) fn set_workflow_enabled(
+pub(crate) async fn set_workflow_enabled(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, enabled: bool) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| set_workflow_enabled_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, enabled)).await
+}
+
+pub(crate) fn set_workflow_enabled_sync(
     state: State<AppState>,
     session_id: String,
     workflow_id: String,
@@ -982,7 +994,11 @@ pub(crate) fn set_workflow_enabled(
 /// pane sends it like any message, so whichever agent answers files the
 /// revision for review.
 #[tauri::command]
-pub(crate) fn workflow_change_request(
+pub(crate) async fn workflow_change_request(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, request: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| workflow_change_request_sync(tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, request)).await
+}
+
+pub(crate) fn workflow_change_request_sync(
     state: State<AppState>,
     session_id: String,
     workflow_id: String,
@@ -1012,7 +1028,11 @@ pub(crate) fn change_request_message(session: &ChatSession, def: &wf::WorkflowDe
 }
 
 #[tauri::command]
-pub(crate) fn list_workflow_runs(
+pub(crate) async fn list_workflow_runs(ligus_app: tauri::AppHandle, session_id: String) -> Result<Vec<WorkflowRunDto>, String> {
+    crate::off_main(ligus_app, move |ligus_app| list_workflow_runs_sync(tauri::Manager::state::<AppState>(ligus_app), session_id)).await
+}
+
+pub(crate) fn list_workflow_runs_sync(
     state: State<AppState>,
     session_id: String,
 ) -> Result<Vec<WorkflowRunDto>, String> {
@@ -1038,7 +1058,11 @@ pub(crate) fn list_workflow_runs(
 }
 
 #[tauri::command]
-pub(crate) fn start_workflow_run(
+pub(crate) async fn start_workflow_run(ligus_app: tauri::AppHandle, session_id: String, workflow_id: String, input: String) -> Result<String, String> {
+    crate::off_main(ligus_app, move |ligus_app| start_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, workflow_id, input)).await
+}
+
+pub(crate) fn start_workflow_run_sync(
     app: AppHandle,
     state: State<AppState>,
     session_id: String,
@@ -1089,7 +1113,11 @@ pub(crate) fn start_workflow_run(
 }
 
 #[tauri::command]
-pub(crate) fn cancel_workflow_run(
+pub(crate) async fn cancel_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| cancel_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, run_id)).await
+}
+
+pub(crate) fn cancel_workflow_run_sync(
     app: AppHandle,
     state: State<AppState>,
     session_id: String,
@@ -1127,7 +1155,11 @@ pub(crate) fn cancel_workflow_run(
 }
 
 #[tauri::command]
-pub(crate) fn resume_workflow_run(
+pub(crate) async fn resume_workflow_run(ligus_app: tauri::AppHandle, session_id: String, run_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| resume_workflow_run_sync(ligus_app.clone(), tauri::Manager::state::<AppState>(ligus_app), session_id, run_id)).await
+}
+
+pub(crate) fn resume_workflow_run_sync(
     app: AppHandle,
     state: State<AppState>,
     session_id: String,
