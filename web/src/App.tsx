@@ -50,6 +50,7 @@ import { LockdownBar } from "@/components/guards/LockdownBar";
 import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
 import { WorkspaceTrustBanner } from "@/components/WorkspaceTrustBanner";
+import { SandboxGrantsBanner } from "@/components/SandboxGrantsBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
 import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
 import { StatusDot } from "@/components/ui";
@@ -956,6 +957,7 @@ export function App() {
       <UpdateBanner />
       <PendingInvitesBanner />
       <WorkspaceTrustBanner />
+      <SandboxGrantsBanner />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

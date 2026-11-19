@@ -76,6 +76,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::DearthModeChanged { .. } => "dearthModeChanged",
         E::JoinApproved { .. } => "joinApproved",
         E::AdmissionClosed { .. } => "admissionClosed",
+        E::WorkspaceSandboxSet { .. } => "workspaceSandboxSet",
         E::ChatLockdownRaised { .. } => "chatLockdownRaised",
         E::ChatLockdownCleared { .. } => "chatLockdownCleared",
         E::ProposalMarkedStale { .. } => "proposalMarkedStale",
@@ -119,7 +120,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
-    "proposalApplyWithdrawn",
+    "proposalApplyWithdrawn", "workspaceSandboxSet",
 ];
 
 #[test]
@@ -541,4 +542,43 @@ fn memory_goldens_are_present() {
         let SessionEvent::FlowRecorded { record } = env.payload else { panic!("{t}") };
         assert_eq!(record.type_str(), t);
     }
+}
+
+/// Writes the Phase C line: the sandbox grants (`WorkspaceSandboxSet`) with a
+/// workspace path grant and one agent's paths and shell grant. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn phase_c_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let mut grants = hive_core::sandbox::SandboxGrants::default();
+    grants.workspace.read_only.push("~/.m2/repository".into());
+    grants.agents.insert(
+        u(0xa1),
+        hive_core::sandbox::AgentGrant { read_only: vec!["/opt/datasets".into()], read_write: vec!["~/scratch/agent".into()], shell: true },
+    );
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let mut e = SessionEventEnvelope::new(cfg, ws, 501, SessionEvent::WorkspaceSandboxSet { grants });
+    e.id = u(0x6010);
+    e.event_id = u(0x6011);
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x6002)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 900, event_id: u(0x6001) }));
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"workspaceSandboxSet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
 }
