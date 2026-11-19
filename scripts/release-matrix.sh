@@ -14,7 +14,7 @@
 # MLX_URL default to localhost). Claude Code over ACP needs LIGUS_LIVE_KEY
 # (an API key): the claude.ai login is never driven through the SDK adapter.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 ALL_ROWS="claude-code-acp claude-code-legacy codex-acp codex-legacy copilot-acp copilot-legacy antigravity-acp antigravity-legacy anthropic-api openai-api gemini-api llama-cpp ollama mlx"
 ROWS="${ROWS:-$ALL_ROWS}"

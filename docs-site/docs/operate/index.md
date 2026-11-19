@@ -7,8 +7,8 @@ the people who self-host and run it. Using the Ligus desktop app, the phone
 app and the `ligus` CLI day to day is in **[Using Ligus](../ligus/index.md)**.
 
 *Ligus* is short for *ligustica* (*Apis mellifera ligustica*, the Italian
-honeybee). Commands, chart names and environment variables still use the
-`ligus` and `LIGUS_*` names; this section documents them as they ship.
+honeybee). Commands, chart names and environment variables use the
+`ligus` and `LIGUS_*` names.
 
 ## Two things to know first
 

@@ -35,7 +35,9 @@ command); it prints to stderr and exits with status 2.
 |---|---|
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus whoami` | prints account id, device id, name, data dir and room |
-| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md). Also prints the room's held events (`held events: N from M device(s), D dropped by a cap (R to fetch again from the relay), L given up, E expired` and their reasons): events this device can't judge yet, which never stop sync ([held events](../../operate/security/threat-model.md#held-events)) |
+| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md). Also prints the room's held events (`held events: N from M device(s), D dropped by a cap (R to fetch again from the relay), L given up, E expired` and their reasons): events this device can't judge yet, which never stop sync ([held events](../../operate/security/threat-model.md#held-events)). The flags make it a preflight that exits non-zero on failure: `--require-confined` exits 3 without an agent sandbox, `--expect-tier` exits 4 on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (exit 5 on failure) |
+| `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
+| `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route |
 
 ```console
 $ ligus whoami
@@ -99,13 +101,13 @@ an invite and an Admin.
 | Command | What it does |
 |---|---|
 | `ligus runtimes` | lists workspace-owned runtimes synced onto this box |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>]` | defines (or replaces by id) a workspace runtime. Not in `--help` |
-| `ligus rm-runtime <id>` | removes a workspace runtime. Not in `--help` |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>]` | defines (or replaces by id) a workspace runtime. |
+| `ligus rm-runtime <id>` | removes a workspace runtime. |
 | `ligus setup [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes |
 | `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
 | `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
-| `ligus agents` | lists workspace agents. Not in `--help` |
-| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]` | defines an agent. Not in `--help` |
+| `ligus agents` | lists workspace agents. |
+| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]` | defines an agent. |
 | `ligus hosts` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
 | `ligus set-agent-host <agent> <host-id>` | binds an agent to a host |
@@ -126,7 +128,7 @@ Credentials for `add-runtime`:
 ## The worker daemon
 
 ```sh
-ligus worker [--label <name>]
+ligus worker [--label <name>] [--health-listen <addr>]
 ```
 
 Registers this box as a host (label: `--label`, else `$HOSTNAME`, else
@@ -135,7 +137,9 @@ to it, backlog included. It publishes a liveness beat on the relay's presence
 channel, backs off on relay errors (6 s doubling to 120 s), finishes replies a
 previous run was streaming when it stopped, and exits cleanly on SIGTERM or
 Ctrl-C. Worker turns are read-only for Claude Code unless
-`LIGUS_WORKER_PERMISSION_MODE` raises them. See
+`LIGUS_WORKER_PERMISSION_MODE` raises them. `--health-listen` (or
+`LIGUS_WORKER_HEALTH_LISTEN`) serves `GET /v1/health` and `/v1/ready` on that
+address. See
 [Headless agents](../../operate/concepts/headless-agents.md).
 
 ```console
@@ -154,18 +158,17 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 | `ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:…] [--out PATH]` | the headless Admin path: issues a box admission from your own CLI identity, confirmed with your recovery key; sealed to the box when `--request` is given. `--out` writes the code owner-only (0600) into an existing directory, which it leaves as it is |
 | `ligus recovery-key create --out PATH` | registers a recovery key for this CLI identity (a CLI founder's first credential) and writes its 24 words to `PATH` (owner-only, 0600; the directory must exist and is left as it is) before registering the key. Never on a box |
 
-`ligus serve enroll` was removed in 0.1 (a box is never a person's device):
-it stops with a migration error. See
-[Admitting a box](../../operate/ops/admitting-a-box.md).
 | `ligus pair [--listen ADDR] [--token-file PATH] [--public-url URL] [--relay-only] [--remote-relay URL] [--reg-token T] [--insecure-relay]` | prints the phone pairing QR code and link. Reads the server's token; never creates one |
 | `ligus remote enable --relay URL [--reg-token T] [--insecure-relay]` | turns on phone access through a relay tunnel (creates host keys, writes `tunnel/relay.json`) |
 | `ligus remote status` (or `ligus remote`) | relay, host id, the running server's link state, phone counts |
 | `ligus remote disable` | stops using the relay; keys and phones are kept |
+| `ligus remote push-test [--phone <pid\|name>]` | sends a test notification to paired phones (or one) and shows each hop |
 | `ligus remote reset` | new host keys and host id; every phone must pair again |
 | `ligus phones list` (or `ligus phones`) | phones paired over the relay |
 | `ligus phones revoke <pid\|name> [--keep-token] [--token-file PATH]` | revokes one phone; also rotates `serve.token` unless `--keep-token` |
 | `ligus phones certify <ligusphone1:code> \| --code-file PATH --recovery-words-file PATH --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX` | "Add this phone" without a desktop: certifies the phone's key (the code its app shows) as one of this identity's devices, at the phone tier, confirmed with the recovery key. The fingerprint (on the phone, Settings > This phone) is required: a code whose key doesn't match is refused. Without `--fingerprint`, at a terminal it shows the fingerprint and asks you to confirm it; anywhere else it refuses. Never from a box; sync to publish |
 | `ligus bind-repo <name\|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]` | binds a checkout for agent file tools (workspace default, or one chat) |
+| `ligus forge list` / `add <kind> <https://base> [--auth token\|oauth\|gh\|none] [--client-id ID] [--internal]` / `token <id> <read\|write>` / `login <id>` / `test <id>` / `remove <id>` | this device's code-host connections ([Code hosts](../features/code-hosts.md)); tokens are read from standard input and kept in the OS secret store |
 | `ligus repos [list]` | the workspace's repositories, this host's checkouts of them, the repos dir and the bindings |
 | `ligus repos add <remote\|canonical\|path> [--name N] [--kind K] [--branch B]` | adds a workspace repository (Admin, with presence); a path also binds it here |
 | `ligus repos remove <repo>` / `rename <repo> <name> [--branch B]` | removes (Admin, with presence) or renames a workspace repository |
@@ -184,6 +187,10 @@ it stops with a migration error. See
 | `ligus dashboard metrics` | lists the built-in Ligus metrics panels can show |
 | `ligus trust list \| enable <digest> \| enable-all [--repo PATH]` | the runtimes and MCP servers a repository ships, and which this host trusts ([Trust this workspace](../concepts/security.md#workspace-trust)); `enable` takes a digest prefix |
 | `ligus facts export --jsonl [--since C]` | this host's content-free facts as `ligus.facts.v1` JSON lines (measurements, guard signals, and state facts from its projection), for external observability tools; the last line carries the cursor to pass as the next `--since` (unix milliseconds also work) ([Telemetry](../concepts/security.md#facts)) |
+
+There is no `ligus serve enroll` (a box is never a person's device): it
+stops with an error that points to box admission. See
+[Admitting a box](../../operate/ops/admitting-a-box.md).
 
 ```console
 $ ligus serve --listen 127.0.0.1:8787 --label home-box

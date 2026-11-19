@@ -1,7 +1,7 @@
 # Workspace repositories
 
 A workspace can name the repositories it works on, for example
-`github.com/zazulam/wefit`. Every member's devices, your `ligus serve` box and
+`github.com/acme/wefit`. Every member's devices, your `ligus serve` box and
 your phone then agree on which code a chat is about, which hosts have it
 checked out, and where a turn may run.
 
@@ -9,7 +9,7 @@ Two things are kept apart:
 
 | | What it is | Where it lives | Synced |
 |---|---|---|---|
-| **Workspace repository** | A name such as WeFit and a canonical identity such as `github.com/zazulam/wefit`, with a default-branch hint. | A signed event on the workspace's config log. | Yes, to every member |
+| **Workspace repository** | A name such as WeFit and a canonical identity such as `github.com/acme/wefit`, with a default-branch hint. | A signed event on the workspace's config log. | Yes, to every member |
 | **Checkout** | "On this device, WeFit is at `~/apps/WeFit`." | This device's own database. | **Never** |
 | **Coverage** | "This host has WeFit checked out" (or is cloning it, or doesn't). No paths. | The host's encrypted presence beat. | Yes, while the host is online |
 | **Chat repository** | "This chat works in WeFit, on `main`." | A signed event on the chat. | Yes |
@@ -24,7 +24,7 @@ Adding or removing a repository is an Admin's act, confirmed with a passkey
 
 - **From a folder you bound.** Link a folder to the workspace (**Choose
   folder…**). If its remote isn't a workspace repository yet, an Admin sees
-  "This folder is github.com/zazulam/wefit. Add WeFit to the workspace?"
+  "This folder is github.com/acme/wefit. Add WeFit to the workspace?"
   **Add** adds it and records the folder as this device's checkout. Others see
   "Ask an admin to add WeFit".
 - **In Settings → Repositories**, paste a remote URL in any git form or a
@@ -40,9 +40,9 @@ bytes: no device fetches anything until a person clones it or binds a folder.
 Ligus turns a remote into its canonical form with one fixed rule, the same on
 every device:
 
-- `git@github.com:ZaZulam/WeFit.git`, `ssh://git@github.com:22/zazulam/wefit`
-  and `https://www.github.com/zazulam/wefit/` are all
-  `github.com/zazulam/wefit`. Userinfo, port, `www.`, a trailing `.git` and
+- `git@github.com:Acme/WeFit.git`, `ssh://git@github.com:22/acme/wefit`
+  and `https://www.github.com/acme/wefit/` are all
+  `github.com/acme/wefit`. Userinfo, port, `www.`, a trailing `.git` and
   slashes are dropped; `ssh.github.com` is `github.com`.
 - Owner and name are lowercased on github.com, gitlab.com, codeberg.org and
   gitea.com, and on any host the entry names as GitHub, GitLab, Gitea or

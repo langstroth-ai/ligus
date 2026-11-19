@@ -68,7 +68,7 @@ There are 117 findings in total. The tables below cover everything that matters 
 | I3 | `github.rs:20-27` **[V]** | `ACCOUNT_NS = 0x6869_7665_6769_7468_6163_636f_756e_7401` (ASCII "hivegithaccount\x01"); `account_id_for(id) = UUIDv5(ACCOUNT_NS, "github:<id>")`. This derives the account id from a public id. |
 | I4 | `github.rs:50-72` | `GithubAccount{id, login, name, email, avatar_url}` and `account_id()`. |
 | I5-I7 | `github.rs:96-199` | Device-flow start and poll, `/user`, `/user/emails`. |
-| I8-I10 | `app/build.rs:11,25-41`; `app/src/lib.rs:12882-12924` | The OAuth client id is baked in at build time or set at runtime (`LIGUS_GITHUB_CLIENT_ID`). No client id is committed. |
+| I8-I10 | `app/build.rs:11,25-41`; `app/src/lib.rs:12882-12924` | The OAuth client id is baked in at build time or set at runtime (`LIGUS_GITHUB_APP_CLIENT_ID`, `LIGUS_GITLAB_CLIENT_ID`). No client id is committed. |
 | I11-I12 | `app/src/lib.rs:350-359, 929-947` | `github_account` in plain `settings.json`; `github_token` in the OS secret store (`SETTINGS_SECRETS`, `secret_store.rs`). |
 | I13-I14 | `app/src/lib.rs:12926-13020` | `github_login_poll` adopts the GitHub id as the actor (`adopt_account_identity`), overwrites `git_email` with the GitHub primary email, and calls `register_directory`. |
 | I15 | `app/src/lib.rs:11303-11307` | At startup, with a GitHub account present, the app calls `set_author_account(account_id_for(id))`. **This is the local-to-GitHub id switch.** |

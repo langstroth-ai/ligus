@@ -40,10 +40,13 @@ sequenceDiagram
     B->>A: envelope (reply, ack, …)
 ```
 
-## The protocol
+## The protocol (proposed)
 
-Three endpoints. Full `/v1` spec in the relay repo,
-[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay):
+Three endpoints. None of them exists in relay v0.3.0: today's relay has only
+the opaque per-workspace `…/presence` and `…/candidates` blob routes (see
+[Self-hosting a relay](self-host.md)), and its `/v1` reference is
+`docs/reference.md` in
+[the relay repository](https://github.com/langstroth-ai/langstroth-relay).
 
 ### `POST /v1/rendezvous`
 
@@ -70,8 +73,8 @@ Publish a `RendezvousPublication`:
 The relay verifies the Ed25519 signature against the
 `publisherSigningPublicKey` over the canonical preimage of the
 record. Bad sig → 400. Stale publish (>5 min skew) → 400. Otherwise
-it stores the publication, capped at the relay's
-`--max-ttl` (default 300s) regardless of what the client requested.
+it stores the publication, capped at a relay-side maximum TTL (300 s in
+this design) regardless of what the client requested.
 
 ### `GET /v1/rendezvous/{workspaceID}/{deviceID}`
 

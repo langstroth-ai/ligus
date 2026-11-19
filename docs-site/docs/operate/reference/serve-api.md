@@ -96,9 +96,8 @@ The phone sends `POST /v1/chats/:id/typing {"typing": true}` about every
 2.5 s while you edit a non-empty draft, and `{"typing": false}` when you send,
 clear the draft, leave the chat or background the app. The box publishes a
 presence beat for that chat to the chat's own relay room (the workspace's, or
-only that DM's room for a DM), sealed under the workspace key, as the person
-it writes messages as: its owner once [enrolled as the owner's
-device](../ops/serve-box.md), otherwise its own identity. The beat says only
+only that DM's room for a DM), sealed under the workspace key, under the box's own identity (its
+[service member](../ops/serve-box.md)), as its messages are. The beat says only
 who is typing in which chat, never what.
 
 - Same bearer or tunnel auth as every route; a chat the box can't see is 404.
@@ -266,8 +265,8 @@ Show the person what you parsed from the preimage, not the box's `preview`.
 
 ### Passkey presence
 
-These endpoints confirmed the actions of a box enrolled as its owner's
-device, a mode removed in 0.1. A box is now its own service member: it
+These endpoints are for a box enrolled as its owner's device, which Ligus
+doesn't support: a box is its own service member. It
 carries no presence, and a vote counts only from a device certified for the
 voter's account, so they never act as the person (see
 [Passkey presence](../security/index.md#presence)). The phone uses

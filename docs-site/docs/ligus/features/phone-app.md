@@ -83,7 +83,8 @@ You can also add a host by typing its address; the app assumes
 Each host profile has a **path** setting:
 
 - **Auto (direct, then relay)**: use the direct address when it answers
-  quickly, otherwise the relay;
+  within 1.5 seconds, otherwise the relay, and check again when the network
+  changes;
 - **Direct only**;
 - **Relay only**, even when the direct address would answer.
 
@@ -101,15 +102,20 @@ What the phone can reach on the box's disk is deliberately narrow:
   name directly inside it that is already a git repository. Bindings to
   other paths are made on the box with `ligus bind-repo`; the phone sees only
   their last path component.
-- **Clones** accept only `owner/name` or `https://github.com/owner/name`;
-  other hosts, schemes, credentials in URLs and query strings are refused.
-  They land in `<repos dir>/<owner>__<name>`, limited by
+- **Clones** accept only `owner/name` (`group/name` on GitLab) or
+  `https://<host>/owner/name`, where the host must be one of the box's
+  code-host connections; other schemes, credentials in URLs, queries and
+  fragments are refused. A github.com repository lands in
+  `<repos dir>/<owner>__<name>`, one from another host in
+  `<repos dir>/<host>__<owner>__<name>`. Clones are limited by
   `LIGUS_REPOS_MAX_CLONE_MB` (2048) and `LIGUS_REPOS_CLONE_TIMEOUT_SECS`
   (900), two at a time.
 - **Proposal files** (`GET /v1/proposals/{id}/file`) take a plain relative
   path: no `..`, no absolute paths, nothing under `.git`. The file is rebuilt
   in a scratch directory, never in the checkout.
-- **GitHub** actions use the box's own `gh` login. Ligus never force-pushes,
+- **Code-host** actions use the box's connections: its own `gh` login for
+  GitHub by default, or tokens in the box's OS secret store, never on the
+  phone. Ligus never force-pushes,
   never pushes to an upstream it doesn't own and never creates forks.
 - Writes that change repos need the box's role to be Contributor or above.
 
@@ -159,7 +165,8 @@ sent anywhere, and there's no push in the demo.
 ## People, channels and chat details
 
 - **People** lists the workspace's human members with their role, title and
-  avatar. The box's own identity is marked as you.
+  avatar. The box's own identity (its service member) is marked "this
+  host".
 - **Channels** shows the channel tree, including each channel's drop-in chat.
 - **Chat details** is a read-only view of the desktop's right-hand panel: who
   is in the chat, which agents it uses and where each one runs, who answers an
@@ -168,14 +175,16 @@ sent anywhere, and there's no push in the demo.
   vaults.
 
 !!! note "Who answers `@ligus`"
-    Only a desktop runs a chat's primary runtime (`@ligus`). Chat details says
-    whether your desktop is available. If it's closed, the turn waits and is
-    answered when the desktop opens. For chats the phone creates to be
-    answered by your desktop, enroll the box as
-    [your own device](../../operate/ops/serve-box.md).
+    Only a desktop runs a chat's primary runtime (`@ligus`): the desktop of
+    the person who created the chat. Chat details says whether that desktop
+    is available. If it's closed, the turn waits and is answered when the
+    desktop opens. A chat the phone creates is the box's own (the box is
+    its own member), so no desktop runs its `@ligus`: mention an agent
+    there, or set `LIGUS_SERVE_DEFAULT_AGENT` on the box to send untagged
+    messages to that agent ([Running ligus serve](../../operate/ops/serve-box.md)).
 
-You can also move an existing agent to a different host from the phone.
-Creating agents and editing runtimes stay on the desktop.
+Moving an agent to another host, creating agents and editing runtimes stay
+on the desktop.
 
 ## Safety codes, invites and direct messages
 
@@ -208,8 +217,8 @@ When you join from an invite, the chat may say **Waiting for Ada's founding
 to sync** until the founder's signed founding reaches your host. Send is off
 and your draft is kept; it clears on its own.
 
-A box is never your device since 0.1, so person invites and DMs as you
-start on your desktop. Code-host changes are made on the host or the
+A box is never your device, so person invites and DMs as you start on your
+desktop. Code-host changes are made on the host or the
 desktop.
 
 ## Repos
@@ -324,7 +333,9 @@ within 20 seconds is queued.
 
 !!! note "Push is off in standard builds"
     The app's push support is compiled in but switched off by default
-    (`LIGUS_PUSH_NOTIFICATIONS = NO` in its build settings). To get push you
+    (`LIGUS_PUSH_NOTIFICATIONS = NO` in the app project's
+    `Config/Shared.xcconfig`; set it to `YES` in your
+    `Config/Local.xcconfig`). To get push you
     build the app yourself with it switched on. Without push the app still
     shows everything when you open it.
 
@@ -368,7 +379,7 @@ failures mean:
 | `refused: no_push_token` | the relay has no APNs token for the phone: it never registered one, the relay restarted without durable storage, or APNs said the token was dead | open the app with notifications allowed; it registers its token every time it connects |
 | `topic not allowed on this relay` | the app's bundle id isn't one the relay pushes to | add it to `LANGSTROTH_RELAY_APNS_TOPICS` on the relay and restart it |
 | `BadDeviceToken` | environment mismatch: a build run from Xcode has a sandbox token, an App Store or TestFlight build a production one | `LANGSTROTH_RELAY_APNS_ENV=auto` (the default) on the relay; open the app again |
-| `DeviceTokenNotForTopic` / `TopicDisallowed` | the topic the relay used isn't the app on the phone | set `LANGSTROTH_RELAY_APNS_TOPIC` / `LANGSTROTH_RELAY_APNS_TOPICS` to the build's bundle id, and update the app (current builds report their bundle id) |
+| `DeviceTokenNotForTopic` / `TopicDisallowed` | the topic the relay used isn't the app on the phone | set `LANGSTROTH_RELAY_APNS_TOPIC` / `LANGSTROTH_RELAY_APNS_TOPICS` to the build's bundle id (the app reports it with its push token) |
 | `InvalidProviderToken` | the relay's APNs key, Key ID or Team ID is wrong, or from another team than the app | fix the relay's `LANGSTROTH_RELAY_APNS_KEY*` / `TEAM_ID` |
 | `Unregistered` (410) | the app was uninstalled or reinstalled | open the app so it registers a new token |
 | `no answer from the relay` | the relay didn't ack within 15 s | the relay's log (`tunnel push` lines) |
@@ -388,7 +399,7 @@ push: message.done to "iPhone" (Ab3dE9…): relay refused it: no_push_token (…
   stream open and has talked to the box in the last 40 seconds. The app closes
   its stream when it goes to the background; if iOS suspends it first (screen
   locked at once), the box stops counting it as open after 40 seconds of
-  silence. Older app builds could leave it counted for up to a minute more.
+  silence.
 - **`coalesced` / `rate-limited`**: bursts in one chat collapse to one
   notification per 10 seconds; 20 a minute and 500 a day per phone.
 - **No `push:` line at all** for an agent reply: the box never saw a finished

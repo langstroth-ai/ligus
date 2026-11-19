@@ -36,11 +36,10 @@ it came before the expiry, or one a thief of the code slots in before the
 box's. Closing needs no passkey (it only narrows who may join), and a headless
 Admin closes from the CLI with `ligus admit close`.
 
-!!! warning "Before 0.1: `ligus serve enroll` and `serve.owner` were removed"
-    Earlier previews could enrol a serve box as one person's device, so the
-    box signed as that person. That path is gone: `ligus serve enroll`,
-    `LIGUS_SERVE_OWNER` and the chart's `serve.owner` now stop with a
-    migration error. Admit the box as described here instead. A box whose
+!!! warning "A box is never a person's device"
+    A box never signs as a person: `ligus serve enroll`,
+    `LIGUS_SERVE_OWNER` and the chart's `serve.owner` stop with an
+    error. Admit the box as described here instead. A box whose
     device key a person's desktop still certifies refuses to start: revoke
     it (**Settings → Account → My devices → Revoke**) and start it from a
     fresh data dir.
