@@ -224,3 +224,39 @@ fn the_local_workspace_is_always_the_owners() {
     let m = solo.post_user_message(c, local, "@scout go").unwrap().id;
     assert!(solo.agent_turn_access(c, m, a.id).unwrap().allowed());
 }
+
+#[test]
+fn only_the_owner_sets_access_through_the_service() {
+    let mut fx = fixture();
+    let policy = ligus_core::AgentPolicy { access: ACCESS_EVERYONE.into(), limits: AgentLimits { member_turns_per_day: Some(5), usd_cents_per_day: None }, notify_on_use: true };
+    let mut adm = svc_on(&fx.path, "adm", "Adm");
+    assert!(!adm.may_manage_agent(fx.wid, &fx.scout));
+    assert!(adm.set_agent_policy(fx.wid, fx.scout.id, policy.clone()).is_err(), "an Admin can't open someone's agent");
+    assert!(fx.host.may_manage_agent(fx.wid, &fx.scout));
+    let bad = ligus_core::AgentPolicy { access: "members".into(), ..policy.clone() };
+    assert!(fx.host.set_agent_policy(fx.wid, fx.scout.id, bad).is_err(), "only owner or everyone");
+    fx.host.set_agent_policy(fx.wid, fx.scout.id, policy.clone()).unwrap();
+    let s = fx.host.load(fx.chat).unwrap().unwrap();
+    assert_eq!(s.workspace_agents.iter().find(|a| a.id == fx.scout.id).unwrap().policy(), policy);
+    // A shared agent: an Admin manages it, a Contributor doesn't.
+    let shared = WorkspaceAgent::new("helper", "rt");
+    fx.host.add_agent(fx.chat, fx.wid, shared.clone()).unwrap();
+    assert!(adm.may_manage_agent(fx.wid, &shared));
+    assert!(!svc_on(&fx.path, "con", "Con").may_manage_agent(fx.wid, &shared));
+}
+
+/// A turn stamped as answering a System note that trails the message (the
+/// "last message" rule) is judged by the message before the note.
+#[test]
+fn a_trailing_system_note_doesnt_hide_or_lend_the_asker() {
+    let mut fx = fixture();
+    let own = fx.host.post_user_message(fx.chat, fx.wid, "@scout go").unwrap().id;
+    let _ = own;
+    fx.host.post_system_note(fx.chat, fx.wid, "routed").unwrap();
+    let note = fx.host.load(fx.chat).unwrap().unwrap().messages.last().unwrap().id;
+    assert!(fx.host.agent_turn_access(fx.chat, note, fx.scout.id).unwrap().allowed());
+    post(&fx, "con", "@scout go");
+    fx.host.post_system_note(fx.chat, fx.wid, "routed").unwrap();
+    let note = fx.host.load(fx.chat).unwrap().unwrap().messages.last().unwrap().id;
+    assert_eq!(fx.host.agent_turn_access(fx.chat, note, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+}

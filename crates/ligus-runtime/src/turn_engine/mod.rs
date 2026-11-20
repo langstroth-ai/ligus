@@ -394,8 +394,13 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     // (a cascade, a hand-off, a workflow stage, a fallback) goes through.
     // Refused: the trigger is answered with a short note no model wrote.
     let mut responder = responder;
-    let agent_use = match (responder.agent_id, reply_to) {
-        (Some(agent), Some(trigger)) => match locked(host).gate_agent_turn(chat_id, workspace_id, trigger, agent) {
+    let gated = match (responder.agent_id, reply_to) {
+        // Bound first: the service isn't held while the host is told.
+        (Some(agent), Some(trigger)) => Some((agent, locked(host).gate_agent_turn(chat_id, workspace_id, trigger, agent))),
+        _ => None,
+    };
+    let agent_use = match gated {
+        Some((agent, gated)) => match gated {
             Ok(Ok(u)) => Some((agent, u)),
             Ok(Err(note)) => {
                 host.changed();
@@ -405,7 +410,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 return Err(TurnError { message: format!("couldn't check who may use this agent: {e}"), stopped: false, message_id: None });
             }
         },
-        _ => None,
+        None => None,
     };
     let usage_day = match &agent_use {
         Some((agent, u)) => {

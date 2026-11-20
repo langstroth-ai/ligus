@@ -22,4 +22,41 @@ avatarUrl: string | null,
 /**
  * Optional avatar accent color (`#rrggbb`).
  */
-avatarColorHex: string | null, };
+avatarColorHex: string | null, 
+/**
+ * Who may use the agent, as enforced: `"owner"` (a personal agent's
+ * default, "Only me"; on a shared agent, workspace Admins) or
+ * `"everyone"`.
+ */
+access: string, 
+/**
+ * Turns each member other than the owner may start per day as set
+ * (`None`: the default; `0`: no limit).
+ */
+memberTurnsPerDay: number | null, 
+/**
+ * The per-member daily cap in force (`None`: no limit).
+ */
+effectiveMemberTurnsPerDay: number | null, 
+/**
+ * The agent's estimated daily spending cap in US cents (`None`: none).
+ */
+usdCentsPerDay: number | null, 
+/**
+ * Its owner is told when someone else uses it.
+ */
+notifyOnUse: boolean, 
+/**
+ * Whether this device's person may use the agent (the @mention
+ * autocomplete greys it out otherwise).
+ */
+available: boolean, 
+/**
+ * Why not, when `available` is false.
+ */
+unavailableReason: string | null, 
+/**
+ * Whether this device's person may change who may use it, its budgets,
+ * and see its usage (its owner; an Admin on a shared agent).
+ */
+canManageAccess: boolean, };

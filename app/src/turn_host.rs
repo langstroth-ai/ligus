@@ -174,6 +174,30 @@ impl TurnHost for DesktopHost<'_> {
         crate::guards::record_sandbox_egress_denials(self.state, self.workspace_id, self.session_id, denied);
     }
 
+    fn agent_used(&self, agent: &str, use_: &ligus_runtime::agent_access::AgentUse) {
+        // "Notify me when someone else uses this agent": this device runs
+        // its owner's agent for another member.
+        if !use_.notify {
+            return;
+        }
+        let who = {
+            let svc = self.state.service.lock().unwrap_or_else(|e| e.into_inner());
+            svc.load(self.session_id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.members.into_iter().find(|m| m.id == use_.requester).map(|m| m.actor.display_name))
+                .unwrap_or_else(|| "Someone".into())
+        };
+        use tauri_plugin_notification::NotificationExt;
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title("Ligus")
+            .body(format!("{} is using {}", ligus_runtime::display::shown(&who), ligus_runtime::display::shown(agent)))
+            .show();
+    }
+
     fn usage_error(&self, provider: ModelProviderKind, message: &str) {
         crate::guards::record_usage_error(self.state, provider, message);
     }

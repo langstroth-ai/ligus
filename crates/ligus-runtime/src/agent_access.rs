@@ -190,6 +190,15 @@ impl ChatService {
         if self.is_local_workspace(session.workspace_id) {
             return Ok(AccessDecision::Allow(AgentUse { requester: self.author().id.clone(), teammate: false, notify: false }));
         }
+        // A turn answering a System row (a note trailing the message, as the
+        // "last message" rule picks it) answers the message before it: a
+        // note isn't anyone speaking.
+        let trigger = match session.messages.iter().position(|m| m.id == trigger) {
+            Some(at) if session.messages[at].role == ligus_core::MessageRole::System => {
+                session.messages[..at].iter().rev().find(|m| m.role != ligus_core::MessageRole::System).map_or(trigger, |m| m.id)
+            }
+            _ => trigger,
+        };
         let links = self.device_links(session.workspace_id).unwrap_or_default();
         let roster = self.workspace_roster(session.workspace_id).ok();
         let people: Option<Vec<String>> = self.trigger_people(session_id, trigger)?.map(|p| {
@@ -259,6 +268,49 @@ impl ChatService {
     /// runtime reported no usage).
     pub fn record_agent_cost(&self, workspace_id: Uuid, agent: Uuid, requester: &str, day: &str, usd: Option<f64>) -> Result<()> {
         Ok(self.store().add_agent_cost(workspace_id, agent, requester, day, usd)?)
+    }
+
+    /// Change who may use `agent_id` and its budgets (`access`: `"owner"`
+    /// or `"everyone"`). Its owner's alone (an Admin's on a shared agent):
+    /// the fold refuses anyone else's (`authz::agent_policy_refusal`), and
+    /// this refuses it up front with the reason.
+    pub fn set_agent_policy(&mut self, workspace_id: Uuid, agent_id: Uuid, policy: ligus_core::AgentPolicy) -> Result<()> {
+        use crate::chat_service::ChatError;
+        if !matches!(policy.access.as_str(), ligus_core::agent::ACCESS_OWNER | ligus_core::agent::ACCESS_EVERYONE) {
+            return Err(ChatError::Unauthorized(format!("unknown access {:?}: use \"owner\" or \"everyone\"", policy.access)));
+        }
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        let agents = self.load(config_id)?.map(|s| s.workspace_agents).unwrap_or_default();
+        let Some(mut agent) = agents.into_iter().find(|a| a.id == agent_id) else {
+            return Err(ChatError::NotFound("unknown agent".into()));
+        };
+        if !self.may_manage_agent(workspace_id, &agent) {
+            return Err(ChatError::Unauthorized(if agent.owner_actor_id.is_empty() {
+                "only an Admin changes who may use a shared agent".into()
+            } else {
+                "only the agent's owner changes who may use it and its budgets".into()
+            }));
+        }
+        agent.access = policy.access;
+        agent.limits = policy.limits;
+        agent.notify_on_use = policy.notify_on_use;
+        self.add_agent(config_id, workspace_id, agent)
+    }
+
+    /// Whether this device's person may change `agent`'s access and budgets
+    /// (and see its usage): its owner, or on a shared agent an Admin.
+    pub fn may_manage_agent(&self, workspace_id: Uuid, agent: &WorkspaceAgent) -> bool {
+        if self.is_local_workspace(workspace_id) {
+            return true;
+        }
+        let links = self.device_links(workspace_id).unwrap_or_default();
+        let me = links.person(&self.author().id).to_string();
+        if agent.owner_actor_id.is_empty() {
+            let roster = self.workspace_roster(workspace_id).ok();
+            person_role(roster.as_ref(), &links, &me).is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank())
+        } else {
+            links.person(&agent.owner_actor_id) == me
+        }
     }
 
     /// `agent`'s usage on this device: today and this month (UTC).

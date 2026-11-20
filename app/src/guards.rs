@@ -1743,6 +1743,29 @@ pub(crate) fn cascade_paused(
     None
 }
 
+/// For a teammate's turn on this person's agent (agent access controls):
+/// the note to answer it with when the agent's runtime is past the
+/// threshold for `priority` (background for a teammate's direct mention),
+/// so their requests back off before the owner's own, which always run.
+pub(crate) fn agent_turn_throttled(
+    state: &AppState,
+    workspace_id: Uuid,
+    provider: ligus_core::ModelProviderKind,
+    priority: ligus_core::throttle::TurnPriority,
+    agent_key: &str,
+    agent_name: &str,
+) -> Option<String> {
+    let d = decide(state, provider, priority, agent_key);
+    let ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d else { return None };
+    let key = format!("teammate:{agent_key}");
+    note_deferral(state, workspace_id, key.clone(), format!("another member's turn on {agent_name}"), provider, priority, d);
+    // Not retried on its own: recorded, then cleared.
+    state.guards.deferred.lock().unwrap().remove(&key);
+    Some(format!(
+        "{agent_name} is paused for other members: its owner's plan window is at {utilization_pct}% (other members' requests pause at {threshold_pct}% to keep room for the owner's own). Ask again later."
+    ))
+}
+
 /// Plan windows, thresholds and what's being held back.
 #[tauri::command]
 pub(crate) fn get_throttle_state(state: State<AppState>) -> ligus_proto::ThrottleStateDto {
