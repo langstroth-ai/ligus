@@ -70,7 +70,10 @@ check "a rerun makes no commit" '[ "$(count "$tap")" -eq 3 ] && grep -q "nothing
 tap=$(new_tap same)
 git clone -q "$tap" "$work/a"
 git clone -q "$tap" "$work/b"
-"$push" "$work/a" "ligus-app 0.2.0" set_cask 0.2.0 > /dev/null 2>&1
+# A different commit date than b's, so the two commits differ even when both
+# land in the same second (identical commits would trivially dedupe).
+GIT_AUTHOR_DATE="2001-01-01T00:00:00Z" GIT_COMMITTER_DATE="2001-01-01T00:00:00Z" \
+  "$push" "$work/a" "ligus-app 0.2.0" set_cask 0.2.0 > /dev/null 2>&1
 "$push" "$work/b" "ligus-app 0.2.0" set_cask 0.2.0 > "$work/b.log" 2>&1
 check "the same change racing lands once" '[ "$(count "$tap")" -eq 2 ] && grep -q "nothing to push" "$work/b.log"'
 
