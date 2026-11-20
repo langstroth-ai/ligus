@@ -11,6 +11,11 @@
 #   (for example v0.1.0 for version 0.1.0), and every ligus crate in
 #   Cargo.lock and web/package.json must carry that same version.
 #   LIGUS_RELEASE_ROOT (default: the repo) is where those two files live.
+# - The desktop app's main binary (mainBinaryName) must not equal the CLI's
+#   `ligus` binary ignoring case: on macOS's case-insensitive filesystem they
+#   would be the same file in target/release, and one build overwrites the
+#   other. The CLI's name is read from crates/ligus-cli/Cargo.toml under
+#   LIGUS_RELEASE_ROOT.
 set -euo pipefail
 
 tag="${1:?usage: check-release-config.sh <tag> [tauri.conf.json]}"
@@ -46,6 +51,17 @@ else:
     web = json.load(open(os.path.join(root, "web/package.json"))).get("version")
     if web != want_v:
         errs.append("web/package.json version is %s, not %s" % (web, want_v))
+main_bin = c.get("mainBinaryName") or "ligus-desktop"
+try:
+    cli = open(os.path.join(root, "crates/ligus-cli/Cargo.toml")).read()
+    cli_bins = re.findall(r'\[\[bin\]\]\s*\nname\s*=\s*"([^"]+)"', cli)
+    if not cli_bins:
+        errs.append("no [[bin]] name found in %s/crates/ligus-cli/Cargo.toml" % root)
+    for b in cli_bins:
+        if b.lower() == main_bin.lower():
+            errs.append("the desktop main binary %r collides with the CLI binary %r on a case-insensitive filesystem; set mainBinaryName in %s to another name" % (main_bin, b, conf))
+except OSError as e:
+    errs.append("can't read the CLI manifest: %s" % e)
 for e in errs:
     print("::error::" + e)
 sys.exit(1 if errs else 0)

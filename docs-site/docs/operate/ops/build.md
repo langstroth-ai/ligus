@@ -30,6 +30,12 @@ target):
 | Windows | `nsis/Ligus_*-setup.exe` (`.msi` needs the WiX toolset) |
 | Linux | `appimage/*.AppImage`, `deb/*.deb`, `rpm/*.rpm` |
 
+The executable inside each bundle is `ligus-desktop`
+(`Ligus.app/Contents/MacOS/ligus-desktop`, `ligus-desktop.exe`,
+`/usr/bin/ligus-desktop`); everything users see is still named Ligus. It
+differs from the CLI's `ligus` even ignoring case, so `cargo build --release
+-p ligus-cli` and `cargo tauri build` can share one target dir.
+
 For a fast dev loop instead of a bundle: `cargo tauri dev`.
 
 ## Cross-building from one machine

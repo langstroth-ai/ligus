@@ -19,6 +19,19 @@ Per-OS artifacts:
 | Windows | `.msi`, `.exe` (NSIS)              | **Authenticode** code signing |
 | Linux   | `.deb`, `.AppImage`, `.rpm`        | (optional) GPG / repo signing |
 
+The app's name everywhere users see it (window title, `Ligus.app`, the Start
+menu and desktop shortcuts, the Linux menu entry, installer file names) is
+`productName`, **Ligus**. The executable inside is `ligus-desktop`
+(`mainBinaryName`): `Ligus.app/Contents/MacOS/ligus-desktop`,
+`ligus-desktop.exe` in the Windows install dir, `/usr/bin/ligus-desktop` from
+the `.deb`/`.rpm` (the generated `.desktop` file's `Exec=` points at it). It
+must not be `Ligus`: on macOS's case-insensitive filesystem that is the same
+file as the CLI's `target/release/ligus`, and building the app overwrote the
+CLI. `scripts/check-release-config.sh` and `app/tests/binary_names.rs` fail a
+name that collides with a workspace binary ignoring case. Keychain trust
+doesn't depend on the executable name: a release app is trusted by its
+designated requirement (bundle id `ai.ligus.desktop` and team id).
+
 ## Signing (requires real credentials — not run in CI by default)
 
 - **macOS** — set `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
