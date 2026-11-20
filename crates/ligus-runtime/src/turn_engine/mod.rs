@@ -425,7 +425,6 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         }
         None => None,
     };
-    let responder = responder;
     let rt = &responder.runtime;
     let tools_allowed = gate.allows_tools();
     let restricted = !envelope.egress.is_open();

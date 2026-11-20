@@ -1736,6 +1736,8 @@ async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice()
         let mut svc = open_service(&h.desktop).unwrap();
         let mut agent = WorkspaceAgent::new("chat", "gw");
         agent.owner_actor_id = svc.author().id.clone();
+        // Open to everyone: the box asks for it (agent access controls).
+        agent.access = ligus_core::agent::ACCESS_EVERYONE.into();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
         id
@@ -3352,6 +3354,8 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         let mut desk = open_service(&h.desktop).unwrap();
         let mut a = WorkspaceAgent::new("reviewer", "gw");
         a.owner_actor_id = desk.author().id.clone();
+        // Open to everyone: the phone's hand-off reaches it (agent access).
+        a.access = ligus_core::agent::ACCESS_EVERYONE.into();
         let id = a.id;
         desk.add_agent(ws, ws, a).unwrap();
         id
