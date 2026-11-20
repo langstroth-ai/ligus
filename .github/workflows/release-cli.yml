@@ -1,16 +1,28 @@
 # Builds the `ligus` CLI/daemon binary for macOS + Linux and attaches it to the
-# GitHub Release for the tag as `ligus-<target>` (what install.sh and the tap
-# fetch). The desktop app is built separately by release.yml.
+# tag's DRAFT GitHub Release as `ligus-<target>` (what install.sh and the tap
+# fetch), with a `.sha256` next to each.
+#
+# Not triggered on its own: release.yml calls it (job `cli`) after its
+# `release` job has created the draft, and publishes the release only when
+# these builds, the desktop builds and the updater check have all succeeded.
+# One workflow run therefore gates the whole release; see release.yml's header.
+#
+# The toolchain setup and build command live in .github/actions/build-cli,
+# which ci.yml also uses to build every target below on each PR, so a target
+# that doesn't build fails the merge queue instead of the release.
 name: release-cli
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
         description: "Release tag (e.g. v0.2.1)"
         required: true
-  push:
-    tags: ["v*"]
+        type: string
+      release-id:
+        description: "Id of the draft release the caller's release job created"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,6 +31,8 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # Every target here must also be in ci.yml's cli-targets matrix
+      # (scripts/test-release-workflow.rb checks it).
       matrix:
         include:
           - runner: macos-latest
@@ -28,156 +42,67 @@ jobs:
           # whose Xcode clang targets x86_64 out of the box.
           - runner: macos-latest
             target: x86_64-apple-darwin
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # A dispatch builds the tag, never the dispatching branch.
+        # Always the tag, also on a manual dispatch of release.yml (which
+        # would otherwise check out the dispatching branch).
         with:
-          ref: "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
-
-      - name: Install Rust target
-        run: rustup update stable && rustup target add ${{ matrix.target }}
-
-      - name: Install musl toolchain (Linux)
-        if: contains(matrix.target, 'linux-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: ${{ matrix.target }}
-
-      # The test-only passkey shortcut (ligus-runtime `test-presence`) must
-      # never be in a shipped binary's build graph.
-      - name: No test-presence in shipped builds
-        shell: bash
-        run: scripts/check-no-test-presence.sh
+          ref: refs/tags/${{ inputs.tag }}
 
       # A tag that is not v<the version of every ligus crate> must not
-      # create a release or upload a binary.
+      # build or upload a binary.
       - name: Check the tag against the versions
         env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag }}
         run: scripts/check-release-config.sh "$TAG"
 
       - name: Build ligus CLI
+        id: build
+        uses: ./.github/actions/build-cli
         env:
           # Public device-flow client ids baked in by ligus-forge (see release.yml).
           LIGUS_GITHUB_APP_CLIENT_ID: ${{ vars.LIGUS_GITHUB_APP_CLIENT_ID }}
           LIGUS_GITLAB_CLIENT_ID: ${{ vars.LIGUS_GITLAB_CLIENT_ID }}
-        run: cargo build --release --locked -p ligus-cli --target ${{ matrix.target }}
+        with:
+          target: ${{ matrix.target }}
+          profile: release
 
       - name: Stage asset
         # install.sh refuses a binary that does not match its .sha256 file.
+        env:
+          BIN: ${{ steps.build.outputs.binary }}
+          TARGET: ${{ matrix.target }}
         run: |
-          install -m 0755 "target/${{ matrix.target }}/release/ligus" "ligus-${{ matrix.target }}"
+          install -m 0755 "$BIN" "ligus-$TARGET"
           if command -v sha256sum >/dev/null; then
-            sha256sum "ligus-${{ matrix.target }}" > "ligus-${{ matrix.target }}.sha256"
+            sha256sum "ligus-$TARGET" > "ligus-$TARGET.sha256"
           else
-            shasum -a 256 "ligus-${{ matrix.target }}" > "ligus-${{ matrix.target }}.sha256"
+            shasum -a 256 "ligus-$TARGET" > "ligus-$TARGET.sha256"
           fi
-          cat "ligus-${{ matrix.target }}.sha256"
+          cat "ligus-$TARGET.sha256"
 
-      # Same release as release.yml: find or create it (never edit it), so
-      # action-gh-release below only ever attaches to an existing release and
-      # keeps its title, notes and prerelease state (no name/body/prerelease
-      # inputs on purpose).
-      - name: Find or create the release
+      # Upload to the draft by tag (gh finds drafts by tag through GraphQL's
+      # release(tagName:); the REST tags endpoint does not), after checking
+      # that the release gh resolves is the very draft the release job made:
+      # never a published release, never a stray second draft. --clobber
+      # makes a rerun replace this target's files. Never publishes: the
+      # publish job in release.yml does that once everything has succeeded.
+      - name: Attach to the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: scripts/ensure-release.sh "$GITHUB_REPOSITORY" "$TAG"
-
-      - name: Attach to release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            ligus-${{ matrix.target }}
-            ligus-${{ matrix.target }}.sha256
-          fail_on_unmatched_files: true
-
-  # Publish/update the Homebrew CLI formula on the tap once the per-arch binaries
-  # are uploaded, so `brew install langstroth-ai/ligus/ligus` tracks releases. The
-  # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
-  # collide). Never write the old
-  # Formula/hive-cli.rb: the tap keeps it, disabled, pointing at ligus. Needs
-  # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
-  # langstroth-ai/homebrew-ligus); skips cleanly when absent.
-  formula:
-    needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish the tap formula
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release-id }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "HOMEBREW_TAP_TOKEN not set — skipping formula update."
-            exit 0
+          got=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId,isDraft --jq '"\(.databaseId) \(.isDraft)"')
+          if [ "$got" != "$RELEASE_ID true" ]; then
+            echo "::error::gh resolves $TAG to release '$got' (id, draft), not the draft $RELEASE_ID"
+            exit 1
           fi
-          VERSION="${TAG#v}"
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          declare -A sha
-          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
-            for i in 1 2 3 4 5; do
-              if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "ligus-${t}" --output "ligus-${t}" --clobber; then break; fi
-              echo "ligus-${t} not ready (attempt ${i}) - retrying"; sleep 15
-            done
-            sha[$t]=$(sha256sum "ligus-${t}" | awk '{print $1}')
-          done
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
-          mkdir -p tap/Formula
-          cat > tap/Formula/ligus.rb <<RUBY
-          class Ligus < Formula
-            desc "Headless Ligus client + agent daemon"
-            homepage "https://github.com/langstroth-ai/ligus"
-            license "MIT"
-
-            on_macos do
-              on_arm do
-                url "${base}/ligus-aarch64-apple-darwin"
-                sha256 "${sha[aarch64-apple-darwin]}"
-              end
-              on_intel do
-                url "${base}/ligus-x86_64-apple-darwin"
-                sha256 "${sha[x86_64-apple-darwin]}"
-              end
-            end
-
-            on_linux do
-              on_arm do
-                url "${base}/ligus-aarch64-unknown-linux-musl"
-                sha256 "${sha[aarch64-unknown-linux-musl]}"
-              end
-              on_intel do
-                url "${base}/ligus-x86_64-unknown-linux-musl"
-                sha256 "${sha[x86_64-unknown-linux-musl]}"
-              end
-            end
-
-            def install
-              bin.install Dir["ligus-*"].first => "ligus"
-            end
-
-            test do
-              assert_path_exists bin/"ligus"
-            end
-          end
-          RUBY
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git add Formula/ligus.rb && git commit -m "ligus ${VERSION}"; then
-            git push origin HEAD
-            echo "Formula ligus bumped to ${VERSION}."
-          else
-            echo "Formula already at ${VERSION} — nothing to do."
-          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "ligus-$TARGET" "ligus-$TARGET.sha256"

@@ -2,10 +2,12 @@
 # (langstroth-ai/homebrew-ligus) to a given tag's version + DMG sha256.
 #
 # The automatic bump on every release lives in release.yml's `cask` job (it runs
-# in the tag's context after the DMG is uploaded). A `release: published` trigger
+# in the tag's context after the `publish` job has published the release). A `release: published` trigger
 # does NOT work here: releases created by tauri-action use GITHUB_TOKEN, and
 # GitHub does not fire the `release` event for GITHUB_TOKEN-created releases. So
 # this workflow is dispatch-only — use it to re-bump a past release by hand.
+# It refuses a tag whose release is still a draft: the tap must only ever
+# point at a published release (a draft's download URL 404s for users).
 #
 # Needs HOMEBREW_TAP_TOKEN: a fine-grained PAT with Contents:write on
 # langstroth-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
@@ -26,10 +28,25 @@ jobs:
   bump:
     runs-on: macos-latest
     steps:
+      - name: The release is published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::malformed tag '$TAG'"; exit 1; }
+          # The tags endpoint never returns drafts: a 404 here means there is
+          # no published release for the tag (none, or still a draft).
+          if ! state=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '"\(.draft)"'); then
+            echo "::error::$TAG has no published release (missing, or still a draft); publish it first"
+            exit 1
+          fi
+          [ "$state" = false ] || { echo "::error::$TAG is still a draft"; exit 1; }
+
       - name: Bump the cask on the tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then

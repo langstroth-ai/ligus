@@ -3,8 +3,10 @@
 
 # Checks the desktop and CLI release workflows against how the pinned
 # release actions really behave, so a rerun can never overwrite the release
-# notes the owner wrote, and the desktop assets and latest.json always land on
-# the one release for the tag.
+# notes the owner wrote, the desktop assets, CLI binaries and latest.json
+# always land on the tag's one DRAFT release, nothing is published until
+# every build succeeded, the tap bumps follow publish, and ci.yml builds every
+# CLI target the release ships.
 #
 #   ruby scripts/test-release-workflow.rb
 #
@@ -25,10 +27,15 @@
 #   - Updater bundles are named <product>_<version>_<arch>.app.tar.gz (the
 #     version is new in v1), and latest.json URLs are API asset URLs.
 #
-# softprops/action-gh-release v3.0.4 (release-cli.yml)
-#   - Creates a published release (title = tag, empty body) if none exists.
-#   - On an existing release keeps name, body and prerelease when those inputs
-#     are unset, and publishes a draft at the end unless draft: true.
+# softprops/action-gh-release v3.0.4 (no longer used: release-cli.yml)
+#   - Publishes a draft release at the end unless draft: true, so it would
+#     publish the draft before the other builds finish. release-cli uploads
+#     with `gh release upload` instead.
+#
+# gh release upload/view <tag> (cli/cli pkg/cmd/release/shared/fetch.go)
+#   - Resolves the tag through REST releases/tags/<tag> (published only) and
+#     GraphQL repository.release(tagName:) (finds a draft) in parallel, so it
+#     uploads into a draft by tag. It never changes draft/prerelease state.
 
 require "json"
 require "minitest/autorun"
@@ -40,11 +47,27 @@ require "yaml"
 ROOT = File.expand_path("..", __dir__)
 RELEASE = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/release.yml")))
 RELEASE_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/release-cli.yml")))
+CI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci.yml")))
+UPDATE_CASK = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/update-cask.yml")))
+BUILD_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/actions/build-cli/action.yml")))
 TAURI_CONF = JSON.parse(File.read(File.join(ROOT, "app/tauri.conf.json")))
 ENSURE = File.join(ROOT, "scripts/ensure-release.sh")
 
 def steps(workflow, job)
   workflow.fetch("jobs").fetch(job).fetch("steps")
+end
+
+def run_text(workflow, job)
+  steps(workflow, job).map { |s| s["run"].to_s }.join("\n")
+end
+
+# YAML parses the bare key `on` as true.
+def triggers(workflow)
+  workflow["on"] || workflow[true]
+end
+
+def matrix_targets(workflow, job)
+  workflow.fetch("jobs").fetch(job).dig("strategy", "matrix", "include").to_h { |e| [e["target"], e["runner"]] }
 end
 
 def tauri_step
@@ -81,13 +104,12 @@ class TauriActionUse < Minitest::Test
     assert_match(/@1deb371b0cd8bd54025b384f1cd735e725c4060f\z/, tauri_step["uses"])
   end
 
-  # release-cli (about 5 min) creates the release before the desktop build
-  # (about 20 min) reaches the upload, so "published release exists" is the
-  # normal case on a tag push, and the only case on a rerun after publishing.
-  def test_installers_land_on_an_existing_published_release
-    out = tauri_action_outcome(with, :published)
-    assert_equal :published, out[:assets_on],
-                 "tauri-action would not upload to the published release (#{out[:assets_on]})"
+  # The release job creates the draft before any build starts, so "a draft
+  # exists" is the case on every run, first or rerun.
+  def test_installers_land_on_the_existing_draft
+    out = tauri_action_outcome(with, :draft)
+    assert_equal :draft, out[:assets_on],
+                 "tauri-action would not upload to the draft (#{out[:assets_on]})"
   end
 
   def test_rerun_never_rewrites_release_notes
@@ -122,23 +144,43 @@ class TauriActionUse < Minitest::Test
 end
 
 class ReleaseCliUse < Minitest::Test
-  def gh_release_step
-    steps(RELEASE_CLI, "build").find { |s| s["uses"].to_s.start_with?("softprops/action-gh-release@") }
+  def upload_step
+    steps(RELEASE_CLI, "build").find { |s| s["run"].to_s.include?("gh release upload") }
   end
 
-  # action-gh-release only keeps an existing release's notes and state when
-  # it is not handed name/body/prerelease/draft/make_latest.
-  def test_cli_upload_never_rewrites_the_release
-    w = gh_release_step.fetch("with")
-    %w[name body body_path prerelease draft make_latest append_body generate_release_notes].each do |k|
-      refute w.key?(k), "release-cli would rewrite #{k} on a rerun"
+  # action-gh-release publishes a draft when it finishes; nothing in the CLI
+  # workflow may use it.
+  def test_cli_never_uses_a_release_action_that_publishes
+    RELEASE_CLI["jobs"].each_value do |job|
+      job.fetch("steps", []).each do |st|
+        refute st["uses"].to_s.start_with?("softprops/action-gh-release@"), "action-gh-release publishes the draft"
+      end
     end
   end
 
-  def test_cli_attaches_to_the_release_the_ensure_step_made
-    ensure_step = steps(RELEASE_CLI, "build").find { |s| s["run"].to_s.include?("scripts/ensure-release.sh") }
-    refute_nil ensure_step, "release-cli must create the release the same way release.yml does"
-    assert_operator steps(RELEASE_CLI, "build").index(ensure_step), :<, steps(RELEASE_CLI, "build").index(gh_release_step)
+  def test_cli_uploads_to_the_draft_the_release_job_made
+    refute_nil upload_step, "release-cli never uploads its binaries"
+    run = upload_step["run"]
+    assert_includes run, "--clobber", "a rerun could not replace a target's binary"
+    assert_operator run.index("databaseId,isDraft"), :<, run.index("gh release upload"),
+                    "check gh resolves the tag to the release job's draft before uploading"
+    assert_includes run, '"$RELEASE_ID true"'
+    assert_equal "${{ inputs.release-id }}", upload_step.dig("env", "RELEASE_ID")
+    cli = RELEASE.fetch("jobs").fetch("cli")
+    assert_includes Array(cli["needs"]), "release"
+    assert_equal "${{ needs.release.outputs.id }}", cli.dig("with", "release-id")
+  end
+
+  # Only release.yml's publish job may make the release public.
+  def test_cli_never_publishes
+    text = RELEASE_CLI["jobs"].keys.map { |j| run_text(RELEASE_CLI, j) }.join("\n")
+    refute_match(/draft=false|release edit|-X PATCH|--latest/, text)
+  end
+
+  # Tag-triggered on its own, it would run outside the publish gate.
+  def test_cli_runs_only_as_part_of_release_yml
+    assert_equal ["workflow_call"], triggers(RELEASE_CLI).keys
+    assert_equal "./.github/workflows/release-cli.yml", RELEASE.dig("jobs", "cli", "uses")
   end
 end
 
@@ -174,17 +216,26 @@ end
 class EnsureRelease < Minitest::Test
   FAKE_GH = <<~'SH'
     #!/usr/bin/env bash
-    # Fake gh: state in $STATE (none|published|draft|race), calls logged to $LOG.
+    # Fake gh: state in $STATE (none|published|draft|two-drafts|race|no-tag),
+    # calls logged to $LOG.
     echo "$*" >> "$LOG"
     case "$1 $2" in
+      "api repos/o/r/git/ref/tags/v0.1.0")
+        [ "$STATE" = no-tag ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+        exit 0 ;;
       "api repos/o/r/releases/tags/v0.1.0")
-        if [ "$STATE" = published ] || [ -f "$STATE_DIR/created" ]; then echo 41; exit 0; fi
+        if [ "$STATE" = published ]; then echo 41; exit 0; fi
         echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
       "api --paginate")
-        if [ "$STATE" = draft ]; then echo 42; fi; exit 0 ;;
-      "release create")
-        if [ "$STATE" = race ]; then touch "$STATE_DIR/created"; echo "already_exists" >&2; exit 1; fi
-        touch "$STATE_DIR/created"; echo "https://github.com/o/r/releases/tag/v0.1.0"; exit 0 ;;
+        case "$STATE" in
+          draft) echo 42 ;;
+          two-drafts) echo 42; echo 44 ;;
+          race) [ -f "$STATE_DIR/created" ] && echo 42 ;;
+        esac
+        exit 0 ;;
+      "api -X")
+        if [ "$STATE" = race ]; then touch "$STATE_DIR/created"; echo "HTTP 502" >&2; exit 1; fi
+        echo 43; exit 0 ;;
     esac
     echo "unexpected gh call: $*" >&2; exit 99
   SH
@@ -202,34 +253,52 @@ class EnsureRelease < Minitest::Test
     end
   end
 
-  def test_reuses_a_published_release_without_editing_it
-    out, _err, status, log = run_ensure("published")
-    assert status.success?
-    assert_equal "41", out
-    refute_match(/release edit|PATCH|-X/, log)
-    refute_match(/release create/, log)
+  # Building into a published release would put new assets on a live one.
+  def test_refuses_a_published_release
+    out, err, status, log = run_ensure("published")
+    refute status.success?
+    assert_equal "", out
+    assert_includes err, "already has a published release"
+    refute_match(/-X POST|-X PATCH|release edit|release create/, log)
   end
 
-  def test_reuses_a_draft
+  def test_reuses_the_draft_on_a_rerun
     out, _err, status, log = run_ensure("draft")
     assert status.success?
     assert_equal "42", out
-    refute_match(/release create|release edit/, log)
+    refute_match(/-X |release create|release edit/, log)
   end
 
-  def test_creates_a_prerelease_when_missing
+  def test_refuses_two_drafts_for_one_tag
+    _out, err, status, log = run_ensure("two-drafts")
+    refute status.success?
+    assert_includes err, "several drafts"
+    refute_match(/-X /, log)
+  end
+
+  def test_creates_a_draft_prerelease_on_the_pushed_tag
     out, _err, status, log = run_ensure("none")
     assert status.success?, log
-    assert_equal "41", out
-    create = log.lines.find { |l| l.start_with?("release create") }
-    assert_includes create, "--prerelease"
-    assert_includes create, "--verify-tag"
+    assert_equal "43", out, "the id must come from the create itself, not a lagging list"
+    create = log.lines.find { |l| l.start_with?("api -X POST") }
+    refute_nil create
+    assert_includes create, "draft=true"
+    assert_includes create, "prerelease=true"
+    assert_includes create, "tag_name=v0.1.0"
+    assert_operator log.index("git/ref/tags/v0.1.0"), :<, log.index("api -X POST")
   end
 
-  def test_loses_a_create_race_gracefully
+  def test_an_unpushed_tag_gets_no_draft
+    _out, err, status, log = run_ensure("no-tag")
+    refute status.success?
+    assert_includes err, "push it first"
+    refute_match(/-X POST/, log)
+  end
+
+  def test_a_failed_create_looks_again
     out, _err, status, _log = run_ensure("race")
     assert status.success?
-    assert_equal "41", out
+    assert_equal "42", out
   end
 
   def test_rejects_a_malformed_tag
@@ -476,22 +545,28 @@ class BuildsTheTag < Minitest::Test
 
   def checkouts(workflow)
     workflow.fetch("jobs").flat_map do |name, job|
-      job.fetch("steps").select { |s| s["uses"].to_s.start_with?("actions/checkout@") }.map { |s| [name, s] }
+      job.fetch("steps", []).select { |s| s["uses"].to_s.start_with?("actions/checkout@") }.map { |s| [name, s] }
     end
   end
 
   def test_every_release_checkout_is_the_tag
-    [RELEASE, RELEASE_CLI].each do |wf|
-      checkouts(wf).each do |job, step|
-        assert_equal TAG_REF, step.dig("with", "ref"), "#{job} would build the dispatching branch, not the tag"
-      end
+    checkouts(RELEASE).each do |job, step|
+      assert_equal TAG_REF, step.dig("with", "ref"), "#{job} would build the dispatching branch, not the tag"
+    end
+    # release-cli.yml is called with the tag release.yml resolved.
+    assert_equal "${{ github.event.inputs.tag || github.ref_name }}", RELEASE.dig("jobs", "cli", "with", "tag")
+    checkouts(RELEASE_CLI).each do |job, step|
+      assert_equal "refs/tags/${{ inputs.tag }}", step.dig("with", "ref"), "release-cli #{job} would not build the tag"
     end
   end
 
   def test_cli_release_checks_the_tag_against_the_version_first
-    run = steps(RELEASE_CLI, "build").map { |s| s["run"].to_s }.join("\n")
-    refute_nil run.index("check-release-config.sh"), "release-cli never checks the tag matches the version"
-    assert_operator run.index("check-release-config.sh"), :<, run.index("cargo build")
+    st = steps(RELEASE_CLI, "build")
+    check = st.index { |s| s["run"].to_s.include?("check-release-config.sh") }
+    build = st.index { |s| s["uses"] == "./.github/actions/build-cli" }
+    refute_nil check, "release-cli never checks the tag matches the version"
+    refute_nil build
+    assert_operator check, :<, build
   end
 end
 
@@ -501,9 +576,9 @@ class CliChecksums < Minitest::Test
   INSTALL = File.join(ROOT, "install.sh")
 
   def test_release_cli_attaches_a_checksum_per_binary
-    step = steps(RELEASE_CLI, "build").find { |s| s["uses"].to_s.start_with?("softprops/action-gh-release@") }
-    files = step.dig("with", "files").to_s
-    assert_includes files, "ligus-${{ matrix.target }}.sha256"
+    step = steps(RELEASE_CLI, "build").find { |s| s["run"].to_s.include?("gh release upload") }
+    assert_includes step["run"], '"ligus-$TARGET" "ligus-$TARGET.sha256"'
+    assert_equal "${{ matrix.target }}", step.dig("env", "TARGET")
     stage = steps(RELEASE_CLI, "build").find { |s| s["name"] == "Stage asset" }["run"]
     assert_match(/sha256/, stage)
   end
@@ -631,5 +706,243 @@ class ForgeClientIds < Minitest::Test
       refute env.key?("LIGUS_GITHUB_CLIENT_ID"), "LIGUS_GITHUB_CLIENT_ID is read by nothing since 0.1"
       %w[LIGUS_GITHUB_APP_CLIENT_ID LIGUS_GITLAB_CLIENT_ID].each { |k| assert env.key?(k), "#{k} is not baked in" }
     end
+  end
+end
+
+# The release stays a draft until every build succeeded: one job publishes,
+# it waits on everything, and the tap follows it.
+class DraftUntilComplete < Minitest::Test
+  BUILD_JOBS = %w[release build cli verify-updater].freeze
+
+  def publish
+    RELEASE.fetch("jobs").fetch("publish")
+  end
+
+  def test_publish_needs_every_build
+    assert_equal BUILD_JOBS.sort, Array(publish["needs"]).sort
+  end
+
+  # Without an explicit condition a skipped job would not block publish
+  # under !cancelled(); require success from each one.
+  def test_publish_requires_each_build_to_succeed
+    cond = publish["if"].to_s
+    BUILD_JOBS.each do |j|
+      assert_includes cond, "needs.#{j}.result == 'success'", "publish does not wait for #{j} to succeed"
+    end
+    refute_match(/always\(\)|failure\(\)/, cond)
+  end
+
+  def test_verify_updater_waits_for_every_desktop_build
+    assert_includes Array(RELEASE.dig("jobs", "verify-updater", "needs")), "build"
+    assert_includes RELEASE.dig("jobs", "verify-updater", "if"), "needs.build.result == 'success'"
+  end
+
+  def test_publish_checks_the_draft_then_publishes_a_prerelease_by_id
+    st = publish["steps"]
+    assets = st.index { |s| s["run"].to_s.include?("scripts/check-release-assets.py") }
+    latest = st.index { |s| s["run"].to_s.include?("scripts/verify-latest-json.py") }
+    patch = st.index { |s| s["run"].to_s.include?("-X PATCH") }
+    refute_nil assets, "publish does not check the draft's assets"
+    refute_nil latest, "publish does not check latest.json"
+    refute_nil patch, "publish never publishes"
+    assert_operator assets, :<, patch
+    assert_operator latest, :<, patch
+    assert_includes st[latest]["run"], "--platforms macos,windows,linux",
+                    "a published release must serve every platform, not just the ones this run built"
+    run = st[patch]["run"]
+    assert_includes run, "releases/$RELEASE_ID"
+    assert_includes run, "draft=false"
+    assert_includes run, "prerelease=true"
+    assert_includes run, "make_latest=false", "promotion to Latest stays manual"
+    refute_includes run, "--latest"
+    assert_operator run.index('"true $TAG"'), :<, run.index("-X PATCH"), "publish must check it holds the tag's draft"
+  end
+
+  # No other job, in either workflow, flips draft or Latest.
+  def test_only_publish_publishes
+    [[RELEASE, "release.yml"], [RELEASE_CLI, "release-cli.yml"]].each do |wf, file|
+      wf["jobs"].each do |name, job|
+        next if wf.equal?(RELEASE) && name == "publish"
+
+        text = job.fetch("steps", []).map { |s| s["run"].to_s }.join("\n")
+        refute_match(/draft=false|-X PATCH|release edit|--latest/, text, "#{file} #{name} changes the release's state")
+        job.fetch("steps", []).each do |s|
+          refute s["uses"].to_s.start_with?("softprops/action-gh-release@"), "#{file} #{name} would publish the draft"
+          w = s["with"] || {}
+          %w[releaseDraft tagName prerelease].each { |k| refute w.key?(k), "#{file} #{name}: tauri-action #{k}" }
+        end
+      end
+    end
+  end
+
+  def test_release_job_creates_a_draft
+    assert_includes run_text(RELEASE, "release"), "scripts/ensure-release.sh"
+    script = File.read(ENSURE)
+    assert_match(/-F draft=true/, script)
+    refute_match(/gh release create/, script)
+  end
+
+  def test_tap_bumps_run_after_publish
+    %w[cask formula].each do |j|
+      job = RELEASE.fetch("jobs").fetch(j)
+      assert_equal ["publish"], Array(job["needs"]), "#{j} must wait for publish"
+      assert_includes job["if"].to_s, "needs.publish.result == 'success'"
+    end
+    refute RELEASE_CLI.fetch("jobs").key?("formula"), "the formula bump must follow publish, in release.yml"
+  end
+
+  def test_manual_cask_bump_refuses_a_draft
+    st = steps(UPDATE_CASK, "bump")
+    guard = st.index { |s| s["run"].to_s.include?("releases/tags/$TAG") }
+    bump = st.index { |s| s["run"].to_s.include?("homebrew-ligus.git") }
+    refute_nil guard, "update-cask.yml would bump the tap to a draft"
+    assert_operator guard, :<, bump
+  end
+
+  def test_one_release_run_per_tag_never_cancelled
+    c = RELEASE.fetch("concurrency")
+    assert_includes c["group"], "github.event.inputs.tag || github.ref_name"
+    assert_equal false, c["cancel-in-progress"]
+  end
+end
+
+# ci.yml builds the CLI for every target release-cli.yml ships, the same way.
+class CiCoversReleaseTargets < Minitest::Test
+  def ci_job
+    CI.fetch("jobs").fetch("cli-targets")
+  end
+
+  def test_ci_builds_every_release_target_on_the_same_runner
+    release = matrix_targets(RELEASE_CLI, "build")
+    assert_equal 4, release.size
+    assert_equal release, matrix_targets(CI, "cli-targets")
+    assert_equal "ubuntu-24.04-arm", release["aarch64-unknown-linux-musl"]
+  end
+
+  def test_both_build_through_the_shared_action
+    rel = steps(RELEASE_CLI, "build").find { |s| s["uses"] == "./.github/actions/build-cli" }
+    ci = ci_job["steps"].find { |s| s["uses"] == "./.github/actions/build-cli" }
+    refute_nil rel
+    refute_nil ci
+    assert_equal "release", rel.dig("with", "profile")
+    assert_equal "debug", ci.dig("with", "profile")
+    [rel, ci].each { |s| assert_equal "${{ matrix.target }}", s.dig("with", "target") }
+    # Nobody builds the CLI beside the action, where it could drift.
+    [run_text(RELEASE_CLI, "build"), ci_job["steps"].map { |s| s["run"].to_s }.join].each do |t|
+      refute_match(/cargo build|rustup|musl-tools/, t)
+    end
+  end
+
+  def test_shared_action_sets_up_the_target_like_the_release
+    text = BUILD_CLI.dig("runs", "steps").map { |s| s["run"].to_s }.join("\n")
+    assert_includes text, 'rustup target add "$TARGET"'
+    assert_includes text, "musl-tools"
+    assert_match(/cargo build .*--locked -p ligus-cli --target "\$TARGET"/, text)
+    assert_includes text, "scripts/check-no-test-presence.sh"
+    musl = BUILD_CLI.dig("runs", "steps").find { |s| s["run"].to_s.include?("musl-tools") }
+    assert_equal "contains(inputs.target, 'linux-musl')", musl["if"]
+  end
+
+  def test_ci_ok_requires_the_job_and_it_runs_on_cli_changes
+    assert_includes Array(CI.dig("jobs", "ci-ok", "needs")), "cli-targets"
+    assert_includes ci_job["if"], "needs.changes.outputs.cli == 'true'"
+    diff = steps(CI, "changes").map { |s| s["run"].to_s }.join("\n")
+    cli_re = diff.lines.find { |l| l.include?("build-cli") }
+    refute_nil cli_re, "the changes job never sets cli"
+    re = Regexp.new(cli_re[/'(\^[^']+)'/, 1])
+    %w[crates/ligus-cli/src/main.rs crates/ligus-runtime/src/lib.rs Cargo.toml Cargo.lock
+       .github/actions/build-cli/action.yml .github/workflows/ci.yml].each { |f| assert_match re, f }
+    %w[docs/packaging.md web/src/main.ts].each { |f| refute_match re, f }
+    assert triggers(CI).key?("merge_group"), "the merge queue must run ci"
+  end
+
+  def test_asset_check_and_formula_use_the_same_targets
+    release = matrix_targets(RELEASE_CLI, "build").keys.sort
+    script = File.read(File.join(ROOT, "scripts/check-release-assets.py"))
+    listed = script[/CLI_TARGETS = \((.*?)\)/m, 1].scan(/"([^"]+)"/).flatten
+    assert_equal release, listed.sort
+    formula = run_text(RELEASE, "formula")[/for t in ([^;]+);/, 1].split
+    assert_equal release, formula.sort
+  end
+end
+
+# scripts/check-release-assets.py on fixture drafts.
+class CheckReleaseAssets < Minitest::Test
+  SCRIPT = File.join(ROOT, "scripts/check-release-assets.py")
+  TARGETS = %w[aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl].freeze
+  HASH = "a" * 64
+
+  def draft
+    assets = [{ "name" => "Ligus_0.1.0_aarch64.dmg", "state" => "uploaded" },
+              { "name" => "latest.json", "state" => "uploaded" }]
+    sums = {}
+    TARGETS.each do |t|
+      assets << { "name" => "ligus-#{t}", "state" => "uploaded", "digest" => "sha256:#{HASH}" }
+      assets << { "name" => "ligus-#{t}.sha256", "state" => "uploaded" }
+      sums["ligus-#{t}.sha256"] = "#{HASH}  ligus-#{t}\n"
+    end
+    [assets, sums]
+  end
+
+  def check(assets, sums)
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "assets.json"), JSON.dump(assets))
+      sums.each { |n, v| File.write(File.join(dir, n), v) }
+      out, _err, status = Open3.capture3("python3", "-I", SCRIPT, "--from-dir", dir, "--tag", "v0.1.0")
+      [status.success?, out]
+    end
+  end
+
+  def test_complete_draft_passes
+    ok, out = check(*draft)
+    assert ok, out
+  end
+
+  def test_missing_cli_target_fails
+    assets, sums = draft
+    assets.reject! { |a| a["name"] == "ligus-aarch64-unknown-linux-musl" }
+    ok, out = check(assets, sums)
+    refute ok
+    assert_includes out, "ligus-aarch64-unknown-linux-musl: missing"
+  end
+
+  def test_missing_checksum_or_dmg_fails
+    assets, sums = draft
+    assets.reject! { |a| a["name"] == "ligus-x86_64-apple-darwin.sha256" || a["name"].end_with?(".dmg") }
+    ok, out = check(assets, sums)
+    refute ok
+    assert_includes out, "ligus-x86_64-apple-darwin.sha256: missing"
+    assert_includes out, "Ligus_0.1.0_aarch64.dmg: missing"
+  end
+
+  def test_checksum_that_does_not_match_the_digest_fails
+    assets, sums = draft
+    sums["ligus-x86_64-unknown-linux-musl.sha256"] = "#{'b' * 64}  ligus-x86_64-unknown-linux-musl\n"
+    ok, out = check(assets, sums)
+    refute ok
+    assert_includes out, "differs"
+  end
+
+  def test_checksum_for_another_file_fails
+    assets, sums = draft
+    sums["ligus-aarch64-apple-darwin.sha256"] = "#{HASH}  ligus-x86_64-apple-darwin\n"
+    ok, out = check(assets, sums)
+    refute ok
+    assert_includes out, "not a sha256 line"
+  end
+
+  def test_unfinished_upload_fails
+    assets, sums = draft
+    assets.find { |a| a["name"] == "latest.json" }["state"] = "starter"
+    ok, out = check(assets, sums)
+    refute ok
+    assert_includes out, "upload not finished"
+  end
+
+  def test_no_digest_from_github_still_checks_presence
+    assets, sums = draft
+    assets.each { |a| a.delete("digest") }
+    ok, out = check(assets, sums)
+    assert ok, out
   end
 end
