@@ -28,6 +28,7 @@ MkDocs site, docs.langstroth.ai, built from [`docs-site/`](../docs-site/README.m
 |-----|----------------|
 | [ligus-social-graph-plan.md](ligus-social-graph-plan.md) | Add-friend-by-GitHub-username, presence, P2P bootstrap; GitHub Teams → roster and roles. |
 | [ligus-issue-trackers.md](ligus-issue-trackers.md) | Per-workspace issue/ticket integration via MCP (GitHub Issues/PRs, Linear, …). |
+| [android-app.md](android-app.md) | Android app spec: parity with the iPhone app, Keystore device key, Credential Manager passkeys, FCM push (relay change), shared Rust core via UniFFI, milestones. |
 
 ## Design intent & internals
 
