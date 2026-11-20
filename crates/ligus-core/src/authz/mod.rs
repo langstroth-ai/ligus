@@ -691,6 +691,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny(format!("role {role:?} cannot change this agent's host, runtime or owner"));
             }
         }
+        // Who may use an agent, and its budgets, are its owner's (an Admin's
+        // on an unowned agent): never another member's, whatever their role.
+        if let Some(why) = agent_policy_refusal(&env.payload, author, role, fold, ws_agents) {
+            return Decision::deny(why);
+        }
         let d = evaluate(&env.payload, author, role, fold);
         if !d.allowed {
             return Decision::deny(d.summary);
@@ -1533,6 +1538,52 @@ fn agent_change_floor(
             }
             Some(floor)
         }
+        _ => None,
+    }
+}
+
+/// Who may change an agent's owner-only settings (`access`, `limits`,
+/// `notify_on_use`: [`crate::agent::AgentPolicy`]): its owner, and only its
+/// owner, whatever anyone else's role; on an unowned agent, an Admin. A new
+/// agent may carry settings only when its author is its owner (or, unowned,
+/// an Admin). An edit that leaves them as they were (a rename, an avatar, an
+/// Admin's re-host) is not judged here. On a chat log, an agent the chat
+/// doesn't define yet is judged against the workspace's agent of that id, as
+/// in [`agent_change_floor`]: a chat-level copy can't open up the
+/// workspace's agent.
+pub fn agent_policy_refusal(
+    event: &SessionEvent,
+    author: &str,
+    role: WorkspaceRole,
+    fold: &ChatSession,
+    workspace: Option<&RosterState>,
+) -> Option<String> {
+    let admin = role.rank() >= WorkspaceRole::Admin.rank();
+    let one = |new: &WorkspaceAgent| -> Option<String> {
+        let policy = new.policy();
+        let before = match fold.workspace_agents.iter().find(|a| a.id == new.id) {
+            Some(old) => Some((old.owner_actor_id.clone(), old.policy())),
+            None => workspace.and_then(|w| w.agents.get(&new.id)).map(|ws| (ws.owner.clone(), ws.policy.clone())),
+        };
+        let (owner, changed) = match before {
+            Some((owner, old)) => (owner, old != policy),
+            None => (new.owner_actor_id.clone(), !policy.is_default()),
+        };
+        if !changed {
+            return None;
+        }
+        let ok = if owner.is_empty() { admin } else { !author.is_empty() && author == owner };
+        (!ok).then(|| {
+            if owner.is_empty() {
+                format!("only an Admin changes who may use the shared agent {}", new.name)
+            } else {
+                format!("only {}'s owner changes who may use it and its budgets", new.name)
+            }
+        })
+    };
+    match event {
+        SessionEvent::AgentUpserted { agent } => one(agent),
+        SessionEvent::AgentRosterUpdated { agents } => agents.iter().find_map(one),
         _ => None,
     }
 }

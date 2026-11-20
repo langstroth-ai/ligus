@@ -63,7 +63,7 @@ pub mod workspace_runtime;
 pub mod testkit;
 
 // Flat re-exports of the core domain types for ergonomic downstream use.
-pub use agent::WorkspaceAgent;
+pub use agent::{AgentLimits, AgentPolicy, WorkspaceAgent};
 pub use authorization::{evaluate as authorize, AuthzDecision, AuthzReason};
 pub use channel::{room_workspace_id, workspace_config_session_id, Channel};
 pub use device_link::DeviceLinks;

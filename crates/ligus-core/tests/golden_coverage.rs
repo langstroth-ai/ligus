@@ -790,3 +790,43 @@ fn phase_c_goldens() {
     sign_envelope(&mut e, u(1), &kp);
     std::fs::write(path, format!("{{\"label\":\"workspaceSandboxSet\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
 }
+
+/// Writes the agent-access line: `agentUpserted` carrying the owner-only
+/// settings (`access`, `limits`, `notifyOnUse`), each left out when unset.
+/// Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the line.
+#[test]
+#[ignore]
+fn agent_access_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let cfg = ligus_core::workspace_config_session_id(ws);
+    let mut agent = ligus_core::WorkspaceAgent::new("scout", "ws-claude");
+    agent.id = u(0x7001);
+    agent.owner_actor_id = u(9).to_string();
+    agent.created_at = Timestamp::epoch();
+    agent.access = ligus_core::agent::ACCESS_EVERYONE.into();
+    agent.limits = ligus_core::AgentLimits { member_turns_per_day: Some(20), usd_cents_per_day: Some(500) };
+    agent.notify_on_use = true;
+    let mut e = SessionEventEnvelope::new(cfg, ws, 502, SessionEvent::AgentUpserted { agent });
+    e.id = u(0x7010);
+    e.event_id = u(0x7011);
+    e.lamport = 905;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 904, event_id: u(0x7002) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x7003)),
+        sig_alg: SigAlg::Ed25519,
+        log_head: None,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    std::fs::write(path, format!("{{\"label\":\"agentUpserted/access\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap())).unwrap();
+}
