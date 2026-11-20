@@ -212,7 +212,7 @@ pub fn find_linux(host: &dyn Host, searched: &mut Searched) -> Result<Option<Pat
         if let Some(p) = images.pop() {
             return Ok(Some(p));
         }
-        searched.add(format!("{}/Ligus*.AppImage", dir.display()));
+        searched.add(dir.join("Ligus*.AppImage").display().to_string());
     }
     Ok(None)
 }
@@ -515,11 +515,17 @@ mod tests {
         let mut s = Searched::default();
         assert_eq!(find_linux(&h, &mut s).unwrap(), None);
         let msg = not_found("linux", &s);
+        // Joined like the lookup joins them (`\` separators when the tests
+        // run on Windows).
+        let home = Path::new("/home/u");
+        let apps = home.join("Applications").join("Ligus*.AppImage");
+        let bin = home.join(".local").join("bin").join("Ligus*.AppImage");
+        let (apps, bin) = (apps.display().to_string(), bin.display().to_string());
         for want in [
             "ligus-desktop on PATH",
             "LIGUS_APPIMAGE",
-            "/home/u/Applications/Ligus*.AppImage",
-            "/home/u/.local/bin/Ligus*.AppImage",
+            &apps,
+            &bin,
             DOWNLOAD_URL,
         ] {
             assert!(msg.contains(want), "missing {want:?} in {msg}");
