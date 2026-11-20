@@ -41,6 +41,7 @@ use ligus_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
 mod admit;
+mod app_cmd;
 mod auth;
 mod forge_cmd;
 mod gateway_check;
@@ -1630,12 +1631,11 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
     Ok(0)
 }
 
-fn usage() -> ! {
-    eprintln!(
-        "ligus — headless Ligus client\n\n\
+const USAGE: &str = "ligus — headless Ligus client\n\n\
          USAGE:\n  \
          ligus --version\n  \
          ligus whoami\n  \
+         ligus app                       open the Ligus desktop app, detached from this terminal\n  \
          ligus gateway-check [--gateway <name>] [--model <id>]\n                                       prove this host's model gateways: a hosted-API turn and a\n                                       sandboxed CLI child through the egress proxy's route\n  \
          ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]\n                                       this device's agent sandbox tier and what it leaves open;\n                                       the flags make it a preflight (non-zero exit on failure)\n  \
          ligus doctor --sandbox [--runtime <name>] [--agent <id>]\n                                       what an agent turn may read and write on this host (the\n                                       home is denied by default), why, the shell rule, and the\n                                       signed grants in force\n  \
@@ -1699,8 +1699,10 @@ fn usage() -> ! {
          ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
          ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
          Config via env (override the saved config.toml from `enroll`):\n  \
-         LIGUS_DATA_DIR, LIGUS_RELAY_URL, LIGUS_RELAY_ACCESS_TOKEN, LIGUS_WORKSPACE, LIGUS_WORKSPACE_KEY."
-    );
+         LIGUS_DATA_DIR, LIGUS_RELAY_URL, LIGUS_RELAY_ACCESS_TOKEN, LIGUS_WORKSPACE, LIGUS_WORKSPACE_KEY.";
+
+fn usage() -> ! {
+    eprintln!("{USAGE}");
     std::process::exit(2);
 }
 
@@ -1736,6 +1738,13 @@ fn run() -> Result<()> {
     if matches!(args.first().map(String::as_str), Some("--version" | "-V" | "version")) {
         println!("ligus {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    // `ligus app` only opens the desktop app: no data dir, config or secrets.
+    if args.first().map(String::as_str) == Some("app") {
+        if wants_help(&args) {
+            usage();
+        }
+        return app_cmd::cmd_app(&args[1..]);
     }
     // Also before any thread starts: `*_FILE` secrets and LIGUS_WS_SECRET_DIR
     // become this process's environment (see hardening.rs).
@@ -2362,6 +2371,15 @@ mod cli_tests {
         assert!(wants_help(&argv(&["help"])));
         assert!(!wants_help(&argv(&["serve", "--pair"])));
         assert!(!wants_help(&argv(&["send", "c", "--", "--help"])));
+    }
+
+    #[test]
+    fn app_command_parses_and_is_listed() {
+        assert!(USAGE.contains("ligus app "));
+        assert!(wants_help(&argv(&["app", "--help"])));
+        assert!(!wants_help(&argv(&["app"])));
+        // A stray argument is refused before anything is looked up or run.
+        assert!(app_cmd::cmd_app(&argv(&["somewhere"])).is_err());
     }
 
     #[test]

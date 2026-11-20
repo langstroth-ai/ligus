@@ -24,7 +24,8 @@ command); it prints to stderr and exits with status 2.
   `LIGUS_WORKSPACE` (default `default`) and `LIGUS_WORKSPACE_KEY` override
   what `ligus enroll` saved in `<data dir>/config.toml`.
 - **First run** of any command creates a fresh identity in the data dir
-  (named `ligus-cli`).
+  (named `ligus-cli`). `ligus app` is the exception: it never opens the
+  data dir, the config or the secret store.
 - **Errors** print `error: …` and exit 1.
 - Flags are matched anywhere after the command; values follow the flag as
   the next argument (`--label box`, not `--label=box`).
@@ -47,6 +48,36 @@ name    : ligus-cli
 data dir: /home/you/.ligus
 room    : default
 ```
+
+## Opening the desktop app
+
+| Command | What it does |
+|---|---|
+| `ligus app` | opens the Ligus desktop app and returns at once. The app is started detached from the terminal, so closing the terminal leaves it running. It takes no arguments: the desktop app has no command-line options or `ligus://` links |
+
+How it finds the app:
+
+- **macOS:** Launch Services, by bundle id (`open -b ai.ligus.desktop`),
+  then by name (`open -a Ligus`). An app that is already running is brought
+  to the front.
+- **Windows:** where the installer recorded it in the registry (the NSIS
+  uninstall key's `InstallLocation` and `Software\ligus\Ligus`, or the MSI's
+  `InstallDir`), then `%LOCALAPPDATA%\Ligus`, `%LOCALAPPDATA%\Programs\Ligus`,
+  `%ProgramFiles%\Ligus` and `%ProgramFiles(x86)%\Ligus`, then
+  `ligus-desktop.exe` on `PATH`.
+- **Linux:** `ligus-desktop` on `PATH` (the deb and rpm packages), then the
+  AppImage named by `LIGUS_APPIMAGE`, then the newest `Ligus*.AppImage` in
+  `~/Applications` or `~/.local/bin`. It needs a graphical session: with
+  neither `DISPLAY` nor `WAYLAND_DISPLAY` set (a `ligus serve` box, a
+  container, an SSH login) it stops with an error and starts nothing.
+
+On Windows and Linux the desktop app has no single-instance handoff, so
+when it is already running `ligus app` prints `Ligus is already running;
+switch to its window.` and does not start a second copy.
+
+When the app isn't found, `ligus app` lists where it looked, points to
+<https://langstroth.ai/ligus/download> (on macOS also
+`brew install --cask langstroth-ai/ligus/ligus-app`) and exits 1.
 
 ## Secrets on the command line
 

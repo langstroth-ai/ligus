@@ -45,6 +45,7 @@ ligus join <invite-code>            # redeem a relay invite code → self-enroll
 ligus setup [--apply]               # detect providers on this box; --apply defines keyless runtimes
 ligus config <export|import <file>> # round-trip the workspace runtime set as TOML
 ligus whoami                        # this client's identity (account/device ids); bootstraps keys on first run
+ligus app                           # open the Ligus desktop app, detached from this terminal
 ligus chats                         # list chats in the local store
 ligus new [title]                   # create a chat in the workspace → prints its id
 ligus tail <chat-id> [--watch]      # print a chat's transcript; --watch syncs + follows

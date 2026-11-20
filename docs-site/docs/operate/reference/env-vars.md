@@ -90,6 +90,12 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MODEL` | `claude-sonnet-4-5` | model for that provider |
 | `LIGUS_MODEL_BASE_URL` | `http://localhost:11434/v1/chat/completions` | Ollama endpoint |
 
+## `ligus app`
+
+| Variable | Default | Read by | Effect |
+|---|---|---|---|
+| `LIGUS_APPIMAGE` | unset | CLI (`ligus app`, Linux) | path to the desktop AppImage to open when `ligus-desktop` isn't on `PATH`; a path that isn't a file is an error ([`ligus app`](../../ligus/reference/cli.md#opening-the-desktop-app)) |
+
 ## `ligus serve`
 
 | Variable | Default | Effect |
