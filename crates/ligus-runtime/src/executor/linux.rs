@@ -793,6 +793,13 @@ struct SeccompOpts {
     all_namespaces: bool,
 }
 
+/// `kexec_file_load`. The `libc` crate doesn't define it for aarch64 musl, so
+/// use the kernel's number there (asm-generic `__NR_kexec_file_load`).
+#[cfg(all(target_arch = "aarch64", target_env = "musl"))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = 294;
+#[cfg(not(all(target_arch = "aarch64", target_env = "musl")))]
+const SYS_KEXEC_FILE_LOAD: libc::c_long = libc::SYS_kexec_file_load;
+
 fn apply_seccomp(o: SeccompOpts) -> io::Result<()> {
     use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
     use std::collections::BTreeMap;
@@ -813,7 +820,7 @@ fn apply_seccomp(o: SeccompOpts) -> io::Result<()> {
         libc::SYS_add_key,
         libc::SYS_request_key,
         libc::SYS_kexec_load,
-        libc::SYS_kexec_file_load,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_init_module,
         libc::SYS_finit_module,
         libc::SYS_setns,
