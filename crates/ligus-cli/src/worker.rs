@@ -392,6 +392,22 @@ pub async fn drain_tick(
         let mut work = Vec::new();
         for pm in candidates {
             let Some(s) = svc.load(pm.session_id)? else { continue };
+            // Agent access controls: this host runs the agent on its own
+            // credentials, so who may use it (and its daily budgets) is
+            // decided here, before claiming. A refused turn is answered with
+            // a short note and drops out of the queue.
+            match svc.gate_agent_turn(pm.session_id, s.workspace_id, pm.message_id, pm.agent_id) {
+                Ok(Ok(_)) => {}
+                Ok(Err(note)) => {
+                    eprintln!("worker: @{} in {} refused: {note}", pm.agent_name, pm.session_id);
+                    sink.changed();
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("worker: access check for {} failed: {e}", pm.message_id);
+                    continue;
+                }
+            }
             let coverage = match roster.as_ref() {
                 Some(r) => ligus_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &ligus_runtime::repos::cloning()),
                 None => ligus_core::dispatch::Coverage::NoRepo,

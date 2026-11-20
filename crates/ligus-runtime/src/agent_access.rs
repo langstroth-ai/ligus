@@ -153,6 +153,20 @@ pub fn availability(agent: &WorkspaceAgent, links: &DeviceLinks, member: &str, r
     }
 }
 
+/// A person's best current role among their member records (their own and
+/// a linked box's service member), mapped through `links`.
+pub fn person_role(roster: Option<&ligus_core::authz::RosterState>, links: &DeviceLinks, person: &str) -> Option<WorkspaceRole> {
+    roster?.members.iter().filter(|(id, _)| links.person(id) == person).map(|(_, m)| m.role).max_by_key(|r| r.rank())
+}
+
+/// `"owner"` or `"everyone"`: who may use `agent` as enforced.
+pub fn access_label(agent: &WorkspaceAgent) -> &'static str {
+    match agent.effective_access() {
+        Access::Owner => ligus_core::agent::ACCESS_OWNER,
+        Access::Everyone => ligus_core::agent::ACCESS_EVERYONE,
+    }
+}
+
 /// One agent's usage on this device, per member: today and this month (UTC).
 #[derive(Debug, Clone, Default)]
 pub struct UsageView {
@@ -188,12 +202,7 @@ impl ChatService {
             }
             out
         });
-        let role_of = |who: &str| -> Option<WorkspaceRole> {
-            let r = roster.as_ref()?;
-            // A linked device's person: the best role among their member
-            // records (their own, and a box's service member).
-            r.members.iter().filter(|(id, _)| links.person(id) == who).map(|(_, m)| m.role).max_by_key(|r| r.rank())
-        };
+        let role_of = |who: &str| person_role(roster.as_ref(), &links, who);
         let day = utc_day(time::OffsetDateTime::now_utc());
         let today = Today { rows: self.store().agent_usage(agent_id, &day, &day)? };
         let owner = links.person(&agent.owner_actor_id).to_string();
