@@ -213,6 +213,13 @@ ligus serve: listening on http://127.0.0.1:8787 â€” workspace 'acme', host 63f2â
 Run `ligus pair` to show the phone pairing code.
 ```
 
+To keep `ligus serve` or `ligus worker` running, use a systemd user unit on
+Linux or, optionally, a LaunchAgent on macOS that starts at login:
+`deploy/local/ligus-local start --role serve|worker --data-dir DIR
+--systemd|--launchd` installs either (`stop` with the same flag removes it;
+`unit --launchd` prints the plist). See
+[Start at login on macOS](../../operate/deploy/personal-fleet.md#start-at-login-on-macos).
+
 See [Remote access for your phone](../../operate/networking/remote-access.md),
 [Running ligus serve as your own device](../../operate/ops/serve-box.md) and the
 [serve API reference](../../operate/reference/serve-api.md).

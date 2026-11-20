@@ -5,10 +5,11 @@
 #   ligus-local preflight  [--role serve|worker]   check this machine; changes nothing
 #   ligus-local install-cli [--version vX.Y.Z] [--bin-dir DIR] [--from-source]
 #   ligus-local configure  --role serve|worker     write the env file (no secrets)
-#   ligus-local start      --role serve|worker     start in the background (or --systemd)
+#   ligus-local start      --role serve|worker     start in the background (or --systemd / --launchd)
 #   ligus-local unit       --role serve|worker     print the systemd unit start --systemd installs
-#   ligus-local verify     --role serve|worker     process, health endpoint, sandbox
-#   ligus-local stop       --role serve|worker
+#                                                  (--launchd: the LaunchAgent plist)
+#   ligus-local verify     --role serve|worker     process, health endpoint, sandbox (alias: status)
+#   ligus-local stop       --role serve|worker     (--systemd / --launchd: also no start at login)
 #   ligus-local uninstall  --role serve|worker [--delete-data]
 #
 # Common flags: --data-dir DIR (required: this device's identity and event
@@ -27,7 +28,7 @@ AC_TOOL=ligus-local
 MARKER=.ligus-local
 
 usage() {
-  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^# shellcheck/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
   cat <<'EOF'
 
 configure flags:
@@ -41,6 +42,8 @@ configure flags:
                            needs --relay-url)
   --force                  rewrite an existing env file
 start flags:   --systemd (Linux: install and start a systemd user unit instead)
+               --launchd (macOS: install and load a LaunchAgent instead, so the box
+                          starts at login and is kept running; stop --launchd removes it)
 Environment:   LIGUS_BIN (default: ligus on PATH, else ~/.local/bin/ligus)
 EOF
 }
@@ -50,7 +53,7 @@ CMD=${1:-}
 case $CMD in -h|--help|help|"") usage; exit 0 ;; esac
 
 ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
-SYSTEMD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
+SYSTEMD=0 LAUNCHD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
 need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
   case $1 in
@@ -65,6 +68,7 @@ while [ $# -gt 0 ]; do
     --throwaway-workspace) THROWAWAY=1 ;;
     --force) FORCE=1 ;;
     --systemd) SYSTEMD=1 ;;
+    --launchd) LAUNCHD=1 ;;
     --delete-data) DEL_DATA=1 ;;
     --version) need "$@"; VERSION=$2; shift ;;
     --bin-dir) need "$@"; BIN_DIR=$2; shift ;;
@@ -76,6 +80,7 @@ while [ $# -gt 0 ]; do
 done
 
 case $ROLE in ""|serve|worker) ;; *) ac_usage_error "--role must be serve or worker" ;; esac
+if [ $SYSTEMD = 1 ] && [ $LAUNCHD = 1 ]; then ac_usage_error "--systemd and --launchd are exclusive"; fi
 # These values end up in an env file that start (and the human) source with
 # `set -a; . FILE`: anything but a plain token would run as shell code.
 valid() { # flag value regex
@@ -92,7 +97,9 @@ valid --relay-url "$RELAY_URL" 'https?://[A-Za-z0-9.:_/%@-]+'
 valid --version "$VERSION" 'v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?'
 case $BACKEND in ""|file|keychain|secret-service) ;; *) ac_usage_error "--secret-backend must be file, keychain or secret-service" ;; esac
 
-OS=$(uname -s)
+# LIGUS_LOCAL_OS and LIGUS_LOCAL_LAUNCHCTL override these for the tests.
+OS=${LIGUS_LOCAL_OS:-$(uname -s)}
+LAUNCHCTL=${LIGUS_LOCAL_LAUNCHCTL:-launchctl}
 find_bin() {
   if [ -n "${LIGUS_BIN:-}" ]; then printf '%s' "$LIGUS_BIN"
   elif ac_have ligus; then command -v ligus
@@ -100,6 +107,7 @@ find_bin() {
   fi
 }
 BIN=$(find_bin || true)
+case $BIN in ""|/*) ;; *) BIN="$PWD/$BIN" ;; esac
 
 # The flags that name this instance, for the commands we print.
 inst() { printf -- '--role %s --data-dir %q' "$ROLE" "$DATA"; [ -n "$ENVF_GIVEN" ] && printf -- ' --env-file %q' "$ENVF"; return 0; }
@@ -181,6 +189,7 @@ cmd_preflight() {
     fi
     ac_have systemctl && ac_check systemd info "systemd present (start --systemd installs a user unit)"
   fi
+  if [ "$OS" = Darwin ] && ac_have "$LAUNCHCTL"; then ac_check launchd info "launchd present (start --launchd installs a LaunchAgent: start at login)"; fi
 
   if [ -n "$ROLE" ]; then
     require_data
@@ -356,11 +365,242 @@ render_unit() {
   done <"$ROOT/deploy/ligus-serve/ligus-serve.service"
 }
 
+# ------------------------------------------------------------ launchd agent
+# start --launchd installs a per-user LaunchAgent,
+# ~/Library/LaunchAgents/ai.ligus.<role>[.<label>].plist, loaded into the
+# login session (gui/<uid>): it starts at login and launchd keeps it running.
+# launchd has no EnvironmentFile, so the env file's settings are copied into
+# the plist (literal values; no shell expansion), except names that look like
+# secrets (those stay in the data dir or the keychain, as on Linux). Rerun
+# start --launchd after editing the env file.
+LA_SKIPPED=""
+LA_DIR() { printf '%s/Library/LaunchAgents' "$HOME"; }
+LA_LOGDIR() { printf '%s/Library/Logs/ligus' "$HOME"; }
+LA_LOG() { printf '%s/%s.log' "$(LA_LOGDIR)" "${1#ai.ligus.}"; } # label
+
+# XML character data. A control character (line break, tab, ...) is refused.
+xml_esc() {
+  case $1 in *[[:cntrl:]]*) return 1 ;; esac
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# The launchd label: ai.ligus.<role>, plus the host label (lowercased, other
+# characters as -) unless it is configure's default <hostname>-<role>.
+la_label() {
+  local l suf
+  if [ "$ROLE" = serve ]; then l=$(env_get LIGUS_SERVE_LABEL); else l=$(env_get LIGUS_WORKER_LABEL); fi
+  [ "$l" = "$(hostname -s 2>/dev/null || echo local)-$ROLE" ] && l=""
+  suf=$(printf '%s' "$l" | tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//')
+  printf 'ai.ligus.%s%s' "$ROLE" "${suf:+.$suf}"
+}
+
+# Settings whose values are secrets never go into the plist (a *_FILE path does).
+la_secret() {
+  case $1 in
+    *_FILE|*_FILES) return 1 ;;
+    *TOKEN*|*KEY*|*SECRET*|*PASS*|*DSN*|*CREDENTIAL*|*PRIVATE*) return 0 ;;
+  esac
+  return 1
+}
+
+# The env file's assignments, last one winning, in first-seen order: KEY=VALUE.
+env_pairs() {
+  [ -f "$ENVF" ] || return 0
+  awk '/^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/ {
+      sub(/^[ \t]*(export[ \t]+)?/, "")
+      i = index($0, "="); k = substr($0, 1, i - 1)
+      if (!(k in val)) order[++n] = k
+      val[k] = substr($0, i + 1)
+    }
+    END { for (j = 1; j <= n; j++) print order[j] "=" val[order[j]] }' "$ENVF"
+}
+
+la_kv() { # key value: one EnvironmentVariables entry
+  local k v
+  k=$(xml_esc "$1") && v=$(xml_esc "$2") || return 1
+  printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$k" "$v"
+}
+
+# The plist start --launchd installs. $1: label. Sets LA_SKIPPED.
+render_plist() {
+  local label=$1 log bin args data wl line k v env="" havepath=0
+  LA_SKIPPED=""
+  log=$(xml_esc "$(LA_LOG "$label")") && bin=$(xml_esc "$BIN") && data=$(xml_esc "$DATA") || return 1
+  args=$(printf '\t\t<string>%s</string>\n\t\t<string>%s</string>' "$bin" "$ROLE")
+  if [ "$ROLE" = worker ]; then
+    wl=$(env_get LIGUS_WORKER_LABEL)
+    wl=$(xml_esc "${wl:-worker}") || return 1
+    args="$args
+$(printf '\t\t<string>--label</string>\n\t\t<string>%s</string>' "$wl")"
+  fi
+  env=$(la_kv LIGUS_DATA_DIR "$DATA") || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    k=${line%%=*} v=${line#*=}
+    case $v in \'*\') v=${v#\'}; v=${v%\'} ;; \"*\") v=${v#\"}; v=${v%\"} ;; esac
+    [ "$k" = LIGUS_DATA_DIR ] && continue
+    # A secret-looking name, or a URL with credentials in it (user:pass@).
+    if la_secret "$k" || printf '%s' "$v" | grep -Eq '://[^/@]*:[^/@]*@'; then LA_SKIPPED="$LA_SKIPPED $k"; continue; fi
+    [ "$k" = PATH ] && havepath=1
+    env="$env
+$(la_kv "$k" "$v")" || return 1
+  done <<PAIRS
+$(env_pairs)
+PAIRS
+  # launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin; agents need the
+  # tools this shell finds (git, the coding CLIs), so its PATH comes along.
+  if [ $havepath = 0 ]; then env="$env
+$(la_kv PATH "$PATH")" || return 1; fi
+  # (An XML comment may not contain a double hyphen: no flag names in it.)
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by ligus-local start, launchd mode (role $ROLE). No secret values: they stay in the data dir or the keychain. To change it, edit the env file and run start with the launchd flag again; stop with the launchd flag removes it. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$label</string>
+	<key>ProgramArguments</key>
+	<array>
+$args
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+$env
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>$data</string>
+	<key>StandardOutPath</key>
+	<string>$log</string>
+	<key>StandardErrorPath</key>
+	<string>$log</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>20</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>
+PLIST
+}
+
+# The plist ligus-local wrote for this role and data dir, if any.
+la_datadir() { # plist -> its LIGUS_DATA_DIR, XML-escaped
+  awk 'p { sub(/^[ \t]*<string>/, ""); sub(/<\/string>[ \t]*$/, ""); print; exit } /<key>LIGUS_DATA_DIR<\/key>/ { p = 1 }' "$1"
+}
+la_ours() { grep -q '^<!-- Written by ligus-local start, launchd mode' "$1" 2>/dev/null; }
+la_find() {
+  local f want
+  want=$(xml_esc "$DATA") || return 1
+  for f in "$(LA_DIR)/ai.ligus.$ROLE.plist" "$(LA_DIR)/ai.ligus.$ROLE".*.plist; do
+    [ -f "$f" ] && la_ours "$f" && [ "$(la_datadir "$f")" = "$want" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+la_print() { "$LAUNCHCTL" print "gui/$(id -u)/$1" 2>/dev/null; } # label
+la_pid() { la_print "$1" | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -1; }
+# Unload the agent if it is loaded; waits for the process to exit.
+la_bootout() {
+  la_print "$1" >/dev/null || return 0
+  "$LAUNCHCTL" bootout "gui/$(id -u)/$1" >/dev/null 2>&1 || true
+  for _ in $(seq 1 25); do la_print "$1" >/dev/null || return 0; sleep 1; done
+  return 1
+}
+la_need() { # command: --launchd only works on macOS
+  if [ "$OS" != Darwin ] || ! ac_have "$LAUNCHCTL"; then
+    ac_check launchd fail "--launchd needs macOS (launchctl)" "drop --launchd (Linux: --systemd)"; ac_raise 3; ac_finish "$AC_TOOL" "$1" "$(json_extra)"
+  fi
+}
+
+la_start() {
+  la_need start
+  local p label plist old log tmp err ok=0
+  if p=$(running_pid); then
+    ac_check start fail "$ROLE is already running in the background for this data dir (pid $p); one data dir is one process" "ligus-local stop $(inst), then start --launchd again"
+    ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  label=$(la_label); plist="$(LA_DIR)/$label.plist"; log=$(LA_LOG "$label")
+  old=$(la_find || true)
+  if [ -e "$plist" ] && [ "$plist" != "$old" ]; then
+    if la_ours "$plist"; then err="another box (data dir $(la_datadir "$plist")) already uses $plist"; else err="$plist exists and ligus-local did not write it"; fi
+    ac_check launchd.label fail "$err" "give this box its own label: ligus-local configure $(inst) --label NAME --force, then start --launchd again"
+    ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  mkdir -p "$(LA_DIR)"
+  (umask 077; mkdir -p "$(LA_LOGDIR)"; : >>"$log")
+  chmod 700 "$(LA_LOGDIR)"
+  tmp=$(mktemp "$(LA_DIR)/.$label.XXXXXX")
+  if ! render_plist "$label" >"$tmp"; then
+    rm -f "$tmp"
+    ac_check launchd fail "a path, the PATH or a setting in $ENVF has a control character (a line break) and can't go into a plist" "remove it and start --launchd again"; ac_raise 2; ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  if ac_have plutil && ! err=$(plutil -lint "$tmp" 2>&1); then
+    rm -f "$tmp"
+    ac_check launchd fail "the rendered plist is not valid: $err" "report this as a ligus-local bug (ligus-local unit $(inst) --launchd prints it)"; ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  chmod 644 "$tmp"
+  if [ -n "$LA_SKIPPED" ]; then
+    ac_check launchd.env warn "not copied into the plist (names that look like secrets):$LA_SKIPPED" "keep secret values in the data dir or the keychain and point at files with *_FILE settings (for example LIGUS_WORKSPACE_KEY_FILE)"
+  fi
+  # A reinstall: the agent loaded for this data dir (under any label) goes first.
+  if { [ -n "$old" ] && ! la_bootout "$(basename "$old" .plist)"; } || ! la_bootout "$label"; then
+    rm -f "$tmp"
+    ac_check launchd fail "the running agent did not stop within 25 s" "launchctl print gui/$(id -u)/$label; then start --launchd again"; ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  [ -n "$old" ] && [ "$old" != "$plist" ] && rm -f "$old"
+  mv "$tmp" "$plist"
+  # An earlier launchctl disable would make bootstrap fail.
+  "$LAUNCHCTL" enable "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    if err=$("$LAUNCHCTL" bootstrap "gui/$(id -u)" "$plist" 2>&1); then ok=1; break; fi
+    la_print "$label" >/dev/null && { ok=1; break; }
+    sleep 1
+  done
+  if [ $ok = 0 ]; then
+    ac_check launchd fail "launchctl bootstrap gui/$(id -u) $plist failed: $err" "plutil -lint $plist; read $log"
+    ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  p=""
+  for _ in 1 2 3 4 5; do p=$(la_pid "$label"); [ -n "$p" ] && break; sleep 1; done
+  if [ -n "$p" ]; then
+    ac_check start pass "launchd agent $label loaded and running (pid $p); it starts at login and is restarted if it exits (log $log)"
+    ac_next "ligus-local verify $(inst) --json"
+  else
+    ac_check start fail "launchd agent $label is loaded but $ROLE is not running: $(tail -3 "$log" 2>/dev/null | tr '\n' ' ')" "read $log (launchd retries every 10 s); exit code 3 means no agent sandbox (never disable it). ligus-local stop $(inst) --launchd removes the agent"
+  fi
+  ac_finish "$AC_TOOL" start "$(json_extra)"
+}
+
+# Remove this data dir's agent: unload it and delete the plist. Prints its label.
+la_remove() {
+  local f label
+  f=$(la_find) || return 0
+  label=$(basename "$f" .plist)
+  la_bootout "$label" || return 1
+  rm -f "$f"
+  printf '%s' "$label"
+}
+
 # --------------------------------------------------------------------- unit
-# Print the unit start --systemd would install (nothing is written).
+# Print the unit start --systemd would install (nothing is written); with
+# --launchd, the plist start --launchd would install.
 cmd_unit() {
   require_role; require_data
   [ -n "$BIN" ] || { echo "ligus-local: ligus CLI not found (ligus-local install-cli)" >&2; exit 3; }
+  if [ $LAUNCHD = 1 ]; then
+    local label; label=$(la_label)
+    if ! render_plist "$label"; then echo "ligus-local: a path, the PATH or an env file setting has a control character (a line break)" >&2; exit 2; fi
+    [ -z "$LA_SKIPPED" ] || echo "ligus-local: not copied into the plist (names that look like secrets):$LA_SKIPPED" >&2
+    echo "ligus-local: start --launchd installs this as $(LA_DIR)/$label.plist" >&2
+    return 0
+  fi
   unit_nnp
   render_unit "$NNP" || { echo "ligus-local: a path or the worker label has a line break" >&2; exit 2; }
 }
@@ -395,7 +635,15 @@ cmd_start() {
     fi
     ac_finish "$AC_TOOL" start "$(json_extra)"
   fi
-  local p
+  [ $LAUNCHD = 1 ] && la_start
+  local p la
+  # launchd already runs this data dir's box: a second process must not start.
+  if [ "$OS" = Darwin ] && la=$(la_find); then
+    la=$(basename "$la" .plist)
+    if p=$(la_pid "$la") && [ -n "$p" ]; then ac_check start pass "$ROLE already running under launchd ($la, pid $p)"
+    else ac_check start fail "launchd agent $la is installed for this data dir but $ROLE is not running" "read $(LA_LOG "$la"); ligus-local start $(inst) --launchd reloads it, ligus-local stop $(inst) --launchd removes it"; fi
+    ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
   if p=$(running_pid); then ac_check start pass "$ROLE already running (pid $p)"; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
   (umask 077; : >>"$(LOGF)")
   # The log never gets a pairing link: start never passes --pair.
@@ -417,12 +665,29 @@ cmd_start() {
 # ------------------------------------------------------------------- verify
 cmd_verify() {
   require_role; require_data
-  local p="" listen
+  local p="" listen la="" log
+  log=$(LOGF)
+  [ $LAUNCHD = 1 ] && la_need verify
+  [ "$OS" = Darwin ] && la=$(la_find || true)
   if [ $SYSTEMD = 1 ]; then
     if systemctl --user is-active --quiet "ligus-$ROLE"; then ac_check process pass "systemd unit ligus-$ROLE active"
     else ac_check process fail "systemd unit ligus-$ROLE not active" "journalctl --user -u ligus-$ROLE -n 50"; fi
-  elif p=$(running_pid); then ac_check process pass "$ROLE running (pid $p)"
-  else ac_check process fail "$ROLE not running" "ligus-local start $(inst); if it exits, read $(LOGF)"; fi
+  elif [ -n "$la" ]; then
+    local label; label=$(basename "$la" .plist); log=$(LA_LOG "$label")
+    if ! la_print "$label" >/dev/null; then
+      ac_check launchd fail "launchd agent $label installed ($la) but not loaded" "ligus-local start $(inst) --launchd (or log out and back in)"
+    else
+      ac_check launchd pass "launchd agent $label installed ($la) and loaded: starts at login, restarted if it exits"
+      if p=$(la_pid "$label") && [ -n "$p" ]; then ac_check process pass "$ROLE running under launchd (pid $p, log $log)"
+      else ac_check process fail "$ROLE not running (launchd retries every 10 s)" "read $log; exit code 3 means no agent sandbox (never disable it)"; fi
+    fi
+  elif [ $LAUNCHD = 1 ]; then
+    ac_check launchd fail "no launchd agent installed for this data dir" "ligus-local start $(inst) --launchd"
+  else
+    [ "$OS" = Darwin ] && ac_have "$LAUNCHCTL" && ac_check launchd info "no launchd agent for this data dir (start --launchd makes it start at login)"
+    if p=$(running_pid); then ac_check process pass "$ROLE running (pid $p)"
+    else ac_check process fail "$ROLE not running" "ligus-local start $(inst); if it exits, read $(LOGF)"; fi
+  fi
   if [ "$ROLE" = serve ]; then listen=$(env_get LIGUS_SERVE_LISTEN); else listen=$(env_get LIGUS_WORKER_HEALTH_LISTEN); fi
   if [ -n "$listen" ]; then
     local code=""
@@ -430,7 +695,7 @@ cmd_verify() {
       code=$(http_status "http://$listen/v1/health"); [ "$code" = 200 ] && break; sleep 1
     done
     if [ "$code" = 200 ]; then ac_check health pass "GET http://$listen/v1/health: 200"
-    else ac_check health fail "GET http://$listen/v1/health: ${code:-no answer}" "read $(LOGF)"; fi
+    else ac_check health fail "GET http://$listen/v1/health: ${code:-no answer}" "read $log"; fi
   fi
   if [ "$(env_get LIGUS_REQUIRE_SANDBOX)" = 1 ]; then ac_check sandbox pass "LIGUS_REQUIRE_SANDBOX=1: the process exits rather than run agents unconfined"
   else ac_check sandbox fail "LIGUS_REQUIRE_SANDBOX is not 1 in $ENVF" "a human decides that; ligus-local configure sets it to 1"; fi
@@ -446,7 +711,24 @@ cmd_stop() {
     ac_check stop pass "systemd unit ligus-$ROLE stopped and disabled"
     ac_finish "$AC_TOOL" stop "$(json_extra)"
   fi
-  local p
+  local p la
+  if [ $LAUNCHD = 1 ]; then
+    la_need stop
+    if ! la=$(la_remove); then
+      ac_check stop fail "the launchd agent did not stop within 25 s" "ligus-local stop $(inst) --launchd again"
+    elif [ -n "$la" ]; then
+      ac_check stop pass "launchd agent $la unloaded and its plist removed: $ROLE stopped and no longer starts at login"
+    else
+      ac_check stop pass "no launchd agent for this data dir"
+    fi
+    [ "$AC_WORST" = 0 ] && running_pid >/dev/null && ac_next "a background $ROLE (not launchd) still runs for this data dir: ligus-local stop $(inst)"
+    ac_finish "$AC_TOOL" stop "$(json_extra)"
+  fi
+  # launchd would restart a box it runs: that needs stop --launchd.
+  if [ "$OS" = Darwin ] && la=$(la_find); then
+    ac_check stop fail "$ROLE runs under launchd ($(basename "$la" .plist)), which restarts it" "ligus-local stop $(inst) --launchd (it also stops it starting at login)"
+    ac_finish "$AC_TOOL" stop "$(json_extra)"
+  fi
   if p=$(running_pid); then
     kill -TERM "$p" 2>/dev/null || true
     # serve gives a turn in flight up to 15 s.
@@ -470,10 +752,16 @@ cmd_uninstall() {
     rm -f "$HOME/.config/systemd/user/ligus-$ROLE.service"; systemctl --user daemon-reload || true
     ac_check unit pass "removed systemd user unit ligus-$ROLE"
   fi
+  local la=""
+  if [ "$OS" = Darwin ]; then
+    if ! la=$(la_remove); then ac_check unit fail "the launchd agent did not stop within 25 s" "ligus-local stop $(inst) --launchd, then uninstall again"; ac_finish "$AC_TOOL" uninstall "$(json_extra)"; fi
+    [ -n "$la" ] && ac_check unit pass "removed launchd agent $la"
+  fi
   ac_check stop pass "$ROLE stopped"
   if [ $DEL_DATA = 1 ]; then
     if [ -f "$DATA/$MARKER" ]; then
       rm -rf "$DATA"
+      [ -n "$la" ] && rm -f "$(LA_LOG "$la")"
       if [ -f "$ENVF" ] && head -1 "$ENVF" | grep -q '^# Written by deploy/local/ligus-local configure'; then
         rm -f "$ENVF"; ac_check data pass "deleted $DATA and $ENVF (this device's identity is gone)"
       else

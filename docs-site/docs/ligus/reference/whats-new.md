@@ -196,6 +196,12 @@ relay, langstroth-auth and the Helm charts). The CLI is `ligus`, settings are
 
 ### Install and deploy
 
+- **Start at login on macOS (optional).** `deploy/local/ligus-local start
+  --launchd` installs a per-user LaunchAgent for a `serve` or `worker` box, so
+  it starts when you log in and is restarted if it exits; `stop --launchd`
+  removes it and `status` shows whether it is installed and running. The
+  plist runs `ligus` without a shell and carries no secrets. See
+  [Start at login on macOS](../../operate/deploy/personal-fleet.md#start-at-login-on-macos).
 - **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `langstroth-ai/ligus`;
   or the `install.sh` one-liner for the CLI, which checks the release's
   SHA-256 file. See [Install with Homebrew](../getting-started/homebrew.md).

@@ -65,7 +65,10 @@ LIGUS_DATA_DIR="$HOME/Library/Application Support/ai.ligus.desktop" \
 ```
 
 Run it as a **background service** — launchd on macOS, systemd on Linux — and the
-agent stays responsive after you quit the app or shut the lid.
+agent stays responsive after you quit the app or shut the lid. For `ligus
+serve` and `ligus worker`, `deploy/local/ligus-local start --launchd` (macOS)
+or `--systemd` (Linux) sets that up; see
+[Start at login on macOS](../deploy/personal-fleet.md#start-at-login-on-macos).
 
 The same data-dir trick lets you **script Ligus** from a terminal, cron, a git
 hook, or CI without the GUI: `ligus send @agent "…"`, `ligus new`, `ligus tail`,

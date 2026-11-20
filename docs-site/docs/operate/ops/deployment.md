@@ -116,7 +116,10 @@ export LIGUS_WS_SECRET_anthropic=sk-ant-…       # matches --secret-ref; stays 
 ligus worker --label team-worker
 ```
 
-Run it under systemd (see `deploy/ligus-serve/` for a unit to adapt) and
+Run it under systemd (see `deploy/ligus-serve/` for a unit to adapt), or on
+a Mac as a LaunchAgent that starts at login (`deploy/local/ligus-local start
+--role worker --launchd`; see
+[Start at login on macOS](../deploy/personal-fleet.md#start-at-login-on-macos)), and
 consider:
 
 - `LIGUS_MCP_MIN_ROLE` (default `admin` when the worker's tier can write,
