@@ -1,23 +1,57 @@
-name: Release (desktop app)
+name: Release
 
-# Builds the Ligus desktop app for macOS, Linux, and Windows on GitHub runners
-# and attaches the installers to a GitHub Release. Artifacts live as release
-# assets — never committed to source control. The (private) ligus-site Netlify
-# build pulls the latest assets at deploy time (see that repo's
-# scripts/fetch-downloads.sh).
+# The whole release for a tag, in one workflow run: the Ligus desktop app for
+# macOS, Linux and Windows (job `build`), the `ligus` CLI for four targets
+# (job `cli`, which calls release-cli.yml), the updater feed check, then
+# publish, then the Homebrew tap. Artifacts live as release assets, never
+# committed to source control. The (private) ligus-site Netlify build pulls
+# the latest assets at deploy time (see that repo's scripts/fetch-downloads.sh).
 #
-# Trigger: push a plain tag like `v0.1.0` (it must match the app version), or run manually (workflow_dispatch).
+# Entry points (docs/packaging.md, "How to cut a release"):
+#   - cut-release.yml (the normal way): checks CI passed on the commit, tags
+#     it, and calls this workflow (workflow_call) with the tag. Its tag is
+#     pushed with GITHUB_TOKEN, which never triggers the `push: tags` trigger
+#     below (GitHub's recursion guard), so a cut never runs the pipeline twice.
+#   - pushing a plain tag like `v0.1.0` by hand (the fallback);
+#   - workflow_dispatch for an existing tag (re-run into its draft).
+# The tag always comes from `inputs.tag` (dispatch, call) or the pushed ref.
 #
-# Release ownership: the `release` job (scripts/ensure-release.sh, shared with
-# release-cli.yml) finds or creates the one release for the tag, and
-# tauri-action only uploads to it by id. tauri-action v1 rewrites the name and
-# body of an existing published release when given tagName, and with
-# releaseDraft it refuses a published release, so it is never given either: a
-# rerun cannot touch the notes, and the installers always land on the release
-# release-cli also uses. A new release is created as a prerelease (not Latest);
-# the owner promotes it with the notes:
+#   setup ──┐
+#   release ┼─> build (desktop x3) ─> verify-updater ─┐
+#           └─> cli (release-cli.yml, CLI x4) ────────┴─> publish ─> cask, formula
+#
+# Draft until complete: the `release` job (scripts/ensure-release.sh) creates
+# the tag's release as a DRAFT prerelease (or reuses the draft on a rerun, and
+# refuses a release that is already published). Every build uploads into
+# that draft, which users, install.sh and the updater cannot see. `publish`
+# runs only when every desktop build, every CLI build and verify-updater
+# succeeded, checks that the draft holds every asset
+# (scripts/check-release-assets.py) and a complete latest.json, and only
+# then publishes it, as a prerelease (never Latest). The tap bumps run after
+# publish. So a failed job leaves an unpublished draft, never a half-filled
+# release: rerun the failed jobs, or delete the draft and re-push the tag
+# (docs/packaging.md, "Cutting a release").
+#
+# Why one workflow: the CLI used to be a separate tag-triggered workflow, and
+# a final job in one workflow cannot `needs:` a job in another; it could only
+# poll the other run or guess from the assets. As a called (reusable)
+# workflow, release-cli's jobs sit in this run's dependency graph, so
+# `publish` waits for them exactly, and "Re-run failed jobs" reruns a failed
+# CLI target together with publish and the tap jobs.
+#
+# Release ownership: tauri-action only uploads to the draft by id. tauri-action
+# v1 rewrites the name and body of an existing published release when given
+# tagName, and with releaseDraft it refuses a published release and creates
+# its own, so it is given neither: the draft the `release` job made is the
+# only release, and a rerun cannot touch the notes. By id it never publishes
+# anything, and the latest.json it writes points at API asset URLs, which
+# keep working after the draft is published. Promotion to Latest stays a
+# manual step, with the notes:
 #   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md \
 #     --prerelease=false --latest
+#
+# The DMG is notarized and stapled separately after tauri-action (which only
+# notarizes the .app inside it) and re-uploaded to the draft before publish.
 #
 # Signing is wired but inert until the secrets exist (private beta ships
 # unsigned — see task: "Auto-updater + code signing"):
@@ -32,19 +66,36 @@ name: Release (desktop app)
 #   Windows: Azure Trusted Signing via a signCommand (added later)
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.1); it must already exist"
+        required: true
+        type: string
+      platforms:
+        description: "Which OSes to build (comma-sep: macos,windows,linux)"
+        required: false
+        type: string
+        default: "macos,windows,linux"
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (e.g. v0.1.1)"
         required: true
       platforms:
-        description: "Which OSes to build (comma-sep: macos,windows,linux). macOS bills at 10x — skip it (build the .dmg locally) to save minutes."
+        description: "Which OSes to build (comma-sep: macos,windows,linux). The draft is published only once it holds every platform's assets."
         default: "macos,windows,linux"
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+
+# One release run per tag at a time (a dispatch racing the tag push would
+# otherwise make two drafts). Never cancelled: a half-run release is a draft.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   # Cheap Linux job that turns the `platforms` input into a build matrix, so a
@@ -57,7 +108,7 @@ jobs:
     steps:
       - id: m
         env:
-          PLATFORMS: ${{ github.event.inputs.platforms || 'macos,windows,linux' }}
+          PLATFORMS: ${{ inputs.platforms || 'macos,windows,linux' }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
@@ -67,7 +118,7 @@ jobs:
           print("matrix=" + json.dumps({"include": include}))
           PY
 
-  # Find or create the release for the tag (never edits an existing one).
+  # Find (rerun) or create the tag's DRAFT release; refuse a published one.
   release:
     runs-on: ubuntu-latest
     outputs:
@@ -76,11 +127,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A dispatch builds the tag, never the dispatching branch.
         with:
-          ref: "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
       - id: r
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         # Assign first: a failure inside $(...) as an echo argument would not
         # fail the step, and an empty releaseId makes tauri-action skip every
         # upload while still reporting success.
@@ -102,7 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A dispatch builds the tag, never the dispatching branch.
         with:
-          ref: "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
 
       - name: Linux build deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -209,7 +260,7 @@ jobs:
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
           # prompt. Bump docs-site/docs/version.json to this tag when publishing.
-          LIGUS_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          LIGUS_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           # APPLE_* (when present) come from the "Configure macOS signing" step
           # via $GITHUB_ENV. tauri-action signs + notarizes + staples on macOS.
           # Auto-updater signing: the Ligus updater key's private half (repo
@@ -223,7 +274,7 @@ jobs:
           tauriScript: tauri
           # macOS with a provisioning profile: the native-passkeys overlay.
           args: ${{ env.LIGUS_TAURI_ARGS }}
-          # Upload to the release the `release` job resolved. No tagName,
+          # Upload to the draft the `release` job made. No tagName,
           # releaseName, releaseDraft or prerelease: with those, tauri-action
           # v1 looks the release up itself and rewrites a published release's
           # name and body on every run (see the header).
@@ -243,6 +294,54 @@ jobs:
           if [ "${LIGUS_MACOS_PASSKEYS:-}" = 1 ]; then mode=--with-profile; else mode=--without-profile; fi
           scripts/check-macos-signing.sh entitlements "$app" "$mode"
 
+      # tauri-action notarizes and staples the .app, but not the DMG around
+      # it: Gatekeeper then rejects the downloaded DMG as "Unnotarized
+      # Developer ID" (spctl -t open) and it carries no ticket. Notarize and
+      # staple the DMG, check both, and replace the copy tauri-action
+      # uploaded to the draft. The cask's sha256 is taken after publish, from
+      # this stapled DMG on the release.
+      - name: Notarize and staple the DMG
+        if: matrix.platform == 'macos-latest' && env.LIGUS_MACOS_SIGNED == '1'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          dmg_name="Ligus_${TAG#v}_aarch64.dmg"
+          dmg="$(find target -type f -path '*/bundle/dmg/*' -name "$dmg_name" | head -n 1)"
+          [ -n "$dmg" ] || { echo "::error::no $dmg_name under target/*/bundle/dmg"; exit 1; }
+          # The App Store Connect key: a 0600 file (mktemp), removed on exit,
+          # never printed.
+          key="$(mktemp "$RUNNER_TEMP/notary-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key"
+          out="$(xcrun notarytool submit "$dmg" --key "$key" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait --timeout 45m --output-format json)" || true
+          echo "$out"
+          status="$(python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$out" 2>/dev/null || true)"
+          if [ "$status" != Accepted ]; then
+            id="$(python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"$out" 2>/dev/null || true)"
+            [ -n "$id" ] && xcrun notarytool log "$id" --key "$key" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" || true
+            echo "::error::notarizing $dmg_name: status '${status:-none}'"
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+          # Both checks the shipped v0.1.0 DMG failed.
+          xcrun stapler validate "$dmg"
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
+          # Replace tauri-action's unstapled upload in the draft (same name).
+          got=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId,isDraft --jq '"\(.databaseId) \(.isDraft)"')
+          if [ "$got" != "$RELEASE_ID true" ]; then
+            echo "::error::gh resolves $TAG to release '$got' (id, draft), not the draft $RELEASE_ID"
+            exit 1
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$dmg"
+
   # tauri-action merges latest.json per matrix job, so concurrent jobs can drop
   # each other's entry and a rerun changes asset ids. Fail loudly (rerun the
   # platform's job) rather than ship an updater feed that misses a platform.
@@ -254,33 +353,103 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # A dispatch builds the tag, never the dispatching branch.
         with:
-          ref: "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
       - name: Check latest.json against the release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          PLATFORMS: ${{ github.event.inputs.platforms || 'macos,windows,linux' }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PLATFORMS: ${{ inputs.platforms || 'macos,windows,linux' }}
           RELEASE_ID: ${{ needs.release.outputs.id }}
         run: python3 scripts/verify-latest-json.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG" --platforms "$PLATFORMS"
 
-  # Auto-bump the Homebrew cask on the tap once the DMG is built + uploaded, so
-  # `brew upgrade --cask ligus-app` tracks releases with no manual edits. Runs in the
-  # tag's context (no cross-workflow tag ambiguity) after `build` uploads assets.
+  # The CLI binaries, into the same draft (release-cli.yml, a called workflow
+  # so that publish can wait on it; see the header).
+  cli:
+    needs: release
+    uses: ./.github/workflows/release-cli.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+      release-id: ${{ needs.release.outputs.id }}
+
+  # The only job that makes the release public. Runs only when every desktop
+  # build, every CLI build and the updater check succeeded (skipped or
+  # cancelled is not success), re-checks the draft itself, then publishes it
+  # as a prerelease. Promotion to Latest stays manual (see the header).
+  publish:
+    needs: [release, build, cli, verify-updater]
+    if: >-
+      ${{ !cancelled()
+        && needs.release.result == 'success'
+        && needs.build.result == 'success'
+        && needs.cli.result == 'success'
+        && needs.verify-updater.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # A dispatch builds the tag, never the dispatching branch.
+        with:
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
+      # Every CLI binary with a matching checksum, the DMG the cask needs,
+      # every upload finished.
+      - name: Check the draft holds every asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: python3 -I scripts/check-release-assets.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG"
+      # verify-updater checked the platforms this run built; a published
+      # release must serve all of them (a platforms-subset dispatch publishes
+      # only once the draft is complete).
+      - name: Check latest.json covers every platform
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: python3 -I scripts/verify-latest-json.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG" --platforms macos,windows,linux
+      - name: Publish the draft as a prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '"\(.draft) \(.tag_name)"')
+          case "$state" in
+            "true $TAG") ;;
+            "false $TAG")
+              echo "Release $RELEASE_ID for $TAG is already published; nothing to do."
+              exit 0 ;;
+            *)
+              echo "::error::release $RELEASE_ID is '$state' (draft, tag), not the $TAG draft"
+              exit 1 ;;
+          esac
+          # By id, not tag: the draft is the release this run filled.
+          # make_latest=false: install.sh, the updater and the site keep the
+          # previous Latest until the owner promotes this one.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=true -f make_latest=false \
+            --jq '"published \(.tag_name) as prerelease=\(.prerelease): \(.html_url)"'
+
+  # Auto-bump the Homebrew cask on the tap once the release is published, so
+  # `brew upgrade --cask ligus-app` tracks releases with no manual edits. Runs
+  # in the tag's context (no cross-workflow tag ambiguity) after `publish`, so
+  # the tap never points at a draft (whose download URLs 404) or at a release
+  # that is missing a platform.
   # Needs HOMEBREW_TAP_TOKEN — a fine-grained PAT with Contents:write on
   # langstroth-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
   # Skips cleanly when the secret is absent. NOTE: kept here rather than in a
   # `release: published` workflow because releases created by GITHUB_TOKEN do not
   # fire the `release` event (GitHub's recursion guard), so that trigger never ran.
   cask:
-    needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: macos-latest
     steps:
       - name: Bump the tap cask
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then
@@ -290,12 +459,8 @@ jobs:
           VERSION="${TAG#v}"
           DMG="Ligus_${VERSION}_aarch64.dmg"
           echo "Downloading ${DMG} from release ${TAG}"
-          for i in 1 2 3 4 5; do
-            if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${DMG}" --output ligus.dmg --clobber; then
-              break
-            fi
-            echo "asset not ready yet (attempt ${i}) - retrying"; sleep 15
-          done
+          # publish checked the DMG is on the release.
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${DMG}" --output ligus.dmg --clobber
           SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
@@ -312,4 +477,85 @@ jobs:
             echo "Cask bumped to ${VERSION}."
           else
             echo "Cask already at ${VERSION} — nothing to do."
+          fi
+
+  # Publish/update the Homebrew CLI formula on the tap once the release (with
+  # the per-arch CLI binaries) is published, so `brew install
+  # langstroth-ai/ligus/ligus` tracks releases. The
+  # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
+  # collide). Never write the old
+  # Formula/hive-cli.rb: the tap keeps it, disabled, pointing at ligus. Needs
+  # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
+  # langstroth-ai/homebrew-ligus); skips cleanly when absent.
+  formula:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the tap formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping formula update."
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          declare -A sha
+          # publish checked every binary is on the release.
+          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "ligus-${t}" --output "ligus-${t}" --clobber
+            sha[$t]=$(sha256sum "ligus-${t}" | awk '{print $1}')
+          done
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
+          mkdir -p tap/Formula
+          cat > tap/Formula/ligus.rb <<RUBY
+          class Ligus < Formula
+            desc "Headless Ligus client + agent daemon"
+            homepage "https://github.com/langstroth-ai/ligus"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${base}/ligus-aarch64-apple-darwin"
+                sha256 "${sha[aarch64-apple-darwin]}"
+              end
+              on_intel do
+                url "${base}/ligus-x86_64-apple-darwin"
+                sha256 "${sha[x86_64-apple-darwin]}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${base}/ligus-aarch64-unknown-linux-musl"
+                sha256 "${sha[aarch64-unknown-linux-musl]}"
+              end
+              on_intel do
+                url "${base}/ligus-x86_64-unknown-linux-musl"
+                sha256 "${sha[x86_64-unknown-linux-musl]}"
+              end
+            end
+
+            def install
+              bin.install Dir["ligus-*"].first => "ligus"
+            end
+
+            test do
+              assert_path_exists bin/"ligus"
+            end
+          end
+          RUBY
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git add Formula/ligus.rb && git commit -m "ligus ${VERSION}"; then
+            git push origin HEAD
+            echo "Formula ligus bumped to ${VERSION}."
+          else
+            echo "Formula already at ${VERSION} — nothing to do."
           fi

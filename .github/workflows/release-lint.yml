@@ -3,7 +3,9 @@ name: release-lint
 # Offline checks of the release workflows against the pinned release actions'
 # behaviour (scripts/test-release-workflow.rb): a rerun must never rewrite a
 # release's notes, installers and latest.json must land on the tag's one
-# release, the Tauri CLI is pinned, and the latest.json verifier works.
+# draft release, nothing is published until every build succeeded, the tap
+# bumps follow publish, ci.yml builds every CLI release target, the Tauri CLI
+# is pinned, and the latest.json and asset verifiers work.
 on:
   push:
     branches: [main, "release/**"]
@@ -11,10 +13,15 @@ on:
       - ".github/workflows/release.yml"
       - ".github/workflows/release-cli.yml"
       - ".github/workflows/release-lint.yml"
+      - ".github/workflows/update-cask.yml"
+      - ".github/workflows/cut-release.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/actions/build-cli/**"
       - "scripts/ensure-release.sh"
       - "scripts/check-release-config.sh"
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
+      - "scripts/check-release-assets.py"
       - "scripts/test-release-workflow.rb"
       - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"
@@ -24,10 +31,15 @@ on:
       - ".github/workflows/release.yml"
       - ".github/workflows/release-cli.yml"
       - ".github/workflows/release-lint.yml"
+      - ".github/workflows/update-cask.yml"
+      - ".github/workflows/cut-release.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/actions/build-cli/**"
       - "scripts/ensure-release.sh"
       - "scripts/check-release-config.sh"
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
+      - "scripts/check-release-assets.py"
       - "scripts/test-release-workflow.rb"
       - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"

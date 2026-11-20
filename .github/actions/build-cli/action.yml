@@ -1,0 +1,74 @@
+# Build the `ligus` CLI for one release target. The one place the CLI's
+# toolchain setup and build command live: release-cli.yml builds the shipped
+# binaries with it (profile: release) and ci.yml builds every shipped target
+# with it on PRs and in the merge queue (profile: debug), so CI and the
+# release can't drift apart.
+#
+# Needs the repository checked out. The caller passes the build-time env
+# (LIGUS_GITHUB_APP_CLIENT_ID, LIGUS_GITLAB_CLIENT_ID) on the step that uses
+# this action; composite steps inherit it.
+name: Build the ligus CLI
+description: Install the target's toolchain and build ligus-cli for it.
+
+inputs:
+  target:
+    description: "Rust target triple (one of the targets release-cli.yml ships)"
+    required: true
+  profile:
+    description: "release (the shipped build) or debug (CI)"
+    required: false
+    default: release
+  save-cache:
+    description: "Whether this run may save the Rust cache"
+    required: false
+    default: "true"
+
+outputs:
+  binary:
+    description: "Path to the built ligus binary"
+    value: ${{ steps.build.outputs.binary }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust target
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: rustup update stable && rustup target add "$TARGET"
+
+    - name: Install musl toolchain (Linux)
+      if: contains(inputs.target, 'linux-musl')
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        key: cli-${{ inputs.target }}-${{ inputs.profile }}
+        save-if: ${{ inputs.save-cache }}
+
+    # The test-only passkey shortcut (ligus-runtime `test-presence`) must
+    # never be in a shipped binary's build graph.
+    - name: No test-presence in shipped builds
+      shell: bash
+      run: scripts/check-no-test-presence.sh
+
+    - name: Build ligus CLI
+      id: build
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        PROFILE: ${{ inputs.profile }}
+      run: |
+        set -euo pipefail
+        case "$PROFILE" in
+          release) flags=(--release); dir=release ;;
+          debug) flags=(); dir=debug ;;
+          *) echo "::error::profile must be release or debug, not '$PROFILE'"; exit 1 ;;
+        esac
+        # (macOS runners may run bash 3.2: no bare empty-array expansion under -u)
+        cargo build ${flags[@]+"${flags[@]}"} --locked -p ligus-cli --target "$TARGET"
+        bin="target/$TARGET/$dir/ligus"
+        test -x "$bin"
+        file "$bin" || true
+        echo "binary=$bin" >> "$GITHUB_OUTPUT"
