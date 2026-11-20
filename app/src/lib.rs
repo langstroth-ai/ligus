@@ -18701,3 +18701,61 @@ mod residual_names_tests {
         assert!(!hidden(&t[0].agent_name) && !hidden(&t[0].slot.by.name), "{:?}", t[0].agent_name);
     }
 }
+
+#[cfg(test)]
+mod agent_access_ui_tests {
+    use super::*;
+
+    fn on(path: &std::path::Path, id: &str) -> ChatService {
+        use ligus_core::crypto::SigningKeypair;
+        let store = ligus_runtime::EventStore::open(path).unwrap();
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ligus_core::ActorIdentity::new(id, id, ligus_core::ActorKind::Human));
+        svc.enable_test_presence();
+        svc
+    }
+
+    /// The roster as each person sees it: the owner may use and manage their
+    /// personal agent ("Only me" by default); a teammate sees it greyed out
+    /// with the reason, and can't manage it.
+    #[test]
+    fn agent_dtos_mark_what_this_person_may_use() {
+        let dir = std::env::temp_dir().join(format!("ligus-agent-access-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ligus.db");
+        let ws = Uuid::new_v4();
+        let mut owner = on(&path, "u1");
+        let chat = owner.create_chat("A", ws, "rt").unwrap();
+        owner
+            .add_member(
+                chat.id,
+                ws,
+                ligus_core::WorkspaceMember {
+                    id: "con".into(),
+                    actor: ligus_core::ActorIdentity::new("con", "Con", ligus_core::ActorKind::Human),
+                    role: ligus_core::WorkspaceRole::Contributor,
+                    title: String::new(),
+                    index: 0,
+                    joined_at: ligus_core::Timestamp::now(),
+                },
+            )
+            .unwrap();
+        let mut scout = WorkspaceAgent::new("scout", "rt");
+        scout.owner_actor_id = "u1".into();
+        owner.add_agent(chat.id, ws, scout.clone()).unwrap();
+        let mine = agent_dto_for(&owner, ws, &scout);
+        assert!(mine.available && mine.can_manage_access);
+        assert_eq!(mine.access, "owner");
+        assert_eq!(mine.effective_member_turns_per_day, Some(ligus_core::agent::DEFAULT_MEMBER_TURNS_PER_DAY));
+        let con = on(&path, "con");
+        let theirs = agent_dto_for(&con, ws, &scout);
+        assert!(!theirs.available && !theirs.can_manage_access);
+        assert_eq!(theirs.unavailable_reason.as_deref(), Some("Only its owner can use this agent"));
+        // Opened up: available to everyone.
+        scout.access = ligus_core::agent::ACCESS_EVERYONE.into();
+        let opened = agent_dto_for(&con, ws, &scout);
+        assert!(opened.available && opened.unavailable_reason.is_none());
+        assert_eq!(opened.access, "everyone");
+        drop((owner, con));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -70,6 +70,7 @@ import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
 import { LogsView } from "@/components/LogsView";
 import { Avatar } from "@/components/Avatar";
+import { AgentAccessPanel } from "@/components/AgentAccessPanel";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
@@ -909,6 +910,11 @@ function AgentRosterRow({
             <div className="mt-1">
               <AgentHostBadge hostId={agent.hostId} hosts={hosts} />
             </div>
+            {!agent.canManageAccess && (
+              <div className="mt-1">
+                <AgentAccessPanel sessionId={sessionId} agent={agent} />
+              </div>
+            )}
             {agent.avatarUrl && (
               <button
                 onClick={async () => {
@@ -934,6 +940,7 @@ function AgentRosterRow({
           Remove
         </button>
       </div>
+      {agent.canManageAccess && <AgentAccessPanel sessionId={sessionId} agent={agent} />}
     </Card>
   );
 }

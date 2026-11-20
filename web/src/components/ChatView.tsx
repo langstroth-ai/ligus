@@ -74,7 +74,7 @@ import { Avatar } from "@/components/Avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
-import { detectMention, filterMentions } from "@/lib/mentions";
+import { agentMentionCandidates, detectMention, filterMentions, mentionSelectable, type MentionCandidate } from "@/lib/mentions";
 import { editorStore } from "@/state/editorStore";
 import { applyStreamDelta, handleTerminal } from "@/lib/streams";
 import { pinToBottom, pinAfterScroll, jumpHint } from "@/lib/autoscroll";
@@ -589,11 +589,13 @@ export function ChatView({
     return m;
   }, [agentList.data]);
   const mentionCands = useMemo(() => {
-    const out: { handle: string; kind: string }[] = [
+    const out: MentionCandidate[] = [
       { handle: PRIMARY_HANDLE, kind: "Default agent" },
       { handle: "all", kind: "Everyone" },
     ];
-    for (const a of agentList.data ?? []) out.push({ handle: a.name, kind: "Agent" });
+    // An agent this person can't use (agent access controls) stays listed,
+    // greyed out with the reason, and can't be inserted.
+    out.push(...agentMentionCandidates(agentList.data ?? []));
     for (const m of memberList.data ?? []) out.push({ handle: m.displayName, kind: m.role });
     return out.filter((c) => c.handle.trim().length > 0);
   }, [agentList.data, memberList.data]);
@@ -602,9 +604,10 @@ export function ChatView({
     [mention, mentionCands],
   );
 
-  function acceptMention(handle: string) {
+  function acceptMention(cand: MentionCandidate | undefined) {
     const ta = taRef.current;
-    if (!ta || !mention) return;
+    if (!ta || !mention || !cand || !mentionSelectable(cand)) return;
+    const handle = cand.handle;
     const caret = ta.selectionStart ?? input.length;
     const next = `${input.slice(0, mention.start)}@${handle} ${input.slice(caret)}`;
     setInput(next);
@@ -1381,11 +1384,24 @@ export function ChatView({
                     {mentionMatches.map((c, i) => (
                       <PopoverItem
                         key={c.handle}
-                        label={<span className="font-medium">@{c.handle}</span>}
+                        label={
+                          c.disabledReason ? (
+                            <span>
+                              <span className="font-medium">@{c.handle}</span>
+                              <span className="ml-2 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
+                                {c.disabledReason}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="font-medium">@{c.handle}</span>
+                          )
+                        }
                         kind={c.kind}
                         active={i === mentionActive}
+                        disabled={Boolean(c.disabledReason)}
+                        title={c.disabledReason}
                         onHover={() => setMentionActive(i)}
-                        onSelect={() => acceptMention(c.handle)}
+                        onSelect={() => acceptMention(c)}
                       />
                     ))}
                   </Popover>
@@ -1505,7 +1521,7 @@ export function ChatView({
                         count: mentionMatches.length,
                         active: mentionActive,
                         setActive: setMentionActive,
-                        onAccept: (i) => acceptMention(mentionMatches[i].handle),
+                        onAccept: (i) => acceptMention(mentionMatches[i]),
                         onDismiss: () => setMention(null),
                       })
                     )

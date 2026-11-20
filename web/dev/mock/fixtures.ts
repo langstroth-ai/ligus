@@ -177,11 +177,36 @@ export const diffs = [
   { path: "tests/scheduler_cold.rs", kind: "untracked", patch: "@@ -0,0 +1,3 @@\n+#[test]\n+fn skips_cold_days() {}\n+\n", addedLines: 3, removedLines: 0 },
 ];
 
+const access = (o: Partial<{ access: string; memberTurnsPerDay: number | null; effectiveMemberTurnsPerDay: number | null; usdCentsPerDay: number | null; notifyOnUse: boolean; available: boolean; unavailableReason: string | null; canManageAccess: boolean }>) => ({
+  access: "owner",
+  memberTurnsPerDay: null,
+  effectiveMemberTurnsPerDay: 50,
+  usdCentsPerDay: null,
+  notifyOnUse: false,
+  available: true,
+  unavailableReason: null,
+  canManageAccess: false,
+  ...o,
+});
+
 export const agents = [
-  { id: "ag-scout", name: "scout", runtimeId: "rt-claude", role: "Explores options and reviews", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null },
-  { id: "ag-builder", name: "builder", runtimeId: "rt-codex", role: "Implements changes", ownerActorId: "a-maya", hostId: "h-box", avatarUrl: null, avatarColorHex: "#4a8c48" },
-  { id: "ag-ligus", name: "ligus", runtimeId: "rt-ollama", role: "Default assistant", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null },
+  { id: "ag-scout", name: "scout", runtimeId: "rt-claude", role: "Explores options and reviews", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null, ...access({ canManageAccess: true, notifyOnUse: true }) },
+  { id: "ag-builder", name: "builder", runtimeId: "rt-codex", role: "Implements changes", ownerActorId: "a-maya", hostId: "h-box", avatarUrl: null, avatarColorHex: "#4a8c48", ...access({ available: false, unavailableReason: "Only its owner can use this agent" }) },
+  { id: "ag-ligus", name: "ligus", runtimeId: "rt-ollama", role: "Default assistant", ownerActorId: "a-zaz", hostId: "", avatarUrl: null, avatarColorHex: null, ...access({ access: "everyone", canManageAccess: true, usdCentsPerDay: 500 }) },
 ];
+
+export const agentUsage = (agentId: string) => ({
+  agentId,
+  day: "2026-11-20",
+  today: [
+    { member: "a-zaz", memberName: "Zaz", turns: 6, uncostedTurns: 0, estimatedCostUsd: 0.42 },
+    { member: "a-maya", memberName: "Maya", turns: 3, uncostedTurns: 3, estimatedCostUsd: null },
+  ],
+  month: [
+    { member: "a-zaz", memberName: "Zaz", turns: 41, uncostedTurns: 2, estimatedCostUsd: 3.17 },
+    { member: "a-maya", memberName: "Maya", turns: 12, uncostedTurns: 12, estimatedCostUsd: null },
+  ],
+});
 
 export const members = [
   { id: "mem-zaz", actorId: "a-zaz", displayName: "Zaz", role: "owner", title: "Beekeeper", index: 1, isSelf: true, avatarUrl: null },
