@@ -354,6 +354,9 @@ export const presenceList = () => invoke<PresenceDto[]>("presence_list");
 /// Privacy). Only that you're typing, sealed under the workspace key; never what.
 export const getShareTyping = () => invoke<boolean>("get_share_typing");
 export const setShareTyping = (enabled: boolean) => invoke<void>("set_share_typing", { enabled });
+/// Whether other members may use this device's `@ligus` in shared chats.
+export const getPrimaryOpenToMembers = () => invoke<boolean>("get_primary_open_to_members");
+export const setPrimaryOpenToMembers = (enabled: boolean) => invoke<void>("set_primary_open_to_members", { enabled });
 
 export const setWorkspaceRoot = (path: string) =>
   invoke<void>("set_workspace_root", { path });

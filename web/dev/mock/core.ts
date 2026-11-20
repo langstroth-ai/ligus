@@ -62,6 +62,10 @@ function handle(cmd: string, args: Args): unknown {
       return true;
     case "set_share_typing":
       return null;
+    case "get_primary_open_to_members":
+      return false;
+    case "set_primary_open_to_members":
+      return null;
     case "list_proposals":
       return flags.empty ? [] : fx.proposals;
     case "list_proposal_sets":

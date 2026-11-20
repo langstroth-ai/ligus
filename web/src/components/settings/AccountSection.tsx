@@ -15,6 +15,8 @@ import {
   retryDeviceRevocation,
   getShareTyping,
   setShareTyping,
+  getPrimaryOpenToMembers,
+  setPrimaryOpenToMembers,
   type DeviceCodeDto,
   type DeviceRevocationDto,
   type RevocationStep,
@@ -47,6 +49,7 @@ export function AccountSection() {
 export function PrivacySection() {
   const qc = useQueryClient();
   const share = useQuery({ queryKey: ["share-typing"], queryFn: getShareTyping });
+  const primary = useQuery({ queryKey: ["primary-open"], queryFn: getPrimaryOpenToMembers });
   return (
     <Section title="Privacy">
       <Row
@@ -62,6 +65,22 @@ export function PrivacySection() {
             void setShareTyping(v)
               .catch((e) => toast.error(errMsg(e)))
               .finally(() => void qc.invalidateQueries({ queryKey: ["share-typing"] }));
+          }}
+        />
+      </Row>
+      <Row
+        label="Let members use @ligus on this device"
+        hint="In a chat with other people, @ligus runs on this device and your account. Off: it answers only you, and other members are told to use their own agents."
+      >
+        <Switch
+          on={primary.data ?? false}
+          disabled={primary.isLoading}
+          label="Let members use @ligus on this device"
+          onChange={(v) => {
+            qc.setQueryData(["primary-open"], v);
+            void setPrimaryOpenToMembers(v)
+              .catch((e) => toast.error(errMsg(e)))
+              .finally(() => void qc.invalidateQueries({ queryKey: ["primary-open"] }));
           }}
         />
       </Row>

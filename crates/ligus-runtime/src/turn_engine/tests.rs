@@ -750,3 +750,46 @@ async fn a_refused_agent_turn_never_calls_the_model() {
     let owner = w.host.inner.svc.lock().unwrap().author().id.clone();
     assert_eq!(usage.today.iter().map(|r| (r.member.clone(), r.turns)).collect::<Vec<_>>(), vec![(owner, 1)]);
 }
+
+/// The primary runtime (`@ligus`, no agent id) runs on this device's
+/// credentials: a teammate's request is answered with a note and the model
+/// is never called, unless this device's person opened it to members.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_teammates_primary_turn_never_calls_the_model() {
+    let (endpoint, model) = spawn_model(vec![text("Hi."), text("Hi.")]).await;
+    let mut w = world(Vec::new());
+    {
+        let mut svc = w.host.inner.svc.lock().unwrap();
+        let mut m = ligus_core::WorkspaceMember {
+            id: "mate".into(),
+            actor: ActorIdentity::new("mate", "Mate", ActorKind::Human),
+            role: ligus_core::WorkspaceRole::Admin,
+            title: String::new(),
+            index: 0,
+            joined_at: ligus_core::Timestamp::now(),
+        };
+        m.actor.account_id = None;
+        svc.add_member(w.chat, w.ws, m).unwrap();
+    }
+    let mut mate = ChatService::new(
+        EventStore::open(w._dir.path().join("ligus.db")).unwrap(),
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+        ActorIdentity::new("mate", "Mate", ActorKind::Human),
+    );
+    w.trigger = mate.post_user_message(w.chat, w.ws, "@ligus hello").unwrap().id;
+    let primary = |w: &World, open: bool| {
+        let mut i = input(w, runtime(&endpoint), false, Arc::new(Recording::default()));
+        i.responder = Responder { author: "Ligus".into(), effect_author: "Ligus".into(), runtime_id: "rt".into(), agent_id: None, runtime: runtime(&endpoint) };
+        i.options.primary_open_to_members = open;
+        i
+    };
+    let err = run(&w.host, primary(&w, false)).await.unwrap_err();
+    assert!(err.message.contains("only"), "{}", err.message);
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call");
+    // Opened: it runs.
+    let mate2 = mate.post_user_message(w.chat, w.ws, "@ligus hello again").unwrap().id;
+    w.trigger = mate2;
+    run(&w.host, primary(&w, true)).await.expect("opened to members");
+    assert_eq!(model.bodies.lock().unwrap().len(), 1);
+}

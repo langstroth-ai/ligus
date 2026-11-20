@@ -276,7 +276,7 @@ carries
 ```
 X-Ligus-Workspace: <32 hex>   = hex(HMAC-SHA256(k, "ligus-gateway-attribution-v1\0" || "w" || 0x00 || workspace_uuid_bytes)[..16])
 X-Ligus-Agent:     <32 hex>   = same with "a" and the agent id
-X-Ligus-Member:    <32 hex>   = same with "m" and the member id's UTF-8 bytes
+X-Ligus-Member:    <32 hex>   = same with "m" and workspace id bytes ‖ member id UTF-8
 ```
 
 `k` is the operator's attribution key file (`modelGatewayAttribution.secretName`,
@@ -292,10 +292,13 @@ member a turn runs for: the requester the turn engine's agent-access decision
 returned (the person nearest the trigger), set on the turn's gateway
 selection (`GatewaySelection::member_id`) by `turn_engine::run`, so the
 gateway's own budgets can count per member. It is a pseudonym under the same
-key and domain string, with kind byte `m` over the member id's UTF-8 bytes
-(member ids are strings, not always UUIDs); never a name or an email. A turn
-no person could be traced to (only possible on an agent open to everyone)
-omits it. It is inside the reserved `x-ligus-*` set the proxy strips from
+key and domain string, with kind byte `m` over the workspace id's 16 bytes
+followed by the member id's UTF-8 bytes (member ids are strings, not always
+UUIDs; an account id is the same in every workspace, so the workspace is
+mixed in and the same person's pseudonyms can't be linked across
+workspaces); never a name or an email. A turn no person could be traced to
+(only possible on an agent open to everyone), or with no workspace, omits
+it. It is inside the reserved `x-ligus-*` set the proxy strips from
 agents' own requests.
 
 ## 11. Threat model: endpoint redirection

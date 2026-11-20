@@ -132,6 +132,9 @@ pub struct ChatService {
     presence_draft: Option<PresenceDraft>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
+    /// Agent access refusal notes this device posted recently, and turns
+    /// it refused silently (device-local, `agent_access::note_refusal`).
+    pub(crate) refusals: crate::agent_access::RefusalMemory,
     /// While set, every append is an agent's effect (Track D): held to the
     /// Agent tier, and signed with the agent's own key when this host holds
     /// one (see [`ChatService::as_agent`]).
@@ -194,6 +197,7 @@ impl ChatService {
             capture_presence: false,
             presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
+            refusals: Default::default(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
             dispatch_seen: std::collections::HashMap::new(),
@@ -2954,6 +2958,38 @@ impl ChatService {
         Ok(self.trigger_chain(session_id, message_id, false)?.map(|c| c.people))
     }
 
+    /// The people behind the tool and directive hand-off cards that wake
+    /// `agent_id` on `trigger` (every host's queue runs a card's receiver
+    /// on the card's message, [`pending_turns`]): each card's signer, as
+    /// [`Self::trigger_people`] judges a relaying reply (none for a card
+    /// this device signed). A card is a request too: a member's card
+    /// pointing at someone else's message can't borrow that message's
+    /// author. `None` when a signer can't be resolved (fail closed).
+    pub fn handoff_card_people(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
+        let to = ligus_core::flow::agent_key(Some(agent_id));
+        let envs = self.store.list_copies(session_id)?;
+        let mut cx = RoleCx::default();
+        let mut out: Vec<String> = Vec::new();
+        for env in &envs {
+            let SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::Handoff(card) } = &env.payload else { continue };
+            if card.to != to || card.message_id != Some(trigger) || !(card.via == "tool" || card.via == "directive") {
+                continue;
+            }
+            match self.foreign_signer_cap(session_id, env, &mut cx)? {
+                Cap::Own => {}
+                Cap::Role(_, who) => {
+                    for w in who {
+                        if !out.contains(&w) {
+                            out.push(w);
+                        }
+                    }
+                }
+                Cap::Unresolved => return Ok(None),
+            }
+        }
+        Ok(Some(out))
+    }
+
     fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
         Ok(self.trigger_chain(session_id, message_id, shell)?.map(|c| c.lowest))
     }
@@ -2969,7 +3005,14 @@ impl ChatService {
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
+        // The people behind the chain: the humans whose messages (and
+        // workflow runs) it reaches first, then the signers it passes
+        // through (a relaying agent's person). The first is the requester,
+        // the person a turn is counted against: never a relaying agent's
+        // person, or a member over their cap could ask through someone
+        // else's agent and have the turn counted against them.
         let mut people: Vec<String> = Vec::new();
+        let mut signers: Vec<String> = Vec::new();
         let add = |people: &mut Vec<String>, id: &str| {
             if !id.is_empty() && !people.iter().any(|p| p == id) {
                 people.push(id.to_string());
@@ -3009,7 +3052,7 @@ impl ChatService {
                         Cap::Role(r, who) => {
                             lowest = Some(min_role(lowest, r));
                             for w in &who {
-                                add(&mut people, w);
+                                add(&mut signers, w);
                             }
                         }
                         Cap::Unresolved => return Ok(None),
@@ -3042,6 +3085,9 @@ impl ChatService {
                     None => return Ok(None),
                 }
             }
+        }
+        for w in &signers {
+            add(&mut people, w);
         }
         Ok(match lowest {
             Some(lowest) if humans > 0 && !people.is_empty() => Some(Chain { lowest, people }),

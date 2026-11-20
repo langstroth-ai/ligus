@@ -1097,13 +1097,15 @@ async fn agent_usage(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Valu
     let id = parse_id(&id, "agent")?;
     let (_, config) = hosts_and_agents(&s)?;
     let agent = config.workspace_agents.iter().find(|a| a.id == id).ok_or_else(|| ApiError::not_found("agent"))?;
-    let (links, me, view) = {
+    // The same rule as every other surface (`may_manage_agent`): its owner,
+    // or an Admin for a shared agent. Checked before anything is read.
+    let view = {
         let svc = s.lock();
-        (svc.device_links(s.ws).unwrap_or_default(), svc.author().id.clone(), svc.agent_usage_view(id)?)
+        if !svc.may_manage_agent(s.ws, agent) {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "only the agent's owner sees its usage"));
+        }
+        svc.agent_usage_view(id)?
     };
-    if agent.owner_actor_id.is_empty() || links.person(&agent.owner_actor_id) != links.person(&me) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "only the agent's owner sees its usage"));
-    }
     Ok(Json(json!({
         "agentId": id,
         "day": view.day,

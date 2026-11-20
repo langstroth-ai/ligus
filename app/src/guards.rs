@@ -1756,14 +1756,18 @@ pub(crate) fn agent_turn_throttled(
     agent_name: &str,
 ) -> Option<String> {
     let d = decide(state, provider, priority, agent_key);
-    let ligus_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d else { return None };
+    let ligus_core::throttle::ThrottleDecision::Defer { .. } = d else { return None };
     let key = format!("teammate:{agent_key}");
     note_deferral(state, workspace_id, key.clone(), format!("another member's turn on {agent_name}"), provider, priority, d);
     // Not retried on its own: recorded, then cleared.
     state.guards.deferred.lock().unwrap().remove(&key);
-    Some(format!(
-        "{agent_name} is paused for other members: its owner's plan window is at {utilization_pct}% (other members' requests pause at {threshold_pct}% to keep room for the owner's own). Ask again later."
-    ))
+    Some(teammate_pause_note(agent_name))
+}
+
+/// The note a teammate's paused turn is answered with. It never says how
+/// far into their plan window the owner is (device-local, private).
+pub(crate) fn teammate_pause_note(agent_name: &str) -> String {
+    format!("{agent_name} is paused for other members for now, to keep room for its owner's own work. Ask again later.")
 }
 
 /// Plan windows, thresholds and what's being held back.

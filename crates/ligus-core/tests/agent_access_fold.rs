@@ -129,14 +129,38 @@ fn a_chat_copy_cant_open_up_the_workspace_agent() {
     assert!(w.state(chat).workspace_agents.iter().all(|x| x.access.is_empty()));
 }
 
+/// Opening an agent to everyone spends its owner's credentials on other
+/// people's requests: under rules v2 it takes the owner's presence, like
+/// rebinding its host or runtime (a stolen device key alone can't open it).
+/// Narrowing it and changing its budgets or notice need none.
 #[test]
-fn changing_who_may_use_an_agent_needs_no_presence() {
+fn opening_an_agent_needs_presence_narrowing_doesnt() {
     let mut w = world();
     let mut a = agent(8, "scout", "mara");
     bare(&mut w, "mara", up(&a));
+    a.limits.member_turns_per_day = Some(3);
+    a.notify_on_use = true;
+    let id = w.write("mara", None, up(&a), None, Proof::None);
+    assert_eq!(w.verdict(id), Verdict::Allowed, "budgets and the notice: no presence");
     a.access = ACCESS_EVERYONE.into();
     let id = w.write("mara", None, up(&a), None, Proof::None);
-    assert_eq!(w.verdict(id), Verdict::Allowed);
+    assert_eq!(w.verdict(id), Verdict::Denied, "opening without presence");
+    let id = w.write("mara", None, up(&a), None, Proof::Recovery);
+    assert_eq!(w.verdict(id), Verdict::Allowed, "opening with presence");
+    a.access = ACCESS_OWNER.into();
+    let id = w.write("mara", None, up(&a), None, Proof::None);
+    assert_eq!(w.verdict(id), Verdict::Allowed, "narrowing: no presence");
+    // A new personal agent created open needs it too; a roster replace that
+    // opens one does.
+    let mut b = agent(9, "open", "mara");
+    b.runtime_id.clear();
+    b.access = ACCESS_EVERYONE.into();
+    let id = w.write("mara", None, up(&b), None, Proof::None);
+    assert_eq!(w.verdict(id), Verdict::Denied);
+    let mut opened = a.clone();
+    opened.access = ACCESS_EVERYONE.into();
+    let id = w.write("mara", None, SessionEvent::AgentRosterUpdated { agents: vec![opened] }, None, Proof::None);
+    assert_eq!(w.verdict(id), Verdict::Denied);
 }
 
 #[test]

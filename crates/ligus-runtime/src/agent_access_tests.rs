@@ -279,3 +279,165 @@ fn the_senders_deferred_fallback_refuses_someone_elses_agent() {
     // The owner's device, back online, finds it answered.
     assert!(crate::turn_dispatch::user_turn_answered(&fx.host.load(fx.chat).unwrap().unwrap(), ask));
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial review (PR #145): each test failed before its fix.
+// ---------------------------------------------------------------------------
+
+fn handoff_card(to: Uuid, message_id: Uuid, task: &str) -> ligus_core::flow::HandoffCard {
+    ligus_core::flow::HandoffCard {
+        id: Uuid::new_v4(),
+        from: ligus_core::flow::PRIMARY.into(),
+        to: ligus_core::flow::agent_key(Some(to)),
+        from_name: "relay".into(),
+        to_name: "scout".into(),
+        message_id: Some(message_id),
+        task: task.into(),
+        task_class: String::new(),
+        branch: String::new(),
+        files: Vec::new(),
+        quality: Default::default(),
+        via: "tool".into(),
+        parcel: None,
+        at_ms: ligus_core::flow::now_ms(),
+    }
+}
+
+/// A teammate records a tool hand-off card to the owner's agent pointing at
+/// the owner's own message: every host's queue then wakes the agent on it.
+/// The card's signer is a person behind that turn too.
+#[test]
+fn a_teammates_hand_off_card_cant_borrow_the_owners_message() {
+    let mut fx = fixture();
+    let own = fx.host.post_user_message(fx.chat, fx.wid, "what's the status?").unwrap().id;
+    let mut con_dev = svc_on(&fx.path, "con", "Con");
+    con_dev
+        .record_flow(fx.chat, fx.wid, ligus_core::flow::FlowRecord::Handoff(handoff_card(fx.scout.id, own, "delete the release branch")))
+        .unwrap();
+    let s = fx.host.load(fx.chat).unwrap().unwrap();
+    assert!(
+        crate::pending_turns(&s).iter().any(|p| p.message_id == own && p.agent_id == fx.scout.id),
+        "precondition: the card queues scout on the owner's message"
+    );
+    assert_eq!(fx.host.agent_turn_access(fx.chat, own, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    // The owner's own card (signed by the owner's device) is fine.
+    let mine = fx.host.post_user_message(fx.chat, fx.wid, "hand it on").unwrap().id;
+    fx.host.record_flow(fx.chat, fx.wid, ligus_core::flow::FlowRecord::Handoff(handoff_card(fx.scout.id, mine, "go"))).unwrap();
+    assert!(fx.host.agent_turn_access(fx.chat, mine, fx.scout.id).unwrap().allowed());
+}
+
+/// A member past their daily cap asks through another member's agent: the
+/// relaying agent's person is nearest the trigger, but the turn is still the
+/// asker's, and every non-owner person behind it must be under the cap.
+#[test]
+fn a_member_over_the_cap_cant_launder_turns_through_someone_elses_agent() {
+    let mut fx = fixture();
+    fx.scout.limits = AgentLimits { member_turns_per_day: Some(1), usd_cents_per_day: None };
+    open(&mut fx);
+    let mut relay = WorkspaceAgent::new("relay", "rt");
+    relay.owner_actor_id = "adm".into();
+    fx.host.add_agent(fx.chat, fx.wid, relay.clone()).unwrap();
+    let mut adm_dev = svc_on(&fx.path, "adm", "Adm");
+    fx.host.record_agent_turn(fx.wid, fx.scout.id, "con").unwrap();
+    let ask = post(&fx, "con", "@relay ask scout");
+    let cascade = agent_reply(&mut adm_dev, (fx.chat, fx.wid), &relay, ask, "@scout do it");
+    let limit = "scout reached today's limit of 1 turn per member (resets at 00:00 UTC).";
+    assert_eq!(fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap(), AccessDecision::Refuse(limit.into()));
+    // Under the cap, the turn is counted against the person who asked.
+    fx.scout.limits.member_turns_per_day = Some(5);
+    fx.host.add_agent(fx.chat, fx.wid, fx.scout.clone()).unwrap();
+    match fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap() {
+        AccessDecision::Allow(u) => assert_eq!(u.requester, "con"),
+        r => panic!("{r:?}"),
+    }
+}
+
+/// A member spamming mentions of an agent they can't use gets one note per
+/// agent per few minutes; later refusals are silent (and still refused).
+#[test]
+fn refusal_notes_are_rate_limited_per_member_per_agent() {
+    let mut fx = fixture();
+    let asks: Vec<Uuid> = (0..5).map(|i| post(&fx, "con", &format!("@scout {i}"))).collect();
+    for a in &asks {
+        assert_eq!(fx.host.gate_agent_turn(fx.chat, fx.wid, *a, fx.scout.id).unwrap(), Err(ONLY_OWNER.to_string()));
+    }
+    let s = fx.host.load(fx.chat).unwrap().unwrap();
+    let notes = s.messages.iter().filter(|m| m.responder_id == Some(fx.scout.id)).count();
+    assert_eq!(notes, 1, "one note, the rest silent");
+    // Another member gets their own note.
+    let adm = post(&fx, "adm", "@scout hi");
+    assert!(fx.host.gate_agent_turn(fx.chat, fx.wid, adm, fx.scout.id).unwrap().is_err());
+    let s = fx.host.load(fx.chat).unwrap().unwrap();
+    assert_eq!(s.messages.iter().filter(|m| m.responder_id == Some(fx.scout.id)).count(), 2);
+}
+
+/// Gating and counting are one step: two turns admitted back to back can't
+/// both pass a cap of one.
+#[test]
+fn admitting_a_turn_counts_it_in_the_same_step() {
+    let mut fx = fixture();
+    fx.scout.limits = AgentLimits { member_turns_per_day: Some(1), usd_cents_per_day: None };
+    open(&mut fx);
+    let a = post(&fx, "con", "@scout one");
+    let b = post(&fx, "con", "@scout two");
+    assert!(fx.host.admit_agent_turn(fx.chat, fx.wid, a, fx.scout.id).unwrap().is_ok());
+    assert!(fx.host.admit_agent_turn(fx.chat, fx.wid, b, fx.scout.id).unwrap().is_err());
+}
+
+/// An agent whose owner id is a stale identity of this device's own person
+/// (a reset, an import) in a workspace where they are the only person: the
+/// device answers it, like dispatch's solo rule. A real other person isn't.
+#[test]
+fn a_stale_owner_id_doesnt_lock_out_the_only_person() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("l.db");
+    let mut me = svc_on(&path, "me", "Me");
+    let wid = Uuid::new_v4();
+    let c = me.create_chat("solo", wid, "rt").unwrap().id;
+    let mut a = WorkspaceAgent::new("scout", "rt");
+    a.owner_actor_id = "stale-self".into();
+    me.add_agent(c, wid, a.clone()).unwrap();
+    let m = me.post_user_message(c, wid, "@scout go").unwrap().id;
+    assert!(me.agent_turn_access(c, m, a.id).unwrap().allowed(), "the only person runs it");
+    // With a second person in the room the owner id means someone else.
+    me.add_member(c, wid, member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+    let theirs = svc_on(&path, "con", "Con").post_user_message(c, wid, "@scout go").unwrap().id;
+    assert!(!me.agent_turn_access(c, theirs, a.id).unwrap().allowed());
+}
+
+/// `@ligus` (the chat's primary runtime) runs on its device's credentials:
+/// in a shared room only that device's person may use it, unless they open
+/// it; alone, or in the device-local workspace, it always answers.
+#[test]
+fn the_primary_is_its_devices_person_unless_opened() {
+    let mut fx = fixture();
+    let con = post(&fx, "con", "@ligus summarize");
+    let own = fx.host.post_user_message(fx.chat, fx.wid, "@ligus summarize").unwrap().id;
+    assert!(!fx.host.primary_turn_access(fx.chat, con, false).unwrap().allowed());
+    assert!(fx.host.primary_turn_access(fx.chat, own, false).unwrap().allowed());
+    assert!(fx.host.primary_turn_access(fx.chat, con, true).unwrap().allowed(), "opened");
+    // Refused with a note in Ligus's name, once.
+    assert!(fx.host.gate_primary_turn(fx.chat, fx.wid, con, false).unwrap().is_err());
+    let s = fx.host.load(fx.chat).unwrap().unwrap();
+    let notes: Vec<_> = s.messages.iter().filter(|m| m.reply_to_message_id == Some(con)).collect();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].responder_id.is_none() && notes[0].role == MessageRole::Assistant);
+    assert!(crate::turn_dispatch::user_turn_answered(&s, con));
+}
+
+/// A silently refused turn stays refused on this device without being
+/// judged again (a host's queue asks every tick).
+#[test]
+fn a_silent_refusal_is_remembered() {
+    let mut fx = fixture();
+    let first = post(&fx, "con", "@scout one");
+    let second = post(&fx, "con", "@scout two");
+    assert!(fx.host.gate_agent_turn(fx.chat, fx.wid, first, fx.scout.id).unwrap().is_err());
+    assert_eq!(fx.host.gate_agent_turn(fx.chat, fx.wid, second, fx.scout.id).unwrap(), Err(ONLY_OWNER.to_string()));
+    // Opened meanwhile: the remembered refusal still stands for that turn
+    // (ask again), while a new one runs.
+    open(&mut fx);
+    assert!(fx.host.gate_agent_turn(fx.chat, fx.wid, second, fx.scout.id).unwrap().is_err());
+    let third = post(&fx, "con", "@scout three");
+    assert!(fx.host.gate_agent_turn(fx.chat, fx.wid, third, fx.scout.id).unwrap().is_ok());
+}

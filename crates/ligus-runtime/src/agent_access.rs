@@ -80,6 +80,58 @@ impl Today {
     }
 }
 
+/// How long after a refusal note to one member about one agent further
+/// refusals of theirs are silent (a member mentioning an agent they can't
+/// use in a loop would otherwise make its host write a note per message).
+pub const REFUSAL_NOTE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The device-local memory behind refusal notes: when each (member, agent)
+/// was last told, and the turns refused silently since (so a host's queue
+/// doesn't judge them again every tick). Never synced.
+#[derive(Debug, Default)]
+pub struct RefusalMemory {
+    told: std::collections::HashMap<(String, String), std::time::Instant>,
+    silent: std::collections::HashMap<(Uuid, String), String>,
+}
+
+impl RefusalMemory {
+    const CAP: usize = 8192;
+
+    /// Whether to post a note to `member` about `agent` now (and remember
+    /// that it was).
+    fn tell(&mut self, member: &str, agent: &str, now: std::time::Instant) -> bool {
+        if self.told.len() >= Self::CAP {
+            self.told.retain(|_, at| now.duration_since(*at) < REFUSAL_NOTE_WINDOW);
+        }
+        let key = (member.to_string(), agent.to_string());
+        match self.told.get(&key) {
+            Some(at) if now.duration_since(*at) < REFUSAL_NOTE_WINDOW => false,
+            _ => {
+                self.told.insert(key, now);
+                true
+            }
+        }
+    }
+
+    fn hush(&mut self, trigger: Uuid, agent: &str, note: &str) {
+        if self.silent.len() >= Self::CAP {
+            self.silent.clear();
+        }
+        self.silent.insert((trigger, agent.to_string()), note.to_string());
+    }
+
+    /// The note a turn was silently refused with, if it was.
+    fn hushed(&self, trigger: Uuid, agent: &str) -> Option<&String> {
+        self.silent.get(&(trigger, agent.to_string()))
+    }
+}
+
+/// The note for a teammate's `@ligus` (the chat's primary runtime) on a
+/// device whose person hasn't opened it to members. Names no one and no
+/// setting of theirs.
+pub const PRIMARY_NOT_AVAILABLE: &str =
+    "Ligus in this chat runs on another member's device and account, and only answers them. Mention one of your own agents instead, or ask them to let members use it.";
+
 /// The note for a person the agent isn't open to.
 pub fn not_available_note(agent: &WorkspaceAgent) -> String {
     if agent.owner_actor_id.is_empty() {
@@ -115,7 +167,11 @@ pub fn decide(
     let owner_turn = personal && requester == owner;
     if !owner_turn {
         if let Some(cap) = agent.limits.member_turn_cap(personal) {
-            if today.turns_of(&requester) >= u64::from(cap) {
+            // Every person behind the turn other than the owner must be under
+            // the cap (the requester first): a member past theirs can't ask
+            // through another member's agent.
+            let over = |who: &String| !(personal && who == owner) && today.turns_of(who) >= u64::from(cap);
+            if over(&requester) || people.is_some_and(|p| p.iter().any(over)) {
                 return AccessDecision::Refuse(format!(
                     "{} reached today's limit of {cap} turn{} per member (resets at 00:00 UTC).",
                     agent.name,
@@ -159,6 +215,22 @@ pub fn person_role(roster: Option<&ligus_core::authz::RosterState>, links: &Devi
     roster?.members.iter().filter(|(id, _)| links.person(id) == person).map(|(_, m)| m.role).max_by_key(|r| r.rank())
 }
 
+/// The name the primary runtime's replies (and refusal notes) carry.
+pub const PRIMARY_NAME: &str = "Ligus";
+
+/// The message a turn answering `trigger` is judged by: a turn answering a
+/// System row (a note trailing the message, as the "last message" rule
+/// picks it) answers the message before it, since a note isn't anyone
+/// speaking.
+fn judged_trigger(session: &ligus_core::ChatSession, trigger: Uuid) -> Uuid {
+    match session.messages.iter().position(|m| m.id == trigger) {
+        Some(at) if session.messages[at].role == ligus_core::MessageRole::System => {
+            session.messages[..at].iter().rev().find(|m| m.role != ligus_core::MessageRole::System).map_or(trigger, |m| m.id)
+        }
+        _ => trigger,
+    }
+}
+
 /// `"owner"` or `"everyone"`: who may use `agent` as enforced.
 pub fn access_label(agent: &WorkspaceAgent) -> &'static str {
     match agent.effective_access() {
@@ -181,27 +253,61 @@ impl ChatService {
     /// device-local workspace (one person, never synced) every turn is the
     /// owner's.
     pub fn agent_turn_access(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<AccessDecision> {
+        Ok(self.agent_turn_access_for(session_id, trigger, agent_id)?.0)
+    }
+
+    /// [`Self::agent_turn_access`] and the person the turn is for (the
+    /// requester, for a refusal note's rate limit; empty when untraced).
+    fn agent_turn_access_for(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<(AccessDecision, String)> {
         let Some(session) = self.load(session_id)? else {
-            return Ok(AccessDecision::Refuse("the chat is gone".into()));
+            return Ok((AccessDecision::Refuse("the chat is gone".into()), String::new()));
         };
         let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else {
-            return Ok(AccessDecision::Refuse("the agent is no longer in this workspace".into()));
+            return Ok((AccessDecision::Refuse("the agent is no longer in this workspace".into()), String::new()));
         };
         if self.is_local_workspace(session.workspace_id) {
-            return Ok(AccessDecision::Allow(AgentUse { requester: self.author().id.clone(), teammate: false, notify: false }));
+            let me = self.author().id.clone();
+            return Ok((AccessDecision::Allow(AgentUse { requester: me.clone(), teammate: false, notify: false }), me));
         }
-        // A turn answering a System row (a note trailing the message, as the
-        // "last message" rule picks it) answers the message before it: a
-        // note isn't anyone speaking.
-        let trigger = match session.messages.iter().position(|m| m.id == trigger) {
-            Some(at) if session.messages[at].role == ligus_core::MessageRole::System => {
-                session.messages[..at].iter().rev().find(|m| m.role != ligus_core::MessageRole::System).map_or(trigger, |m| m.id)
-            }
-            _ => trigger,
-        };
+        let trigger = judged_trigger(&session, trigger);
         let links = self.device_links(session.workspace_id).unwrap_or_default();
         let roster = self.workspace_roster(session.workspace_id).ok();
-        let people: Option<Vec<String>> = self.trigger_people(session_id, trigger)?.map(|p| {
+        let mut people = self.people_behind(session_id, trigger, &links)?;
+        // A tool or directive hand-off card waking this agent on `trigger`
+        // is a request by whoever signed it.
+        match self.handoff_card_people(session_id, trigger, agent_id)? {
+            Some(cards) => {
+                if let Some(p) = people.as_mut() {
+                    for who in cards {
+                        let person = links.person(&who).to_string();
+                        if !p.contains(&person) {
+                            p.push(person);
+                        }
+                    }
+                }
+            }
+            None => people = None,
+        }
+        let requester = people.as_ref().and_then(|p| p.first().cloned()).unwrap_or_default();
+        // The only person in the room asking on their own device: an owner
+        // id that isn't theirs is a stale identity of their own (a reset,
+        // an import), as dispatch's solo rule already assumes. Nobody else
+        // is there to protect.
+        let me = links.person(&self.author().id).to_string();
+        if crate::turn_dispatch::human_member_count(&session, &links) <= 1 && people.as_ref().is_some_and(|p| !p.is_empty() && p.iter().all(|x| *x == me)) {
+            return Ok((AccessDecision::Allow(AgentUse { requester: me, teammate: false, notify: false }), requester));
+        }
+        let role_of = |who: &str| person_role(roster.as_ref(), &links, who);
+        let day = utc_day(time::OffsetDateTime::now_utc());
+        let today = Today { rows: self.store().agent_usage(agent_id, &day, &day)? };
+        let owner = links.person(&agent.owner_actor_id).to_string();
+        Ok((decide(agent, &owner, people.as_deref(), &role_of, &today), requester))
+    }
+
+    /// The people behind `trigger`, mapped through `links`, deduplicated,
+    /// nearest (the requester) first.
+    fn people_behind(&self, session_id: Uuid, trigger: Uuid, links: &DeviceLinks) -> Result<Option<Vec<String>>> {
+        Ok(self.trigger_people(session_id, trigger)?.map(|p| {
             let mut out: Vec<String> = Vec::new();
             for who in p {
                 let person = links.person(&who).to_string();
@@ -210,47 +316,164 @@ impl ChatService {
                 }
             }
             out
-        });
-        let role_of = |who: &str| person_role(roster.as_ref(), &links, who);
-        let day = utc_day(time::OffsetDateTime::now_utc());
-        let today = Today { rows: self.store().agent_usage(agent_id, &day, &day)? };
+        }))
+    }
+
+    /// Whether the person behind `trigger` may use `agent_id` at all (who,
+    /// not budgets): what the router asks before offering an agent an
+    /// un-addressed message.
+    pub fn agent_usable_for(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> bool {
+        let Ok(Some(session)) = self.load(session_id) else { return false };
+        let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else { return false };
+        if self.is_local_workspace(session.workspace_id) {
+            return true;
+        }
+        let links = self.device_links(session.workspace_id).unwrap_or_default();
+        let roster = self.workspace_roster(session.workspace_id).ok();
+        let Ok(people) = self.people_behind(session_id, trigger, &links) else { return false };
+        let me = links.person(&self.author().id).to_string();
+        if crate::turn_dispatch::human_member_count(&session, &links) <= 1 && people.as_ref().is_some_and(|p| !p.is_empty() && p.iter().all(|x| *x == me)) {
+            return true;
+        }
         let owner = links.person(&agent.owner_actor_id).to_string();
-        Ok(decide(agent, &owner, people.as_deref(), &role_of, &today))
+        let access = effective_access(&agent.access, &agent.owner_actor_id);
+        match people {
+            Some(p) if !p.is_empty() => p.iter().all(|who| usable_by(access, &owner, who, person_role(roster.as_ref(), &links, who))),
+            _ => access == Access::Everyone,
+        }
+    }
+
+    /// Whether this device may run the chat's **primary** runtime (`@ligus`,
+    /// no agent) answering `trigger`. It runs on this device's own
+    /// credentials, so in a shared room only this device's person may use it
+    /// unless they opened it to members (`open`, a device-local setting).
+    /// Alone in the room, or in the device-local workspace, it always
+    /// answers.
+    pub fn primary_turn_access(&self, session_id: Uuid, trigger: Uuid, open: bool) -> Result<AccessDecision> {
+        Ok(self.primary_turn_access_for(session_id, trigger, open)?.0)
+    }
+
+    fn primary_turn_access_for(&self, session_id: Uuid, trigger: Uuid, open: bool) -> Result<(AccessDecision, String)> {
+        let Some(session) = self.load(session_id)? else {
+            return Ok((AccessDecision::Refuse("the chat is gone".into()), String::new()));
+        };
+        let links = self.device_links(session.workspace_id).unwrap_or_default();
+        let me = links.person(&self.author().id).to_string();
+        if self.is_local_workspace(session.workspace_id) || crate::turn_dispatch::human_member_count(&session, &links) <= 1 {
+            return Ok((AccessDecision::Allow(AgentUse { requester: me.clone(), teammate: false, notify: false }), me));
+        }
+        let trigger = judged_trigger(&session, trigger);
+        let people = self.people_behind(session_id, trigger, &links)?;
+        let requester = people.as_ref().and_then(|p| p.first().cloned()).unwrap_or_default();
+        Ok(match people {
+            Some(p) if !p.is_empty() && p.iter().all(|x| *x == me) => (AccessDecision::Allow(AgentUse { requester: me, teammate: false, notify: false }), requester),
+            _ if open => (AccessDecision::Allow(AgentUse { requester: requester.clone(), teammate: true, notify: false }), requester),
+            _ => (AccessDecision::Refuse(PRIMARY_NOT_AVAILABLE.into()), requester),
+        })
     }
 
     /// Answer a refused turn with `note`, in the agent's name, unless it is
     /// answered already (another device refused it first). No model runs.
-    /// Returns whether a note was posted.
+    /// Returns whether a note was posted. Not rate limited: see
+    /// [`Self::note_refusal`].
     pub fn refuse_agent_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: &WorkspaceAgent, note: &str) -> Result<bool> {
-        let answered = self.load(session_id)?.is_some_and(|s| {
-            let Some(at) = s.messages.iter().position(|m| m.id == trigger) else { return true };
+        self.refuse_turn(session_id, workspace_id, trigger, Some(agent), note)
+    }
+
+    /// [`Self::refuse_agent_turn`] for an agent, or for the primary
+    /// (`None`: the note is in Ligus's name, with no responder).
+    fn refuse_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<&WorkspaceAgent>, note: &str) -> Result<bool> {
+        let Some(s) = self.load(session_id)? else { return Ok(false) };
+        let (name, runtime) = match agent {
+            Some(a) => (a.name.clone(), a.runtime_id.clone()),
+            None => (PRIMARY_NAME.to_string(), s.runtime_id.clone()),
+        };
+        let answered = {
+            let Some(at) = s.messages.iter().position(|m| m.id == trigger) else { return Ok(false) };
             s.messages[at + 1..].iter().any(|m| {
                 matches!(m.role, ligus_core::MessageRole::Assistant | ligus_core::MessageRole::Agent)
                     && !m.superseded
                     && m.reply_to_message_id == Some(trigger)
-                    && (m.responder_id == Some(agent.id) || m.author == agent.name)
+                    && match agent {
+                        Some(a) => m.responder_id == Some(a.id) || m.author == a.name,
+                        None => m.responder_id.is_none(),
+                    }
             })
-        });
+        };
         if answered {
             return Ok(false);
         }
-        let mid = self.begin_assistant_message(session_id, workspace_id, agent.name.clone(), agent.runtime_id.clone(), Some(agent.id), Some(trigger))?;
+        let mid = self.begin_assistant_message(session_id, workspace_id, name, runtime, agent.map(|a| a.id), Some(trigger))?;
         self.complete_assistant_message(session_id, workspace_id, mid, note.to_string())?;
         Ok(true)
     }
 
-    /// Check `agent_id`'s turn and, when refused, answer it with the note.
-    /// `Ok(None)` = run it (with who it's counted against); `Ok(Some(note))`
-    /// = refused (and answered).
+    /// Answer a refused turn with `note` (as [`Self::refuse_agent_turn`]),
+    /// at most once per [`REFUSAL_NOTE_WINDOW`] for `requester` and the
+    /// agent (`None`: the primary); otherwise silently, and the turn is
+    /// remembered as refused so this device doesn't judge it again. Returns
+    /// whether a note was posted.
+    pub fn note_refusal(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<&WorkspaceAgent>, requester: &str, note: &str) -> Result<bool> {
+        let key = ligus_core::flow::agent_key(agent.map(|a| a.id));
+        if self.refusals.hushed(trigger, &key).is_some() {
+            return Ok(false);
+        }
+        if !self.refusals.tell(requester, &key, std::time::Instant::now()) {
+            self.refusals.hush(trigger, &key, note);
+            return Ok(false);
+        }
+        self.refuse_turn(session_id, workspace_id, trigger, agent, note)
+    }
+
+    /// Check `agent_id`'s turn and, when refused, answer it with the note
+    /// (rate limited, [`Self::note_refusal`]). `Ok(Ok(use))` = run it (with
+    /// who it's counted against); `Ok(Err(note))` = refused.
     pub fn gate_agent_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<std::result::Result<AgentUse, String>> {
-        match self.agent_turn_access(session_id, trigger, agent_id)? {
+        // Refused silently already: not judged again (a host's queue asks
+        // every tick).
+        if let Some(note) = self.refusals.hushed(trigger, &ligus_core::flow::agent_key(Some(agent_id))) {
+            return Ok(Err(note.clone()));
+        }
+        let (decision, requester) = self.agent_turn_access_for(session_id, trigger, agent_id)?;
+        match decision {
             AccessDecision::Allow(u) => Ok(Ok(u)),
             AccessDecision::Refuse(note) => {
                 let agent = self.load(session_id)?.and_then(|s| s.workspace_agents.into_iter().find(|a| a.id == agent_id));
                 if let Some(agent) = agent {
-                    if self.refuse_agent_turn(session_id, workspace_id, trigger, &agent, &note)? {
+                    if self.note_refusal(session_id, workspace_id, trigger, Some(&agent), &requester, &note)? {
                         tracing::info!(target: "dispatch", agent = %agent.name, "agent turn refused: {note}");
                     }
+                }
+                Ok(Err(note))
+            }
+        }
+    }
+
+    /// [`Self::gate_agent_turn`] and, when allowed, the turn counted in the
+    /// same step (so two turns admitted back to back can't both pass a cap
+    /// of one). Returns the use and the UTC day it was counted on.
+    pub fn admit_agent_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<std::result::Result<(AgentUse, String), String>> {
+        match self.gate_agent_turn(session_id, workspace_id, trigger, agent_id)? {
+            Ok(u) => {
+                let day = self.record_agent_turn(workspace_id, agent_id, &u.requester)?;
+                Ok(Ok((u, day)))
+            }
+            Err(note) => Ok(Err(note)),
+        }
+    }
+
+    /// [`Self::primary_turn_access`] and, when refused, the note in Ligus's
+    /// name (rate limited).
+    pub fn gate_primary_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, open: bool) -> Result<std::result::Result<AgentUse, String>> {
+        if let Some(note) = self.refusals.hushed(trigger, ligus_core::flow::PRIMARY) {
+            return Ok(Err(note.clone()));
+        }
+        let (decision, requester) = self.primary_turn_access_for(session_id, trigger, open)?;
+        match decision {
+            AccessDecision::Allow(u) => Ok(Ok(u)),
+            AccessDecision::Refuse(note) => {
+                if self.note_refusal(session_id, workspace_id, trigger, None, &requester, &note)? {
+                    tracing::info!(target: "dispatch", "primary turn refused: {note}");
                 }
                 Ok(Err(note))
             }

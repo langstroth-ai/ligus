@@ -157,14 +157,19 @@ value, and every device's fold refuses a change to it, or to the agent's
 budgets, by anyone but the owner (an Admin on a shared agent): an Admin's
 rename that keeps the settings stands, one that opens the agent up is
 dropped. A value a device doesn't know is read as "Only me", so an older
-device never opens an agent up.
+device never opens an agent up. In a workspace on rules v2, **opening** an
+agent to everyone (or creating one already open) needs its owner's passkey
+confirmation, like rebinding its host or runtime; narrowing it, and changing
+its budgets or notice, don't.
 
 A turn runs only if **every person behind it** may use the agent: the
 message's author, every person an agent-to-agent chain reaches (an
 `@mention` cascade or a hand-off: the person who started it), and a workflow
-stage's run initiator. Asking your own agent to ask someone else's doesn't
+stage's run initiator, and whoever signed a hand-off card that wakes the
+agent on that message. Asking your own agent to ask someone else's doesn't
 get around it. A chain no person can be traced back to runs only on an agent
-open to everyone.
+open to everyone. The router never offers an un-addressed message to an
+agent its author can't use.
 
 The `@mention` autocomplete greys out an agent you can't use and says why;
 the phone gets the same as `available` and `unavailableReason` on
@@ -176,7 +181,11 @@ The device that would run the agent answers the message with one short
 reply in the agent's name that no model wrote, for example *"scout is only
 available to its owner."* Nothing is claimed, no model is called, nothing is
 counted. Because the reply answers the message, no other device picks the
-turn up afterwards.
+turn up afterwards. A member gets at most one such note per agent every five
+minutes; further refusals in that window are silent (the turn is still
+refused, and the device doesn't judge it again). A note says only what the
+agent's signed settings already say: never its prompt, its runtime, or how
+far into its plan window its owner is.
 
 ### The offline fallback
 
@@ -193,7 +202,7 @@ An owner can also cap use per day (UTC days, resetting at 00:00 UTC):
 
 | Budget | Default | Notes |
 |---|---|---|
-| Turns per member per day | 50 on a personal agent; no limit on a shared one | `0` means no limit. The owner's own turns are never limited. |
+| Turns per member per day | 50 on a personal agent; no limit on a shared one | `0` means no limit. The owner's own turns are never limited. A turn is counted against the person who asked (the author of the message the chain starts from), and every other person behind it must be under the cap too: asking through someone else's agent doesn't reset yours. |
 | Estimated spend per day (USD) | none | Counts everyone's turns, the owner's included; once reached, other members' turns are refused and the owner's still run. |
 
 Spend is estimated from the token usage the runtime reports, priced by the
@@ -201,7 +210,9 @@ same table as the per-turn [spend budget](../addons/ligus-mcp.md#spend)
 (`LIGUS_MODEL_PRICES` adds or overrides prices). A runtime that reports no
 usage (most subscription CLIs, local models) can't be counted in dollars,
 only in turns. The cap is checked before a turn starts, so the turn that
-crosses it finishes.
+crosses it finishes (and turns already running when it is crossed). A turn
+is counted when it is admitted, in the same step as the check, so two turns
+can't both pass a cap of one; a turn that then fails still counts.
 
 Usage is counted in the database of **the device or worker that runs the
 agent**, never synced: an agent its owner runs on two devices is counted on
@@ -228,6 +239,19 @@ as **background work** on your runtime: it is the first to pause as the
 window fills (from about 70%), with a short note in the chat, leaving the
 headroom for you. The desktop app applies this (it is where plan windows are
 tracked); a worker has no plan-window throttle.
+
+### `@ligus`, the chat's primary runtime {#primary}
+
+`@ligus` isn't a workspace agent: it runs on the device of the person who
+created the chat, on **their** credentials. So it follows the same rule as a
+personal agent. In a chat with other people it answers only that device's
+person; another member's `@ligus` gets a short note instead (*"Ligus in this
+chat runs on another member's device and account, and only answers them.
+..."*). Its person can open it in **Settings → Account → Privacy → Let
+members use @ligus on this device** (a device setting, not synced). Alone in
+a workspace, and in your own local workspace, it always answers. The same
+applies to a workflow stage run by `@ligus`, and to `ligus agent`, which
+answers only its operator unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`.
 
 ## Reviewing agent changes
 

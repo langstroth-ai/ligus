@@ -297,8 +297,10 @@ X-Ligus-Member:    <32 hex characters>
 Each is a keyed hash (HMAC-SHA256, truncated to 16 bytes) of the workspace
 id, agent id or member id under the attribution key:
 `hex(HMAC-SHA256(key, "ligus-gateway-attribution-v1\0" ‖ kind ‖ 0x00 ‖ id)[..16])`,
-with kind `w` or `a` over the id's 16 bytes, and `m` over the member id's
-UTF-8 bytes. `X-Ligus-Member` names the **requesting member**: the person
+with kind `w` or `a` over the id's 16 bytes, and `m` over the workspace
+id's 16 bytes followed by the member id's UTF-8 bytes (so one person's
+pseudonym differs per workspace and can't link their turns across
+workspaces). `X-Ligus-Member` names the **requesting member**: the person
 nearest the turn's trigger, as agent access decided it (see
 [Who can use an agent](../../ligus/concepts/agents.md#who-can-use-an-agent)),
 so the gateway's own budgets can count per member; it is left out when no

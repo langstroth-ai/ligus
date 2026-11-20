@@ -514,9 +514,13 @@ impl Attribution {
         Self { workspace: workspace.map(|w| pseudonym(key, b"w", w)), agent: agent.map(|a| pseudonym(key, b"a", a)), member: None }
     }
 
-    /// With the requesting member's keyed hash (`member`: its member id).
-    pub fn with_member(mut self, key: &[u8], member: Option<&str>) -> Self {
-        self.member = member.filter(|m| !m.is_empty()).map(|m| pseudonym_bytes(key, b"m", m.as_bytes()));
+    /// With the requesting member's keyed hash (`member`: its member id),
+    /// scoped to `workspace` ([`member_pseudonym`]); none without one.
+    pub fn with_member(mut self, key: &[u8], workspace: Option<Uuid>, member: Option<&str>) -> Self {
+        self.member = match (workspace, member.filter(|m| !m.is_empty())) {
+            (Some(w), Some(m)) => Some(member_pseudonym(key, w, m)),
+            _ => None,
+        };
         self
     }
     pub fn headers(&self) -> Vec<(&'static str, String)> {
@@ -537,6 +541,17 @@ impl Attribution {
 /// `hex(HMAC-SHA256(key, ATTRIBUTION_CONTEXT || kind || 0 || id)[..16])`.
 pub fn pseudonym(key: &[u8], kind: &[u8], id: Uuid) -> String {
     pseudonym_bytes(key, kind, id.as_bytes())
+}
+
+/// The `x-ligus-member` pseudonym: [`pseudonym_bytes`] with kind `m` over
+/// the workspace id's 16 bytes then the member id's UTF-8 bytes. A member
+/// id is an account id, the same in every workspace, so the pseudonym is
+/// scoped to the workspace: the same person's turns in two workspaces don't
+/// share one at the gateway.
+pub fn member_pseudonym(key: &[u8], workspace: Uuid, member: &str) -> String {
+    let mut id = workspace.as_bytes().to_vec();
+    id.extend_from_slice(member.as_bytes());
+    pseudonym_bytes(key, b"m", &id)
 }
 
 /// [`pseudonym`] over arbitrary id bytes (a member id is a string): kind
@@ -658,7 +673,7 @@ impl ModelGateways {
 
     fn attribution_for(&self, g: &Gateway, sel: &GatewaySelection) -> Option<Attribution> {
         let key = self.attribution_key.as_ref().filter(|_| g.attribution())?;
-        Some(Attribution::new(key, sel.workspace_id, sel.agent_id).with_member(key, sel.member_id.as_deref()))
+        Some(Attribution::new(key, sel.workspace_id, sel.agent_id).with_member(key, sel.workspace_id, sel.member_id.as_deref()))
     }
 
     /// The gateway a turn uses.

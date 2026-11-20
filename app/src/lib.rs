@@ -328,6 +328,11 @@ struct LiveSettings {
     /// this device publishes "not typing" only.
     #[serde(default = "default_true")]
     share_typing: bool,
+    /// Let other members use this device's primary runtime (`@ligus`) in
+    /// shared chats, on this device's credentials (agent access controls).
+    /// Off: in a room with other people it answers only you.
+    #[serde(default)]
+    primary_open_to_members: bool,
     /// Vault retrieval (Settings → Models). Empty embeddings URL/model = off:
     /// vaults are pasted into the system prompt as before.
     #[serde(default)]
@@ -609,6 +614,7 @@ impl Default for LiveSettings {
             builtin_write_in_place: false,
             builtin_run_command: false,
             share_typing: true,
+            primary_open_to_members: false,
             retrieval_embed_url: String::new(),
             retrieval_embed_model: String::new(),
             retrieval_rerank_url: String::new(),
@@ -6267,6 +6273,11 @@ async fn run_revision_turn(
         Ok(g) => g,
         Err(_) => return Err("this chat is busy — try again once the current turn finishes".into()),
     };
+    // Agent access controls before claiming (or any context-summary model
+    // call): the producing agent may be someone else's.
+    if !agent_turn_allowed(state, sid, workspace_id, trigger.id, &responder, true) {
+        return Ok(());
+    }
     // Through the dispatcher (design repos-and-checkouts 11.5), like every
     // other turn: another device that already holds the revision's turn runs
     // it (this one watches its holder).
@@ -6876,11 +6887,16 @@ async fn implement_proposal_targeted(
         .unwrap_or_else(|| ligus_runtime::review::implement_instruction(&proposal));
     let agent = plan.target_agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id)).cloned();
     let responder = responder_for(&state, &session, agent.as_ref());
-    {
+    let trigger = {
         let mut svc = state.service.lock().unwrap();
-        svc.post_user_message(sid, workspace_id, &prompt).map_err(map_err)?;
+        svc.post_user_message(sid, workspace_id, &prompt).map_err(map_err)?.id
+    };
+    // Agent access controls before anything runs (the target agent may be
+    // someone else's); answering the instruction itself, whatever syncs in.
+    if !agent_turn_allowed(&state, sid, workspace_id, trigger, &responder, true) {
+        return Err("that agent isn't available to you; the proposal stays approved".into());
     }
-    let _ = run_turn(&app, &state, sid, workspace_id, &responder).await?;
+    let _ = run_turn_answering(&app, &state, sid, workspace_id, &responder, Some(trigger)).await?;
 
     // Mark it applied (gate satisfied + dispatched).
     {
@@ -9023,6 +9039,7 @@ async fn run_prepared_turn_inner(
             git_attribution: true,
             scan_injections: true,
             detailed_report: true,
+            primary_open_to_members: state.settings.lock().unwrap().primary_open_to_members,
             ..Default::default()
         },
     };
@@ -9349,11 +9366,27 @@ pub(crate) fn dispatch_here(
 /// who may use the agent and its daily budgets, then the plan-window
 /// throttle, where a teammate's turn on this person's agent ranks as
 /// background work (`direct`: a person's own message, not a hand-off). A
-/// refused or paused turn is answered with a short note and `false` is
-/// returned: don't claim, don't run. The primary runtime isn't an agent and
-/// always passes. The turn engine checks access again before any model call.
+/// refused or paused turn is answered with a short note (at most one per
+/// member and agent every few minutes) and `false` is returned: don't claim,
+/// don't run. The primary runtime (`@ligus`) runs on this device's
+/// credentials: in a shared room it answers only this device's person
+/// unless they opened it (Settings, Privacy). The turn engine checks access
+/// again before any model call.
 pub(crate) fn agent_turn_allowed(state: &AppState, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, responder: &Responder, direct: bool) -> bool {
-    let Some(agent_id) = responder.agent_id else { return true };
+    let Some(agent_id) = responder.agent_id else {
+        let open = state.settings.lock().unwrap().primary_open_to_members;
+        return match state.service.lock().unwrap().gate_primary_turn(session_id, workspace_id, trigger, open) {
+            Ok(Ok(_)) => true,
+            Ok(Err(note)) => {
+                tracing::info!(target: "dispatch", "primary turn refused: {note}");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(target: "dispatch", "primary access check failed: {e}");
+                false
+            }
+        };
+    };
     let gated = state.service.lock().unwrap().gate_agent_turn(session_id, workspace_id, trigger, agent_id);
     let used = match gated {
         Ok(Ok(u)) => u,
@@ -9376,7 +9409,7 @@ pub(crate) fn agent_turn_allowed(state: &AppState, session_id: Uuid, workspace_i
             let mut svc = state.service.lock().unwrap();
             let agent = svc.load(session_id).ok().flatten().and_then(|s| s.workspace_agents.into_iter().find(|a| a.id == agent_id));
             if let Some(agent) = agent {
-                let _ = svc.refuse_agent_turn(session_id, workspace_id, trigger, &agent, &note);
+                let _ = svc.note_refusal(session_id, workspace_id, trigger, Some(&agent), &used.requester, &note);
             }
             false
         }
@@ -9571,6 +9604,9 @@ async fn send_message(
     // target means the message was human-to-human — no runtime runs.
     let mut visited: Vec<Uuid> = Vec::new();
     let mut first_reply: Option<String> = None;
+    // The reply the next cascade hop answers (the previous hop's own reply,
+    // never whatever synced in last).
+    let mut cascade_from: Option<Uuid> = None;
     for depth in 0..MAX_CASCADE_DEPTH {
         let Some(target) = next_target else { break };
         let session = {
@@ -9655,12 +9691,7 @@ async fn send_message(
         // who may use it (every person behind the turn), its budgets and the
         // throttle, before claiming or running anything. A cascade is
         // checked at every hop.
-        let trigger_here = if depth == 0 {
-            trigger_id
-        } else {
-            let svc = state.service.lock().unwrap();
-            svc.load(sid).ok().flatten().and_then(|s| s.messages.iter().rev().find(|m| !m.is_streaming && !m.superseded).map(|m| m.id)).unwrap_or(trigger_id)
-        };
+        let trigger_here = if depth == 0 { trigger_id } else { cascade_from.unwrap_or(trigger_id) };
         if !agent_turn_allowed(&state, sid, workspace_id, trigger_here, &responder, depth == 0) {
             break;
         }
@@ -9695,7 +9726,10 @@ async fn send_message(
         let reply = tokio::select! {
             biased;
             _ = stop.stopped() => break,
-            r = run_turn(&app, &state, sid, workspace_id, &responder) => match r {
+            // Answering the turn's own trigger: a teammate's message that
+            // syncs in meanwhile is neither the reply's target nor what the
+            // engine's access check judges.
+            r = run_turn_answering(&app, &state, sid, workspace_id, &responder, Some(trigger_here)) => match r {
                 Ok(r) => r,
                 // That turn alone was stopped (by its reply): the cascade ends.
                 Err(e) if e == ligus_runtime::turn_engine::STOPPED => break,
@@ -9703,6 +9737,7 @@ async fn send_message(
             },
         };
         let (reply_id, reply) = (reply.message_id, reply.body);
+        cascade_from = Some(reply_id);
         if first_reply.is_none() {
             first_reply = Some(reply.clone());
         }
@@ -10379,6 +10414,21 @@ fn get_share_typing(state: State<AppState>) -> bool {
 fn set_share_typing(state: State<AppState>, enabled: bool) {
     let mut s = state.settings.lock().unwrap();
     s.share_typing = enabled;
+    save_settings(&state.data_dir, &s);
+}
+
+/// Whether other members may use this device's primary runtime (`@ligus`)
+/// in shared chats (agent access controls).
+#[tauri::command]
+fn get_primary_open_to_members(state: State<AppState>) -> bool {
+    state.settings.lock().unwrap().primary_open_to_members
+}
+
+/// Turn "Let members use @ligus on this device" on or off.
+#[tauri::command]
+fn set_primary_open_to_members(state: State<AppState>, enabled: bool) {
+    let mut s = state.settings.lock().unwrap();
+    s.primary_open_to_members = enabled;
     save_settings(&state.data_dir, &s);
 }
 
@@ -12251,6 +12301,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             builtin_write_in_place: false,
             builtin_run_command: false,
             share_typing: true,
+            primary_open_to_members: false,
             retrieval_embed_url: String::new(),
             retrieval_embed_model: String::new(),
             retrieval_rerank_url: String::new(),
@@ -15900,7 +15951,9 @@ pub fn run() {
             presence_ping,
             presence_list,
             get_share_typing,
-            set_share_typing
+            set_share_typing,
+            get_primary_open_to_members,
+            set_primary_open_to_members
         ])
         .run(app_context())
         .expect("error while running Ligus");
@@ -18712,6 +18765,14 @@ mod agent_access_ui_tests {
         let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ligus_core::ActorIdentity::new(id, id, ligus_core::ActorKind::Human));
         svc.enable_test_presence();
         svc
+    }
+
+    /// A teammate's paused turn is told to ask later, never how far into
+    /// their plan window the owner is (device-local, private).
+    #[test]
+    fn the_teammate_pause_note_keeps_the_owners_plan_window_private() {
+        let n = crate::guards::teammate_pause_note("scout");
+        assert!(n.starts_with("scout ") && !n.contains('%'), "{n}");
     }
 
     /// The roster as each person sees it: the owner may use and manage their

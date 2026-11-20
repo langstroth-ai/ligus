@@ -53,9 +53,11 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // Agents and runtimes: rebinding an agent's host or runtime,
         // removing one, every workspace runtime change, and touching a host
         // someone else owns.
-        SessionEvent::AgentUpserted { agent } => agent_rebinds(agent, fold),
+        // Opening an agent to everyone (its owner's credentials, spent on
+        // other people's requests) too.
+        SessionEvent::AgentUpserted { agent } => agent_rebinds(agent, fold) || agent_opens(agent, fold),
         SessionEvent::AgentRosterUpdated { agents } => {
-            agents.iter().any(|a| agent_rebinds(a, fold))
+            agents.iter().any(|a| agent_rebinds(a, fold) || agent_opens(a, fold))
                 || fold.workspace_agents.iter().any(|old| !agents.iter().any(|a| a.id == old.id))
         }
         SessionEvent::AgentRemoved { .. } => true,
@@ -164,6 +166,19 @@ fn agent_rebinds(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bo
     match fold.workspace_agents.iter().find(|a| a.id == agent.id) {
         None => !agent.host_id.is_empty() || !agent.runtime_id.is_empty(),
         Some(old) => old.host_id != agent.host_id || old.runtime_id != agent.runtime_id,
+    }
+}
+
+/// Whether `agent` is open to everyone where it wasn't (a new agent: where
+/// its kind's default isn't). Narrowing it, and its budgets, need nothing.
+fn agent_opens(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bool {
+    use crate::agent::Access;
+    if agent.effective_access() != Access::Everyone {
+        return false;
+    }
+    match fold.workspace_agents.iter().find(|a| a.id == agent.id) {
+        Some(old) => old.effective_access() != Access::Everyone,
+        None => !agent.owner_actor_id.is_empty(),
     }
 }
 

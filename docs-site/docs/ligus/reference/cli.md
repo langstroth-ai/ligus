@@ -125,7 +125,7 @@ an invite and an Admin.
 | `ligus hosts` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
 | `ligus set-agent-host <agent> <host-id>` | binds an agent to a host |
-| `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages. Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
+| `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
 
 `<provider>` is one of `anthropic`, `openai`, `openrouter`, `ollama`,
 `custom` (any OpenAI-compatible server), `claude-code`, `codex`,

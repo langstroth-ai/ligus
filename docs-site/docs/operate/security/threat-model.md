@@ -480,7 +480,11 @@ budget. See [Who can use an agent](../../ligus/concepts/agents.md#who-can-use-an
 | A teammate `@mentions` or messages your personal agent | Personal agents are "Only me" by default. The device or worker that would run the turn checks it before it claims the turn or calls a model, and answers with a short refusal instead; nothing is spent or counted. |
 | Routing around it through another agent, a hand-off or a workflow | Every person behind the turn must be allowed: the chain is walked over the signed envelopes (the author gate's walk), including a foreign agent key's host member and a workflow run's initiator. A chain with no traceable person runs only on an agent open to everyone. |
 | The sender's own device answers after the owner's device is silent (the deferred fallback) | The fallback checks access like every other path and refuses; it never runs someone else's personal agent on the sender's device. A refusal answers the trigger, so no device picks it up later. |
-| Opening someone's agent up (setting `access` to everyone, or raising its budgets) | Only the agent's owner can change those settings (an Admin on a shared agent), whatever another member's role: every device's fold drops anyone else's change, including through a chat-level copy of the agent or a whole-roster replace (property test `agent_access_fold.rs`). |
+| Opening someone's agent up (setting `access` to everyone, or raising its budgets) | Only the agent's owner can change those settings (an Admin on a shared agent), whatever another member's role: every device's fold drops anyone else's change, including through a chat-level copy of the agent or a whole-roster replace (property test `agent_access_fold.rs`). Under rules v2, opening an agent to everyone also needs the owner's passkey presence, so a stolen device key alone can't open it. |
+| A forged hand-off card (a member records a tool hand-off to your agent pointing at your own message) | The card's signer counts as a person behind the turn, so the card can't borrow your message's author. |
+| Asking past your cap through another member's agent | The turn is counted against the person who asked, and every non-owner person behind it must be under the cap. |
+| A teammate's `@ligus` on your device | The chat's primary runtime answers only its device's person in a shared room unless they open it (Settings → Privacy); `ligus agent` likewise. |
+| Spamming mentions of an agent you can't use | One refusal note per member per agent every five minutes; the rest are silent. |
 | A teammate drains your subscription's plan window | Their direct mentions of your agent rank as background work on your desktop and pause first as the window fills; your own direct turns always run. |
 | Overspending | A per-member daily turn cap (50 by default on a personal agent) and an optional daily estimated-spend cap, counted where the agent runs. |
 
@@ -493,18 +497,24 @@ Residual risks:
   that crosses the daily spend cap finishes. Spend is an estimate from
   reported token usage; a runtime that reports none (most subscription
   CLIs, local models) is counted in turns only.
-- **No passkey for the setting.** Changing who may use your agent needs no
-  passkey presence: someone holding your device key can already post as
-  you and use the agent directly, so a presence check would add no
-  protection here.
+- **Presence only for opening.** Under rules v2, opening an agent to
+  everyone needs the owner's passkey; narrowing it and changing budgets
+  don't (someone holding your device key can already post as you and use
+  the agent directly). Without rules v2 no change needs presence.
 - **The owner's id must be stable.** Access compares member ids (mapped
-  through device links). If the owner's identity churns to a new member id,
-  their own turns on an "Only me" agent are refused until the agent is
-  reassigned; the device-local workspace is never refused.
+  through device links). An account id is the same on all of a person's
+  devices, so this bites only after an identity reset: alone in a workspace
+  (as dispatch's solo rule assumes) the device still runs an agent whose
+  owner id is stale; in a room with other people the agent must be
+  reassigned. The device-local workspace is never refused.
 - **Duplicate refusal notes.** Two of the owner's devices that both see a
   refused turn at once may each post the note.
-- The primary runtime (the chat's `@ligus`) isn't a workspace agent and has
-  no access setting; it runs on the chat creator's device.
+- **The host's person isn't asked.** An Admin can bind an agent to a host
+  (S2, with presence); the host then runs it on its credentials under the
+  agent owner's access setting, not the host person's.
+- **Rate-limited refusals stay open.** A turn refused silently isn't
+  answered; the sender's own device refuses it again (once) after the
+  offline-fallback wait.
 
 ### Someone with your phone {#lost-phone}
 

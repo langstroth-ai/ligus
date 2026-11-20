@@ -94,7 +94,8 @@ relay, langstroth-auth and the Helm charts). The CLI is `ligus`, settings are
   someone else's agent on the sender's device. Owners set daily budgets
   (turns per member, an estimated-spend cap), see per-member usage, can be
   notified when someone else uses an agent, and keep their plan window for
-  their own requests. The `@mention` autocomplete greys out agents you can't
+  their own requests. `@ligus` in a shared chat answers only the person
+  whose device runs it, unless they open it in Settings. The `@mention` autocomplete greys out agents you can't
   use, and a model gateway can count per member through the pseudonymous
   `X-Ligus-Member` header. See
   [Who can use an agent](../concepts/agents.md#who-can-use-an-agent).

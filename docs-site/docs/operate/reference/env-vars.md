@@ -84,6 +84,7 @@ first time it is created; after that, Settings is the source of truth.
 | Variable | Default | Effect |
 |---|---|---|
 | `LIGUS_ALLOW_PERSONAL_AGENT` | unset | must be set for `ligus agent` to run at all |
+| `LIGUS_AGENT_OPEN_TO_MEMBERS` | unset | `1`: `ligus agent` answers every member's messages in a shared room; unset, only its operator's (it runs on the operator's credential) |
 | `LIGUS_RUNTIME` | unset | workspace runtime id (same as `--runtime`) |
 | `LIGUS_PROVIDER` | `anthropic` | `anthropic`, `openai`, `openrouter` or `ollama` when no workspace runtime is used |
 | `LIGUS_MODEL` | `claude-sonnet-4-5` | model for that provider |
