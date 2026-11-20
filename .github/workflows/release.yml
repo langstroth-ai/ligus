@@ -445,6 +445,12 @@ jobs:
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: macos-latest
     steps:
+      # Only for scripts/tap-push.sh (the tag's copy, like every other job).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
+          persist-credentials: false
+          sparse-checkout: scripts
       - name: Bump the tap cask
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -464,20 +470,17 @@ jobs:
           SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
-          cd tap
           # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
           # the tap keeps it, disabled, pointing hive users at Ligus.
-          test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; exit 1; }
-          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
-          sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git commit -am "ligus-app ${VERSION}"; then
-            git push origin HEAD
-            echo "Cask bumped to ${VERSION}."
-          else
-            echo "Cask already at ${VERSION} — nothing to do."
-          fi
+          # tap-push.sh reruns this after rebasing onto a concurrent tap push.
+          bump_cask() {
+            test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; return 1; }
+            sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
+            sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
+          }
+          export -f bump_cask
+          export VERSION SHA
+          scripts/tap-push.sh tap "ligus-app ${VERSION}" bump_cask
 
   # Publish/update the Homebrew CLI formula on the tap once the release (with
   # the per-arch CLI binaries) is published, so `brew install
@@ -487,11 +490,20 @@ jobs:
   # Formula/hive-cli.rb: the tap keeps it, disabled, pointing at ligus. Needs
   # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
   # langstroth-ai/homebrew-ligus); skips cleanly when absent.
+  # Runs after cask so the two never push to the tap at once (tap-push.sh
+  # also retries a rejected push); `!cancelled()` keeps it running when the
+  # cask bump fails.
   formula:
-    needs: publish
+    needs: [publish, cask]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      # Only for scripts/tap-push.sh (the tag's copy, like every other job).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
+          persist-credentials: false
+          sparse-checkout: scripts
       - name: Publish the tap formula
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -511,9 +523,8 @@ jobs:
             gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "ligus-${t}" --output "ligus-${t}" --clobber
             sha[$t]=$(sha256sum "ligus-${t}" | awk '{print $1}')
           done
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
-          mkdir -p tap/Formula
-          cat > tap/Formula/ligus.rb <<RUBY
+          formula="$RUNNER_TEMP/ligus.rb"
+          cat > "$formula" <<RUBY
           class Ligus < Formula
             desc "Headless Ligus client + agent daemon"
             homepage "https://github.com/langstroth-ai/ligus"
@@ -550,12 +561,9 @@ jobs:
             end
           end
           RUBY
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git add Formula/ligus.rb && git commit -m "ligus ${VERSION}"; then
-            git push origin HEAD
-            echo "Formula ligus bumped to ${VERSION}."
-          else
-            echo "Formula already at ${VERSION} — nothing to do."
-          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
+          # tap-push.sh reruns this after rebasing onto a concurrent tap push.
+          bump_formula() { mkdir -p Formula && cp "$formula" Formula/ligus.rb; }
+          export -f bump_formula
+          export formula
+          scripts/tap-push.sh tap "ligus ${VERSION}" bump_formula

@@ -795,7 +795,7 @@ class DraftUntilComplete < Minitest::Test
   def test_tap_bumps_run_after_publish
     %w[cask formula].each do |j|
       job = RELEASE.fetch("jobs").fetch(j)
-      assert_equal ["publish"], Array(job["needs"]), "#{j} must wait for publish"
+      assert_includes Array(job["needs"]), "publish", "#{j} must wait for publish"
       assert_includes job["if"].to_s, "needs.publish.result == 'success'"
     end
     refute RELEASE_CLI.fetch("jobs").key?("formula"), "the formula bump must follow publish, in release.yml"
@@ -1080,5 +1080,59 @@ class DmgNotarized < Minitest::Test
   def test_cask_hashes_the_published_dmg
     assert_equal ["publish"], Array(RELEASE.dig("jobs", "cask", "needs"))
     assert_includes run_text(RELEASE, "cask"), 'gh release download "${TAG}"'
+  end
+end
+
+# Every job that writes to the Homebrew tap pushes through tap-push.sh (pull
+# --rebase and retry on a rejected push), and release.yml's two tap jobs run
+# one after the other, so a concurrent push can never fail a release.
+class TapPushesNeverRace < Minitest::Test
+  TAP_URL = "homebrew-ligus.git"
+  TAP_PUSH = File.join(ROOT, "scripts/tap-push.sh")
+
+  def tap_writers
+    { "release.yml" => RELEASE, "update-cask.yml" => UPDATE_CASK }.flat_map do |file, wf|
+      wf.fetch("jobs").select { |_, job| job.fetch("steps", []).any? { |s| s["run"].to_s.include?(TAP_URL) } }
+        .map { |name, job| ["#{file}:#{name}", job] }
+    end
+  end
+
+  def test_every_tap_writer_is_known
+    assert_equal %w[release.yml:cask release.yml:formula update-cask.yml:bump], tap_writers.map(&:first).sort
+  end
+
+  def test_every_tap_writer_pushes_through_the_retry_script
+    tap_writers.each do |name, job|
+      st = job.fetch("steps")
+      run = st.map { |s| s["run"].to_s }.join("\n")
+      assert_match(%r{^\s*scripts/tap-push\.sh tap "[^"]+" bump_\w+$}, run, "#{name} must push via tap-push.sh")
+      refute_match(/git (push|commit)\b/, run, "#{name} must not push to the tap directly")
+      # The script comes from a checkout before the tap step, never with the
+      # checkout's GITHUB_TOKEN left in git config.
+      co = st.index { |s| s["uses"].to_s.start_with?("actions/checkout@") }
+      tap = st.index { |s| s["run"].to_s.include?(TAP_URL) }
+      refute_nil co, "#{name} has no checkout for tap-push.sh"
+      assert_operator co, :<, tap
+      assert_equal false, st[co].dig("with", "persist-credentials"), name
+      # The apply function tap-push.sh reruns after a rebase is exported to it.
+      fn = run[%r{tap-push\.sh tap "[^"]+" (bump_\w+)}, 1]
+      assert_includes run, "export -f #{fn}", name
+      refute_match(/set -x|echo[^\n]*\$\{?TAP_TOKEN/, run, "#{name} would print TAP_TOKEN")
+    end
+  end
+
+  def test_release_tap_jobs_are_serialized
+    assert_equal %w[cask publish], Array(RELEASE.dig("jobs", "formula", "needs")).sort, "formula must run after cask"
+    assert_includes RELEASE.dig("jobs", "formula", "if"), "!cancelled()", "a failed cask bump must not skip the formula"
+  end
+
+  def test_the_script_rebases_and_retries
+    script = File.read(TAP_PUSH)
+    assert File.executable?(TAP_PUSH), "tap-push.sh must be executable"
+    assert_includes script, "git pull -q --rebase origin"
+    assert_includes script, "TAP_PUSH_ATTEMPTS:-5"
+    assert_match(/sleep \$\(\(backoff \* attempt\)\)/, script)
+    assert_includes script, 'git config user.name "github-actions[bot]"'
+    refute_match(/set -x|remote get-url|git remote -v/, script, "tap-push.sh would print the tokened remote")
   end
 end
