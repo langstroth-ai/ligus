@@ -872,3 +872,30 @@ async fn allow_list_survives_header_tricks() {
     let s = seen.lock().unwrap();
     assert!(s.heads.iter().all(|h| !h.contains("EVIL")), "{:?}", s.heads);
 }
+
+/// Agent access controls: the requesting member rides as a keyed pseudonym
+/// in `x-ligus-member` (never the member id, a name or an email), only when
+/// the gateway's attribution is on and a member is known.
+#[test]
+fn attribution_names_the_requesting_member_pseudonymously() {
+    let key = [7u8; 32];
+    let w = Uuid::from_u128(1);
+    let member = "3f6c1a2e-5b7d-4c11-9a0b-2d4e6f8a1c3e";
+    let at = Attribution::new(&key, Some(w), None).with_member(&key, Some(member));
+    let m = at.member.clone().unwrap();
+    assert_eq!(m.len(), 32);
+    assert!(!m.contains(&member[..8]));
+    assert_eq!(m, pseudonym_bytes(&key, b"m", member.as_bytes()), "stable");
+    assert_ne!(m, pseudonym_bytes(&[8u8; 32], b"m", member.as_bytes()), "keyed");
+    assert!(at.headers().iter().any(|(h, v)| *h == HEADER_MEMBER && v == &m));
+    assert_eq!(HEADER_MEMBER, "x-ligus-member");
+    // Inside the reserved set: a caller can't set it.
+    assert!(at.headers().iter().all(|(h, _)| h.starts_with("x-ligus-")));
+    // No member: no header.
+    let none = Attribution::new(&key, Some(w), None).with_member(&key, Some(""));
+    assert!(none.headers().iter().all(|(h, _)| *h != HEADER_MEMBER));
+    // A UUID member id hashes the same way as its string form, not as raw
+    // bytes: separated from an agent id of the same value.
+    let u = Uuid::from_u128(9);
+    assert_ne!(pseudonym_bytes(&key, b"m", u.to_string().as_bytes()), pseudonym(&key, b"a", u));
+}

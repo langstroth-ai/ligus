@@ -701,3 +701,52 @@ async fn a_fenced_placeholder_stops_the_turn() {
     let s = load(&w);
     assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder left");
 }
+
+/// Agent access controls, the engine's backstop: a teammate's mention of an
+/// owner-only agent is answered with a short note no model wrote, the model
+/// is never called and nothing is counted. The owner's own turn runs, is
+/// counted, and its gateway attribution would name the owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_agent_turn_never_calls_the_model() {
+    let (endpoint, model) = spawn_model(vec![text("Done.")]).await;
+    let mut w = world(Vec::new());
+    let own_trigger = w.trigger;
+    {
+        let mut svc = w.host.inner.svc.lock().unwrap();
+        let mut m = ligus_core::WorkspaceMember {
+            id: "mate".into(),
+            actor: ActorIdentity::new("mate", "Mate", ActorKind::Human),
+            role: ligus_core::WorkspaceRole::Admin,
+            title: String::new(),
+            index: 0,
+            joined_at: ligus_core::Timestamp::now(),
+        };
+        m.actor.account_id = None;
+        svc.add_member(w.chat, w.ws, m).unwrap();
+    }
+    let mut mate = ChatService::new(
+        EventStore::open(w._dir.path().join("ligus.db")).unwrap(),
+        SigningKeypair::generate().unwrap(),
+        SigningKeypair::generate().unwrap(),
+        ActorIdentity::new("mate", "Mate", ActorKind::Human),
+    );
+    w.trigger = mate.post_user_message(w.chat, w.ws, "@coder please add a greeting").unwrap().id;
+    let err = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.unwrap_err();
+    assert_eq!(err.message, "coder is only available to its owner.");
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call");
+    let s = load(&w);
+    let notes: Vec<_> = s.messages.iter().filter(|m| m.reply_to_message_id == Some(w.trigger)).collect();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].body, "coder is only available to its owner.");
+    let usage = w.host.inner.svc.lock().unwrap().agent_usage_view(w.coder).unwrap();
+    assert!(usage.today.is_empty(), "nothing counted");
+
+    // The owner's own request runs and is counted against the owner.
+    w.trigger = own_trigger;
+    let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the owner's turn runs");
+    assert_eq!(out.body, "Done.");
+    assert_eq!(model.bodies.lock().unwrap().len(), 1);
+    let usage = w.host.inner.svc.lock().unwrap().agent_usage_view(w.coder).unwrap();
+    let owner = w.host.inner.svc.lock().unwrap().author().id.clone();
+    assert_eq!(usage.today.iter().map(|r| (r.member.clone(), r.turns)).collect::<Vec<_>>(), vec![(owner, 1)]);
+}

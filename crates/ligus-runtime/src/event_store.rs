@@ -54,9 +54,11 @@ pub fn syncable(env: &SessionEventEnvelope) -> Result<()> {
     Ok(())
 }
 
+mod agent_usage;
 mod held;
 mod repo_tables;
 pub use held::{claimed_account, HeldEvent, HeldStats, HoldItem, RefetchRow, HELD_PER_SIGNER, HELD_PER_WORKSPACE, HELD_REFETCH_PER_WORKSPACE, HELD_REFETCH_TRIES, HELD_RETRY_EVERY, HELD_TOTAL, HELD_TTL_MS};
+pub use agent_usage::{parse_day, utc_day, AgentUsageRow};
 pub use repo_tables::{CheckoutSource, RepoMapping};
 
 /// A chat responder's compaction state as kept on this device: the first
@@ -333,6 +335,7 @@ impl EventStore {
         )?;
         repo_tables::init(&conn)?;
         held::init(&conn)?;
+        agent_usage::init(&conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn

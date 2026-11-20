@@ -65,8 +65,9 @@ pub const DEFAULT_MEMBER_TURNS_PER_DAY: u32 = 50;
 #[serde(rename_all = "camelCase")]
 pub struct AgentLimits {
     /// Turns each member other than the owner may start per day. Absent:
-    /// [`DEFAULT_MEMBER_TURNS_PER_DAY`]. `0`: no per-member limit. The
-    /// owner's own turns are never limited.
+    /// [`DEFAULT_MEMBER_TURNS_PER_DAY`] on a personal agent, no limit on a
+    /// shared one. `0`: no per-member limit. The owner's own turns are never
+    /// limited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member_turns_per_day: Option<u32>,
     /// Estimated spend per day for the agent overall, in US cents, from the
@@ -83,10 +84,12 @@ impl AgentLimits {
         self == &Self::default()
     }
 
-    /// The per-member daily turn cap, `None` = unlimited.
-    pub fn member_turn_cap(&self) -> Option<u32> {
+    /// The per-member daily turn cap, `None` = unlimited. `personal`: the
+    /// agent has an owner (only a personal agent has a default cap).
+    pub fn member_turn_cap(&self, personal: bool) -> Option<u32> {
         match self.member_turns_per_day {
-            None => Some(DEFAULT_MEMBER_TURNS_PER_DAY),
+            None if personal => Some(DEFAULT_MEMBER_TURNS_PER_DAY),
+            None => None,
             Some(0) => None,
             Some(n) => Some(n),
         }
@@ -238,10 +241,12 @@ mod tests {
     #[test]
     fn member_turn_cap() {
         let mut l = AgentLimits::default();
-        assert_eq!(l.member_turn_cap(), Some(DEFAULT_MEMBER_TURNS_PER_DAY));
+        assert_eq!(l.member_turn_cap(true), Some(DEFAULT_MEMBER_TURNS_PER_DAY));
+        assert_eq!(l.member_turn_cap(false), None, "a shared agent has no default cap");
         l.member_turns_per_day = Some(0);
-        assert_eq!(l.member_turn_cap(), None);
+        assert_eq!(l.member_turn_cap(true), None);
         l.member_turns_per_day = Some(3);
-        assert_eq!(l.member_turn_cap(), Some(3));
+        assert_eq!(l.member_turn_cap(true), Some(3));
+        assert_eq!(l.member_turn_cap(false), Some(3));
     }
 }

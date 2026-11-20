@@ -43,6 +43,20 @@ impl TurnPriority {
     }
 }
 
+/// The priority of an agent turn on the runtime that runs it. A direct
+/// request is interactive only when it is the agent owner's own (or the
+/// agent is shared): a teammate's direct mention of someone's personal agent
+/// spends the owner's plan window, so it ranks as background work and backs
+/// off first. Hand-offs and workflow stages rank as workflow work, a
+/// teammate's lower still.
+pub fn agent_turn_priority(direct: bool, teammate: bool) -> TurnPriority {
+    match (direct, teammate) {
+        (_, true) => TurnPriority::Background,
+        (true, false) => TurnPriority::Interactive,
+        (false, false) => TurnPriority::Workflow,
+    }
+}
+
 /// What a runtime last said about its plan window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,5 +210,17 @@ mod tests {
         assert_eq!(w(WindowStatus::Rejected, None).effective_pct(0), 100);
         // Past the reset time the old signal no longer holds anything back.
         assert_eq!(w(WindowStatus::Rejected, None).effective_pct(10_000), 0);
+    }
+
+    #[test]
+    fn a_teammates_direct_mention_is_background_on_the_owners_runtime() {
+        assert_eq!(agent_turn_priority(true, false), TurnPriority::Interactive, "your own direct turn always runs");
+        assert_eq!(agent_turn_priority(true, true), TurnPriority::Background);
+        assert_eq!(agent_turn_priority(false, false), TurnPriority::Workflow);
+        assert_eq!(agent_turn_priority(false, true), TurnPriority::Background);
+        let p = ThrottlePolicy { stagger_pct: 0, ..Default::default() };
+        let at75 = w(WindowStatus::Allowed, Some(75));
+        assert_eq!(p.decide(agent_turn_priority(true, false), "a", Some(&at75), 0), ThrottleDecision::Run);
+        assert!(matches!(p.decide(agent_turn_priority(true, true), "a", Some(&at75), 0), ThrottleDecision::Defer { .. }));
     }
 }
