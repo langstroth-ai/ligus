@@ -54,12 +54,16 @@ K=deploy/kubernetes/ligus-k8s
 $K preflight --context orbstack -n ligus-trial --release trial --probe --image ligus:dev --json
 $K secrets workspace --throwaway --context orbstack -n ligus-trial --release trial
 $K install --scenario trial --context orbstack -n ligus-trial --release trial \
-  --image ligus:dev --relay-image-repository langstroth-relay --relay-image-tag dev \
-  --relay-chart ../relay/deploy/helm/langstroth-relay --dry-run --json
+  --image ligus:dev --dry-run --json
 $K install ... (same flags, without --dry-run)
 $K verify --context orbstack -n ligus-trial --release trial --json
 $K teardown --context orbstack -n ligus-trial --release trial --delete-data --delete-secrets --delete-namespace
 ```
+
+`ligus:dev` is an image you build from `deploy/container/Dockerfile` (the
+`ligus` image isn't published). The relay chart and image come from
+`ghcr.io/langstroth-ai` by default; `--relay-chart` and
+`--relay-image-repository`/`--relay-image-tag` override them.
 
 Scenarios: `trial` (relay and serve in one namespace, in-memory relay,
 throwaway workspace), `team-in-cluster-relay` (relay installed separately in

@@ -38,6 +38,10 @@ the app data dir; the theme is stored locally per device.
   workspace key; never what you type. Off, this device only ever says "not
   typing". The phone app has the same switch. See
   [Security](../../operate/security/index.md#encryption).
+- **Privacy → Let members use @ligus on this device** (off by default) — in a
+  chat with other people, let them use `@ligus`, which runs on this device
+  and your account. Off, it answers only you. Not synced. See
+  [Who can use your agents](agent-access.md#ligus-the-built-in-assistant).
 
 ## Appearance
 

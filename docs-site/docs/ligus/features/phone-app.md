@@ -143,7 +143,9 @@ sent anywhere, and there's no push in the demo.
   channels, in the desktop's sidebar order.
 - Start a chat or send a message from the phone. `@mentions` route exactly as
   on the desktop: `@agent` wakes that agent, `@ligus` the chat's primary
-  runtime. See [Multi-agent collaboration](multi-agent.md).
+  runtime. See [Multi-agent collaboration](multi-agent.md). Someone else's
+  agent answers you only if they opened it to everyone; otherwise you get a
+  short reply saying so ([Who can use your agents](agent-access.md)).
 - Replies stream live. A reply produced on the `ligus serve` box streams token
   by token; one produced on another device (your desktop, a worker) appears
   once it syncs, a few seconds later.

@@ -19,6 +19,11 @@ you (or another participant) mention.
 | `@alice` (a member's name/handle) | that specific person |
 | `@owners`, `@admins`, `@contributors`, `@viewers` | a governance-role group |
 
+An agent added by a member is theirs: by default only they can use it, and a
+mention from anyone else gets a short "only available to its owner" reply.
+In a chat with other people, `@ligus` answers only the person whose device
+runs it. See [Who can use your agents](agent-access.md).
+
 `@all` is the only broadcast token — there is no `@here` or `@everyone`.
 `@you` is not a broadcast: in an agent's reply it reaches only the person
 the reply answers, and in a person's message it means nothing (see

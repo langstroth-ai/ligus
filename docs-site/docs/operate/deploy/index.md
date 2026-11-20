@@ -95,11 +95,15 @@ gate who may connect with tokens. Guide:
 ## 4. Kubernetes for one organisation
 
 !!! warning "Preview"
-    The `ligus` Helm chart lives under `deploy/helm` in this repository; it
-    and the `ligus` image aren't published. The relay and langstroth-auth
-    charts and images come from the relay repository (v0.3.0), whose
-    releases publish them to `ghcr.io/langstroth-ai`.
-    Expect changes. See [Kubernetes (preview)](kubernetes.md).
+    The relay pieces are published to `ghcr.io/langstroth-ai`: the
+    `langstroth-relay` chart and image 0.3.0
+    (`oci://ghcr.io/langstroth-ai/charts/langstroth-relay`) and the
+    optional `langstroth-auth` chart 0.1.0 with its 0.3.0 image. The
+    `ligus` chart and image are not published: install the chart from
+    `deploy/helm/ligus` in a checkout of this repository and build the image
+    from `deploy/container/Dockerfile`. The Ligus 0.1.0 release ships the
+    desktop apps and `ligus` CLI binaries only. Expect changes. See
+    [Kubernetes (preview)](kubernetes.md).
 
 ```mermaid
 flowchart TB

@@ -240,7 +240,7 @@ what need a **passkey** assertion over the event:
 | Guards | dearth mode, clearing a lockdown |
 | Zones | path zones and the home beacon |
 | Workflows | workflow definitions; votes on a proposal that carries a workflow |
-| Agents and runtimes | an agent's host or runtime changing, removing an agent, workspace runtimes, someone else's host |
+| Agents and runtimes | an agent's host or runtime changing, opening an agent to everyone ([agent access](../../ligus/features/agent-access.md)), removing an agent, workspace runtimes, someone else's host |
 | Gates | tuning a proposal set, lowering a proposal's approvals or role floor, the workspace rules (version and relying party; not the one written at creation) |
 | Human-gated decisions | votes on a human-gated proposal (lockdown, dearth over brood paths), a person deciding a proposal set, applying a human-gated proposal |
 

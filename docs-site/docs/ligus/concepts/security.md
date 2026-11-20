@@ -715,6 +715,10 @@ worker`, `ligus agent`) applies the same gate to every runtime:
 - One shared function (`ChatService::trigger_author_role`) decides this on
   the desktop, `ligus worker`, `ligus serve` and `ligus agent`.
 
+The author gate decides what a turn may do. Whether the author may use the
+agent at all is its owner's choice, checked first; see
+[Who can use your agents](../features/agent-access.md).
+
 ## The shell is the Owner's {#owner-only-shell}
 
 A shell (`run_command`, a CLI's Bash or shell tool, an ACP `execute`

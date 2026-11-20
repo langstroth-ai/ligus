@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ligus
-description: Ligus on Kubernetes - an always-on serve device per workspace, optional worker hosts and MCP servers, with the relay as an optional dependency. Preview; not published.
+description: Ligus on Kubernetes - an always-on serve device per workspace, optional worker hosts and MCP servers, with the relay as an optional dependency. Preview; install from a checkout (this chart and its image are not published).
 type: application
 version: 0.1.0
 # The CLI image this chart is tested against (it reads only LIGUS_* settings, so 0.1 or later).
@@ -12,9 +12,10 @@ keywords:
   - e2ee
 kubeVersion: ">=1.27.0-0"
 dependencies:
-  # The relay chart lives in the relay repository (relay v0.3.0). It is not
-  # published yet: package it from a relay checkout into charts/ (README).
-  # Most installs point at an existing relay (relayUrl) instead.
+  # The relay chart lives in the relay repository (relay v0.3.0) and is
+  # published to the OCI registry below: `helm dependency build` fetches it
+  # into charts/ (README). Most installs point at an existing relay
+  # (relayUrl) instead.
   - name: langstroth-relay
     alias: relay
     version: 0.3.0

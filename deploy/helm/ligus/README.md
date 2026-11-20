@@ -57,20 +57,27 @@ that runs a local program, so the chart fails closed:
 
 ## Install
 
-Build the images (the relay from a relay checkout at v0.3.0):
+This chart and the `ligus` image are not published. Build the image and push
+it to a registry your cluster can pull from (the relay image,
+`ghcr.io/langstroth-ai/langstroth-relay:0.3.0`, is published):
 
 ```sh
 docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
+docker push registry.example.com/ligus:0.1.0
 ```
 
 The chart's only dependency is the relay chart, which is optional but must be
-present for Helm to render. Until it is published, package it from a relay
-checkout at v0.3.0:
+present for Helm to render. It is published at
+`oci://ghcr.io/langstroth-ai/charts/langstroth-relay` (0.3.0); fetch it into
+`charts/` (no registry login needed):
 
 ```sh
-mkdir -p deploy/helm/ligus/charts
-helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/langstroth-relay
+helm dependency build deploy/helm/ligus
 ```
+
+Without network access to ghcr.io, package it from a relay checkout at
+v0.3.0 instead: `helm package -d deploy/helm/ligus/charts
+<relay-checkout>/deploy/helm/langstroth-relay`.
 
 Create the workspace connection Secret from a desktop invite (the chart
 generates no Secrets, so `helm template`, Argo CD and Flux render the same
