@@ -332,7 +332,7 @@ pub async fn drain_tick(
     if failed.len() >= 8192 {
         failed.clear();
     }
-    let (work, runtimes) = {
+    let (work, runtimes, refused) = {
         let mut svc = lock(svc);
         // A box that can't write (revoked, or awaiting its owner's approval)
         // can't claim or answer anything either.
@@ -390,6 +390,7 @@ pub async fn drain_tick(
         };
         let live = |d: Uuid| ctx.presence.is_none() || online.contains(&d);
         let mut work = Vec::new();
+        let mut refused = false;
         for pm in candidates {
             let Some(s) = svc.load(pm.session_id)? else { continue };
             // Agent access controls: this host runs the agent on its own
@@ -400,7 +401,8 @@ pub async fn drain_tick(
                 Ok(Ok(_)) => {}
                 Ok(Err(note)) => {
                     eprintln!("worker: @{} in {} refused: {note}", pm.agent_name, pm.session_id);
-                    sink.changed();
+                    // Told after the service is released (the sink reads it).
+                    refused = true;
                     continue;
                 }
                 Err(e) => {
@@ -422,8 +424,11 @@ pub async fn drain_tick(
                 Err(e) => eprintln!("worker: claim {} failed: {e}", pm.message_id),
             }
         }
-        (work, runtimes)
+        (work, runtimes, refused)
     };
+    if refused {
+        sink.changed();
+    }
     for pm in &work {
         sink.status(pm.session_id, pm.agent_id, TurnState::Queued, None);
     }
