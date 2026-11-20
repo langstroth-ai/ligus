@@ -131,6 +131,9 @@ secret must show no associated-domains entitlement.
 Check a signed build:
 
 ```bash
+codesign -dv /Applications/Ligus.app 2>&1 | grep -E '^(Identifier|Executable|TeamIdentifier)='
+#   Identifier=ai.ligus.desktop, TeamIdentifier=H5H3NNR456,
+#   Executable=/Applications/Ligus.app/Contents/MacOS/ligus-desktop
 codesign -d --entitlements - /Applications/Ligus.app   # lists webcredentials:ligus.ai
 security cms -D -i /Applications/Ligus.app/Contents/embedded.provisionprofile | grep -A3 associated-domains
 ```

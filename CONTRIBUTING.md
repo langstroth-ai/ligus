@@ -32,6 +32,15 @@ cd web && bun run build         # frontend typecheck (tsc) + build
 cargo tauri dev                 # run the app (frontend + backend)
 ```
 
+The desktop app's executable is `ligus-desktop` (`mainBinaryName` in
+`app/tauri.conf.json`) and the CLI's is `ligus`, so both can be built into
+the same target dir: `cargo build --release -p ligus-cli` and
+`cargo tauri build` in either order leave `target/release/ligus` as the CLI.
+(Before this, the app was `Ligus`, which on macOS's case-insensitive
+filesystem is the same file as `ligus`, so the app build overwrote the CLI.)
+Keep the two names distinct ignoring case: the `binary_names` test in
+`app/tests/` and `scripts/check-release-config.sh` both fail otherwise.
+
 To sync against a local relay, run one from
 [langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) in its
 checkout: `go run ./cmd/langstroth-relay` (serves `http://0.0.0.0:8443`, in

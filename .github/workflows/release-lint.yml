@@ -16,6 +16,7 @@ on:
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
       - "scripts/test-release-workflow.rb"
+      - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"
       - "web/bun.lock"
   pull_request:
@@ -28,6 +29,7 @@ on:
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
       - "scripts/test-release-workflow.rb"
+      - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"
       - "web/bun.lock"
   workflow_dispatch:
