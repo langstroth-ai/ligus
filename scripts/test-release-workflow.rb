@@ -374,6 +374,22 @@ class ReleaseConfig < Minitest::Test
     ok, _out = run_check("ligus-v0.1.0")
     refute ok
   end
+
+  # On a case-insensitive filesystem target/release/Ligus is target/release/ligus:
+  # a desktop build would overwrite the CLI.
+  def test_desktop_binary_must_not_collide_with_the_cli
+    Dir.mktmpdir do |dir|
+      conf = JSON.parse(File.read(CONF))
+      %w[Ligus LIGUS ligus].each do |name|
+        conf["mainBinaryName"] = name
+        path = File.join(dir, "tauri.conf.json")
+        File.write(path, JSON.generate(conf))
+        ok, out = run_check("v#{conf["version"]}", path)
+        refute ok, name
+        assert_includes out, "collides with the CLI binary"
+      end
+    end
+  end
 end
 
 # The native-passkeys signing checks (scripts/check-macos-signing.sh): the
@@ -583,8 +599,9 @@ class AllVersionsMatch < Minitest::Test
 
   def test_a_crate_or_package_version_mismatch_fails
     Dir.mktmpdir do |dir|
-      %w[app web].each { |d| Dir.mkdir(File.join(dir, d)) }
+      %w[app web crates crates/ligus-cli].each { |d| Dir.mkdir(File.join(dir, d)) }
       FileUtils.cp(File.join(ROOT, "app/tauri.conf.json"), File.join(dir, "app/tauri.conf.json"))
+      FileUtils.cp(File.join(ROOT, "crates/ligus-cli/Cargo.toml"), File.join(dir, "crates/ligus-cli/Cargo.toml"))
       version = TAURI_CONF.fetch("version")
       File.write(File.join(dir, "web/package.json"), JSON.generate({ "version" => version }))
       lock = File.read(File.join(ROOT, "Cargo.lock"))

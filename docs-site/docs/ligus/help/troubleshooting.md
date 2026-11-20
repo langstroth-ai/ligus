@@ -27,6 +27,16 @@ launch:
 - **Linux**: `chmod +x Ligus_*.AppImage` (add `--appimage-extract-and-run`
   on hosts without FUSE).
 
+**Finding the process**: the desktop app's executable is `ligus-desktop`
+(`ligus-desktop.exe` on Windows), so that's the name in Activity Monitor,
+Task Manager or `ps`. The CLI is `ligus`.
+
+**`target/release/ligus serve` opens the desktop app** (a build from source
+on macOS): the checkout predates the `ligus-desktop` executable name, when
+the app's `Ligus` binary overwrote the CLI's `ligus` on the case-insensitive
+filesystem. Update, then rebuild the CLI with `cargo build --release -p
+ligus-cli`.
+
 **"Ligus can't use this data folder"** on launch: the data dir is, or links
 to, data Ligus did not create. Nothing was changed. Point `LIGUS_DATA_DIR`
 at a new, empty dir.
