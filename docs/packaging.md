@@ -63,13 +63,51 @@ triples. Its `cli-targets` job builds the `ligus` CLI for every target
 `release-cli.yml` ships (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`)
 through the same composite action, `.github/actions/build-cli`, so a target that
-doesn't build fails the PR, not the tag. `ci-nightly.yml` builds the release
+doesn't build fails the PR, not the tag. `cut-release.yml` won't tag a commit
+unless `ci-ok` passed on it. `ci-nightly.yml` builds the release
 profile. `release-lint.yml` runs `scripts/test-release-workflow.rb`, which checks
 the structure below.
 
-## Cutting a release
+## How to cut a release
 
-One workflow run, `release.yml`, builds and publishes the whole release for a tag:
+Cut releases from GitHub with **`cut-release.yml`**, never by tagging on a laptop.
+
+1. Bump every version (the app in `app/tauri.conf.json`, every `ligus-*` crate,
+   `web/package.json`) in a PR and merge it through the queue.
+2. A repository admin runs:
+
+   ```bash
+   gh workflow run cut-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z
+   # or pick the commit: -f ref=<branch or sha>
+   ```
+
+   By default `ref` is the head of `release/vX.Y.Z` if that branch exists, or `main`
+   if it doesn't. The workflow refuses to run unless whoever started it (or re-ran it)
+   is a repo admin, the required check `ci-ok` passed on that exact commit (GitHub
+   Actions' own check run), `scripts/check-release-config.sh vX.Y.Z` passes there,
+   and the tag doesn't exist yet. Then it pushes the annotated tag `vX.Y.Z` on that
+   commit and calls `release.yml` with the tag.
+3. Watch the run. When it finishes, the release is a published **prerelease** and the
+   tap has been bumped. Write the notes and promote it by hand:
+
+   ```bash
+   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md --prerelease=false --latest
+   ```
+
+**Only one pipeline run per tag.** `cut-release.yml` pushes the tag with
+`GITHUB_TOKEN`, and GitHub doesn't start workflows for events that `GITHUB_TOKEN`
+causes. So `release.yml`'s own `push: tags` trigger doesn't fire for that tag, and the
+`workflow_call` from `cut-release.yml` is the only run. That trigger stays as a
+fallback: an admin who pushes a `v*` tag by hand starts the same pipeline. Never give
+`cut-release.yml`'s checkout a PAT or an App token: the tag push would then start a
+second run. (`release.yml`'s per-tag concurrency group would queue that second run,
+and it would only re-fill the draft or stop at the published release, but it is still
+wasted work.)
+
+### What the pipeline does
+
+`release.yml` runs the whole release in one workflow run. Its entry points are a call
+from `cut-release.yml`, a tag push, or `workflow_dispatch` for an existing tag:
 
 1. `release`: checks the tag against every version (`scripts/check-release-config.sh`)
    and creates the tag's GitHub Release as a **draft** prerelease
@@ -85,19 +123,6 @@ One workflow run, `release.yml`, builds and publishes the whole release for a ta
    platforms, then publishes the draft as a **prerelease**. It never marks it Latest.
 5. `cask` and `formula` bump the Homebrew tap, only after `publish`.
 
-To cut `vX.Y.Z`: bump every version (the app, every `ligus-*` crate, `web/package.json`),
-merge, then tag the merged commit and push the tag:
-
-```bash
-git tag vX.Y.Z <commit> && git push origin vX.Y.Z
-```
-
-Then write the notes and promote by hand:
-
-```bash
-gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md --prerelease=false --latest
-```
-
 ### When a release run fails
 
 Nothing is published: the release is still a draft, and the tap is untouched.
@@ -105,17 +130,18 @@ Nothing is published: the release is still a draft, and the tap is untouched.
 - **A flaky job** (runner, network): use "Re-run failed jobs" on the run. Uploads
   replace the target's files in the same draft, and `publish` and the tap jobs run
   once everything is green.
-- **A real bug**: fix it on the release branch, then delete the draft and the tag
-  and tag the fixed commit:
+- **A real bug**: fix it through the merge queue, then delete the draft and the tag
+  and cut again:
 
   ```bash
   gh release delete vX.Y.Z --repo langstroth-ai/ligus --yes   # the draft
-  git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z
-  git tag vX.Y.Z <fixed commit> && git push origin vX.Y.Z
+  git push origin :refs/tags/vX.Y.Z
+  gh workflow run cut-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z
   ```
 
   `gh release delete` finds drafts by tag. Leave out `--cleanup-tag` and delete the
-  tag yourself, as above, so you can see that it has gone.
+  tag yourself, as above, so you can see that it has gone. `cut-release.yml` refuses
+  a tag that still exists.
 - **A run that published, then a tap job failed**: rerun the failed job, or bump the
   cask by hand with `update-cask.yml` (it refuses a tag that is still a draft).
 
@@ -125,7 +151,7 @@ then complete.
 
 Re-cutting a tag whose release was **already published** means deleting that
 release first (`ensure-release.sh` refuses to build into a published release),
-then deleting and re-pushing the tag as above. Users who already downloaded the
+then deleting the tag and cutting again as above. Users who already downloaded the
 old assets keep them, and the tap may point at the old checksums until the new
 run's `cask` and `formula` jobs run.
 

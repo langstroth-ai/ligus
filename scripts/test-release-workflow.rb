@@ -48,6 +48,7 @@ ROOT = File.expand_path("..", __dir__)
 RELEASE = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/release.yml")))
 RELEASE_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/release-cli.yml")))
 CI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci.yml")))
+CUT = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/cut-release.yml")))
 UPDATE_CASK = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/update-cask.yml")))
 BUILD_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/actions/build-cli/action.yml")))
 TAURI_CONF = JSON.parse(File.read(File.join(ROOT, "app/tauri.conf.json")))
@@ -541,7 +542,7 @@ end
 # Every job that builds or checks a release must build the tag itself, also
 # on a manual dispatch (which otherwise checks out the dispatching branch).
 class BuildsTheTag < Minitest::Test
-  TAG_REF = "${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+  TAG_REF = "${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}"
 
   def checkouts(workflow)
     workflow.fetch("jobs").flat_map do |name, job|
@@ -554,10 +555,19 @@ class BuildsTheTag < Minitest::Test
       assert_equal TAG_REF, step.dig("with", "ref"), "#{job} would build the dispatching branch, not the tag"
     end
     # release-cli.yml is called with the tag release.yml resolved.
-    assert_equal "${{ github.event.inputs.tag || github.ref_name }}", RELEASE.dig("jobs", "cli", "with", "tag")
+    assert_equal "${{ inputs.tag || github.ref_name }}", RELEASE.dig("jobs", "cli", "with", "tag")
     checkouts(RELEASE_CLI).each do |job, step|
       assert_equal "refs/tags/${{ inputs.tag }}", step.dig("with", "ref"), "release-cli #{job} would not build the tag"
     end
+  end
+
+  # Called by cut-release.yml, github.event is the caller's dispatch (its
+  # inputs are `version`/`ref`), so the tag must only come from `inputs`.
+  def test_tag_never_comes_from_the_event_payload
+    [RELEASE, RELEASE_CLI].each do |wf|
+      refute_includes JSON.dump(wf), "github.event.inputs", "github.event.inputs is the caller's when called"
+    end
+    assert_equal({ "type" => "string", "required" => true }, triggers(RELEASE)["workflow_call"]["inputs"]["tag"].slice("type", "required"))
   end
 
   def test_cli_release_checks_the_tag_against_the_version_first
@@ -801,7 +811,7 @@ class DraftUntilComplete < Minitest::Test
 
   def test_one_release_run_per_tag_never_cancelled
     c = RELEASE.fetch("concurrency")
-    assert_includes c["group"], "github.event.inputs.tag || github.ref_name"
+    assert_includes c["group"], "inputs.tag || github.ref_name"
     assert_equal false, c["cancel-in-progress"]
   end
 end
@@ -944,5 +954,82 @@ class CheckReleaseAssets < Minitest::Test
     assets.each { |a| a.delete("digest") }
     ok, out = check(assets, sums)
     assert ok, out
+  end
+end
+
+# cut-release.yml: the normal way to release, from GitHub, never a laptop.
+class CutRelease < Minitest::Test
+  def cut_steps
+    steps(CUT, "cut")
+  end
+
+  def idx(text)
+    i = cut_steps.index { |s| s["run"].to_s.include?(text) || s["uses"].to_s.include?(text) }
+    refute_nil i, "cut-release has no step with #{text}"
+    i
+  end
+
+  def test_dispatch_only_with_a_version
+    assert_equal ["workflow_dispatch"], triggers(CUT).keys
+    inputs = triggers(CUT)["workflow_dispatch"]["inputs"]
+    assert inputs["version"]["required"]
+    refute inputs["ref"]["required"]
+  end
+
+  def test_least_privilege
+    assert_equal({}, CUT["permissions"], "nothing by default")
+    assert_equal({ "contents" => "write", "checks" => "read" }, CUT.dig("jobs", "cut", "permissions"))
+    assert_equal({ "contents" => "write" }, CUT.dig("jobs", "release", "permissions"))
+  end
+
+  def test_order_of_checks_before_the_tag
+    admin = idx("collaborators/$who/permission")
+    sha = idx("repos/$GITHUB_REPOSITORY/commits/$ref")
+    ci = idx("check_name=ci-ok")
+    config = idx("check-release-config.sh")
+    tag = idx("git tag -a")
+    assert_operator admin, :<, sha
+    assert_operator sha, :<, ci
+    assert_operator ci, :<, config
+    assert_operator config, :<, tag
+    tag_run = cut_steps[tag]["run"]
+    assert_operator tag_run.index("git ls-remote --tags"), :<, tag_run.index("git tag -a"), "refuse an existing tag first"
+    refute_match(/push.*(-f|--force)/, tag_run)
+  end
+
+  def test_admins_only_including_reruns
+    run = cut_steps[idx("collaborators/$who/permission")]
+    assert_includes run["run"], '[ "$perm" != admin ]'
+    assert_equal "${{ github.actor }}", run.dig("env", "ACTOR")
+    assert_equal "${{ github.triggering_actor }}", run.dig("env", "TRIGGERING_ACTOR")
+  end
+
+  def test_ci_ok_must_have_passed_on_that_exact_commit
+    st = cut_steps[idx("check_name=ci-ok")]
+    assert_equal "${{ steps.sha.outputs.sha }}", st.dig("env", "SHA")
+    assert_includes st["run"], "commits/$SHA/check-runs"
+    assert_includes st["run"], '.conclusion == "success"'
+    assert_includes st["run"], '.app.slug == "github-actions"'
+    checkout = cut_steps[idx("actions/checkout@")]
+    assert_equal "${{ steps.sha.outputs.sha }}", checkout.dig("with", "ref"), "the checks and the tag must be on one commit"
+    assert_includes cut_steps[idx("git tag -a")]["run"], '"$SHA"'
+  end
+
+  # The tag is pushed with GITHUB_TOKEN, which does not trigger release.yml's
+  # push: tags, so the call below is the only pipeline run.
+  def test_pipeline_is_called_once_with_the_tag
+    rel = CUT.dig("jobs", "release")
+    assert_equal "./.github/workflows/release.yml", rel["uses"]
+    assert_equal "${{ needs.cut.outputs.tag }}", rel.dig("with", "tag")
+    assert_equal ["cut"], Array(rel["needs"])
+    assert_equal "inherit", rel["secrets"]
+    checkout = cut_steps[idx("actions/checkout@")]
+    refute checkout.fetch("with", {}).key?("token"), "a PAT/App token would make the tag push start release.yml too"
+    refute_includes JSON.dump(CUT), "secrets.HOMEBREW", "cut-release itself needs no other secrets"
+  end
+
+  def test_tag_push_fallback_still_works
+    assert_equal ["v*"], triggers(RELEASE)["push"]["tags"]
+    assert triggers(RELEASE).key?("workflow_call")
   end
 end

@@ -113,6 +113,24 @@ $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 - **Cloud credentials**, the choice of cluster, StorageClass and node pools,
   and labelling an existing namespace Pod Security `restricted`.
 - Approving any exit-4 decision, and revoking or rotating keys.
+- **Cutting a release** (`cut-release.yml`, repository admins only) and
+  promoting it to Latest.
+
+## Cutting a release
+
+Releases are cut from GitHub, never by pushing a tag from a laptop. A
+repository admin runs:
+
+```bash
+gh workflow run cut-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z   # optional: -f ref=<branch or sha>
+```
+
+It tags `vX.Y.Z` only if `ci-ok` passed on that exact commit and every version
+matches, then builds the release as a draft and publishes it as a prerelease
+once every build has passed. Agents may prepare the version bump and watch the
+run, but never push a `v*` tag, never publish a draft by hand, and never
+promote a release to Latest. The full flow and the recovery steps are in
+[docs/packaging.md](docs/packaging.md#how-to-cut-a-release).
 
 ## When something fails
 
