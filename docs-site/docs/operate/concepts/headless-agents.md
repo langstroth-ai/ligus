@@ -246,6 +246,39 @@ LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 - `--secret - | @FILE` carries the key **E2EE on the log** (zero worker
   provisioning; use only for trusted workspaces).
 
+## Who may use a hosted agent
+
+A worker or serve box runs its agents on the runtimes and secrets it holds,
+so it applies the agent's access setting and daily budgets
+([Who can use an agent](../../ligus/concepts/agents.md#who-can-use-an-agent))
+before it claims a mention, a cascade or a hand-off from its queue:
+
+- a personal agent sent to the box is still its owner's alone unless the
+  owner opens it to everyone; a shared agent is everyone's unless an Admin
+  restricts it to Admins;
+- every person behind the turn (author, chain, workflow initiator) must be
+  allowed; a refused turn gets a short reply in the agent's name, leaves the
+  queue, and calls no model;
+- turns and estimated cost are counted in the box's own database
+  (`agent_usage`, per agent, per member, per UTC day; never synced), which
+  is what the per-member and daily-spend caps read. Two boxes that both
+  host an agent count separately.
+
+The phone sees whether its person may use each agent (`available`,
+`unavailableReason` and `access` on `GET /v1/agents`), and the agent's owner
+reads the box's counts with `GET /v1/agents/{id}/usage`:
+
+```json
+{ "agentId": "…", "day": "2026-11-20",
+  "today": [ { "member": "…", "turns": 3, "uncostedTurns": 1, "estimatedCostUsd": 0.0412 } ],
+  "month": [ … ] }
+```
+
+`estimatedCostUsd` is left out when none of the member's turns reported
+usage. Anyone but the agent's owner gets `403`. A box has no plan-window
+throttle, and a "notify me" notice for a box-hosted agent shows on the
+owner's desktop when the reply syncs.
+
 ## Concurrency: worker pools + isolated edits
 
 Several people can drive the **same** shared agents from different channels at

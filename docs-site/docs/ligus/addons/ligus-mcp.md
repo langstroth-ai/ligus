@@ -194,6 +194,14 @@ What is counted:
 
 The budget is per turn. A hand-off starts a new turn with its own budget.
 
+`LIGUS_MCP_MAX_SPEND_USD` is the device's cap for **one turn**. An agent's
+owner can also set a **daily** estimated-spend cap and a per-member daily
+turn count on the agent itself, counted by the device that runs it from the
+same reported usage and prices; the per-turn budget still ends a single
+expensive turn, and the daily cap refuses other members' new turns once the
+day's spend reaches it. See
+[Daily budgets](../concepts/agents.md#daily-budgets).
+
 ## Audit {#audit}
 
 - **Every call** is a device-local, content-free fact: time, turn, chat,

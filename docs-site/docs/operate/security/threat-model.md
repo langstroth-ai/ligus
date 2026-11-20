@@ -468,6 +468,44 @@ Residual risks: the gateway operator sees all model traffic, by design;
 compromised serve or worker process (not an agent child) holds the gateway
 credentials; a stolen token works for its own audience until it expires.
 
+### A member spending someone else's credentials {#agent-use}
+
+An agent's turn runs on its owner's device or its host worker, on their API
+key, subscription, local model or the worker's runtime. The prize is
+getting those turns run without the owner's consent, or past the owner's
+budget. See [Who can use an agent](../../ligus/concepts/agents.md#who-can-use-an-agent).
+
+| Threat | Mitigation |
+|---|---|
+| A teammate `@mentions` or messages your personal agent | Personal agents are "Only me" by default. The device or worker that would run the turn checks it before it claims the turn or calls a model, and answers with a short refusal instead; nothing is spent or counted. |
+| Routing around it through another agent, a hand-off or a workflow | Every person behind the turn must be allowed: the chain is walked over the signed envelopes (the author gate's walk), including a foreign agent key's host member and a workflow run's initiator. A chain with no traceable person runs only on an agent open to everyone. |
+| The sender's own device answers after the owner's device is silent (the deferred fallback) | The fallback checks access like every other path and refuses; it never runs someone else's personal agent on the sender's device. A refusal answers the trigger, so no device picks it up later. |
+| Opening someone's agent up (setting `access` to everyone, or raising its budgets) | Only the agent's owner can change those settings (an Admin on a shared agent), whatever another member's role: every device's fold drops anyone else's change, including through a chat-level copy of the agent or a whole-roster replace (property test `agent_access_fold.rs`). |
+| A teammate drains your subscription's plan window | Their direct mentions of your agent rank as background work on your desktop and pause first as the window fills; your own direct turns always run. |
+| Overspending | A per-member daily turn cap (50 by default on a personal agent) and an optional daily estimated-spend cap, counted where the agent runs. |
+
+Residual risks:
+
+- **Counting is per device.** Each device or worker that runs an agent
+  counts in its own database; an agent its owner runs on two devices can
+  be used up to the cap on each.
+- **One turn overshoots.** Caps are checked before a turn starts; the turn
+  that crosses the daily spend cap finishes. Spend is an estimate from
+  reported token usage; a runtime that reports none (most subscription
+  CLIs, local models) is counted in turns only.
+- **No passkey for the setting.** Changing who may use your agent needs no
+  passkey presence: someone holding your device key can already post as
+  you and use the agent directly, so a presence check would add no
+  protection here.
+- **The owner's id must be stable.** Access compares member ids (mapped
+  through device links). If the owner's identity churns to a new member id,
+  their own turns on an "Only me" agent are refused until the agent is
+  reassigned; the device-local workspace is never refused.
+- **Duplicate refusal notes.** Two of the owner's devices that both see a
+  refused turn at once may each post the note.
+- The primary runtime (the chat's `@ligus`) isn't a workspace agent and has
+  no access setting; it runs on the chat creator's device.
+
 ### Someone with your phone {#lost-phone}
 
 The phone app holds a credential that lets it act through your box with the
@@ -889,6 +927,11 @@ it.
       that it is refused.
     - **Ties.** Events at one lamport sort by event id, which their drafter
       picks (a box drafting a phone's action included).
+
+31. **Agent budgets are per device and approximate.** Agent access and the
+    daily budgets are enforced on the device that runs the agent, counted in
+    its own database (UTC days), and estimated from reported token usage; see
+    [A member spending someone else's credentials](#agent-use).
 
 ## Out of scope {#out-of-scope}
 

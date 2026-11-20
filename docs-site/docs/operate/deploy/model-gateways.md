@@ -291,12 +291,20 @@ With `attribution: true`, every request through that gateway carries
 ```
 X-Ligus-Workspace: <32 hex characters>
 X-Ligus-Agent:     <32 hex characters>
+X-Ligus-Member:    <32 hex characters>
 ```
 
 Each is a keyed hash (HMAC-SHA256, truncated to 16 bytes) of the workspace
-or agent id under the attribution key. The gateway can count, rate-limit and
-bill per workspace and per agent, but can't recover the ids, names or
-anything else. No message content is sent in headers. Give serve and every
+id, agent id or member id under the attribution key:
+`hex(HMAC-SHA256(key, "ligus-gateway-attribution-v1\0" ‖ kind ‖ 0x00 ‖ id)[..16])`,
+with kind `w` or `a` over the id's 16 bytes, and `m` over the member id's
+UTF-8 bytes. `X-Ligus-Member` names the **requesting member**: the person
+nearest the turn's trigger, as agent access decided it (see
+[Who can use an agent](../../ligus/concepts/agents.md#who-can-use-an-agent)),
+so the gateway's own budgets can count per member; it is left out when no
+person could be traced. The gateway can count, rate-limit and set budgets
+per workspace, agent and member, but can't recover the ids, names, email
+addresses or anything else. No message content is sent in headers. Give serve and every
 worker the same key (`modelGatewayAttribution.secretName`) so the ids match
 across hosts.
 
