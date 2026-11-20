@@ -89,6 +89,10 @@ pub struct EngineOptions {
     pub detailed_report: bool,
     /// Warm the context-window probe before a tool loop.
     pub warm_context_probe: bool,
+    /// This device's person lets other members use the chat's primary
+    /// runtime (`@ligus`) on this device's credentials (agent access
+    /// controls; off: in a shared room it answers only them).
+    pub primary_open_to_members: bool,
 }
 
 /// Everything the host decided about a claimed turn.
@@ -294,6 +298,10 @@ pub trait TurnHost: Sync {
     fn progress(&self, _progress: &crate::patch_leaving::ProgressTracker) {}
     fn egress_denials(&self, _denied: &[crate::egress::HostPort]) {}
     fn usage_error(&self, _provider: ModelProviderKind, _message: &str) {}
+    /// An agent turn passed agent access and is about to run (`agent`: the
+    /// responder's name). A host may tell the owner when someone else uses
+    /// the agent (`use_.notify`).
+    fn agent_used(&self, _agent: &str, _use: &crate::agent_access::AgentUse) {}
 
     /// The text a provider error is shown as.
     fn error_text(&self, error: &str) -> String {
@@ -384,6 +392,52 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     if stop.is_stopped() {
         return Err(TurnError { message: STOPPED.into(), stopped: true, message_id: None });
     }
+    // Agent access controls (`agent_access`): who may use this agent and its
+    // daily budgets, decided here on every host before anything is spent.
+    // A host checks before it claims too; this is the backstop every path
+    // (a cascade, a hand-off, a workflow stage, a fallback) goes through.
+    // Refused: the trigger is answered with a short note no model wrote.
+    // The primary runtime (`@ligus`) runs on this device's credentials:
+    // in a shared room only this device's person uses it, unless opened.
+    // Gating and counting an agent's turn are one step under the service
+    // lock, so concurrent turns can't both pass a cap of one.
+    let mut responder = responder;
+    let gated = match (responder.agent_id, reply_to) {
+        // Bound first: the service isn't held while the host is told.
+        (Some(agent), Some(trigger)) => Some((Some(agent), locked(host).admit_agent_turn(chat_id, workspace_id, trigger, agent))),
+        (None, Some(trigger)) => {
+            let r = locked(host).gate_primary_turn(chat_id, workspace_id, trigger, options.primary_open_to_members);
+            Some((None, r.map(|r| r.map(|u| (u, String::new())))))
+        }
+        _ => None,
+    };
+    let agent_use = match gated {
+        Some((agent, gated)) => match gated {
+            Ok(Ok((u, day))) => agent.map(|a| (a, u, day)),
+            Ok(Err(note)) => {
+                host.changed();
+                return Err(TurnError { message: note, stopped: false, message_id: None });
+            }
+            Err(e) => {
+                return Err(TurnError { message: format!("couldn't check who may use this agent: {e}"), stopped: false, message_id: None });
+            }
+        },
+        None => None,
+    };
+    let usage_day = match &agent_use {
+        Some((agent, u, day)) => {
+            // A gateway's attribution names the member the turn runs for.
+            if let Some(g) = responder.runtime.gateway.as_mut() {
+                g.workspace_id = g.workspace_id.or(Some(workspace_id));
+                g.agent_id = g.agent_id.or(Some(*agent));
+                g.member_id = Some(u.requester.clone()).filter(|m| !m.is_empty());
+            }
+            host.agent_used(&responder.effect_author, u);
+            Some(day.clone())
+        }
+        None => None,
+    };
+    let agent_use = agent_use.map(|(a, u, _)| (a, u));
     let rt = &responder.runtime;
     let tools_allowed = gate.allows_tools();
     let restricted = !envelope.egress.is_open();
@@ -647,6 +701,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let denials = policy.denials.clone();
     let scope = iface.scope();
     let turn_notes = scope.notes.clone();
+    let meter = scope.spend.clone();
     let stream = async {
         if anthropic_loop {
             let Some(api_key) = rt.api_key.clone() else { return Err(ProviderError::Subprocess("no API key".into())) };
@@ -689,6 +744,14 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         },
     };
     host.egress_denials(&denials.lock().map(|d| d.clone()).unwrap_or_default());
+    // The turn's estimated cost, counted against the agent's daily cap
+    // (`None`: the runtime reported no usage; counted in turns only).
+    if let (Some((agent, u)), Some(day)) = (&agent_use, &usage_day) {
+        let usd = meter.as_ref().map(|m| m.total()).filter(|t| *t > 0.0);
+        if let Err(e) = locked(host).record_agent_cost(workspace_id, *agent, &u.requester, day, usd) {
+            tracing::warn!(target: "dispatch", "couldn't count the turn's cost: {e}");
+        }
+    }
     if let Some(t) = &http_tools {
         host.progress(t.progress());
     }

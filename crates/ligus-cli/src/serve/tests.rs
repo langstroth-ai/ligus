@@ -204,6 +204,11 @@ async fn harness_with(
         svc.add_workspace_runtime(ws, wr).unwrap();
         let mut agent = WorkspaceAgent::new("coder", "gw");
         agent.owner_actor_id = svc.author().id.clone();
+        // Open to everyone (agent access controls): the box is another
+        // member here, and these tests drive the desktop owner's agent from
+        // the phone. `an_owner_only_agent_refuses_the_phone_without_a_model_call`
+        // covers a personal agent's default.
+        agent.access = ligus_core::agent::ACCESS_EVERYONE.into();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
         let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
@@ -1163,6 +1168,62 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     h.handle.shutdown();
 }
 
+/// Agent access controls on a box: a personal agent of the desktop's owner,
+/// sent to this box, is "Only me" by default. The phone (another member
+/// here) sees it as unavailable with the reason, and a mention from it is
+/// answered by the box with a short note: no model call, nothing counted,
+/// and its usage is the owner's to read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_only_agent_refuses_the_phone_without_a_model_call() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "should never run"}))]]).await;
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
+    let ws = h.handle.shared.ws;
+    let private = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("private", "gw");
+        a.owner_actor_id = desk.author().id.clone();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    desktop_sync(&h).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[private]).await;
+
+    let p = agent_json(&h, private).await;
+    assert_eq!(p["available"], json!(false));
+    assert_eq!(p["unavailableReason"], "Only its owner can use this agent");
+    assert_eq!(p["access"], "owner");
+    let open = agent_json(&h, h.agent_id).await;
+    assert_eq!(open["available"], json!(true));
+    assert!(open.get("unavailableReason").is_none());
+    assert_eq!(open["access"], "everyone");
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Try it" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let mut rx = h.events(None).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@private summarize the README" }))).await;
+    let seen = collect_until(&mut rx, 120, |evs| {
+        evs.iter().any(|(n, d, _)| (n == "message.created" || n == "message.done") && d["message"]["body"] == "private is only available to its owner.")
+    })
+    .await;
+    assert!(
+        seen.iter().any(|(_, d, _)| d["message"]["body"] == "private is only available to its owner."),
+        "the refusal note: {:?}",
+        seen.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>()
+    );
+    // Give a wrongly queued turn time to reach the model, then check none did.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(model.bodies.lock().unwrap().is_empty(), "no model call");
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    let notes = msgs["messages"].as_array().unwrap().iter().filter(|m| m["body"] == "private is only available to its owner.").count();
+    assert_eq!(notes, 1, "answered once");
+    assert!(h.handle.shared.lock().agent_usage_view(private).unwrap().today.is_empty(), "nothing counted");
+    // The usage view is the owner's: the phone's person isn't.
+    let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/agents/{private}/usage"), None).await;
+    assert_eq!(code, 403);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reject_with_reason_and_last_event_id_replay() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
@@ -1675,6 +1736,8 @@ async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice()
         let mut svc = open_service(&h.desktop).unwrap();
         let mut agent = WorkspaceAgent::new("chat", "gw");
         agent.owner_actor_id = svc.author().id.clone();
+        // Open to everyone: the box asks for it (agent access controls).
+        agent.access = ligus_core::agent::ACCESS_EVERYONE.into();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
         id
@@ -3291,6 +3354,8 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         let mut desk = open_service(&h.desktop).unwrap();
         let mut a = WorkspaceAgent::new("reviewer", "gw");
         a.owner_actor_id = desk.author().id.clone();
+        // Open to everyone: the phone's hand-off reaches it (agent access).
+        a.access = ligus_core::agent::ACCESS_EVERYONE.into();
         let id = a.id;
         desk.add_agent(ws, ws, a).unwrap();
         id

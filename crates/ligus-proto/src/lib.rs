@@ -437,6 +437,55 @@ pub struct WorkspaceAgentDto {
     pub avatar_url: Option<String>,
     /// Optional avatar accent color (`#rrggbb`).
     pub avatar_color_hex: Option<String>,
+    /// Who may use the agent, as enforced: `"owner"` (a personal agent's
+    /// default, "Only me"; on a shared agent, workspace Admins) or
+    /// `"everyone"`.
+    pub access: String,
+    /// Turns each member other than the owner may start per day as set
+    /// (`None`: the default; `0`: no limit).
+    pub member_turns_per_day: Option<u32>,
+    /// The per-member daily cap in force (`None`: no limit).
+    pub effective_member_turns_per_day: Option<u32>,
+    /// The agent's estimated daily spending cap in US cents (`None`: none).
+    pub usd_cents_per_day: Option<u32>,
+    /// Its owner is told when someone else uses it.
+    pub notify_on_use: bool,
+    /// Whether this device's person may use the agent (the @mention
+    /// autocomplete greys it out otherwise).
+    pub available: bool,
+    /// Why not, when `available` is false.
+    pub unavailable_reason: Option<String>,
+    /// Whether this device's person may change who may use it, its budgets,
+    /// and see its usage (its owner; an Admin on a shared agent).
+    pub can_manage_access: bool,
+}
+
+/// One member's use of an agent, as the device that runs it counted it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AgentUsageRowDto {
+    /// The member's id (empty: a turn no person could be traced to).
+    pub member: String,
+    /// Their display name, when known.
+    pub member_name: String,
+    pub turns: u32,
+    /// Turns whose runtime reported no token usage (not in the cost).
+    pub uncosted_turns: u32,
+    /// Estimated USD, when any of the turns reported usage.
+    pub estimated_cost_usd: Option<f64>,
+}
+
+/// An agent's usage on this device: today and this month (UTC days).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AgentUsageDto {
+    pub agent_id: String,
+    /// Today, `YYYY-MM-DD` (UTC).
+    pub day: String,
+    pub today: Vec<AgentUsageRowDto>,
+    pub month: Vec<AgentUsageRowDto>,
 }
 
 /// A configured runtime surfaced to the desktop shell.
@@ -945,6 +994,7 @@ mod tests {
         RuntimeSummaryDto::export_all(&cfg).unwrap();
         ContextTelemetryDto::export_all(&cfg).unwrap();
         WorkspaceAgentDto::export_all(&cfg).unwrap();
+        AgentUsageDto::export_all(&cfg).unwrap();
         SkillDto::export_all(&cfg).unwrap();
         McpServerDto::export_all(&cfg).unwrap();
         ReactionDto::export_all(&cfg).unwrap();

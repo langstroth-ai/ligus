@@ -507,16 +507,21 @@ async fn prepare_stage(
         "**[Workflow · {} → {}]**\n\n{rendered}",
         run.definition.name, node.name
     );
-    {
+    let prompt_id = {
         let mut svc = state.service.lock().unwrap();
-        svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?;
-    }
+        svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?.id
+    };
     let session = {
         let svc = state.service.lock().unwrap();
         svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?
     };
     let agent = resolve_stage_agent(&session, agent_id, &node.name)?;
     let responder = responder_for(state, &session, agent.as_ref());
+    // Agent access controls before any model call (the context summary
+    // included): the stage's agent must be open to the run's initiator.
+    if !crate::agent_turn_allowed(state, session_id, workspace_id, prompt_id, &responder, false) {
+        return Err(format!("{} isn't available to the person who started this run", responder.author));
+    }
     let (system, turns) = windowed_context(state, session_id, &session, &responder).await;
     Ok(PreparedStage::Local { responder, session, system, turns })
 }

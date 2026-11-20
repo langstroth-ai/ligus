@@ -3,6 +3,27 @@
 export interface MentionCandidate {
   handle: string;
   kind: string;
+  /// Set when the viewer can't use this agent (agent access controls): the
+  /// row stays listed, greyed out with this reason, and can't be inserted.
+  disabledReason?: string;
+}
+
+/// The @mention candidates for roster agents. An agent this person can't
+/// use (agent access controls: `available === false`) stays listed, greyed
+/// out with the reason, and can't be inserted.
+export function agentMentionCandidates(
+  agents: { name: string; available?: boolean; unavailableReason?: string | null }[],
+): MentionCandidate[] {
+  return agents.map((a) =>
+    a.available === false
+      ? { handle: a.name, kind: "Not available", disabledReason: a.unavailableReason || "You can't use this agent" }
+      : { handle: a.name, kind: "Agent" },
+  );
+}
+
+/// Whether a candidate can be inserted into the draft.
+export function mentionSelectable(c: MentionCandidate | undefined): boolean {
+  return Boolean(c) && !c!.disabledReason;
 }
 
 /// Detect an `@token` immediately before the caret. The token is a single word

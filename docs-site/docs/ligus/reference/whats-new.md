@@ -87,6 +87,18 @@ relay, langstroth-auth and the Helm charts). The CLI is `ligus`, settings are
   run agent turns through the same engine, with the same repository gate and
   sandbox policy. See
   [One turn engine on every host](../concepts/agents.md#one-turn-engine-on-every-host).
+- **You decide who can use your agents.** A personal agent is "Only me"
+  until its owner opens it to everyone; a shared agent is everyone's unless
+  an Admin restricts it. Every person behind a turn must be allowed, through
+  hand-offs, cascades and workflows too, and the offline fallback never runs
+  someone else's agent on the sender's device. Owners set daily budgets
+  (turns per member, an estimated-spend cap), see per-member usage, can be
+  notified when someone else uses an agent, and keep their plan window for
+  their own requests. `@ligus` in a shared chat answers only the person
+  whose device runs it, unless they open it in Settings. The `@mention` autocomplete greys out agents you can't
+  use, and a model gateway can count per member through the pseudonymous
+  `X-Ligus-Member` header. See
+  [Who can use an agent](../concepts/agents.md#who-can-use-an-agent).
 - **One answer per turn, from a device that has the code.** When several
   devices could answer a turn, they agree through signed claims; a host with
   a checkout of the chat's repository goes first, and a holder that goes

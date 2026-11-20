@@ -978,6 +978,8 @@ export function PopoverItem({
   kind,
   active = false,
   danger = false,
+  disabled = false,
+  title,
   onSelect,
   onHover,
 }: {
@@ -986,21 +988,28 @@ export function PopoverItem({
   kind?: ReactNode;
   active?: boolean;
   danger?: boolean;
+  /// Listed but not selectable (greyed out; `title` says why).
+  disabled?: boolean;
+  title?: string;
   onSelect?: () => void;
   onHover?: () => void;
 }) {
   return (
     <button
       role="menuitem"
+      aria-disabled={disabled || undefined}
+      title={title}
       onMouseEnter={onHover}
       onMouseDown={(e) => {
         e.preventDefault();
-        onSelect?.();
+        if (!disabled) onSelect?.();
       }}
       className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
       style={{
         background: active ? SELECT_TINT : "transparent",
         color: danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
+        opacity: disabled ? 0.5 : undefined,
+        cursor: disabled ? "not-allowed" : undefined,
       }}
     >
       {glyph != null && <span className="grid h-5 w-5 shrink-0 place-items-center">{glyph}</span>}

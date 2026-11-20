@@ -1008,6 +1008,15 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 .collect();
             seen.extend(s.messages.iter().map(|m| m.id));
             for last in triggers {
+                // Agent access controls: this runs on the operator's own
+                // credential, like a desktop's primary runtime, so in a shared
+                // room it answers only the operator unless they opened it
+                // (LIGUS_AGENT_OPEN_TO_MEMBERS=1). Refused: left for others.
+                let open = ligus_core::names::var("LIGUS_AGENT_OPEN_TO_MEMBERS").is_ok_and(|v| v == "1");
+                if !svc.primary_turn_access(s.id, last.id, open).map(|d| d.allowed()).unwrap_or(false) {
+                    println!("↳ @{name}: not answering {} (another member's message; set LIGUS_AGENT_OPEN_TO_MEMBERS=1 to answer everyone)", last.id);
+                    continue;
+                }
                 // Non-Send store is held across .await — cmd_agent runs on a
                 // current-thread runtime (see run()), so this is allowed.
                 let mut turns = turns_for(&worker::through_trigger(&s, last.id), None, &name);

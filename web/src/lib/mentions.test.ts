@@ -73,3 +73,22 @@ describe("cleanName", () => {
     expect(cleanName(" A‮na​  B ")).toBe("Ana B");
   });
 });
+
+describe("agent access in the @mention autocomplete", () => {
+  it("an agent you can't use stays listed, greyed out with its reason, and can't be inserted", async () => {
+    const { agentMentionCandidates, mentionSelectable } = await import("./mentions");
+    const cands = agentMentionCandidates([
+      { name: "scout", available: true },
+      { name: "private", available: false, unavailableReason: "Only its owner can use this agent" },
+      { name: "legacy" },
+    ]);
+    expect(cands.map((c) => c.handle)).toEqual(["scout", "private", "legacy"]);
+    const priv = cands[1];
+    expect(priv.disabledReason).toBe("Only its owner can use this agent");
+    expect(priv.kind).toBe("Not available");
+    expect(mentionSelectable(priv)).toBe(false);
+    expect(mentionSelectable(cands[0])).toBe(true);
+    expect(mentionSelectable(cands[2])).toBe(true);
+    expect(filterMentions(cands, "pri")).toEqual([priv]);
+  });
+});

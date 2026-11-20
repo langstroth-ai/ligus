@@ -251,8 +251,10 @@ pub(crate) fn route_block(
 /// (its participants, or the whole roster when none are picked). An agent
 /// sent to a host that is offline (by presence), on a runtime the chat's
 /// sandbox envelope refuses, or on a throttled runtime is left out (see
-/// [`route_block`]).
-fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: &WorkspaceView) -> Vec<flow::route::Candidate> {
+/// [`route_block`]), and so is one the person behind `trigger` may not use
+/// (agent access controls): the router never hands someone's message to an
+/// agent that would only refuse it.
+fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: &WorkspaceView, trigger: Uuid) -> Vec<flow::route::Candidate> {
     let careers = careers(view);
     let now = ligus_core::Timestamp::now();
     let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
@@ -266,7 +268,7 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: 
         if !session.participant_agent_ids.is_empty() && !session.participant_agent_ids.contains(&a.id) {
             continue;
         }
-        if !host_live(&a.host_id) {
+        if !host_live(&a.host_id) || !svc.agent_usable_for(session.id, trigger, a.id) {
             continue;
         }
         // An agent whose host says it has no checkout of this chat's repo
@@ -369,7 +371,7 @@ pub(crate) fn route_target(
     let now = flow::now_ms();
     let view = view_with(svc, session.workspace_id);
     let book = score_book(&view, &s, now);
-    let cands = candidates(state, svc, session, &view);
+    let cands = candidates(state, svc, session, &view, trigger_id);
     let config_stops = view.config.route_stops.clone();
     let thread = thread_memory(session, now);
     let secret = key_secret_cache(state, session.workspace_id);
@@ -1401,6 +1403,11 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
     }
     let workspace_id = session.workspace_id;
     drop(svc);
+    // Agent access controls before claiming: the stage's agent must be open
+    // to the person who started the run.
+    if !crate::agent_turn_allowed(state, session_id, workspace_id, prompt_id, &crate::responder_for(state, &session, Some(&agent)), false) {
+        return None;
+    }
     // Through the dispatcher (design repos-and-checkouts 11.5): the claim
     // carries this device's signed coverage of the chat's repo, and the
     // host's worker claims the same prompt key, so whoever folds first runs

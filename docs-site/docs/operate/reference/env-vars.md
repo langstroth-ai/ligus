@@ -76,7 +76,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_MAX_CASCADE_HANDOFFS` | `6` | desktop, CLI | hand-offs per cascade |
 | `LIGUS_MCP_MAX_CASCADE_ASKS` | `6` | desktop, CLI | questions and permission requests per cascade |
 | `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn; reaching it ends the turn ([what is counted](../../ligus/addons/ligus-mcp.md#spend)) |
-| `LIGUS_MODEL_PRICES` | unset | desktop, CLI | `prefix=in/out,…` USD per million tokens, for pricing API turns against the spend budget |
+| `LIGUS_MODEL_PRICES` | unset | desktop, CLI | `prefix=in/out,…` USD per million tokens, for pricing API turns against the per-turn spend budget and an agent's [daily spending cap](../../ligus/concepts/agents.md#daily-budgets) (counted on the device that runs the agent, so set it there) |
 | `LIGUS_MCP_BRIDGE` | this binary | desktop, CLI | the program agents run as `ligus mcp-bridge` |
 
 ### `ligus agent` (development responder)
@@ -84,6 +84,7 @@ first time it is created; after that, Settings is the source of truth.
 | Variable | Default | Effect |
 |---|---|---|
 | `LIGUS_ALLOW_PERSONAL_AGENT` | unset | must be set for `ligus agent` to run at all |
+| `LIGUS_AGENT_OPEN_TO_MEMBERS` | unset | `1`: `ligus agent` answers every member's messages in a shared room; unset, only its operator's (it runs on the operator's credential) |
 | `LIGUS_RUNTIME` | unset | workspace runtime id (same as `--runtime`) |
 | `LIGUS_PROVIDER` | `anthropic` | `anthropic`, `openai`, `openrouter` or `ollama` when no workspace runtime is used |
 | `LIGUS_MODEL` | `claude-sonnet-4-5` | model for that provider |

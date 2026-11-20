@@ -17,6 +17,9 @@ pub mod agent_turn;
 pub mod apply_host;
 pub mod attachment_blob;
 pub mod attachment_safety;
+pub mod agent_access;
+#[cfg(test)]
+mod agent_access_tests;
 pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;

@@ -354,6 +354,9 @@ export const presenceList = () => invoke<PresenceDto[]>("presence_list");
 /// Privacy). Only that you're typing, sealed under the workspace key; never what.
 export const getShareTyping = () => invoke<boolean>("get_share_typing");
 export const setShareTyping = (enabled: boolean) => invoke<void>("set_share_typing", { enabled });
+/// Whether other members may use this device's `@ligus` in shared chats.
+export const getPrimaryOpenToMembers = () => invoke<boolean>("get_primary_open_to_members");
+export const setPrimaryOpenToMembers = (enabled: boolean) => invoke<void>("set_primary_open_to_members", { enabled });
 
 export const setWorkspaceRoot = (path: string) =>
   invoke<void>("set_workspace_root", { path });
@@ -1064,6 +1067,27 @@ export const addAgent = (
 
 export const removeAgent = (sessionId: string, agentId: string) =>
   invoke<void>("remove_agent", { sessionId, agentId });
+
+// ── Agent access controls: who may use an agent, its budgets, its usage ─────
+export type { AgentUsageDto } from "@/bindings/AgentUsageDto";
+export type { AgentUsageRowDto } from "@/bindings/AgentUsageRowDto";
+import type { AgentUsageDto } from "@/bindings/AgentUsageDto";
+
+/// Who may use an agent ("owner": only its owner, or Admins on a shared
+/// agent; "everyone"), its daily budgets (`memberTurnsPerDay`: null = the
+/// default, 0 = unlimited; `usdCentsPerDay`: null = no cap) and the owner's
+/// "notify me" setting. The owner's alone (an Admin's on a shared agent).
+export const setAgentAccess = (
+  agentId: string,
+  access: "owner" | "everyone",
+  memberTurnsPerDay: number | null,
+  usdCentsPerDay: number | null,
+  notifyOnUse: boolean,
+) => invoke<void>("set_agent_access", { agentId, access, memberTurnsPerDay, usdCentsPerDay, notifyOnUse });
+
+/// The agent's usage as this device counted it, per member: today and this
+/// month (UTC days). Its owner's only.
+export const getAgentUsage = (agentId: string) => invoke<AgentUsageDto>("get_agent_usage", { agentId });
 
 // ── Queued work (spec §12.5): unanswered agent mentions + host status ────────
 export type { QueuedWorkDto } from "@/bindings/QueuedWorkDto";

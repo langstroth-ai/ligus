@@ -731,6 +731,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/chats/{id}/typing", get(super::typing_api::get_typing).post(super::typing_api::post_typing))
         .route("/v1/agents", get(list_agents))
         .route("/v1/agents/{id}/host", put(set_agent_host))
+        .route("/v1/agents/{id}/usage", get(agent_usage))
         .route("/v1/hosts", get(list_hosts))
         .route("/v1/guards", get(workspace_guards))
         .route("/v1/chats/{id}/lockdown/clear", post(clear_lockdown))
@@ -1070,8 +1071,59 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
         // Empty host = the agent owner's own device (the desktop's default).
         v["hostLabel"] = json!("Owner's device");
     }
+    // Agent access controls: whether this box's person may use the agent
+    // (the phone greys it out with the reason), and who may.
+    let (links, roster, me) = {
+        let svc = s.lock();
+        (svc.device_links(s.ws).unwrap_or_default(), svc.workspace_roster(s.ws).ok(), svc.author().id.clone())
+    };
+    let person = links.person(&me).to_string();
+    let role = ligus_runtime::agent_access::person_role(roster.as_ref(), &links, &person);
+    let why = ligus_runtime::agent_access::availability(a, &links, &me, role);
+    v["available"] = json!(why.is_none());
+    if let Some(why) = why {
+        v["unavailableReason"] = json!(why);
+    }
+    v["access"] = json!(ligus_runtime::agent_access::access_label(a));
     super::people::decorate_agent(&mut v, s, a, hosts);
     v
+}
+
+/// `GET /v1/agents/{id}/usage`: the agent's usage **as this box counted
+/// it** (the turns it ran for the agent: an agent hosted elsewhere shows
+/// nothing here), per member, today and this month (UTC days), with the
+/// estimated cost where the runtime reported usage. Its owner's only.
+async fn agent_usage(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let id = parse_id(&id, "agent")?;
+    let (_, config) = hosts_and_agents(&s)?;
+    let agent = config.workspace_agents.iter().find(|a| a.id == id).ok_or_else(|| ApiError::not_found("agent"))?;
+    // The same rule as every other surface (`may_manage_agent`): its owner,
+    // or an Admin for a shared agent. Checked before anything is read.
+    let view = {
+        let svc = s.lock();
+        if !svc.may_manage_agent(s.ws, agent) {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "only the agent's owner sees its usage"));
+        }
+        svc.agent_usage_view(id)?
+    };
+    Ok(Json(json!({
+        "agentId": id,
+        "day": view.day,
+        "today": usage_rows(&view.today),
+        "month": usage_rows(&view.month),
+    })))
+}
+
+fn usage_rows(rows: &[ligus_runtime::event_store::AgentUsageRow]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            let mut v = json!({ "member": r.member, "turns": r.turns, "uncostedTurns": r.uncosted });
+            if r.turns > r.uncosted {
+                v["estimatedCostUsd"] = json!((r.cost_usd * 10_000.0).round() / 10_000.0);
+            }
+            v
+        })
+        .collect()
 }
 
 async fn list_agents(State(s): S) -> ApiResult<Json<Value>> {

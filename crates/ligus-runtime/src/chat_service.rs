@@ -132,6 +132,9 @@ pub struct ChatService {
     presence_draft: Option<PresenceDraft>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
+    /// Agent access refusal notes this device posted recently, and turns
+    /// it refused silently (device-local, `agent_access::note_refusal`).
+    pub(crate) refusals: crate::agent_access::RefusalMemory,
     /// While set, every append is an agent's effect (Track D): held to the
     /// Agent tier, and signed with the agent's own key when this host holds
     /// one (see [`ChatService::as_agent`]).
@@ -194,6 +197,7 @@ impl ChatService {
             capture_presence: false,
             presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
+            refusals: Default::default(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
             dispatch_seen: std::collections::HashMap::new(),
@@ -2940,7 +2944,57 @@ impl ChatService {
         (grants, here)
     }
 
+    /// The people behind a turn's trigger chain, the same walk as
+    /// [`Self::trigger_author_role`]: every human whose message the chain
+    /// reaches (across hand-offs and @mention cascades), a workflow stage's
+    /// run initiator, and the member a foreign agent key's reply speaks for
+    /// (its host device's). The first is the **requester**: the person
+    /// nearest the trigger (a user message's own author). Member ids, as
+    /// signed in the envelopes, never the payload's `actor_identity`.
+    /// `None` when the chain has no human or can't be resolved (fail
+    /// closed): agent access refuses it unless the agent is open to
+    /// everyone.
+    pub fn trigger_people(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
+        Ok(self.trigger_chain(session_id, message_id, false)?.map(|c| c.people))
+    }
+
+    /// The people behind the tool and directive hand-off cards that wake
+    /// `agent_id` on `trigger` (every host's queue runs a card's receiver
+    /// on the card's message, [`pending_turns`]): each card's signer, as
+    /// [`Self::trigger_people`] judges a relaying reply (none for a card
+    /// this device signed). A card is a request too: a member's card
+    /// pointing at someone else's message can't borrow that message's
+    /// author. `None` when a signer can't be resolved (fail closed).
+    pub fn handoff_card_people(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
+        let to = ligus_core::flow::agent_key(Some(agent_id));
+        let envs = self.store.list_copies(session_id)?;
+        let mut cx = RoleCx::default();
+        let mut out: Vec<String> = Vec::new();
+        for env in &envs {
+            let SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::Handoff(card) } = &env.payload else { continue };
+            if card.to != to || card.message_id != Some(trigger) || !(card.via == "tool" || card.via == "directive") {
+                continue;
+            }
+            match self.foreign_signer_cap(session_id, env, &mut cx)? {
+                Cap::Own => {}
+                Cap::Role(_, who) => {
+                    for w in who {
+                        if !out.contains(&w) {
+                            out.push(w);
+                        }
+                    }
+                }
+                Cap::Unresolved => return Ok(None),
+            }
+        }
+        Ok(Some(out))
+    }
+
     fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
+        Ok(self.trigger_chain(session_id, message_id, shell)?.map(|c| c.lowest))
+    }
+
+    fn trigger_chain(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<Chain>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
         // Every event on the chain is judged against this chat's own
@@ -2951,6 +3005,19 @@ impl ChatService {
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
+        // The people behind the chain: the humans whose messages (and
+        // workflow runs) it reaches first, then the signers it passes
+        // through (a relaying agent's person). The first is the requester,
+        // the person a turn is counted against: never a relaying agent's
+        // person, or a member over their cap could ask through someone
+        // else's agent and have the turn counted against them.
+        let mut people: Vec<String> = Vec::new();
+        let mut signers: Vec<String> = Vec::new();
+        let add = |people: &mut Vec<String>, id: &str| {
+            if !id.is_empty() && !people.iter().any(|p| p == id) {
+                people.push(id.to_string());
+            }
+        };
         let mut seen = std::collections::HashSet::new();
         let mut queue = vec![message_id];
         while let Some(id) = queue.pop() {
@@ -2982,7 +3049,12 @@ impl ChatService {
                 for env in &touching {
                     match self.foreign_signer_cap(session_id, env, &mut cx)? {
                         Cap::Own => {}
-                        Cap::Role(r) => lowest = Some(min_role(lowest, r)),
+                        Cap::Role(r, who) => {
+                            lowest = Some(min_role(lowest, r));
+                            for w in &who {
+                                add(&mut signers, w);
+                            }
+                        }
                         Cap::Unresolved => return Ok(None),
                     }
                 }
@@ -2998,13 +3070,29 @@ impl ChatService {
             humans += 1;
             let Some(role) = self.human_message_role(session_id, &touching, &mut cx, shell)? else { return Ok(None) };
             lowest = Some(min_role(lowest, role));
+            for e in &touching {
+                match e.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).filter(|id| !id.is_empty()) {
+                    Some(id) => add(&mut people, id),
+                    None => return Ok(None),
+                }
+            }
             let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
             for run_id in runs {
                 let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx, shell)? else { return Ok(None) };
                 lowest = Some(min_role(lowest, role));
+                match run_initiator(&envs, run_id) {
+                    Some(id) => add(&mut people, &id),
+                    None => return Ok(None),
+                }
             }
         }
-        Ok(if humans == 0 { None } else { lowest })
+        for w in &signers {
+            add(&mut people, w);
+        }
+        Ok(match lowest {
+            Some(lowest) if humans > 0 && !people.is_empty() => Some(Chain { lowest, people }),
+            _ => None,
+        })
     }
 
     /// A human's message: Owner when every event shaping it was signed by
@@ -3040,7 +3128,7 @@ impl ChatService {
         let Some(stamp) = env.actor_stamp.as_ref() else { return Ok(Cap::Unresolved) };
         if stamp.actor.kind != ligus_core::ActorKind::Agent {
             return Ok(match self.envelope_author_role(session_id, env, cx)? {
-                Some(r) => Cap::Role(r),
+                Some(r) => Cap::Role(r, vec![stamp.actor.id.clone()]),
                 None => Cap::Unresolved,
             });
         }
@@ -3059,12 +3147,14 @@ impl ChatService {
         }
         let Some(device) = roster.devices.get(&key.host_device_id) else { return Ok(Cap::Unresolved) };
         let mut lowest = None;
-        for m in roster.members.values() {
+        let mut who = Vec::new();
+        for (id, m) in &roster.members {
             if m.account_id.is_some_and(|a| device.accounts.contains(&a)) {
                 lowest = Some(min_role(lowest, m.role));
+                who.push(id.clone());
             }
         }
-        Ok(lowest.map_or(Cap::Unresolved, Cap::Role))
+        Ok(lowest.map_or(Cap::Unresolved, |r| Cap::Role(r, who)))
     }
 
     /// The role of the human who started workflow run `run_id`: the author
@@ -3616,12 +3706,29 @@ impl RoleCx {
     }
 }
 
+/// A resolved trigger chain: the lowest role behind it and the people
+/// behind it, nearest first.
+struct Chain {
+    lowest: WorkspaceRole,
+    people: Vec<String>,
+}
+
+/// The stamped author of workflow run `run_id`'s first record on this log.
+fn run_initiator(envs: &[SessionEventEnvelope], run_id: Uuid) -> Option<String> {
+    envs.iter()
+        .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
+        .min_by_key(|e| (e.lamport, e.sequence))
+        .and_then(|e| e.actor_stamp.as_ref())
+        .map(|s| s.actor.id.clone())
+        .filter(|id| !id.is_empty())
+}
+
 /// What one event on an agent's output does to a chain's role.
 enum Cap {
     /// Written by this device: no cap.
     Own,
-    /// Capped at the signer's role.
-    Role(WorkspaceRole),
+    /// Capped at the signer's role; the people it speaks for.
+    Role(WorkspaceRole, Vec<String>),
     /// The signer can't be resolved: the chain fails closed.
     Unresolved,
 }

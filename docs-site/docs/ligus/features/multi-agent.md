@@ -129,6 +129,15 @@ review markers on files instead of mentioning each other; un-addressed
 messages can be routed by measured outcomes (shadow mode first); and work
 nobody was asked to do lands on a task board. See [Flow](flow.md).
 
+### Hand-offs can't widen who uses an agent
+
+A hand-off or an `@mention` cascade runs for the people who started it. If
+your agent hands work to a teammate's personal agent that is set to "Only
+me", that agent's device refuses the turn with a short reply, exactly as if
+you had mentioned it yourself; the same holds for a workflow stage started
+by someone the agent isn't open to. See
+[Who can use an agent](../concepts/agents.md#who-can-use-an-agent).
+
 ## Quorum voting on proposals
 
 A proposal (a reviewed file write, command, etc.) can require **more than

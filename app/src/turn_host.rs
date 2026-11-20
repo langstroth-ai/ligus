@@ -174,6 +174,38 @@ impl TurnHost for DesktopHost<'_> {
         crate::guards::record_sandbox_egress_denials(self.state, self.workspace_id, self.session_id, denied);
     }
 
+    fn agent_used(&self, agent: &str, use_: &ligus_runtime::agent_access::AgentUse) {
+        // "Notify me when someone else uses this agent": this device runs
+        // its owner's agent for another member.
+        if !use_.notify {
+            return;
+        }
+        let who = {
+            let svc = self.state.service.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(s) = svc.load(self.session_id).ok().flatten() else { return };
+            // Only on the owner's own device (an agent sent to another
+            // member's machine as its host doesn't notify that member).
+            let links = svc.device_links(self.workspace_id).unwrap_or_default();
+            let mine = s
+                .workspace_agents
+                .iter()
+                .find(|a| Some(a.id) == self.agent_id)
+                .is_some_and(|a| links.person(&a.owner_actor_id) == links.person(&svc.author().id));
+            if !mine {
+                return;
+            }
+            s.members.into_iter().find(|m| links.person(&m.id) == use_.requester).map(|m| m.actor.display_name).unwrap_or_else(|| "Someone".into())
+        };
+        use tauri_plugin_notification::NotificationExt;
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title("Ligus")
+            .body(format!("{} is using {}", ligus_runtime::display::shown(&who), ligus_runtime::display::shown(agent)))
+            .show();
+    }
+
     fn usage_error(&self, provider: ModelProviderKind, message: &str) {
         crate::guards::record_usage_error(self.state, provider, message);
     }

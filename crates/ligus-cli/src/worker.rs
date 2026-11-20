@@ -332,7 +332,7 @@ pub async fn drain_tick(
     if failed.len() >= 8192 {
         failed.clear();
     }
-    let (work, runtimes) = {
+    let (work, runtimes, refused) = {
         let mut svc = lock(svc);
         // A box that can't write (revoked, or awaiting its owner's approval)
         // can't claim or answer anything either.
@@ -390,8 +390,26 @@ pub async fn drain_tick(
         };
         let live = |d: Uuid| ctx.presence.is_none() || online.contains(&d);
         let mut work = Vec::new();
+        let mut refused = false;
         for pm in candidates {
             let Some(s) = svc.load(pm.session_id)? else { continue };
+            // Agent access controls: this host runs the agent on its own
+            // credentials, so who may use it (and its daily budgets) is
+            // decided here, before claiming. A refused turn is answered with
+            // a short note and drops out of the queue.
+            match svc.gate_agent_turn(pm.session_id, s.workspace_id, pm.message_id, pm.agent_id) {
+                Ok(Ok(_)) => {}
+                Ok(Err(note)) => {
+                    eprintln!("worker: @{} in {} refused: {note}", pm.agent_name, pm.session_id);
+                    // Told after the service is released (the sink reads it).
+                    refused = true;
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("worker: access check for {} failed: {e}", pm.message_id);
+                    continue;
+                }
+            }
             let coverage = match roster.as_ref() {
                 Some(r) => ligus_runtime::repos::dispatch_coverage(svc.store(), svc.device_id(), &s, r, &ligus_runtime::repos::cloning()),
                 None => ligus_core::dispatch::Coverage::NoRepo,
@@ -406,8 +424,11 @@ pub async fn drain_tick(
                 Err(e) => eprintln!("worker: claim {} failed: {e}", pm.message_id),
             }
         }
-        (work, runtimes)
+        (work, runtimes, refused)
     };
+    if refused {
+        sink.changed();
+    }
     for pm in &work {
         sink.status(pm.session_id, pm.agent_id, TurnState::Queued, None);
     }
@@ -743,7 +764,10 @@ async fn run_turn(
         timeout: turn_timeout(),
         options: EngineOptions { empty_reply_notice: true, warm_context_probe: true, ..Default::default() },
     };
-    let result = turn_engine::run(&host, input).await;
+    // On the heap: the engine's future is large, and the serve worker's
+    // thread (a current-thread runtime) would carry it on its own stack,
+    // which overflowed on Windows.
+    let result = Box::pin(turn_engine::run(&host, input)).await;
     drop(stop_guard);
     match result {
         Ok(outcome) => {

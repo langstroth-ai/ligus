@@ -32,6 +32,8 @@ pub struct AgentState {
     pub host_id: String,
     pub runtime_id: String,
     pub owner: String,
+    /// Who may use it and its budgets (only the owner changes them).
+    pub policy: crate::agent::AgentPolicy,
 }
 
 /// One device, as the trust events on this log certify it.
@@ -569,7 +571,7 @@ impl RosterTracker {
         self.state.agents = fold
             .workspace_agents
             .iter()
-            .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone() }))
+            .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone(), policy: a.policy() }))
             .collect();
         self.state.dearth = fold.guards.dearth_on().is_some();
         self.state.zones = fold.flow.zones.clone();

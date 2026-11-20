@@ -48,6 +48,10 @@ function handle(cmd: string, args: Args): unknown {
       return { original: "fn main() {}\n", modified: "fn main() {\n    println!(\"hi\");\n}\n", isBinary: false };
     case "list_agents":
       return fx.agents;
+    case "set_agent_access":
+      return null;
+    case "get_agent_usage":
+      return fx.agentUsage(String(args?.agentId ?? ""));
     case "list_members":
       return fx.members;
     case "workspace_members":
@@ -57,6 +61,10 @@ function handle(cmd: string, args: Args): unknown {
     case "get_share_typing":
       return true;
     case "set_share_typing":
+      return null;
+    case "get_primary_open_to_members":
+      return false;
+    case "set_primary_open_to_members":
       return null;
     case "list_proposals":
       return flags.empty ? [] : fx.proposals;
