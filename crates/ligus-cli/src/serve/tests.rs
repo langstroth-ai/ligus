@@ -654,6 +654,7 @@ async fn peer_names_reach_the_api_cleaned() {
         if agents["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["id"] == json!(evil_agent)))
             && memory["total"].as_u64() == Some(1)
             && h.get("/v1/chats").await["chats"].as_array().is_some_and(|c| c.iter().any(|c| c["id"] == json!(chat_id)))
+            && h.get(&format!("/v1/chats/{chat_id}/details")).await["workflowRuns"].as_array().is_some_and(|r| !r.is_empty())
         {
             break;
         }
