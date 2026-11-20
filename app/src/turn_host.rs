@@ -182,11 +182,19 @@ impl TurnHost for DesktopHost<'_> {
         }
         let who = {
             let svc = self.state.service.lock().unwrap_or_else(|e| e.into_inner());
-            svc.load(self.session_id)
-                .ok()
-                .flatten()
-                .and_then(|s| s.members.into_iter().find(|m| m.id == use_.requester).map(|m| m.actor.display_name))
-                .unwrap_or_else(|| "Someone".into())
+            let Some(s) = svc.load(self.session_id).ok().flatten() else { return };
+            // Only on the owner's own device (an agent sent to another
+            // member's machine as its host doesn't notify that member).
+            let links = svc.device_links(self.workspace_id).unwrap_or_default();
+            let mine = s
+                .workspace_agents
+                .iter()
+                .find(|a| Some(a.id) == self.agent_id)
+                .is_some_and(|a| links.person(&a.owner_actor_id) == links.person(&svc.author().id));
+            if !mine {
+                return;
+            }
+            s.members.into_iter().find(|m| links.person(&m.id) == use_.requester).map(|m| m.actor.display_name).unwrap_or_else(|| "Someone".into())
         };
         use tauri_plugin_notification::NotificationExt;
         let _ = self
