@@ -132,6 +132,150 @@ else
 fi
 if [ "$(nnp "$TMP/bwrap-plain" no)" = NoNewPrivileges=yes ]; then pass "a non-setuid bwrap keeps NoNewPrivileges"; else fail "non-setuid bwrap"; fi
 
+# ligus-local's LaunchAgent (start --launchd): the plist is rendered into a
+# temp HOME and checked; install, status and removal run against a FAKE
+# launchctl (LIGUS_LOCAL_LAUNCHCTL and first on PATH): nothing is ever loaded
+# into the real launchd, and the real ~/Library is never touched.
+H="$TMP/la-home"; mkdir -p "$H" "$TMP/fakebin" "$TMP/lc" "$TMP/b &<\"'>"
+LB="$TMP/b &<\"'>/ligus"; printf '#!/bin/sh\n' >"$LB"; chmod +x "$LB"
+cat >"$TMP/fakebin/launchctl" <<'FAKE'
+#!/bin/sh
+# Fake launchctl: records calls; "loaded" agents are files in $FAKE_LAUNCHCTL_DIR.
+d=${FAKE_LAUNCHCTL_DIR:?}
+printf '%s\n' "$*" >>"$d/calls"
+case $1 in
+  enable|disable) exit 0 ;;
+  bootstrap)
+    label=$(awk 'p { sub(/^[ \t]*<string>/, ""); sub(/<\/string>.*/, ""); print; exit } /<key>Label<\/key>/ { p = 1 }' "$3")
+    if [ -e "$d/loaded.$label" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
+    cp "$3" "$d/loaded.$label" ;;
+  bootout)
+    label=${2##*/}
+    if [ ! -e "$d/loaded.$label" ]; then echo "Boot-out failed: 3: No such process" >&2; exit 3; fi
+    rm -f "$d/loaded.$label" ;;
+  print)
+    label=${2##*/}
+    if [ ! -e "$d/loaded.$label" ]; then echo "Could not find service \"$label\" in domain" >&2; exit 113; fi
+    printf '%s = {\n\tactive count = 1\n\tstate = running\n\tpid = 4242\n}\n' "$2" ;;
+  *) echo "fake launchctl: unexpected: $*" >&2; exit 64 ;;
+esac
+FAKE
+chmod +x "$TMP/fakebin/launchctl"
+la() { # ligus-local with the fake launchd, the temp HOME and the awkward binary path
+  env HOME="$H" PATH="$TMP/fakebin:$PATH" LIGUS_LOCAL_OS=Darwin LIGUS_LOCAL_LAUNCHCTL="$TMP/fakebin/launchctl" \
+    FAKE_LAUNCHCTL_DIR="$TMP/lc" LIGUS_BIN="$LB" "$LOCAL" "$@"
+}
+la_env() { # file data-dir role label: an env file as configure writes it, plus extras
+  local lk=LIGUS_SERVE_LABEL; [ "$3" = worker ] && lk=LIGUS_WORKER_LABEL
+  mkdir -p "$2"
+  { echo "# Written by deploy/local/ligus-local configure."
+    echo "LIGUS_DATA_DIR='$2'"
+    echo "LIGUS_REQUIRE_SANDBOX=1"
+    echo "LIGUS_RELAY_URL='https://relay.example/v1?a=1&b=<2>'"
+    echo "$lk='$4'"
+    echo "LIGUS_WORKSPACE='local-trial-test'"
+    echo "LIGUS_WORKSPACE_KEY=not-a-real-secret"
+    echo "LIGUS_WORKSPACE_KEY_FILE='$2/throwaway-workspace.key'"
+    echo "export LIGUS_REPOS_DIR=\"$TMP/my repos\""
+    echo "LIGUS_NTFY_URL=https://bee:not-a-real-pass@ntfy.example"
+  } >"$1"; chmod 600 "$1"
+}
+# shellcheck disable=SC2016  # the $ in the label is literal
+la_env "$TMP/lw.env" "$TMP/lw data" worker 'My Box & "co" <1> $HOME'
+set +e
+la unit --launchd --role worker --data-dir "$TMP/lw data" --env-file "$TMP/lw.env" >"$TMP/p1.plist" 2>"$TMP/p1.err"; RC=$?
+set -e
+if [ "$RC" = 0 ] && python3 -I - "$TMP/p1.plist" "$LB" "$TMP/lw data" "$H" "$TMP" <<'PY'
+import plistlib, sys
+path, binp, data, home, tmp = sys.argv[1:]
+with open(path, "rb") as f:
+    p = plistlib.load(f)
+label = 'My Box & "co" <1> $HOME'
+assert p["Label"] == "ai.ligus.worker.my-box-co-1-home", p["Label"]
+assert p["ProgramArguments"] == [binp, "worker", "--label", label], p["ProgramArguments"]
+e = p["EnvironmentVariables"]
+assert e["LIGUS_DATA_DIR"] == data and e["LIGUS_REQUIRE_SANDBOX"] == "1"
+assert e["LIGUS_RELAY_URL"] == "https://relay.example/v1?a=1&b=<2>", e["LIGUS_RELAY_URL"]
+assert e["LIGUS_WORKER_LABEL"] == label and e["LIGUS_REPOS_DIR"] == tmp + "/my repos"
+assert e["LIGUS_WORKSPACE_KEY_FILE"] == data + "/throwaway-workspace.key"
+assert "LIGUS_WORKSPACE_KEY" not in e, "a secret-looking setting reached the plist"
+assert "LIGUS_NTFY_URL" not in e, "a URL with credentials reached the plist"
+assert e.get("PATH"), "no PATH"
+assert p["WorkingDirectory"] == data
+log = home + "/Library/Logs/ligus/worker.my-box-co-1-home.log"
+assert p["StandardOutPath"] == log and p["StandardErrorPath"] == log, p["StandardOutPath"]
+assert p["RunAtLoad"] is True and p["KeepAlive"] is True and p["ThrottleInterval"] == 10
+assert p["ProcessType"] == "Background" and p["Umask"] == 0o077 and p["ExitTimeOut"] == 20
+PY
+then pass "launchd plist: arguments, environment, escaping (spaces, quotes, &, <, \$), no secrets"
+else fail "launchd plist: rc $RC $(cat "$TMP/p1.err")"; fi
+if grep -Eq 'not-a-real-(secret|pass)' "$TMP/p1.plist"; then fail "launchd plist carries a secret value"; else pass "launchd plist leaves the secret value out"; fi
+if grep -q 'LIGUS_WORKSPACE_KEY LIGUS_NTFY_URL' "$TMP/p1.err"; then pass "launchd unit names the setting it left out"; else fail "launchd unit: no note about the skipped setting"; fi
+if command -v plutil >/dev/null 2>&1; then
+  if plutil -lint "$TMP/p1.plist" >/dev/null; then pass "launchd plist passes plutil -lint"; else fail "plutil -lint"; fi
+else
+  printf 'skip plutil -lint (not macOS)\n'
+fi
+if [ ! -e "$H/Library" ]; then pass "unit --launchd writes nothing"; else fail "unit --launchd wrote under HOME"; fi
+set +e
+env HOME="$H" LIGUS_BIN="$TMP/x
+<string>evil</string>" "$LOCAL" unit --launchd --role serve --data-dir "$TMP/lw data" --env-file "$TMP/lw.env" >"$TMP/p2.plist" 2>/dev/null; RC=$?
+set -e
+if [ "$RC" = 2 ] && ! grep -q evil "$TMP/p2.plist"; then pass "launchd plist refuses a line break"; else fail "launchd plist with a line break: rc $RC"; fi
+run "$TMP/la0" env HOME="$H" LIGUS_LOCAL_OS=Linux LIGUS_BIN="$LB" "$LOCAL" start --launchd --json --role worker --data-dir "$TMP/lw data" --env-file "$TMP/lw.env"
+check_json "ligus-local start --launchd off macOS" "$TMP/la0" 3 "$RC" launchd
+run "$TMP/la0b" "$LOCAL" start --launchd --systemd --json --role serve --data-dir "$TMP/x"
+check_json "ligus-local --launchd with --systemd is a usage error" "$TMP/la0b" 2 "$RC"
+
+# Install, reinstall, status, a second box, a label clash, relabel, removal.
+LA="$H/Library/LaunchAgents"; UID_=$(id -u)
+la_env "$TMP/ls.env" "$TMP/ls" serve "$(hostname -s 2>/dev/null || echo local)-serve"
+run "$TMP/la1" la start --launchd --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local start --launchd" "$TMP/la1" 0 "$RC" start
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+if [ -f "$LA/ai.ligus.serve.plist" ] && [ "$(mode "$LA/ai.ligus.serve.plist")" = 644 ] && [ -e "$TMP/lc/loaded.ai.ligus.serve" ]; then
+  pass "launchd agent ai.ligus.serve installed (0644) and bootstrapped"
+else fail "launchd install: $(ls -la "$LA" 2>&1)"; fi
+if [ "$(mode "$H/Library/Logs/ligus")" = 700 ] && [ -f "$H/Library/Logs/ligus/serve.log" ]; then pass "launchd log dir is owner-only"; else fail "launchd log dir mode"; fi
+if grep -qxF "bootstrap gui/$UID_ $LA/ai.ligus.serve.plist" "$TMP/lc/calls"; then pass "launchctl bootstrap gui/<uid> used"; else fail "launchctl calls: $(cat "$TMP/lc/calls")"; fi
+run "$TMP/la2" la start --launchd --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local start --launchd again (reinstall)" "$TMP/la2" 0 "$RC" start
+if [ "$(grep -c "^bootout gui/$UID_/ai.ligus.serve\$" "$TMP/lc/calls")" = 1 ] && [ "$(grep -c '^bootstrap ' "$TMP/lc/calls")" = 2 ] \
+  && [ "$(find "$LA" -type f | wc -l | tr -d ' ')" = 1 ]; then pass "reinstall boots the loaded agent out first, one plist"
+else fail "reinstall: $(cat "$TMP/lc/calls"; ls -a "$LA")"; fi
+run "$TMP/la3" la status --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local status with the launchd agent" "$TMP/la3" 0 "$RC" launchd
+if grep -q '"pid 4242' "$TMP/la3" || grep -q 'pid 4242' "$TMP/la3"; then pass "status reports the launchd pid"; else fail "status: $(cat "$TMP/la3")"; fi
+run "$TMP/la4" la start --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local start (no flag) leaves the launchd box alone" "$TMP/la4" 0 "$RC" start
+if [ ! -e "$TMP/ls/ligus-local-serve.pid" ]; then pass "no second process next to the launchd one"; else fail "plain start started a second process"; fi
+run "$TMP/la5" la stop --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local stop (no flag) points at --launchd" "$TMP/la5" 1 "$RC" stop
+la_env "$TMP/lw2.env" "$TMP/lw2" worker 'shed'
+run "$TMP/la6" la start --launchd --json --role worker --data-dir "$TMP/lw2" --env-file "$TMP/lw2.env"
+check_json "ligus-local start --launchd, a second box" "$TMP/la6" 0 "$RC" start
+if [ -f "$LA/ai.ligus.worker.shed.plist" ] && [ -f "$LA/ai.ligus.serve.plist" ] && [ -f "$H/Library/Logs/ligus/worker.shed.log" ]; then pass "two boxes get distinct labels, plists and logs"; else fail "second box: $(ls "$LA")"; fi
+la_env "$TMP/lw3.env" "$TMP/lw3" worker 'Shed'
+cp "$LA/ai.ligus.worker.shed.plist" "$TMP/shed.before"
+run "$TMP/la7" la start --launchd --json --role worker --data-dir "$TMP/lw3" --env-file "$TMP/lw3.env"
+check_json "ligus-local start --launchd refuses another box's label" "$TMP/la7" 1 "$RC" launchd.label
+if cmp -s "$TMP/shed.before" "$LA/ai.ligus.worker.shed.plist"; then pass "the other box's plist is untouched"; else fail "label clash overwrote a plist"; fi
+la_env "$TMP/lw2.env" "$TMP/lw2" worker 'barn'
+run "$TMP/la8" la start --launchd --json --role worker --data-dir "$TMP/lw2" --env-file "$TMP/lw2.env"
+check_json "ligus-local start --launchd after a relabel" "$TMP/la8" 0 "$RC" start
+if [ -f "$LA/ai.ligus.worker.barn.plist" ] && [ ! -e "$LA/ai.ligus.worker.shed.plist" ] && [ ! -e "$TMP/lc/loaded.ai.ligus.worker.shed" ]; then pass "relabel replaces the old agent"; else fail "relabel: $(ls "$LA")"; fi
+run "$TMP/la9" la stop --launchd --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local stop --launchd" "$TMP/la9" 0 "$RC" stop
+if [ ! -e "$LA/ai.ligus.serve.plist" ] && [ ! -e "$TMP/lc/loaded.ai.ligus.serve" ]; then pass "stop --launchd unloads and removes the plist"; else fail "stop --launchd left the agent"; fi
+run "$TMP/la10" la status --launchd --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local status --launchd after removal" "$TMP/la10" 1 "$RC" launchd
+run "$TMP/la11" la stop --launchd --json --role serve --data-dir "$TMP/ls" --env-file "$TMP/ls.env"
+check_json "ligus-local stop --launchd twice" "$TMP/la11" 0 "$RC" stop
+run "$TMP/la12" la uninstall --json --role worker --data-dir "$TMP/lw2" --env-file "$TMP/lw2.env"
+check_json "ligus-local uninstall removes the launchd agent" "$TMP/la12" 0 "$RC" unit
+if [ -z "$(find "$LA" -type f)" ] && ! ls "$TMP/lc"/loaded.* >/dev/null 2>&1; then pass "no agent left installed or loaded"; else fail "left behind: $(ls -a "$LA" "$TMP/lc")"; fi
+if ! grep -Eq '^(load|unload) ' "$TMP/lc/calls"; then pass "never the deprecated launchctl load/unload"; else fail "launchctl load/unload used"; fi
+
 # ligus-k8s never falls back to the current kube context.
 run "$TMP/c1" "$K8S" verify --json --namespace x --release r
 check_json "ligus-k8s without --context is a usage error" "$TMP/c1" 2 "$RC"

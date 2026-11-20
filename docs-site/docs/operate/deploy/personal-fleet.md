@@ -158,6 +158,42 @@ ligus serve: listening on http://192.0.2.10:8787 — workspace '…', host 63f2�
 and, on its first start, `ligus: joined workspace '…' as its own service
 member (Contributor).`
 
+### Start at login on macOS (optional) {#start-at-login-on-macos}
+
+On a Mac, `deploy/local/ligus-local` can install a per-user LaunchAgent so
+the box starts when you log in and launchd restarts it if it exits. It is
+off unless you ask for it; without `--launchd`, `start` runs the box in the
+background for the current session only.
+
+```sh
+L=deploy/local/ligus-local
+$L start  --role serve --data-dir ~/.ligus-serve --launchd   # install and load; rerun after editing the env file
+$L status --role serve --data-dir ~/.ligus-serve             # installed? loaded? pid?
+$L unit   --role serve --data-dir ~/.ligus-serve --launchd   # print the plist without installing it
+$L stop   --role serve --data-dir ~/.ligus-serve --launchd   # unload it and delete the plist (no more start at login)
+```
+
+- The agent is `~/Library/LaunchAgents/ai.ligus.<role>[.<label>].plist`
+  (mode 0644), loaded with `launchctl bootstrap gui/$(id -u)`. The label
+  suffix is the host label from `configure --label`, left out when it is the
+  default `<hostname>-<role>`, so a serve and a worker box, or two boxes of
+  one role with different labels, get their own agents.
+- The plist runs the `ligus` binary directly (`ProgramArguments`, no
+  shell), with `WorkingDirectory` set to the data dir, `KeepAlive` with a
+  10 s throttle, `ProcessType` Background and an owner-only umask. Its
+  output goes to `~/Library/Logs/ligus/<role>[.<label>].log` (the directory
+  is owner-only).
+- launchd can't read an env file, so `start --launchd` copies the env
+  file's settings (`LIGUS_DATA_DIR`, `LIGUS_RELAY_URL`, the listen address
+  and label, `LIGUS_REQUIRE_SANDBOX=1`, ...) and your shell's `PATH` into
+  the plist as literal values. Names that look like secrets (`*TOKEN*`,
+  `*KEY*`, `*SECRET*`, `*PASS*`, ...) and URLs with a password in them are
+  never copied: keep secret values in
+  the data dir or the keychain and point at files with `*_FILE` settings,
+  as on Linux. Edit the env file, not the plist, and run `start --launchd`
+  again; it boots the old agent out first.
+- `ligus-local uninstall` removes the agent too.
+
 ## 6. Check the server's membership
 
 The laptop's **People** list shows the server as a service member. Phone

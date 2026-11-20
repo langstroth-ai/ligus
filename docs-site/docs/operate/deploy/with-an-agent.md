@@ -81,6 +81,8 @@ $L stop --role serve --data-dir ~/.ligus-serve
 ```
 
 `--role worker` runs a worker instead; `--systemd` (Linux) installs a user
-unit. The desktop app itself is installed with Homebrew and opened by you:
+unit. On macOS, `--launchd` (optional) installs a LaunchAgent so the box
+starts at login and is kept running; `stop --launchd` removes it. See
+[Start at login on macOS](personal-fleet.md#start-at-login-on-macos). The desktop app itself is installed with Homebrew and opened by you:
 see [Install with Homebrew](../../ligus/getting-started/homebrew.md). More on the
 home box: [Personal fleet](personal-fleet.md).

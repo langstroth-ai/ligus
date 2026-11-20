@@ -121,6 +121,15 @@ journalctl --user -u ligus-serve -f
 
 Health check from any tailnet device: `curl http://<tailscale-ip>:8787/v1/health`.
 
+On a Mac (optional): `deploy/local/ligus-local start --role serve --data-dir
+~/.ligus-serve --launchd` installs a LaunchAgent
+(`~/Library/LaunchAgents/ai.ligus.serve[.<label>].plist`) that starts the box
+at login and keeps it running; `stop --launchd` unloads and removes it,
+`status` shows it. launchd reads no env file, so the env file's settings are
+copied into the plist, except names that look like secrets; rerun `start
+--launchd` after editing it. See the docs: Personal fleet, Start at login on
+macOS.
+
 ## 6. Pair the phone
 
 ```sh

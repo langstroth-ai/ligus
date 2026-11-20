@@ -55,9 +55,9 @@ $L preflight --role serve --data-dir ~/.ligus-serve --json
 $L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]   # until 0.1.0 is released: --from-source
 $L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] --json
 #   then the HUMAN enrolls (configure prints the exact command)
-$L start --role serve --data-dir ~/.ligus-serve [--systemd] --json
-$L verify --role serve --data-dir ~/.ligus-serve --json
-$L stop --role serve --data-dir ~/.ligus-serve
+$L start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
+$L verify --role serve --data-dir ~/.ligus-serve --json   # alias: status
+$L stop --role serve --data-dir ~/.ligus-serve [--systemd | --launchd]
 $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 ```
 

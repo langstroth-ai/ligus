@@ -82,13 +82,26 @@ If you chose a non-default `--env-file`, pass it to every later command
 ```sh
 $L start --role serve --data-dir ~/.ligus-serve --json        # background process, log in the data dir
 $L start --role serve --data-dir ~/.ligus-serve --systemd --json   # Linux: a systemd user unit instead
+$L start --role serve --data-dir ~/.ligus-serve --launchd --json   # macOS: a LaunchAgent instead (start at login)
 $L unit --role serve --data-dir ~/.ligus-serve      # print the systemd unit --systemd installs (NoNewPrivileges is relaxed only for a setuid bwrap without user namespaces)
-$L verify --role serve --data-dir ~/.ligus-serve --json        # process, GET /v1/health, sandbox required
+$L unit --role serve --data-dir ~/.ligus-serve --launchd   # print the plist --launchd installs
+$L verify --role serve --data-dir ~/.ligus-serve --json        # process, GET /v1/health, sandbox required (alias: status; shows a LaunchAgent)
 ```
 
 If start fails, read the log it names (`ligus-local-serve.log` in the data
-dir); exit code 3 from serve means no sandbox. With `--systemd`, starting at
-boot needs `sudo loginctl enable-linger $USER`: the human runs it.
+dir; under launchd `~/Library/Logs/ligus/serve[.<label>].log`); exit code 3
+from serve means no sandbox. With `--systemd`, starting at boot needs `sudo
+loginctl enable-linger $USER`: the human runs it.
+
+`--launchd` is opt-in: ask the human before making a box start at login.
+It installs `~/Library/LaunchAgents/ai.ligus.<role>[.<label>].plist` and
+loads it with `launchctl bootstrap gui/<uid>`. The plist gets the env file's
+settings as literal values, never secret-looking ones (`*TOKEN*`, `*KEY*`,
+...), which stay in the data dir or the keychain; after editing the env
+file, run `start --launchd` again. Two boxes of one role need different
+`configure --label`s (a clash exits 1 and names the fix). While a box runs
+under launchd, plain `stop` refuses (launchd would restart it): use
+`stop --launchd`, which unloads it and deletes the plist.
 
 ## 7. Hand over (checkpoint: human)
 
@@ -101,7 +114,7 @@ Reference: `deploy/ligus-serve/README.md`.
 ## Stop and remove
 
 ```sh
-$L stop --role serve --data-dir ~/.ligus-serve
+$L stop --role serve --data-dir ~/.ligus-serve [--launchd]   # --launchd: also no start at login
 $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 ```
 

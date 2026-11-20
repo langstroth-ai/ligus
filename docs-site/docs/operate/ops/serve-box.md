@@ -7,7 +7,11 @@ you. See [Admitting a box](admitting-a-box.md).
 
 This page covers what that means for the phone, how the box's online status
 works, and applying approved changes. For reaching the box from the phone, see
-[Remote access for your phone](../networking/remote-access.md).
+[Remote access for your phone](../networking/remote-access.md). To run it as
+a service: a systemd user unit on Linux, or (optional) a LaunchAgent that
+starts it at login on macOS; see
+[Run ligus serve as a service](../deploy/personal-fleet.md#5-run-ligus-serve-as-a-service)
+and [Start at login on macOS](../deploy/personal-fleet.md#start-at-login-on-macos).
 
 ## The box is its own member
 
@@ -52,7 +56,7 @@ admit it again.
   private network namespace behind a NetworkPolicy, a firewall).
 - **Don't put `--pair` in the service.** `ligus serve --pair` prints the
   pairing link, `serve.token` included on the direct path, and under systemd
-  that goes to journald and stays there. Run `ligus pair` from a terminal.
+  that goes to journald (under launchd, to `~/Library/Logs/ligus/`) and stays there. Run `ligus pair` from a terminal.
 - **The operator token stays on the box.** `serve.operator.token` (0600, in
   the data dir) is the only credential that counts as the box owner, or as a
   secure channel for invite and admission codes and code-host tokens, on a
