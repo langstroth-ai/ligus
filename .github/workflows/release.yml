@@ -50,6 +50,9 @@ name: Release
 #   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md \
 #     --prerelease=false --latest
 #
+# The DMG is notarized and stapled separately after tauri-action (which only
+# notarizes the .app inside it) and re-uploaded to the draft before publish.
+#
 # Signing is wired but inert until the secrets exist (private beta ships
 # unsigned — see task: "Auto-updater + code signing"):
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
@@ -290,6 +293,54 @@ jobs:
           [ -n "$app" ] || { echo "::error::no signed .app bundle under target/*/bundle/macos"; exit 1; }
           if [ "${LIGUS_MACOS_PASSKEYS:-}" = 1 ]; then mode=--with-profile; else mode=--without-profile; fi
           scripts/check-macos-signing.sh entitlements "$app" "$mode"
+
+      # tauri-action notarizes and staples the .app, but not the DMG around
+      # it: Gatekeeper then rejects the downloaded DMG as "Unnotarized
+      # Developer ID" (spctl -t open) and it carries no ticket. Notarize and
+      # staple the DMG, check both, and replace the copy tauri-action
+      # uploaded to the draft. The cask's sha256 is taken after publish, from
+      # this stapled DMG on the release.
+      - name: Notarize and staple the DMG
+        if: matrix.platform == 'macos-latest' && env.LIGUS_MACOS_SIGNED == '1'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          dmg_name="Ligus_${TAG#v}_aarch64.dmg"
+          dmg="$(find target -type f -path '*/bundle/dmg/*' -name "$dmg_name" | head -n 1)"
+          [ -n "$dmg" ] || { echo "::error::no $dmg_name under target/*/bundle/dmg"; exit 1; }
+          # The App Store Connect key: a 0600 file (mktemp), removed on exit,
+          # never printed.
+          key="$(mktemp "$RUNNER_TEMP/notary-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key"
+          out="$(xcrun notarytool submit "$dmg" --key "$key" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait --timeout 45m --output-format json)" || true
+          echo "$out"
+          status="$(python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$out" 2>/dev/null || true)"
+          if [ "$status" != Accepted ]; then
+            id="$(python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"$out" 2>/dev/null || true)"
+            [ -n "$id" ] && xcrun notarytool log "$id" --key "$key" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" || true
+            echo "::error::notarizing $dmg_name: status '${status:-none}'"
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+          # Both checks the shipped v0.1.0 DMG failed.
+          xcrun stapler validate "$dmg"
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
+          # Replace tauri-action's unstapled upload in the draft (same name).
+          got=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId,isDraft --jq '"\(.databaseId) \(.isDraft)"')
+          if [ "$got" != "$RELEASE_ID true" ]; then
+            echo "::error::gh resolves $TAG to release '$got' (id, draft), not the draft $RELEASE_ID"
+            exit 1
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$dmg"
 
   # tauri-action merges latest.json per matrix job, so concurrent jobs can drop
   # each other's entry and a rerun changes asset ids. Fail loudly (rerun the

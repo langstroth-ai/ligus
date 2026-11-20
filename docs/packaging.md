@@ -116,6 +116,14 @@ from `cut-release.yml`, a tag push, or `workflow_dispatch` for an existing tag:
 2. `build` (desktop, macOS/Windows/Linux, tauri-action by release id) and `cli`
    (`release-cli.yml`, four targets, `gh release upload`) upload into the draft.
    Nobody can see a draft: not users, not `install.sh`, not the updater.
+   On macOS, tauri-action notarizes and staples only the `.app`, not the DMG around
+   it. The build job therefore notarizes the DMG (`xcrun notarytool submit --wait`,
+   with the same App Store Connect key, written to a 0600 temp file that is removed
+   afterwards), staples it, and checks it: `xcrun stapler validate` and
+   `spctl -a -t open --context context:primary-signature` must both pass. It then
+   replaces tauri-action's unstapled upload in the draft
+   (`gh release upload --clobber`). The cask's sha256 is computed after publish,
+   from this stapled DMG.
 3. `verify-updater` checks `latest.json` on the draft (`scripts/verify-latest-json.py`).
 4. `publish` runs only if every job above succeeded. It checks the draft holds every
    asset (`scripts/check-release-assets.py`: each CLI binary with a matching

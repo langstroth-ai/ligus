@@ -1033,3 +1033,52 @@ class CutRelease < Minitest::Test
     assert triggers(RELEASE).key?("workflow_call")
   end
 end
+
+# tauri-action notarizes the .app, not the DMG: the DMG is notarized,
+# stapled, checked and re-uploaded before publish, and the cask hashes the
+# published (stapled) one.
+class DmgNotarized < Minitest::Test
+  def build_steps
+    steps(RELEASE, "build")
+  end
+
+  def step
+    build_steps.find { |s| s["name"] == "Notarize and staple the DMG" }
+  end
+
+  def test_dmg_is_notarized_stapled_and_checked_before_upload
+    refute_nil step, "the DMG is never notarized"
+    run = step["run"]
+    order = ["xcrun notarytool submit", "--wait", "xcrun stapler staple", "xcrun stapler validate",
+             "spctl -a -t open --context context:primary-signature", "gh release upload"]
+    order.each { |t| assert_includes run, t }
+    order.each_cons(2) { |a, b| assert_operator run.index(a), :<, run.index(b), "#{a} must come before #{b}" }
+    assert_includes run, '[ "$status" != Accepted ]', "a rejected submission must fail the job"
+    assert_match(/gh release upload "\$TAG" .*--clobber "\$dmg"/, run, "the stapled DMG must replace tauri-action's upload")
+    assert_includes run, '"$RELEASE_ID true"', "upload only into this run's draft"
+  end
+
+  def test_runs_after_the_build_on_signed_macos_only
+    tauri = build_steps.index { |s| s["uses"].to_s.start_with?("tauri-apps/tauri-action@") }
+    assert_operator tauri, :<, build_steps.index(step)
+    assert_includes step["if"], "matrix.platform == 'macos-latest'"
+    assert_includes step["if"], "LIGUS_MACOS_SIGNED == '1'"
+  end
+
+  def test_the_api_key_stays_private
+    run = step["run"]
+    assert_includes run, 'mktemp "$RUNNER_TEMP/'
+    assert_includes run, "chmod 600"
+    assert_match(/trap 'rm -f "\$key"' EXIT/, run)
+    assert_operator run.index("trap"), :<, run.index("printf '%s' \"$APPLE_API_KEY_P8\"")
+    refute_match(/echo[^\n]*APPLE_API_KEY_P8|set -x/, run)
+    %w[APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8].each do |k|
+      assert_equal "${{ secrets.#{k} }}", step.dig("env", k)
+    end
+  end
+
+  def test_cask_hashes_the_published_dmg
+    assert_equal ["publish"], Array(RELEASE.dig("jobs", "cask", "needs"))
+    assert_includes run_text(RELEASE, "cask"), 'gh release download "${TAG}"'
+  end
+end
