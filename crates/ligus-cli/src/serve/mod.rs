@@ -1665,7 +1665,9 @@ impl worker::ServiceSource for Shared {
 /// tool executors (MCP clients, the lazy worktree) never have to be `Send`, and
 /// a long turn never starves the API.
 fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
-    Ok(std::thread::Builder::new().name("ligus-serve-worker".into()).spawn(move || {
+    // A generous stack: a turn's futures run on this thread's own stack
+    // (Windows' default overflowed in a hosted agent's tool turn).
+    Ok(std::thread::Builder::new().name("ligus-serve-worker".into()).stack_size(16 * 1024 * 1024).spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
             Err(e) => {

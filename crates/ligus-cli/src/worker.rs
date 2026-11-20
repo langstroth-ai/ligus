@@ -764,7 +764,10 @@ async fn run_turn(
         timeout: turn_timeout(),
         options: EngineOptions { empty_reply_notice: true, warm_context_probe: true, ..Default::default() },
     };
-    let result = turn_engine::run(&host, input).await;
+    // On the heap: the engine's future is large, and the serve worker's
+    // thread (a current-thread runtime) would carry it on its own stack,
+    // which overflowed on Windows.
+    let result = Box::pin(turn_engine::run(&host, input)).await;
     drop(stop_guard);
     match result {
         Ok(outcome) => {
