@@ -1,15 +1,25 @@
 # Kubernetes for one organisation (preview)
 
-!!! warning "Preview: the `ligus` chart and image are not published"
-    Three Helm charts implement this: `ligus` in this repository
-    ([`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus)),
-    and `langstroth-relay` and `langstroth-auth` in the relay repository at v0.3.0
-    (`deploy/helm/`). The `ligus` chart and the `ligus` container image are
-    not published: build them yourself. Relay releases publish the relay and
-    langstroth-auth images (`ghcr.io/langstroth-ai/langstroth-relay:<version>`,
-    `ghcr.io/langstroth-ai/langstroth-auth:<version>`) and charts
-    (`oci://ghcr.io/langstroth-ai/charts/<name>`); you can also build them
-    from a relay checkout, as below. Values and behaviour may change. The design they implement is
+!!! warning "Preview: build the `ligus` image yourself"
+    Three Helm charts implement this. What is published, and where:
+
+    | Piece | Published? | Reference |
+    |---|---|---|
+    | `langstroth-relay` chart | yes, 0.3.0 | `oci://ghcr.io/langstroth-ai/charts/langstroth-relay --version 0.3.0` |
+    | `langstroth-relay` image | yes, 0.3.0 (amd64, arm64) | `ghcr.io/langstroth-ai/langstroth-relay:0.3.0` |
+    | `langstroth-auth` chart | yes, 0.1.0 | `oci://ghcr.io/langstroth-ai/charts/langstroth-auth --version 0.1.0` |
+    | `langstroth-auth` image | yes, 0.3.0 | `ghcr.io/langstroth-ai/langstroth-auth:0.3.0` |
+    | `ligus` chart | no | [`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus) in this repository (chart 0.1.0) |
+    | `ligus` image | no | build it from [`deploy/container/Dockerfile`](https://github.com/langstroth-ai/ligus/blob/main/deploy/container/Dockerfile) |
+
+    The relay pieces are pulled anonymously; no registry login is needed.
+    The Ligus 0.1.0 release publishes the desktop apps and the `ligus` CLI
+    binaries (including static Linux builds), not a container image or a
+    chart: its Kubernetes check builds the image and installs the chart on
+    a throwaway kind cluster, then discards both. Install the `ligus` chart
+    from a checkout of this repository and point it at an image you build
+    and push to your own registry. Values and behaviour may change. The
+    design they implement is
     [`docs/design/kubernetes.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/design/kubernetes.md).
 
 This shape runs the always-on parts of the Langstroth platform for **one trusted
@@ -189,15 +199,14 @@ enter it.
 
 ## Install
 
-Build the `ligus` image yourself. The relay image can come from the relay
-release (`ghcr.io/langstroth-ai/langstroth-relay:0.3.0`) or be built the
-same way:
+Build the `ligus` image yourself and push it to a registry your cluster can
+pull from. The relay chart and image are published, so the relay needs no
+build:
 
 ```sh
-# in a relay checkout at v0.3.0
-docker build -f deploy/container/Dockerfile -t registry.example.com/langstroth-relay:0.3.0 .
-# in a ligus checkout at 0.1
+# in a ligus checkout at v0.1.0
 docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
+docker push registry.example.com/ligus:0.1.0
 ```
 
 ### Relay
@@ -213,8 +222,8 @@ kubectl -n langstroth-relay create secret generic relay-env \
   --from-literal=LANGSTROTH_RELAY_TOKEN_PUBKEY=<issuer public key>
 kubectl -n langstroth-relay create secret generic relay-metrics --from-literal=token=$(openssl rand -hex 24)
 kubectl -n langstroth-relay create secret tls relay-tls --cert=relay.crt --key=relay.key   # or cert-manager
-helm install langstroth-relay <relay-checkout>/deploy/helm/langstroth-relay -n langstroth-relay \
-  --set image.repository=registry.example.com/langstroth-relay --set image.tag=0.3.0 \
+helm install langstroth-relay oci://ghcr.io/langstroth-ai/charts/langstroth-relay \
+  --version 0.3.0 -n langstroth-relay \
   --set database.mode=external --set database.external.existingSecret=relay-db \
   --set 'database.external.cidrs[0]=<database address>/32' \
   --set config.existingSecret=relay-env \
@@ -224,6 +233,10 @@ helm install langstroth-relay <relay-checkout>/deploy/helm/langstroth-relay -n l
   --set 'clientIP.trustedProxies[0]=<your ingress controller address>/32'
 helm test langstroth-relay -n langstroth-relay
 ```
+
+The chart's default image is `ghcr.io/langstroth-ai/langstroth-relay` at
+the chart's version; set `image.repository` and `image.tag` only to use a
+mirror or your own build.
 
 With the release name `langstroth-relay` the in-cluster Services are
 `langstroth-relay-sync` and `langstroth-relay-tunnel`. The tunnel is off by default;
@@ -270,8 +283,9 @@ Create the workspace on a desktop first (**Add workspace → Create**) and take
 the room and key from its invite, or from **Settings → Team sync**. Then:
 
 ```sh
-mkdir -p deploy/helm/ligus/charts
-helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/langstroth-relay
+# in a ligus checkout at v0.1.0: fetch the chart's one dependency, the
+# published langstroth-relay chart (optional at runtime, needed to render)
+helm dependency build deploy/helm/ligus
 
 kubectl create namespace ligus-ws-acme
 kubectl label namespace ligus-ws-acme pod-security.kubernetes.io/enforce=restricted

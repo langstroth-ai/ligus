@@ -33,6 +33,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 - [Settings](https://docs.langstroth.ai/ligus/features/settings/): Every settings section — Account, Appearance, Folder & Git (per-workspace folder), Team sync, Schedules, Models & runtimes, Tools & MCP, Permissions, Updates, Diagnostics.
 - [Right Rail](https://docs.langstroth.ai/ligus/features/right-rail/): The tools/review/people/context panes.
 - [Multi-agent collaboration](https://docs.langstroth.ai/ligus/features/multi-agent/): Multiple agents in one chat and how they interact.
+- [Who can use your agents](https://docs.langstroth.ai/ligus/features/agent-access/): Only me or everyone, daily limits and spending caps, refusal replies, the @ligus privacy switch and the X-Ligus-Member gateway header.
 - [Exploring options (proposal sets)](https://docs.langstroth.ai/ligus/features/proposal-sets/): Competing alternatives assessed blind by agent scouts, quorum and stop signals, and a person's decision after a pre-flight.
 - [Mentions & notifications](https://docs.langstroth.ai/ligus/features/mentions-and-notifications/): Addressing participants and how notifications work.
 - [Agentic workflows](https://docs.langstroth.ai/ligus/features/workflows/): Multi-stage agent pipelines and human-approval gates, including gate-routes-back loops. Agents author definitions as reviewable proposals; people approve, run and pause them.
@@ -89,7 +90,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 - [Solo laptop](https://docs.langstroth.ai/operate/deploy/solo/): The desktop app alone, no relay.
 - [Personal fleet](https://docs.langstroth.ai/operate/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
 - [Team on a relay](https://docs.langstroth.ai/operate/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.
-- [Kubernetes (preview)](https://docs.langstroth.ai/operate/deploy/kubernetes/): The relay and ligus Helm charts (preview, unpublished), what each pod holds, and known limits.
+- [Kubernetes (preview)](https://docs.langstroth.ai/operate/deploy/kubernetes/): The published relay chart and image, the ligus Helm chart (preview, build the image yourself), what each pod holds, and known limits.
 - [Keys off the cluster (design)](https://docs.langstroth.ai/operate/deploy/keys-off-cluster/): A cluster that runs only the relay and executors; not shipped.
 - [Multi-tenant (design)](https://docs.langstroth.ai/operate/deploy/multi-tenant/): Three authorization layers for hosting many organisations; not implemented.
 - [Deploying with an LLM gateway](https://docs.langstroth.ai/operate/deploy/model-gateways/): Route serve and worker agents through an operator-listed LLM gateway (LiteLLM, kgateway, Envoy AI Gateway, Inference Extension pools): chart allow-list, ServiceAccount-token, API-key and mTLS auth, credential injection, attribution headers.

@@ -20,8 +20,10 @@ Step-by-step skills: [`.claude/skills/ligus-deploy-k8s`](.claude/skills/ligus-de
 | The same, relay outside the cluster (https) | one `ligus` release per workspace | `ligus-k8s`, scenario `team-external-relay` | as above, plus DNS and TLS for the relay |
 | Self-host the relay | the relay | the relay repository (`github.com/langstroth-ai/langstroth-relay`) and its AGENTS.md | DNS, TLS, cloud credentials |
 
-Kubernetes is a **preview**: the charts and images are not published. Build
-the image from `deploy/container/Dockerfile`; the relay chart comes from a
+Kubernetes is a **preview**. The `ligus` chart and image are not published:
+build the image from `deploy/container/Dockerfile` and install the chart from
+this checkout. The relay chart and image (0.3.0) are published to
+`ghcr.io/langstroth-ai`; install pulls the relay chart from there, or from a
 relay checkout (`--relay-chart`) or a pinned fetch (`--fetch-relay-chart`).
 
 ## Commands
@@ -40,7 +42,7 @@ $K preflight --context CTX -n NS --release R --probe --image REPO:TAG --json   #
 $K secrets workspace --throwaway --context CTX -n NS --release R   # trial only
 $K secrets workspace --from-dir DIR --context CTX -n NS --release R   # real workspace: DIR prepared by the human
 $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG \
-   --relay-image-repository RREPO --relay-image-tag RTAG --relay-chart RELAY/deploy/helm/langstroth-relay --dry-run --json
+   [--relay-image-repository RREPO --relay-image-tag RTAG] [--relay-chart RELAY/deploy/helm/langstroth-relay] --dry-run --json
 $K install ...the same flags without --dry-run... --json   # waits for readiness (--timeout, default 10m)
 $K verify --context CTX -n NS --release R --json                   # pods, sandbox preflight, health, NetworkPolicies, helm test
 $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace] --json

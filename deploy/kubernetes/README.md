@@ -1,6 +1,9 @@
 # Ligus on Kubernetes
 
-Status: **preview** (charts and images not published). The operator guide,
+Status: **preview**. The relay chart and image (0.3.0) and the
+langstroth-auth chart (0.1.0) are published to `ghcr.io/langstroth-ai`; the
+`ligus` chart and image are not (install the chart from this checkout, build
+the image yourself). The operator guide,
 including supported nodes, backups, upgrades and what 0.1 does not support, is
 [`docs-site/docs/operate/deploy/kubernetes.md`](../../docs-site/docs/operate/deploy/kubernetes.md). The Helm chart is in
 [`../helm/ligus`](../helm/ligus) and its README is the install guide. The

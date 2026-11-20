@@ -41,7 +41,7 @@ usage() {
 install flags:
   --scenario trial|team-in-cluster-relay|team-external-relay   (required)
   --image REPO:TAG | --image-repository R --image-tag T | --image-digest sha256:...
-  --relay-image-repository R --relay-image-tag T   (trial: the in-release relay's image)
+  --relay-image-repository R --relay-image-tag T   (trial: the in-release relay's image; default ghcr.io/langstroth-ai/langstroth-relay:0.3.0)
   --relay-url URL               (team-external-relay; https:// only)
   --relay-namespace NS          (team-in-cluster-relay; default langstroth-relay)
   --workspace-secret NAME       (default <release>-workspace)
@@ -52,6 +52,7 @@ install flags:
   --storage-class NAME
   --values FILE                 extra values (never secrets), applied last
   --relay-chart DIR             package the relay chart from a relay checkout
+                                (default: pull it from oci://ghcr.io/langstroth-ai/charts)
   --fetch-relay-chart           git clone the relay repo at the pinned commit
   --dry-run                     render and server-side dry-run only
   --timeout DUR                 helm --wait timeout (default 10m)
@@ -547,8 +548,11 @@ ensure_relay_chart() {
       rm -rf "$tmp"; ac_check chart.dependency fail "helm package of the fetched relay chart failed" "use --relay-chart with a local relay checkout"; ac_raise 3; return 1
     fi
     rm -rf "$tmp"
+  elif helm dependency build "$CHART" >/dev/null 2>&1 && ls "$CHART"/charts/langstroth-relay-*.tgz >/dev/null 2>&1; then
+    ac_check chart.dependency pass "relay chart pulled from oci://ghcr.io/langstroth-ai/charts (langstroth-relay $RELAY_CHART_VERSION)"
+    return 0
   else
-    ac_check chart.dependency fail "the relay chart (langstroth-relay $RELAY_CHART_VERSION) is not packaged in deploy/helm/ligus/charts" "rerun with --relay-chart <relay-checkout>/deploy/helm/langstroth-relay, or --fetch-relay-chart"
+    ac_check chart.dependency fail "the relay chart (langstroth-relay $RELAY_CHART_VERSION) is not in deploy/helm/ligus/charts and could not be pulled from oci://ghcr.io/langstroth-ai/charts" "check network access to ghcr.io, or rerun with --relay-chart <relay-checkout>/deploy/helm/langstroth-relay, or --fetch-relay-chart"
     ac_raise 3; return 1
   fi
   ac_check chart.dependency pass "relay chart packaged into deploy/helm/ligus/charts"
@@ -670,9 +674,6 @@ cmd_install() {
     esac
   fi
   [ "$SCENARIO" = team-in-cluster-relay ] && RELAY_NS=${RELAY_NS:-langstroth-relay}
-  if [ "$SCENARIO" = trial ] && [ -z "$RELAY_IMG_REPO$RELAY_IMG_TAG" ]; then
-    ac_check relay.image warn "no --relay-image-repository/--relay-image-tag: the trial's relay uses the chart default (ghcr.io/langstroth-ai/langstroth-relay), which is not published yet, so its pod will sit in ImagePullBackOff" "build the relay image in a relay checkout and pass --relay-image-repository R --relay-image-tag T"
-  fi
   base_tools || ac_finish "$AC_TOOL" install "$(json_ctx)"
   check_extra_values || ac_finish "$AC_TOOL" install "$(json_ctx)"
   ensure_relay_chart || ac_finish "$AC_TOOL" install "$(json_ctx)"

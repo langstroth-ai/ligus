@@ -33,17 +33,19 @@ StorageClass to use and whether any worker hosts are wanted (`--workers a,b`).
 
 ## 2. Image and relay chart
 
-- No published images yet. If `$IMG` doesn't exist, build it:
+- The `ligus` image is not published. If `$IMG` doesn't exist, build it:
   `docker build -f deploy/container/Dockerfile -t ligus:dev .` (kind: then
   `kind load docker-image ligus:dev --name <cluster>`; OrbStack and Docker
-  Desktop see local images directly). The trial also needs a relay image
-  built in a relay checkout, passed as `--relay-image-repository R
-  --relay-image-tag T`: without it the relay pod sits in ImagePullBackOff
-  (install warns `relay.image`).
-- The chart needs the relay chart packaged: pass
-  `--relay-chart <relay-checkout>/deploy/helm/langstroth-relay` (a full checkout:
-  the chart links `../langstroth-postgres`) or `--fetch-relay-chart` (git clone of
-  `langstroth-ai/langstroth-relay` at the commit CI pins) to the first install.
+  Desktop see local images directly). The relay image is published
+  (`ghcr.io/langstroth-ai/langstroth-relay:0.3.0`, the trial's default);
+  pass `--relay-image-repository R --relay-image-tag T` only for a mirror or
+  your own build.
+- The chart needs the relay chart in `deploy/helm/ligus/charts`. By default
+  install pulls the published one (`oci://ghcr.io/langstroth-ai/charts`,
+  anonymous). Offline, pass `--relay-chart <relay-checkout>/deploy/helm/langstroth-relay`
+  (a full checkout: the chart links `../langstroth-postgres`) or
+  `--fetch-relay-chart` (git clone of `langstroth-ai/langstroth-relay` at the
+  commit CI pins) to the first install.
 
 ## 3. Preflight
 
