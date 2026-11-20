@@ -260,3 +260,22 @@ fn a_trailing_system_note_doesnt_hide_or_lend_the_asker() {
     let note = fx.host.load(fx.chat).unwrap().unwrap().messages.last().unwrap().id;
     assert_eq!(fx.host.agent_turn_access(fx.chat, note, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
 }
+
+/// The deferred (offline) fallback: the owner's device stays silent, so the
+/// sender's device would answer the turn itself. For someone else's
+/// personal agent it refuses instead: the note, no run, nothing counted on
+/// the sender's device, and the turn is closed for every device.
+#[test]
+fn the_senders_deferred_fallback_refuses_someone_elses_agent() {
+    let fx = fixture();
+    let mut sender = svc_on(&fx.path, "con", "Con");
+    let ask = sender.post_user_message(fx.chat, fx.wid, "@scout run the tests").unwrap().id;
+    let s = sender.load(fx.chat).unwrap().unwrap();
+    assert!(crate::turn_dispatch::deferred_turn_unanswered(&s, ask), "precondition: the fallback would take it");
+    assert_eq!(sender.gate_agent_turn(fx.chat, fx.wid, ask, fx.scout.id).unwrap(), Err(ONLY_OWNER.to_string()));
+    let s = sender.load(fx.chat).unwrap().unwrap();
+    assert!(!crate::turn_dispatch::turn_still_open(&s, ask));
+    assert!(sender.agent_usage_view(fx.scout.id).unwrap().today.is_empty());
+    // The owner's device, back online, finds it answered.
+    assert!(crate::turn_dispatch::user_turn_answered(&fx.host.load(fx.chat).unwrap().unwrap(), ask));
+}
