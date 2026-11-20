@@ -4,7 +4,7 @@ name: release-lint
 # behaviour (scripts/test-release-workflow.rb): a rerun must never rewrite a
 # release's notes, installers and latest.json must land on the tag's one
 # draft release, nothing is published until every build succeeded, the tap
-# bumps follow publish, ci.yml builds every CLI release target, the Tauri CLI
+# bumps follow publish and survive a concurrent tap push, ci.yml builds every CLI release target, the Tauri CLI
 # is pinned, and the latest.json and asset verifiers work.
 on:
   push:
@@ -23,6 +23,8 @@ on:
       - "scripts/verify-latest-json.py"
       - "scripts/check-release-assets.py"
       - "scripts/test-release-workflow.rb"
+      - "scripts/tap-push.sh"
+      - "scripts/test-tap-push.sh"
       - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"
       - "web/bun.lock"
@@ -41,6 +43,8 @@ on:
       - "scripts/verify-latest-json.py"
       - "scripts/check-release-assets.py"
       - "scripts/test-release-workflow.rb"
+      - "scripts/tap-push.sh"
+      - "scripts/test-tap-push.sh"
       - "crates/ligus-cli/Cargo.toml"
       - "app/tauri.conf.json"
       - "web/bun.lock"
@@ -61,3 +65,7 @@ jobs:
           # runner's Ruby lacks it rather than pull an unpinned gem.
           ruby -rminitest -e 1 2>/dev/null || sudo apt-get install -y ruby-minitest
           ruby scripts/test-release-workflow.rb
+      - name: Tap push tests
+        run: |
+          shellcheck scripts/tap-push.sh scripts/test-tap-push.sh
+          bash scripts/test-tap-push.sh
