@@ -431,7 +431,7 @@ pub fn cmd_phones_certify(
     }
     let id = svc.certify_phone_code(ws, &phone)?;
     println!(
-        "certified phone '{}' ({id}, fingerprint {}) as one of your devices (the phone tier). Sync to publish it; then pair the phone with your box.",
+        "certified phone '{}' ({id}, fingerprint {}) as one of your devices (the phone tier). Sync to publish it (`ligus sync`), give the box a few seconds to pull it, then tap Retry on the phone (or scan a new `ligus pair` link).",
         phone.label,
         phone.fingerprint()
     );
