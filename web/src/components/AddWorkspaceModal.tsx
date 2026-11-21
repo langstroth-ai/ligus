@@ -222,8 +222,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             onClick={() => setTab(t)}
             className="flex-1 rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors"
             style={{
-              background: tab === t ? "var(--ligus-accent-cool)" : "transparent",
-              color: tab === t ? "#fff" : "var(--ligus-ink)",
+              background: tab === t ? "var(--ligus-accent-fill)" : "transparent",
+              color: tab === t ? "var(--ligus-on-accent)" : "var(--ligus-ink)",
             }}
           >
             {t === "create" ? "Create" : "Join"}

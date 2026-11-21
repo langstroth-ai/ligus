@@ -331,7 +331,7 @@ function Alternative({
             className="h-full rounded-full"
             style={{
               width: `${pct}%`,
-              background: alt.meetsQuorum ? "var(--ligus-success)" : "var(--ligus-accent-cool)",
+              background: alt.meetsQuorum ? "var(--ligus-success)" : "var(--ligus-accent-fill)",
             }}
           />
         </div>

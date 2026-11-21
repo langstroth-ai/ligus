@@ -50,9 +50,37 @@ Full release notes are on the
   for your passkey. A relay entry the desktop can't match to a workspace
   member says so instead of reporting success. See
   [Remove a box](../../operate/security/runbooks.md#remove-box).
+### Desktop
+
+- **Settings sections fail on their own.** A Settings section that hits an
+  error shows a small card with **Try again** instead of replacing the whole
+  app.
+- **Admit a box from the workspace menu.** **Admit a box…** is in the
+  workspace menu (the workspace name at the top of the sidebar) and the
+  command palette, not only on the rail's right-click menu. See
+  [Admitting a box](../../operate/ops/admitting-a-box.md).
+- **The command palette reaches every pane and every Settings section.**
+- **Warnings have their own colour.** An amber-orange, apart from the honey
+  accent, in light and dark.
+- **Readability fixes.** **Save access**, the active Settings button and the
+  Create/Join tabs now meet contrast, and menus opened from the sidebar are
+  readable again.
+- **The tour describes the Diff tab correctly.** It shows the chat checkout's
+  uncommitted changes; proposals are in the **Review** pane.
 
 ### CLI
 
+- **The CLI documents itself.** `ligus help` lists every command and a set
+  of task guides (`ligus help box`, `phone`, `remote`, `worker`,
+  `kubernetes`, `repos`, `agents`, `security`, `env`, `troubleshooting`, and
+  `agents-guide` for coding agents). `ligus <command> --help` prints the
+  command's purpose, flags with defaults, environment variables, examples and
+  exit codes. Help prints to stdout and exits 0 (it was stderr and 2), and
+  never opens the data dir; a usage error now exits 2. New: `ligus status`
+  summarises the data dir, workspace, relay, admission and serve state, and
+  `--json` works on `status`, `whoami`, `chats`, `runtimes`, `agents`,
+  `hosts`, `repos list`, `remote status` and `phones list`. See the
+  [CLI reference](cli.md#help).
 - **`ligus app`** opens the desktop app and returns at once, detached from
   the terminal. See the [CLI reference](cli.md).
 - **`ligus-local verify` finds the systemd unit by itself.** On Linux, when

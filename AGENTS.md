@@ -14,7 +14,7 @@ Step-by-step skills: [`.claude/skills/ligus-deploy-k8s`](.claude/skills/ligus-de
 | Goal | Deploy | Tool | Human-only parts |
 |---|---|---|---|
 | One person, one machine | The desktop app only | none: `brew install --cask langstroth-ai/ligus/ligus-app` | First launch, passkey and sign-in, creating the workspace |
-| Agents keep working while the laptop sleeps (a home box, a spare Linux machine) | `ligus serve` (and optionally `ligus worker`) next to the desktop | `deploy/local/ligus-local` | `ligus enroll` with the invite, pairing the phone, exposure (LAN, tailnet) |
+| Agents keep working while the laptop sleeps (a home box, a spare Linux machine) | `ligus serve` (and optionally `ligus worker`) next to the desktop | `deploy/local/ligus-local` | approving the box admission (`ligus admit request`, then `ligus admit redeem`), pairing the phone, exposure (LAN, tailnet) |
 | Try the Kubernetes shape on a local cluster (OrbStack, kind, k3d) | relay + serve in one namespace, throwaway workspace | `deploy/kubernetes/ligus-k8s`, scenario `trial` | none, unless the cluster is shared |
 | A team's always-on parts on a cluster, relay in the same cluster | one `ligus` release per workspace | `ligus-k8s`, scenario `team-in-cluster-relay` (relay installed first from the relay repository) | the workspace connection (Secret files), the cluster and context, storage class, exposure |
 | The same, relay outside the cluster (https) | one `ligus` release per workspace | `ligus-k8s`, scenario `team-external-relay` | as above, plus DNS and TLS for the relay |
@@ -27,6 +27,13 @@ this checkout. The relay chart and image (0.3.0) are published to
 relay checkout (`--relay-chart`) or a pinned fetch (`--fetch-relay-chart`).
 
 ## Commands
+
+The `ligus` CLI documents itself: `ligus help` lists every command and
+guide, `ligus <command> --help` gives a command's flags, defaults,
+environment variables, examples and exit codes, and
+`ligus help agents-guide` is a one-shot playbook for agents (set up a box,
+add an agent, deploy on Kubernetes, check health). `ligus status --json`
+summarises a data dir.
 
 Every command is non-interactive and idempotent, takes flags or environment
 variables (never prompts), prints progress on stderr and, with `--json`,
@@ -56,7 +63,7 @@ L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
 $L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]   # until 0.1.0 is released: --from-source
 $L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] --json
-#   then the HUMAN enrolls (configure prints the exact command)
+#   then admit the box: ligus admit request; the HUMAN (an Admin) approves it; ligus admit redeem <code>
 $L start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
 $L verify --role serve --data-dir ~/.ligus-serve --json   # alias: status
 $L stop --role serve --data-dir ~/.ligus-serve [--systemd | --launchd]
@@ -105,9 +112,11 @@ $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 
 - **Passkeys and sign-in** on the desktop app (first launch, langstroth-auth
   device-code logins).
-- **Invites and enrollment**: copying a workspace invite, `ligus enroll`,
-  `ligus join`, approving a device on the desktop, and preparing the
-  workspace Secret files for a cluster install.
+- **Invites, admissions and enrollment**: copying a workspace invite,
+  `ligus enroll` and `ligus join` (a person's own CLI device), approving a
+  box admission with a passkey (a box joins only with `ligus admit request`
+  and `ligus admit redeem`, never an invite), approving a device on the
+  desktop, and preparing the workspace Secret files for a cluster install.
 - **Pairing the phone** (`ligus pair` prints a secret; run it in the human's
   own terminal, never as a Job or in a logged session).
 - **Exposure**: anything reachable from outside the machine or cluster (LAN,

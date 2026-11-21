@@ -45,7 +45,13 @@ function handle(cmd: string, args: Args): unknown {
     case "get_workspace_diffs":
       return flags.empty ? [] : fx.diffs;
     case "get_file_diff_sides":
-      return { original: "fn main() {}\n", modified: "fn main() {\n    println!(\"hi\");\n}\n", isBinary: false };
+      return fx.fileDiffSides(String(args?.path ?? ""));
+    case "list_workspace_repos":
+      return fx.workspaceRepos;
+    case "memory_view":
+      return fx.memoryView(String(args?.query ?? ""));
+    case "task_state":
+      return [];
     case "list_agents":
       return fx.agents;
     case "set_agent_access":

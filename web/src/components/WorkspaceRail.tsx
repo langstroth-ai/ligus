@@ -286,8 +286,8 @@ export function WorkspaceRail({
           aria-pressed={settingsActive}
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar || onOpenHelp ? "" : "mt-auto"}`}
           style={{
-            background: settingsActive ? "var(--ligus-accent-cool)" : "var(--ligus-panel)",
-            color: settingsActive ? "#fff" : "var(--ligus-ink)",
+            background: settingsActive ? "var(--ligus-accent-fill)" : "var(--ligus-panel)",
+            color: settingsActive ? "var(--ligus-on-accent)" : "var(--ligus-ink)",
             border: settingsActive ? "none" : "1px solid var(--ligus-line)",
             opacity: settingsActive ? 1 : 0.85,
           }}

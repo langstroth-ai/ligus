@@ -950,6 +950,12 @@ export function Popover({
           borderColor: "var(--ligus-line)",
           background: "var(--ligus-panel)",
           visibility: pos ? "visible" : "hidden",
+          // A panel-coloured surface: use the page ink even when opened from
+          // the dark sidebar, which re-points --ligus-ink to its cream ink.
+          color: "var(--ligus-base-ink)",
+          ["--ligus-ink" as string]: "var(--ligus-base-ink)",
+          ["--ligus-ink-soft" as string]: "var(--ligus-base-ink-soft)",
+          ["--ligus-overlay" as string]: "var(--ligus-base-overlay)",
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >

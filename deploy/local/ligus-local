@@ -14,9 +14,10 @@
 #
 # Common flags: --data-dir DIR (required: this device's identity and event
 # log) --env-file FILE --json. The desktop app is installed and first opened
-# by the human (Homebrew cask ligus-app); see AGENTS.md. Joining a real
-# workspace (`ligus enroll` with the invite) is a human step: the invite
-# carries the workspace key.
+# by the human (Homebrew cask ligus-app); see AGENTS.md. A box joins a real
+# workspace only through a box admission (`ligus admit request`, an Admin
+# approves it with a passkey, `ligus admit redeem`); never with a person's
+# invite. The approval is the human step.
 # shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
@@ -132,17 +133,17 @@ SYNOPSIS
 
   Creates DIR (mode 0700) and the env file (mode 0600) with
   LIGUS_REQUIRE_SANDBOX=1. Without a workspace connection it exits 4 and
-  prints the human step: the human runs `ligus enroll -` with the invite in
-  their own terminal (the invite carries the workspace key). A box that is
-  not a member yet is admitted by an Admin (`ligus admit request` on the
-  box, approved on a desktop; `ligus help box` has the details).
+  prints the admission steps: with the env file loaded, `ligus admit request`
+  prints the box's join request; an Admin approves it (desktop: workspace
+  menu > Admit a box, or the phone) and sends back a code; `ligus admit
+  redeem` keeps it. A box never joins with a person's invite (`ligus help box`).
 
 FLAGS
   --listen ADDR            serve: loopback, LAN or tailnet address:port (default 127.0.0.1:8787);
                            worker: health address (default 127.0.0.1:8788). 0.0.0.0 and [::]
                            are refused (exit 4): exposure is a human decision
   --label NAME             host label other members see (default: <short hostname>-<role>)
-  --relay-url URL          override the relay from the enrolled connection (http or https)
+  --relay-url URL          override the relay the admission names (http or https)
   --secret-backend B       file: owner-only files in the data dir; keychain; secret-service
                            (default: unset, the OS store; macOS keychain prompts need the human)
   --throwaway-workspace    a random workspace nobody else holds, for trials and tests only
@@ -160,7 +161,7 @@ EXAMPLES
 
 EXIT CODES
   0 configured and a workspace connection exists   2 usage error   3 ligus CLI missing
-  4 stop for the human: no workspace connection yet (enroll), 0.0.0.0, or the desktop app's data dir
+  4 stop for the human: no workspace connection yet (admission), 0.0.0.0, or the desktop app's data dir
 EOF
 }
 
@@ -365,8 +366,9 @@ ONE-SHOT SEQUENCE (an agent; the human steps are marked)
   1. ligus-local preflight --json
   2. ligus-local install-cli [--version vX.Y.Z | --from-source] --json
   3. ligus-local configure --role serve --data-dir ~/.ligus-serve --json      (exits 4 until step 4)
-  4. HUMAN: in their own terminal, load the env file and run `ligus enroll -` with the invite
-     (configure prints the exact command); an Admin admits the box if it is not a member yet
+  4. Admission, with the env file loaded (configure prints the commands):
+     ligus admit request --label NAME; HUMAN: an Admin approves it (desktop: workspace menu >
+     Admit a box, or the phone) and sends back a code; ligus admit redeem ligusadmit1:...
   5. ligus-local start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
   6. ligus-local verify --role serve --data-dir ~/.ligus-serve --json
   7. HUMAN: pair the phone (`ligus pair`, prints a secret), any exposure beyond loopback
@@ -391,7 +393,7 @@ EXIT CODES
   1  a check or an operation failed; checks[].fix says what to do
   2  usage error (unknown command or flag, missing or invalid value)
   3  a precondition is missing that you can fix and rerun (the ligus CLI, curl, cargo, the env file)
-  4  a human must decide or act (enroll, exposure, deleting data they own); stop and ask
+  4  a human must decide or act (admit the box, exposure, deleting data they own); stop and ask
   With --json, stdout is one object: {schema, tool, command, ok, exitCode, checks[{id, status,
   detail, fix}], next[], role, dataDir, envFile, bin}; a usage error adds "error".
 
@@ -574,7 +576,7 @@ cmd_preflight() {
     if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
       ac_check workspace pass "a workspace connection is configured"
     else
-      ac_check workspace warn "no workspace connection yet" "HUMAN STEP: in their own terminal, the human runs: set -a; . $ENVF; set +a; $BIN enroll -, pastes the invite, then Ctrl-D (the invite carries the workspace key; never paste it into chat or onto the command line). Trials: configure --throwaway-workspace"
+      ac_check workspace warn "no workspace connection yet" "admit the box: set -a; . $ENVF; set +a; $BIN admit request --label NAME; HUMAN STEP: an Admin approves the request (desktop: workspace menu > Admit a box) and sends back a code; then $BIN admit redeem ligusadmit1:... (or --file PATH). Trials: configure --throwaway-workspace"
     fi
   fi
   ac_finish "$AC_TOOL" preflight "$(json_extra)"
@@ -624,7 +626,7 @@ cmd_configure() {
     local tmpf; tmpf=$(umask 077; mktemp "$ENVF.XXXXXX")
     {
       echo "# Written by deploy/local/ligus-local configure. No secret values here:"
-      echo "# the workspace connection is saved by 'ligus enroll' in LIGUS_DATA_DIR."
+      echo "# the workspace connection is saved by 'ligus admit redeem' in LIGUS_DATA_DIR."
       echo "LIGUS_DATA_DIR='$DATA'"
       echo "LIGUS_REQUIRE_SANDBOX=1"
       [ -n "$BACKEND" ] && echo "LIGUS_SECRET_BACKEND='$BACKEND'"
@@ -653,7 +655,9 @@ cmd_configure() {
     ac_next "ligus-local start $(inst)"
   else
     ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
-    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll - [--token @<0600 token file>], paste the invite, then Ctrl-D (copy the invite from the desktop app: workspace > Copy invite; or save it to a 0600 file and use $BIN enroll --file PATH; it carries the workspace key, so keep it off the command line). Then: ligus-local start $(inst)"
+    ac_next "set -a; . $ENVF; set +a; $BIN admit request --label NAME   (prints the box's join request ligusjoin1:... and a fingerprint)"
+    ac_next "HUMAN STEP: an Admin approves the request (desktop: workspace menu > Admit a box, or the phone; headless: ligus admit issue --request ...) after checking the fingerprint, and sends back a ligusadmit1: code"
+    ac_next "set -a; . $ENVF; set +a; $BIN admit redeem ligusadmit1:...   (or --file PATH); then: ligus-local start $(inst)"
     ac_raise 4
   fi
   ac_finish "$AC_TOOL" configure "$(json_extra)"
@@ -985,7 +989,7 @@ cmd_start() {
   [ -n "$BIN" ] || { ac_check cli.binary fail "ligus CLI not found" "ligus-local install-cli"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
   [ -f "$ENVF" ] || { ac_check env.file fail "$ENVF not found" "ligus-local configure $(inst) (with the same flags as before)"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
   if [ ! -f "$DATA/config.toml" ] && [ -z "$(env_get LIGUS_WORKSPACE)" ]; then
-    ac_check workspace fail "no workspace connection" "HUMAN STEP: ligus enroll with the invite, in the human's own terminal (ligus-local configure prints the command)"; ac_raise 4; ac_finish "$AC_TOOL" start "$(json_extra)"
+    ac_check workspace fail "no workspace connection" "admit the box first: ligus admit request, an Admin approves it (HUMAN STEP), ligus admit redeem (ligus-local configure prints the commands)"; ac_raise 4; ac_finish "$AC_TOOL" start "$(json_extra)"
   fi
   if [ $SYSTEMD = 1 ]; then
     if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; fi

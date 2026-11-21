@@ -267,8 +267,9 @@ three real seams instead:
   haven't turned on for the chat.
 - **Claude Code brings its own permission mode.** It gates its own file and
   command actions; Ligus doesn't second-guess it.
-- **Changes land as proposals you review.** Edits an agent makes surface in
-  the **Diff** tab and the **Review** pane, where peers approve (and reach
-  quorum, if configured) before they're implemented.
+- **Changes land as proposals you review.** An agent's proposed edits surface
+  in the **Review** pane, where peers approve (and reach quorum, if
+  configured) before they're implemented. The **Diff** tab shows the chat
+  checkout's uncommitted changes.
 
 Those decisions are events too; they sync to peers and survive relaunches.

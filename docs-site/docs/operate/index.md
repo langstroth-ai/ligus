@@ -30,7 +30,7 @@ honeybee). Commands, chart names and environment variables use the
 |---|---|
 | Pick a shape: solo, personal fleet, team, Kubernetes | [Choose a deployment](deploy/index.md) |
 | Hand the deployment to a coding agent | [Deploying with an agent](deploy/with-an-agent.md) (AGENTS.md and the deploy skills) |
-| Run a relay (Docker, Fly.io, systemd), pick its storage, gate access | [Self-hosting a relay](networking/self-host.md) |
+| Run a relay (Docker, Compose, systemd, a container platform), pick its storage, gate access | [Self-hosting a relay](networking/self-host.md) |
 | Let people sign in with your identity provider | [langstroth-auth](deploy/ligus-auth.md), with [Pocket ID](deploy/ligus-auth-pocket-id.md) or [Dex](deploy/ligus-auth-dex.md) |
 | Run the relay and Ligus hosts on a cluster | [Kubernetes (preview)](deploy/kubernetes.md) |
 | Route agents through your LLM gateway (LiteLLM, kgateway, Envoy AI Gateway) | [Deploying with an LLM gateway](deploy/model-gateways.md) |

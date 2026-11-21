@@ -64,21 +64,29 @@ loopback is the **human's** decision (it exposes the API to that network).
 On macOS the device secrets go to the keychain, which can show a prompt the
 human answers; `--secret-backend file` keeps them in owner-only files.
 
-## 5. Enroll (checkpoint: human)
+## 5. Admit the box (checkpoint: human)
 
-`configure` exits 4 and prints the exact command. The human runs it in their
-own terminal with the invite from the desktop app (workspace > Copy invite);
-the invite carries the workspace key, so never ask for it:
+A box joins a workspace only through a **box admission**, never with a
+person's invite (`ligus enroll` is for a person's own CLI device, not a box).
+`configure` exits 4 and prints the commands. With the env file loaded:
 
 ```sh
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
-ligus enroll -                    # paste the invite, Ctrl-D; add --token @FILE if the relay needs one
+ligus admit request --label NAME   # prints ligusjoin1:... and a fingerprint; needs no relay or sync
 ```
 
-A box that is not a member of the workspace yet is then admitted by an
-Admin: `ligus admit request` on the box prints its join request, the Admin
-approves it on a desktop (workspace menu > Admit a box) and the human runs
-`ligus admit redeem` with the code (`ligus help box`).
+**Human:** an Admin pastes the request on a desktop (workspace menu > Admit a
+box…, or the phone), checks the fingerprint, approves with a passkey and
+sends back a `ligusadmit1:` code. That code is sealed to this box, so it may
+go on the command line:
+
+```sh
+ligus admit redeem ligusadmit1:...  # or --file PATH; keeps the relay, room and workspace key
+ligus status                        # admission: kept
+```
+
+`ligus serve` / `ligus worker` sync first at start and join with the kept
+admission; no `ligus sync` is needed before. See `ligus help box`.
 
 For a quick test with nothing real at stake: `configure --throwaway-workspace
 --relay-url URL --force` makes a random workspace nobody else holds. It needs

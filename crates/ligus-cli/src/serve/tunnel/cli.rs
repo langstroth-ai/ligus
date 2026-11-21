@@ -37,8 +37,45 @@ pub fn remote_disable(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `ligus remote status`.
-pub fn remote_status(data_dir: &Path) -> Result<()> {
+/// `ligus remote status --json`: the same facts as one JSON document.
+fn remote_status_json(data_dir: &Path) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let dir = tunnel_dir(data_dir);
+    let now = super::now();
+    let relay = read_json::<RelaySettings>(&RelaySettings::file(&dir))?;
+    let live = read_json::<LiveStatus>(&dir.join("status.json"))?;
+    let phones = Registry::load(&dir)?.list();
+    Ok(json!({
+        "relay": relay.as_ref().map(|s| json!({ "url": s.relay, "enabled": s.enabled })),
+        "hostId": HostKeys::load(&dir)?.map(|k| k.host_id().to_string()),
+        "serve": live.as_ref().map(|st| json!({
+            "connected": st.connected,
+            "status": st.status,
+            "push": st.push,
+            "lastError": st.last_error,
+            "connectedSince": st.connected_since,
+            "description": describe_status(st, now),
+        })),
+        "phones": {
+            "active": phones.iter().filter(|p| p.is_active()).count(),
+            "revoked": phones.iter().filter(|p| !p.is_active()).count(),
+            "list": phones.iter().filter(|p| p.is_active()).map(|p| json!({
+                "pid": p.pid,
+                "name": p.name,
+                "pushEnabled": p.push_enabled,
+                "pushPreviews": p.push_previews,
+                "lastSeen": p.last_seen,
+            })).collect::<Vec<_>>(),
+        },
+    }))
+}
+
+/// `ligus remote status [--json]`.
+pub fn remote_status(data_dir: &Path, json: bool) -> Result<()> {
+    if json {
+        println!("{}", remote_status_json(data_dir)?);
+        return Ok(());
+    }
     let dir = tunnel_dir(data_dir);
     match read_json::<RelaySettings>(&RelaySettings::file(&dir))? {
         Some(s) => println!("relay:     {} ({})", s.relay, if s.enabled { "enabled" } else { "disabled" }),
@@ -268,9 +305,29 @@ pub fn remote_reset(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `ligus phones list`.
-pub fn phones_list(data_dir: &Path) -> Result<()> {
+/// `ligus phones list [--json]`.
+pub fn phones_list(data_dir: &Path, json: bool) -> Result<()> {
     let phones = Registry::load(&tunnel_dir(data_dir))?.list();
+    if json {
+        let revocations = super::revocation::Ledger::load(&tunnel_dir(data_dir)).list();
+        let v = serde_json::json!({
+            "phones": phones.iter().map(|p| serde_json::json!({
+                "pid": p.pid,
+                "name": p.name,
+                "state": if p.is_active() { "active" } else { "revoked" },
+                "pairedAt": p.enrolled_at,
+                "lastSeen": p.last_seen,
+                "pushEnabled": p.push_enabled,
+            })).collect::<Vec<_>>(),
+            "revocations": revocations.iter().map(|e| serde_json::json!({
+                "name": e.status.name,
+                "deviceId": e.status.device_id,
+                "summary": e.status.summary(),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{v}");
+        return Ok(());
+    }
     if phones.is_empty() {
         println!("No paired phones. Run `ligus pair` with remote access enabled.");
         return Ok(());

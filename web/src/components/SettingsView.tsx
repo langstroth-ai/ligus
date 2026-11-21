@@ -31,6 +31,7 @@ import { FlowSection } from "@/components/settings/FlowSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { AttachmentsSection } from "@/components/settings/AttachmentsSection";
+import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { IconComb } from "@/components/flow/icon";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
@@ -280,6 +281,10 @@ export function SettingsView({
         {/* Keyed by tab: each tab opens at its top instead of inheriting the
             previous tab's scroll offset. */}
         <div key={tab} className="ligus-enter min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          {/* One boundary per section: a section that throws (an unexpected
+              payload, a missing field) degrades to a contained card with
+              "Try again" instead of replacing the whole app. */}
+          <PaneErrorBoundary label={TAB_LABEL[tab]}>
           {tab === "account" && <AccountSection />}
           {tab === "appearance" && (
             <AppearanceSection
@@ -305,6 +310,7 @@ export function SettingsView({
           {tab === "updates" && <UpdatesSection />}
           {tab === "diagnostics" && <DiagnosticsSection />}
           {tab === "danger" && <DangerZoneSection />}
+          </PaneErrorBoundary>
         </div>
       </div>
     </Modal>
