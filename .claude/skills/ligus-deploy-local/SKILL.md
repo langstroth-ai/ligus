@@ -85,7 +85,7 @@ $L start --role serve --data-dir ~/.ligus-serve --systemd --json   # Linux: a sy
 $L start --role serve --data-dir ~/.ligus-serve --launchd --json   # macOS: a LaunchAgent instead (start at login)
 $L unit --role serve --data-dir ~/.ligus-serve      # print the systemd unit --systemd installs (NoNewPrivileges is relaxed only for a setuid bwrap without user namespaces)
 $L unit --role serve --data-dir ~/.ligus-serve --launchd   # print the plist --launchd installs
-$L verify --role serve --data-dir ~/.ligus-serve --json        # process, GET /v1/health, sandbox required (alias: status; shows a LaunchAgent)
+$L verify --role serve --data-dir ~/.ligus-serve --json        # process, GET /v1/health, sandbox required (alias: status; checks the systemd unit or LaunchAgent start installed)
 ```
 
 If start fails, read the log it names (`ligus-local-serve.log` in the data

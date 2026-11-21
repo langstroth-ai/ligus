@@ -654,6 +654,7 @@ upgrade, and use ping/pong deadlines instead.
 | Connect attempts per source IP | 30 / min. Failed auth: 10 / min, then 4029 for 5 min |
 | Open enrollment windows per host | 2. Attempts per window: 5. Window lifetime ≤ 15 min |
 | Enrollment-mode splice | 5 min, 4 MiB |
+| Provisional connections (E3b, §7.2.1; host side) | 4 at once per host, then 4043. Each: 5 min, 8 requests, its own device only |
 | Control messages per host | 20 / s burst. Pushes ≤ 1 / s sustained, ≤ 2 000 / day |
 | Mux streams per session | 32. Head ≤ 16 KiB. DATA ≤ 16 384 B. Initial window 256 KiB |
 | Session lifetime | 24 h |
@@ -997,6 +998,12 @@ calls it right after admitting or suspending a host.
   same file-handoff model as `serve.token`.
 - **API:** the auth middleware accepts `TunnelPeer`, plus the tunnel-only
   routes (§9). No handler changes.
+- **E3b (0.1.1, §7.2.1):** an uncertified phone that sends `enrollKey`
+  gets a provisional connection served by its own router, which holds only
+  the three `/v1/phone-enroll/*` routes
+  (`crates/ligus-cli/src/serve/phone_enroll_api.rs`); the box relays the
+  phone's request to the desktop on the presence channel. Closes 4040 to
+  4043 are in §12.
 
 ## 17. Security properties
 

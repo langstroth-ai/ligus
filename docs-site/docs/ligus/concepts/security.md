@@ -926,16 +926,21 @@ who sees the QR in its 5 minutes, over your shoulder, in a screen share or
 in a photo, holds the secret too, and could answer it from their own phone
 if they can reach a box of the workspace. Ligus makes that hard to miss:
 
-- **Show code.** The desktop draws the QR only when you ask, hides it when
-  the window loses focus, and asks the system not to capture the window
+- **Show code.** The desktop draws the QR only when you choose **Show
+  code**, hides it when the window loses focus ("The code is hidden while
+  Ligus isn't in front. It's still valid."), and asks the system not to capture the window
   while it shows (best effort: not every capture path honours it, and a
   camera pointed at the screen always works).
 - **The hold.** **Add this phone** stays disabled for 5 seconds after a
-  request arrives. If a second phone answers in that time, nothing is added
-  and the desktop asks you to start again.
+  request arrives ("Listening for other phones…"). If a second phone
+  answers before you approve, nothing is added: the desktop says "Two
+  phones answered this code. Someone else may have seen it. Nothing was
+  added." and offers **Show a new code**.
 - **The tripwire.** After you approve, the desktop keeps listening until
-  the code expires. If another phone answers, it raises an alert naming the
-  phone you added and its fingerprint, with a button to revoke it; the
+  the code expires. If another phone answers, it raises an alert, "Another
+  phone answered this code", naming the phone you added and its
+  fingerprint and the other phone's, with **Revoke *label*** (your passkey
+  confirms it) and **It's mine**; the
   other phone, if it is yours, says another phone was added with the code.
 - **One use, 5 minutes.** A code is locked to the first phone that answers
   it and expires after 5 minutes.

@@ -107,7 +107,7 @@ proposals.
 
 ### Lost a device without a backup
 
-Revoke it (your own device: **Settings → Account → My devices**) and set up
+Revoke it (your own device: **Settings → Profile → My devices**) and set up
 a new one: a desktop by signing in and joining the workspace again; a serve
 or worker box with `ligus enroll` in a fresh data dir. History comes back
 from the relay or peers, as far back as the relay's retention reaches.

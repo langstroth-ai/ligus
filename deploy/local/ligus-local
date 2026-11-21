@@ -8,7 +8,7 @@
 #   ligus-local start      --role serve|worker     start in the background (or --systemd / --launchd)
 #   ligus-local unit       --role serve|worker     print the systemd unit start --systemd installs
 #                                                  (--launchd: the LaunchAgent plist)
-#   ligus-local verify     --role serve|worker     process, health endpoint, sandbox (alias: status)
+#   ligus-local verify     --role serve|worker     process (or its systemd unit / LaunchAgent), health, sandbox (alias: status)
 #   ligus-local stop       --role serve|worker     (--systemd / --launchd: also no start at login)
 #   ligus-local uninstall  --role serve|worker [--delete-data]
 #
@@ -44,6 +44,8 @@ configure flags:
 start flags:   --systemd (Linux: install and start a systemd user unit instead)
                --launchd (macOS: install and load a LaunchAgent instead, so the box
                           starts at login and is kept running; stop --launchd removes it)
+verify:        checks the systemd unit or LaunchAgent start installed for this data dir
+               by itself (--systemd / --launchd only make it required)
 Environment:   LIGUS_BIN (default: ligus on PATH, else ~/.local/bin/ligus)
 EOF
 }
@@ -338,6 +340,18 @@ unit_nnp() {
   NNP_WHY="$b is setuid root and unprivileged user namespaces are off, so under NoNewPrivileges=yes bwrap could not sandbox agents; agent processes still run with no_new_privs"
 }
 
+SD_UNIT() { printf '%s/.config/systemd/user/ligus-%s.service' "$HOME" "$ROLE"; }
+# Whether the systemd user unit is one start --systemd wrote for this env
+# file (a hand-installed ligus-serve.service belongs to someone else's data
+# dir): verify then checks it without --systemd, and uninstall removes it.
+sd_ours() {
+  local unit envf
+  unit=$(SD_UNIT)
+  [ "$OS" = Linux ] && [ -f "$unit" ] || return 1
+  envf=$(sd_path "$ENVF") || return 1
+  grep -q '^Description=.*(ligus-local)' "$unit" && grep -qxF "EnvironmentFile=$envf" "$unit"
+}
+
 # The systemd user unit start --systemd installs, from the shipped one.
 # $1: yes|no for NoNewPrivileges.
 render_unit() {
@@ -615,7 +629,7 @@ cmd_start() {
   fi
   if [ $SYSTEMD = 1 ]; then
     if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
-    local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
+    local unit; unit=$(SD_UNIT)
     mkdir -p "$(dirname "$unit")"
     unit_nnp
     if [ "$NNP" = no ]; then
@@ -669,9 +683,15 @@ cmd_verify() {
   log=$(LOGF)
   [ $LAUNCHD = 1 ] && la_need verify
   [ "$OS" = Darwin ] && la=$(la_find || true)
+  # start --systemd's unit for this data dir is found without --systemd, as
+  # a LaunchAgent is on macOS.
+  if [ $SYSTEMD = 0 ] && ac_have systemctl && sd_ours; then
+    SYSTEMD=1
+    ac_check systemd info "systemd user unit ligus-$ROLE installed by ligus-local for this data dir ($(SD_UNIT))"
+  fi
   if [ $SYSTEMD = 1 ]; then
     if systemctl --user is-active --quiet "ligus-$ROLE"; then ac_check process pass "systemd unit ligus-$ROLE active"
-    else ac_check process fail "systemd unit ligus-$ROLE not active" "journalctl --user -u ligus-$ROLE -n 50"; fi
+    else ac_check process fail "systemd unit ligus-$ROLE not active" "journalctl --user -u ligus-$ROLE -n 50; ligus-local start $(inst) --systemd starts it again"; fi
   elif [ -n "$la" ]; then
     local label; label=$(basename "$la" .plist); log=$(LA_LOG "$label")
     if ! la_print "$label" >/dev/null; then
@@ -744,12 +764,10 @@ cmd_stop() {
 cmd_uninstall() {
   require_role; require_data
   ( AC_JSON=0; cmd_stop ) >/dev/null 2>&1 || true
-  local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
-  # Only a unit start --systemd wrote for this env file (a hand-installed
-  # ligus-serve.service belongs to someone else's data dir).
-  if [ "$OS" = Linux ] && [ -f "$unit" ] && grep -q '^Description=.*(ligus-local)' "$unit" && grep -qx "EnvironmentFile=$ENVF" "$unit"; then
+  # Only a unit start --systemd wrote for this env file.
+  if sd_ours; then
     systemctl --user disable --now "ligus-$ROLE" >/dev/null 2>&1 || true
-    rm -f "$HOME/.config/systemd/user/ligus-$ROLE.service"; systemctl --user daemon-reload || true
+    rm -f "$(SD_UNIT)"; systemctl --user daemon-reload || true
     ac_check unit pass "removed systemd user unit ligus-$ROLE"
   fi
   local la=""

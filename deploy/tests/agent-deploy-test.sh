@@ -276,6 +276,44 @@ check_json "ligus-local uninstall removes the launchd agent" "$TMP/la12" 0 "$RC"
 if [ -z "$(find "$LA" -type f)" ] && ! ls "$TMP/lc"/loaded.* >/dev/null 2>&1; then pass "no agent left installed or loaded"; else fail "left behind: $(ls -a "$LA" "$TMP/lc")"; fi
 if ! grep -Eq '^(load|unload) ' "$TMP/lc/calls"; then pass "never the deprecated launchctl load/unload"; else fail "launchctl load/unload used"; fi
 
+# ligus-local verify finds start --systemd's unit for this data dir without
+# --systemd (a FAKE systemctl first on PATH; the real user manager is never
+# touched): only a unit ligus-local wrote for this env file counts.
+SH="$TMP/sd-home"; mkdir -p "$SH/.config/systemd/user" "$TMP/sdbin" "$TMP/sd"
+cat >"$TMP/sdbin/systemctl" <<'FAKE'
+#!/bin/sh
+# Fake systemctl --user: a unit is active when $FAKE_SD_DIR/active.<unit> exists.
+d=${FAKE_SD_DIR:?}
+printf '%s\n' "$*" >>"$d/calls"
+[ "$1" = --user ] || { echo "fake systemctl: not --user: $*" >&2; exit 64; }
+case $2 in
+  is-active) for u; do :; done; [ -e "$d/active.$u" ] ;;
+  *) echo "fake systemctl: unexpected: $*" >&2; exit 64 ;;
+esac
+FAKE
+chmod +x "$TMP/sdbin/systemctl"
+sd() { # ligus-local on "Linux" with the fake systemctl and the temp HOME
+  env HOME="$SH" PATH="$TMP/sdbin:$PATH" LIGUS_LOCAL_OS=Linux FAKE_SD_DIR="$TMP/sd" LIGUS_BIN="$LB" "$LOCAL" "$@"
+}
+la_env "$TMP/sd1.env" "$TMP/sdd" serve sdbox
+sd unit --role serve --data-dir "$TMP/sdd" --env-file "$TMP/sd1.env" >"$SH/.config/systemd/user/ligus-serve.service" 2>/dev/null
+run "$TMP/sd1" sd verify --json --role serve --data-dir "$TMP/sdd" --env-file "$TMP/sd1.env"
+check_json "ligus-local verify, systemd unit installed but inactive" "$TMP/sd1" 1 "$RC" systemd
+touch "$TMP/sd/active.ligus-serve"
+run "$TMP/sd2" sd status --json --role serve --data-dir "$TMP/sdd" --env-file "$TMP/sd1.env"
+check_json "ligus-local verify finds the active systemd unit without --systemd" "$TMP/sd2" 0 "$RC" systemd
+if grep -q 'systemd unit ligus-serve active' "$TMP/sd2" && grep -qx -- '--user is-active --quiet ligus-serve' "$TMP/sd/calls"; then
+  pass "verify checks the unit with systemctl --user is-active"
+else fail "verify with the unit: $(cat "$TMP/sd2" "$TMP/sd/calls")"; fi
+la_env "$TMP/sd-other.env" "$TMP/sdo" serve other
+run "$TMP/sd3" sd verify --json --role serve --data-dir "$TMP/sdo" --env-file "$TMP/sd-other.env"
+check_json "ligus-local verify ignores another data dir's unit" "$TMP/sd3" 1 "$RC" process
+if ! grep -q '"id":"systemd"' "$TMP/sd3"; then pass "another env file's unit is not this box's"; else fail "verify took another data dir's unit: $(cat "$TMP/sd3")"; fi
+sed -i.bak 's/^Description=.*/Description=Ligus serve (hand-installed)/' "$SH/.config/systemd/user/ligus-serve.service"
+run "$TMP/sd4" sd verify --json --role serve --data-dir "$TMP/sdd" --env-file "$TMP/sd1.env"
+check_json "ligus-local verify ignores a hand-installed unit" "$TMP/sd4" 1 "$RC" process
+if ! grep -q '"id":"systemd"' "$TMP/sd4"; then pass "a unit ligus-local didn't write is left to its owner"; else fail "verify took a hand-installed unit"; fi
+
 # ligus-k8s never falls back to the current kube context.
 run "$TMP/c1" "$K8S" verify --json --namespace x --release r
 check_json "ligus-k8s without --context is a usage error" "$TMP/c1" 2 "$RC"

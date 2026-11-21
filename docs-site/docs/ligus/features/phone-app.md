@@ -36,9 +36,10 @@ itself, through your `ligus serve` box.
    Show code**. The QR code appears with a 5-minute countdown. It is hidden
    when Ligus isn't in front (the code stays valid); choose **Show code** to
    bring it back, and **Show a new code** once it expires. If this desktop
-   can't show a code (no relay connection for the workspace, no passkey or
-   recovery key on your account), the panel says what is missing and offers
-   [Can't scan?](#cant-scan) instead.
+   can't show a code (the workspace isn't shared, it has no relay
+   connection, or your account has no passkey or recovery key), the panel
+   says "Adding a phone by scanning a code isn't available here right now",
+   lists what is missing and offers [Can't scan?](#cant-scan) instead.
 2. **On the phone:** **Settings → This phone → Add to my devices**, then
    point the camera at the desktop's code. Use the scanner inside the Ligus
    app; the phone's camera app doesn't read this code.
@@ -61,6 +62,12 @@ itself, through your `ligus serve` box.
 6. The phone sees that the box now knows its certificate, pairs, and says
    "This phone is now one of your devices". There is nothing to retry by
    hand.
+
+**My devices** lists the phone under the name it gave itself (cleaned, as
+every name is). That name is remembered only on the desktop that added the
+phone, in its local settings: your other desktops list the same phone as
+"Device" and the first 8 characters of its device id (for example
+"Device 6f1c2a9b"). Both flows ([Can't scan?](#cant-scan) too) remember it.
 
 The phone is added to the workspace the desktop showed the code for, under
 the account of the person at that desktop. The phone warns you before

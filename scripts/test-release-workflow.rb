@@ -1136,3 +1136,55 @@ class TapPushesNeverRace < Minitest::Test
     refute_match(/set -x|remote get-url|git remote -v/, script, "tap-push.sh would print the tokened remote")
   end
 end
+
+
+# The app updates itself, so the cask says auto_updates true. Both cask bumps
+# add it to the tap's copy (once, before depends_on) and the staging copy has
+# it, so the next release writes it.
+class CaskAutoUpdates < Minitest::Test
+  CASK = File.join(ROOT, "deploy/homebrew/Casks/ligus-app.rb")
+  LINE = "  auto_updates true"
+
+  # The lines of bump_cask that add auto_updates (everything after the sed
+  # bumps of version and sha256), run in a dir holding Casks/ligus-app.rb.
+  def add_step(workflow, job)
+    fn = run_text(workflow, job)[/^\s*bump_cask\(\) \{\n(.*?)^\s*\}\n/m, 1]
+    refute_nil fn, "#{job}: no bump_cask function"
+    fn.lines.reject { |l| l.include?("sed -i") || l.include?("test -f") }.join.gsub("return 1", "exit 1")
+  end
+
+  def apply(script, cask_text)
+    Dir.mktmpdir do |d|
+      FileUtils.mkdir_p(File.join(d, "Casks"))
+      path = File.join(d, "Casks/ligus-app.rb")
+      File.write(path, cask_text)
+      _out, err, st = Open3.capture3("bash", "-euo", "pipefail", "-c", script, chdir: d)
+      [st.success?, File.read(path), err]
+    end
+  end
+
+  def test_the_staging_cask_says_auto_updates
+    lines = File.readlines(CASK, chomp: true)
+    assert_equal 1, lines.count(LINE)
+    assert_operator lines.index(LINE), :<, lines.index { |l| l.start_with?("  depends_on ") }
+    assert_operator lines.index(LINE), :>, lines.index { |l| l.start_with?("  livecheck do") }
+  end
+
+  def test_every_cask_bump_adds_auto_updates_once
+    staging = File.read(CASK)
+    old = staging.lines.reject { |l| l.include?("auto_updates") }.join
+    { "release.yml:cask" => [RELEASE, "cask"], "update-cask.yml:bump" => [UPDATE_CASK, "bump"] }.each do |name, (wf, job)|
+      script = add_step(wf, job)
+      ok, out, err = apply(script, old)
+      assert ok, "#{name}: #{err}"
+      lines = out.lines(chomp: true)
+      assert_equal 1, lines.count(LINE), name
+      assert_equal "  depends_on arch: :arm64", lines[lines.index(LINE) + 2], name
+      ok, again, err = apply(script, out)
+      assert ok, "#{name} (rerun after a rebase): #{err}"
+      assert_equal out, again, "#{name} must be idempotent"
+      ok, _out, _err = apply(script, "cask \"ligus-app\" do\nend\n")
+      refute ok, "#{name} must fail when it can't place auto_updates"
+    end
+  end
+end

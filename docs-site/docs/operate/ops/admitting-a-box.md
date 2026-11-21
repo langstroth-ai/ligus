@@ -41,7 +41,7 @@ Admin closes from the CLI with `ligus admit close`.
     `LIGUS_SERVE_OWNER` and the chart's `serve.owner` stop with an
     error. Admit the box as described here instead. A box whose
     device key a person's desktop still certifies refuses to start: revoke
-    it (**Settings → Account → My devices → Revoke**) and start it from a
+    it (**Settings → Profile → My devices → Revoke**) and start it from a
     fresh data dir.
 
 ## Start-up: sync first, never found
