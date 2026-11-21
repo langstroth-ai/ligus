@@ -96,7 +96,8 @@ const NOT_ENTITLED_WAIT: Duration = Duration::from_secs(10 * 60);
 /// doesn't serve (4006, and 4003 should a relay send it here) tries again
 /// rarely;
 /// another process on this host's key (4009) waits at least a minute;
-/// anything else backs off.
+/// a rate limit (4029) waits at least a minute (retrying sooner can't lift
+/// it); anything else backs off.
 fn after_close(code: u16, why: &str, backoff: Duration) -> After {
     match code {
         4001 => After::Stop(format!(
@@ -107,7 +108,7 @@ fn after_close(code: u16, why: &str, backoff: Duration) -> After {
             "the relay doesn't speak this version of the remote-access protocol (4026 {why}); remote access is stopped. Update Ligus, or point it at a newer relay."
         )),
         4003 | 4006 => After::Wait(jitter(NOT_ENTITLED_WAIT).max(NOT_ENTITLED_WAIT)),
-        4009 => After::Wait(jitter(MAX_BACKOFF).max(MAX_BACKOFF)),
+        4009 | 4029 => After::Wait(jitter(MAX_BACKOFF).max(MAX_BACKOFF)),
         _ => After::Wait(jitter(backoff)),
     }
 }
@@ -146,6 +147,12 @@ pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receive
                                 "remote: the relay doesn't serve this host ({code} {why}: ask its operator); trying again in {} min",
                                 wait.as_secs() / 60
                             ),
+                            4029 => eprintln!(
+                                "remote: the relay is rate limiting this network ({code} {why}). It counts failed attempts per \
+                                 IP address (per /64 on IPv6), so a phone on the same network retrying an old pairing link \
+                                 counts too; the block lifts a few minutes after the failures stop. Retrying in {}s.",
+                                wait.as_secs()
+                            ),
                             _ => eprintln!("remote: relay closed the control connection ({code} {why}); retrying in {}s", wait.as_secs()),
                         }
                         wait
@@ -171,6 +178,37 @@ fn close_code(m: &Message) -> Option<(u16, String)> {
         Message::Close(Some(f)) => Some((u16::from(f.code), f.reason.to_string())),
         Message::Close(None) => Some((1005, String::new())),
         _ => None,
+    }
+}
+
+/// The relay's `{"t":"error","code","message"}` frame as text, e.g.
+/// `rate_limited: too many attempts`.
+fn relay_error_text(m: &Value) -> String {
+    let code = m["code"].as_str().unwrap_or("error");
+    match m["message"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(msg) => format!("{code}: {msg}"),
+        None => code.to_string(),
+    }
+}
+
+/// The relay refused with an error frame (§6): it follows it with a close
+/// frame whose code says what to do. Wait briefly for that code, so the
+/// refusal is classified like any other close (and its text is logged).
+async fn refusal(ws: &mut Ws, m: &Value) -> End {
+    let text = relay_error_text(m);
+    match tokio::time::timeout(Duration::from_secs(2), next_json(ws)).await {
+        Ok(Err(End::Code(code, _))) => End::Code(code, text),
+        _ => End::Other(anyhow!("the relay refused the control connection ({text})")),
+    }
+}
+
+/// The relay's opening `challenge`, or the refusal it sent instead.
+async fn read_challenge(ws: &mut Ws) -> Result<Value, End> {
+    let ch = next_json(ws).await?;
+    match ch["t"].as_str() {
+        Some("challenge") => Ok(ch),
+        Some("error") => Err(refusal(ws, &ch).await),
+        _ => Err(End::Other(anyhow!("expected challenge, got {}", ch["t"]))),
     }
 }
 
@@ -200,10 +238,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
     };
     // challenge → hello → welcome
     let welcome = async {
-        let ch = next_json(&mut ws).await?;
-        if ch["t"] != "challenge" {
-            return Err(End::Other(anyhow!("expected challenge, got {}", ch["t"])));
-        }
+        let ch = read_challenge(&mut ws).await?;
         if ch["v"] != 1 {
             return Err(End::Other(anyhow!("relay speaks tunnel version {}", ch["v"])));
         }
@@ -224,9 +259,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
             let m = next_json(&mut ws).await?;
             match m["t"].as_str() {
                 Some("welcome") => return Ok(m),
-                Some("error") => {
-                    eprintln!("remote: relay error: {} {}", m["code"], m["message"]);
-                }
+                Some("error") => return Err(refusal(&mut ws, &m).await),
                 _ => {}
             }
         }
@@ -373,6 +406,60 @@ mod close_code_tests {
             assert!(matches!(after_close(code, "x", b), After::Wait(w) if w >= NOT_ENTITLED_WAIT), "{code} retried at the reconnect pace");
         }
         assert!(matches!(after_close(4009, "superseded", b), After::Wait(w) if w >= MAX_BACKOFF));
+        assert!(matches!(after_close(4029, "rate_limited: too many attempts", b), After::Wait(w) if w >= MAX_BACKOFF));
         assert!(matches!(after_close(4011, "shutting_down", b), After::Wait(w) if w <= b * 2));
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+
+    /// A relay that answers the upgrade with `frames` and then closes with `close`.
+    async fn relay_sending(frames: Vec<Value>, close: Option<(u16, &'static str)>) -> Ws {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            for f in frames {
+                ws.send(Message::Text(f.to_string().into())).await.unwrap();
+            }
+            if let Some((code, reason)) = close {
+                let _ = ws.close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.into() })).await;
+            }
+            while ws.next().await.is_some() {}
+        });
+        tokio_tungstenite::connect_async(format!("ws://{addr}")).await.unwrap().0
+    }
+
+    /// The relay refusing the control connection (an error frame instead of
+    /// the challenge) is reported with its code and message, not as
+    /// `expected challenge, got "error"`, and is classified by its close code.
+    #[tokio::test]
+    async fn a_refused_control_connection_says_why() {
+        let err = json!({ "t": "error", "code": "rate_limited", "message": "too many attempts" });
+        let mut ws = relay_sending(vec![err.clone()], Some((4029, "rate_limited"))).await;
+        match read_challenge(&mut ws).await {
+            Err(End::Code(4029, why)) => assert_eq!(why, "rate_limited: too many attempts"),
+            other => panic!("{other:?}"),
+        }
+        // No close frame: the refusal text still reaches the log.
+        let mut ws = relay_sending(vec![err], None).await;
+        match read_challenge(&mut ws).await {
+            Err(End::Other(e)) => assert!(format!("{e:#}").contains("rate_limited: too many attempts"), "{e:#}"),
+            other => panic!("{other:?}"),
+        }
+        let mut ws = relay_sending(vec![json!({ "t": "challenge", "v": 1, "nonce": "x" })], None).await;
+        assert!(matches!(read_challenge(&mut ws).await, Ok(v) if v["t"] == "challenge"));
+    }
+
+    #[test]
+    fn relay_error_text_reads_code_and_message() {
+        assert_eq!(relay_error_text(&json!({ "t": "error", "code": "not_entitled", "message": " " })), "not_entitled");
+        assert_eq!(relay_error_text(&json!({ "t": "error" })), "error");
     }
 }

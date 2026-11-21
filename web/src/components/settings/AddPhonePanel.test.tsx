@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AddPhonePanel } from "./AddPhonePanel";
 import * as ipc from "@/lib/ipc";
+import { toast } from "@/components/Toast";
 
 vi.mock("@/lib/ipc", () => ({
   inspectPhoneCode: vi.fn(),
@@ -41,6 +42,17 @@ describe("Add this phone", () => {
     await userEvent.click(add);
     await waitFor(() => expect(ipc.certifyPhoneCode).toHaveBeenCalledWith("ligusphone1:abc", "ABCD-EF01-2345-6789-ABCD", "ws"));
     expect(onDone).toHaveBeenCalled();
+    // The phone can't know it was added: say what to do next on it.
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/tap Retry on the phone/);
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/ligus pair/);
+  });
+
+  it("marks the name as the phone's own claim, next to the fingerprint", async () => {
+    vi.mocked(ipc.inspectPhoneCode).mockResolvedValue({ ...fresh, label: "iPhone" });
+    render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByLabelText("Phone code"));
+    await userEvent.paste("ligusphone1:abc");
+    expect(await screen.findByTestId("phone-name-hint")).toHaveTextContent(/name the phone gives itself/);
   });
 
   it("refuses a revoked or conflicting phone with the reason", async () => {

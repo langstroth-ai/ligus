@@ -39,7 +39,9 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
       // Certify only the key whose fingerprint was compared, into the
       // workspace the preview was for (refused if the active one changed).
       await certifyPhoneCode(code, preview.fingerprint, preview.workspaceId);
-      toast.success(`${preview.label || "Your phone"} is now one of your devices. Pair it with your box from the app.`);
+      toast.success(
+        `${preview.label || "Your phone"} is now one of your devices. Give your box a few seconds to sync it, then tap Retry on the phone (or scan a new \`ligus pair\` link if the old one used its five attempts).`,
+      );
       onDone();
     } catch (e) {
       toast.error(`Couldn't add the phone: ${errMsg(e)}`);
@@ -67,6 +69,10 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
         <div className="space-y-1.5 text-xs">
           <div>
             <span className="text-ink-soft">Phone</span> <strong>{preview.label || "unnamed"}</strong>
+            <span className="text-ink-soft" data-testid="phone-name-hint">
+              {" "}
+              (the name the phone gives itself; the fingerprint is what proves it's yours)
+            </span>
           </div>
           <div>
             <span className="text-ink-soft">Fingerprint</span>{" "}

@@ -669,7 +669,7 @@ impl TunnelHost {
             }
         };
         if exhausted {
-            eprintln!("remote: pairing window {eid} closed after {MAX_WINDOW_ATTEMPTS} failed attempts");
+            eprintln!("remote: pairing window {eid} closed after {MAX_WINDOW_ATTEMPTS} failed attempts; run `ligus pair` for a new pairing link");
             self.close_window(eid);
         }
     }
