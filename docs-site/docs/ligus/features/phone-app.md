@@ -34,8 +34,11 @@ itself, through your `ligus serve` box.
 
 1. **On the desktop:** **Settings → Profile → My devices → Add a phone →
    Show code**. The QR code appears with a 5-minute countdown. It is hidden
-   when the window loses focus; choose **Show code** to bring it back, and
-   **Show a new code** once it expires.
+   when Ligus isn't in front (the code stays valid); choose **Show code** to
+   bring it back, and **Show a new code** once it expires. If this desktop
+   can't show a code (no relay connection for the workspace, no passkey or
+   recovery key on your account), the panel says what is missing and offers
+   [Can't scan?](#cant-scan) instead.
 2. **On the phone:** **Settings → This phone → Add to my devices**, then
    point the camera at the desktop's code. Use the scanner inside the Ligus
    app; the phone's camera app doesn't read this code.
@@ -43,8 +46,8 @@ itself, through your `ligus serve` box.
    *Ana* (*role*)'s devices in *workspace*?". Check that it is you, then
    choose **Add**. The phone then shows its fingerprint
    (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four) and waits.
-4. **On the desktop:** a card says "*Ana's iPhone* wants to be added", with
-   the box that relayed the request and the same fingerprint. **Compare the
+4. **On the desktop:** a card says "*Ana's iPhone* wants to be added",
+   "Relayed by *box*", who the phone will act as, and the fingerprint. **Compare the
    fingerprint with the phone's screen**, group by group, and tick "Your
    phone shows the same fingerprint". The phone's name is only what the
    phone calls itself; the fingerprint is what proves it is the phone in
@@ -52,8 +55,8 @@ itself, through your `ligus serve` box.
 5. Choose **Add this phone** and confirm with your passkey; the passkey
    sheet names the same fingerprint. The button stays disabled for the first
    5 seconds after the request appears ("Listening for other phones…"): if
-   a second phone answers the same code in that time, the desktop stops and
-   asks you to start again. If the card isn't your phone, choose **Not my
+   a second phone answers the same code in that time, nothing is added and
+   the desktop asks you to start again. If the card isn't your phone, choose **Not my
    phone**.
 6. The phone sees that the box now knows its certificate, pairs, and says
    "This phone is now one of your devices". There is nothing to retry by
@@ -139,7 +142,7 @@ your account, your role and the passkey relying party by itself.
 | "this phone belongs to someone else here" | the phone is already certified for another person in this workspace | reset the phone's device key in the app and add it again |
 | "this phone's device is revoked here" | the phone was revoked | reset the phone's device key in the app and add it again |
 | the desktop declined | **Not my phone** was chosen | show a new code and scan again |
-| "Two phones answered this code. Someone else may have seen it. Start again." (desktop) | a second phone answered before you approved | nothing was added. Show a new code, keep it out of sight of others and cameras, and scan again |
+| "Two phones answered this code. Someone else may have seen it. Nothing was added." (desktop) | a second phone answered before you approved | **Show a new code**, keep it off shared screens and out of sight of cameras, and scan again |
 | the phone keeps waiting, or the box refuses with "too many attempts" | the box keeps a few requests at a time, or the relay is rate limiting your network (`4029`, failed attempts per IP address) | stop retrying and wait 5 minutes; then show a new code and scan it once |
 
 ### "Another phone answered this code" {#another-phone}
@@ -150,8 +153,9 @@ even after you approve, so that this can't happen silently:
 
 - **On the desktop:** "Another phone answered this code after you added
   *label* (fingerprint …). If the phone you added isn't the one in your
-  hand, revoke it now." Compare the fingerprint it names with the one on
-  your phone (**Settings → This phone**). If they differ, choose
+  hand, revoke it now." It also shows the other phone's name and
+  fingerprint. Compare both with the fingerprint on your phone
+  (**Settings → This phone**). If they differ, choose
   **Revoke *label***: it is your own device, so your passkey is enough. If
   they match, choose **It's mine**.
 - **On the phone:** "Another phone was added with this code. Tell the
