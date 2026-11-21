@@ -1,8 +1,10 @@
 # Add a phone by scanning the desktop's QR (reverse-QR enrollment)
 
-Status: **design, not built.** Reviewed in
-[phone-enroll-reverse-qr.review.md](phone-enroll-reverse-qr.review.md).
-Ligus is short for *ligustica*; the platform is Langstroth.
+Status: **design, not built.** Revision 3, after review rounds 1 and 2
+([phone-enroll-reverse-qr.review.md](phone-enroll-reverse-qr.review.md);
+§15 maps each required revision to where it landed). Review verdict:
+**Approve with risks**. Ligus is short for
+*ligustica*; the platform is Langstroth.
 
 Citations are `file:line` into this repo as of `origin/main` at `b635b65f9`,
 `relay/…` into `langstroth-ai/langstroth-relay` at `a5cec7b`, and `ios/…`
@@ -46,7 +48,7 @@ a fallback.
 | D2 | A phone that isn't paired yet (the common case: pairing needs a certificate first) | A new, additive **provisional enrollment** in the tunnel (`relay-tunnel.md` §7.2 "E3b"): a phone that proves the box's pairing secret and its own device key, but isn't certified yet, gets a restricted channel to the enroll routes only. Over the direct path (bearer token) the routes are available as they are. |
 | D3 | No box at all | Paste (unchanged), plus `ligus phones certify`. Owner question O1: let the phone's code (public data) go through Universal Clipboard. |
 | D4 | The desktop's QR | `ligusenroll1:` + workspace id, the desktop's device id, a 32-byte one-time secret, an expiry. The secret travels only optically. |
-| D5 | Binding | The phone's request carries its unchanged `ligusphone1:` code, a P-256 signature by the phone over the request, and an **HMAC keyed from the QR's secret**. A box, relay or member without the secret can't substitute a key, replay into another offer, or have a request accepted. One use, 5-minute expiry. |
+| D5 | Binding | The phone's request carries its unchanged `ligusphone1:` code, a P-256 signature by the phone over the request, and an **HMAC keyed from the QR's secret**. A box, relay or member without the secret can't substitute a key, replay into another offer, or have a request accepted. One use, 5-minute expiry. Against a *stolen* QR: only a box may relay, a second phone aborts the offer, and the desktop keeps listening after approval and raises a revoke alert (the "tripwire", §8.3). |
 | D6 | Authorization | The desktop certifies through the **same** `certify_phone_code` as paste: the same `DeviceCertificateAdded`, the same fold rules, the passkey every phone enrollment needs. The box writes nothing to any log. |
 | D7 | Wire names | All new: `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`, HKDF salt `ligus-enroll-qr-v1`, contexts `ligus-enroll-request-v1\0`, `ligus-enroll-result-v1\0`, `ligus-enroll-relay-v1\0`, `ligus-enroll-answer-v1\0`. Nothing existing is renamed or changed. Golden vectors in `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`. |
 
@@ -108,7 +110,7 @@ Why not the alternatives:
                                                                         in <workspace>?"  [Add]
                                      ◄─ POST /v1/phone-enroll/requests {request: ligusenrollreq1:…}
                                      checks (§7.3), then publishes presence slot
-                                     phone-enroll:<rid>  (sealed, box-signed)
+                                     phone-enroll:<rid>:<box>  (sealed, box-signed)
  polls presence, opens the slot,
  checks MAC (s), phone sig, code,
  offer, standing                                                       shows its fingerprint, waits
@@ -209,16 +211,25 @@ and the sealed JSON is signed by the writer's device key over
 
 | Slot | Field | Writer | Plaintext | Signature context |
 |---|---|---|---|---|
-| `phone-enroll:<b64u rid>` | `phoneEnrollRequest` | the box that took the request | `{request, relay: <box device id>, at}` | `ligus-enroll-relay-v1\0` |
+| `phone-enroll:<b64u rid>:<box device id>` | `phoneEnrollRequest` | the box that took the request | `{request, relay: <box device id>, at}` | `ligus-enroll-relay-v1\0` |
 | `phone-enroll-answer:<b64u rid>` | `phoneEnrollAnswer` | the desktop that showed the QR | `{answer, desktop: <device id>, at}` | `ligus-enroll-answer-relay-v1\0` |
 
 Readers drop a blob that doesn't open at or after the authorized head, isn't
-in the slot its `rid` names, isn't signed by a certified, unrevoked device
-of a current member (`certified_device_key`,
-`crates/ligus-runtime/src/chat_service/guards.rs:105`), or whose `at` is
-more than 30 s ahead or 60 s old. The box re-publishes every 10 s while the
-request is pending and writes `{}` when it settles; the desktop does the
-same for its answer until the offer's expiry.
+in the slot its `rid` (and, for a request, its `relay`) names, or whose `at`
+is more than 30 s ahead or 60 s old. Signers are narrowed (review R2):
+
+- a **request** slot counts only when signed by a certified, unrevoked
+  device of a current **service member** (a box;
+  `certified_device_key`, `crates/ligus-runtime/src/chat_service/guards.rs:105`,
+  plus the member's `ActorKind::Service`). A person's own device can't
+  inject a request, even with the workspace key and the QR's secret;
+- an **answer** slot counts only when signed by the offer's own
+  `desktop_device_id` (the box checks it against the roster, the phone
+  checks the tag).
+
+The box re-publishes every 10 s while the request is pending and writes `{}`
+when it settles; the desktop does the same for its answer until the offer's
+expiry.
 
 The relay sees two slot names per enrollment and the timing; the slot's
 `rid` is unlinkable to the secret.
@@ -294,18 +305,21 @@ Nothing these routes return is secret: no `s`, no keys, no tokens.
 
 Body `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` (`deviceId` only
 off the tunnel). Writes nothing. Answers `200 {workspaceId, workspaceName,
-person: {displayName, role}, desktopLabel, phone: {standing}}` where
-`person` is the member who holds `desktopDeviceId` on this box's roster.
-Refusals, `409 {error, message}`:
+person: {accountId, memberId, displayName, role, nameCollision},
+desktopLabel, phone: {standing}}` where `person` is the member who holds
+`desktopDeviceId` on this box's roster, `nameCollision` is true when another
+current member has the same display name after `clean_display_name`, and
+`standing` is `new` or `alreadyMine` (the phone then has nothing to do).
+Refusals, `{error, message}`:
 
-| `error` | When |
-|---|---|
-| `wrong_workspace` | `workspaceId` isn't this box's workspace |
-| `desktop_unknown` | `desktopDeviceId` isn't a certified, unrevoked, non-phone, non-delegated device of exactly one current human member here |
-| `offer_expired` | `exp < now − 120` or `exp > now + 900` (box clock) |
-| `device_revoked` | the phone's device is revoked here (403) |
-| `already_yours` | the phone is already certified for that person (200 with `standing: alreadyMine`, not an error) |
-| `someone_elses` | the phone is certified here for another account |
+| Status | `error` | When |
+|---|---|---|
+| 409 | `wrong_workspace` | `workspaceId` isn't this box's workspace |
+| 409 | `desktop_unknown` | `desktopDeviceId` isn't a certified, unrevoked, non-phone, non-delegated device of exactly one current human member here |
+| 409 | `offer_expired` | `exp < now − 120` or `exp > now + 420` (box clock; the desktop issues `now + 300`) |
+| 403 | `device_revoked` | the phone's device is revoked here |
+| 409 | `someone_elses` | the phone is certified here for another account |
+| 503 | `relay_unavailable` | this box has no presence connection to the workspace's relay (a P2P-only box), so it couldn't relay a request |
 
 ### 7.3 `POST /v1/phone-enroll/requests`
 
@@ -318,12 +332,18 @@ everything it can:
 4. the caller's device (§7.1) is the code's device id, when the channel
    binds one;
 5. every `check` rule above;
-6. limits: at most one pending request per phone device (a new one replaces
-   it), at most 8 pending in all, at most 30 accepted per minute.
+6. limits (review R5), so no caller can starve the others:
+   - at most one pending request per phone device (a new one replaces it);
+   - per channel: 1 pending per provisional connection, 2 per bearer or
+     operator caller, 1 per paired tunnel peer;
+   - 16 pending in all; when full, the oldest pending request of the caller
+     holding the most is evicted (a flood evicts itself);
+   - at most 30 accepted per minute; at most 16 `phone-enroll:*` slots
+     published at once.
 
 It can't check `mac` (it never has `s`). Then it publishes the
-`phone-enroll:<rid>` slot (§5.5) and answers `202 {rid, state:
-"relayed"}`. Re-submitting the same bytes is idempotent; pending requests
+`phone-enroll:<rid>:<its device id>` slot (§5.5) and answers `202 {rid,
+state: "relayed"}`. Re-submitting the same bytes is idempotent; pending requests
 live in memory until `exp` and are dropped on restart (the phone
 re-submits on a 404 from the status route).
 
@@ -331,8 +351,11 @@ re-submits on a 404 from the status route).
 
 Long-polls up to `N ≤ 25` s. `{state: "waiting" | "answered" | "expired",
 answer?: "ligusenrollres1:…", certified: bool}`. `answer` is the desktop's
-slot, relayed as is (the box can't check its tag). `certified` is whether
-this box's roster now has the phone's certificate.
+slot, relayed as is (the box can't check its tag; it relays only an answer
+signed by the offer's desktop device, §5.5). `certified` is whether this
+box's roster now has the phone's certificate. The box keeps polling for the
+answer until the offer's `exp` even after `certified` turns true, so a late
+"another phone" answer (§8.3) still reaches the phone.
 
 ### 7.5 What the box may write
 
@@ -347,11 +370,14 @@ fold refuses an enroller that isn't a device of the phone's account,
 ### 8.1 The offer
 
 **Settings → Account → My devices → Add a phone** (the button is renamed
-from "Add this phone"). Before showing a QR the desktop checks that it can
-certify at all: an active workspace, a relay presence connection
-(`active_presence_conn`, `app/src/lib.rs:5166`), and this device is a
-person's own, not delegated, with an account (the `certify_phone`
-preconditions). Otherwise it opens straight on the paste flow and says why.
+from "Add this phone"). Before drawing a secret the desktop checks that it
+can finish: an active workspace; a relay presence connection
+(`active_presence_conn`, `app/src/lib.rs:5166`); this device is a person's
+own, not delegated, not a phone, with an account (the `certify_phone`
+preconditions, `phone_sign.rs:38-41`); and the account can give presence
+(a passkey on the roster, or a presence provider such as a CLI identity's
+recovery key; review R8). Otherwise it opens straight on the paste flow and
+says which of these is missing.
 
 New Tauri commands (`app/src/phones_ui.rs`):
 
@@ -359,10 +385,14 @@ New Tauri commands (`app/src/phones_ui.rs`):
   300`, keeps `Offer {ws, s, rid, k_req, k_ans, exp, state}` **in memory
   only** (one per desktop; a new one replaces the old), and returns `{qrSvg,
   rid, expiresAt}`. The QR is rendered in Rust (`qrcodegen`, already a
-  dependency of `ligus-cli`), so the webview never holds `s` as text.
+  dependency of `ligus-cli`), so the webview never holds `s` as text. While
+  an offer's QR is visible the window is content-protected
+  (`WebviewWindow::set_content_protected(true)`; best effort, review R3).
 - `phone_enroll_offer_poll()`: lists presence (every 2 s while the panel is
-  open), opens `phone-enroll:<rid>`, and checks, in order: the slot
-  signature (a certified device of a member), `rid`, `mac` (constant time),
+  open, and on until `exp` after approval), opens every
+  `phone-enroll:<rid>:*` slot, and checks, in order: the slot signature (a
+  box: a certified device of a current service member), `rid`, `mac`
+  (constant time),
   `ws`/`D`/`exp` equal the offer, `exp` not passed (desktop clock),
   `phone_sig`, `PhoneCode::decode(code_body)`, `phone_standing`. Returns
   `waiting`, `request {label, fingerprint, deviceId, standing, via}`, or a
@@ -371,24 +401,70 @@ New Tauri commands (`app/src/phones_ui.rs`):
   `confirm_matches_preview` (`phones_ui.rs:74`, fingerprint and workspace),
   then `certify_phone_code(ws, &code)`: the passkey sheet names the
   fingerprint (`phone_enroll.rs` test `the_passkey_sheet_names_the_fingerprint`).
-  Publishes the `certified` answer and closes the offer.
+  Refused within 5 s of the request first appearing (the hold, §8.3).
+  Publishes the `certified` answer; the offer moves to **watching** (§8.3)
+  until `exp`, then closes.
 - `phone_enroll_offer_decline(rid)`: publishes `declined`, closes.
-- `phone_enroll_offer_cancel()`: drops the offer.
+- `phone_enroll_offer_cancel()`: drops the offer (refused while watching:
+  closing the panel keeps the watch running in the background until `exp`).
 
 **One use.** The first request that passes every check locks the offer to
-its phone. Re-publications of the same bytes are ignored. A *different*
-valid request for the same `rid` before approval aborts the offer: "Two
-phones answered this code. Someone else may have seen it. Start again."
+its phone: its device id and key. Another valid request **from the same
+phone** (the same bytes re-published by any box, or a fresh request after
+the phone restarted and scanned again: ECDSA signatures differ each time)
+is the same phone and replaces nothing that matters. A valid request from
+**another phone** (another device id or key) for the same `rid` before
+approval aborts the offer: "Two phones answered this code. Someone else may
+have seen it. Start again." (review round 2, R11)
+
+**Log hygiene** (review R10). The offer text, `s`, `k_req` and `k_ans` are
+never logged, returned to the webview, put in an error message or written
+to disk. Logs name an offer only by `rid`. The existing `tracing::info!`
+on certification (`phones_ui.rs:108`) stays as it is (device id and label).
 
 ### 8.2 What the desktop shows
 
-- The QR, "Scan with the Ligus app on your phone: Settings → This phone →
-  Add to my devices", a countdown, and **Show a new code** when it expires.
+- First, **Show code** (the QR isn't drawn until asked; review R3), then the
+  QR, "Scan with the Ligus app on your phone: Settings → This phone → Add to
+  my devices", a countdown, and **Show a new code** when it expires. The QR
+  is hidden (and the offer kept) when the window loses focus or the app
+  goes to the background, with **Show code** to bring it back. It is an
+  image: not selectable, no copy or save action.
 - On a request: "**Ana's iPhone** wants to be added", relayed by
   *box-label*, the fingerprint in five groups, "Your phone shows the same
-  fingerprint" checkbox, **Add this phone** (passkey), **Not my phone**.
+  fingerprint" checkbox, **Add this phone** (passkey; enabled after the
+  5-second hold, with "Listening for other phones…"), **Not my phone**.
 - **Can't scan?** below: the existing paste panel, unchanged except its
   hint, which loses the camera-app sentence.
+- The tripwire alert (§8.3), wherever the person is in the app.
+
+### 8.3 Stolen-QR defences: hold and tripwire (review R1)
+
+Anyone who saw the QR holds the secret and can answer it, if they can get a
+box to relay for them. The desktop can't tell such a request from the real
+phone's, except by the fingerprint the person compares and by **seeing two
+phones answer one code**. So:
+
+- **Hold.** **Add this phone** stays disabled for 5 s after the request
+  first appears. A second phone answering within that time aborts the
+  offer before anything is certified.
+- **Tripwire.** After approval the offer is *watched* until `exp`: the
+  desktop keeps polling, and a different valid request raises a blocking
+  alert, "Another phone answered this code after you added *label*
+  (fingerprint …). If the phone you added isn't the one in your hand, revoke
+  it now." with **Revoke *label*** (the existing device revocation,
+  confirmed with the passkey as every revocation is, `authz/rules.rs:26`)
+  and **It's mine**. The answer slot keeps saying `certified` for the first
+  phone's device id, so the second phone, if it is the real one, raises the
+  phone-side alarm below.
+- **Phone side.** A phone whose answer is `certified` for a device id that
+  isn't its own shows "Another phone was added with this code. Tell the
+  person at the desktop to revoke it." and doesn't retry.
+
+The tripwire turns a silent impersonation into a visible one. It can't stop
+an attacker who has the secret *and* runs the only box the real phone can
+reach (it could withhold the real phone's request); the fingerprint
+comparison is the last line there (review residual risk RR2).
 
 ## 9. Phone (iOS)
 
@@ -401,25 +477,41 @@ phones answered this code. Someone else may have seen it. Start again."
   (`QRScannerView.swift:142`, `DeepLink.hasAcceptedScheme`), takes
   `ligusenroll1:` when opened from Add to my devices. Copy: "Point at the
   code on your desktop (Settings → My devices → Add a phone)".
-- After the scan: decode, check `exp`, pick the host profile whose
-  workspace (from `/v1/me` or `check`) is the offer's; if none, "Pair with
-  this workspace's box first" and open the pairing scanner, keeping the
-  offer in memory until it expires.
-- Confirm: "Add this phone to **Ana**'s devices in **acme**?" (names from
-  `check`), **Add**. Then: sign `signed` with the Secure Enclave key, build
-  the request, submit, and show the fingerprint large with "Your desktop
-  shows the same fingerprint. Check it there, then confirm with your
-  passkey." and a waiting state.
-- On `certified` (tag verified, own device id) and the box's `certified:
-  true`: enroll again (tunnel) or refresh `/v1/me` (direct), then "This
-  phone is now one of your devices".
+- After the scan: decode, refuse an offer with `exp` more than 120 s in the
+  past or more than 10 minutes ahead (the box's tolerance, so a phone clock
+  a little off doesn't refuse a fresh code; review round 2, R12), pick the host profile whose workspace (from
+  `/v1/me` or `check`) is the offer's; if none, "Pair with this workspace's
+  box first" and open the pairing scanner, keeping the offer in memory
+  until it expires.
+- **One offer at a time** (review R9): a second scan while a request is
+  pending asks "Cancel the request to *Ana*'s desktop and use this code
+  instead?"; only one offer is ever in memory.
+- Confirm: "Add this phone to **Ana** (*role*)'s devices in **acme**?"
+  (from `check`), **Add**. Warnings above the button (review R4): when
+  `nameCollision` is true, "Two people here are called Ana. Make sure this
+  is your desktop."; when the phone already knows its account from another
+  host profile (`/v1/me` `account.id`) and the offer's `accountId` differs,
+  "This phone acts as *Name* elsewhere. This code is from a different
+  account." Then: sign `signed` with the Secure Enclave key, build the
+  request, submit, and show the fingerprint large with "Your desktop shows
+  the same fingerprint. Check it there, then confirm with your passkey."
+  and a waiting state.
+- **Success is the box's `certified: true`** for this phone (review R7):
+  then enroll again (tunnel) or refresh `/v1/me` (direct), and "This phone
+  is now one of your devices". The answer is not needed for success; it
+  carries `declined`, `refused` and the tripwire alarm (§8.3), and is
+  checked (tag, `rid`, device id) before it is shown. A phone that crashed
+  and lost `s` simply pairs: E3a or `/v1/me` tells it whether it is
+  certified.
 - Errors: expired ("Show a new code on your desktop and scan again"),
   `declined`, `wrong_workspace`, `someone_elses`, `device_revoked` (offer
   Reset device key), box too old (404/4040 without provisional: "Update
-  ligus serve, or use Can't scan?"), no relay/presence on the desktop
-  (desktop side).
-- `s`, `k_req` and `k_ans` live in memory only and are wiped after the
-  flow; nothing is logged.
+  ligus serve, or use Can't scan?"), `relay_unavailable` ("This box can't
+  reach the workspace's relay. Use Can't scan?"), the tripwire alarm
+  (§8.3).
+- `s`, `k_req`, `k_ans` and the offer text live in memory only and are
+  wiped after the flow; never logged, never in a crash report or an error
+  string.
 - `Info.plist` `NSCameraUsageDescription` (`ios/Ligus/Support/Info.plist:85`)
   becomes "Ligus uses the camera to scan pairing codes from your box and
   your desktop."
@@ -456,9 +548,17 @@ phones answered this code. Someone else may have seen it. Start again."
 - 2.7 Deep links: no `ligus://` link for enrollment; the scanner only.
 - 2.11 Secure clipboard: the offer is never copied or shared.
 - 2.12 `FLAG_SECURE` on the waiting screen (it shows the fingerprint).
+- 3.x (new) Add to my devices: one offer at a time; the name-collision and
+  other-account warnings on the confirm sheet; success is the box's
+  `certified: true`; the tripwire alarm on an answer naming another device
+  id; the offer's secret in memory only, never logged.
 - 4.1 Golden vectors: `phone_enroll_qr_v1.jsonl` (offer, keys, request,
-  answer, negatives).
-- E3b provisional enrollment in the tunnel client.
+  answer, negatives) and `rust_parity_enroll_v1.jsonl`; through the shared
+  core (section 2.9) these are the core's own parsers, so the boundary
+  parity test covers them.
+- 2.9 / tunnel client: E3b provisional enrollment (`enrollKey` in msg1,
+  `provisional` msg2, the attempt budget).
+- 2.4 Passkeys: nothing new on the phone; the passkey is the desktop's.
 
 ## 13. Tests
 
@@ -480,9 +580,14 @@ phones answered this code. Someone else may have seen it. Start again."
   the provisional router serves nothing else (404 for `/v1/chats`); old
   phone (no `enrollKey`) still gets 4040; window attempt accounting; then
   E3a binds after certification.
-- **Web** (`AddPhonePanel.test.tsx`): QR shown, countdown, request card,
-  checkbox gates the button, abort on a second phone, Can't scan? paste
-  still works, the camera-app hint is gone.
+- **Web** (`AddPhonePanel.test.tsx`): Show code, then the QR; hidden on
+  blur; countdown; request card; checkbox and the 5-second hold gate the
+  button; abort on a second phone; the tripwire alert after approval; Can't
+  scan? paste still works; the camera-app hint is gone.
+- **Attack tests** T1 to T14 of the review, each executable as specified
+  there (stolen QR and tripwire, member-signed slot, co-member QR, pending
+  flood, no relay, lost answer, exposure, no passkey, two offers, logs,
+  substitution, replay, revoked, old peers).
 - **iOS** (`RustParityTests`-style): a Rust-generated differential corpus
   `rust_parity_enroll_v1.jsonl` (mutated offers, requests and answers with
   the core's verdict) the Swift parser must match exactly.
@@ -498,3 +603,22 @@ phones answered this code. Someone else may have seen it. Start again."
   holds no secret; the fingerprint comparison is the defence), to make the
   paste fallback work across devices? Recommended: yes.
 - **O2.** Approve E3b (a tunnel-host protocol addition, no relay change).
+- **O3.** The 5-second hold before **Add this phone** (§8.3): keep it, or
+  rely on the tripwire alone? Recommended: keep.
+
+## 15. Changes after review
+
+| Review item | Change |
+|---|---|
+| R1 stolen QR before the real phone | §8.3 hold and tripwire; phone-side alarm (§9) |
+| R2 any member could inject | §5.5: request slots signed only by a service member's device, answers only by the offer's desktop; slot name carries the box's device id |
+| R3 QR on a shared screen | §8.1 content protection; §8.2 Show code, hidden on blur, image only |
+| R4 co-member QR, name collisions | §7.2 `accountId`, `memberId`, `nameCollision`; §9 warnings |
+| R5 pending flood | §7.3 per-channel caps, eviction, `exp ≤ now + 420` |
+| R6 box without a relay | §7.2 `503 relay_unavailable` |
+| R7 lost answer | §9 success is the box's `certified: true` |
+| R8 no passkey | §8.1 precheck |
+| R9 two offers on the phone | §9 one offer at a time |
+| R10 logs | §8.1 and §9 log hygiene, review T10 |
+| Round 2, R11: a restarted phone isn't "another phone" | §8.1 one use is per device id and key, not per byte string |
+| Round 2, R12: phone clock tolerance | §9 the phone accepts `exp` up to 120 s past, like the box |

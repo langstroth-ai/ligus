@@ -264,3 +264,147 @@ Each is executable; names are suggestions.
 - **R10 (C10).** Log hygiene stated for all three sides, with T10.
 
 ---
+# Round 2 (revised design)
+
+## Decision
+
+**Approve with risks.**
+
+R1 to R10 landed as the design's §15 maps them, and each was checked
+against the text. Round 2 found two small defects introduced or left by the
+revision (R11, R12 below); both were fixed in revision 3 and re-checked.
+Nothing left needs another round. The risks that remain are listed at the
+end; none is a reason to hold the build, and each has a test that shows its
+bound.
+
+## What was re-checked
+
+- **R1 hold and tripwire.** The hold aborts a second phone within 5 s; after
+  approval the desktop watches until `exp`, the alert offers a passkey
+  revocation, and the answer slot keeps naming the certified device so the
+  real phone raises its alarm. The phone treats an answer naming another
+  device as an alarm, not a success. Holds.
+- **R2 signer narrowing.** A request slot needs a service member's device
+  signature; a person's device (even holding the workspace key and the
+  secret) is dropped. The answer slot needs the offer's own desktop device.
+  Holds. A box operator holding a stolen secret is still possible: RR2.
+- **R3 exposure.** Show code, hide on blur or background, image only,
+  content protection while visible. Holds, best effort: RR4.
+- **R4 co-member QR.** `accountId`, `memberId`, `nameCollision`, the role on
+  the confirm sheet and the other-account warning. Mitigates; doesn't
+  prevent a person who ignores both: RR5.
+- **R5 flood.** Per-channel caps (provisional 1, bearer/operator 2, paired
+  peer 1), a 16-entry global cap that evicts from the heaviest caller, and
+  `exp ≤ now + 420`. A pairing-secret holder gets at most 5 provisional
+  connections per `ligus pair` window; a bearer holder at most 2 pending. An
+  honest phone on another channel always gets a slot. Holds.
+- **R6 to R10.** `relay_unavailable`; success on the box's `certified:
+  true` (a box that lies about it only makes the phone try E3a or `/v1/me`,
+  which refuse); the presence precheck; one offer at a time; log hygiene
+  with T10. Hold.
+
+## New findings (round 2)
+
+### C11. A restarted phone looks like "another phone" (fixed: R11)
+
+- **Claim:** "a *different* valid request ... aborts the offer" (revision 2,
+  §8.1).
+- **Sequence:** the phone submits, the app is killed (memory pressure), the
+  person reopens it and scans the same QR again. The Secure Enclave's ECDSA
+  signatures are randomized, so the new request's bytes differ.
+- **Actual (revision 2):** "different" meant different bytes: the offer
+  aborts (before approval) or the tripwire fires (after), a false alarm on
+  an honest retry.
+- **Fix (revision 3):** "another phone" means another device id or key; the
+  same phone's fresh request is the same phone. **T15:** unit: two valid
+  requests from the same key with different signatures neither abort nor
+  trip; a request from a second key does.
+
+### C12. Phone clock tolerance (fixed: R12)
+
+- **Sequence:** the phone's clock runs 3 minutes fast (manual time, travel).
+  The desktop issues `exp = now + 300`.
+- **Actual (revision 2):** the phone refused `exp` "in the past" with no
+  tolerance, while the box allows 120 s. A phone a little off couldn't use
+  fresh codes.
+- **Fix (revision 3):** the phone accepts `exp` up to 120 s past, like the
+  box; the desktop's own clock is what ends the offer. **T16:** iOS unit
+  with an injected clock: `exp = now − 60` accepted, `now − 180` refused.
+
+### Checked and holding (round 2)
+
+- **Crash recovery.** Every piece of new state is in memory with a lifetime
+  ≤ 7 minutes: the desktop's offer, the box's pending list, the phone's
+  offer. A crash anywhere loses at most one attempt; the certificate, if it
+  was written, syncs as today and E3a or `/v1/me` finds it. No migration,
+  nothing to roll back.
+- **Ordering.** Presence is last-writer-wins and unordered; the protocol
+  never depends on order: the desktop deduplicates by device and key, the
+  box by device, the phone by `rid`. A slot that arrives before the keyring
+  epoch it was sealed under is retried on the next poll (the box
+  re-publishes every 10 s).
+- **Concurrent desktops.** Two of the person's desktops certifying the same
+  phone write the same certificate; the second is a re-publish the fold
+  accepts without presence (`authz/rules.rs:33-37`). Two people's desktops:
+  the second gets `someone_elses` from the box, `Conflict` from
+  `phone_standing`. Holds.
+- **Removed member.** A person removed while their offer is open can't get
+  a usable phone: the certificate may fold, but `phone_person` names no
+  member (`chat_service/phone_sign.rs:77-99`) and every phone route refuses.
+  Holds (the same as the paste flow).
+- **Versioning.** `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`
+  are versioned by prefix; E3b by an optional msg1 field and a msg2 field
+  only a new phone reads. Nothing existing is renamed: `ligusphone1:`,
+  `ligus-phone-code-v1\0`, `ligus-device-id-v1\0`, `hive-envelope-v3\0`,
+  `hive-tunnel/1`, the UUIDv5 namespaces and `x-hive-*` headers are
+  untouched. Holds.
+
+## Required tests (round 2)
+
+T1 to T14 from round 1, plus T15 and T16 above.
+
+## Residual risks
+
+- **RR1. Stolen QR, approved without reading the fingerprint, and the real
+  phone never answers.** Someone who saw the QR in its 5 minutes and can
+  get a box to relay (a pairing secret, the box's bearer token, or a box
+  they operate) answers first, more than 5 s ahead of the real phone; the
+  person approves without comparing; the real phone never scans (the person
+  thinks it's done). The tripwire then never fires. Bound: the attacker's
+  key is visible in My devices as a second phone, and the real phone keeps
+  being refused at pairing until it's added, which sends the person back to
+  the panel. Test: T1 variant with no second phone asserts the extra device
+  is listed.
+- **RR2. A malicious box operator with the QR's secret** can relay their own
+  request and withhold the real one, so neither the hold nor the tripwire
+  sees two phones. Only the fingerprint comparison stops it. Same bound as
+  RR1. This is the box-in-the-path case the MAC can't help with once the
+  secret is lost.
+- **RR3. Slot clobbering.** The relay doesn't bind presence slot names to
+  their writer (`relay/server.go:804-824`), so the relay or any member can
+  overwrite `phone-enroll:*` slots with junk. Availability only: forged
+  content fails the signature and MAC checks. Fall back to paste.
+- **RR4. Content protection is best effort.** Some capture paths (recent
+  macOS screen-capture APIs, a camera pointed at the screen) still see the
+  QR. Show code, hide-on-blur and the 5-minute, one-use expiry bound it.
+- **RR5. Co-member phishing.** A member who gets a person to scan their QR,
+  past the name, role and other-account warnings, binds that phone to their
+  own account; the phone's person is then locked out of it in that
+  workspace until they reset the device key (two holders, `phone_person`
+  fails closed). No access to the victim's data.
+- **RR6. Metadata.** The relay sees `phone-enroll:*` slot names, a random
+  `rid`, the relaying box's device id and the timing: that someone in the
+  workspace is adding a phone now. No content.
+- **RR7. Tunnel attempt budget.** Provisional (1, more if the person is
+  slow) plus the final enrollment (1) come out of the window's 5 attempts;
+  a slow or retried flow can exhaust it, and the person runs `ligus pair`
+  again.
+- **RR8. Pre-existing, out of scope: the paste flow's lock-out.** Anyone in
+  the workspace who has a phone's `ligusphone1:` code (it is public: shown
+  on the phone, and with owner question O1, on the clipboard) can certify it
+  for their own account, leaving the phone with two holders and its person
+  locked out (RR5's effect, without any scan). The reverse-QR flow is
+  immune (it needs the phone's fresh signature over the offer), but paste
+  stays. Recommended follow-up: let `phone_standing` warn when a code's
+  phone has never been seen by this person's boxes, or require a fresh
+  phone signature in paste too (a second code that names the desktop).
