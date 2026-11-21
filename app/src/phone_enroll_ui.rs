@@ -8,16 +8,18 @@
 //! (best effort: it keeps it out of screenshots and most screen sharing).
 //!
 //! A phone answers through a `ligus serve` box, which relays its request on
-//! the relay's presence channel (`phone-enroll:<rid>:<box>`, sealed under the
-//! workspace key and signed by the box). The page polls
+//! the relay's presence channel (`phone-enroll:<rid>:<box>:<phone tag>`, one
+//! slot per request, sealed under the workspace key and signed by the box).
+//! The page polls
 //! [`phone_enroll_offer_poll`]; every request goes through the codec's checks
 //! in the design's order (slot signature by a service member's device, then
 //! `rid`, MAC, offer fields, expiry, phone signature, the phone's code), then
 //! `phone_standing`, then the one-use lock ([`DesktopOffer::observe`]).
-//! Approval holds for 5 s after the phone first appears, then certifies with
-//! the person's passkey through the same `certify_phone_code` as paste. After
-//! an answer the offer is handed to a background watch that re-publishes the
-//! answer (`phone-enroll-answer:<rid>`, signed by this device) until the
+//! Approval holds for 5 s after the phone first appears, takes one last look
+//! at presence itself (another phone there aborts, even if the page stopped
+//! polling), then certifies with the person's passkey through the same
+//! `certify_phone_code` as paste. After an answer the offer is handed to a
+//! background watch that re-publishes the answer (`phone-enroll-answer:<rid>`, signed by this device) until the
 //! offer's expiry and, after an approval, raises the tripwire
 //! ([`TRIPWIRE_EVENT`]) when another phone answers the same code.
 //!
@@ -50,6 +52,9 @@ pub(crate) const TRIPWIRE_EVENT: &str = "phone-enroll://tripwire";
 
 /// How often the background watch lists presence.
 const WATCH_POLL_MS: u64 = 2_000;
+
+/// Approval refused: another phone answered the code (the poll's `aborted`).
+pub(crate) const TWO_PHONES: &str = "Two phones answered this code. Someone else may have seen it. Nothing was added. Start again.";
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -253,6 +258,50 @@ struct Current {
     approving: bool,
 }
 
+/// One look at a presence listing for the offer on screen: every valid
+/// request, through the one-use lock. The first phone locks the offer;
+/// another phone before approval aborts it.
+#[allow(clippy::too_many_arguments)]
+fn look(
+    c: &mut Current,
+    blobs: &HashMap<String, Value>,
+    ring: &KeyringEngine,
+    now_ms: i64,
+    relay_key: impl Fn(Uuid) -> Option<Vec<u8>>,
+    standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
+    via: impl Fn(Uuid) -> String,
+    duplicate: impl Fn(&PhoneCode) -> bool,
+) {
+    for (relay, req) in valid_requests(&c.offer, blobs, ring, now_ms, &relay_key) {
+        let Some(st) = standing(&req.code) else { continue };
+        match c.offer.observe(&req, now_ms) {
+            Ok(Seen::First) => {
+                tracing::info!(target: "identity", rid = %c.offer.rid(), "a phone answered an add-a-phone code");
+                let card = phone_dto(&req.code, &st, via(relay), duplicate(&req.code));
+                c.phone = Some(Locked { request: req, standing: st, card, first_seen_ms: now_ms });
+            }
+            Ok(Seen::SamePhone) => {
+                // The same phone again (re-published, or rescanned after a
+                // restart): refresh its standing, keep when it first appeared.
+                if let Some(l) = c.phone.as_mut() {
+                    let (standing, problem) = crate::phones_ui::standing_dto(st.clone());
+                    l.card.standing = standing;
+                    l.card.problem = problem;
+                    l.standing = st;
+                }
+            }
+            Ok(Seen::TwoPhones) => {
+                tracing::warn!(target: "identity", rid = %c.offer.rid(), "two phones answered one add-a-phone code; offer aborted");
+                c.other = Some(req);
+                break;
+            }
+            // Only after approval, and an approved offer isn't on screen.
+            Ok(Seen::Tripwire) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 /// The desktop's add-a-phone state: at most one offer on screen. Answered
 /// offers move to a [`Watch`].
 #[derive(Default)]
@@ -367,34 +416,7 @@ impl EnrollDesk {
             shield(false);
             return PollDto::bare("expired");
         }
-        for (relay, req) in valid_requests(&c.offer, blobs, ring, now_ms, &relay_key) {
-            let Some(st) = standing(&req.code) else { continue };
-            match c.offer.observe(&req, now_ms) {
-                Ok(Seen::First) => {
-                    tracing::info!(target: "identity", rid = %c.offer.rid(), "a phone answered an add-a-phone code");
-                    let card = phone_dto(&req.code, &st, via(relay), duplicate(&req.code));
-                    c.phone = Some(Locked { request: req, standing: st, card, first_seen_ms: now_ms });
-                }
-                Ok(Seen::SamePhone) => {
-                    // The same phone again (re-published, or rescanned after a
-                    // restart): refresh its standing, keep when it first appeared.
-                    if let Some(l) = c.phone.as_mut() {
-                        let (standing, problem) = crate::phones_ui::standing_dto(st.clone());
-                        l.card.standing = standing;
-                        l.card.problem = problem;
-                        l.standing = st;
-                    }
-                }
-                Ok(Seen::TwoPhones) => {
-                    tracing::warn!(target: "identity", rid = %c.offer.rid(), "two phones answered one add-a-phone code; offer aborted");
-                    c.other = Some(req);
-                    break;
-                }
-                // Only after approval, and an approved offer isn't on screen.
-                Ok(Seen::Tripwire) => {}
-                Err(_) => break,
-            }
-        }
+        look(c, blobs, ring, now_ms, relay_key, standing, via, duplicate);
         if c.offer.is_aborted() {
             if !c.approving {
                 *cur = None;
@@ -416,14 +438,40 @@ impl EnrollDesk {
         }
     }
 
-    /// **Add this phone**, before the passkey: the hold, the lock, the
-    /// fingerprint and the expiry (the codec's `check_approve`), and that the
-    /// active workspace is still the offer's. Returns the code to certify and
-    /// marks the approval in flight.
-    pub(crate) fn begin_approve(&self, rid: &str, fingerprint: &str, active_ws: Uuid, now_ms: i64) -> Result<(Uuid, PhoneCode), String> {
+    /// **Add this phone**, before the passkey. First one last look at the
+    /// presence listing `blobs`, fetched for this call, exactly as a poll
+    /// looks (`standing` is `phone_standing`): another phone there aborts the
+    /// offer and refuses with [`TWO_PHONES`], so a page that stopped polling
+    /// after the first sighting can't skip the two-phones abort. Then the
+    /// hold, the lock, the fingerprint and the expiry (the codec's
+    /// `check_approve`), and that the active workspace is still the offer's.
+    /// Returns the code to certify and marks the approval in flight.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn begin_approve(
+        &self,
+        rid: &str,
+        fingerprint: &str,
+        active_ws: Uuid,
+        now_ms: i64,
+        blobs: &HashMap<String, Value>,
+        ring: &KeyringEngine,
+        relay_key: impl Fn(Uuid) -> Option<Vec<u8>>,
+        standing: impl Fn(&PhoneCode) -> Option<PhoneStanding>,
+    ) -> Result<(Uuid, PhoneCode), String> {
         let mut cur = self.current.lock().unwrap();
         let c = cur.as_mut().ok_or("This code was closed. Show a new code.")?;
         let rid = Rid::from_b64u(rid).ok_or("This is for another code.")?;
+        if rid != c.offer.rid() {
+            return Err("This is for another code.".into());
+        }
+        if !c.offer.is_aborted() {
+            look(c, blobs, ring, now_ms, relay_key, standing, |_| "a serve box".into(), |_| false);
+        }
+        if c.offer.is_aborted() {
+            // Kept (aborted) so the page's next poll shows the two-phones panel.
+            tracing::warn!(target: "identity", rid = %c.offer.rid(), "approval refused: two phones answered one add-a-phone code");
+            return Err(TWO_PHONES.into());
+        }
         let code = c.offer.check_approve(rid, fingerprint.trim(), now_ms).map_err(|e| e.to_string())?.clone();
         crate::phones_ui::confirm_matches_preview(&code, fingerprint, &c.ws.to_string(), active_ws)?;
         if c.phone.as_ref().is_some_and(|l| !matches!(l.standing, PhoneStanding::New | PhoneStanding::AlreadyMine)) {
@@ -755,15 +803,38 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
     .await
 }
 
-/// **Add this phone**: after the hold, with the compared fingerprint;
-/// certifies with the person's passkey, answers `certified`, and keeps
+/// **Add this phone**: after the hold, with the compared fingerprint, and
+/// after a last presence look finds no other phone; certifies with the
+/// person's passkey, answers `certified`, and keeps
 /// watching for other phones until the offer expires.
 #[tauri::command(async)]
 pub(crate) async fn phone_enroll_offer_approve(ligus_app: AppHandle, rid: String, fingerprint: String) -> Result<ApprovedDto, String> {
     let app = ligus_app.clone();
+    // A last look for other phones, right before certifying (fails closed:
+    // no listing, no approval).
+    let (ws, relay, room, ring) = {
+        let state = ligus_app.state::<AppState>();
+        let ws = state.phone_enroll.current_ws().ok_or("This code was closed. Show a new code.")?;
+        let (relay, room, ring) = conn_for(&state, ws)
+            .ok_or("No relay connection for this code's workspace, so Ligus can't check that no other phone answered it.")?;
+        (ws, relay, room, ring)
+    };
+    let blobs = relay.list_presence(&room).await.map_err(|e| format!("Couldn't check that no other phone answered this code: {e}"))?;
     let (watch, alert) = crate::off_main(ligus_app, move |app| {
         let state = app.state::<AppState>();
-        let (ws, code) = state.phone_enroll.begin_approve(&rid, &fingerprint, state.active_workspace_id(), now_ms())?;
+        let (ws, code) = {
+            let svc = state.service.lock().unwrap();
+            state.phone_enroll.begin_approve(
+                &rid,
+                &fingerprint,
+                state.active_workspace_id(),
+                now_ms(),
+                &blobs,
+                &ring,
+                |d| svc.enroll_relay_key(ws, d),
+                |code| svc.phone_standing(ws, code).ok(),
+            )?
+        };
         let certified = {
             let mut svc = state.service.lock().unwrap();
             svc.certify_phone_code(ws, &code).map_err(|e| e.to_string())
