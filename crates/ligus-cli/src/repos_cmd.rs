@@ -184,6 +184,31 @@ pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, p
         None | Some("list") => {
             let es = entries()?;
             let maps = svc.store().repo_mappings(ws)?;
+            if flag("--json").is_some() {
+                let repos: Vec<serde_json::Value> = es
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "id": e.repo.id,
+                            "name": shown(&e.repo.display_name),
+                            "canonical": e.repo.canonical,
+                            "defaultBranch": e.repo.default_branch,
+                            "removed": e.removed,
+                            "checkouts": maps.iter().filter(|m| m.repo_id == e.repo.id).map(|m| serde_json::json!({
+                                "path": m.path,
+                                "source": m.source.as_str(),
+                                "confirmed": m.confirmed,
+                                "primary": m.primary,
+                                "viaFork": m.via_fork,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                let mut v = crate::repos::repos_json(data_dir);
+                v["repos"] = serde_json::Value::Array(repos);
+                println!("{v}");
+                return Ok(());
+            }
             if es.is_empty() {
                 println!("This workspace has no repositories yet. Add one: ligus repos add <remote | path>");
             }

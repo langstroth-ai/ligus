@@ -541,6 +541,19 @@ pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, 
     Ok(())
 }
 
+/// The repos dir and the bindings, for `ligus repos list --json`.
+pub fn repos_json(data_dir: &Path) -> serde_json::Value {
+    let dir = repos_dir(data_dir);
+    let b = RepoBindings::load(data_dir);
+    serde_json::json!({
+        "reposDir": dir,
+        "bindings": {
+            "workspace": b.workspace.as_ref().map(|w| resolve_path(&dir, w)),
+            "chats": b.chats.iter().map(|(c, t)| (c.clone(), serde_json::json!(resolve_path(&dir, t)))).collect::<serde_json::Map<_, _>>(),
+        },
+    })
+}
+
 /// `ligus repos` — show the repos dir and the bindings.
 pub fn cmd_repos(data_dir: &Path) -> Result<()> {
     let dir = repos_dir(data_dir);

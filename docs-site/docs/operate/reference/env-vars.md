@@ -24,6 +24,9 @@ column says which. The relay's own variables are on
 | `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
 | `LIGUS_NATIVE_PASSKEYS` | on | desktop | `0`: passkey prompts always use the browser hand-off instead of the macOS or Windows passkey dialog ([native passkeys](../security/native-passkeys.md)) |
+| `LIGUS_WORKSPACE_KEY_FILE`, `LIGUS_RELAY_ACCESS_TOKEN_FILE`, `LIGUS_REMOTE_REG_TOKEN_FILE`, `LIGUS_NTFY_TOKEN_FILE` | unset | CLI | a file holding the secret the variable without `_FILE` would hold (not both); the file is denied to agent processes |
+| `LIGUS_WS_SECRET_DIR` | unset | CLI | a directory of files, each becoming `LIGUS_WS_SECRET_<file name>` (a mounted Secret) |
+| `LIGUS_SECRETS_DIR` | `/var/run/secrets/ligus` with the `k8s` backend | CLI | the `k8s` secret backend's mounted Secret dir; denied to agent processes |
 | `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../../ligus/concepts/identity.md#key-storage)) |
 
 On the desktop, the connection variables only **seed** `settings.json` the
@@ -35,6 +38,11 @@ first time it is created; after that, Settings is the source of truth.
 |---|---|---|---|
 | `LIGUS_WS_SECRET_<ref>` | unset | desktop and CLI | the key for a workspace runtime defined with `secretRef = <ref>`. Set it on each host that runs the agent |
 | `LIGUS_WORKER_PERMISSION_MODE` | read-only | CLI worker | `acceptEdits`, `runCommands` or `bypassPermissions` lets worker turns of Claude Code and the subscription CLIs edit files / run commands. Edits land in an isolated worktree as a proposal |
+| `LIGUS_WORKER_HEALTH_LISTEN` | unset | CLI worker | address for `GET /v1/health` and `/v1/ready` (same as `ligus worker --health-listen`) |
+| `LIGUS_RUNTIMES_FILE` | `<data dir>/runtimes.toml` | CLI | this host's local runtimes, for example a mounted ConfigMap |
+| `LIGUS_MODEL_GATEWAYS_FILE` | unset | CLI | the operator's [model gateways](../deploy/model-gateways.md); a file that can't be used stops every command with exit 2 |
+| `LIGUS_MODEL_GATEWAYS_EXCLUSIVE` | on when gateways are listed | CLI | `0`: also run turns that don't use a listed gateway |
+| `LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE` | generated in the data dir | CLI | attribution key file (32+ bytes, the same on every host of a workspace so pseudonymous ids agree) |
 | `LIGUS_WORKER_TOOLS` | on | CLI worker | give workspace HTTP runtimes on this worker the agent tool loop |
 | `LIGUS_BUILTIN_TOOLS` | on | CLI | offer the built-in file tools (`read_file`, `list_dir`, `search`, and `write_file`/`edit_file` in an isolated worktree) |
 | `LIGUS_BUILTIN_RUN_COMMAND` | off | CLI | also offer `run_command`, only inside the turn's worktree |
@@ -90,6 +98,15 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MODEL` | `claude-sonnet-4-5` | model for that provider |
 | `LIGUS_MODEL_BASE_URL` | `http://localhost:11434/v1/chat/completions` | Ollama endpoint |
 
+## Other CLI commands
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LIGUS_HOST_LABEL` | `$HOSTNAME`, else `this host` | `ligus repos`: this host's label in its messages |
+
+`ligus help env` prints every variable the CLI reads; a test keeps it in
+step with the code.
+
 ## `ligus app`
 
 | Variable | Default | Read by | Effect |
@@ -118,6 +135,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_GITHUB_APP_CLIENT_ID` | unset | the Ligus GitHub App's client id for device sign-in (also read at build time); no secret |
 | `LIGUS_GITLAB_CLIENT_ID` | unset | the gitlab.com OAuth application id for device sign-in (also read at build time); no secret |
 | `LIGUS_REPOS_CLONE_TIMEOUT_SECS` | `900` | clone and fetch timeout |
+| `LIGUS_AUTH_ADMIN_URL` / `LIGUS_AUTH_ADMIN_TENANT` / `LIGUS_AUTH_ADMIN_TOKEN_FILE` | unset | langstroth-auth's admin API, a tenant and an owner-only file holding that tenant's device-revocation token: revoking a phone also revokes its langstroth-auth sign-in. All three or none |
 | `LIGUS_REMOTE_RELAY` | from `tunnel/relay.json` | relay for the phone tunnel; `off` disables it for this run |
 | `LIGUS_REMOTE_REG_TOKEN` | from `relay.json` | registration token for a gated relay |
 | `LIGUS_REMOTE_INSECURE_RELAY` | off | allow an `http://` relay (tests, loopback) |
