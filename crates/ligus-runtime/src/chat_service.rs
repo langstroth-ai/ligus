@@ -3787,6 +3787,24 @@ mod tests {
         (ChatService::new(store, kp, account_kp, author), public)
     }
 
+    /// A reverse-QR answer slot is signed by this device's key: it verifies
+    /// under the device's public key and nobody else's.
+    #[test]
+    fn enroll_answer_slot_is_signed_by_this_device() {
+        use crate::phone_enroll_qr::{answer_slot, check_relayed_answer, EnrollSecret, Offer, Outcome, RelayedAnswer};
+        let (svc, public) = service();
+        let offer = Offer { workspace_id: Uuid::new_v4(), desktop_device_id: svc.device_id(), secret: EnrollSecret::from_bytes([7; 32]), exp: 2_000_000_000 };
+        let keys = offer.keys();
+        let answer = crate::phone_enroll_qr::EnrollAnswer::build(&keys, Outcome::Declined, Uuid::new_v4());
+        let now_ms = 1_999_999_800_000;
+        let signed = svc.sign_enroll_answer(RelayedAnswer::new(&answer, svc.device_id(), now_ms));
+        assert!(signed.verify(&public));
+        let other = SigningKeypair::generate().unwrap().public_key_bytes().to_vec();
+        assert!(!signed.verify(&other));
+        let slot = answer_slot(keys.rid);
+        assert!(check_relayed_answer(&slot, &signed, svc.device_id(), now_ms, |_| Some(public.clone())).is_ok());
+    }
+
     /// The dispatcher's entry (design repos-and-checkouts 11): a turn device
     /// A holds is watched, not run; once A stays silent past the claim
     /// timeout (and isn't live) this device hands it over and runs it; A's

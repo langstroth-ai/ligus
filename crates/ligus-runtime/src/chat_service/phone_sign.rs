@@ -363,6 +363,13 @@ impl ChatService {
         let cert = self.certify_phone(workspace_id, code.device_id, &code.public_key)?;
         Ok(cert.device_id)
     }
+
+    /// Sign a reverse-QR answer slot (`crate::phone_enroll_qr`, design §5.5)
+    /// with this device's key: the desktop that showed the offer publishes
+    /// it, and readers take it only when this device signed it.
+    pub fn sign_enroll_answer(&self, a: crate::phone_enroll_qr::RelayedAnswer) -> crate::phone_enroll_qr::RelayedAnswer {
+        a.sign(&self.keypair)
+    }
 }
 
 /// The refusal of a phone draft whose chain link went stale.
