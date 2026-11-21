@@ -32,7 +32,7 @@ service you have to trust: a workspace with no relay puts nothing on the wire.
 | **Desktop** | The main app (Rust, Tauri v2, React). Chats, agents, review, workflows, git. | This repo, [`app/`](app/README.md) + [`web/`](web/README.md) |
 | **`ligus` CLI** | Headless client: sync a workspace, script it, run agents on a box with `ligus worker`, host the phone with `ligus serve`. | This repo, [`crates/ligus-cli`](crates/ligus-cli/README.md) |
 | **Phone** | iPhone app that talks to your own `ligus serve` box. Holds no workspace keys. | Its own repository (not public yet) |
-| **Terminal** | A terminal UI for orchestration: workflows, agents, hosts, proposals. | Its own repository (not public yet) |
+| **Terminal** | `lt`, a terminal UI for orchestration: workflows, agents, hosts, proposals. Install with `brew install langstroth-ai/ligus/lt`. | [langstroth-ai/ligus-term](https://github.com/langstroth-ai/ligus-term) |
 
 ## What it does
 
