@@ -236,6 +236,26 @@ async fn two_boxes_opts(b_ntfy: Option<ntfy::Ntfy>, b_opts: impl FnOnce(&mut Ser
     two_boxes_on(spawn_relay().await, b_ntfy, b_opts).await
 }
 
+/// Wait until the relay holds A's invite `inv`, read through a scratch data
+/// dir with B's keys. B's first sync must find it: A pushes on its own sync
+/// loop, and a round that fails (a busy database) retries seconds later.
+async fn relay_holds_invite(a: &Box_, b_cfg: &Config, probe: &std::path::Path, inv: &str) {
+    let cfg = Config { data_dir: probe.to_path_buf(), ..b_cfg.clone() };
+    std::fs::create_dir_all(probe).unwrap();
+    let config_id = ligus_core::workspace_config_session_id(uuid_of_room(&cfg.room));
+    let subject = format!("invite:{inv}");
+    until(&[a], 60, async || {
+        sync_once(&cfg).await.ok()?;
+        let store = ligus_runtime::EventStore::open(probe.join("ligus.db")).ok()?;
+        let events = store.list(config_id).ok()?;
+        events
+            .iter()
+            .any(|e| matches!(&e.payload, ligus_core::SessionEvent::JoinApproved { subject: s, .. } if *s == subject))
+            .then_some(())
+    })
+    .await;
+}
+
 async fn two_boxes_on(
     (relay, contacts): (String, C),
     b_ntfy: Option<ntfy::Ntfy>,
@@ -260,6 +280,7 @@ async fn two_boxes_on(
     }
     let mut b_cfg = cfg_for(&b_dir, &conn.relay_url, &conn.room, conn.key.clone());
     b_cfg.epoch_keys = conn.ek.clone();
+    relay_holds_invite(&a, &b_cfg, &tmp.path().join("probe"), conn.inv.as_deref().unwrap()).await;
     let mut o = opts(&b_cfg.data_dir, "Bea");
     o.ntfy = b_ntfy;
     b_opts(&mut o);
@@ -510,15 +531,17 @@ async fn writes_wait_for_the_founder() {
     let code = opened["invite"].as_str().unwrap().to_string();
     let ws: Uuid = serde_json::from_value(opened["workspaceId"].clone()).unwrap();
     // B joins at once: until A's signed founding reaches B, B's writes
-    // there wait (and the row says so); then it clears on its own.
+    // there wait (and the row says so); then it clears on its own. B's DM
+    // sync is held while we look, or the founding can land between the
+    // reads.
+    b.handle.shared.dm_sync_held.store(true, std::sync::atomic::Ordering::SeqCst);
     b.post("/v1/invites/join", json!({ "code": code })).await;
     let waiting = b.handle.shared.lock().waiting_for_founder(ws).unwrap();
-    if let Some(founder) = waiting {
-        assert_eq!(founder, a_acc);
-        let rows = b.get("/v1/dms").await;
-        assert_eq!(rows["dms"][0]["waitingForFounder"], json!(true));
-    }
+    assert_eq!(waiting, Some(a_acc), "nothing of the DM has synced to B yet");
+    let rows = b.get("/v1/dms").await;
+    assert_eq!(rows["dms"][0]["waitingForFounder"], json!(true));
     // Once synced it clears on its own.
+    b.handle.shared.dm_sync_held.store(false, std::sync::atomic::Ordering::SeqCst);
     until(&[&a, &b], 30, async || {
         let d = b2.get("/v1/dms").await;
         (d["dms"][0]["waitingForFounder"] == json!(false) && d["dms"][0]["chatId"].is_string()).then_some(())
