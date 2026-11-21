@@ -525,6 +525,22 @@ an apply as you; clearing a lockdown and gated votes also need your passkey.
 Optional Face ID / passcode lock protects the app on an unlocked phone. Revoke the phone from the box; see
 [Lost phone](runbooks.md#lost-phone).
 
+### Someone who sees the add-a-phone QR code {#add-phone-qr}
+
+The desktop's **Add a phone** QR code (0.1.1) carries a one-time secret for
+5 minutes. Whoever reads it, and can reach a box of the workspace (a
+pairing link, the box's token, or a box they run), can answer it with their
+own phone. The desktop locks the code to the first phone that answers,
+disables **Add this phone** for 5 seconds, aborts if a second phone answers
+before approval, and after approval keeps listening until the code expires,
+raising a revoke alert if another phone answers (the tripwire). The box and
+the relay can't forge, swap or replay a request without the secret, and the
+box can't certify a phone. What's left is in
+[Known limitations](#known-limitations) (item 32) and, in plain words, in
+[Adding a phone by QR code](../../ligus/concepts/security.md#add-phone-qr).
+If the alarm fires, see
+[Another phone answered this code](../../ligus/features/phone-app.md#another-phone).
+
 ### Someone with a copy of a data dir {#data-dir}
 
 A data dir (desktop or CLI) contains private key seeds, workspace keys,
@@ -537,7 +553,7 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 0.1.0. Each stays on this list until a release fixes
+Stated plainly, as of 0.1.1. Each stays on this list until a release fixes
 it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
@@ -942,6 +958,28 @@ it.
     daily budgets are enforced on the device that runs the agent, counted in
     its own database (UTC days), and estimated from reported token usage; see
     [A member spending someone else's credentials](#agent-use).
+
+32. **Adding a phone by QR rests on the fingerprint comparison.** Someone
+    who reads the desktop's QR code in its 5 minutes (a photo, a screen
+    share) and reaches a box of the workspace can answer it. The hold and
+    the tripwire catch it when your own phone also answers; they can't when
+    the person approves without comparing fingerprints and never scans with
+    their own phone, or when the attacker runs the only box the real phone
+    can reach and holds its request back. The extra phone is listed in My
+    devices, and the real phone keeps being refused at pairing. Content
+    protection on the QR is best effort. The relay or any member can
+    overwrite the presence slots the request travels in (availability only:
+    forged content fails the checks). A co-member who gets a person to scan
+    their QR, past the warnings, binds that phone to their own account and
+    locks its person out of the workspace until they reset the phone's
+    device key. The relay sees that a phone is being added, by which box and
+    when.
+33. **The paste fallback can lock a phone out.** A phone's `ligusphone1:`
+    code isn't secret (the phone shows it). Anyone in the workspace who has
+    it can certify it for their own account; the phone then has two holders,
+    its person can't act from it in that workspace, and they reset the
+    phone's device key. The QR flow isn't affected. A fix is planned after
+    0.1.1.
 
 ## Out of scope {#out-of-scope}
 

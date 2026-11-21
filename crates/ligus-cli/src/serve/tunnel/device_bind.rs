@@ -80,6 +80,21 @@ pub fn check(claim: &DeviceClaim, host_id: &str, static_pub: &[u8; 32], lookup: 
     }
 }
 
+/// E3b, P1 (§7.2): a claim for a device the box doesn't know yet, proved by
+/// the key the phone sends along (`enrollKey`, b64u of the 65-byte SEC1
+/// P-256 point): the key is a valid point, the claim's id is the one it
+/// derives, and the claim's signature verifies under it over the same
+/// `ctx("device-bind", host_id, phone_static)`. Returns the key.
+pub fn check_provisional(claim: &DeviceClaim, enroll_key: &str, host_id: &str, static_pub: &[u8; 32]) -> Result<Vec<u8>, &'static str> {
+    let key = b64u_decode(enroll_key).map_err(|_| "malformed enrollKey")?;
+    if ligus_runtime::phone_enroll::check_device_id(claim.id, &key).is_err() {
+        return Err("the device id isn't the one enrollKey derives");
+    }
+    let sig = b64u_decode(&claim.sig).map_err(|_| "malformed signature")?;
+    ligus_core::crypto::verify_p256(&key, &bind_message(host_id, static_pub), &sig).map_err(|_| "the device signature does not verify under enrollKey")?;
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +119,25 @@ mod tests {
         assert_eq!(check(&claim, "HOST", &st, |_| DeviceLookup::Unknown), BindCheck::Unknown);
         let bad = DeviceClaim { id, sig: "!!".into() };
         assert!(matches!(check(&bad, "HOST", &st, certified), BindCheck::Invalid(_)));
+    }
+
+    /// E3b, P1: only a key that derives the claim's id and signed this
+    /// pairing's binding passes.
+    #[test]
+    fn a_provisional_claim_needs_its_own_key() {
+        let p = ligus_core::testkit::Phone::new();
+        let st = [7u8; 32];
+        let key = b64u(p.public_key());
+        let claim = DeviceClaim { id: p.device_id, sig: b64u(ligus_core::crypto::sign_p256(&p.key, &bind_message("HOST", &st))) };
+        assert_eq!(check_provisional(&claim, &key, "HOST", &st), Ok(p.public_key()));
+        assert!(check_provisional(&claim, &key, "HOST", &[8u8; 32]).is_err(), "another pairing");
+        assert!(check_provisional(&claim, &key, "OTHER", &st).is_err(), "another host");
+        let other = ligus_core::testkit::Phone::new();
+        assert!(check_provisional(&claim, &b64u(other.public_key()), "HOST", &st).is_err(), "a key that doesn't derive the id");
+        let theirs = DeviceClaim { id: other.device_id, sig: claim.sig.clone() };
+        assert!(check_provisional(&theirs, &b64u(other.public_key()), "HOST", &st).is_err(), "a signature by another key");
+        assert!(check_provisional(&claim, "!!", "HOST", &st).is_err());
+        assert!(check_provisional(&claim, &b64u([4u8; 65]), "HOST", &st).is_err(), "not a point");
     }
 
     #[test]

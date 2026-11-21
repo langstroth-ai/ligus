@@ -4,6 +4,57 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## 0.1.1 (unreleased)
+
+### Phone
+
+- **Add a phone by scanning the desktop's code.** On the desktop,
+  **Settings → Profile → My devices → Add a phone → Show code**; on the
+  phone, **Settings → This phone → Add to my devices** and scan. The phone's
+  request reaches the desktop through your `ligus serve` box; you compare
+  the fingerprint and approve with your passkey, and the phone pairs. A
+  brand-new phone that isn't paired yet works too: through the relay the box
+  gives it a provisional connection that reaches only the add-a-phone
+  routes. Pasting the phone's code stays as **Can't scan?**. The QR's
+  one-time secret keeps the box and the relay from swapping in another key,
+  and a 5-second hold and a tripwire alert catch a second phone answering the
+  same code. See [Add your phone](../features/phone-app.md#add-this-phone),
+  [Adding a phone by QR code](../concepts/security.md#add-phone-qr) and the
+  [`/v1/phone-enroll/*` routes](../../operate/reference/serve-api.md#phone-enroll).
+- **Clearer pairing errors.** When the relay refuses the box's control
+  connection, `ligus serve` now logs the relay's reason (for example
+  `rate_limited: too many attempts`) instead of only "expected challenge".
+  A `4029` waits at least a minute and says that the relay counts failed
+  attempts per IP address (per /64 on IPv6), so a phone retrying a used-up
+  pairing link from the same network counts too. After **Add this phone**
+  and `ligus phones certify`, the desktop and the CLI say what to do next
+  (let the box sync, tap Retry on the phone, or scan a new `ligus pair`
+  link), and the panel marks the phone's name as the phone's own claim. See
+  [Troubleshooting](../help/troubleshooting.md#the-phone-cant-connect).
+
+### CLI
+
+- **`ligus app`** opens the desktop app and returns at once, detached from
+  the terminal. See the [CLI reference](cli.md).
+
+### Docs
+
+- **Who can use your agents.** A new page on agent access: Only me or
+  everyone in the workspace, daily turn limits and the spending cap, the
+  refusal replies, notify-on-use and usage. See
+  [Who can use your agents](../features/agent-access.md).
+- **Fixes.** UI labels (**Workspace → Agent roster**, **Settings → Profile →
+  Privacy**), and what is actually published for Kubernetes: the relay and
+  langstroth-auth charts and the relay image pull anonymously from
+  `ghcr.io/langstroth-ai`; the ligus chart and image aren't published. See
+  [Kubernetes](../../operate/deploy/kubernetes.md).
+
+### Release
+
+- **Homebrew tap updates no longer race.** The formula and the cask are
+  pushed to the tap one after the other, and a rejected push rebases and
+  retries, so a release no longer leaves the tap half updated.
+
 ## 0.1.0
 
 The first release of Ligus (short for *ligustica*): the desktop app, the

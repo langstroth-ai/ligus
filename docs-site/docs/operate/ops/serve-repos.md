@@ -86,7 +86,7 @@ accepts a shared alias for itself.
 Cloning (by name or by id), renaming a repository, picking a chat's
 repository, a rescan and confirming a found checkout spend the box's own
 code-host access, so only the box's owner can ask for them: the phone of the
-Admin who admitted the box, certified to their account (**Add this phone**
+Admin who admitted the box, certified to their account (**Add a phone**
 on their desktop), over its own pairing, or the operator with
 `serve.operator.token` on a box that listens on loopback. Any other phone,
 the phones' `serve.token` (even on loopback, through a reverse proxy), and

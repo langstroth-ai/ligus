@@ -33,6 +33,10 @@ the app data dir; the theme is stored locally per device.
   device** takes the enrollment code a `ligus serve` box prints, so what you
   do from your phone through that box is authored as you rather than as a
   separate member. See [Running ligus serve as your own device](../../operate/ops/serve-box.md).
+  **Add a phone** shows a QR code that the phone app scans (**Settings → This
+  phone → Add to my devices**); compare the fingerprint and confirm with your
+  passkey. **Can't scan?** takes the phone's code as text instead. See
+  [Add your phone](phone-app.md#add-this-phone).
 - **Privacy → Share typing status** (on by default) — show people in a chat
   when you're typing. Only that you're typing is shared, sealed under the
   workspace key; never what you type. Off, this device only ever says "not

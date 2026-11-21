@@ -35,6 +35,8 @@ mod links;
 mod memory;
 pub use memory::MemoryDraft;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
+mod phone_enroll_relay;
+pub use phone_enroll_relay::{EnrollDesktop, EnrollPhoneStanding};
 mod phone_sign;
 mod presence;
 mod repos;
