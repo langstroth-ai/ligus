@@ -375,6 +375,16 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
     let mut fails: HashMap<String, u32> = HashMap::new();
     let mut skip_until: HashMap<String, tokio::time::Instant> = HashMap::new();
     while !shared.stopping() {
+        // Checked before the list is read, so a DM added after the hold is
+        // set is never synced until it is released.
+        #[cfg(test)]
+        if shared.dm_sync_held.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+                _ = stop.wait_for(|s| *s) => return,
+            }
+            continue;
+        }
         let dms = shared.dms.list();
         let mut changed = false;
         for conn in &dms {

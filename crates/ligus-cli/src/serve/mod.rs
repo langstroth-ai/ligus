@@ -271,6 +271,10 @@ pub struct Shared {
     /// presence (the HTTP tests have no phone or passkey).
     #[cfg(test)]
     pub test_presence: AtomicBool,
+    /// Tests only: the DM sync loop runs no rounds while set, so a test can
+    /// look at a DM before its founder's log arrives.
+    #[cfg(test)]
+    pub dm_sync_held: AtomicBool,
     /// When this process started (see [`Shared::fresh`]).
     started_at: Timestamp,
     pub http: reqwest::Client,
@@ -1138,6 +1142,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         stopping: AtomicBool::new(false),
         #[cfg(test)]
         test_presence: AtomicBool::new(false),
+        #[cfg(test)]
+        dm_sync_held: AtomicBool::new(false),
         started_at: Timestamp::now(),
         http: ligus_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),

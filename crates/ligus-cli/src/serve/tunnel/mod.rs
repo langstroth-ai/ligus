@@ -522,9 +522,13 @@ impl TunnelHost {
     fn send_request(&self, mut msg: Value, pending: Pending) -> bool {
         let id = random_id();
         msg["id"] = json!(id);
+        // The waiter goes in before the request leaves: the relay can answer,
+        // and the control loop take the ack, before this thread is scheduled
+        // again, and an ack nobody waits for is dropped.
+        Self::lock(&self.acks).insert(id.clone(), pending);
         let sent = Self::lock(&self.control).as_ref().is_some_and(|tx| tx.send(msg.to_string()).is_ok());
-        if sent {
-            Self::lock(&self.acks).insert(id, pending);
+        if !sent {
+            Self::lock(&self.acks).remove(&id);
         }
         sent
     }
