@@ -811,6 +811,11 @@ Flow, per [`serve-api.md`](../docs-site/docs/operate/reference/serve-api.md#phon
     recomputed from the content it shows. A missing or different digest
     signs nothing. The box's digest binds only for workflow or command JSON
     the phone can't reproduce;
+  - sign only what was shown: recompute the content digest from the copy on
+    screen at vote time and refuse on mismatch; the rendered view only shows
+    whole files the diff produces. A proposal that offers a file binds its
+    `attachment` (name, type, size, hash) as the digest's ninth part: show
+    those and recompute, or refuse with "review it on your desktop";
   - the signed-lamport ledger (section 3.2);
   - one action in flight per chat;
   - a sheet is bound to the profile it opened on and cancelled when that
@@ -1020,6 +1025,7 @@ checks their SHA-256 against a manifest:
 | `crates/ligus-core/tests/golden/phone_actions_v1.jsonl` (25 lines) | each `ok` case passes `check_phone_action` and its `signature` verifies under `publicKey`. Each `refuse/*` case fails with exactly its `expect` string. The `*/presence` cases use their `assertion` and `challenge` |
 | `crates/ligus-core/tests/golden/p256_cryptokit.jsonl` | the signatures verify over `preimage`, and `der_to_raw_low_s` plus Keystore-style DER round-trips them |
 | `crates/ligus-core/tests/golden/envelopes_v3.jsonl` (117 lines) | the JSON round-trip used by the parser accepts every envelope's fields |
+| `crates/ligus-core/tests/golden/proposal_digest_v1.jsonl` | `proposal_digest` over each line's parts equals its `diffDigest`, and the ninth part is exactly `attachmentJson` |
 | `crates/ligus-core/tests/golden/presence/*.json` | `check_assertion_locally` over real authenticator output |
 | `crates/ligus-proto/tests/vectors/display-names.json` | `clean_display_name` |
 | `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl` | the offer, the keys (`rid`, `k_req`, `k_ans`), the request and the answer, and each negative with its refusal reason (`EnrollError::code`) |
