@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
@@ -116,7 +115,8 @@ fn after_close(code: u16, why: &str, backoff: Duration) -> After {
 /// Keep the control connection up until `stop`. Reconnects with backoff
 /// 1 … 60 s (±20 %); waits ≥ 60 s after 4009 and ≥ 10 min after 4003 or
 /// 4006; stops on 4001 and 4026 (§12, [`after_close`]).
-pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receiver<bool>, t: Timeouts) {
+pub async fn run(host: Arc<TunnelHost>, router: impl Into<session::Routers>, mut stop: watch::Receiver<bool>, t: Timeouts) {
+    let router: session::Routers = router.into();
     let mut backoff = Duration::from_secs(1);
     loop {
         if *stop.borrow() {
@@ -230,7 +230,7 @@ async fn next_json(ws: &mut Ws) -> Result<Value, End> {
     }
 }
 
-async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch::Receiver<bool>, t: Timeouts) -> (End, bool) {
+async fn connect_once(host: &Arc<TunnelHost>, router: &session::Routers, stop: &mut watch::Receiver<bool>, t: Timeouts) -> (End, bool) {
     let url = host.settings.ws_url("/v1/tunnel/host");
     let mut ws = match dial(&url).await {
         Ok(ws) => ws,
@@ -321,7 +321,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
     (end, true)
 }
 
-fn handle(host: &Arc<TunnelHost>, router: &Router, v: &Value, stop: watch::Receiver<bool>, t: Timeouts) {
+fn handle(host: &Arc<TunnelHost>, router: &session::Routers, v: &Value, stop: watch::Receiver<bool>, t: Timeouts) {
     match v["t"].as_str() {
         Some("open") => {
             let Some(sid) = v["sid"].as_str().map(str::to_string) else { return };

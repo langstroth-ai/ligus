@@ -215,6 +215,38 @@ where
         Ok((conn, pid, credential))
     }
 
+    /// E3b: enroll as a phone this box doesn't know yet, with the device
+    /// claim and its key (`enrollKey`). The host answers `{"v":1,
+    /// "provisional":true}` and serves the add-a-phone routes only.
+    pub async fn provisional_handshake(ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<Self> {
+        let key = keys.device.public_key();
+        Self::provisional_handshake_with(ws, keys, host, ps, name, &key).await
+    }
+
+    /// [`Self::provisional_handshake`] sending `enroll_key` as the key.
+    pub async fn provisional_handshake_with(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str, enroll_key: &[u8]) -> Result<Self> {
+        let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, Some(&ps.psk), None)?;
+        let mut buf = vec![0u8; noise::MAX_MSG];
+        let payload = json!({
+            "v": 1,
+            "name": name,
+            "pk": b64u(keys.auth.verifying_key().as_bytes()),
+            "device": keys.device_claim(&host.host_id),
+            "enrollKey": b64u(enroll_key),
+        })
+        .to_string();
+        let n = hs.write_message(payload.as_bytes(), &mut buf)?;
+        ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
+        let msg2 = next_bin(&mut ws).await?;
+        let mut out = vec![0u8; noise::MAX_MSG];
+        let m = hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
+        let v: Value = serde_json::from_slice(&out[..m])?;
+        if v != json!({ "v": 1, "provisional": true }) {
+            bail!("expected a provisional msg2, got {v}");
+        }
+        Ok(Self { ws, ts: hs.into_transport_mode()?, next_id: 1, buf })
+    }
+
     pub async fn send(&mut self, f: Frame) -> Result<()> {
         let n = self.ts.write_message(&f.encode(), &mut self.buf)?;
         self.ws.send(Message::Binary(self.buf[..n].to_vec().into())).await?;
@@ -315,6 +347,15 @@ pub async fn phone_enroll_with_device(host: &HostInfo, keys: &PhoneKeys, ps: &Pa
     ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::enroll_handshake_with(ws, keys, host, ps, name, device).await
+}
+
+/// E3b: a provisional enrollment through the relay (see
+/// [`PhoneConn::provisional_handshake`]).
+pub async fn phone_enroll_provisional(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str) -> Result<PhoneConn<ClientWs>> {
+    let (mut ws, _) = phone_dial(host).await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
+    await_ready(&mut ws).await?;
+    PhoneConn::provisional_handshake(ws, keys, host, ps, name).await
 }
 
 /// Open a session through the relay with a credential.

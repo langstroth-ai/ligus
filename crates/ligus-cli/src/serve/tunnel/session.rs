@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tower::ServiceExt;
 
 use super::frame::{self, goaway, reset, Frame, RequestHead, ResponseHead};
-use super::{b64u, b64u_fixed, cred, hkdf, noise, now, random_id, PhoneRecord, TunnelHost, TunnelPeer};
+use super::{b64u, b64u_fixed, cred, hkdf, noise, now, random_id, PhoneRecord, ProvisionalPeer, TunnelHost, TunnelPeer};
 
 /// Handshake must complete within this long of `ready` (§10).
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -32,6 +32,26 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Session lifetime (§7.4).
 pub const MAX_LIFETIME: Duration = Duration::from_secs(24 * 3600);
 const MAX_TRANSPORT_MESSAGES: u64 = 1 << 32;
+/// E3b (§7.2, P5): a provisional connection lives at most this long (the
+/// relay caps an enrollment splice at 5 minutes too).
+pub const PROVISIONAL_LIFETIME: Duration = Duration::from_secs(300);
+/// E3b (P5): provisional connections one host serves at once.
+pub const MAX_PROVISIONAL: usize = 4;
+
+/// The routers a session serves: the API, and for a provisional (E3b)
+/// connection the enroll routes only. A host without a provisional router
+/// refuses an uncertified phone with 4040 as before.
+#[derive(Clone)]
+pub struct Routers {
+    pub api: Router,
+    pub provisional: Option<Router>,
+}
+
+impl From<Router> for Routers {
+    fn from(api: Router) -> Self {
+        Self { api, provisional: None }
+    }
+}
 
 /// What the relay's `open` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +95,9 @@ pub const DEVICE_REVOKED: (u16, &str) = (4041, "device_revoked");
 /// No device claim, a bad signature, or a device that isn't a phone: an app
 /// bug or the wrong box; don't retry.
 pub const DEVICE_CLAIM_INVALID: (u16, &str) = (4042, "device_claim_invalid");
+/// E3b: the box already serves as many provisional connections as it may
+/// ([`MAX_PROVISIONAL`]): try again in a minute.
+pub const PROVISIONAL_BUSY: (u16, &str) = (4043, "provisional_busy");
 
 impl EnrollRefusal {
     fn new((close, code): (u16, &'static str), detail: impl Into<String>) -> Self {
@@ -106,6 +129,48 @@ struct EnrollHello {
     /// [`super::device_bind`]).
     #[serde(default)]
     device: Option<super::device_bind::DeviceClaim>,
+    /// E3b: the phone's P-256 device key (b64u, 65 bytes SEC1), for a
+    /// device this box doesn't know yet. Old phones never send it.
+    #[serde(default, rename = "enrollKey")]
+    enroll_key: Option<String>,
+}
+
+/// Who the transport serves.
+enum Peer {
+    Paired(String),
+    /// E3b: with the slot it holds among [`MAX_PROVISIONAL`].
+    Provisional(ProvisionalPeer, ProvisionalSlot),
+}
+
+/// One of the host's [`MAX_PROVISIONAL`] provisional connections; freed on drop.
+struct ProvisionalSlot(Arc<TunnelHost>);
+
+impl ProvisionalSlot {
+    fn take(host: &Arc<TunnelHost>) -> Option<Self> {
+        let mut n = host.provisional.load(Ordering::SeqCst);
+        loop {
+            if n >= MAX_PROVISIONAL {
+                return None;
+            }
+            match host.provisional.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Self(host.clone())),
+                Err(now) => n = now,
+            }
+        }
+    }
+}
+
+impl Drop for ProvisionalSlot {
+    fn drop(&mut self) {
+        self.0.provisional.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// What a request on the mux carries for the router.
+#[derive(Clone)]
+enum PeerExt {
+    Tunnel(TunnelPeer),
+    Provisional(ProvisionalPeer),
 }
 
 #[derive(Deserialize)]
@@ -130,10 +195,11 @@ where
 
 /// Run one accepted connection to the end. Errors are already logged-worthy
 /// descriptions; the connection is closed either way.
-pub async fn run<S>(host: Arc<TunnelHost>, router: Router, ws: S, mode: Mode, stop: watch::Receiver<bool>, t: Timeouts) -> Result<()>
+pub async fn run<S>(host: Arc<TunnelHost>, routers: impl Into<Routers>, ws: S, mode: Mode, stop: watch::Receiver<bool>, t: Timeouts) -> Result<()>
 where
     S: Stream<Item = Result<Message, WsError>> + Sink<Message, Error = WsError> + Unpin + Send + 'static,
 {
+    let routers: Routers = routers.into();
     let (mut tx, mut rx) = ws.split();
     let res = async {
         let msg1 = tokio::time::timeout(t.handshake, next_binary(&mut rx)).await.map_err(|_| anyhow!("handshake timed out"))??;
@@ -157,7 +223,7 @@ where
                 let n = hs.write_message(br#"{"v":1}"#, &mut buf)?;
                 tx.send(Message::Binary(buf[..n].to_vec().into())).await?;
                 let ts = hs.into_transport_mode()?;
-                Ok((ts, rec.pid, None))
+                Ok((ts, Peer::Paired(rec.pid), None))
             }
             Mode::Enroll { eid } => {
                 // E1: an open, unexpired window.
@@ -207,6 +273,23 @@ where
                     use super::device_bind::BindCheck;
                     match super::device_bind::check(claim, keys.host_id(), &rs, |d| host.lookup_device(d)) {
                         BindCheck::Bind(d) => d,
+                        BindCheck::Unknown if hello.enroll_key.is_some() && routers.provisional.is_some() => {
+                            // E3b (P1 to P3): a phone this box can't bind
+                            // yet gets the enroll routes only. The attempt
+                            // counts; `ps` stays unused and no phone
+                            // record is made.
+                            host.window_failed(eid);
+                            let key = super::device_bind::check_provisional(claim, hello.enroll_key.as_deref().unwrap_or_default(), keys.host_id(), &rs)
+                                .map_err(|why| EnrollRefusal::new(DEVICE_CLAIM_INVALID, why))?;
+                            let slot = ProvisionalSlot::take(&host)
+                                .ok_or_else(|| EnrollRefusal::new(PROVISIONAL_BUSY, "this box is adding as many phones as it can at once; try again in a minute"))?;
+                            let n = hs.write_message(br#"{"v":1,"provisional":true}"#, &mut buf)?;
+                            tx.send(Message::Binary(buf[..n].to_vec().into())).await?;
+                            let ts = hs.into_transport_mode()?;
+                            let peer = ProvisionalPeer { conn: random_id(), device_id: claim.id, public_key: key, requests: Default::default() };
+                            println!("remote: provisional enrollment for workspace device {} (add-a-phone routes only)", claim.id);
+                            return Ok((ts, Peer::Provisional(peer, slot), None));
+                        }
                         BindCheck::Unknown => {
                             host.window_failed(eid);
                             return Err(EnrollRefusal::new(
@@ -257,12 +340,12 @@ where
                     owner_phone: false,
                     device_id: Some(device_id),
                 };
-                Ok((ts, pid, Some(PendingEnroll { rec, eid: eid.clone() })))
+                Ok((ts, Peer::Paired(pid), Some(PendingEnroll { rec, eid: eid.clone() })))
             }
         }
     }
     .await;
-    let (ts, pid, pending) = match res {
+    let (ts, peer, pending) = match res {
         Ok(v) => v,
         Err(e) => {
             // Close without msg2. An enrollment refused at E3a says why with
@@ -277,10 +360,19 @@ where
             return Err(e);
         }
     };
-    if pending.is_none() {
-        host.registry.touch(&pid);
+    match peer {
+        Peer::Paired(pid) => {
+            if pending.is_none() {
+                host.registry.touch(&pid);
+            }
+            mux(host, routers.api, tx, rx, ts, PeerExt::Tunnel(TunnelPeer { pid }), pending, stop, t).await
+        }
+        Peer::Provisional(p, _slot) => {
+            let router = routers.provisional.unwrap_or_else(Router::new);
+            let t = Timeouts { lifetime: t.lifetime.min(PROVISIONAL_LIFETIME), ..t };
+            mux(host, router, tx, rx, ts, PeerExt::Provisional(p), None, stop, t).await
+        }
     }
-    mux(host, router, tx, rx, ts, pid, pending, stop, t).await
 }
 
 enum Out {
@@ -305,7 +397,7 @@ async fn mux<Tx, Rx>(
     mut tx: Tx,
     mut rx: Rx,
     ts: TransportState,
-    pid: String,
+    peer: PeerExt,
     mut pending: Option<PendingEnroll>,
     mut stop: watch::Receiver<bool>,
     t: Timeouts,
@@ -314,6 +406,10 @@ where
     Tx: Sink<Message, Error = WsError> + Unpin + Send + 'static,
     Rx: Stream<Item = Result<Message, WsError>> + Unpin + Send + 'static,
 {
+    let (pid, provisional) = match &peer {
+        PeerExt::Tunnel(p) => (p.pid.clone(), false),
+        PeerExt::Provisional(_) => (String::new(), true),
+    };
     let ts = Arc::new(Mutex::new(ts));
     // Writer: encrypts in send order, one Noise message per WebSocket message.
     let (out, mut out_rx) = mpsc::channel::<Out>(64);
@@ -369,7 +465,7 @@ where
                 last_activity = Instant::now();
                 // The phone is awake (it PINGs while the app is open): the
                 // push gate's "app open" expires without this.
-                if pending.is_none() {
+                if pending.is_none() && !provisional {
                     host.phone_heard(&pid);
                 }
                 // P2: any decrypt failure ends the session.
@@ -411,7 +507,7 @@ where
                     goaway_code = Some((goaway::PROTOCOL, "short frame"));
                     break 'session;
                 };
-                match handle_frame(f, &mut streams, &mut last_open, &out, &router, &pid, &done_tx).await {
+                match handle_frame(f, &mut streams, &mut last_open, &out, &router, &peer, &done_tx).await {
                     Flow::Continue => {}
                     Flow::Goaway(code, why) => { goaway_code = Some((code, why)); break 'session; }
                     Flow::Close => break 'session,
@@ -427,7 +523,8 @@ where
                 }
             }
             r = revoked.recv() => {
-                let gone = match r {
+                // A provisional connection has no pairing to revoke.
+                let gone = !provisional && match r {
                     Ok(p) => p == pid,
                     Err(_) => !host.registry.is_active(&pid) && pending.is_none(),
                 };
@@ -477,7 +574,7 @@ async fn handle_frame(
     last_open: &mut u32,
     out: &mpsc::Sender<Out>,
     router: &Router,
-    pid: &str,
+    peer: &PeerExt,
     done_tx: &mpsc::UnboundedSender<u32>,
 ) -> Flow {
     use frame::*;
@@ -515,7 +612,7 @@ async fn handle_frame(
                 id,
                 head,
                 router.clone(),
-                pid.to_string(),
+                peer.clone(),
                 out.clone(),
                 body_rx,
                 recv_window.clone(),
@@ -599,7 +696,7 @@ fn simple_response(status: StatusCode, msg: &str) -> http::Response<Body> {
 }
 
 /// Build the in-process request for a head; `None` = malformed.
-fn build_request(head: &RequestHead, body: Body, pid: &str) -> Option<http::Request<Body>> {
+fn build_request(head: &RequestHead, body: Body, peer: &PeerExt) -> Option<http::Request<Body>> {
     let method = http::Method::from_bytes(head.method.as_bytes()).ok()?;
     let uri: http::Uri = head.path.parse().ok()?;
     let mut b = http::Request::builder().method(method).uri(uri);
@@ -612,7 +709,14 @@ fn build_request(head: &RequestHead, body: Body, pid: &str) -> Option<http::Requ
         b = b.header(k, v);
     }
     let mut req = b.body(body).ok()?;
-    req.extensions_mut().insert(TunnelPeer { pid: pid.to_string() });
+    match peer {
+        PeerExt::Tunnel(p) => {
+            req.extensions_mut().insert(p.clone());
+        }
+        PeerExt::Provisional(p) => {
+            req.extensions_mut().insert(p.clone());
+        }
+    }
     Some(req)
 }
 
@@ -621,7 +725,7 @@ async fn serve_stream(
     id: u32,
     head: RequestHead,
     router: Router,
-    pid: String,
+    peer: PeerExt,
     out: mpsc::Sender<Out>,
     body_rx: mpsc::UnboundedReceiver<Bytes>,
     recv_window: Arc<AtomicI64>,
@@ -648,7 +752,7 @@ async fn serve_stream(
     let resp = if !head.path.starts_with("/v1/") {
         simple_response(StatusCode::NOT_FOUND, "not found")
     } else {
-        match build_request(&head, Body::from_stream(body), &pid) {
+        match build_request(&head, Body::from_stream(body), &peer) {
             Some(req) => match router.oneshot(req).await {
                 Ok(r) => r,
                 Err(e) => match e {},
