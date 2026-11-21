@@ -249,3 +249,63 @@ async fn a_failed_removal_never_rotates() {
     drop(svc);
     assert!(is_member(&w.desktop, w.ws, &w.box_member), "the box was removed without its MemberRemoved");
 }
+
+/// The common way a box joins: `ligus admit request` on the box, the Admin's
+/// sealed admission for that request (desktop **Admit a box…** or `ligus
+/// admit issue --request`), `ligus admit redeem`. Such a box has no relay
+/// subject this desktop minted. It is removed from its member row in the
+/// People pane (**Members → Remove & revoke**, `remove_and_revoke`): the box
+/// is listed in every chat's member projection, and that path writes
+/// `MemberRemoved` for its service member on the config log and then
+/// rotates, so the box is left out and can't read what follows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_admitted_from_its_join_request_is_removed_from_its_member_row() {
+    let w = world().await;
+    let config_id = workspace_config_session_id(w.ws);
+    let mut home = config(&w._tmp.path().join("home-server"), &w.relay, &w.room);
+    let request = crate::admit::join_request(&home, "home-server").unwrap();
+    let sealed = {
+        let mut svc = open_service(&w.desktop).unwrap();
+        let (inv, seed) = svc.issue_box_admission(w.ws, 3_600_000, Some(&request)).unwrap();
+        request.seal(&crate::serve::admission_code(&w.desktop, &svc, inv, &seed).unwrap()).unwrap()
+    };
+    sync(&w.desktop).await;
+    crate::admit::redeem(&mut home, &sealed).unwrap();
+    let (member, device) = {
+        let (mut svc, _) =
+            crate::admit::prepare_box(&mut home, "home-server", None, None, |c| async move { sync_once(&c).await }).await.unwrap();
+        crate::publish_key_agreement(&home, &mut svc);
+        (svc.author().id.clone(), svc.device_id())
+    };
+    sync(&home).await;
+    sync(&w.desktop).await;
+    let dev = device.to_string();
+
+    let mut svc = open_service(&w.desktop).unwrap();
+    let control = svc.rotate_workspace_key(w.ws).unwrap();
+    assert!(control.rotation.sealed.contains_key(&dev), "control: the admitted box gets the key");
+    // The People pane lists it on a chat's members (the config roster is
+    // hoisted onto every chat), with the remove actions.
+    let chat = svc.create_chat("ops", w.ws, "rt").unwrap();
+    assert!(svc.load(chat.id).unwrap().unwrap().members.iter().any(|m| m.id == member && m.actor.kind == ligus_core::ActorKind::Service));
+
+    // Remove & revoke on its row: remove_member (routed to the config log),
+    // then the rotation.
+    svc.remove_member(chat.id, w.ws, member.clone()).unwrap();
+    assert!(!svc.load(config_id).unwrap().unwrap().members.iter().any(|m| m.id == member), "MemberRemoved on the config log");
+    let issued = svc.rotate_workspace_key(w.ws).unwrap();
+    assert!(!issued.rotation.sealed.contains_key(&dev), "the rotation sealed to the removed box");
+    assert!(issued.rotation.sealed.contains_key(&w.ana_device.to_string()));
+    let said = svc.post_user_message(chat.id, w.ws, "after the home server left").unwrap().id;
+    drop(svc);
+    sync(&w.desktop).await;
+    for _ in 0..2 {
+        let _ = tokio::time::timeout(REQ, sync_once(&home)).await.expect("the box's fetch in time");
+        sync(&w.ana).await;
+    }
+    assert!(crate::box_ring(&home).unwrap().keys_for(issued.rotation.version, None).is_empty(), "the box holds the new key");
+    let on_box = open_service(&home).unwrap().load(chat.id).unwrap();
+    assert!(on_box.is_none_or(|s| !s.messages.iter().any(|m| m.id == said)), "the removed box read what followed");
+    let on_ana = open_service(&w.ana).unwrap().load(chat.id).unwrap().expect("ana got the chat");
+    assert!(on_ana.messages.iter().any(|m| m.id == said));
+}
