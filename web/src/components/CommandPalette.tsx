@@ -28,6 +28,8 @@ export interface PaletteActions {
   cycleAppearance?: () => void;
   /// Relaunch the spotlight feature tour.
   takeTour?: () => void;
+  /// Admit a box (ligus serve / worker) to the active shared workspace.
+  admitBox?: () => void;
 }
 
 interface Cmd {
@@ -74,7 +76,7 @@ export function CommandPalette({
     if (actions.setCanvasMode) {
       items.push(
         { id: "view-chat", label: "View: Chat", hint: "Go", run: run(() => actions.setCanvasMode!("chat")) },
-        { id: "view-diff", label: "View: Diff", hint: "Go", run: run(() => actions.setCanvasMode!("diff")) },
+        { id: "view-diff", label: "View: Diff (uncommitted changes)", hint: "Go", run: run(() => actions.setCanvasMode!("diff")) },
         { id: "view-code", label: "View: Code", hint: "Go", run: run(() => actions.setCanvasMode!("code")) },
       );
       if (actions.quickOpenFile) {
@@ -92,7 +94,8 @@ export function CommandPalette({
         items.push({
           id: `pane-${p.id}`,
           label: `Open ${p.label}`,
-          hint: `Pane · ⌘⌥${i + 1}`,
+          // ⌘⌥1–9 reach the first nine panes; later ones are palette-only.
+          hint: i < 9 ? `Pane · ⌘⌥${i + 1}` : "Pane",
           run: run(() => actions.openPane!(p.id)),
         });
       });
@@ -108,6 +111,9 @@ export function CommandPalette({
     }
     if (actions.cycleAppearance) {
       items.push({ id: "appearance", label: "Toggle light / dark", hint: "Action", run: run(actions.cycleAppearance) });
+    }
+    if (actions.admitBox) {
+      items.push({ id: "admit-box", label: "Admit a box…", hint: "Workspace", run: run(actions.admitBox) });
     }
     if (actions.takeTour) {
       items.push({ id: "take-tour", label: "Take the tour", hint: "Help", run: run(actions.takeTour) });

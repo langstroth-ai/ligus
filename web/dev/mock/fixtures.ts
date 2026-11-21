@@ -514,3 +514,130 @@ export const clis = [
 ];
 
 export const schedules = [{ id: "s1", enabled: true, label: "Morning stand-up digest", workspaceId: "ws-1", runtimeId: "rt-claude", prompt: "Summarize yesterday", trigger: { kind: "daily_at", hour: 8, minute: 30 }, lastRun: iso(300) }];
+
+// ── Workspace repositories (Settings → Repositories, the repo suggestion) ──
+export const workspaceRepos = {
+  canAdmin: true,
+  hostLabel: "MacBook Pro",
+  coverageReporting: true,
+  scanRoots: ["/Users/zaz/projects"],
+  suggestion: null,
+  hostAliases: [{ alias: "gh-work", host: "github.com", accepted: true }],
+  repos: [
+    {
+      id: "repo-apiary",
+      name: "apiary",
+      canonical: "github.com/zaz/apiary",
+      forgeKind: "github",
+      defaultBranch: "main",
+      removed: false,
+      here: { state: "present", code: "present", viaFork: false, path: "/Users/zaz/projects/apiary", found: [] },
+      hosts: [
+        { hostId: "h-box", label: "serve box", kind: "worker", online: false, state: "present", viaFork: false },
+        { hostId: "h-maya", label: "Maya's laptop", kind: "device", online: true, state: "present", viaFork: true },
+      ],
+      aliases: [{ alias: "github.com/apiary-org/apiary", accepted: true }],
+    },
+    {
+      id: "repo-relay",
+      name: "relay",
+      canonical: "codeberg.org/maya/relay",
+      forgeKind: "gitea",
+      defaultBranch: "main",
+      removed: false,
+      here: { state: "missing", code: "no_checkout", viaFork: false, path: null, found: ["/Users/zaz/src/relay"] },
+      hosts: [{ hostId: "h-box", label: "serve box", kind: "worker", online: false, state: "cloning", viaFork: false }],
+      aliases: [{ alias: "codeberg.org/apiary/relay", accepted: false }],
+    },
+    {
+      id: "repo-notes",
+      name: "hive-notes",
+      canonical: "local:9f2c41d07a",
+      forgeKind: "local",
+      defaultBranch: "main",
+      removed: false,
+      here: { state: "unknown", code: "unknown", viaFork: false, path: null, found: [] },
+      hosts: [],
+    },
+  ],
+};
+
+// ── Workspace memory (the Memory pane) ──
+const maya = { id: "a-maya", name: "Maya", kind: "human" as const };
+const zaz = { id: "a-zaz", name: "Zaz", kind: "human" as const };
+const scout = { id: "ag-scout", name: "scout", kind: "agent" as const };
+const rev = (n: string, title: string, body: string, author: typeof zaz, minsAgo: number, tags: string[] = []) => ({
+  rev: `rev-${n}`,
+  title,
+  body,
+  tags,
+  author,
+  atMs: now - minsAgo * 60_000,
+  source: { chatId: "chat-1" },
+});
+export const memoryView = (query: string) => {
+  const entries = [
+    {
+      id: "mem-1",
+      current: rev("1b", "Inspections need 15 °C or warmer", "Don't schedule hive inspections below 15 °C: opening the hive chills the brood. Use the forecast high, not the current reading.", maya, 40, ["scheduler", "weather"]),
+      createdBy: maya,
+      createdAtMs: now - 3 * 86_400_000,
+      revisionCount: 2,
+    },
+    {
+      id: "mem-2",
+      current: rev("2a", "Relay sync is end-to-end encrypted", "Never log decrypted payloads in the relay client. The workspace key stays on member devices.", zaz, 600, ["security"]),
+      createdBy: zaz,
+      createdAtMs: now - 6 * 86_400_000,
+      revisionCount: 1,
+    },
+    {
+      id: "mem-3",
+      current: rev("3a", "Varroa counts are per 300 bees", "Mite wash counts in the importer are per 300-bee sample; convert to a percentage before comparing hives.", scout, 1440, ["varroa"]),
+      createdBy: scout,
+      createdAtMs: now - 86_400_000,
+      revisionCount: 1,
+    },
+  ];
+  const q = query.trim().toLowerCase();
+  const shown = q ? entries.filter((e) => `${e.current.title} ${e.current.body}`.toLowerCase().includes(q)) : entries;
+  return {
+    entries: shown,
+    total: entries.length,
+    proposals: [
+      {
+        proposal: {
+          proposalId: "mp-1",
+          op: { op: "create", entryId: "mem-4", title: "Run cargo test with --locked", body: "CI builds with --locked; run tests the same way so lockfile drift shows up locally.", tags: ["ci"] },
+          proposer: "ag-scout",
+          source: { chatId: "chat-2" },
+          rationale: "Two turns failed in CI after passing locally.",
+        },
+        by: scout,
+        atMs: now - 25 * 60_000,
+      },
+    ],
+    chatTitles: { "chat-1": "Hive inspection scheduler", "chat-2": "Relay reconnect backoff" },
+    agentNames: { "ag-scout": "scout", "ag-builder": "builder", primary: "ligus" },
+    me: "a-zaz",
+    moderator: true,
+  };
+};
+
+// ── Workspace diff sides (the Diff tab's Monaco view), keyed by path ──
+const diffSides: Record<string, { original: string; modified: string }> = {
+  "src/scheduler.rs": {
+    original: "pub fn next_due(&self, now: Date) -> Date {\n    self.queue.peek().copied().unwrap_or(now)\n}\n",
+    modified:
+      "pub fn next_due(&self, now: Date) -> Date {\n    let floor = self.cfg.min_temp_c;\n    self.queue\n        .iter()\n        .find(|s| s.forecast_high_c >= floor)\n        .copied()\n        .unwrap_or(now)\n}\n",
+  },
+  "src/weather.rs": {
+    original: "pub struct Day {\n    pub date: NaiveDate,\n    pub rain: f32,\n}\n",
+    modified: "pub struct Day {\n    pub date: NaiveDate,\n    pub rain: f32,\n    pub high_c: f32,\n}\n",
+  },
+  "tests/scheduler_cold.rs": {
+    original: "",
+    modified: "#[test]\nfn skips_cold_days() {}\n",
+  },
+};
+export const fileDiffSides = (path: string) => ({ ...(diffSides[path] ?? { original: "", modified: "" }), isBinary: false });

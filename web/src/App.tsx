@@ -59,12 +59,14 @@ import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
 import { StatusDot } from "@/components/ui";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
+import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { PANES } from "@/lib/panes";
+import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
 import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
@@ -154,6 +156,9 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addWsOpen, setAddWsOpen] = useState(false);
+  // "Admit a box" for the active workspace, from the workspace menu or ⌘K
+  // (the rail's right-click menu keeps its own entry).
+  const [admitBoxOpen, setAdmitBoxOpen] = useState(false);
   const [mode, setMode] = useState<CanvasMode>("chat");
   // Live mirror of `mode` for non-React callbacks (the editorStore subscription
   // below) so they read the current canvas mode without re-subscribing.
@@ -913,14 +918,12 @@ export function App() {
     {
       anchor: "canvas-tabs",
       placement: "bottom",
-      title: "Chat · Diff · Code",
-      body: "Switch the canvas between the conversation, a per-file review of proposed changes, and a full code editor.",
+      ...TOUR_CANVAS_TABS,
     },
     {
       anchor: "canvas",
       placement: "bottom",
-      title: "Review changes",
-      body: "The Diff tab shows every proposed file change PR-style. Approve to commit it onto this chat’s own branch — nothing touches your files until you say so.",
+      ...TOUR_DIFF,
       before: () => setMode("diff"),
     },
     {
@@ -1009,6 +1012,7 @@ export function App() {
           cycleAppearance: () =>
             setAppearanceMode(appearanceMode === "dark" ? "light" : "dark"),
           takeTour: () => startTour(),
+          admitBox: activeWorkspace?.kind === "room" ? () => setAdmitBoxOpen(true) : undefined,
           stepChat: (dir) => stepChatRef.current(dir),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
@@ -1025,6 +1029,9 @@ export function App() {
         settingsActive={settingsOpen}
       />
       <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
+      {admitBoxOpen && activeWorkspace?.kind === "room" && (
+        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
+      )}
       {sidebarVisible && (
       <Sidebar
         width={menuPaneWidth}
@@ -1037,6 +1044,7 @@ export function App() {
         knownWorkspaces={settings.data?.knownWorkspaces ?? []}
         displayName={settings.data?.displayName ?? "You"}
         utilityPane={utilityPane}
+        onAdmitBox={activeWorkspace?.kind === "room" ? () => setAdmitBoxOpen(true) : undefined}
         onSelect={(id) => {
           rememberChat(id);
           setSelectedId(id);
@@ -1431,6 +1439,7 @@ function CanvasModeTabs({
         <button
           key={t.id}
           role="tab"
+          title={CANVAS_TAB_HINT[t.id]}
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
           className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"

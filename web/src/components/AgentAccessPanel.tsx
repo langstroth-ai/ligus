@@ -145,7 +145,7 @@ function AccessEditor({ sessionId, agent }: { sessionId: string; agent: Workspac
           onClick={() => save.mutate()}
           disabled={save.isPending}
           className="rounded-full px-3 py-1 font-semibold"
-          style={{ background: "var(--ligus-accent-cool)", color: "var(--ligus-canvas)" }}
+          style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
         >
           {save.isPending ? "Saving…" : "Save access"}
         </button>

@@ -37,6 +37,21 @@ Full release notes are on the
   on that desktop; your other desktops still show "Device xxxxxxxx". See
   [Add your phone](../features/phone-app.md#add-this-phone).
 
+### Desktop
+
+- **Fixes from a UX review.** One Settings section that hits an error now
+  shows a small "hit a problem" card with **Try again** instead of replacing
+  the whole app. **Admit a box…** is in the workspace menu (the workspace
+  name at the top of the sidebar) and the command palette, not only on the
+  rail's right-click menu; the palette also lists every pane and every
+  Settings section. Warnings use their own amber-orange, apart from the honey
+  accent, in light and dark. A few filled buttons (**Save access**, the
+  active Settings button, the Create/Join tabs) now meet contrast, and menus
+  opened from the sidebar are readable again. The tour now says that the
+  **Diff** tab shows the chat checkout's uncommitted changes; proposals are
+  in the **Review** pane. See
+  [Admitting a box](../../operate/ops/admitting-a-box.md).
+
 ### CLI
 
 - **`ligus app`** opens the desktop app and returns at once, detached from

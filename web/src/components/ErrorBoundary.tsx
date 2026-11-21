@@ -39,12 +39,12 @@ export class ErrorBoundary extends Component<Props, State> {
     // the boundary so a transient failure can re-render without a full reload.
     if (this.props.variant === "pane") {
       return (
-        <div className="flex h-full items-center justify-center p-4">
+        <div role="alert" className="flex h-full items-center justify-center p-4">
           <div
             className="max-w-sm rounded-xl border px-4 py-4 text-center text-sm"
             style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
           >
-            <div className="font-medium" style={{ color: "var(--ligus-danger-ink)" }}>
+            <div className="font-medium">
               {this.props.label ? `${this.props.label} hit a problem.` : "This panel hit a problem."}
             </div>
             <p className="mt-1 text-xs opacity-70">The rest of the app is still working.</p>

@@ -72,8 +72,10 @@ its device key and its key-agreement key. The fingerprint covers all of them, so
 a request swapped on the way to you (another key to seal the code to, another
 account) shows a different fingerprint.
 
-On the desktop, right-click the workspace in the rail and choose **Admit a
-box… → From the box's join request**. Paste the request, choose **Check**,
+On the desktop, open the workspace menu (the workspace name at the top of the
+sidebar) and choose **Admit a box… → From the box's join request**. The same
+entry is in the command palette (⌘K, "Admit a box") and on the right-click
+menu of the workspace in the rail. Paste the request, choose **Check**,
 compare the fingerprint with the one the box printed, then choose **Admit this
 box** and confirm with your passkey. You need to be an Admin.
 
