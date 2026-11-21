@@ -93,3 +93,5 @@ test-relay = ["dep:axum"]
 tempfile = "3"
 axum = "0.8"
 proptest = { version = "1", default-features = false, features = ["std"] }
+# Fixed P-256 keys for the reverse-QR golden vectors (already in the tree via ligus-core).
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }

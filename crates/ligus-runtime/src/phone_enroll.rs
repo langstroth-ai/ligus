@@ -37,7 +37,7 @@ const FIXED: usize = 16 + P256_KEY_LEN + 64;
 // signed over it. Pinned in the tests below and in the iOS signer.
 const PREIMAGE_TAG: &[u8] = b"ligus-phone-code-v1\0";
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum PhoneCodeError {
     #[error("not a Ligus phone code (expected {CODE_PREFIX}...)")]
     NotACode,
@@ -136,12 +136,19 @@ impl PhoneCode {
     /// The `ligusphone1:` code: base64url (no padding) of device(16) ‖
     /// key(65) ‖ sig(64) ‖ label (UTF-8, at most 64 bytes).
     pub fn encode(&self) -> String {
+        format!("{CODE_PREFIX}{}", URL_SAFE_NO_PAD.encode(self.body()))
+    }
+
+    /// The code's bytes without the prefix or the base64url: device(16) ‖
+    /// key(65) ‖ sig(64) ‖ label. Carried unchanged inside a reverse-QR
+    /// request (`crate::phone_enroll_qr`).
+    pub fn body(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(FIXED + self.label.len());
         b.extend_from_slice(self.device_id.as_bytes());
         b.extend_from_slice(&self.public_key);
         b.extend_from_slice(&self.signature);
         b.extend_from_slice(self.label.as_bytes());
-        format!("{CODE_PREFIX}{}", URL_SAFE_NO_PAD.encode(b))
+        b
     }
 
     /// Parse and verify a code: its signature, its label, and the
@@ -151,6 +158,12 @@ impl PhoneCode {
         let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
         let body = compact.strip_prefix(CODE_PREFIX).ok_or(PhoneCodeError::NotACode)?;
         let b = URL_SAFE_NO_PAD.decode(body.as_bytes()).map_err(|_| PhoneCodeError::Malformed)?;
+        Self::from_body(&b)
+    }
+
+    /// [`Self::decode`] of a code's bytes ([`Self::body`]): every check
+    /// `decode` makes (length, label clamp, signature, derived id).
+    pub fn from_body(b: &[u8]) -> Result<Self, PhoneCodeError> {
         if b.len() < FIXED || b.len() > FIXED + MAX_LABEL {
             return Err(PhoneCodeError::Malformed);
         }
