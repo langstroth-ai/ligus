@@ -14411,16 +14411,34 @@ async fn workspace_join_via_invite(state: State<'_, AppState>, code: String) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Prefix of the relay subject the agent-box bootstrap mints for a box
+/// (`ligus-box:<random id>`). It is deliberately not `ligus:`, which names a
+/// Ligus account (`ligus:<account id>`), so a box's subject can never be read
+/// as an account id.
+const BOX_SUBJECT_PREFIX: &str = "ligus-box:";
+
+/// A new, random relay subject for an agent box. Never derived from a handle,
+/// a forge account or anything else public.
+fn new_box_subject() -> String {
+    format!("{BOX_SUBJECT_PREFIX}{}", Uuid::new_v4())
+}
+
 /// The Ligus account id (as a string) a relay membership subject names:
-/// `ligus:<account id>` for a desktop-minted token. Anything else (a
-/// langstroth-auth `<tenant>:<user>` subject) names no account this device can
-/// map, and `None` leaves the roster alone. Lets us exclude a relay-removed
-/// member from the E2EE rotation recipient set.
-fn ligus_account_id_for(account: &str) -> Option<String> {
-    account
-        .strip_prefix("ligus:")
-        .and_then(|s| Uuid::parse_str(s.trim()).ok())
-        .map(|id| id.to_string())
+/// `ligus:<account id>`, and only when that id is an account on the local
+/// workspace roster `members`. Anything else names no account this device can
+/// map, and `None` leaves the roster alone: a langstroth-auth
+/// `<tenant>:<user>` subject, a box's `ligus-box:<id>`, and a box subject
+/// minted before the `ligus-box:` prefix, which was `ligus:<random id>` (still
+/// valid on the relay; its random id is no account's, so the roster check
+/// is what tells it apart). Lets us exclude a relay-removed member from the
+/// E2EE rotation recipient set.
+fn ligus_account_id_for(account: &str, members: &[ligus_core::WorkspaceMember]) -> Option<String> {
+    let id = account.strip_prefix("ligus:").and_then(|s| Uuid::parse_str(s.trim()).ok())?;
+    let id_str = id.to_string();
+    members
+        .iter()
+        .any(|m| m.actor.account_id == Some(id) || m.actor.id == id_str)
+        .then_some(id_str)
 }
 
 /// Remove a member from the active workspace (`account` = the relay subject,
@@ -14452,12 +14470,13 @@ async fn workspace_remove_member(
     }
     let client = state.relay_client(&relay);
 
-    // 1. Remove server-side membership first (authorization enforced relay-side).
+    // 1. Remove server-side membership first (authorization enforced
+    //    relay-side). A refusal stops here: nothing below runs unless the
+    //    relay removed them.
     client.remove_member(&room, &account).await.map_err(|e| e.to_string())?;
 
     // 2. Remove them from the workspace roster too (when they're on it), so
     //    the rotation below doesn't seal to their devices.
-    let removed_id = ligus_account_id_for(&account);
     {
         let mut svc = state.service.lock().unwrap();
         let config_id = ligus_core::workspace_config_session_id(ws);
@@ -14465,11 +14484,13 @@ async fn workspace_remove_member(
             .load(config_id)
             .map_err(map_err)?
             .map(|c| {
+                let Some(removed_id) = ligus_account_id_for(&account, &c.members) else {
+                    return Vec::new();
+                };
                 c.members
                     .iter()
                     .filter(|m| {
-                        removed_id.as_deref() == Some(m.actor.id.as_str())
-                            || m.actor.account_id.map(|a| a.to_string()).as_deref() == removed_id.as_deref()
+                        m.actor.id == removed_id || m.actor.account_id.map(|a| a.to_string()).as_deref() == Some(removed_id.as_str())
                     })
                     .map(|m| m.id.clone())
                     .collect()
@@ -15125,8 +15146,8 @@ fn set_relay_issuer_key(state: State<AppState>, key: String) -> Result<(), Strin
 /// Generate the remote-agent bootstrap: mint the box's relay identity token
 /// and enroll that identity in the relay's membership (when the relay
 /// enforces it), then return the copy-paste command block. The token subject
-/// is `ligus:<random id>`, a principal made for this box: never derived from
-/// a handle, a forge account or anything else public.
+/// is `ligus-box:<random id>` ([`new_box_subject`]), a principal made for this
+/// box that can't be read as an account id.
 #[tauri::command]
 async fn generate_agent_bootstrap(
     state: State<'_, AppState>,
@@ -15151,13 +15172,13 @@ async fn generate_agent_bootstrap(
         .ok_or("Connect a relay first (Settings → Team sync).")?;
     let label: String = label.trim().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).take(64).collect();
     let label = if label.is_empty() { "agent-box".to_string() } else { label };
-    let sub = format!("ligus:{}", Uuid::new_v4());
+    let sub = new_box_subject();
     let role = if role.trim().is_empty() { "contributor".to_string() } else { role };
 
     let client = state.relay_client(&configured_relay(&state)?);
     // Best-effort enroll on a membership-enforcing relay (the admin's own
     // token authorizes it). The relay learns the label, nothing else.
-    let enrolled = client.upsert_member(&room, &sub, &label, &role).await.is_ok();
+    let enrolled = client.upsert_member(&room, &sub, &label, &role).await;
 
     let token = mint_hrt1_token(&issuer, &sub, exp_days)?;
     let invite = encode_ligusws_conn(&relay, &room, key.as_deref());
@@ -15167,10 +15188,10 @@ async fn generate_agent_bootstrap(
     block.push_str("brew install langstroth-ai/ligus/ligus && \\\n");
     block.push_str(&format!("  ligus enroll \"{invite}\" --token \"{token}\" && \\\n"));
     block.push_str(&format!("  ligus worker --label {label}\n"));
-    if !enrolled {
+    if let Err(e) = enrolled {
         block.push_str(&format!(
-            "\n# NOTE: couldn't enroll {sub} in the relay's membership (are you the workspace owner/admin \
-             and has it been claimed?). The box can still `ligus join <code>` with an invite.\n"
+            "\n# NOTE: couldn't enroll {sub} in the relay's membership ({e}). Are you the workspace \
+             owner/admin, and has it been claimed? The box can still `ligus join <code>` with an invite.\n"
         ));
     }
     Ok(block)
@@ -18874,5 +18895,43 @@ mod agent_access_ui_tests {
         assert_eq!(opened.access, "everyone");
         drop((owner, con));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod box_subject_tests {
+    use super::*;
+
+    fn human(account: Uuid) -> WorkspaceMember {
+        let mut actor = ActorIdentity::new(&format!("human-{account}"), "Ana", ActorKind::Human);
+        actor.account_id = Some(account);
+        WorkspaceMember {
+            id: format!("m-{account}"),
+            actor,
+            role: ligus_core::WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 1,
+            joined_at: Default::default(),
+        }
+    }
+
+    /// A box's relay subject never reads as an account id: neither one the
+    /// bootstrap mints now (`ligus-box:<id>`) nor one minted before that
+    /// (`ligus:<random id>`, which names no account on the roster). A real
+    /// member's `ligus:<account id>` still maps.
+    #[test]
+    fn box_subjects_are_never_account_ids() {
+        let ana = Uuid::new_v4();
+        let roster = vec![human(ana)];
+
+        let minted = new_box_subject();
+        assert!(minted.starts_with(BOX_SUBJECT_PREFIX) && !minted.starts_with("ligus:"), "{minted}");
+        assert_eq!(ligus_account_id_for(&minted, &roster), None, "a new box subject read as an account");
+
+        let legacy_box = format!("ligus:{}", Uuid::new_v4());
+        assert_eq!(ligus_account_id_for(&legacy_box, &roster), None, "a pre-existing box subject read as an account");
+
+        assert_eq!(ligus_account_id_for(&format!("ligus:{ana}"), &roster), Some(ana.to_string()));
+        assert_eq!(ligus_account_id_for("acme:ana", &roster), None);
     }
 }

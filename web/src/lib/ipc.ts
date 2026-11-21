@@ -854,7 +854,8 @@ export const workspaceJoinViaInvite = (code: string) =>
 /// Remote-agent bootstrap (relay admins with an issuer key). `hasIssuerKey`
 /// gates the UI; `setRelayIssuerKey` stores the local Ed25519 seed;
 /// `generateAgentBootstrap` mints the box a random relay identity
-/// (`ligus:<id>`), enrolls it, and returns the copy-paste command.
+/// (`ligus-box:<id>`, never read as an account id), enrolls it, and returns
+/// the copy-paste command.
 export const hasIssuerKey = () => invoke<boolean>("has_issuer_key");
 export const setRelayIssuerKey = (key: string) =>
   invoke<void>("set_relay_issuer_key", { key });

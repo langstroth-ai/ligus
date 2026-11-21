@@ -40,13 +40,22 @@ DELETE /v1/workspaces/:id/members/:account   -> remove (admin+)
 ```
 
 **Roles** mirror the client's: `viewer < contributor < admin < owner`.
-`contributor` and above may write; `admin` and above manage the roster; only
-an `owner` may grant or change `owner`, and the last owner can't be removed
-or demoted.
+Every member, `viewer` included, may write envelopes; `admin` and above
+manage the roster and invites; only an `owner` may grant or change `owner`,
+and the last owner can't be removed or demoted.
 
-**Enforcement.** On a claimed workspace, writes (`envelopes`, `keyring`,
-`presence`, `candidates`) need a member with at least `contributor`, and
-reads need a member; anyone else is refused.
+**Enforcement.** On a claimed workspace, any member may read and may write
+`envelopes`, `presence`, `candidates` and blobs; posting a key rotation
+(`keyring`) needs at least `contributor`; anyone else is refused. Viewers
+must be able to write: a Viewer publishes its key-agreement key, its read
+state and its attachments as envelopes, and without its key-agreement key it
+never receives a key rotation. The app still decides what a Viewer may
+author, so a Viewer's writes are checked by every device, whatever the relay
+accepts.
+
+Relays before v0.3.2 required `contributor` for every write, which refuses a
+Viewer's envelopes on a claimed workspace, so a Viewer there never gets the
+rotated key. Run v0.3.2 or later if your workspaces have Viewers.
 
 **Removing someone = remove + rotate.** `DELETE …/members/:account` stops
 their access on the relay at once; pair it with a workspace-key rotation in
