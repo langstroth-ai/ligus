@@ -963,7 +963,8 @@ What this doesn't stop, stated plainly:
 - **Scanning someone else's code.** If a co-member gets you to scan the QR
   on *their* desktop, past the name, role and other-account warnings, your
   phone is added to their account. They gain no access to your data, but
-  your phone is locked out of that workspace until you reset its device key.
+  your phone is locked out of that workspace until you
+  [reset its device key](../features/phone-app.md#revoked-phone).
 - **The paste fallback.** Can't scan? takes the phone's `ligusphone1:` code,
   which isn't secret. Anyone in the workspace who has it can certify it for
   their own account, which also locks your phone out until you reset its

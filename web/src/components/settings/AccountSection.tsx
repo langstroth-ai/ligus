@@ -12,6 +12,7 @@ import {
   listDeviceRequests,
   revokeMyDevice,
   listDeviceRevocations,
+  listDevicePairings,
   retryDeviceRevocation,
   getShareTyping,
   setShareTyping,
@@ -19,8 +20,10 @@ import {
   setPrimaryOpenToMembers,
   type DeviceCodeDto,
   type DeviceRevocationDto,
+  type MyDeviceDto,
   type RevocationStep,
 } from "@/lib/ipc";
+import { deviceName, pairingLine, revokeConfirmText } from "@/lib/myDevices";
 import { confirmDialog } from "@/components/Dialog";
 import { Button, Section, Switch, fieldStyle } from "@/components/ui";
 import { Row } from "@/components/settings/FlowSection";
@@ -255,6 +258,7 @@ export function DevicesSection() {
   const devices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, refetchInterval: 15_000 });
   const requests = useQuery({ queryKey: ["device-requests"], queryFn: listDeviceRequests, refetchInterval: 15_000 });
   const revocations = useQuery({ queryKey: ["device-revocations"], queryFn: listDeviceRevocations, refetchInterval: 15_000 });
+  const pairings = useQuery({ queryKey: ["device-pairings"], queryFn: listDevicePairings, refetchInterval: 30_000 });
   const [adding, setAdding] = useState(false);
   const [addingPhone, setAddingPhone] = useState(false);
   const [code, setCode] = useState("");
@@ -266,6 +270,7 @@ export function DevicesSection() {
     qc.invalidateQueries({ queryKey: ["my-devices"] });
     qc.invalidateQueries({ queryKey: ["device-requests"] });
     qc.invalidateQueries({ queryKey: ["device-revocations"] });
+    qc.invalidateQueries({ queryKey: ["device-pairings"] });
   };
 
   async function check(next: string) {
@@ -301,14 +306,12 @@ export function DevicesSection() {
     }
   }
 
-  async function revoke(deviceId: string, label: string) {
-    const ok = await confirmDialog(
-      `Revoke ${label}? Every member stops accepting its events right away. To use it again, run \`ligus serve enroll --new-device\` on it and approve the new code.`,
-      { danger: true },
-    );
+  async function revoke(d: MyDeviceDto) {
+    const label = deviceName(d, pairings.data ?? []);
+    const ok = await confirmDialog(revokeConfirmText(d, pairings.data ?? []), { danger: true });
     if (!ok) return;
     try {
-      await revokeMyDevice(deviceId);
+      await revokeMyDevice(d.deviceId);
       toast.success(`${label} was revoked.`);
       refresh();
     } catch (e) {
@@ -427,11 +430,14 @@ export function DevicesSection() {
         >
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">
-              {d.label}
+              {deviceName(d, pairings.data ?? [])}
               {d.thisDevice && <span className="text-ink-soft"> · this device</span>}
               {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
             </div>
             <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
+            {!d.revoked && pairingLine(d, pairings.data ?? []) && (
+              <div className="truncate text-[11px] text-ink-soft">{pairingLine(d, pairings.data ?? [])}</div>
+            )}
             {d.revoked &&
               (revocations.data ?? [])
                 .filter((r) => r.deviceId === d.deviceId)
@@ -441,7 +447,7 @@ export function DevicesSection() {
             <button
               className="shrink-0 text-xs hover:opacity-80"
               style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => void revoke(d.deviceId, d.label)}
+              onClick={() => void revoke(d)}
             >
               Revoke
             </button>

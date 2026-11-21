@@ -292,6 +292,20 @@ describe("Can't scan? (paste the phone's code)", () => {
     expect(await screen.findByTestId("paste-phone-name-hint")).toHaveTextContent(/name the phone gives itself/);
   });
 
+  it("adds a phone that is already yours again, so My devices takes its new name", async () => {
+    onDone = vi.fn();
+    vi.mocked(ipc.inspectPhoneCode).mockResolvedValue({ ...fresh, standing: "alreadyMine", label: "Ana's new name" });
+    await openPaste();
+    await userEvent.click(screen.getByLabelText("Phone code"));
+    await userEvent.paste("ligusphone1:abc");
+    expect(await screen.findByTestId("paste-phone-already-mine")).toHaveTextContent(/updates its name/);
+    const add = screen.getByRole("button", { name: "Add this phone" });
+    expect(add).toBeDisabled();
+    await userEvent.click(screen.getByLabelText(/same fingerprint/));
+    await userEvent.click(add);
+    await waitFor(() => expect(ipc.certifyPhoneCode).toHaveBeenCalledWith("ligusphone1:abc", "ABCD-EF01-2345-6789-ABCD", "ws"));
+  });
+
   it("refuses a revoked or conflicting phone with the reason", async () => {
     vi.mocked(ipc.inspectPhoneCode).mockResolvedValue({
       ...fresh,

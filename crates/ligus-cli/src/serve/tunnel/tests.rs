@@ -380,6 +380,39 @@ fn sealed_push_stays_within_the_spec_limit() {
     }
 }
 
+// ── The paired-phones report (My devices) ──────────────────────────────────
+
+/// One entry per workspace device with an active pairing: a phone paired
+/// twice (a re-pair) is one entry under its newest pairing's name and its
+/// latest sighting; a revoked pairing and an unbound record are left out.
+#[test]
+fn the_pairing_report_has_one_entry_per_paired_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let reg = Registry::load(tmp.path()).unwrap();
+    let (a, b, c) = (PhoneKeys::generate(), PhoneKeys::generate(), PhoneKeys::generate());
+    let mut old = record("p-old", &a);
+    old.name = "iPhone".into();
+    old.enrolled_at = 100;
+    old.last_seen = Some(500);
+    let mut new = record("p-new", &b);
+    new.device_id = Some(a.device_id());
+    new.name = "Ana's iPhone".into();
+    new.enrolled_at = 200;
+    new.last_seen = Some(300);
+    let gone = record("p-gone", &c);
+    reg.activate(old).unwrap();
+    reg.activate(new).unwrap();
+    reg.activate(gone).unwrap();
+    reg.revoke("p-gone").unwrap();
+    let r = reg.pairing_report("host-1", 900);
+    assert_eq!((r.host_id.as_str(), r.at), ("host-1", 900));
+    assert_eq!(r.phones.len(), 1, "{r:?}");
+    assert_eq!(r.phones[0].device_id, a.device_id().to_string());
+    assert_eq!(r.phones[0].name, "Ana's iPhone", "the newest pairing's name");
+    assert_eq!(r.phones[0].last_seen, Some(480), "the latest sighting, to the minute");
+    assert!(r.signature.is_empty(), "the caller signs it with the box's device key");
+}
+
 // ── Files ────────────────────────────────────────────────────────────────────
 
 #[cfg(unix)]

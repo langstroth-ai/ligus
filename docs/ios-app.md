@@ -73,7 +73,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" and "Add a phone by scanning the desktop's QR" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate |
+| GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" and "Add a phone by scanning the desktop's QR" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate. `workspaceName` is the workspace config log's title, which the Owner's or an Admin's desktop writes once from the name it keeps in its settings (empty until then; the app then shows the box's name) |
 | POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | 0.1.1. Who showed a scanned `ligusenroll1:` code: `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing: "new"\|"alreadyMine"}}`. See "Add a phone by scanning the desktop's QR" below |
 | POST | `/v1/phone-enroll/requests` `{request}` | 0.1.1. `202 {rid, state: "relayed"}`: the box passed the phone's `ligusenrollreq1:` request to the desktop |
 | GET | `/v1/phone-enroll/requests/{rid}?wait=N` | 0.1.1. `{state: "waiting"\|"answered"\|"expired", answer?, certified}`, long poll up to 25 s |
@@ -592,7 +592,7 @@ otherwise with `expired` or `too_far_ahead`; the box accepts
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | Writes nothing. `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `deviceId` only off the tunnel (through it, the device the connection proved). `standing`: `new`, or `alreadyMine` (nothing to do: say so and stop) |
+| POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | Writes nothing. `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `deviceId` only off the tunnel (through it, the device the connection proved). `standing`: `new`, or `alreadyMine` (already this person's: the app still sends its request so the desktop can update the phone's remembered name, and finishes on the desktop's answer, not on the status route's `certified`, which is already true) |
 | POST | `/v1/phone-enroll/requests` `{request: "ligusenrollreq1:…"}` | `202 {rid, state: "relayed"}`. Re-sending the same bytes is idempotent. The box keeps pending requests in memory until `exp`; on a `404` from the status route (the box restarted), send the request again |
 | GET | `/v1/phone-enroll/requests/{rid}?wait=N` | `N ≤ 25` (off the tunnel, add `&deviceId=` when one caller has several requests). `{state: "waiting"\|"answered"\|"expired", answer?: "ligusenrollres1:…", certified: bool}`. `certified` is whether the box's roster now has this phone's certificate |
 

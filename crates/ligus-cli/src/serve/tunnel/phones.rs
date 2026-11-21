@@ -171,6 +171,29 @@ impl Registry {
             .collect()
     }
 
+    /// The paired-phones report for the desktops' My devices: one entry per
+    /// workspace device with an active pairing (its newest pairing's name,
+    /// the latest it was seen, to the minute), unsigned.
+    pub fn pairing_report(&self, host_id: &str, at: i64) -> ligus_runtime::revocation_status::PairingReport {
+        use ligus_runtime::revocation_status::{PairedPhone, PairingReport, MAX_PAIRED_REPORTED};
+        let mut by_device: std::collections::BTreeMap<uuid::Uuid, (u64, PairedPhone)> = Default::default();
+        for r in self.lock().iter().filter(|r| r.is_active()) {
+            let Some(d) = r.device_id else { continue };
+            // To the minute: every workspace-key holder can read the report.
+            let seen = r.last_seen.map(|t| (t - t % 60) as i64);
+            let e = by_device.entry(d).or_insert_with(|| (r.enrolled_at, PairedPhone { device_id: d.to_string(), name: r.name.clone(), last_seen: seen }));
+            if r.enrolled_at >= e.0 {
+                e.0 = r.enrolled_at;
+                e.1.name = r.name.clone();
+            }
+            e.1.last_seen = e.1.last_seen.max(seen);
+        }
+        let mut phones: Vec<PairedPhone> = by_device.into_values().map(|(_, p)| p).collect();
+        phones.sort_by_key(|p| std::cmp::Reverse(p.last_seen));
+        phones.truncate(MAX_PAIRED_REPORTED);
+        PairingReport { host_id: host_id.to_string(), at, phones, signature: Vec::new() }
+    }
+
     /// Record a newly issued credential `exp` (never moves backwards).
     pub fn set_cred_exp(&self, pid: &str, exp: u64) -> Result<()> {
         let mut phones = self.lock();

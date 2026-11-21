@@ -4991,6 +4991,11 @@ struct MyDeviceDto {
     revoked: bool,
     /// When its host last checked in (RFC 3339), if it registers one.
     last_seen: Option<String>,
+    /// A phone (its certificate is the phone tier).
+    phone: bool,
+    /// The label is a name (a host's, or one the phone gave itself here),
+    /// not the "Device 1a2b3c4d" fallback.
+    named: bool,
 }
 
 /// A host that names you as its owner but isn't certified as your device
@@ -5102,22 +5107,48 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
     let svc = state.service.lock().unwrap();
     let here = svc.device_id();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
-    Ok(svc
-        .own_devices(ws)
-        .map_err(map_err)?
+    let phones: std::collections::HashSet<Uuid> = svc
+        .store()
+        .load_config(ws, None, None)
+        .map(|(_, t)| t.current().devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect())
+        .unwrap_or_default();
+    Ok(my_device_rows(svc.own_devices(ws).map_err(map_err)?, here, |d| phones.contains(&d), |d| {
+        let host = hosts.iter().find(|h| h.id == d.to_string())?;
+        Some((host.label.clone(), rfc3339(state.host_presence.last_seen(host))))
+    }, &phone_labels))
+}
+
+/// My devices' rows: exactly one per device id (the trust log can hold more
+/// than one certificate for a device), labelled by [`device_label`], whose
+/// remembered phone name is the newest one this desktop was given.
+fn my_device_rows(
+    devices: Vec<ligus_runtime::device_enroll::OwnDevice>,
+    here: Uuid,
+    is_phone: impl Fn(Uuid) -> bool,
+    host: impl Fn(Uuid) -> Option<(String, String)>,
+    phone_labels: &HashMap<String, String>,
+) -> Vec<MyDeviceDto> {
+    let mut seen = std::collections::HashSet::new();
+    devices
         .into_iter()
+        .filter(|d| seen.insert(d.device_id))
         .map(|d| {
-            let host = hosts.iter().find(|h| h.id == d.device_id.to_string());
+            let host = host(d.device_id);
+            let label = device_label(d.device_id, here, host.as_ref().map(|h| h.0.as_str()), phone_labels);
+            let named = host.as_ref().is_some_and(|h| !shown(&h.0).trim().is_empty())
+                || phone_labels.get(&d.device_id.to_string()).is_some_and(|l| !shown(l).trim().is_empty());
             MyDeviceDto {
                 device_id: d.device_id.to_string(),
-                label: device_label(d.device_id, here, host.map(|h| h.label.as_str()), &phone_labels),
+                label,
                 fingerprint: d.fingerprint,
                 this_device: d.device_id == here,
                 revoked: d.revoked,
-                last_seen: host.map(|h| rfc3339(state.host_presence.last_seen(h))),
+                last_seen: host.map(|h| h.1),
+                phone: is_phone(d.device_id),
+                named,
             }
         })
-        .collect())
+        .collect()
 }
 
 #[tauri::command]
@@ -5154,6 +5185,50 @@ fn device_label(device: Uuid, here: Uuid, host_label: Option<&str>, phone_labels
         .filter(|l| !l.trim().is_empty())
         .or_else(|| phone_labels.get(&device.to_string()).map(|l| shown(l)).filter(|l| !l.trim().is_empty()))
         .unwrap_or_else(|| if device == here { "This device".into() } else { format!("Device {}", &device.to_string()[..8]) })
+}
+
+#[cfg(test)]
+mod my_devices_tests {
+    use super::*;
+    use ligus_runtime::device_enroll::OwnDevice;
+
+    fn dev(id: Uuid) -> OwnDevice {
+        OwnDevice { device_id: id, fingerprint: "AAAA".into(), revoked: false, also_certified_by: Vec::new() }
+    }
+
+    /// One row per device id, under the newest name this desktop was given
+    /// for the phone (a re-add through Add a phone replaces the old one).
+    #[test]
+    fn one_row_per_device_under_its_newest_name() {
+        let (here, phone, other) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut labels = HashMap::new();
+        labels.insert(phone.to_string(), "iPhone (paste)".to_string());
+        // The newer flow remembers the phone's new name over the old one.
+        labels.insert(phone.to_string(), "Ana's iPhone".to_string());
+        let rows = my_device_rows(vec![dev(here), dev(phone), dev(phone), dev(other)], here, |d| d == phone, |_| None, &labels);
+        assert_eq!(rows.len(), 3, "the phone is one row");
+        let p = rows.iter().find(|r| r.device_id == phone.to_string()).unwrap();
+        assert_eq!(p.label, "Ana's iPhone");
+        assert!(p.phone && p.named && !p.this_device);
+        let o = rows.iter().find(|r| r.device_id == other.to_string()).unwrap();
+        assert!(!o.named && !o.phone && o.label.starts_with("Device "));
+        let h = rows.iter().find(|r| r.this_device).unwrap();
+        assert_eq!(h.label, "This device");
+    }
+
+    #[test]
+    fn pairings_name_their_box_and_sort_by_last_seen() {
+        use ligus_runtime::revocation_status::{PairedPhone, PairingReport};
+        let mut reports = HashMap::new();
+        let phone = |id: &str, seen: Option<i64>| PairedPhone { device_id: id.into(), name: "Ana\u{202E}s iPhone".into(), last_seen: seen };
+        reports.insert("h1".to_string(), PairingReport { host_id: "h1".into(), at: 9, phones: vec![phone("p1", Some(5))], signature: Vec::new() });
+        reports.insert("h2".to_string(), PairingReport { host_id: "h2".into(), at: 9, phones: vec![phone("p1", Some(7))], signature: Vec::new() });
+        let rows = pairing_rows(reports, |id| (id == "h1").then(|| "home-server".to_string()));
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].host_label.as_str(), rows[0].last_seen), ("a serve box", Some(7)));
+        assert_eq!((rows[1].host_label.as_str(), rows[1].last_seen), ("home-server", Some(5)));
+        assert!(!rows[0].name.contains('\u{202E}'), "names are cleaned for display");
+    }
 }
 
 /// Your devices' labels in `ws` as My devices shows them (for the add-a-phone
@@ -5261,6 +5336,60 @@ async fn list_device_revocations(state: State<'_, AppState>) -> Result<Vec<Devic
     }
     out.sort_by_key(|d| std::cmp::Reverse(d.status.revoked_at));
     Ok(out)
+}
+
+/// A phone a box reports it has paired (its sealed, device-signed pairing
+/// report): what My devices shows as "paired with home-server, seen 2 min
+/// ago". Display only.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevicePairingDto {
+    device_id: String,
+    host_id: String,
+    host_label: String,
+    /// The pairing's name on that box.
+    name: String,
+    /// When the phone last talked to that box (unix seconds, to the minute).
+    last_seen: Option<i64>,
+    /// When the box sent the report (unix seconds).
+    reported_at: i64,
+}
+
+/// The phones every box in the active workspace reports it has paired.
+#[tauri::command]
+async fn list_device_pairings(state: State<'_, AppState>) -> Result<Vec<DevicePairingDto>, String> {
+    let Some((relay, room, ring)) = active_presence_conn(&state) else { return Ok(Vec::new()) };
+    let ws = room_workspace_id(&room);
+    let blobs = relay.list_presence(&room).await.map_err(map_err)?;
+    let (reports, hosts) = {
+        let svc = state.service.lock().unwrap();
+        // Only a box's own signed report counts (its certified, unrevoked device key).
+        let reports = ligus_runtime::revocation_status::open_pairing_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten());
+        (reports, svc.list_hosts(ws).unwrap_or_default())
+    };
+    Ok(pairing_rows(reports, |id| hosts.iter().find(|h| h.id == id).map(|h| h.label.clone())))
+}
+
+fn pairing_rows(
+    reports: HashMap<String, ligus_runtime::revocation_status::PairingReport>,
+    host_label: impl Fn(&str) -> Option<String>,
+) -> Vec<DevicePairingDto> {
+    let mut out = Vec::new();
+    for (host_id, r) in reports {
+        let label = host_label(&host_id).map(|l| shown(&l)).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
+        for p in r.phones {
+            out.push(DevicePairingDto {
+                device_id: p.device_id,
+                host_id: host_id.clone(),
+                host_label: label.clone(),
+                name: shown(&p.name),
+                last_seen: p.last_seen,
+                reported_at: r.at,
+            });
+        }
+    }
+    out.sort_by_key(|p| std::cmp::Reverse(p.last_seen));
+    out
 }
 
 /// Ask the boxes to retry a revoked phone's unfinished steps now (they also
@@ -13452,6 +13581,13 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
             {
                 tracing::error!(target: "workspace", "ensure_self_member on activate failed: {e}");
             }
+            // The workspace's name lives in this desktop's settings and its
+            // invites; an Owner or Admin also writes it to the config log
+            // (once), so a box and the phones paired with it show it rather
+            // than the box's own label.
+            if let Err(e) = svc.publish_workspace_name(id, &conn.name) {
+                tracing::error!(target: "workspace", "naming the workspace on its config log failed: {e}");
+            }
             // Give the workspace a #general so its channel tree is never empty
             // (idempotent — no-op once any channel exists, incl. a founder's that
             // synced in).
@@ -15833,6 +15969,7 @@ pub fn run() {
             inspect_device_code,
             approve_device,
             list_my_devices,
+            list_device_pairings,
             list_device_requests,
             revoke_my_device,
             list_device_revocations,

@@ -832,6 +832,19 @@ box's certified, unrevoked device), and a retry request
 over `"ligus-revocation-retry-v1\0" ‖ JSON`, with `requester`; the box takes
 it only from a certified, unrevoked, non-phone device of a current member).
 
+The box also tells the desktops which phones it has paired, so **My
+devices** can say "Paired with home-server · seen 2 min ago" and the revoke
+confirmation can name the phone in the person's hand: a sealed presence
+slot `pairings:<host_id>` holding `{hostId, at, phones: [{deviceId, name,
+lastSeen?}]}`, one entry per workspace device with an active pairing (the
+newest pairing's name; `lastSeen` in unix seconds, rounded down to the
+minute, since every workspace-key holder can open it), at most 32. It is
+signed by the box's device key (Ed25519 over
+`"ligus-pairing-report-v1\0" ‖ JSON` without the signature) and verified
+by the desktop against the box's certified, unrevoked device. The box sends
+it every 30 seconds while it has a paired phone, and once more, empty, after
+its last one goes. Display only.
+
 `ligus remote reset` generates new host keys, so a new `host_id`: every phone
 must re-pair. Use it if the host key may have leaked.
 

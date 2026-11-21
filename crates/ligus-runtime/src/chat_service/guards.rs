@@ -76,6 +76,11 @@ impl ChatService {
         r.sign(&self.keypair)
     }
 
+    /// Sign a paired-phones report with this device's key.
+    pub fn sign_pairing_report(&self, r: crate::revocation_status::PairingReport) -> crate::revocation_status::PairingReport {
+        r.sign(&self.keypair)
+    }
+
     /// Sign a phone-revocation retry request with this device's key.
     pub fn sign_revocation_retry(&self, r: crate::revocation_status::RetryRequest) -> crate::revocation_status::RetryRequest {
         r.sign(&self.keypair)

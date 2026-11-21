@@ -4591,6 +4591,10 @@ async fn phones_certify_headless_then_me_on_loopback() {
     let mut say_yes = |_: &ligus_runtime::phone_enroll::PhoneCode| Ok(true);
     crate::admit::cmd_phones_certify(&h.desktop, Some(&code.encode()), None, Some(w.clone()), None, Some(&mut say_yes)).unwrap();
     assert_eq!(certs(), 1, "certifying again writes nothing");
+    // The owner's desktop names the workspace on its config log: the box
+    // learns the name from there (it joined from an admission, never an
+    // invite with the name in it) and gives it to the phone.
+    assert!(open_service(&h.desktop).unwrap().publish_workspace_name(ws, "Comb Council").unwrap());
     sync_once(&h.desktop).await.unwrap();
     let mut v = Value::Null;
     for _ in 0..200 {
@@ -4607,6 +4611,7 @@ async fn phones_certify_headless_then_me_on_loopback() {
     assert_eq!(v["workspaceId"], json!(ws));
     assert_eq!(v["configLogId"], json!(workspace_config_session_id(ws)));
     assert_eq!(v["room"], json!(h.desktop.room));
+    assert_eq!(v["workspaceName"], "Comb Council", "the workspace's name, not the box's label");
     let owner = open_service(&h.desktop).unwrap().author().clone();
     assert_eq!(v["account"]["id"], json!(owner.account_id));
     assert_eq!(v["account"]["memberId"], json!(owner.id));
