@@ -3,7 +3,8 @@
 Status: **design, not built.** Revision 3, after review rounds 1 and 2
 ([phone-enroll-reverse-qr.review.md](phone-enroll-reverse-qr.review.md);
 §15 maps each required revision to where it landed). Review verdict:
-**Approve with risks**. Ligus is short for
+**Approve with risks**. The owner answered O1 to O3 and deferred RR8 on
+2026-11-20 (§16); the text below reflects those answers. Ligus is short for
 *ligustica*; the platform is Langstroth.
 
 Citations are `file:line` into this repo as of `origin/main` at `b635b65f9`,
@@ -46,11 +47,11 @@ a fallback.
 |---|---|---|
 | D1 | Return path, phone → desktop | **Through the workspace's `ligus serve` box** (option a). The phone posts a request to a new box route; the box relays it to the desktop on the relay's **presence channel**, sealed under the workspace key and signed by the box's device key, the same way phone-revocation reports travel today (`crates/ligus-runtime/src/revocation_status.rs`). No relay change, no new event kind on the log. |
 | D2 | A phone that isn't paired yet (the common case: pairing needs a certificate first) | A new, additive **provisional enrollment** in the tunnel (`relay-tunnel.md` §7.2 "E3b"): a phone that proves the box's pairing secret and its own device key, but isn't certified yet, gets a restricted channel to the enroll routes only. Over the direct path (bearer token) the routes are available as they are. |
-| D3 | No box at all | Paste (unchanged), plus `ligus phones certify`. Owner question O1: let the phone's code (public data) go through Universal Clipboard. |
+| D3 | No box at all | Paste (unchanged), plus `ligus phones certify`. The phone's `ligusphone1:` code stays `.localOnly` (no Universal Clipboard): a phone's person may not have a Mac (owner decision O1, §16). |
 | D4 | The desktop's QR | `ligusenroll1:` + workspace id, the desktop's device id, a 32-byte one-time secret, an expiry. The secret travels only optically. |
 | D5 | Binding | The phone's request carries its unchanged `ligusphone1:` code, a P-256 signature by the phone over the request, and an **HMAC keyed from the QR's secret**. A box, relay or member without the secret can't substitute a key, replay into another offer, or have a request accepted. One use, 5-minute expiry. Against a *stolen* QR: only a box may relay, a second phone aborts the offer, and the desktop keeps listening after approval and raises a revoke alert (the "tripwire", §8.3). |
 | D6 | Authorization | The desktop certifies through the **same** `certify_phone_code` as paste: the same `DeviceCertificateAdded`, the same fold rules, the passkey every phone enrollment needs. The box writes nothing to any log. |
-| D7 | Wire names | All new: `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`, HKDF salt `ligus-enroll-qr-v1`, contexts `ligus-enroll-request-v1\0`, `ligus-enroll-result-v1\0`, `ligus-enroll-relay-v1\0`, `ligus-enroll-answer-v1\0`. Nothing existing is renamed or changed. Golden vectors in `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`. |
+| D7 | Wire names | All new: `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`, HKDF salt `ligus-enroll-qr-v1`, contexts `ligus-enroll-request-v1\0` (phone signature and request MAC, §5.3), `ligus-enroll-answer-v1\0` (answer tag, §5.4), `ligus-enroll-relay-v1\0` and `ligus-enroll-answer-relay-v1\0` (presence-slot signatures, §5.5). Nothing existing is renamed or changed. Golden vectors in `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`. |
 
 ## 3. What this builds on (code-verified)
 
@@ -177,7 +178,7 @@ mac        = HMAC-SHA256(k_req, signed ‖ phone_sig)                           
 
 request    = "ligusenrollreq1:" + b64u( rid ‖ workspace_id ‖ desktop_device_id ‖ exp
                                         ‖ phone_sig ‖ mac ‖ code_body )
-           = 233 + 145..209 = 378..442 bytes before encoding
+           = 152 + 145..209 = 297..361 bytes before encoding
 ```
 
 - `code_body` decodes as a `ligusphone1:` code with every check of
@@ -599,12 +600,15 @@ comparison is the last line there (review residual risk RR2).
 
 ## 14. Owner questions
 
+Answered on 2026-11-20; see §16.
+
 - **O1.** Let the `ligusphone1:` code go through Universal Clipboard (it
   holds no secret; the fingerprint comparison is the defence), to make the
-  paste fallback work across devices? Recommended: yes.
+  paste fallback work across devices? **No.**
 - **O2.** Approve E3b (a tunnel-host protocol addition, no relay change).
+  **Approved.**
 - **O3.** The 5-second hold before **Add this phone** (§8.3): keep it, or
-  rely on the tripwire alone? Recommended: keep.
+  rely on the tripwire alone? **Keep.**
 
 ## 15. Changes after review
 
@@ -622,3 +626,41 @@ comparison is the last line there (review residual risk RR2).
 | R10 logs | §8.1 and §9 log hygiene, review T10 |
 | Round 2, R11: a restarted phone isn't "another phone" | §8.1 one use is per device id and key, not per byte string |
 | Round 2, R12: phone clock tolerance | §9 the phone accepts `exp` up to 120 s past, like the box |
+| Revision 3 errata | D7 lists the four contexts §5.3 to §5.5 actually use (`ligus-enroll-result-v1\0` was a leftover name, used nowhere); §5.3's request length is 152 + 145..209 = 297..361 bytes |
+
+## 16. Owner decisions (2026-11-20)
+
+| # | Decision | Effect on this design |
+|---|---|---|
+| O1 | **No.** The phone's `ligusphone1:` code stays `.localOnly` on the phone: no Universal Clipboard. A phone's person may not use a Mac at all, so the clipboard can't be the fallback's transport. | D3; the paste fallback is unchanged (the person reads or types the code, or uses `ligus phones certify`). The reverse QR is the cross-device path. |
+| O2 | **Approved:** E3b provisional enrollment (§6.1), an additive tunnel-host protocol change. No relay change. | §6.1 is built as written. |
+| O3 | **Keep** the 5-second hold before **Add this phone** (§8.3). | §8.1, §8.2 and §8.3 as written. |
+| RR8 | **Later.** The paste flow's co-member lock-out (review RR8) is a known follow-up, not part of 0.1.1. | Recorded below. |
+
+### Known follow-up: the paste flow's co-member lock-out (RR8)
+
+Anyone in the workspace who has a phone's `ligusphone1:` code (it is public:
+the phone shows it) can certify it for their own account. The phone then
+has two holders and `phone_person` fails closed
+(`crates/ligus-runtime/src/chat_service/phone_sign.rs:89-97`), so its person
+is locked out of that workspace until they reset the device key. The
+reverse-QR flow is immune (it needs the phone's fresh signature over the
+offer); paste isn't. Not in 0.1.1. Candidate fixes, from the review: let
+`phone_standing` warn when a code's phone has never been seen by this
+person's boxes, or require a fresh phone signature in paste too (a second
+code that names the desktop).
+
+### Build order (0.1.1)
+
+1. **Codec.** `crates/ligus-runtime/src/phone_enroll_qr.rs`: the three wire
+   formats (§5.1, §5.3, §5.4), the keys (§5.2), the slot payloads and their
+   signatures (§5.5), and every check §7, §8 and §9 assign to the box, the
+   desktop and the phone, as pure functions. Golden vectors
+   `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl` and the iOS
+   differential corpus `rust_parity_enroll_v1.jsonl`. The later pieces call
+   this API and nothing else for the formats.
+2. **Box.** The three routes (§7) and the request slot (§5.5).
+3. **Tunnel.** E3b (§6.1).
+4. **Desktop.** The Tauri commands (§8.1) and the web panel (§8.2).
+5. **iOS.** §9, against the vectors from step 1.
+6. **End to end and attack tests** T1 to T16 (§13; review).

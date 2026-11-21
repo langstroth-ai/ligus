@@ -401,10 +401,13 @@ T1 to T14 from round 1, plus T15 and T16 above.
   again.
 - **RR8. Pre-existing, out of scope: the paste flow's lock-out.** Anyone in
   the workspace who has a phone's `ligusphone1:` code (it is public: shown
-  on the phone, and with owner question O1, on the clipboard) can certify it
+  on the phone; owner question O1 was answered no, so it never goes through
+  the clipboard) can certify it
   for their own account, leaving the phone with two holders and its person
   locked out (RR5's effect, without any scan). The reverse-QR flow is
   immune (it needs the phone's fresh signature over the offer), but paste
   stays. Recommended follow-up: let `phone_standing` warn when a code's
   phone has never been seen by this person's boxes, or require a fresh
   phone signature in paste too (a second code that names the desktop).
+  **Owner decision (2026-11-20): later.** A known follow-up, not part of
+  0.1.1 (design §16).
