@@ -66,6 +66,7 @@ pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;
 pub mod phone_enroll;
+pub mod phone_enroll_qr;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
 pub mod private_file;

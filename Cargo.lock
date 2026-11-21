@@ -3530,6 +3530,7 @@ dependencies = [
  "ligus-core",
  "ligus-forge",
  "ligus-proto",
+ "p256 0.14.0",
  "proptest",
  "regex",
  "reqwest",

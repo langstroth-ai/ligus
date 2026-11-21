@@ -185,7 +185,7 @@ pub fn retry_slot(device_id: &str) -> String {
     format!("revocation-retry:{device_id}")
 }
 
-fn seal(ring: &KeyringEngine, field: &str, v: &impl Serialize) -> Option<Value> {
+pub(crate) fn seal(ring: &KeyringEngine, field: &str, v: &impl Serialize) -> Option<Value> {
     let k = ring.seal_key()?;
     let plain = serde_json::to_vec(v).ok()?;
     let sealed = seal_symmetric_kid(&k.key, k.version, &k.kid, &plain).ok()?;
@@ -193,7 +193,7 @@ fn seal(ring: &KeyringEngine, field: &str, v: &impl Serialize) -> Option<Value> 
 }
 
 /// Open every `field` blob sealed at (or after) the authorized head.
-fn open_all<T: for<'de> Deserialize<'de>>(blobs: &HashMap<String, Value>, ring: &KeyringEngine, field: &str, prefix: &str) -> Vec<(String, T)> {
+pub(crate) fn open_all<T: for<'de> Deserialize<'de>>(blobs: &HashMap<String, Value>, ring: &KeyringEngine, field: &str, prefix: &str) -> Vec<(String, T)> {
     let floor = ring.authorized_head();
     let mut out = Vec::new();
     for (slot, blob) in blobs {

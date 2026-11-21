@@ -1,6 +1,6 @@
 # Add a phone by scanning the desktop's QR (reverse-QR enrollment)
 
-Status: **design, not built.** Revision 3, after review rounds 1 and 2
+Status: **design; step 1 of the build order (the codec, §16) built.** Revision 3, after review rounds 1 and 2
 ([phone-enroll-reverse-qr.review.md](phone-enroll-reverse-qr.review.md);
 §15 maps each required revision to where it landed). Review verdict:
 **Approve with risks**. The owner answered O1 to O3 and deferred RR8 on
@@ -664,3 +664,52 @@ code that names the desktop).
 4. **Desktop.** The Tauri commands (§8.1) and the web panel (§8.2).
 5. **iOS.** §9, against the vectors from step 1.
 6. **End to end and attack tests** T1 to T16 (§13; review).
+
+### Resolved while building step 1 (the codec)
+
+The codec is `crates/ligus-runtime/src/phone_enroll_qr.rs`; its module doc
+lists the API each later step calls. Where this design left a detail open,
+the code settled it as follows (the golden vectors pin each one):
+
+- **Where it lives.** In `ligus-runtime`, next to `PhoneCode`, which it
+  reuses unchanged (`PhoneCode::body` and `PhoneCode::from_body` were added;
+  `decode` now calls `from_body`). The golden file is where D7 put it,
+  `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`, and the iOS
+  corpus sits beside it in `golden/differential/rust_parity_enroll_v1.jsonl`
+  (as the app's `Fixtures/differential/`). Both are generated and checked by
+  `crates/ligus-runtime/tests/phone_enroll_qr_vectors.rs`, which also fails
+  if either file differs from a fresh generation.
+- **Strict base64url** also refuses whitespace anywhere (`PhoneCode::decode`
+  ignores whitespace in a pasted `ligusphone1:`; the new formats are only
+  scanned or relayed, never typed).
+- **The offer has no integrity of its own** (the QR's error correction
+  covers the optics). A flipped bit decodes as another offer; it is refused
+  one step later, when the desktop that showed the real offer checks the
+  request (`wrong_offer` or `bad_mac`). §13's "every single-bit flip of the
+  offer is refused" holds end to end, not at `Offer::decode`.
+- **Box refusals §7.2 doesn't list**, for `POST /v1/phone-enroll/requests`:
+  `400 bad_request` when steps 1 to 3 fail (the encoding, the code, the
+  phone signature) and `403 device_mismatch` when the channel's device isn't
+  the code's (step 4).
+- **Refusal reasons.** `EnrollError::code` is the stable reason the vectors
+  and the iOS corpus compare: `not_an_offer`, `not_a_request`,
+  `not_an_answer`, `malformed`, `bad_code`, `bad_phone_signature`,
+  `wrong_offer`, `bad_mac`, `offer_mismatch`, `expired`, `too_far_ahead`,
+  `bad_tag`, `offer_closed`, `no_request`, `hold`, `fingerprint_mismatch`,
+  `wrong_slot`, `stale_slot`, `bad_slot_signature`, `wrong_desktop`,
+  `device_mismatch`.
+- **Clocks.** Every check takes Unix milliseconds. The box accepts
+  `now − 120 s ≤ exp ≤ now + 420 s`; the phone `now − 120 s ≤ exp ≤ now +
+  600 s` (refusing `expired` or `too_far_ahead`); the desktop accepts a
+  request until `now > exp` (the offer is over at `exp + 1 ms`). The hold
+  is measured in milliseconds: **Add this phone** is allowed from 5000 ms
+  after the request first appeared.
+- **Slot payloads** serialize as `{request, relay, at, signature}` and
+  `{answer, desktop, at, signature}` in that field order; `at` is Unix
+  seconds; the signature is Ed25519 by the device key, a JSON byte array,
+  omitted from the signed bytes, exactly as `revocation_status.rs`.
+- **"Another phone"** is another device id or another key; the same key with
+  another label (a phone renamed and scanned again) is the same phone.
+- **An answer about another phone** that isn't `certified` (the desktop
+  declined or refused whoever answered first) is `PhoneVerdict::AnotherPhone`
+  too; the phone asks for a new code.
