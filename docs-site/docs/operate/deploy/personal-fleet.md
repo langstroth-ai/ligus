@@ -107,8 +107,8 @@ ligus admit request --label home-server
 # prints a join request (ligusjoin1:…) and a fingerprint
 ```
 
-On the laptop, right-click the workspace in the rail, **Admit a box… → From
-the box's join request**, paste it, **Check** that the fingerprint matches,
+On the laptop, open the workspace menu (the workspace name at the top of the
+sidebar; or ⌘K, "Admit a box"), **Admit a box… → From the box's join request**, paste it, **Check** that the fingerprint matches,
 **Admit this box**, and confirm with your passkey. Copy the code it gives
 you (sealed to the server: only the server can open it) back to the server:
 

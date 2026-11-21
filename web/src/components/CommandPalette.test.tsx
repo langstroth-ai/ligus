@@ -85,4 +85,34 @@ describe("CommandPalette", () => {
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("reaches every pane and every settings section, with honest shortcut hints", async () => {
+    const { PANES } = await import("@/lib/panes");
+    const { SETTINGS_TABS } = await import("./SettingsView");
+    const openPane = vi.fn();
+    const openSettingsTab = vi.fn();
+    setup({ openPane, openSettingsTab });
+    for (const p of PANES) expect(screen.getByText(`Open ${p.label}`)).toBeInTheDocument();
+    for (const t of SETTINGS_TABS) expect(screen.getByText(`Settings: ${t.label}`)).toBeInTheDocument();
+    // ⌘⌥1–9 cover the first nine panes; the tenth is palette-only, so no fake key.
+    expect(PANES.length).toBeGreaterThan(9);
+    expect(screen.getByText("Pane · ⌘⌥9")).toBeInTheDocument();
+    expect(screen.queryByText("Pane · ⌘⌥10")).not.toBeInTheDocument();
+    const last = PANES[PANES.length - 1];
+    await userEvent.setup().click(screen.getByText(`Open ${last.label}`));
+    expect(openPane).toHaveBeenCalledWith(last.id);
+  });
+
+  it("offers Admit a box only when the workspace can admit one", async () => {
+    const admitBox = vi.fn();
+    setup({ admitBox });
+    await userEvent.setup().click(screen.getByText("Admit a box…"));
+    expect(admitBox).toHaveBeenCalledTimes(1);
+  });
+
+  it("has no Admit a box entry without the action (a personal workspace)", () => {
+    setup();
+    expect(screen.queryByText("Admit a box…")).not.toBeInTheDocument();
+  });
 });
+

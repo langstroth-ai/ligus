@@ -121,9 +121,10 @@ enforced where the real seams are:
   you turn some on for the chat, in the Tools pane.
 - **Claude Code brings its own permission mode**, which governs its file and
   command actions.
-- **Agent changes surface as proposals.** Edits appear in the **Diff** tab and
-  the **Review** pane, where members approve (and reach quorum, if configured)
-  before they're implemented.
+- **Agent changes surface as proposals.** Proposals appear in the **Review**
+  pane, where members approve (and reach quorum, if configured) before
+  they're implemented. The **Diff** tab shows the chat checkout's uncommitted
+  changes.
 
 The `[permissions]` presets in `ligus.config.toml` (read/write/run/vault/
 network/remote-runtime capability flags) carry this policy as workspace data;

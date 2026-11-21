@@ -291,26 +291,35 @@ export function resolvePalette(name: ThemeName, mode: AppearanceMode): Palette {
   return wantsDark ? family.dark : family.light;
 }
 
+/// Status + overlay tokens per scheme (identical across accent families): one
+/// legible green/red/amber per light/dark rather than eight hand-tuned variants.
+/// Warn is an amber-orange (OKLCH hue 45 in light, 50 in dark) kept clearly
+/// apart from the honey brand accent (hue 75-85) so a warning never reads as
+/// decoration, and short of danger's red (hue 22-25). Light warn is
+/// oklch(0.52 0.13 45), dark warn oklch(0.80 0.12 50); both stay at least
+/// 4.5:1 as text on canvas, panel and mist in every palette (theme.test.ts).
+export const STATUS_COLORS: Record<"light" | "dark", { success: string; danger: string; warn: string; overlay: string }> = {
+  dark: {
+    success: "rgb(92,205,134)",
+    danger: "rgb(240,112,112)",
+    warn: "rgb(252,166,118)",
+    overlay: "rgba(255,255,255,0.06)",
+  },
+  light: {
+    success: "rgb(34,140,80)",
+    danger: "rgb(198,55,55)",
+    warn: "rgb(164,76,29)",
+    overlay: "rgba(0,0,0,0.05)",
+  },
+};
+
 export function applyTheme(p: Palette) {
   const root = document.documentElement;
   // Status + overlay tokens are scheme-derived (identical across accent
   // families) — one legible green/red/amber per light/dark rather than eight
   // hand-tuned variants. Components must use these instead of hardcoded
   // #34c759-style literals so light palettes stay readable.
-  const status =
-    p.scheme === "dark"
-      ? {
-          success: "rgb(92,205,134)",
-          danger: "rgb(240,112,112)",
-          warn: "rgb(228,180,80)",
-          overlay: "rgba(255,255,255,0.06)",
-        }
-      : {
-          success: "rgb(34,140,80)",
-          danger: "rgb(198,55,55)",
-          warn: "rgb(170,116,24)",
-          overlay: "rgba(0,0,0,0.05)",
-        };
+  const status = STATUS_COLORS[p.scheme];
   root.style.setProperty("--ligus-success", status.success);
   root.style.setProperty("--ligus-danger", status.danger);
   root.style.setProperty("--ligus-warn", status.warn);

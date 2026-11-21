@@ -80,6 +80,7 @@ export function Sidebar({
   knownWorkspaces,
   displayName,
   utilityPane,
+  onAdmitBox,
 }: {
   width: number;
   selectedId: string | null;
@@ -97,6 +98,9 @@ export function Sidebar({
   knownWorkspaces: string[];
   displayName: string;
   utilityPane: UtilityPane;
+  /// Admit a box (a `ligus serve` or worker) to the active workspace. Passed
+  /// only for a shared (room) workspace; the entry sits in the workspace menu.
+  onAdmitBox?: () => void;
 }) {
   const qc = useQueryClient();
   // Scope chats + channels by the *active workspace id*. listChats/listChannels
@@ -509,6 +513,9 @@ export function Sidebar({
               <PopoverItem label="Remove current folder" onSelect={handleWorkspaceRemove} />
             )}
             <PopoverItem label="Workspace settings…" onSelect={() => { setShowWorkspaceMenu(false); onOpenSettings(); }} />
+            {onAdmitBox && (
+              <PopoverItem label="Admit a box…" onSelect={() => { setShowWorkspaceMenu(false); onAdmitBox(); }} />
+            )}
             {workspaceError && (
               <div className="px-2 pt-1 text-[11px]" style={{ color: "var(--ligus-danger-ink)" }}>{workspaceError}</div>
             )}

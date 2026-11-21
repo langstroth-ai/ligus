@@ -22,7 +22,7 @@
      every palette (esp. light variants) stays legible. */
   --ligus-success: rgb(34, 140, 80);
   --ligus-danger: rgb(198, 55, 55);
-  --ligus-warn: rgb(170, 116, 24);
+  --ligus-warn: rgb(164, 76, 29); /* amber-orange, apart from honey: see STATUS_COLORS in lib/theme.ts */
   --ligus-overlay: rgba(0, 0, 0, 0.05);
 
   /* Derived chat-layer tokens (redesign). Built from the base --ligus-* tokens
@@ -88,6 +88,13 @@
   /* Names used by 0.1 code before they existed — alias, don't break. */
   --ligus-warning: var(--ligus-warn);
   --ligus-surface: var(--ligus-panel);
+  /* The page-level ink, captured at :root. Custom properties resolve var() where
+     they're declared, so these keep the palette's ink even inside a region that
+     re-points --ligus-ink (the dark sidebar), and a light surface opened there
+     (a Popover menu) can switch back to them. */
+  --ligus-base-ink: var(--ligus-ink);
+  --ligus-base-ink-soft: var(--ligus-ink-soft);
+  --ligus-base-overlay: var(--ligus-overlay);
   /* Keyboard focus ring (≥3:1 against every surface). */
   --ligus-focus: var(--ligus-accent-ink);
 
