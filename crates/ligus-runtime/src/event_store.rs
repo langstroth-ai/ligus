@@ -205,6 +205,18 @@ impl EventStore {
                 PRIMARY KEY (workspace_id, invite_id)
             );
 
+            -- Device-local: the relay subject an Admin's desktop minted for a
+            -- box (People > Remote agents) and the box admission it issued in
+            -- the same bootstrap. The admission's redemption names the box's
+            -- service member, so removing that subject from the relay roster
+            -- removes the right workspace member (never matched by name).
+            CREATE TABLE IF NOT EXISTS box_relay_subjects (
+                workspace_id TEXT NOT NULL,
+                subject      TEXT NOT NULL,
+                invite_id    TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, subject)
+            );
+
             -- Device-local: the issue time (unix ms) of the newest contact
             -- record seen per contact id, so a relay can't serve an older one
             -- (anti-rollback, IDENTITY-AND-FORGES S6/S4).
@@ -1742,6 +1754,30 @@ impl EventStore {
             )
             .optional()?;
         Ok(v.and_then(|h| crate::box_admission::seed_from_hex(&h)))
+    }
+
+    /// Link box relay subject `subject` (minted by this Admin's device) to
+    /// the box admission `invite_id` issued with it.
+    pub fn set_box_relay_admission(&self, workspace_id: Uuid, subject: &str, invite_id: Uuid) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO box_relay_subjects (workspace_id, subject, invite_id) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace_id.to_string(), subject, invite_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The box admission linked to relay subject `subject`, if this device
+    /// minted that subject together with an admission.
+    pub fn box_relay_admission(&self, workspace_id: Uuid, subject: &str) -> Result<Option<Uuid>> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT invite_id FROM box_relay_subjects WHERE workspace_id = ?1 AND subject = ?2",
+                rusqlite::params![workspace_id.to_string(), subject],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
 
     /// Forget the redeem key seed once the redemption it proved is written:

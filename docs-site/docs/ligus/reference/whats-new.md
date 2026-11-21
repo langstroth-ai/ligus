@@ -37,6 +37,20 @@ Full release notes are on the
   on that desktop; your other desktops still show "Device xxxxxxxx". See
   [Add your phone](../features/phone-app.md#add-this-phone).
 
+### Security
+
+- **A box removed from the relay roster loses access to new traffic.**
+  Removing a box under **People → Team members (server-enforced)** used to take it off
+  the relay only: its service member stayed on the workspace roster, so the
+  key rotation that follows sealed the new key to it and it kept reading new
+  messages. Now the desktop that bootstrapped the box (**People → Remote
+  agents**) removes the box's member from the workspace first (or closes its
+  admission if it never joined), then rotates, so the box is left out. The
+  bootstrap command now carries the box's admission, so generating it asks
+  for your passkey. A relay entry the desktop can't match to a workspace
+  member says so instead of reporting success. See
+  [Remove a box](../../operate/security/runbooks.md#remove-box).
+
 ### CLI
 
 - **`ligus app`** opens the desktop app and returns at once, detached from

@@ -132,11 +132,14 @@ can act as that device and read everything it could.
    configured, so the key wasn't rotated" means it wasn't). Your browser
    asks for a passkey for each of the two events.
 2. If the relay enforces membership, also remove them from the relay
-   roster. That alone doesn't rotate
-   the key; step 1 does.
+   roster (**People → Team members (server-enforced)**). That removes them from the
+   workspace roster too, if step 1 hasn't, and rotates the key again.
 3. Revoke their relay token ([below](#relay-token)).
 4. If they had access to shared worker or serve boxes, remove their logins
-   there and rotate any secrets they could read.
+   there and rotate any secrets they could read. A box is its own member:
+   removing a person, even the Admin who admitted a box, leaves the box in
+   the workspace. Remove the boxes they ran on their own
+   ([Remove a box](#remove-box)).
 5. Headless boxes follow the rotation on their next sync, as long as they
    published their key-agreement key (they do on start). **Settings →
    Passkeys & keys** shows the key version; on a box, `ligus sync` logs it.
@@ -144,6 +147,29 @@ can act as that device and read everything it could.
    refused on every device until an Admin adds them again.
 7. Remember: they keep everything they had already synced, and every
    earlier key epoch (old epochs stay readable by design).
+
+## Remove a box {#remove-box}
+
+For a `ligus serve` or `ligus worker` box that is its own member (see
+[Admitting a box](../ops/admitting-a-box.md)).
+
+1. **Admin, People pane → Members → Remove & revoke** on the box's member,
+   or, on the desktop that generated its bootstrap, **People → Team members (server-enforced) → Remove** on its `ligus-box:` identity. Either one removes
+   the box's member from the workspace roster and then rotates the
+   workspace key to the members who remain. The relay-roster path also
+   takes the box off the relay, and for a box that never joined it closes
+   the box's admission.
+2. Effect: the rotation leaves the box out, so it **loses access to new
+   traffic** from then on; every device refuses what it signs afterwards.
+3. Check the toast. If it says the entry matches no workspace member (a
+   box bootstrapped elsewhere or before 0.1.1), the box may still read new
+   traffic: do step 1 with **Remove & revoke** on its member. If removing
+   the member failed, the key was not rotated: retry with **Remove &
+   revoke**.
+4. Not achieved: the box keeps everything it had already synced and every
+   earlier key epoch. Rotate any secrets it held (`LIGUS_WS_SECRET_*`, its
+   relay token, forge logins).
+5. To bring it back, start it from a fresh data dir and admit it again.
 
 ## Move to a new workspace {#move-to-a-new-workspace}
 

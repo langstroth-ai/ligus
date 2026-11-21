@@ -199,6 +199,28 @@ from that point, and the next workspace key rotation leaves it out, so it
 can't read new traffic. A revoked box goes read-only. To bring it back, start
 it from a fresh data dir and admit it again.
 
+**Removing a box from the relay roster.** A box bootstrapped from **People →
+Remote agents** has a relay identity of its own (`ligus-box:<id>`), and the
+desktop that made the bootstrap issued the box's admission with it and
+remembers which admission goes with which identity. Removing that identity
+under **People → Team members (server-enforced)** on that desktop:
+
+1. removes it from the relay;
+2. removes the box's service member from the workspace (the member the
+   admission's redemption added, never matched by name), with your passkey;
+   for a box that never joined, closes its admission instead, so it can't
+   join with it later;
+3. rotates the workspace key, sealed to the members who remain, so the box
+   **loses access to new traffic** from the rotation on. It keeps what it
+   had already synced.
+
+If removing the member fails (you cancel the passkey, say), the key isn't
+rotated and the error says so: finish with **Remove & revoke** on the box's
+member under Members. Another Admin's desktop, or a box whose relay identity
+was minted another way (`langstroth-relay bootstrap-agent`, a sign-in token,
+a desktop before 0.1.1), has no such link: the removal says the entry matches
+no workspace member, and you remove the box's member under Members.
+
 ## Troubleshooting
 
 | The box says | What to do |

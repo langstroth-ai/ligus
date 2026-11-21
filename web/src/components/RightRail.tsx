@@ -2136,9 +2136,18 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   });
   const srvRemoveMutation = useMutation({
     mutationFn: (account: string) => workspaceRemoveMember(account),
-    onSuccess: () => {
+    onSuccess: (r) => {
       refreshSrv();
-      toast.success("Removed on the relay. Rotate the key too (Remove & revoke above) to cut read access.");
+      refresh();
+      if (r.unmapped) {
+        toast.error(
+          "Removed on the relay and rotated the key, but this entry matches no workspace member here, so it may still read new messages. If it's a box, remove its member under Members (Remove & revoke).",
+        );
+      } else if (r.closedAdmission) {
+        toast.success(`Removed. The box never joined; its admission is closed. Key rotated to ${r.recipients} device${r.recipients === 1 ? "" : "s"}.`);
+      } else {
+        toast.success(`Removed from the relay and the workspace. Key rotated to ${r.recipients} device${r.recipients === 1 ? "" : "s"}.`);
+      }
     },
     onError: (e) => toast.error(`Couldn't remove: ${errMsg(e)}`),
   });
@@ -2406,11 +2415,11 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   className="shrink-0 text-xs font-medium hover:opacity-80"
                   style={{ color: "var(--ligus-danger-ink)" }}
                   onClick={() =>
-                    confirmThen(`Remove @${m.login} from this workspace on the relay?`, () =>
+                    confirmThen(`Remove @${m.login} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`, () =>
                       srvRemoveMutation.mutate(m.account),
                     )
                   }
-                  title="Stop the relay from accepting their writes (pair with Remove & revoke to cut reads)"
+                  title="Remove them on the relay and from the workspace, then rotate the key"
                 >
                   Remove
                 </button>

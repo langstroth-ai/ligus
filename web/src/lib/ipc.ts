@@ -816,9 +816,25 @@ export const workspaceClaimMembership = () =>
   invoke<boolean>("workspace_claim_membership");
 /// Server-side members of the active workspace (empty on open relays).
 export const workspaceMembers = () => invoke<MemberEntry[]>("workspace_members");
-/// Remove a member by relay subject; caller must be Admin+.
+/// What removing a relay member did in the workspace.
+export interface RelayRemoveResultDto {
+  /** Whether the workspace key was rotated. */
+  rotated: boolean;
+  /** How many remaining devices the new key was sealed to. */
+  recipients: number;
+  /** What the relay entry named here. */
+  target: "person" | "box" | "unmapped";
+  /** It named no workspace member this device can match: it may still get
+   *  the new key until its member is removed under Members. */
+  unmapped: boolean;
+  /** A box that never joined: its admission was closed. */
+  closedAdmission: boolean;
+}
+/// Remove a member by relay subject (a person, or a box this device
+/// bootstrapped), remove them from the workspace too, then rotate the key.
+/// Caller must be Admin+.
 export const workspaceRemoveMember = (account: string) =>
-  invoke<void>("workspace_remove_member", { account });
+  invoke<RelayRemoveResultDto>("workspace_remove_member", { account });
 
 /// A relay invite (metadata only; never the code).
 export interface InviteEntry {

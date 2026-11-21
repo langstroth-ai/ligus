@@ -123,8 +123,12 @@ travels in the generated line.)
 paste the Ed25519 seed once under **Settings → Team sync → Advanced → Relay
 issuer key** (local-only, never synced). Then the **People pane → Remote
 agents** section takes a role and a box label, mints the box its own random relay
-identity (`ligus-box:<id>`), enrolls it, and shows the
-same copy-paste command in a box — no terminal needed on the admin side. See
+identity (`ligus-box:<id>`), enrolls it, issues the box admission it joins the
+workspace with (confirm with your passkey), and shows the
+same copy-paste command in a box — no terminal needed on the admin side. That
+desktop remembers which admission goes with the identity, so removing the
+identity under **People → Team members (server-enforced)** later removes the
+box from the workspace too and rotates the key without it. See
 [Right Rail — People](../../ligus/features/right-rail.md).
 
 **Manual path.** Or wire it by hand. Instead of hand-exporting four env vars,
