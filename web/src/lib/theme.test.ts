@@ -97,7 +97,7 @@ describe("filled accent controls", () => {
   });
 });
 
-// Static guard against the regressions the UX review found: text painted on the
+// Static guard against unreadable filled controls: text painted on the
 // raw honey fill, or white/black literals instead of the on-accent token.
 const sources = import.meta.glob("../components/**/*.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 

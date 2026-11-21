@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
-// Repositories throws on render (the mock-mode crash the UX review found);
+// Repositories throws on render (as it did under the mock backend with no repos);
 // Appearance renders normally, to show the rest of Settings keeps working.
 vi.mock("@/components/settings/RepositoriesSection", () => ({
   RepositoriesSection: () => {
