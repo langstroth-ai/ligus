@@ -14,7 +14,7 @@ There are two ways in, and both reach the same router:
 |---|---|---|
 | **Direct** | plain HTTP to `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`) | `Authorization: Bearer <token>`: the phones' token in `<data dir>/serve.token` (or `LIGUS_SERVE_TOKEN_FILE`), one for every direct-path phone, or the **operator token** in `<data dir>/serve.operator.token`. Both are 64 hex characters, created 0600 at first start, compared in constant time |
 | **Relay tunnel** | the phone's Noise session through the relay (`hive-tunnel/1`) | the phone's own paired key and `hpc1` credential. Any `Authorization` header is stripped. Each request re-checks that the phone isn't revoked |
-| **Provisional tunnel** (0.1.1) | a Noise session through the relay for a phone that isn't certified yet (`relay-tunnel.md` §7.2, E3b) | the box's pairing secret and the phone's own device key, proved at enrollment. Reaches only the three [Add a phone](#phone-enroll) routes, for at most 5 minutes; everything else is 404 |
+| **Provisional tunnel** (0.1.1) | a Noise session through the relay for a phone that isn't certified yet (`relay-tunnel.md` §7.2.1, E3b) | the box's pairing secret and the phone's own device key, proved at enrollment. Reaches only the three [Add a phone](#phone-enroll) routes, for at most 5 minutes; everything else is 404 |
 
 - Only `GET /v1/health` answers without a token.
 - **Two bearer tokens.** `serve.token` goes to phones (in the pairing link,
@@ -80,8 +80,9 @@ $ curl -s "http://127.0.0.1:8787/v1/me?deviceId=6f1c…" -H "Authorization: Bear
 A pairing refused because the phone isn't certified yet closes with the
 WebSocket code `4040` and reason `device_not_certified` (see
 [`docs/relay-tunnel.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/relay-tunnel.md)
-§12, "Host enrollment refusals"; `4041 device_revoked` and
-`4042 device_claim_invalid` are the other two).
+§12, "Host enrollment refusals"; the others are `4041 device_revoked`,
+`4042 device_claim_invalid` and, for a provisional connection (0.1.1),
+`4043 provisional_busy`).
 
 ### Chats and people
 

@@ -21,14 +21,17 @@ brew install --cask langstroth-ai/ligus/ligus-app   # desktop app
 brew install langstroth-ai/ligus/ligus              # CLI
 ```
 
-`brew upgrade --cask ligus-app` picks up new releases (the `livecheck` block
-watches GitHub releases).
+The app updates itself, so the cask says `auto_updates true`: `brew upgrade`
+leaves it to the app, and `brew upgrade --cask --greedy ligus-app` (or
+`brew reinstall --cask ligus-app`) moves the cask to the latest release (the
+`livecheck` block watches GitHub releases).
 
 ## Releases update the tap
 
 `release.yml` bumps the tap after its `publish` job has published the
 release, never from a draft: job `cask` sets `version` and `sha256` in
-`Casks/ligus-app.rb` from the released `Ligus_<version>_aarch64.dmg`, and job
+`Casks/ligus-app.rb` from the released `Ligus_<version>_aarch64.dmg` (and adds
+`auto_updates true` before `depends_on` if the tap's copy lacks it), and job
 `formula` rewrites `Formula/ligus.rb` from the released `ligus-<target>`
 binaries. Both need `HOMEBREW_TAP_TOKEN` (Contents:write on the tap) and skip
 cleanly without it. `update-cask.yml` re-bumps the cask for a past, published

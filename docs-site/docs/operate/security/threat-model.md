@@ -532,8 +532,10 @@ The desktop's **Add a phone** QR code (0.1.1) carries a one-time secret for
 pairing link, the box's token, or a box they run), can answer it with their
 own phone. The desktop locks the code to the first phone that answers,
 disables **Add this phone** for 5 seconds, aborts if a second phone answers
-before approval, and after approval keeps listening until the code expires,
-raising a revoke alert if another phone answers (the tripwire). The box and
+before approval ("Two phones answered this code"), and after approval keeps
+listening until the code expires, raising a revoke alert if another phone
+answers (the tripwire: "Another phone answered this code", with
+**Revoke *label*** and **It's mine**). The box and
 the relay can't forge, swap or replay a request without the secret, and the
 box can't certify a phone. What's left is in
 [Known limitations](#known-limitations) (item 32) and, in plain words, in

@@ -94,7 +94,8 @@ This creates the box's host keys and saves the relay in
 ## 3. Pair the phone
 
 The box pairs only phones it knows as certified to a person. Add the phone
-from the desktop (**My devices → Add a phone → Show code**, scanned with the
+from the desktop (**Settings → Profile → My devices → Add a phone → Show
+code**, scanned with the
 app's **Settings → This phone → Add to my devices**; see
 [Add your phone](../../ligus/features/phone-app.md#add-this-phone)). A
 brand-new phone can do this through the box before it is certified: through

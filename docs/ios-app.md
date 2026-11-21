@@ -476,7 +476,9 @@ show "Add this phone on your desktop first" leading with **Scan your
 desktop's code** (0.1.1; the code and fingerprint under Can't scan?),
 and offer to pair again once the desktop has synced (the same link works
 for its 10 minutes, five attempts in all; then run `ligus pair` again). **4041** `device_revoked` and **4042** `device_claim_invalid` are
-final: show them, don't retry. A close without a reason is any other refusal
+final: show them, don't retry. **4043** `provisional_busy` (0.1.1, only for
+a phone that sent `enrollKey`; [`relay-tunnel.md`](relay-tunnel.md) §7.2.1)
+means the box already serves 4 provisional connections: retry in a minute. A close without a reason is any other refusal
 (a wrong or used pairing secret).
 
 **4. Ask who you are.** After pairing, `GET /v1/me` (through the tunnel)

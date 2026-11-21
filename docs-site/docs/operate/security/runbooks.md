@@ -18,7 +18,7 @@ says what the step achieves and what it doesn't. Background:
 
 For a `ligus serve` box (or another device) enrolled as **your** device.
 
-1. On a desktop: **Settings → Account → My devices → Revoke** on that
+1. On a desktop: **Settings → Profile → My devices → Revoke** on that
    device. You can't revoke the device you're using.
 2. Effect: updated devices quarantine its events from then on; a revoked
    `ligus serve` goes read-only and reports `identity.mode` `revoked` on
@@ -26,13 +26,18 @@ For a `ligus serve` box (or another device) enrolled as **your** device.
 3. Not achieved: it still holds the workspace key and can read whatever it
    can still fetch. If the device itself is lost or compromised, continue
    with [Compromised device](#compromised-device).
-4. **Revoking needs Admin.** Device revocation is an Admin-level change on
-   the workspace log, and every device ignores one signed by anyone below
-   Admin, both when it checks the event and when it builds its list of
-   trusted devices. If you aren't an Admin, your revocation has no effect on
-   other devices: ask an Admin to revoke the device, or to remove that
-   device's member (for a box that was its own member), and treat it as a
-   [compromised device](#compromised-device) meanwhile.
+4. **Your own device needs no Admin.** Revoking a device your account
+   holds is self-service at any role: every device accepts it, both when
+   it checks the event and when it builds its list of trusted devices.
+   Your account holds a device when it certified it and no other member's
+   account certified the same key for themselves (a device id is derived
+   from its public key, so anyone who knows the key could). Anything else
+   still needs an Admin, and never one ranked below the device's holder: a
+   device another member also certified, a device nobody certified here
+   (a phone known only by its pairing), or a box that is its own member.
+   If yours is one of those, ask an Admin to revoke the device, or to
+   remove that device's member (for a box that was its own member), and
+   treat it as a [compromised device](#compromised-device) meanwhile.
 5. To bring a box back later: start it from a fresh data dir and admit it
    again ([Admitting a box](../ops/admitting-a-box.md)).
 

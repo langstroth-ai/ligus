@@ -75,6 +75,13 @@ jobs:
             test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; return 1; }
             sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
             sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
+            # The app updates itself, so brew upgrade leaves it alone unless
+            # --greedy. Added once, before depends_on (Homebrew's stanza order).
+            if ! grep -qx '  auto_updates true' Casks/ligus-app.rb; then
+              awk '!done && /^  depends_on / { print "  auto_updates true"; print ""; done = 1 } { print }' Casks/ligus-app.rb > Casks/ligus-app.rb.new
+              mv Casks/ligus-app.rb.new Casks/ligus-app.rb
+            fi
+            grep -qx '  auto_updates true' Casks/ligus-app.rb || { echo "::error::no depends_on line in Casks/ligus-app.rb to put auto_updates before"; return 1; }
           }
           export -f bump_cask
           export VERSION SHA

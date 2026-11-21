@@ -31,11 +31,21 @@ Full release notes are on the
   (let the box sync, tap Retry on the phone, or scan a new `ligus pair`
   link), and the panel marks the phone's name as the phone's own claim. See
   [Troubleshooting](../help/troubleshooting.md#the-phone-cant-connect).
+- **My devices remembers the phone's name.** The desktop that added a phone
+  (by QR code or with **Can't scan?**) lists it under the name the phone gave
+  itself instead of "Device" and the start of its id. The name is kept only
+  on that desktop; your other desktops still show "Device xxxxxxxx". See
+  [Add your phone](../features/phone-app.md#add-this-phone).
 
 ### CLI
 
 - **`ligus app`** opens the desktop app and returns at once, detached from
   the terminal. See the [CLI reference](cli.md).
+- **`ligus-local verify` finds the systemd unit by itself.** On Linux, when
+  `ligus-local start --systemd` installed the user unit for that data dir,
+  `verify` (and `status`) checks it with `systemctl --user is-active`
+  without `--systemd`, as it already finds a LaunchAgent on macOS. See the
+  [CLI reference](cli.md).
 
 ### Docs
 
@@ -48,12 +58,19 @@ Full release notes are on the
   langstroth-auth charts and the relay image pull anonymously from
   `ghcr.io/langstroth-ai`; the ligus chart and image aren't published. See
   [Kubernetes](../../operate/deploy/kubernetes.md).
+- **Revoking your own device needs no Admin.** The runbook said it did; any
+  member can revoke a device their own account holds. See
+  [Revoke one of your devices](../../operate/security/runbooks.md#revoke-device).
 
 ### Release
 
 - **Homebrew tap updates no longer race.** The formula and the cask are
   pushed to the tap one after the other, and a rejected push rebases and
   retries, so a release no longer leaves the tap half updated.
+- **The Homebrew cask says the app updates itself** (`auto_updates true`).
+  `brew upgrade` leaves Ligus to its own updater instead of offering an
+  upgrade it already did; `brew upgrade --cask --greedy ligus-app` still
+  moves the cask on.
 
 ## 0.1.0
 

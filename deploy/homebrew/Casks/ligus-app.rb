@@ -15,6 +15,10 @@ cask "ligus-app" do
     strategy :github_latest
   end
 
+  # The app updates itself (Tauri updater): brew upgrade skips it unless
+  # --greedy. The release's cask job adds this line to the tap's copy.
+  auto_updates true
+
   depends_on arch: :arm64
   depends_on :macos
 

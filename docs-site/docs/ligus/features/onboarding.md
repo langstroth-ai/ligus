@@ -38,7 +38,7 @@ paste). (Key seeds are files, not in the OS keystore — see
 ## Re-running onboarding
 
 The wizard returns whenever the data dir is new. The supported way to
-start over is **Settings → Account → Danger zone → "Reset local data"**,
+start over is **Settings → Danger zone → Reset local data…**,
 which wipes this device's chats, identity, keys, settings, and
 workspaces and relaunches Ligus fresh into the wizard. Quitting Ligus and
 deleting `ai.ligus.desktop/` has the same effect.
