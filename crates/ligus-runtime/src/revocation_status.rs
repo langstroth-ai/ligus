@@ -301,6 +301,9 @@ pub struct PairedPhone {
 pub struct PairingReport {
     /// The serve box's workspace device id (its host id); it signs.
     pub host_id: String,
+    /// The workspace it reports for (signed, so a member of two workspaces
+    /// can't re-seal one workspace's report into the other).
+    pub workspace_id: uuid::Uuid,
     pub at: i64,
     pub phones: Vec<PairedPhone>,
     /// Ed25519 by the box's device key over [`PAIRING_CONTEXT`] and the rest.
@@ -310,6 +313,13 @@ pub struct PairingReport {
 
 /// Pairing reports carry at most this many phones.
 pub const MAX_PAIRED_REPORTED: usize = 32;
+/// A pairing's name is at most this long (what a box stores when it pairs).
+pub const MAX_PAIRED_NAME_CHARS: usize = 64;
+/// A pairing report older than this is not shown (a box republishes it every
+/// presence beat while it has phones).
+pub const PAIRING_REPORT_TTL_SECS: i64 = 60 * 60;
+/// How far ahead of this device's clock a report may be dated.
+const PAIRING_REPORT_SKEW_SECS: i64 = 300;
 
 impl PairingReport {
     fn unsigned(&self) -> Self {
@@ -335,18 +345,33 @@ pub fn seal_pairing_report(ring: &KeyringEngine, report: &PairingReport) -> Opti
 }
 
 /// Every box's pairing report in a presence listing, keyed by host id. A
-/// report in another host's slot, or not signed by that host's device key
-/// (`device_key` resolves a certified, unrevoked device), is dropped.
+/// report in another host's slot, not signed by that host's device key
+/// (`device_key` resolves the boxes whose reports this device accepts: on a
+/// desktop, its own account's certified, unrevoked devices), made for
+/// another workspace than `workspace_id`, or not fresh at `now` is dropped.
+/// What is kept is bounded and cleaned for display: at most
+/// [`MAX_PAIRED_REPORTED`] phones, names cleaned and at most
+/// [`MAX_PAIRED_NAME_CHARS`], no sighting later than the report.
 pub fn open_pairing_reports(
     blobs: &HashMap<String, Value>,
     ring: &KeyringEngine,
+    workspace_id: uuid::Uuid,
+    now: i64,
     device_key: impl Fn(uuid::Uuid) -> Option<Vec<u8>>,
 ) -> HashMap<String, PairingReport> {
     open_all::<PairingReport>(blobs, ring, "pairingReport", "pairings:")
         .into_iter()
         .filter(|(slot, r)| *slot == pairing_slot(&r.host_id))
+        .filter(|(_, r)| r.workspace_id == workspace_id && r.at >= now - PAIRING_REPORT_TTL_SECS && r.at <= now + PAIRING_REPORT_SKEW_SECS)
         .filter(|(_, r)| uuid::Uuid::parse_str(&r.host_id).ok().and_then(&device_key).is_some_and(|pk| r.verify(&pk)))
-        .map(|(_, r)| (r.host_id.clone(), r))
+        .map(|(_, mut r)| {
+            r.phones.truncate(MAX_PAIRED_REPORTED);
+            for p in &mut r.phones {
+                p.name = crate::display::shown(&p.name).chars().take(MAX_PAIRED_NAME_CHARS).collect();
+                p.last_seen = p.last_seen.filter(|t| *t <= r.at);
+            }
+            (r.host_id.clone(), r)
+        })
         .collect()
 }
 
@@ -424,14 +449,14 @@ mod tests {
         let (bx, other, holder) = (dev(), dev(), dev());
         let keys = |d: uuid::Uuid| [&bx, &other].into_iter().find(|x| x.id == d).map(|x| x.kp.public_key_bytes().to_vec());
         let phone = PairedPhone { device_id: "p1".into(), name: "Ana's iPhone".into(), last_seen: Some(40) };
-        let r = PairingReport { host_id: bx.id.to_string(), at: 41, phones: vec![phone.clone()], signature: Vec::new() }.sign(&bx.kp);
+        let r = PairingReport { host_id: bx.id.to_string(), workspace_id: uuid::Uuid::nil(), at: 41, phones: vec![phone.clone()], signature: Vec::new() }.sign(&bx.kp);
         let mut blobs = HashMap::new();
         blobs.insert(pairing_slot(&bx.id.to_string()), seal_pairing_report(&k, &r).unwrap());
         // Another box's signature over a report naming `bx`, in its own slot.
         blobs.insert(pairing_slot(&other.id.to_string()), seal_pairing_report(&k, &PairingReport { host_id: bx.id.to_string(), ..r.clone() }.sign(&other.kp)).unwrap());
         // A revocation report is not a pairing report.
         blobs.insert(report_slot(&bx.id.to_string()), seal_report(&k, &RevocationReport { host_id: bx.id.to_string(), ..Default::default() }.sign(&bx.kp)).unwrap());
-        let got = open_pairing_reports(&blobs, &k, keys);
+        let got = open_pairing_reports(&blobs, &k, uuid::Uuid::nil(), 41, keys);
         assert_eq!(got.len(), 1);
         assert_eq!(got[&bx.id.to_string()], r);
         assert!(!serde_json::to_string(&blobs[&pairing_slot(&bx.id.to_string())]).unwrap().contains("Ana"), "the relay sees ciphertext only");
@@ -440,14 +465,56 @@ mod tests {
         for forged in [PairingReport { signature: Vec::new(), ..fake.clone() }, fake.clone().sign(&holder.kp), fake.clone()] {
             let mut b = HashMap::new();
             b.insert(slot.clone(), seal_pairing_report(&k, &forged).unwrap());
-            assert!(open_pairing_reports(&b, &k, keys).is_empty(), "a forged pairing report was shown");
+            assert!(open_pairing_reports(&b, &k, uuid::Uuid::nil(), 41, keys).is_empty(), "a forged pairing report was shown");
         }
         // A revocation report's signature doesn't make a pairing report.
         let crossed = PairingReport { signature: RevocationReport { host_id: bx.id.to_string(), at: 41, devices: Vec::new(), signature: Vec::new() }.sign(&bx.kp).signature, ..r.clone() };
         let mut b = HashMap::new();
         b.insert(slot.clone(), seal_pairing_report(&k, &crossed).unwrap());
-        assert!(open_pairing_reports(&b, &k, keys).is_empty());
-        assert!(open_pairing_reports(&blobs, &k, |_| None).is_empty(), "a revoked box's report is dropped");
+        assert!(open_pairing_reports(&b, &k, uuid::Uuid::nil(), 41, keys).is_empty());
+        assert!(open_pairing_reports(&blobs, &k, uuid::Uuid::nil(), 41, |_| None).is_empty(), "a revoked box's report is dropped");
+    }
+
+    /// Security review of the pairing report: a genuine report of a box is
+    /// shown only in the workspace it was made for, only while it is fresh,
+    /// with no sighting later than the report itself, and within the size
+    /// an honest box sends (so a box's key, or a member replaying an old
+    /// report, can't keep a phone "seen just now" on the revoke prompt).
+    #[test]
+    fn a_pairing_report_is_fresh_bounded_and_bound_to_its_workspace() {
+        let (wa, wb) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let (a, b) = (KeyringEngine::passphrase(wa, ligus_core::derive_workspace_key("a")), KeyringEngine::passphrase(wb, ligus_core::derive_workspace_key("b")));
+        let bx = dev();
+        let keys = |d: uuid::Uuid| (d == bx.id).then(|| bx.kp.public_key_bytes().to_vec());
+        let now = 1_800_000_000;
+        let open = |r: &PairingReport, ring: &KeyringEngine, ws: uuid::Uuid| {
+            let mut m = HashMap::new();
+            m.insert(pairing_slot(&r.host_id), seal_pairing_report(ring, r).unwrap());
+            open_pairing_reports(&m, ring, ws, now, keys).into_values().next()
+        };
+        let phone = PairedPhone { device_id: "p1".into(), name: "Ana's iPhone".into(), last_seen: Some(now - 60) };
+        let fresh = PairingReport { host_id: bx.id.to_string(), workspace_id: wa, at: now, phones: vec![phone.clone()], signature: Vec::new() }.sign(&bx.kp);
+        assert_eq!(open(&fresh, &a, wa).as_ref(), Some(&fresh), "control: a fresh report shows");
+        // Cross-workspace: a member of both workspaces re-seals the box's
+        // report (its device key certified in both) into the other one.
+        assert!(open(&fresh, &b, wb).is_none(), "a report made for another workspace was shown");
+        // Replay: the box's own genuine report from a month ago; one dated tomorrow.
+        let old = PairingReport { at: now - 30 * 86_400, phones: vec![PairedPhone { last_seen: Some(now - 30 * 86_400), ..phone.clone() }], ..fresh.clone() }.sign(&bx.kp);
+        assert!(open(&old, &a, wa).is_none(), "a month-old report was shown");
+        let ahead = PairingReport { at: now + 86_400, ..fresh.clone() }.sign(&bx.kp);
+        assert!(open(&ahead, &a, wa).is_none(), "a report from tomorrow was shown");
+        // A sighting after the report itself ("seen just now" for years).
+        let later = PairingReport { phones: vec![PairedPhone { last_seen: Some(now + 10 * 365 * 86_400), ..phone.clone() }], ..fresh.clone() }.sign(&bx.kp);
+        assert_eq!(open(&later, &a, wa).unwrap().phones[0].last_seen, None, "a sighting after the report was kept");
+        // Bounded: no more phones than a box reports, names as long as a pairing's.
+        let huge = PairingReport {
+            phones: (0..5_000).map(|i| PairedPhone { device_id: format!("p{i}"), name: format!("Ana\u{202E}{}", "x".repeat(5_000)), last_seen: None }).collect(),
+            ..fresh.clone()
+        }
+        .sign(&bx.kp);
+        let got = open(&huge, &a, wa).unwrap();
+        assert_eq!(got.phones.len(), MAX_PAIRED_REPORTED);
+        assert!(got.phones.iter().all(|p| p.name.chars().count() <= MAX_PAIRED_NAME_CHARS && !p.name.contains('\u{202E}')));
     }
 
     #[test]

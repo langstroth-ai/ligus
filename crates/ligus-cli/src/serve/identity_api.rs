@@ -328,7 +328,7 @@ fn workspace_name(s: &Shared) -> String {
     svc.load(workspace_config_session_id(s.ws))
         .ok()
         .flatten()
-        .map(|c| ligus_proto::names::clean_display_name(&c.title))
+        .map(|c| ligus_runtime::display::workspace_name(&c.title))
         .filter(|t| !t.is_empty())
         .unwrap_or_default()
 }

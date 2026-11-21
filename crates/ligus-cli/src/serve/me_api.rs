@@ -90,7 +90,7 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
     Json(json!({
         "workspaceId": s.ws,
         "room": s.cfg.room,
-        "workspaceName": config.as_ref().map(|c| ligus_runtime::display::shown(&c.title)).unwrap_or_default(),
+        "workspaceName": config.as_ref().map(|c| ligus_runtime::display::workspace_name(&c.title)).unwrap_or_default(),
         "configLogId": config_id,
         "device": { "id": device, "fingerprint": fingerprint, "tier": "phone" },
         "account": {

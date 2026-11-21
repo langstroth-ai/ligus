@@ -15,6 +15,17 @@ use ligus_core::workflow::{WorkflowDefinition, WorkflowRun};
 
 pub use ligus_proto::names::clean_display_name as shown;
 
+/// The longest workspace name shown (and written by
+/// `ChatService::publish_workspace_name`).
+pub const MAX_WORKSPACE_NAME_CHARS: usize = 120;
+
+/// A workspace's name (its config log's title) as the phone and the `serve`
+/// API show it: cleaned like any peer-chosen label and at most
+/// [`MAX_WORKSPACE_NAME_CHARS`] characters, whoever wrote it.
+pub fn workspace_name(title: &str) -> String {
+    shown(title).chars().take(MAX_WORKSPACE_NAME_CHARS).collect::<String>().trim().to_string()
+}
+
 fn author(a: &mut MemoryAuthor) {
     a.name = shown(&a.name);
 }
@@ -89,6 +100,12 @@ mod tests {
 
     fn rev(title: &str) -> MemoryRevision {
         MemoryRevision { title: title.into(), body: EVIL.into(), author: MemoryAuthor { name: EVIL.into(), ..Default::default() }, ..Default::default() }
+    }
+
+    #[test]
+    fn a_workspace_name_is_cleaned_and_bounded() {
+        assert_eq!(workspace_name("Comb\u{202E} Council"), "Comb Council");
+        assert_eq!(workspace_name(&"x".repeat(5000)).chars().count(), MAX_WORKSPACE_NAME_CHARS);
     }
 
     #[test]

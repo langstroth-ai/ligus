@@ -76,8 +76,11 @@ its device id (for example "Device 6f1c2a9b"). Both flows
 already yours again replaces the old name rather than adding a second row:
 the phone says "This phone is already one of *Ana*'s devices in
 *workspace*. Update its name there?" and **Update name** sends its current
-name to the desktop, which needs no passkey for it. When a box has the phone paired, the row also says so:
-"Paired with home-server · seen 2 min ago".
+name to the desktop, which needs no passkey for it. When one of your own
+boxes (a box enrolled as your device) has the phone paired, the row also
+says so: "Paired with home-server · seen 2 min ago". A box reports only its
+owner's phones, and your desktop ignores what any other device says about
+yours.
 
 The phone is added to the workspace the desktop showed the code for, under
 the account of the person at that desktop. The phone warns you before
@@ -159,7 +162,12 @@ desktop of the workspace's Owner (or an Admin) also writes the name to the
 workspace's config log, once, the next time it opens the workspace, and
 the box gives it to the phone (`workspaceName` in `GET /v1/me` and in the
 add-a-phone check). Until that has synced to the box, the phone shows the
-box's name only. A name already on the config log is kept.
+box's name only. A name already on the config log is kept. Only an Owner or
+an Admin can name or rename the workspace: every device drops a
+Contributor's or Viewer's name on the config log, so a member can't make
+the phone ask to be added to someone's devices "in" a workspace that looks
+like another one. The name is cleaned like any other name and shown up to
+120 characters.
 
 ### If adding the phone fails {#add-phone-troubleshooting}
 

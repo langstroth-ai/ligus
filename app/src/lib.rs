@@ -5221,8 +5221,8 @@ mod my_devices_tests {
         use ligus_runtime::revocation_status::{PairedPhone, PairingReport};
         let mut reports = HashMap::new();
         let phone = |id: &str, seen: Option<i64>| PairedPhone { device_id: id.into(), name: "Ana\u{202E}s iPhone".into(), last_seen: seen };
-        reports.insert("h1".to_string(), PairingReport { host_id: "h1".into(), at: 9, phones: vec![phone("p1", Some(5))], signature: Vec::new() });
-        reports.insert("h2".to_string(), PairingReport { host_id: "h2".into(), at: 9, phones: vec![phone("p1", Some(7))], signature: Vec::new() });
+        reports.insert("h1".to_string(), PairingReport { host_id: "h1".into(), workspace_id: Uuid::nil(), at: 9, phones: vec![phone("p1", Some(5))], signature: Vec::new() });
+        reports.insert("h2".to_string(), PairingReport { host_id: "h2".into(), workspace_id: Uuid::nil(), at: 9, phones: vec![phone("p1", Some(7))], signature: Vec::new() });
         let rows = pairing_rows(reports, |id| (id == "h1").then(|| "home-server".to_string()));
         assert_eq!(rows.len(), 2);
         assert_eq!((rows[0].host_label.as_str(), rows[0].last_seen), ("a serve box", Some(7)));
@@ -5363,8 +5363,12 @@ async fn list_device_pairings(state: State<'_, AppState>) -> Result<Vec<DevicePa
     let blobs = relay.list_presence(&room).await.map_err(map_err)?;
     let (reports, hosts) = {
         let svc = state.service.lock().unwrap();
-        // Only a box's own signed report counts (its certified, unrevoked device key).
-        let reports = ligus_runtime::revocation_status::open_pairing_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten());
+        // Only a fresh report for this workspace, signed by one of your own
+        // boxes (your certified, unrevoked device), counts: another member's
+        // box, or any other workspace-key holder, can't name your phones or
+        // say one is paired right now.
+        let now = ligus_core::Timestamp::now().inner().unix_timestamp();
+        let reports = ligus_runtime::revocation_status::open_pairing_reports(&blobs, &ring, ws, now, |d| svc.own_device_key(ws, d).ok().flatten());
         (reports, svc.list_hosts(ws).unwrap_or_default())
     };
     Ok(pairing_rows(reports, |id| hosts.iter().find(|h| h.id == id).map(|h| h.label.clone())))
