@@ -2,7 +2,10 @@
 //! key as one of your devices, from the code its app shows
 //! (`ligus_runtime::phone_enroll`).
 //!
-//! The person pastes (or scans) the phone's `ligusphone1:` code, compares the
+//! This is the paste flow (**Can't scan?**); the QR flow, where the phone
+//! scans the desktop's code, is `crate::phone_enroll_ui`.
+//!
+//! The person pastes the phone's `ligusphone1:` code, compares the
 //! fingerprint with the phone's screen, and confirms with their passkey: the
 //! certificate is a P-256 one (the phone tier, capped by their role), and the
 //! rules require their presence for every phone enrollment, so the desktop's
@@ -34,7 +37,7 @@ fn decode(code: &str) -> Result<PhoneCode, String> {
     PhoneCode::decode(code).map_err(|e| e.to_string())
 }
 
-fn standing_dto(s: PhoneStanding) -> (String, Option<String>) {
+pub(crate) fn standing_dto(s: PhoneStanding) -> (String, Option<String>) {
     match s {
         PhoneStanding::New => ("new".into(), None),
         PhoneStanding::AlreadyMine => ("alreadyMine".into(), None),
@@ -71,7 +74,7 @@ pub(crate) fn inspect_phone_code_sync(state: State<AppState>, code: String) -> R
 /// Refuse to certify anything but what the sheet showed: the key whose
 /// fingerprint the person compared, into the workspace the preview was for
 /// (the active one can change between the preview and the passkey).
-fn confirm_matches_preview(
+pub(crate) fn confirm_matches_preview(
     c: &PhoneCode,
     fingerprint: &str,
     previewed_ws: &str,
@@ -106,6 +109,8 @@ pub(crate) fn certify_phone_code_sync(
     let mut svc = state.service.lock().unwrap();
     let id = svc.certify_phone_code(ws, &c).map_err(|e| e.to_string())?;
     tracing::info!(target: "identity", device = %id, label = %c.label, "certified a phone as this account's");
+    drop(svc);
+    crate::remember_phone_label(&state, id, &c.label);
     Ok(id.to_string())
 }
 

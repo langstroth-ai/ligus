@@ -1268,6 +1268,85 @@ export const inspectPhoneCode = (code: string) => invoke<PhoneCodeDto>("inspect_
 /// certified device id.
 export const certifyPhoneCode = (code: string, fingerprint: string, workspaceId: string) =>
   invoke<string>("certify_phone_code", { code, fingerprint, workspaceId });
+/// "Add a phone" by QR (the phone scans this desktop's code). The offer lives
+/// in the app's memory only; the page gets the QR as an SVG image, never as
+/// text.
+export interface EnrollAccountDto {
+  /// Who the phone will act as.
+  displayName: string;
+  role: string;
+  workspaceName: string;
+  /// Another current member here has the same display name.
+  nameCollision: boolean;
+}
+export interface PhoneEnrollOfferDto {
+  /// The QR code as an SVG drawn by the app (black on white).
+  qrSvg: string;
+  rid: string;
+  /// Unix seconds.
+  expiresAt: number;
+  account: EnrollAccountDto;
+}
+export interface EnrollPhoneDto {
+  deviceId: string;
+  /// The name the phone gives itself.
+  label: string;
+  fingerprint: string;
+  standing: "new" | "alreadyMine" | "revoked" | "conflict";
+  problem: string | null;
+  /// The box that relayed the phone's request.
+  via: string;
+  /// One of your devices already has this name.
+  duplicateLabel: boolean;
+}
+export interface PhoneEnrollPollDto {
+  state: "none" | "waiting" | "request" | "aborted" | "expired";
+  rid: string | null;
+  expiresAt: number | null;
+  phone: EnrollPhoneDto | null;
+  /// "Add this phone" is enabled once this reaches 0 (the 5-second hold).
+  holdRemainingMs: number | null;
+}
+export interface PhoneEnrollApprovedDto {
+  deviceId: string;
+  label: string;
+  /// The desktop keeps watching for other phones until then (Unix seconds).
+  watchingUntil: number;
+}
+export interface PhoneEnrollPrecheckDto {
+  ready: boolean;
+  missing: string[];
+}
+export interface TripwirePhoneDto {
+  deviceId: string;
+  label: string;
+  fingerprint: string;
+}
+/// Another phone answered a code after its phone was added.
+export interface PhoneEnrollTripwireDto {
+  rid: string;
+  added: TripwirePhoneDto;
+  other: TripwirePhoneDto;
+}
+/// Can this desktop add a phone by QR now (workspace, relay, passkey)?
+export const phoneEnrollPrecheck = () => invoke<PhoneEnrollPrecheckDto>("phone_enroll_precheck");
+/// Show code: a new offer; the window is content protected while it shows.
+export const phoneEnrollOfferStart = () => invoke<PhoneEnrollOfferDto>("phone_enroll_offer_start");
+/// Show the same offer's QR again after it was hidden.
+export const phoneEnrollOfferShow = () => invoke<PhoneEnrollOfferDto>("phone_enroll_offer_show");
+/// Hide the QR (the window lost focus); the offer stays.
+export const phoneEnrollOfferHide = () => invoke<void>("phone_enroll_offer_hide");
+/// Close the offer.
+export const phoneEnrollOfferCancel = () => invoke<void>("phone_enroll_offer_cancel");
+/// Look for the phone's request (call again only after the last one settled).
+export const phoneEnrollOfferPoll = () => invoke<PhoneEnrollPollDto>("phone_enroll_offer_poll");
+/// Add this phone: certify it with your passkey (after the hold).
+export const phoneEnrollOfferApprove = (rid: string, fingerprint: string) =>
+  invoke<PhoneEnrollApprovedDto>("phone_enroll_offer_approve", { rid, fingerprint });
+/// Not my phone: answer declined and close the offer.
+export const phoneEnrollOfferDecline = (rid: string) => invoke<void>("phone_enroll_offer_decline", { rid });
+export const onPhoneEnrollTripwire = (cb: (e: PhoneEnrollTripwireDto) => void): Promise<UnlistenFn> =>
+  listen<PhoneEnrollTripwireDto>("phone-enroll://tripwire", (evt) => cb(evt.payload));
 /// Hosts naming you as their owner that you haven't approved yet.
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.
