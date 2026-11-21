@@ -69,8 +69,8 @@ impl Box_ {
     /// The box relays `text` into a presence listing.
     fn relay(&self, blobs: &mut HashMap<String, Value>, ring: &KeyringEngine, text: &str, now_ms: i64) {
         let r = RelayedRequest::new(text, self.id, now_ms).sign(&self.kp);
-        let rid = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(text).unwrap().rid;
-        blobs.insert(request_slot(rid, self.id), seal_relayed_request(ring, &r).unwrap());
+        let req = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(text).unwrap();
+        blobs.insert(request_slot(req.rid, self.id, req.device_id()), seal_relayed_request(ring, &r).unwrap());
     }
 }
 
@@ -128,10 +128,27 @@ impl Flow {
         self.bx.relay(&mut self.blobs, &ring, &text, now_ms);
     }
 
+    /// **Add this phone** up to the passkey, as the command does: its last
+    /// presence look reads the flow's listing (`blobs`).
+    fn begin(&self, fingerprint: &str, active_ws: Uuid, now_ms: i64) -> Result<(Uuid, PhoneCode), String> {
+        let key = self.bx.key();
+        let bx = self.bx.id;
+        self.desk.begin_approve(
+            &self.rid,
+            fingerprint,
+            active_ws,
+            now_ms,
+            &self.blobs,
+            &self.ring,
+            |d| (d == bx).then(|| key.clone()),
+            |c| self.svc.phone_standing(self.ws, c).ok(),
+        )
+    }
+
     /// Approve as the command does: the checks, the passkey (test presence),
     /// then the watch.
     fn approve(&mut self, fingerprint: &str, now_ms: i64, shield: &Shield) -> Result<(Watch, Option<TripwireDto>), String> {
-        let (ws, code) = self.desk.begin_approve(&self.rid, fingerprint, self.ws, now_ms)?;
+        let (ws, code) = self.begin(fingerprint, self.ws, now_ms)?;
         self.svc.certify_phone_code(ws, &code).map_err(|e| e.to_string())?;
         Ok(self.desk.finish_approve(&shield.f()).expect("a watch"))
     }
@@ -202,12 +219,12 @@ fn one_phone_waits_out_the_hold_then_is_certified_and_answered() {
     assert_eq!(card.via, "Home box");
     assert_eq!(got.hold_remaining_ms, Some(HOLD_MS));
     // The hold: Add this phone is refused for 5 s after the phone appeared.
-    let err = f.desk.begin_approve(&f.rid, &card.fingerprint, f.ws, NOW + 1_000 + HOLD_MS - 1).unwrap_err();
+    let err = f.begin(&card.fingerprint, f.ws, NOW + 1_000 + HOLD_MS - 1).unwrap_err();
     assert!(err.contains("still listening for other phones"), "{err}");
     assert_eq!(f.poll(NOW + 4_000, &shield).hold_remaining_ms, Some(2_000));
     // Wrong fingerprint, wrong workspace.
-    assert!(f.desk.begin_approve(&f.rid, "0000-0000-0000-0000-0000", f.ws, NOW + 7_000).is_err());
-    assert!(f.desk.begin_approve(&f.rid, &card.fingerprint, Uuid::new_v4(), NOW + 7_000).unwrap_err().contains("workspace changed"));
+    assert!(f.begin("0000-0000-0000-0000-0000", f.ws, NOW + 7_000).is_err());
+    assert!(f.begin(&card.fingerprint, Uuid::new_v4(), NOW + 7_000).unwrap_err().contains("workspace changed"));
     f.desk.approve_failed();
     // Approve.
     let (mut watch, alert) = f.approve(&card.fingerprint, NOW + 7_000, &shield).unwrap();
@@ -279,7 +296,7 @@ fn two_phones_abort_the_offer() {
     );
     assert_eq!(got.state, "aborted");
     assert_eq!(shield.last(), Some(false));
-    assert!(f.desk.begin_approve(&f.rid, &fp, f.ws, NOW + 9_000).is_err());
+    assert!(f.begin(&fp, f.ws, NOW + 9_000).is_err());
 }
 
 /// T1: after approval, another phone answering the same code raises the
@@ -315,6 +332,33 @@ fn another_phone_after_approval_trips_the_alert() {
     assert_eq!(phone.check_answer(&a.answer, ana.device_id).unwrap(), PhoneVerdict::AnotherPhone(Outcome::Certified));
 }
 
+/// Concern B of the 0.1.1 security review: approval does its own last
+/// presence look. The page polled once (the first phone), then stopped; a
+/// second phone's request is on the relay when **Add this phone** is
+/// pressed at exactly the hold. Approval must refuse with the two-phones
+/// outcome, certify nothing, and leave the offer aborted for the next poll.
+#[test]
+fn approve_looks_again_and_refuses_when_a_second_phone_answered() {
+    let shield = Shield::default();
+    let mut f = Flow::new(&shield);
+    let (a, b) = (Phone::new(), Phone::new());
+    f.phone_answers(&a, "Ana's iPhone", NOW);
+    let fp = f.poll(NOW, &shield).phone.unwrap().fingerprint;
+    // No poll after this: the second phone is only on the relay.
+    f.phone_answers(&b, "Ana's iPhone", NOW + 1_000);
+    let err = f.approve(&fp, NOW + HOLD_MS, &shield).map(|_| ()).unwrap_err();
+    assert_eq!(err, TWO_PHONES);
+    assert_eq!(f.svc.phone_standing(f.ws, &code_of(&a, "x")).unwrap(), PhoneStanding::New, "nothing was certified");
+    assert_eq!(f.poll(NOW + HOLD_MS + 100, &shield).state, "aborted", "the page's next poll shows the two-phones panel");
+    assert!(f.begin(&fp, f.ws, NOW + HOLD_MS + 200).is_err(), "and approval stays refused");
+    // The same phone again (rescanned: a fresh signature) is no second phone.
+    let mut g = Flow::new(&shield);
+    g.phone_answers(&a, "Ana's iPhone", NOW);
+    let fp = g.poll(NOW, &shield).phone.unwrap().fingerprint;
+    g.phone_answers(&a, "Ana's iPhone", NOW + 1_000);
+    assert!(g.approve(&fp, NOW + HOLD_MS, &shield).is_ok());
+}
+
 /// A second phone that aborts the offer while the passkey runs: the phone is
 /// still certified (the passkey said yes), so the alert comes at once.
 #[test]
@@ -324,7 +368,7 @@ fn a_second_phone_during_the_passkey_alerts_at_once() {
     let (a, b) = (Phone::new(), Phone::new());
     f.phone_answers(&a, "Ana's iPhone", NOW);
     let fp = f.poll(NOW, &shield).phone.unwrap().fingerprint;
-    let (ws, code) = f.desk.begin_approve(&f.rid, &fp, f.ws, NOW + HOLD_MS).unwrap();
+    let (ws, code) = f.begin(&fp, f.ws, NOW + HOLD_MS).unwrap();
     // While the passkey sheet is up, a second phone answers.
     let mut blobs = HashMap::new();
     f.bx.relay(&mut blobs, &f.ring, &request_text(&f.qr, &b, "Ana's iPhone", NOW + 6_000), NOW + 6_000);
@@ -384,7 +428,7 @@ fn a_phone_that_cant_be_added_is_refused_not_approved() {
     let card = got.phone.unwrap();
     assert_eq!(card.standing, "revoked");
     assert!(card.problem.is_some());
-    assert!(f.desk.begin_approve(&f.rid, &card.fingerprint, f.ws, NOW + HOLD_MS).is_err());
+    assert!(f.begin(&card.fingerprint, f.ws, NOW + HOLD_MS).is_err());
     f.desk.approve_failed();
     let mut watch = f.desk.decline(&f.rid, &shield.f()).unwrap().unwrap();
     let (_, blob) = watch.answer_due(NOW + 6_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_relayed_answer(a)).unwrap();
@@ -443,9 +487,9 @@ fn the_desktops_own_device_cannot_relay_a_request() {
     assert!(f.svc.enroll_relay_key(f.ws, me).is_none());
     let mut blobs = HashMap::new();
     let text = request_text(&f.qr, &Phone::new(), "x", NOW);
-    let rid = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(&text).unwrap().rid;
+    let req = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(&text).unwrap();
     let r = f.svc.sign_relayed_request(RelayedRequest::new(&text, me, NOW));
-    blobs.insert(request_slot(rid, me), seal_relayed_request(&f.ring, &r).unwrap());
+    blobs.insert(request_slot(req.rid, me, req.device_id()), seal_relayed_request(&f.ring, &r).unwrap());
     let got = f.desk.poll(&blobs, &f.ring, NOW, |d| f.svc.enroll_relay_key(f.ws, d), |c| f.svc.phone_standing(f.ws, c).ok(), |_| String::new(), |_| false, &shield.f());
     assert_eq!(got.state, "waiting");
 }
@@ -551,8 +595,8 @@ fn secrets_macs_and_codes_never_reach_the_logs() {
         assert_eq!(f.poll(NOW, &shield).state, "waiting");
         f.bx.relay(&mut f.blobs, &f.ring, &text, NOW);
         let card = f.poll(NOW, &shield).phone.unwrap();
-        errors.extend(f.desk.begin_approve(&f.rid, &card.fingerprint, f.ws, NOW + 1).err());
-        errors.extend(f.desk.begin_approve(&f.rid, "nope", f.ws, NOW + HOLD_MS).err());
+        errors.extend(f.begin(&card.fingerprint, f.ws, NOW + 1).err());
+        errors.extend(f.begin("nope", f.ws, NOW + HOLD_MS).err());
         let (mut watch, _) = f.approve(&card.fingerprint, NOW + HOLD_MS, &shield).unwrap();
         let (_, blob) = watch.answer_due(NOW + HOLD_MS, &f.ring, f.svc.device_id(), |x| f.svc.sign_relayed_answer(x)).unwrap();
         let mut listing = HashMap::new();

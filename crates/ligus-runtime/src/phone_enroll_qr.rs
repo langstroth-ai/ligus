@@ -47,7 +47,8 @@
 //!   roster checks on [`EnrollRequest::fields`] and the phone's
 //!   [`EnrollRequest::code`]; then [`RelayedRequest::new`] →
 //!   [`RelayedRequest::sign`] (its device key) → [`seal_relayed_request`],
-//!   published at [`request_slot`]`(rid, box_device_id)`.
+//!   published at [`request_slot`]`(rid, box_device_id, phone_device_id)`
+//!   (one slot per phone, so every pending request shows at once).
 //! - `GET /v1/phone-enroll/requests/{rid}`: [`open_relayed_answers`] then
 //!   [`check_relayed_answer`]`(slot, &answer, offer_desktop, now_ms,
 //!   desktop_key)`, relaying [`RelayedAnswer::answer`] as is.
@@ -128,8 +129,11 @@ pub const ANSWER_CONTEXT: &[u8] = b"ligus-enroll-answer-v1\0";
 pub const RELAY_CONTEXT: &[u8] = b"ligus-enroll-relay-v1\0";
 /// Context of the desktop's signature over an answer slot.
 pub const ANSWER_RELAY_CONTEXT: &[u8] = b"ligus-enroll-answer-relay-v1\0";
-/// Presence slot name prefix of a relayed request: `phone-enroll:<b64u rid>:<box device id>`.
+/// Presence slot name prefix of a relayed request:
+/// `phone-enroll:<b64u rid>:<box device id>:<phone tag>` ([`request_slot`]).
 pub const REQUEST_SLOT_PREFIX: &str = "phone-enroll:";
+/// Context of a request slot's phone tag ([`phone_slot_tag`]).
+pub const SLOT_TAG_CONTEXT: &[u8] = b"ligus-enroll-slot-v1\0";
 /// Presence slot name prefix of an answer: `phone-enroll-answer:<b64u rid>`.
 pub const ANSWER_SLOT_PREFIX: &str = "phone-enroll-answer:";
 /// Sealed-blob field of a request slot.
@@ -1224,9 +1228,29 @@ impl PhoneOffer {
 
 // ---- presence slots (§5.5) ----
 
-/// `phone-enroll:<b64u rid>:<box device id>`.
-pub fn request_slot(rid: Rid, box_device_id: Uuid) -> String {
-    format!("{REQUEST_SLOT_PREFIX}{}:{box_device_id}", rid.to_b64u())
+/// `phone-enroll:<b64u rid>:<box device id>:<phone tag>`: one slot per
+/// offer, relaying box and phone, so a box publishes every request it holds
+/// for an offer at once and the desktop sees each one within the hold
+/// (§8.3). `phone_device_id` is the device id of the request's code.
+pub fn request_slot(rid: Rid, box_device_id: Uuid, phone_device_id: Uuid) -> String {
+    format!(
+        "{REQUEST_SLOT_PREFIX}{}:{box_device_id}:{}",
+        rid.to_b64u(),
+        phone_slot_tag(rid, phone_device_id)
+    )
+}
+
+/// The phone's part of a request slot's name: `b64u(SHA-256(
+/// "ligus-enroll-slot-v1\0" ‖ rid ‖ phone_device_id)[..16])`. Keyed by
+/// `rid`, so the relay can't link a phone's slots across offers or to its
+/// device id.
+pub fn phone_slot_tag(rid: Rid, phone_device_id: Uuid) -> String {
+    use sha2::Digest as _;
+    let mut h = sha2::Sha256::new();
+    h.update(SLOT_TAG_CONTEXT);
+    h.update(rid.0);
+    h.update(phone_device_id.as_bytes());
+    URL_SAFE_NO_PAD.encode(&h.finalize()[..16])
 }
 
 /// `phone-enroll-answer:<b64u rid>`.
@@ -1343,8 +1367,8 @@ impl RelayedAnswer {
     }
 }
 
-/// A request slot is taken only if it sits in the slot its own `rid` and
-/// `relay` name, its `at` is within 30 s ahead and 60 s old, and it is
+/// A request slot is taken only if it sits in the slot its own `rid`,
+/// `relay` and phone (the device id of the request's code) name, its `at` is within 30 s ahead and 60 s old, and it is
 /// signed by `relay`'s key. `service_device_key` returns a key only for a
 /// certified, unrevoked device of a current **service member** (a box);
 /// `None` for anyone else, so a person's device can't inject a request
@@ -1356,8 +1380,9 @@ pub fn check_relayed_request(
     now_ms: i64,
     service_device_key: impl Fn(Uuid) -> Option<Vec<u8>>,
 ) -> Result<Rid, EnrollError> {
-    let rid = RawRequest::parse(&r.request)?.fields.rid;
-    if slot != request_slot(rid, r.relay) {
+    let raw = RawRequest::parse(&r.request)?;
+    let rid = raw.fields.rid;
+    if slot != request_slot(rid, r.relay, uuid_at(&raw.code_body, 0)) {
         return Err(EnrollError::WrongSlot);
     }
     if !slot_fresh(r.at, now_ms) {

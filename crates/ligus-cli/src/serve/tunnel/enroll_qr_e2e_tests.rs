@@ -207,7 +207,7 @@ async fn scan_the_desktops_qr_then_pair_and_ask_who_am_i() {
     assert_eq!(seen.code, code_of(&phone, "Ana's iPhone"));
     // The slot is sealed (the relay sees no request text) and box-signed.
     let raw = crate::relay_client(&desk.cfg).unwrap().list_presence(&desk.cfg.room).await.unwrap();
-    let blob = raw.get(&request_slot(f.rid, box_id)).expect("the box's slot").to_string();
+    let blob = raw.get(&request_slot(f.rid, box_id, phone.device_id)).expect("the box's slot").to_string();
     assert!(!blob.contains(&text[qr::REQUEST_PREFIX.len()..]) && !blob.contains("ligusenrollreq1"), "sealed");
 
     // Waiting.
@@ -239,7 +239,7 @@ async fn scan_the_desktops_qr_then_pair_and_ask_who_am_i() {
     // The box stops relaying the request once the answer names its phone.
     let relay_client = crate::relay_client(&desk.cfg).unwrap();
     let deadline = tokio::time::Instant::now() + WAIT;
-    while relay_client.list_presence(&desk.cfg.room).await.unwrap().get(&request_slot(f.rid, box_id)) != Some(&json!({})) {
+    while relay_client.list_presence(&desk.cfg.room).await.unwrap().get(&request_slot(f.rid, box_id, phone.device_id)) != Some(&json!({})) {
         assert!(tokio::time::Instant::now() < deadline, "the box never cleared its slot");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -346,9 +346,9 @@ async fn the_box_refuses_and_relays_and_the_desktop_catches_two_phones() {
     let now = now_ms();
     let forged = desk.svc.sign_relayed_request(RelayedRequest::new(&good.encode(), desk.id, now));
     assert!(desk.svc.enroll_relay_key(ws, desk.id).is_none());
-    assert_eq!(check_relayed_request(&request_slot(f.rid, desk.id), &forged, now, |d| desk.svc.enroll_relay_key(ws, d)), Err(EnrollError::BadSlotSignature));
+    assert_eq!(check_relayed_request(&request_slot(f.rid, desk.id, good.device_id()), &forged, now, |d| desk.svc.enroll_relay_key(ws, d)), Err(EnrollError::BadSlotSignature));
     let boxed = h.handle.shared.lock().sign_relayed_request(RelayedRequest::new(&good.encode(), box_id, now));
-    assert_eq!(check_relayed_request(&request_slot(f.rid, box_id), &boxed, now, |d| desk.svc.enroll_relay_key(ws, d)), Ok(f.rid));
+    assert_eq!(check_relayed_request(&request_slot(f.rid, box_id, good.device_id()), &boxed, now, |d| desk.svc.enroll_relay_key(ws, d)), Ok(f.rid));
     let _ = seal_relayed_request(&desk.ring(), &forged).expect("any key holder can seal; the signature is what counts");
 
     // The honest phone A, then T15: A again after a restart (a new signature).

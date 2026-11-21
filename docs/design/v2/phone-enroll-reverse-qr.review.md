@@ -393,8 +393,10 @@ T1 to T14 from round 1, plus T15 and T16 above.
   workspace until they reset the device key (two holders, `phone_person`
   fails closed). No access to the victim's data.
 - **RR6. Metadata.** The relay sees `phone-enroll:*` slot names, a random
-  `rid`, the relaying box's device id and the timing: that someone in the
-  workspace is adding a phone now. No content.
+  `rid`, the relaying box's device id, one per-offer phone tag per request
+  (so how many phones answered an offer; not who: the tag is keyed by
+  `rid`) and the timing: that someone in the workspace is adding a phone
+  now. No content.
 - **RR7. Tunnel attempt budget.** Provisional (1, more if the person is
   slow) plus the final enrollment (1) come out of the window's 5 attempts;
   a slow or retried flow can exhaust it, and the person runs `ligus pair`
@@ -411,3 +413,16 @@ T1 to T14 from round 1, plus T15 and T16 above.
   phone signature in paste too (a second code that names the desktop).
   **Owner decision (2026-11-20): later.** A known follow-up, not part of
   0.1.1 (design §16).
+
+## Security review of the build (0.1.1)
+
+Findings against the built code, each fixed with a test that fails before
+the fix (design §16, "Resolved while building step 1" and "Resolved in the
+security review of the build").
+
+| # | Finding | Fix |
+|---|---|---|
+| F1 | An answer counted per offer, not per request: a co-member's answer naming the real phone stopped the box relaying it, and the real desktop's answer was refused | The box takes an answer only for the requests whose own desktop signed it (PR #170) |
+| A | The hold could miss a second phone: one request per offer shown at a time, rotating every 3 s on a 2 s loop, so a second phone just after the first first showed about 6 s after the first sighting, past the 5-second hold | One slot per (offer, box, phone), `phone-enroll:<rid>:<box>:<phone tag>`, published at once; every poll sees every pending request (up to 16) |
+| B | Approval did no presence read of its own: a page that stopped polling after the first sighting skipped the two-phones abort | `phone_enroll_offer_approve` lists presence and runs the poll's checks right before certifying; another phone aborts and refuses; no listing, no approval |
+
