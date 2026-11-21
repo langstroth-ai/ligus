@@ -434,6 +434,59 @@ Host rules:
 
 The phone keeps `pid`, `cred`, the push key and the host's `hs`/`hid`/relay.
 
+#### 7.2.1 E3b: provisional enrollment (add a phone before it is certified)
+
+A phone pairs only once its workspace device is certified (E3a), so a phone
+that still has to be added to its person's devices has no channel to the box
+yet. E3b gives it one, restricted to the "add a phone" routes of the
+reverse-QR enrollment ([design](design/v2/phone-enroll-reverse-qr.md) §6.1,
+§7). It is end to end between phone and host and additive: the relay sees
+an ordinary enrollment splice and needs no change.
+
+msg1's payload gains one optional field, the phone's P-256 device key:
+
+```
+msg1 phone→host  payload {"v":1,"name":…,"pk":…,"device":{"id":…,"sig":…},
+                          "enrollKey":"<b64u 65-byte SEC1 P-256 key>"}
+msg2 host→phone  payload {"v":1,"provisional":true}          (no pid, no cred)
+then transport (no PING is needed: nothing is confirmed at E4)
+```
+
+Host rules, applied only where E3a would refuse with **4040
+`device_not_certified`** (the box doesn't know the claimed device yet). A
+device the box knows (certified, revoked, or not a phone) takes the E3a path
+whatever `enrollKey` says.
+
+- **P1.** `enrollKey` must be a 65-byte uncompressed P-256 point whose
+  derived device id (`device_id_for(P256, key)`) is `device.id`, and
+  `device.sig` must verify under it over the same `ctx("device-bind", hid,
+  phone_static)` as E3a. Otherwise **4042 `device_claim_invalid`**.
+- **P2.** The attempt counts against the window, as a 4040 does; `ps` is
+  not consumed, no phone record is made and nothing is sent to the relay
+  (no `enrollClose`).
+- **P3.** msg2 is `{"v":1,"provisional":true}`.
+- **P4.** The connection is served by a separate router that holds only
+  `POST /v1/phone-enroll/check`, `POST /v1/phone-enroll/requests` and
+  `GET /v1/phone-enroll/requests/{rid}`; every other path is a 404. It never
+  reaches the API router or its auth. The routes know the phone as the
+  device it proved (P1), never one a request names.
+- **P5.** A provisional connection may submit at most 8 requests (then
+  429 `rate_limited`), only for its own device (403 `device_mismatch`), and
+  lives at most 5 minutes (the relay caps an enrollment splice at 5 minutes
+  and 4 MiB anyway, §6.4.2). A host serves at most 4 provisional
+  connections at once; a fifth is refused with **4043 `provisional_busy`**
+  (the attempt still counts).
+- **P6.** Once the phone's certificate has synced to the box (the status
+  route's `certified: true`), the phone closes the provisional connection
+  and enrolls again with the same window and the same Noise static: E3a now
+  binds. A window allows 5 attempts, so the normal budget is provisional (1)
+  plus the final enrollment (1).
+
+Compatibility: an old phone never sends `enrollKey` and gets 4040 as before.
+An old host ignores the unknown field and answers 4040 too; the phone then
+says "update `ligus serve`, or use Can't scan?". A host built without the
+provisional router (an embedder of the tunnel) also answers 4040.
+
 ### 7.3 Session (`mode:"session"`)
 
 ```
@@ -639,7 +692,13 @@ static in session mode) stays a plain close without a reason.
 |---|---|---|---|
 | 4040 | `device_not_certified` | this box doesn't know the claimed workspace device as a certified phone yet | show "Add this phone on your desktop first" (the phone's code and fingerprint); once certified, wait for the box to sync and pair again with a fresh `ligus pair` link |
 | 4041 | `device_revoked` | the device, or the pairing keys of one, is revoked | don't retry: show it; a new device key and id are needed |
-| 4042 | `device_claim_invalid` | no device claim, a signature that doesn't verify, or a device that isn't a phone | don't retry: an app bug or the wrong box |
+| 4042 | `device_claim_invalid` | no device claim, a signature that doesn't verify, or a device that isn't a phone; with `enrollKey` (E3b, §7.2.1): a key that isn't a valid point, doesn't derive the claimed id, or doesn't verify the claim | don't retry: an app bug or the wrong box |
+| 4043 | `provisional_busy` | E3b (§7.2.1): the host already serves 4 provisional connections | retry in a minute (the attempt counted against the window) |
+
+A phone that sent `enrollKey` (E3b, §7.2.1) and gets msg2
+`{"v":1,"provisional":true}` instead of a close is not refused: it holds a
+provisional connection to the add-a-phone routes only. A 4040 to a phone
+that sent `enrollKey` means the host has no E3b (an older `ligus serve`).
 
 Mux RESET codes: 0 `cancel`, 1 `refused`, 2 `protocol`, 3 `flow_control`,
 4 `internal`.

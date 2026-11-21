@@ -816,3 +816,138 @@ async fn dialed_websocket_refuses_messages_over_the_spec_limit() {
         }
     }
 }
+
+// ── E3b: provisional enrollment (relay-tunnel.md §7.2) ──────────────────────
+
+/// A phone the box doesn't know yet (its device isn't on the test roster).
+fn uncertified_phone() -> PhoneKeys {
+    PhoneKeys {
+        auth: ed25519_dalek::SigningKey::from_bytes(&random_bytes()),
+        static_priv: random_bytes(),
+        device: Arc::new(ligus_core::testkit::Phone::new()),
+    }
+}
+
+/// The provisional router a test host serves: one route that says who the
+/// request came from.
+fn enroll_only_router() -> Router {
+    Router::new().route(
+        "/v1/phone-enroll/check",
+        post(|p: Option<Extension<ProvisionalPeer>>, t: Option<Extension<TunnelPeer>>| async move {
+            axum::Json(json!({ "device": p.map(|p| p.0.device_id), "tunnel": t.is_some() }))
+        }),
+    )
+}
+
+impl Rig {
+    async fn accept_with(&self, mode: session::Mode, routers: session::Routers) -> (MemWs, tokio::task::JoinHandle<anyhow::Result<()>>) {
+        let (client, server) = testkit::ws_pair().await;
+        let task = tokio::spawn(session::run(self.host.clone(), routers, server, mode, self.stop.subscribe(), Default::default()));
+        (client, task)
+    }
+
+    fn window(&self) -> PairingSecret {
+        let ps = PairingSecret::generate();
+        self.host.add_window(PairingSecret::from_bytes(ps.ps), now() + 600);
+        ps
+    }
+
+    fn e3b(&self) -> session::Routers {
+        session::Routers { api: test_router(), provisional: Some(enroll_only_router()) }
+    }
+}
+
+fn closed(e: anyhow::Error) -> (u16, String) {
+    e.downcast_ref::<testkit::Closed>().map(|c| (c.0, c.1.clone())).unwrap_or_else(|| panic!("{e:#}"))
+}
+
+/// E3b, P1 to P4, and old peers (review T14): an uncertified phone that
+/// proves its key gets `{"v":1,"provisional":true}` and the enroll routes
+/// only, with no pairing made and the window left open; an old phone (no
+/// `enrollKey`) and a host without E3b still answer 4040; a key that isn't
+/// the claimed device's is 4042.
+#[tokio::test]
+async fn e3b_an_uncertified_phone_gets_only_the_enroll_routes() {
+    let r = rig();
+    let phone = uncertified_phone();
+    let enroll = |ps: &PairingSecret| session::Mode::Enroll { eid: ps.eid.clone() };
+
+    // T14: an old phone, no enrollKey: 4040 as before.
+    let ps = r.window();
+    let (ws, _) = r.accept_with(enroll(&ps), r.e3b()).await;
+    let e = PhoneConn::enroll_handshake(ws, &phone, &r.info, &ps, "old").await.err().unwrap();
+    assert_eq!(closed(e), (4040, "device_not_certified".into()));
+    // T14: a host without E3b ignores enrollKey: 4040.
+    let ps = r.window();
+    let (ws, _) = r.accept_with(enroll(&ps), test_router().into()).await;
+    let e = PhoneConn::provisional_handshake(ws, &phone, &r.info, &ps, "x").await.err().unwrap();
+    assert_eq!(closed(e), (4040, "device_not_certified".into()));
+    // P1: a key that doesn't derive the claimed id, or isn't a point: 4042.
+    let ps = r.window();
+    let other = ligus_core::testkit::Phone::new().public_key();
+    for key in [other, vec![4u8; 65], vec![1u8; 3]] {
+        let (ws, _) = r.accept_with(enroll(&ps), r.e3b()).await;
+        let e = PhoneConn::provisional_handshake_with(ws, &phone, &r.info, &ps, "x", &key).await.err().unwrap();
+        assert_eq!(closed(e), (4042, "device_claim_invalid".into()));
+    }
+
+    // P3, P4: the provisional connection.
+    let ps = r.window();
+    let (ws, task) = r.accept_with(enroll(&ps), r.e3b()).await;
+    let mut c = PhoneConn::provisional_handshake(ws, &phone, &r.info, &ps, "Ana's iPhone").await.unwrap();
+    let v = c.request("POST", "/v1/phone-enroll/check", Some(json!({}))).await.unwrap();
+    assert_eq!((v.status, v.json()), (200, json!({ "device": phone.device_id(), "tunnel": false })));
+    for path in ["/v1/hello", "/v1/chats", "/v1/me"] {
+        assert_eq!(c.request("GET", path, None).await.unwrap().status, 404, "{path}: only the enroll routes");
+    }
+    // P2: no pairing, ps not consumed, the window still open.
+    assert!(r.host.registry.active_by_static(&phone.static_pub()).is_none());
+    assert!(r.host.window_psk(&ps.eid).is_some());
+    assert_eq!(r.host.provisional.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop(c);
+    let _ = task.await;
+    assert_eq!(r.host.provisional.load(std::sync::atomic::Ordering::SeqCst), 0, "the slot is freed with the connection");
+
+    // P6: once the box knows the device, the same window binds with E3a.
+    let (id, key) = (phone.device_id(), phone.device.public_key());
+    r.host.set_device_lookup(Arc::new(move |d| {
+        if d == id {
+            device_bind::DeviceLookup::Certified { public_key: key.clone(), phone: true }
+        } else {
+            device_bind::DeviceLookup::Unknown
+        }
+    }));
+    let (ws, _) = r.accept_with(enroll(&ps), r.e3b()).await;
+    let (mut c, pid, _) = PhoneConn::enroll_handshake(ws, &phone, &r.info, &ps, "Ana's iPhone").await.unwrap();
+    assert_eq!(r.host.registry.get(&pid).unwrap().device_id, Some(id));
+    assert!(r.host.window_psk(&ps.eid).is_none(), "consumed by the real pairing");
+    assert_eq!(c.request("GET", "/v1/hello", None).await.unwrap().json()["pid"], json!(pid));
+}
+
+/// E3b, P2 and P5: every provisional attempt counts against the window, and
+/// at most four provisional connections are open at once (4043).
+#[tokio::test]
+async fn e3b_attempts_count_and_at_most_four_at_once() {
+    let r = rig();
+    let mut open = Vec::new();
+    for _ in 0..session::MAX_PROVISIONAL {
+        let ps = r.window();
+        let (ws, task) = r.accept_with(session::Mode::Enroll { eid: ps.eid.clone() }, r.e3b()).await;
+        open.push((PhoneConn::provisional_handshake(ws, &uncertified_phone(), &r.info, &ps, "x").await.unwrap(), task));
+    }
+    let ps = r.window();
+    let (ws, _) = r.accept_with(session::Mode::Enroll { eid: ps.eid.clone() }, r.e3b()).await;
+    let e = PhoneConn::provisional_handshake(ws, &uncertified_phone(), &r.info, &ps, "x").await.err().unwrap();
+    assert_eq!(closed(e), (4043, "provisional_busy".into()));
+    drop(open);
+    // Five provisional attempts use up a window (MAX_WINDOW_ATTEMPTS).
+    let ps = r.window();
+    let phone = uncertified_phone();
+    for _ in 0..MAX_WINDOW_ATTEMPTS {
+        let (ws, task) = r.accept_with(session::Mode::Enroll { eid: ps.eid.clone() }, r.e3b()).await;
+        let c = PhoneConn::provisional_handshake(ws, &phone, &r.info, &ps, "x").await;
+        drop(c);
+        let _ = task.await;
+    }
+    assert!(r.host.window_psk(&ps.eid).is_none(), "each provisional attempt counted");
+}

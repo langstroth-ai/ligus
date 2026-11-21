@@ -388,6 +388,22 @@ pub struct TunnelPeer {
     pub pid: String,
 }
 
+/// Marks a request on a provisional connection (E3b, §7.2): a phone that
+/// proved the pairing secret and its own device key but isn't certified
+/// yet. Only the enroll routes' own router sees it
+/// (`serve::phone_enroll_api::provisional_router`), never the API router.
+#[derive(Debug, Clone)]
+pub struct ProvisionalPeer {
+    /// This connection's id (its limits are counted under it).
+    pub conn: String,
+    /// The workspace device the phone proved (`device.id`).
+    pub device_id: uuid::Uuid,
+    /// The phone's P-256 key (`enrollKey`), 65 bytes SEC1.
+    pub public_key: Vec<u8>,
+    /// Requests submitted on this connection (at most 8, P5).
+    pub requests: Arc<AtomicUsize>,
+}
+
 /// A host request waiting for the relay's `ack`.
 enum Pending {
     Enroll(String),
@@ -432,6 +448,9 @@ pub struct TunnelHost {
     pub revoked: broadcast::Sender<String>,
     pub sessions: AtomicUsize,
     pub max_sessions: AtomicUsize,
+    /// Provisional (E3b) connections open now (at most
+    /// [`session::MAX_PROVISIONAL`]).
+    pub provisional: AtomicUsize,
     pub push_available: AtomicBool,
     /// Host-side push limits, foreground suppression and relay refusals.
     push_gate: Mutex<push::PushGate>,
@@ -477,6 +496,7 @@ impl TunnelHost {
             revoked,
             sessions: AtomicUsize::new(0),
             max_sessions: AtomicUsize::new(8),
+            provisional: AtomicUsize::new(0),
             push_available: AtomicBool::new(false),
             push_gate: Mutex::new(push::PushGate::default()),
             status: Mutex::new(LiveStatus::default()),

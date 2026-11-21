@@ -56,6 +56,7 @@ pub mod ntfy;
 pub mod pair;
 pub mod people;
 pub mod phone_actions_api;
+pub mod phone_enroll_api;
 pub mod presence_api;
 pub mod proposal_file;
 pub mod repos_api;
@@ -319,6 +320,8 @@ pub struct Shared {
     pub pending_codes: identity_api::PendingCodes,
     /// The phone's typing and who else is typing (`typing_api`).
     pub typing: typing_api::Typing,
+    /// Reverse-QR phone enrollment: requests relayed to desktops (`phone_enroll_api`).
+    pub phone_enroll: phone_enroll_api::EnrollBox,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -1155,6 +1158,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         contact_state: Mutex::new("unknown".into()),
         pending_codes: identity_api::PendingCodes::default(),
         typing: typing_api::Typing::default(),
+        phone_enroll: Default::default(),
         ligus_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),
@@ -1186,6 +1190,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(sync_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(phone_enroll_api::relay_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));
@@ -1200,7 +1205,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(revocation_watch(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(tunnel::revocation::run(t.clone(), rx.clone())));
         tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));
-        tasks.push(tokio::spawn(tunnel::control::run(t, api::router(shared.clone()), rx.clone(), Default::default())));
+        // E3b: an uncertified phone gets the add-a-phone routes only.
+        let routers = tunnel::session::Routers { api: api::router(shared.clone()), provisional: Some(phone_enroll_api::provisional_router(shared.clone())) };
+        tasks.push(tokio::spawn(tunnel::control::run(t, routers, rx.clone(), Default::default())));
     }
     let worker = spawn_worker(shared.clone())?;
     shared.sync_kick.notify_one();

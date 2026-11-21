@@ -1437,3 +1437,6 @@ async fn admission_prepare_is_bound_to_the_pairings_phone() {
     assert!(body.contains(&h.handle.shared.token()) && !body.contains(op.trim()), "{body}");
     h.handle.shutdown();
 }
+
+#[path = "enroll_qr_e2e_tests.rs"]
+mod enroll_qr;

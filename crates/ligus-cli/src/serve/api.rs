@@ -715,7 +715,7 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
 }
 
 pub fn router(shared: Arc<Shared>) -> Router {
-    Router::new()
+    let r = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/me", get(super::me_api::me))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
@@ -794,7 +794,8 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/tunnel/push", put(tunnel_push))
         .route("/v1/tunnel/direct", get(tunnel_direct))
         .route("/v1/revocations", get(list_revocations))
-        .route("/v1/revocations/{device}/retry", post(retry_revocation))
+        .route("/v1/revocations/{device}/retry", post(retry_revocation));
+    super::phone_enroll_api::routes(r)
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
