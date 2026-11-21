@@ -34,32 +34,360 @@ MANAGED_LABEL=ligus.ai/managed-by
 MANAGED_VALUE=ligus-k8s
 RELEASE_LABEL=ligus.ai/release
 
-usage() {
-  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+# ---------------------------------------------------------------------- help
+# `ligus-k8s --help` (everything), `ligus-k8s help <command>` and
+# `ligus-k8s <command> --help` (one command). Help goes to stdout, exit 0.
+# deploy/tests/agent-deploy-test.sh checks every command in the dispatcher
+# at the bottom has a section here and every flag the parser takes is named.
+
+help_common_flags() {
+  cat <<'EOF'
+  --context CTX            the kube context every kubectl and helm call is pinned to (required
+                           except for check-rendered; default: $LIGUS_KUBE_CONTEXT; never the
+                           current context)
+  -n, --namespace NS       one namespace per workspace (default: $LIGUS_NAMESPACE)
+  --release NAME           the Helm release (default: $LIGUS_RELEASE, else ligus)
+  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
+                           progress always goes to stderr
+  -h, --help               print this command's help and exit 0
+EOF
+}
+
+help_see_also() {
+  cat <<'EOF'
+SEE ALSO
+  ligus-k8s help <command>       one command's help (also: ligus-k8s <command> --help)
+  ligus help kubernetes          Ligus on Kubernetes: the chart, scenarios, supported nodes
+  ligus help worker              ligus worker: extra capacity bound to a named host
+  ligus help box                 ligus serve as an always-on box
+  ligus help agents-guide        what an agent may do alone and what needs a human
+  ligus help troubleshooting     pods stuck in Init, sandbox and NetworkPolicy failures
+  ligus help security            the sandbox, keys and what never leaves the namespace
+  ligus help env                 every environment variable ligus reads
+  AGENTS.md (repository root), .claude/skills/ligus-deploy-k8s/SKILL.md,
+  deploy/kubernetes/README.md, deploy/helm/ligus/README.md
+EOF
+}
+
+hc_preflight() {
+  cat <<'EOF'
+ligus-k8s preflight - check the cluster can host Ligus; changes nothing
+
+SYNOPSIS
+  ligus-k8s preflight --context CTX [-n NS] [--release NAME] [--probe [--image REPO:TAG]
+                      [--probe-image REF]] [--storage-class NAME] [--json]
+
+  Checks kubectl, helm (3.14+), openssl, Kubernetes 1.27+, permissions,
+  the namespace's Pod Security level, NetworkPolicy enforcement (from the
+  CNI), the StorageClass, node kernels (6.7+ for Landlock) and the relay
+  chart dependency. --probe measures instead of guessing.
+
+FLAGS
+  --probe                  create a temporary namespace ($LIGUS_PROBE_NS_PREFIX, default
+                           ligus-preflight-<hex>), measure Pod Security, NetworkPolicy and the
+                           Landlock sandbox, then delete it (default: off)
+  --image REPO:TAG         the Ligus image for the Landlock probe (ligus doctor --turn-test in a
+                           restricted pod); without it that probe is skipped. Also accepted:
+                           --image-repository R [--image-tag T | --image-digest sha256:...]
+                           (tag default 0.1.0 when only a repository is given)
+  --probe-image REF        the image for the probe pods, with httpd and wget (default busybox:1.37)
+  --storage-class NAME     check this StorageClass instead of the default one
+EOF
+  help_common_flags
   cat <<'EOF'
 
-install flags:
-  --scenario trial|team-in-cluster-relay|team-external-relay   (required)
-  --image REPO:TAG | --image-repository R --image-tag T | --image-digest sha256:...
-  --relay-image-repository R --relay-image-tag T   (trial: the in-release relay's image; default ghcr.io/langstroth-ai/langstroth-relay:0.3.0)
-  --relay-url URL               (team-external-relay; https:// only)
-  --relay-namespace NS          (team-in-cluster-relay; default langstroth-relay)
-  --workspace-secret NAME       (default <release>-workspace)
-  --relay-access-token          the workspace Secret holds relay-access-token
-  --workers a,b                 named worker hosts (worker.instances)
-  --no-serve                    workers only (serve.enabled=false)
-  --access-mode ReadWriteOnce|ReadWriteOncePod   override the scenario's
-  --storage-class NAME
-  --values FILE                 extra values (never secrets), applied last
-  --relay-chart DIR             package the relay chart from a relay checkout
-                                (default: pull it from oci://ghcr.io/langstroth-ai/charts)
-  --fetch-relay-chart           git clone the relay repo at the pinned commit
-  --dry-run                     render and server-side dry-run only
-  --timeout DUR                 helm --wait timeout (default 10m)
-verify flags:   --skip-helm-test
-preflight flags: --probe [--image REF] [--probe-image busybox:1.37]
-teardown flags: --delete-data --delete-secrets --delete-namespace
+EXAMPLES
+  ligus-k8s preflight --context kind-ligus -n ligus-trial --json
+  ligus-k8s preflight --context orbstack -n ligus-ws-acme --release acme --probe --image ligus:dev --json
+
+EXIT CODES
+  0 ready (warnings allowed)   1 a check failed (kernel, CNI, storage, Kubernetes version)
+  2 usage error (no --context)   3 a tool missing, helm too old, or the API server unreachable
 EOF
+}
+
+hc_secrets() {
+  cat <<'EOF'
+ligus-k8s secrets - create the workspace Secret (or another Secret) without printing a value
+
+SYNOPSIS
+  ligus-k8s secrets workspace --context CTX -n NS [--release NAME] (--throwaway | --from-dir DIR)
+                              [--name NAME | --workspace-secret NAME] [--replace] [--json]
+  ligus-k8s secrets generic   --context CTX -n NS [--release NAME] --name NAME --from-dir DIR
+                              [--replace] [--json]
+
+  Creates the namespace if needed (Pod Security restricted, labelled
+  ligus.ai/managed-by=ligus-k8s). Values are read from files, never argv or
+  stdout. An existing Secret is left unchanged unless --replace.
+
+FLAGS
+  --throwaway              workspace: a random room and key nobody else holds (trials and tests only)
+  --from-dir DIR           files, one per key, in a directory only the owner can read (mode 0700,
+                           files 0600). workspace: room, key and optionally relay-access-token,
+                           written by the human; nothing else is allowed
+  --name NAME              the Secret's name (generic: required; workspace: default the
+                           --workspace-secret value)
+  --workspace-secret NAME  the workspace Secret's name (default <release>-workspace)
+  --replace                update an existing Secret (default: leave it unchanged)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-k8s secrets workspace --throwaway --context kind-ligus -n ligus-trial --json
+  ligus-k8s secrets workspace --from-dir ~/ligus-ws-secret --context prod -n ligus-ws-acme --release acme --json
+  ligus-k8s secrets generic --name model-keys --from-dir ~/model-keys --context prod -n ligus-ws-acme --json
+
+EXIT CODES
+  0 created or already there   2 usage error (no kind, --name or --from-dir for generic)
+  3 a tool missing, the cluster unreachable, or DIR missing, readable by others or with an extra file
+  4 stop for the human: no Secret and neither flag (a real workspace needs their files), an
+    existing Secret lacks room/key, a file is missing, or the namespace is not restricted and not ours
+EOF
+}
+
+hc_install() {
+  cat <<'EOF'
+ligus-k8s install - render, check, dry-run, then helm upgrade --install --wait
+
+SYNOPSIS
+  ligus-k8s install --scenario trial|team-in-cluster-relay|team-external-relay
+                    --context CTX -n NS [--release NAME] [image flags] [relay flags]
+                    [--workspace-secret NAME] [--relay-access-token] [--workers a,b] [--no-serve]
+                    [--access-mode MODE] [--storage-class NAME] [--values FILE]
+                    [--relay-chart DIR | --fetch-relay-chart] [--dry-run] [--timeout DUR] [--json]
+  ligus-k8s render ...         the same as install --dry-run
+
+  Renders the chart with the scenario's values (deploy/kubernetes/scenarios)
+  and your flags, refuses a manifest that turns off a fail-closed default
+  (sandbox required and preflighted, NetworkPolicies with restricted egress,
+  nothing exposed or privileged), runs a server-side dry run, checks the
+  workspace Secret has room and key, then installs and waits. Rerunning it
+  with a new image upgrades the release in place.
+
+FLAGS
+  --scenario S             trial | team-in-cluster-relay | team-external-relay (required)
+  --image REPO:TAG         the Ligus image (default: the chart's, ghcr.io/langstroth-ai/ligus at
+                           the chart's appVersion); or --image-repository R, --image-tag T,
+                           --image-digest sha256:... (a digest overrides the tag)
+  --relay-image-repository R, --relay-image-tag T
+                           trial: the in-release relay's image (default
+                           ghcr.io/langstroth-ai/langstroth-relay:0.3.0)
+  --relay-url URL          team-external-relay: the relay, https:// only (required there)
+  --relay-namespace NS     team-in-cluster-relay: where the relay runs (default langstroth-relay)
+  --workspace-secret NAME  the workspace Secret (default <release>-workspace)
+  --relay-access-token     the workspace Secret also holds relay-access-token (default: off)
+  --workers a,b            named worker hosts (worker.instances; default: none)
+  --no-serve               workers only (serve.enabled=false; default: serve on)
+  --access-mode MODE       ReadWriteOnce or ReadWriteOncePod (default: the scenario's: trial
+                           ReadWriteOnce, team ReadWriteOncePod)
+  --storage-class NAME     the PVCs' StorageClass (default: the cluster's default)
+  --values FILE            extra values, applied last; never secret values (refused, exit 4)
+  --relay-chart DIR        package the relay chart from a relay checkout (default:
+                           $LIGUS_RELAY_CHART, else pull it from oci://ghcr.io/langstroth-ai/charts)
+  --fetch-relay-chart      git clone $LIGUS_RELAY_REPO_URL at $LIGUS_RELAY_REF (the commit CI
+                           pins) and package its chart
+  --dry-run                render, check and server-side dry-run only; prints the rendered
+                           manifest's path (no secrets in it)
+  --timeout DUR            helm --wait timeout (default 10m)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-k8s install --scenario trial --context kind-ligus -n ligus-trial --image ligus:dev --dry-run --json
+  ligus-k8s install --scenario trial --context kind-ligus -n ligus-trial --image ligus:dev --json
+  ligus-k8s install --scenario team-external-relay --relay-url https://relay.example.com \
+    --context prod -n ligus-ws-acme --release acme --image-repository R --image-digest sha256:... --json
+
+EXIT CODES
+  0 installed (or the dry run passed)   1 render, server dry run or helm failed
+  2 usage error (no or unknown --scenario, bad value, --values file not found)
+  3 a tool, the cluster, the relay chart or the in-cluster relay Service is missing
+  4 stop for the human: the values turn off a fail-closed default, the workspace Secret is missing,
+    --relay-url is not https, or --values holds a secret value
+EOF
+}
+
+hc_verify() {
+  cat <<'EOF'
+ligus-k8s verify - check a release: status, pods, sandbox, health, NetworkPolicies, helm test
+
+SYNOPSIS
+  ligus-k8s verify --context CTX -n NS [--release NAME] [--skip-helm-test] [--json]
+
+  Each serve and worker pod must be Ready with a passed sandbox preflight
+  (Landlock and a confined agent turn); serve must answer GET /v1/health;
+  helm test runs a sandboxed turn and sync through the relay on a
+  throwaway workspace.
+
+FLAGS
+  --skip-helm-test         do not run helm test (default: run it, 5m timeout)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-k8s verify --context kind-ligus -n ligus-trial --json
+  ligus-k8s verify --context prod -n ligus-ws-acme --release acme --skip-helm-test --json
+
+EXIT CODES
+  0 healthy   1 a check failed (read checks[].fix)   2 usage error (no --context or -n)
+  3 a tool missing or the API server unreachable
+EOF
+}
+
+hc_teardown() {
+  cat <<'EOF'
+ligus-k8s teardown (alias: uninstall) - helm uninstall; optionally delete data, Secrets, namespace
+
+SYNOPSIS
+  ligus-k8s teardown --context CTX -n NS [--release NAME] [--delete-data] [--delete-secrets]
+                     [--delete-namespace] [--json]
+
+  Keeps PVCs and Secrets by default. Uninstalling is not revoking: if the
+  release ever joined a real workspace, a human revokes it from a desktop.
+
+FLAGS
+  --delete-data            delete the release's PVCs: the identities and event logs (default: keep)
+  --delete-secrets         delete the Secrets ligus-k8s created for this release (default: keep)
+  --delete-namespace       delete the namespace, only if ligus-k8s created it and no other Helm
+                           release is in it (default: keep)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-k8s teardown --context kind-ligus -n ligus-trial --json
+  ligus-k8s teardown --context kind-ligus -n ligus-trial --delete-data --delete-secrets --delete-namespace --json
+
+EXIT CODES
+  0 removed   1 helm uninstall failed or the namespace did not finish deleting   2 usage error
+  3 a tool missing or the API server unreachable
+  4 --delete-namespace on a namespace ligus-k8s did not create or that holds other releases
+EOF
+}
+
+hc_check_rendered() {
+  cat <<'EOF'
+ligus-k8s check-rendered - check a rendered manifest keeps the fail-closed defaults (offline)
+
+SYNOPSIS
+  ligus-k8s check-rendered FILE [--json]
+
+  The same check install runs on its rendered manifest (helm template
+  output); needs no cluster and no --context. Used by the tests.
+
+FLAGS
+  FILE                     the rendered manifest (required)
+  --json                   print exactly one JSON object on stdout
+  -h, --help               print this command's help and exit 0
+
+EXAMPLES
+  helm template t deploy/helm/ligus -f deploy/kubernetes/scenarios/trial.yaml > /tmp/t.yaml
+  ligus-k8s check-rendered /tmp/t.yaml --json
+
+EXIT CODES
+  0 every default kept   2 FILE missing   4 a default is off: a human decides
+EOF
+}
+
+# One command's section; an unknown command is a usage error (exit 2).
+help_cmd_body() {
+  case $1 in
+    preflight) hc_preflight ;;
+    secrets) hc_secrets ;;
+    install|render) hc_install ;;
+    verify) hc_verify ;;
+    teardown|uninstall) hc_teardown ;;
+    check-rendered) hc_check_rendered ;;
+    *) ac_usage_error "no help for unknown command: $1 (ligus-k8s --help lists them)" ;;
+  esac
+}
+# help_cmd <command>: `help <command>` and `<command> --help`.
+help_cmd() {
+  local body
+  body=$(help_cmd_body "$1") || exit $?
+  printf '%s\n\n' "$body"
+  help_see_also
+}
+
+usage() {
+  cat <<'EOF'
+ligus-k8s - deploy one Ligus workspace (ligus serve, workers) on Kubernetes
+
+Ligus is short for ligustica. This tool installs the deploy/helm/ligus
+chart non-interactively, for a person or a coding agent. Every command is
+idempotent, never prompts, never prints a secret, and is pinned to the
+kube context you name.
+
+SYNOPSIS
+  ligus-k8s <command> [flags]
+  ligus-k8s help [<command>]          ligus-k8s <command> --help
+
+COMMANDS
+  preflight        check the cluster; changes nothing (--probe: a temporary namespace)
+  secrets          secrets workspace | secrets generic: create a Secret from files
+  install          render, check, server dry-run, then helm upgrade --install --wait
+                   (also upgrades; render = install --dry-run)
+  verify           helm status, pods, sandbox, health, NetworkPolicies, helm test
+  teardown         helm uninstall, optionally data, Secrets, namespace (alias: uninstall)
+  check-rendered   check a rendered manifest's fail-closed defaults, offline
+
+COMMON FLAGS
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+ONE-SHOT SEQUENCE (an agent; the human steps are marked)
+  0. HUMAN: confirm the context, namespace and scenario (and for a team: StorageClass, workers)
+  1. ligus-k8s preflight --context CTX -n NS --release R --probe --image REPO:TAG --json
+  2. ligus-k8s secrets workspace --throwaway --context CTX -n NS --release R --json      (trial)
+     or HUMAN writes room, key [, relay-access-token] into a 0700 dir, then
+     ligus-k8s secrets workspace --from-dir DIR --context CTX -n NS --release R --json
+     real workspace: HUMAN saves each box's admission (desktop: Admit a box > For Kubernetes)
+     as DIR/admission; ligus-k8s secrets generic --name R-serve-admission --from-dir DIR ...;
+     name it in a --values file (serve.admission.existingSecret)
+  3. ligus-k8s install --scenario S --context CTX -n NS --release R --image REPO:TAG --dry-run --json
+  4. the same install without --dry-run
+  5. ligus-k8s verify --context CTX -n NS --release R --json
+  6. HUMAN: pair the phone, any exposure, DNS and TLS for the relay
+
+EXAMPLES
+  ligus-k8s preflight --context kind-ligus -n ligus-trial --probe --image ligus:dev --json
+  ligus-k8s install --scenario trial --context kind-ligus -n ligus-trial --image ligus:dev --json
+  ligus-k8s help install
+
+ENVIRONMENT
+  LIGUS_KUBE_CONTEXT       default for --context
+  LIGUS_NAMESPACE          default for --namespace
+  LIGUS_RELEASE            default for --release (else ligus)
+  LIGUS_RELAY_CHART        default for --relay-chart
+  LIGUS_RELAY_REPO_URL     --fetch-relay-chart's repository
+                           (default https://github.com/langstroth-ai/langstroth-relay.git)
+  LIGUS_RELAY_REF          --fetch-relay-chart's commit (default: the one CI pins)
+  LIGUS_PROBE_NS_PREFIX    preflight --probe's namespace prefix (default ligus-preflight-)
+  TMPDIR                   where install writes its values file and rendered manifest
+  KUBECONFIG               read by kubectl and helm as usual
+
+EXIT CODES
+  0  done (warnings allowed)
+  1  a check or an operation failed; checks[].fix says what to do
+  2  usage error (unknown command or flag, missing or invalid value, no --context)
+  3  a precondition is missing that you can fix and rerun (a tool, the cluster, the relay chart)
+  4  a human must decide or act (a real workspace secret, exposure, weakening a default); stop and ask
+  With --json, stdout is one object: {schema, tool, command, ok, exitCode, checks[{id, status,
+  detail, fix}], next[], context, namespace, release, ...}; a usage error adds "error".
+
+COMMAND DETAILS
+EOF
+  local c
+  for c in preflight secrets install verify teardown check-rendered; do
+    echo
+    help_cmd_body "$c"
+  done
+  echo
+  help_see_also
 }
 
 # ---------------------------------------------------------------- arguments
@@ -67,9 +395,11 @@ CMD=${1:-}
 [ $# -gt 0 ] && shift
 SUB=""
 case $CMD in
-  -h|--help|help|"") usage; exit 0 ;;
-  secrets) SUB=${1:-}; [ $# -gt 0 ] && shift ;;
-  check-rendered) SUB=${1:-}; [ $# -gt 0 ] && shift ;;  # check a rendered manifest (offline; used by the tests)
+  -h|--help|"") usage; exit 0 ;;
+  help) if [ $# -gt 0 ]; then help_cmd "$1"; else usage; fi; exit 0 ;;
+  secrets|check-rendered)  # check-rendered: a rendered manifest (offline; used by the tests)
+    SUB=${1:-}; [ $# -gt 0 ] && shift
+    case $SUB in -h|--help) help_cmd "$CMD"; exit 0 ;; esac ;;
 esac
 
 CTX="" NS="" REL="" SCENARIO="" DRY=0 PROBE=0
@@ -116,7 +446,7 @@ while [ $# -gt 0 ]; do
     --from-dir) need "$@"; FROM_DIR=$2; shift ;;
     --name) need "$@"; SECRET_NAME=$2; shift ;;
     --replace) REPLACE=1 ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help) help_cmd "$CMD"; exit 0 ;;
     *) ac_usage_error "unknown argument: $1" ;;
   esac
   shift
