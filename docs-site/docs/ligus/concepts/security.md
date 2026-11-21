@@ -903,6 +903,74 @@ events, what exactly is signed and how it is verified are in
 [Passkey presence](../../operate/security/index.md#presence) in
 Operating Langstroth.
 
+## Adding a phone by QR code {#add-phone-qr}
+
+Since 0.1.1 you add a phone by showing a QR code on your desktop and scanning
+it with the Ligus app ([Add your phone](../features/phone-app.md#add-this-phone)).
+The phone's request travels back to the desktop through your `ligus serve`
+box and the relay, so it matters what those two can and can't do.
+
+**The QR's secret keeps the box and the relay out of the key path.** The QR
+holds a one-time 32-byte secret that only travels optically, from the
+screen to the phone's camera. The phone proves it read the QR with a MAC
+keyed from that secret, and signs the request with its own device key. The
+box and the relay never see the secret, so neither can swap in another key,
+replay an old request into a new code, or make the desktop accept a request
+it made up. The box can check the phone's signature but can't certify a
+phone: the desktop certifies it with your passkey, through the same rules
+as every other device. The relay sees only that someone in the workspace is
+adding a phone, and when.
+
+**The fingerprint comparison is still the check that matters most.** Anyone
+who sees the QR in its 5 minutes, over your shoulder, in a screen share or
+in a photo, holds the secret too, and could answer it from their own phone
+if they can reach a box of the workspace. Ligus makes that hard to miss:
+
+- **Show code.** The desktop draws the QR only when you ask, hides it when
+  the window loses focus, and asks the system not to capture the window
+  while it shows (best effort: not every capture path honours it, and a
+  camera pointed at the screen always works).
+- **The hold.** **Add this phone** stays disabled for 5 seconds after a
+  request arrives. If a second phone answers in that time, nothing is added
+  and the desktop asks you to start again.
+- **The tripwire.** After you approve, the desktop keeps listening until
+  the code expires. If another phone answers, it raises an alert naming the
+  phone you added and its fingerprint, with a button to revoke it; the
+  other phone, if it is yours, says another phone was added with the code.
+- **One use, 5 minutes.** A code is locked to the first phone that answers
+  it and expires after 5 minutes.
+- **Only boxes relay.** The desktop accepts a request only when a box (a
+  service member's certified device) signed it, not when another member's
+  device did.
+
+What this doesn't stop, stated plainly:
+
+- **Approving without comparing.** Someone who photographs the QR and
+  answers first, while you approve without comparing the fingerprint and
+  never scan with your own phone, adds their phone as yours, and the
+  tripwire never fires because your phone never answers. The extra phone is
+  listed in **My devices**, and your real phone is still refused when it
+  pairs, which sends you back to the panel. Compare the fingerprint every
+  time.
+- **A box operator who saw the QR.** Someone who runs the only box your
+  phone can reach and also has the secret can hold back your phone's
+  request and send their own; only the fingerprint comparison catches that.
+- **Scanning someone else's code.** If a co-member gets you to scan the QR
+  on *their* desktop, past the name, role and other-account warnings, your
+  phone is added to their account. They gain no access to your data, but
+  your phone is locked out of that workspace until you reset its device key.
+- **The paste fallback.** Can't scan? takes the phone's `ligusphone1:` code,
+  which isn't secret. Anyone in the workspace who has it can certify it for
+  their own account, which also locks your phone out until you reset its
+  device key. The QR flow is immune to this (it needs a fresh signature by
+  the phone over the code it scanned); a fix for paste is a known follow-up.
+- **Availability.** The relay, or any member, can overwrite the presence
+  slots the request travels in. Forged content fails the checks, so this
+  only stops the flow; use Can't scan?.
+
+See [the threat model](../../operate/security/threat-model.md#add-phone-qr)
+for the attacker's view.
+
 ## What this page does not cover
 
 The full [security model](../../operate/security/index.md), the

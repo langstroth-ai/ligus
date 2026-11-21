@@ -93,12 +93,16 @@ This creates the box's host keys and saves the relay in
 
 ## 3. Pair the phone
 
-Add the phone on your desktop first (**My devices > Add this phone**, with
-the code the app shows; see
-[Add this phone](../../ligus/features/phone-app.md#add-this-phone)). The box
-pairs only phones it knows as certified: an earlier attempt is refused with
-the close code `4040 device_not_certified`, and the phone pairs again once the
-box has synced.
+The box pairs only phones it knows as certified to a person. Add the phone
+from the desktop (**My devices → Add a phone → Show code**, scanned with the
+app's **Settings → This phone → Add to my devices**; see
+[Add your phone](../../ligus/features/phone-app.md#add-this-phone)). A
+brand-new phone can do this through the box before it is certified: through
+the relay the box gives it a provisional connection that reaches only the
+add-a-phone routes, and on the direct path it uses the box's token. Once the
+box has synced the certificate, the phone pairs. A phone that tries to pair
+first is refused with the close code `4040 device_not_certified`; its refusal
+screen leads to the same scan.
 
 ```sh
 ligus pair

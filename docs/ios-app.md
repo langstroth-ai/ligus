@@ -73,14 +73,17 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate |
+| GET | `/v1/me` | Tunnel or loopback only. `{workspaceId, room, workspaceName, configLogId, device: {id, fingerprint, tier: "phone"}, account: {id, memberId, displayName, role}, rpId, origins}`: who this phone is here (see "Add this phone" and "Add a phone by scanning the desktop's QR" below). `403 {error: "device_not_certified", message}` until the box knows the phone's certificate |
+| POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | 0.1.1. Who showed a scanned `ligusenroll1:` code: `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing: "new"\|"alreadyMine"}}`. See "Add a phone by scanning the desktop's QR" below |
+| POST | `/v1/phone-enroll/requests` `{request}` | 0.1.1. `202 {rid, state: "relayed"}`: the box passed the phone's `ligusenrollreq1:` request to the desktop |
+| GET | `/v1/phone-enroll/requests/{rid}?wait=N` | 0.1.1. `{state: "waiting"\|"answered"\|"expired", answer?, certified}`, long poll up to 25 s |
 | GET | `/v1/health` | `{ok: true, version, workspace?, deviceLabel?, identity?}`. `workspace` (room name), `deviceLabel` and `identity` appear only when authorized. `identity = {mode: "member"\|"revoked", actorId, displayName, deviceFingerprint}`: the box's own service-member identity (`"owner"` is never reached: a box enrolled as a person's device refuses to start) |
 | GET | `/v1/chats` | `{chats: [{id, title, updatedAt, preview, unread: int, channelId, participants: [Participant]}]}`, newest first |
 | POST | `/v1/chats` `{title?}` | `{chat}` |
 | GET | `/v1/chats/{id}/messages?after=<messageId>&limit=<n>` | `{messages: [Message]}`, oldest first. Without `after`, the latest page (default limit 100, max 1000) |
 | POST | `/v1/chats/{id}/messages` `{body}` | `{message}`. `@Name` mentions route to agents exactly as on the desktop/CLI |
 | GET | `/v1/chats/{id}/details` | The chat's details (the desktop's right-hand panel, read-only); see below |
-| GET | `/v1/agents` | `{agents: [{id, name, runtimeLabel, model?, hostId?, hostLabel?, hostKind, hostOnline?, role?, avatarUrl?, avatarColorHex?, ownerActorId?}]}`. `ownerActorId` (absent when the agent has no recorded owner) is the account that may grant the agent's permission requests besides the host's own person: show the Allow button on a `permission` ask only when it is yours |
+| GET | `/v1/agents` | `{agents: [{id, name, runtimeLabel, model?, hostId?, hostLabel?, hostKind, hostOnline?, role?, avatarUrl?, avatarColorHex?, ownerActorId?, available, unavailableReason?, access}]}`. `ownerActorId` (absent when the agent has no recorded owner) is the account that may grant the agent's permission requests besides the host's own person: show the Allow button on a `permission` ask only when it is yours. `available` is whether this box's person may use the agent; when false, grey it out (no @mention) and show `unavailableReason` ("Only its owner can use this agent", "Only workspace Admins can use this agent"). `access` is `owner` or `everyone` ([agent access](../docs-site/docs/ligus/features/agent-access.md)); budgets aren't checked here |
 | GET | `/v1/chats/{id}/asks` | `{asks: [Ask]}`, newest first. `Ask = {id, chatId, turnId, agentKey, agentName, kind, question, options, expiresAtMs, closed, open, answer?, answeredBy?}`; `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation); decide on `kind`, never on the question's text. `ask.pending` events carry the same `Ask` |
 | GET | `/v1/people` | `{people: [Person]}`, the workspace's human members |
 | GET | `/v1/channels` | `{channels: [{id, name, purpose?, position, archived, defaultChatId}]}`, in sidebar order |
@@ -450,8 +453,11 @@ device id doesn't belong to its key" (`check_device_id`), before the
 desktop shows the fingerprint, so a phone that sends a stored or random id
 can't be added.
 
-**2. The desktop certifies it.** The person pastes the code into **My
-devices > Add this phone** on their desktop (or runs `ligus phones certify
+**2. The desktop certifies it.** Since 0.1.1 the primary path is the reverse
+QR below: the phone scans the desktop's code and its own code reaches the
+desktop through the box. The fallback, **Can't scan?**: the person pastes or
+types the code into **My devices > Add a phone > Can't scan?** on their
+desktop (or runs `ligus phones certify
 <code> --recovery-words-file PATH --fingerprint F` on a CLI identity of
 theirs; without `--fingerprint` it asks at a terminal and refuses
 otherwise), compares the fingerprint with the phone's screen and confirms with
@@ -466,7 +472,8 @@ id (the phone needs a new key and id).
 (`device: {id, sig}`, [`relay-tunnel.md`](relay-tunnel.md) §7.2 E3a) names
 this device. Until the box has synced the certificate the host closes the
 enrollment WebSocket with close code **4040**, reason `device_not_certified`:
-show "Add this phone on your desktop first" with the code and fingerprint,
+show "Add this phone on your desktop first" leading with **Scan your
+desktop's code** (0.1.1; the code and fingerprint under Can't scan?),
 and offer to pair again once the desktop has synced (the same link works
 for its 10 minutes, five attempts in all; then run `ligus pair` again). **4041** `device_revoked` and **4042** `device_claim_invalid` are
 final: show them, don't retry. A close without a reason is any other refusal
@@ -479,6 +486,234 @@ passkey relying party (`rpId`, `origins`). Store them with the host profile;
 use `account.memberId` to recognise your own messages and `rpId`/`origins`
 for every `ASAuthorization` request. Nothing is typed in. Call it again after
 a `403 device_not_certified` from any phone-action route.
+
+### Add a phone by scanning the desktop's QR: implementation spec (0.1.1)
+
+The reverse of "Add this phone": the **desktop** shows a QR code, the phone
+scans it with the app's own scanner, and the phone's `ligusphone1:` code
+travels back to the desktop through the workspace's `ligus serve` box. The
+desktop then certifies it exactly as the paste flow does (the same
+`certify_phone_code`, the same `DeviceCertificateAdded`, the same passkey).
+Design: [`design/v2/phone-enroll-reverse-qr.md`](design/v2/phone-enroll-reverse-qr.md).
+Reference implementation: `ligus_runtime::phone_enroll_qr` (the only code
+that builds or parses a `ligusenroll*` string). Golden vectors:
+`crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`; differential
+corpus (each mutated offer, request and answer with the core's verdict,
+which the Swift parser must match exactly):
+`crates/ligus-core/tests/golden/differential/rust_parity_enroll_v1.jsonl`
+(copy into `LigusTests/Fixtures/differential/`). Both are generated and
+checked by `crates/ligus-runtime/tests/phone_enroll_qr_vectors.rs`.
+
+**Flow.**
+
+1. Desktop: **Settings > Profile > My devices > Add a phone > Show code**.
+   It draws a 32-byte secret, sets `exp = now + 300`, and shows the offer as
+   a QR code (never as text).
+2. Phone: **Settings > This phone > Add to my devices** opens the scanner,
+   which in this context accepts `ligusenroll1:` (and nothing else; the
+   pairing scanner still takes only `ligus://`). Decode the offer and check
+   its expiry (below).
+3. Pick the host profile whose workspace (from `/v1/me`, or `check`) is the
+   offer's `workspace_id`. None: "Pair with this workspace's box first",
+   open the pairing scanner and keep the offer in memory until it expires.
+   An uncertified phone reaches the box through the provisional enrollment
+   (E3b, below) or, on the direct path, with its bearer token.
+4. `POST /v1/phone-enroll/check`; show "Add this phone to **Ana** (*role*)'s
+   devices in **acme**?" from its answer, with the warnings below, and
+   **Add**.
+5. Sign the request with the Secure Enclave key, build
+   `ligusenrollreq1:`, `POST /v1/phone-enroll/requests`, and show the
+   fingerprint large: "Your desktop shows the same fingerprint. Check it
+   there, then confirm with your passkey."
+6. Long-poll `GET /v1/phone-enroll/requests/{rid}?wait=25`. **Success is
+   `certified: true`**: then enroll again with the same pairing window
+   (tunnel) or refresh `/v1/me` (direct), and show "This phone is now one of
+   your devices". Keep polling until the offer expires: a late answer may
+   still carry the tripwire alarm.
+
+**Wire formats.** Integers little-endian; `b64u` is base64url without
+padding, and decoders refuse padding, `+`, `/`, whitespace anywhere and
+non-canonical trailing bits (stricter than `ligusphone1:`, whose decoder
+ignores whitespace in a pasted code).
+
+```
+offer     = "ligusenroll1:" + b64u( workspace_id(16) ‖ desktop_device_id(16) ‖ secret(32) ‖ exp(u64 LE, Unix s) )
+            72 bytes → 96 characters after the 13-character prefix
+
+prk       = HKDF-Extract(salt = "ligus-enroll-qr-v1", ikm = secret)        (HKDF-SHA256)
+rid       = HKDF-Expand(prk, info = "rid",         16)
+k_req     = HKDF-Expand(prk, info = "request-mac", 32)
+k_ans     = HKDF-Expand(prk, info = "answer-mac",  32)
+
+code_body = the phone's ligusphone1: code bytes, unchanged:
+            device_id(16) ‖ pubkey(65) ‖ code_sig(64) ‖ label(UTF-8, ≤ 64)
+signed    = "ligus-enroll-request-v1\0" ‖ rid(16) ‖ workspace_id(16) ‖ desktop_device_id(16)
+            ‖ exp(u64 LE) ‖ code_body
+phone_sig = ECDSA P-256 / SHA-256 by the Secure Enclave key over signed, r ‖ s, low S (64)
+mac       = HMAC-SHA256(k_req, signed ‖ phone_sig)                                 (32)
+request   = "ligusenrollreq1:" + b64u( rid ‖ workspace_id ‖ desktop_device_id ‖ exp
+                                       ‖ phone_sig ‖ mac ‖ code_body )            297..361 bytes
+
+outcome   = 1 certified | 2 declined | 3 refused (the phone's standing: a conflict or revoked)
+tag       = HMAC-SHA256(k_ans, "ligus-enroll-answer-v1\0" ‖ rid(16) ‖ outcome(u8) ‖ device_id(16))
+answer    = "ligusenrollres1:" + b64u( rid ‖ outcome ‖ device_id ‖ tag )            65 bytes
+```
+
+- The prefix is the version (a later format is `ligusenroll2:`); there is no
+  inner version byte.
+- The offer carries no name, label or relay URL: who the desktop belongs to
+  comes from the box's roster (`check`), never from the QR.
+- The offer isn't a URL and no `ligus://` link starts this flow: only the
+  in-app scanner reads it, so a web page or another app can't start it with
+  a code it made.
+- The offer has no integrity of its own. A damaged offer decodes as another
+  offer and is refused later, when the desktop checks the request
+  (`wrong_offer` or `bad_mac`).
+- `code_body` passes every check of `PhoneCode::decode` (the code signature,
+  the label clamp, the derived id); the desktop certifies exactly it.
+- `phone_sig` is fresh for each request: it binds the phone's consent to
+  this offer, so a `ligusphone1:` code someone saw earlier can't answer it.
+  The `mac` proves the sender read the QR: the box can check everything but
+  the MAC, the desktop checks everything.
+- `rid` travels on the wire (the box and the relay see it) and reveals
+  nothing about the secret. `secret`, `k_req`, `k_ans` and the offer text
+  stay in memory on the phone and the desktop only.
+
+**Clocks.** All checks take Unix milliseconds; `exp` is seconds. The phone
+accepts an offer with `now − 120 s ≤ exp ≤ now + 600 s` and refuses it
+otherwise with `expired` or `too_far_ahead`; the box accepts
+`now − 120 s ≤ exp ≤ now + 420 s`; the desktop accepts a request until
+`now > exp`.
+
+**Routes** (the box; full reference in
+[`serve-api.md`](../docs-site/docs/operate/reference/serve-api.md#phone-enroll)):
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | Writes nothing. `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `deviceId` only off the tunnel (through it, the device the connection proved). `standing`: `new`, or `alreadyMine` (nothing to do: say so and stop) |
+| POST | `/v1/phone-enroll/requests` `{request: "ligusenrollreq1:…"}` | `202 {rid, state: "relayed"}`. Re-sending the same bytes is idempotent. The box keeps pending requests in memory until `exp`; on a `404` from the status route (the box restarted), send the request again |
+| GET | `/v1/phone-enroll/requests/{rid}?wait=N` | `N ≤ 25`. `{state: "waiting"\|"answered"\|"expired", answer?: "ligusenrollres1:…", certified: bool}`. `certified` is whether the box's roster now has this phone's certificate |
+
+`rid`, `workspaceId` and `desktopDeviceId` in `check` are as the offer has
+them (`rid` as b64u, the ids as lowercase hyphenated UUIDs); `exp` is a
+number of Unix seconds.
+
+Box refusals, `{error, message}`:
+
+| Status | `error` | Show |
+|---|---|---|
+| 400 | `bad_request` | a bug on this side (the request didn't decode or the signature didn't verify): don't retry |
+| 403 | `device_mismatch` | the request names another device than this connection proved: don't retry |
+| 403 | `device_revoked` | "This phone's device is revoked here", and offer **Reset device key** |
+| 409 | `wrong_workspace` | "This code is for another workspace": pick another host profile or pair with the right box |
+| 409 | `desktop_unknown` | "The desktop that showed this code isn't a device of a person here" |
+| 409 | `offer_expired` | "Show a new code on your desktop and scan again" |
+| 409 | `someone_elses` | "This phone belongs to someone else here": offer **Reset device key** |
+| 503 | `relay_unavailable` | "This box can't reach the workspace's relay. Use Can't scan?" |
+| 404 on these routes, or a `4040` close without a provisional answer | (box older than 0.1.1) | "Update ligus serve, or use Can't scan?" |
+
+**E3b: provisional enrollment (relay tunnel).** A phone pairs only once it is
+certified (E3a, [`relay-tunnel.md`](relay-tunnel.md) §7.2), so an uncertified
+phone asks for a provisional channel. msg1's payload gains one optional
+field, the phone's public key:
+
+```
+{"v":1, "name":…, "pk":…, "device":{"id":…, "sig":…}, "enrollKey":"<b64u 65-byte SEC1 P-256 key>"}
+```
+
+Only where E3a would close with `4040 device_not_certified`, a 0.1.1 host
+checks that `enrollKey` is a valid point, that `device.id` is the id it
+derives, and that `device.sig` verifies under it over the same
+`ctx("device-bind", host_id, phone_static)` as E3a (otherwise `4042`), and
+answers msg2 `{"v":1,"provisional":true}`: no `pid`, no `cred`. The
+connection then reaches only the three `/v1/phone-enroll/*` routes (anything
+else is 404), for requests about its own device id only, at most 8
+requests, for at most 5 minutes; a box holds at most 4 at once. The attempt
+counts against the pairing window (5 attempts) and doesn't consume the
+pairing secret. Once `certified` is true, close the provisional connection
+and enroll again with the same link: E3a now binds. An older host ignores
+`enrollKey` and closes with 4040 as before; an older phone never sends it.
+The relay sees nothing new: msg1 and msg2 are end to end.
+
+**The answer.** `answer` is the desktop's, relayed as is; the box can't
+check its tag. Check it with `PhoneOffer::check_answer(text, my_device)`
+(the tag under `k_ans`, `rid`, the device id) before showing it:
+
+| Verdict | Show |
+|---|---|
+| `Mine(certified)` | nothing extra; success is `certified: true` from the box |
+| `Mine(declined)` | "Your desktop declined this phone." Ask for a new code |
+| `Mine(refused)` | the phone's standing refused it (a conflict, or revoked): offer **Reset device key** |
+| `AnotherPhone(certified)` | the tripwire alarm: "Another phone was added with this code. Tell the person at the desktop to revoke it." Don't retry |
+| `AnotherPhone(declined or refused)` | someone else answered first and was turned away: "Show a new code on your desktop and scan again" |
+
+A phone that lost the secret (it crashed) simply pairs: E3a or `/v1/me`
+says whether it is certified.
+
+**Codec refusal reasons** (`EnrollError::code`, pinned by the vectors and
+the corpus): `not_an_offer`, `not_a_request`, `not_an_answer`, `malformed`,
+`bad_code`, `bad_phone_signature`, `wrong_offer`, `bad_mac`,
+`offer_mismatch`, `expired`, `too_far_ahead`, `bad_tag`, `offer_closed`,
+`no_request`, `hold`, `fingerprint_mismatch`, `wrong_slot`, `stale_slot`,
+`bad_slot_signature`, `wrong_desktop`, `device_mismatch`. The phone meets
+`not_an_offer`, `malformed`, `expired` and `too_far_ahead` on a scan, and
+`not_an_answer`, `malformed`, `wrong_offer` and `bad_tag` on an answer
+(drop an answer that fails; keep polling).
+
+**The phone's screens.**
+
+- **Settings > This phone > Add to my devices** is the primary action; the
+  code card moves under **Can't scan? Show this phone's code**. The code
+  stays `.localOnly` (no Universal Clipboard).
+- The pairing refusal screen for `device_not_certified` leads with **Scan
+  your desktop's code**.
+- Scanner copy: "Point at the code on your desktop (Settings > My devices >
+  Add a phone)".
+- **One offer at a time.** A second scan while a request is pending asks
+  "Cancel the request to *Ana*'s desktop and use this code instead?"; only
+  one offer is ever in memory.
+- Warnings above **Add**: when `nameCollision` is true, "Two people here
+  are called Ana. Make sure this is your desktop."; when this phone already
+  knows its account from another host profile (`/v1/me` `account.id`) and
+  the offer's `accountId` differs, "This phone acts as *Name* elsewhere.
+  This code is from a different account."
+- Accessibility: the scanner announces "Scanner. Point the camera at the
+  code on your desktop"; a successful scan gives a haptic and a VoiceOver
+  announcement; the fingerprint uses `.speechSpellsOutCharacters`; Can't
+  scan? is reachable without the camera.
+- `NSCameraUsageDescription`: "Ligus uses the camera to scan pairing codes
+  from your box and your desktop."
+- Secrets: the secret, `k_req`, `k_ans` and the offer text live in memory
+  only and are wiped after the flow; never logged, never in a crash report
+  or an error string.
+
+**What the desktop and the box do** (for reference; the phone doesn't
+implement these):
+
+- The box checks everything it can (encoding, the code, `phone_sig`, the
+  caller's device, the `check` rules, limits), then publishes the request
+  on the relay's presence channel at `phone-enroll:<b64u rid>:<box device
+  id>` (field `phoneEnrollRequest`, `{request, relay, at, signature}`),
+  sealed under the workspace key and signed (Ed25519, context
+  `ligus-enroll-relay-v1\0`) by its device key. Only a slot signed by a
+  certified device of a current service member counts, so a person's own
+  device can't inject a request. The box writes nothing to any log, and
+  can't certify a phone.
+- The desktop opens the slot and checks, in order: the slot signature,
+  `rid`, `mac` (constant time), that `ws`, `D` and `exp` are the offer's,
+  the expiry, `phone_sig`, the code, the phone's standing. The first valid
+  request locks the offer to that phone (device id and key; a new label is
+  the same phone). **Add this phone** is allowed from 5000 ms after the
+  request first appeared (the hold); a valid request from another phone
+  before approval aborts the offer ("Two phones answered this code. Someone
+  else may have seen it. Start again."). After approval the desktop keeps
+  watching until `exp` and raises a revoke alert if another phone answers
+  (the tripwire).
+- The desktop answers at `phone-enroll-answer:<b64u rid>` (field
+  `phoneEnrollAnswer`, `{answer, desktop, at, signature}`, context
+  `ligus-enroll-answer-relay-v1\0`); the box relays only an answer signed by
+  the offer's own desktop device. Both sides republish every 10 s while
+  pending and drop slots more than 30 s ahead or 60 s old.
 
 ### Phone actions: implementation spec (0.1)
 

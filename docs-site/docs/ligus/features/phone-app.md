@@ -24,42 +24,146 @@ The box's own votes never count as your approval
 ([Running ligus serve](../../operate/ops/serve-box.md)). For the whole
 setup end to end, see [Personal fleet](../../operate/deploy/personal-fleet.md).
 
-## Add this phone {#add-this-phone}
+## Add your phone {#add-this-phone}
 
 Before the phone can pair with your box or sign anything, your desktop
 certifies the phone's own device key (a P-256 key in the Secure Enclave) as
-one of **your** devices:
+one of **your** devices. Since 0.1.1 the desktop shows a QR code and the
+phone scans it with the Ligus app; the phone's code reaches the desktop by
+itself, through your `ligus serve` box.
 
-1. In the app, open **Settings > This phone**. It shows the phone's code
-   (`ligusphone1:…`, as a QR code and as text to copy) and its fingerprint
-   (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four).
-2. On your desktop, open **Settings > Profile > My devices > Add this phone**
-   and paste the code (copy it on the phone and paste on the Mac with the
-   shared clipboard, or scan the QR code with the phone's camera app and
-   paste what it reads).
-3. Check that the fingerprint the desktop shows is the one on the phone,
-   tick the box, and choose **Add this phone**. Your passkey confirms it;
-   the passkey sheet names the same fingerprint. The phone is added to the
-   workspace you checked the code in: if you switch workspaces before
-   confirming, the desktop refuses and asks you to check the code again.
+1. **On the desktop:** **Settings → Profile → My devices → Add a phone →
+   Show code**. The QR code appears with a 5-minute countdown. It is hidden
+   when the window loses focus; choose **Show code** to bring it back, and
+   **Show a new code** once it expires.
+2. **On the phone:** **Settings → This phone → Add to my devices**, then
+   point the camera at the desktop's code. Use the scanner inside the Ligus
+   app; the phone's camera app doesn't read this code.
+3. The phone asks the box who showed the code and says "Add this phone to
+   *Ana* (*role*)'s devices in *workspace*?". Check that it is you, then
+   choose **Add**. The phone then shows its fingerprint
+   (`XXXX-XXXX-XXXX-XXXX-XXXX`, five groups of four) and waits.
+4. **On the desktop:** a card says "*Ana's iPhone* wants to be added", with
+   the box that relayed the request and the same fingerprint. **Compare the
+   fingerprint with the phone's screen**, group by group, and tick "Your
+   phone shows the same fingerprint". The phone's name is only what the
+   phone calls itself; the fingerprint is what proves it is the phone in
+   your hand.
+5. Choose **Add this phone** and confirm with your passkey; the passkey
+   sheet names the same fingerprint. The button stays disabled for the first
+   5 seconds after the request appears ("Listening for other phones…"): if
+   a second phone answers the same code in that time, the desktop stops and
+   asks you to start again. If the card isn't your phone, choose **Not my
+   phone**.
+6. The phone sees that the box now knows its certificate, pairs, and says
+   "This phone is now one of your devices". There is nothing to retry by
+   hand.
+
+The phone is added to the workspace the desktop showed the code for, under
+the account of the person at that desktop. The phone warns you before
+**Add** when two people in the workspace share the name shown ("Two people
+here are called Ana. Make sure this is your desktop.") and when this phone
+already acts as someone else on another host profile ("This code is from a
+different account.").
+
+### A phone that isn't paired yet {#new-phone}
+
+A brand-new phone has no channel to your box yet, and the box pairs only
+phones it already knows as certified. The flow handles this through the
+box:
+
+- If the phone has no host profile for the workspace in the code, it says
+  "Pair with this workspace's box first" and opens the pairing scanner,
+  keeping the desktop's code in memory until it expires. Scan the QR code
+  `ligus pair` prints on the box.
+- Through the relay, the box answers an uncertified phone with a
+  **provisional** connection: it reaches the three add-a-phone routes and
+  nothing else, for at most 5 minutes. Once the desktop has certified the
+  phone and the box has synced, the phone closes it and pairs normally with
+  the same link.
+- On the direct path (LAN or tailnet), the phone is paired before it is
+  certified and calls the same routes with the box's token.
+- If pairing was refused first ("add this phone first"), the refusal screen
+  leads with **Scan your desktop's code**.
+
+A pairing link allows five attempts in all; the provisional connection and
+the final pairing each use one. If the link runs out, run `ligus pair` again.
+
+### Can't scan? {#cant-scan}
+
+The paste flow still works, for a phone without a camera, a desktop that
+can't show the code (no relay connection, or no passkey on this account), or
+a box older than 0.1.1:
+
+1. In the app, open **Settings → This phone → Can't scan? Show this phone's
+   code**. It shows the phone's code (`ligusphone1:…`, as a QR code and as
+   text) and its fingerprint.
+2. On the desktop, under **Add a phone**, open **Can't scan?** and paste or
+   type the code. The phone's copy is local to the phone and never goes
+   through the shared clipboard, so on a Mac you either type it or move it
+   some other way you trust.
+3. Compare the fingerprint, tick the box, choose **Add this phone** and
+   confirm with your passkey. If you switch workspaces before confirming,
+   the desktop refuses and asks you to check the code again.
+4. Give the box a few seconds to sync, then tap **Retry** on the phone (or
+   scan a new `ligus pair` link if the old one used its five attempts).
+
+Without a desktop, `ligus phones certify` does the same on a CLI identity of
+yours with your recovery key ([CLI reference](../reference/cli.md)).
+
+### What the phone can do once added
 
 A phone code can't take over a device. A phone's device id is derived from
 its key, so a code naming any other id (one of the workspace's desktops or
 boxes, another phone, or an id the phone chose) is refused by the desktop
 before it shows the fingerprint, and a certificate for it by every member's
-fold.
+fold. Both flows end in the same certificate, checked by the same rules.
 
 The phone is certified at the **phone tier**: it can post, react, vote,
 answer an agent's question, clear a lockdown and ask a host to apply, as you
-and capped by your role; it never changes members, devices or keys. Without
-a desktop, `ligus phones certify` does the same on a CLI identity of yours
-with your recovery key ([CLI reference](../reference/cli.md)).
+and capped by your role; it never changes members, devices or keys.
 
-A phone that tries to pair before the box has synced its certificate is
-refused with `device_not_certified` (the app says to add the phone first);
-pair again once the desktop has synced. After pairing, the app asks the box
-`GET /v1/me` and fills in the workspace, your account, your role and the
-passkey relying party by itself.
+After pairing, the app asks the box `GET /v1/me` and fills in the workspace,
+your account, your role and the passkey relying party by itself.
+
+### If adding the phone fails {#add-phone-troubleshooting}
+
+| The app or desktop says | Why | What to do |
+|---|---|---|
+| "Show a new code on your desktop and scan again" | the code is older than 5 minutes | **Show a new code** on the desktop and scan it |
+| "This code expires too far ahead: check the clock" | the phone's or the box's clock is off by several minutes | set the clocks automatically, then show a new code |
+| "Pair with this workspace's box first" | the phone has no host profile for this workspace | scan `ligus pair` from the box (see [A phone that isn't paired yet](#new-phone)) |
+| "This box can't reach the workspace's relay. Use Can't scan?" | the box syncs only peer to peer, so it can't pass the request to the desktop | use [Can't scan?](#cant-scan), or give the box a relay |
+| "Update ligus serve, or use Can't scan?" | the box is older than 0.1.1 | update the box, or use [Can't scan?](#cant-scan) |
+| "this code is for another workspace" | the phone is paired with another workspace's box | pair with this workspace's box, or show the code from the right workspace |
+| "this phone belongs to someone else here" | the phone is already certified for another person in this workspace | reset the phone's device key in the app and add it again |
+| "this phone's device is revoked here" | the phone was revoked | reset the phone's device key in the app and add it again |
+| the desktop declined | **Not my phone** was chosen | show a new code and scan again |
+| "Two phones answered this code. Someone else may have seen it. Start again." (desktop) | a second phone answered before you approved | nothing was added. Show a new code, keep it out of sight of others and cameras, and scan again |
+| the phone keeps waiting, or the box refuses with "too many attempts" | the box keeps a few requests at a time, or the relay is rate limiting your network (`4029`, failed attempts per IP address) | stop retrying and wait 5 minutes; then show a new code and scan it once |
+
+### "Another phone answered this code" {#another-phone}
+
+If someone else saw or photographed the desktop's QR code, they could answer
+it from their own phone. The desktop keeps listening until the code expires,
+even after you approve, so that this can't happen silently:
+
+- **On the desktop:** "Another phone answered this code after you added
+  *label* (fingerprint …). If the phone you added isn't the one in your
+  hand, revoke it now." Compare the fingerprint it names with the one on
+  your phone (**Settings → This phone**). If they differ, choose
+  **Revoke *label***: it is your own device, so your passkey is enough. If
+  they match, choose **It's mine**.
+- **On the phone:** "Another phone was added with this code. Tell the
+  person at the desktop to revoke it." Your phone wasn't added; someone
+  else's was. Revoke the added phone on the desktop
+  (**Settings → Profile → My devices → Revoke**), then show a new code and add
+  your phone again.
+
+If the phone you revoked had already paired with your box, also revoke its
+pairing on the box (`ligus phones revoke`; see
+[Lost phone](../../operate/security/runbooks.md#lost-phone)). Then check
+**My devices** for any other phone you don't recognise.
 
 ## Pairing: direct or through the relay
 
@@ -91,7 +195,7 @@ Each host profile has a **path** setting:
 The app can hold several host profiles, each stored as its own Keychain
 item. Credentials live in the iOS Keychain; the phone never holds a
 workspace key. Its own device key lives in the Secure Enclave and never
-leaves it ([Add this phone](#add-this-phone)).
+leaves it ([Add your phone](#add-this-phone)).
 
 ## Host path policy
 
