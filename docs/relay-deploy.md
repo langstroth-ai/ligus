@@ -4,10 +4,11 @@ The relay now lives in its own repository:
 
 > **[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (MIT)
 
-Full deploy instructions — Docker, Fly.io, environment variables, TLS, optional
-token gating, and Postgres/HA — live in that repo's **README** and
-`deploy/fly.toml`. It's a single portable container, so you can run it on any VM,
-managed container host (Fly, Render, Railway, Cloud Run), or Kubernetes; the only
+Full deploy instructions — Docker Compose, systemd, Helm, any container
+platform, environment variables, TLS, token gating, Postgres, backups and
+upgrades — live in that repo's **docs/deploy.md**. It's a single portable
+container, so you can run it on any VM, managed container host (Render,
+Railway, Fly.io, Cloud Run), or Kubernetes; the only
 requirements are a public HTTPS URL and (for the snapshot store) a small volume.
 
 Quick start:

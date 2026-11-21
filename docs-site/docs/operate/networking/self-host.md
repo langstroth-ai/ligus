@@ -73,18 +73,16 @@ docker run -d --name langstroth-relay --restart unless-stopped \
   ghcr.io/langstroth-ai/langstroth-relay:0.3.0
 ```
 
-### Fly.io
+### Docker Compose, or a container platform
 
-The repository includes `deploy/fly.toml` (port 8443, a volume at `/data`,
-health check on `/v1/health`). Its `dockerfile` path is relative to
-`deploy/`, so run Fly from the repository root and pass the config:
-
-```sh
-fly launch --config deploy/fly.toml --copy-config --no-deploy   # pick a name and region
-fly volumes create hive_data --size 1 --region <region>   # the name deploy/fly.toml mounts
-fly deploy . --config deploy/fly.toml
-curl -s https://<app>.fly.dev/v1/health          # → ok
-```
+The relay repository's [deploy guide](https://github.com/langstroth-ai/langstroth-relay/blob/main/docs/deploy.md) has a Docker Compose setup
+(`deploy/compose/langstroth-relay`: the relay with Postgres, or alone with
+its snapshot store, and an optional Caddy service for TLS), a hardened
+systemd unit (`deploy/systemd`), and the settings for any platform that runs
+a container image (Render, Railway, Fly.io, Cloud Run, ...): use the release
+image, `$PORT` or `LANGSTROTH_RELAY_ADDR`, `DATABASE_URL` or a volume with
+`LANGSTROTH_RELAY_DATA_DIR`, one always-on instance, and `/v1/health` as the
+health check.
 
 ### systemd
 
@@ -496,8 +494,9 @@ single-use.
 ### Community limits {#community-limits}
 
 For a relay that people you don't know can use. Every limit here is **off
-by default**. The relay's `deploy/fly.toml` carries a commented profile with
-values for one small VM, and the Helm chart sets them under `limits.*`.
+by default**. The relay's `deploy/compose/langstroth-relay/.env.example`
+carries a commented profile with values for one small machine, and the Helm
+chart sets them under `limits.*`.
 Quotas refuse new writes (`507`) and never evict, so a full workspace stays
 readable.
 

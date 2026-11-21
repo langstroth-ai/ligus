@@ -18,22 +18,25 @@ Time: about 20 minutes for the relay, 2 minutes per teammate.
 
 | Decision | Options | Recommendation |
 |---|---|---|
-| Where the relay runs | Fly.io, a VM with Docker, Kubernetes (preview) | a small always-on machine with a volume or Postgres |
+| Where the relay runs | a VM with Docker Compose or systemd, a container platform, Kubernetes (preview) | a small always-on machine with a volume or Postgres |
 | Relay storage | Postgres, JSON snapshot on a volume, memory | snapshot for a small team; Postgres for more |
 | Who may use the relay | open, static token list, signed tokens | signed tokens (`hrt1`) for anything on the internet |
 | Relay-side membership | off, `LANGSTROTH_RELAY_MEMBERSHIP=1` | off to start; see [Server-side membership](server-side-membership.md) |
 
 ## 1. Deploy the relay
 
-Follow [Self-hosting a relay](../networking/self-host.md). The short
-version on Fly.io:
+Follow [Self-hosting a relay](../networking/self-host.md) or the relay's
+[deploy guide](https://github.com/langstroth-ai/langstroth-relay/blob/main/docs/deploy.md). The short version, on a Linux host with Docker Compose
+and DNS for `relay.example.com` pointing at it:
 
 ```sh
-git clone https://github.com/langstroth-ai/langstroth-relay && cd relay
-fly launch --config deploy/fly.toml --copy-config --no-deploy
-fly volumes create ligus_data --size 1 --region <region>
-fly deploy . --config deploy/fly.toml
-curl -s https://<app>.fly.dev/v1/health
+git clone https://github.com/langstroth-ai/langstroth-relay
+cd langstroth-relay/deploy/compose/langstroth-relay
+cp .env.example .env && chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 24)/" .env
+sed -i "s/^RELAY_DOMAIN=.*/RELAY_DOMAIN=relay.example.com/" .env
+docker compose --profile tls up -d
+curl -s https://relay.example.com/v1/health
 # ok
 ```
 
@@ -46,8 +49,8 @@ On your own machine (not the relay), with the relay binary built
 ./langstroth-relay keygen
 # private_key=…   # SECRET — keep on the issuer only (never on the relay)
 # public_key=…
-fly secrets set LANGSTROTH_RELAY_TOKEN_PUBKEY=<public_key>
-curl -s -o /dev/null -w '%{http_code}\n' https://<app>.fly.dev/v1/workspaces/x/envelopes
+echo LANGSTROTH_RELAY_TOKEN_PUBKEY=<public_key> >> .env && docker compose up -d relay
+curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/v1/workspaces/x/envelopes
 # 401
 ```
 
@@ -65,7 +68,7 @@ revoked one at a time on the open-source relay, so give them an expiry; see
 ## 3. Create the workspace (first Admin)
 
 1. Install the desktop app ([Solo laptop](../deploy/solo.md#1-install)).
-2. **Settings → Team sync**: **Relay URL** `https://<app>.fly.dev` and your
+2. **Settings → Team sync**: **Relay URL** `https://relay.example.com` and your
    **Relay access token**. Save.
 3. Workspace rail **＋ → Add workspace → Create**. Ligus generates a random
    room id and workspace key; you are the Owner.
