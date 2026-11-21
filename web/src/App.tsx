@@ -45,6 +45,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
+import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
@@ -957,6 +958,7 @@ export function App() {
       <ToastHost />
       <DialogHost />
       <PresenceSheet />
+      <PhoneEnrollTripwire />
       <UpdateBanner />
       <PendingInvitesBanner />
       <WorkspaceTrustBanner />

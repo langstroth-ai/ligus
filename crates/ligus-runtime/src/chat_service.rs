@@ -3799,7 +3799,7 @@ mod tests {
         let keys = offer.keys();
         let answer = crate::phone_enroll_qr::EnrollAnswer::build(&keys, Outcome::Declined, Uuid::new_v4());
         let now_ms = 1_999_999_800_000;
-        let signed = svc.sign_enroll_answer(RelayedAnswer::new(&answer, svc.device_id(), now_ms));
+        let signed = svc.sign_relayed_answer(RelayedAnswer::new(&answer, svc.device_id(), now_ms));
         assert!(signed.verify(&public));
         let other = SigningKeypair::generate().unwrap().public_key_bytes().to_vec();
         assert!(!signed.verify(&other));

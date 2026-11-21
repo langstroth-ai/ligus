@@ -46,6 +46,7 @@ pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_native;
 mod passkey_ui;
+mod phone_enroll_ui;
 mod phones_ui;
 mod people;
 mod links_ui;
@@ -108,6 +109,8 @@ struct AppState {
     /// Host liveness from the connected room's relay presence channel (see
     /// `ligus_runtime::host_presence`), refreshed by `run_device_host_loop`.
     host_presence: ligus_runtime::HostPresence,
+    /// "Add a phone" by QR: the offer on screen, in memory only.
+    phone_enroll: crate::phone_enroll_ui::EnrollDesk,
     /// Workspace guards kept in memory (leases held, heartbeats seen).
     guards: crate::guards::GuardRuntime,
     identity: IdentityStore<StoreKeyVault>,
@@ -464,6 +467,12 @@ struct LiveSettings {
     /// folder.
     #[serde(default)]
     workspace_dirs: std::collections::HashMap<String, String>,
+    /// The names phones gave themselves when this desktop added them (device
+    /// id → label), so My devices shows "Ana's iPhone" rather than "Device
+    /// 1a2b3c4d". A phone's certificate carries no name and a phone has no
+    /// host record; device-local, never synced (other desktops show the id).
+    #[serde(default)]
+    phone_labels: std::collections::HashMap<String, String>,
     /// Opt-in egress presets (Settings → Guards → Network presets), per
     /// workspace: workspace UUID (string) → preset names such as
     /// `package-registries`. Device-LOCAL on purpose: widening where this
@@ -644,6 +653,7 @@ impl Default for LiveSettings {
             remote_file_tools_optins: std::collections::HashMap::new(),
             workspace_root: None,
             workspace_dirs: std::collections::HashMap::new(),
+            phone_labels: std::collections::HashMap::new(),
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -665,7 +675,7 @@ impl Default for LiveSettings {
 /// deterministic function of whatever `room` string is stored, so pre-existing
 /// human-name rooms in older settings keep resolving to the exact same id
 /// (back-compat: we never rewrite an existing `room`).
-fn room_workspace_id(room: &str) -> Uuid {
+pub(crate) fn room_workspace_id(room: &str) -> Uuid {
     ligus_core::room_workspace_id(room)
 }
 
@@ -5087,6 +5097,8 @@ async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>
 
 pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDeviceDto>, String> {
     let ws = state.active_workspace_id();
+    // Read before the service lock: never hold both.
+    let phone_labels = state.settings.lock().unwrap().phone_labels.clone();
     let svc = state.service.lock().unwrap();
     let here = svc.device_id();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
@@ -5096,14 +5108,9 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
         .into_iter()
         .map(|d| {
             let host = hosts.iter().find(|h| h.id == d.device_id.to_string());
-            let short = d.device_id.to_string()[..8].to_string();
             MyDeviceDto {
                 device_id: d.device_id.to_string(),
-                label: host.map(|h| shown(&h.label)).filter(|l| !l.trim().is_empty()).unwrap_or(if d.device_id == here {
-                    "This device".into()
-                } else {
-                    format!("Device {short}")
-                }),
+                label: device_label(d.device_id, here, host.map(|h| h.label.as_str()), &phone_labels),
                 fingerprint: d.fingerprint,
                 this_device: d.device_id == here,
                 revoked: d.revoked,
@@ -5138,6 +5145,45 @@ pub(crate) fn list_device_requests_sync(state: State<AppState>) -> Result<Vec<De
         .collect())
 }
 
+/// What My devices calls a device: its host's label, else the name a phone
+/// gave itself when this desktop added it, else "This device" or "Device
+/// <first 8 of its id>".
+fn device_label(device: Uuid, here: Uuid, host_label: Option<&str>, phone_labels: &HashMap<String, String>) -> String {
+    host_label
+        .map(shown)
+        .filter(|l| !l.trim().is_empty())
+        .or_else(|| phone_labels.get(&device.to_string()).map(|l| shown(l)).filter(|l| !l.trim().is_empty()))
+        .unwrap_or_else(|| if device == here { "This device".into() } else { format!("Device {}", &device.to_string()[..8]) })
+}
+
+/// Your devices' labels in `ws` as My devices shows them (for the add-a-phone
+/// duplicate-name flag). `phone_labels` is the settings' map, read before
+/// the service lock.
+pub(crate) fn my_device_labels(svc: &ChatService, ws: Uuid, phone_labels: &HashMap<String, String>) -> Vec<(Uuid, String)> {
+    let here = svc.device_id();
+    let hosts = svc.list_hosts(ws).unwrap_or_default();
+    svc.own_devices(ws)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| !d.revoked)
+        .map(|d| {
+            let host = hosts.iter().find(|h| h.id == d.device_id.to_string());
+            (d.device_id, device_label(d.device_id, here, host.map(|h| h.label.as_str()), phone_labels))
+        })
+        .collect()
+}
+
+/// Remember the name a phone gave itself when this desktop certified it.
+pub(crate) fn remember_phone_label(state: &AppState, device: Uuid, label: &str) {
+    let label = shown(label);
+    if label.trim().is_empty() {
+        return;
+    }
+    let mut s = state.settings.lock().unwrap();
+    s.phone_labels.insert(device.to_string(), label);
+    save_settings(&state.data_dir, &s);
+}
+
 /// Revoke one of your devices (lost box, re-enrollment): every member stops
 /// accepting its events. Self-service for a device your account certified, at
 /// any role (Phase 0, R5); only those are offered. Never this desktop itself.
@@ -5163,7 +5209,7 @@ pub(crate) fn revoke_my_device_sync(state: State<AppState>, device_id: String) -
 
 /// The active workspace's presence channel: relay client, room and ring
 /// (none without a relay or a workspace key).
-fn active_presence_conn(state: &AppState) -> Option<(ligus_runtime::RelayClient, String, ligus_runtime::keyring::KeyringEngine)> {
+pub(crate) fn active_presence_conn(state: &AppState) -> Option<(ligus_runtime::RelayClient, String, ligus_runtime::keyring::KeyringEngine)> {
     let (url, room, key, ws_conn) = {
         let s = state.settings.lock().unwrap();
         let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
@@ -12331,6 +12377,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         remote_file_tools_optins: std::collections::HashMap::new(),
         workspace_root: None,
         workspace_dirs: std::collections::HashMap::new(),
+        phone_labels: std::collections::HashMap::new(),
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
         cli_user_config_workspaces: Default::default(),
@@ -12474,6 +12521,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     Ok(AppState {
         service: BlockingLock::new(service),
         host_presence: ligus_runtime::HostPresence::new(),
+        phone_enroll: Default::default(),
         guards: Default::default(),
         identity,
         data_dir,
@@ -15647,6 +15695,14 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_sign_out,
             phones_ui::inspect_phone_code,
             phones_ui::certify_phone_code,
+            phone_enroll_ui::phone_enroll_precheck,
+            phone_enroll_ui::phone_enroll_offer_start,
+            phone_enroll_ui::phone_enroll_offer_show,
+            phone_enroll_ui::phone_enroll_offer_hide,
+            phone_enroll_ui::phone_enroll_offer_cancel,
+            phone_enroll_ui::phone_enroll_offer_poll,
+            phone_enroll_ui::phone_enroll_offer_approve,
+            phone_enroll_ui::phone_enroll_offer_decline,
             passkey_ui::security_status,
             passkey_ui::passkey_register,
             passkey_ui::recovery_key_create,
