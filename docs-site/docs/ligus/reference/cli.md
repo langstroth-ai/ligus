@@ -26,7 +26,7 @@ Topics:
 | Topic | Guide |
 |---|---|
 | `quickstart` | join a workspace from this machine with its invite and post a message |
-| `box` | an always-on `ligus serve` box: install, enroll, admit, serve, pair; with `deploy/local/ligus-local` and a systemd unit or LaunchAgent |
+| `box` | an always-on `ligus serve` box: install, admit (`ligus admit request`, an Admin approves, `ligus admit redeem`), serve, pair; with `deploy/local/ligus-local` and a systemd unit or LaunchAgent |
 | `worker` | a worker host that answers mentions for the agents bound to it |
 | `phone` | pairing, **Add a phone** by scanning the desktop's code, and pasting the phone's code instead |
 | `remote` | reaching the box from the phone through a relay tunnel |
@@ -81,7 +81,8 @@ command prompts when standard input isn't a terminal: the one question
   to one data dir.
 - **Connection.** `LIGUS_RELAY_URL`, `LIGUS_RELAY_ACCESS_TOKEN`,
   `LIGUS_WORKSPACE` (default `default`) and `LIGUS_WORKSPACE_KEY` override
-  what `ligus enroll` saved in `<data dir>/config.toml`.
+  what `ligus enroll` (a person's CLI) or `ligus admit redeem` (a box) saved
+  in `<data dir>/config.toml`.
 - **First run** of any command creates a fresh identity in the data dir,
   named after `LIGUS_SERVE_LABEL`, else the host name. `ligus app`,
   `ligus help` and `--help` never open the data dir, the config or the
@@ -157,10 +158,16 @@ from memory once used.
 
 ## Joining a workspace
 
+`ligus enroll` is for a person's own CLI device. A serve or worker box never
+enrolls with an invite: it joins only through a box admission
+(`ligus admit request`, an Admin approves it, `ligus admit redeem`; see
+[The home host for the phone](#the-home-host-for-the-phone) and
+`ligus help box`).
+
 | Command | What it does |
 |---|---|
 | `ligus enroll - \| --file PATH [--token - \| @FILE]` | decodes a workspace invite (relay URL, room, E2EE key), piped (`-`) or from a file, and saves the relay and room to `<data dir>/config.toml` and the key and the optional relay access token to the secret store. An invite on the command line still works, with a warning. An invite whose workspace has no usable relay URL is refused |
-| `ligus join <invite-code>` | redeems a **relay** invite code, enrolling this box's identity in the workspace at the invite's role. Needs a relay configured first |
+| `ligus join <invite-code>` | redeems a **relay** invite code, adding this identity to the workspace's relay roster at the invite's role. Needs a relay configured first |
 | `ligus sync [--watch]` | one push + pull round with the relay (paging until caught up); `--watch` repeats every 3 s. Prints `pushed N, pulled M` |
 
 ```console
@@ -169,7 +176,7 @@ Enrolled workspace 'acme' at https://relay.example.com.
 Saved to /home/you/.ligus/config.toml.
 No access token set — for a membership-enforcing relay, add one:
   ligus enroll --file <invite-file> --token @<token-file>   (or export LIGUS_RELAY_ACCESS_TOKEN)
-Next: `ligus sync` then `ligus worker` to bring the agent online.
+Next: `ligus sync`. (A serve or worker box doesn't enroll: it joins with `ligus admit request` and `ligus admit redeem`, see `ligus help box`.)
 ```
 
 !!! note "Where the connection is kept"

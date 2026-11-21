@@ -63,11 +63,12 @@ pub fn join_request(cfg: &Config, label: &str) -> Result<JoinRequest> {
 pub fn print_request(cfg: &Config, label: &str) -> Result<()> {
     let r = join_request(cfg, label)?;
     println!(
-        "\nThis box isn't a member of workspace '{}' yet. Ask an Admin to admit it: on the desktop, workspace menu > \
+        "\nThis box isn't a member of {} yet. Ask an Admin to admit it: on the desktop, workspace menu > \
          Admit a box (or on the phone), paste this join request, check the fingerprint and approve with a passkey:\n\n  {}\n\n\
          Fingerprint: {}  (label \"{}\")\n\nThen run `ligus admit redeem <code>` here with the sealed code they send back, or put \
          the code in the file {ADMISSION_FILE_ENV} names, and start the box again.\n",
-        cfg.room,
+        // A fresh box has no workspace yet: the admission brings it.
+        if cfg.relay_url.is_none() && cfg.room == "default" { "a workspace".to_string() } else { format!("workspace '{}'", cfg.room) },
         r.encode(),
         r.fingerprint(),
         r.label

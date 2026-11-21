@@ -242,7 +242,7 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
         println!("No access token set — for a membership-enforcing relay, add one:");
         println!("  ligus enroll --file <invite-file> --token @<token-file>   (or export LIGUS_RELAY_ACCESS_TOKEN)");
     }
-    println!("Next: `ligus sync` then `ligus worker` to bring the agent online.");
+    println!("Next: `ligus sync`. (A serve or worker box doesn't enroll: it joins with `ligus admit request` and `ligus admit redeem`, see `ligus help box`.)");
     Ok(())
 }
 
@@ -536,16 +536,26 @@ fn status_report(cfg: &Config) -> serde_json::Value {
     let remote: Option<serve::tunnel::RelaySettings> = std::fs::read(&remote).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let live: Option<serve::tunnel::LiveStatus> = std::fs::read(tunnel.join("status.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let sandbox = ligus_runtime::executor::sandbox_status();
-    let next = if stored.is_none() && cfg.relay_url.is_none() {
-        "ligus enroll --file ./invite   (ligus help quickstart)"
-    } else if relay_problem.is_some() {
-        "set a relay: ligus enroll with an invite from a workspace that has one, or LIGUS_RELAY_URL"
-    } else if cfg.key.is_none() {
-        "no workspace key: ligus enroll --file ./invite (or ligus admit redeem for a box)"
+    // A box (serve, worker) joins only through an admission, never an
+    // invite; a person's CLI device enrolls with an invite.
+    let is_box = stored.as_ref().is_some_and(|s| s.service);
+    let join = if is_box {
+        "admit this box: ligus admit request, an Admin approves it (desktop: workspace menu > Admit a box), then ligus admit redeem <code> (ligus help box)"
+    } else if stored.is_none() {
+        "a serve or worker box: ligus admit request (ligus help box); a person's own CLI: ligus enroll --file ./invite (ligus help quickstart)"
+    } else {
+        "a person's own CLI: ligus enroll --file ./invite (ligus help quickstart); for a box use a fresh data dir and ligus admit request (ligus help box)"
+    };
+    let next = if relay_problem.is_some() || cfg.key.is_none() {
+        join
+    } else if is_box && !member {
+        if admission {
+            "start ligus serve or ligus worker: it syncs first, then joins with the kept admission"
+        } else {
+            join
+        }
     } else if !copy {
-        "ligus sync"
-    } else if !member && stored.as_ref().is_some_and(|s| s.service) {
-        "admit this box: ligus admit request, then ligus admit redeem (ligus help box)"
+        if is_box { "start ligus serve or ligus worker (it syncs first)" } else { "ligus sync" }
     } else {
         "ready"
     };
@@ -2545,9 +2555,16 @@ mod cli_tests {
         assert_eq!(r["workspace"]["room"], "r");
         assert_eq!(r["workspace"]["localCopy"], false);
         assert!(r["workspace"]["relayProblem"].as_str().unwrap().contains("no relay URL"));
-        assert!(r["next"].as_str().unwrap().starts_with("ligus enroll"), "{r}");
         assert!(IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir)).load().unwrap().is_none());
         assert!(!cfg.data_dir.join("ligus.db").exists());
+        // No identity yet: both ways in, the box's first.
+        assert!(r["next"].as_str().unwrap().starts_with("a serve or worker box: ligus admit request"), "{r}");
+        // A box is never told to enroll.
+        admit::mark_box(&cfg).unwrap();
+        let r = status_report(&cfg);
+        assert!(r["next"].as_str().unwrap().starts_with("admit this box"), "{r}");
+        assert!(!r["next"].as_str().unwrap().contains("enroll"), "{r}");
+
     }
 
     #[test]

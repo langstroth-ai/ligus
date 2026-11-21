@@ -179,8 +179,8 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "enroll",
         group: G_START,
-        summary: "save a workspace connection from an invite (relay, room, key)",
-        purpose: "Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
+        summary: "a person's own CLI device: save a workspace connection from an invite",
+        purpose: "For a person's own CLI device (never a serve or worker box: a box joins with `ligus admit`). Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
                   room to <data dir>/config.toml, the key and the optional relay access token to the secret store. \
                   An invite carries the workspace key: pipe it or pass a file; on the command line it works with a \
                   warning. Refuses an invite whose workspace has no usable relay URL.",
@@ -191,7 +191,7 @@ pub const COMMANDS: &[Cmd] = &[
             f("--token - | @FILE", "none", "relay access token, from stdin or an owner-only file (a literal value works with a warning)"),
         ],
         examples: &["pbpaste | ligus enroll -", "ligus enroll --file ./invite --token @./relay-token", "ligus enroll --file ./invite && ligus sync"],
-        see_also: &["ligus sync", "ligus admit", "ligus help box", "ligus help security"],
+        see_also: &["ligus sync", "ligus help quickstart", "ligus admit (a box)", "ligus help security"],
         ..D
     },
     Cmd {
@@ -1780,51 +1780,59 @@ phone (ligus help phone). The desktop app: ligus app.
         summary: "a headless serve box: install, admit, serve, pair (ligus-local, systemd, launchd)",
         text: "\
 A `ligus serve` box is an always-on Ligus device (a home server, a spare Mac) that
-syncs, runs the agents bound to it and serves the phone app. It joins as its own
-service member through an admission; it never acts as a person. Use a data dir
-only this box uses, never the desktop app's.
+syncs, runs the agents bound to it and serves the phone app. It joins a workspace
+only through a box admission, as its own service member: never with a person's
+invite (`ligus enroll` is for a person's own CLI device) and never as a person.
+Use a data dir only this box uses, never the desktop app's.
+
+What the code does: `ligus admit request` needs no relay, workspace or sync (it
+creates the box identity and prints a request). `ligus admit redeem` keeps the
+relay, room and workspace key the admission carries. `ligus serve` and `ligus
+worker` sync first at start, then join with the kept admission; a box with no
+copy of the workspace after that sync refuses to start. No `ligus sync` is needed.
 
 With the deploy script (from a checkout of the repository; every step has --json):
   L=deploy/local/ligus-local
   1. $L preflight --role serve --data-dir ~/.ligus-serve
   2. $L install-cli                          # or: brew install langstroth-ai/ligus/ligus
   3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box
-  4. A person enrolls the box with the invite (it carries the workspace key):
-       set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a   # configure prints the env file path
-       ligus enroll --file ./invite
-  5. Admit the box, with the same environment loaded:
-       ligus sync && ligus admit request --label home-box
-       # an Admin approves it (step 6 below), then:
-       ligus admit redeem --file ./admission
-     verify: ligus status                     # admission: kept
-  6. $L start --role serve --data-dir ~/.ligus-serve --systemd    # Linux user unit
+     (exits 4 until the box is admitted, and prints the next commands)
+  4. Admit the box, with the env file loaded:
+       set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
+       ligus admit request --label home-box   # prints ligusjoin1:… and a fingerprint
+     HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…, or the
+     phone), checks the fingerprint, confirms with a passkey, sends back a code.
+       ligus admit redeem ligusadmit1:…       # sealed to this box; or --file PATH
+     verify: ligus status                     # admission: kept, workspace key: yes
+  5. $L start --role serve --data-dir ~/.ligus-serve --systemd    # Linux user unit
      $L start --role serve --data-dir ~/.ligus-serve --launchd    # macOS LaunchAgent
-  7. $L verify --role serve --data-dir ~/.ligus-serve --json
+  6. $L verify --role serve --data-dir ~/.ligus-serve --json
+     verify: ligus status                     # member: yes
   `ligus-local help <command>` explains each step.
 
 By hand:
   export LIGUS_DATA_DIR=~/.ligus-serve
   1. ligus --version                          # installed
   2. ligus doctor --require-confined          # exit 0: agents run sandboxed here
-  3. ligus enroll --file ./invite             # the relay, room and workspace key
-     verify: ligus status                     # relay set, workspace key set
-  4. ligus sync                               # the box needs a copy of the workspace
-     verify: ligus status                     # local copy: yes
-  5. ligus admit request --label home-box     # prints ligusjoin1:… and a fingerprint
-  6. An Admin approves it: desktop, workspace menu > Admit a box (or the phone),
+  3. ligus admit request --label home-box     # prints ligusjoin1:… and a fingerprint
+  4. An Admin approves it: desktop, workspace menu > Admit a box… (or the phone),
      checks the fingerprint, approves with a passkey and sends back a code.
+     (headless Admin, on their own CLI identity: ligus admit issue --request ligusjoin1:… \\
+      --recovery-words-file PATH --out ./admission, then ligus sync)
        ligus admit redeem ligusadmit1:…       # or: ligus admit redeem --file ./admission
-     (headless Admin on another identity: ligus admit issue --request … --recovery-words-file …)
-  7. ligus serve --listen 127.0.0.1:8787 --label home-box
+     verify: ligus status                     # admission: kept
+  5. ligus serve --listen 127.0.0.1:8787 --label home-box   # syncs, then joins
      verify: curl -s http://127.0.0.1:8787/v1/health ; ligus status   # member: yes
-  8. Pair the phone, from a second terminal with the same environment:
+  6. Pair the phone, from a second terminal with the same environment:
        ligus pair
      (ligus help phone; through a relay instead of the LAN or tailnet: ligus help remote)
 
+A gated relay also needs a relay access token for the box: LIGUS_RELAY_ACCESS_TOKEN
+(or LIGUS_RELAY_ACCESS_TOKEN_FILE) in its environment, or ligus auth login.
 Keep it running: deploy/local/ligus-local start --systemd (Linux, a user unit) or
 --launchd (macOS, a LaunchAgent that starts at login); `stop` with the same flag
 removes it. Listen on loopback, a LAN or a Tailscale address; 0.0.0.0 is refused.
-On Kubernetes: ligus help kubernetes.
+On Kubernetes the admission is a mounted Secret (LIGUS_ADMISSION_FILE): ligus help kubernetes.
 ",
     },
     Topic {
@@ -1833,20 +1841,21 @@ On Kubernetes: ligus help kubernetes.
         summary: "a worker host that answers mentions for the agents bound to it",
         text: "\
 A worker answers @mentions for the agents bound to it, on workspace runtimes only
-(never a personal key). Like a serve box it joins as its own member.
+(never a personal key). Like a serve box it joins only through a box admission,
+as its own member, never with a person's invite.
 
   export LIGUS_DATA_DIR=~/.ligus-worker
-  1. ligus enroll --file ./invite && ligus sync
-     verify: ligus status                          # relay and key set, local copy: yes
-  2. ligus admit request --label build-box ; an Admin approves ; ligus admit redeem ligusadmit1:…
-  3. ligus setup                                    # what this box can run
-     ligus setup --apply                            # keyless runtimes (Ollama, CLIs)
-     ligus add-runtime anthropic Anthropic anthropic claude-sonnet-4-6 --secret-ref anthropic
-     export LIGUS_WS_SECRET_anthropic=…            # on this box only
-     verify: ligus runtimes                         # secretRef:anthropic ✓
-  4. ligus worker --label build-box --health-listen 127.0.0.1:8788
-     verify: curl -s 127.0.0.1:8788/v1/ready ; ligus hosts
-  5. Bind an agent to it (from any member's CLI or the desktop):
+  1. ligus doctor --require-confined               # exit 0: agents run sandboxed here
+  2. ligus admit request --label build-box          # no relay or sync needed
+     HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…)
+     ligus admit redeem ligusadmit1:…               # or --file PATH
+     verify: ligus status                           # admission: kept
+  3. ligus setup                                    # what this box can run (keys, Ollama, CLIs)
+     export LIGUS_WS_SECRET_<ref>=…                 # the key of a secretRef runtime, on this box only
+  4. ligus worker --label build-box --health-listen 127.0.0.1:8788   # syncs, then joins
+     verify: curl -s 127.0.0.1:8788/v1/ready ; ligus status (member: yes) ; ligus runtimes
+  5. A person defines runtimes and binds an agent to it (desktop, or their own CLI):
+       ligus add-runtime anthropic Anthropic anthropic claude-sonnet-4-6 --secret-ref anthropic
        ligus add-agent coder anthropic --host <worker host id> && ligus sync
        # or: ligus set-agent-host coder <worker host id> && ligus sync
      verify: ligus agents ; ligus queue
@@ -1930,15 +1939,24 @@ per workspace, and --json for one JSON result on stdout.
   1. $K preflight --context CTX -n NS --release R --probe --image REPO:TAG --json
   2. $K secrets workspace --throwaway --context CTX -n NS --release R      # trial only
      $K secrets workspace --from-dir DIR --context CTX -n NS --release R   # real workspace
-  3. $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --dry-run --json
+  3. A real workspace: each box (serve, every worker) joins through its own box
+     admission, never an invite. HUMAN: an Admin makes one per box on a desktop
+     (workspace menu > Admit a box > For Kubernetes; headless: ligus admit issue
+     --out) and saves it as a file named `admission` in a private DIR; then
+       $K secrets generic --name R-serve-admission --from-dir DIR --context CTX -n NS --release R
+     and a --values file with serve.admission.existingSecret: R-serve-admission
+     (workers: worker.instances[].admission.existingSecret). The pod redeems it at
+     start from LIGUS_ADMISSION_FILE.
+  4. $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --dry-run --json
      $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --json
-     (scenarios: trial, team-in-cluster-relay, team-external-relay)
-  4. $K verify --context CTX -n NS --release R --json
-  5. $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace]
+     (scenarios: trial, team-in-cluster-relay, team-external-relay; rerun to upgrade)
+  5. $K verify --context CTX -n NS --release R --json
+  6. $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace]
 
-`ligus-k8s help <command>` explains each step. The pods run `ligus serve` and
-`ligus worker` with LIGUS_SECRET_BACKEND=k8s, LIGUS_ADMISSION_FILE for the box
-admission and LIGUS_REQUIRE_SANDBOX=1 (exit 3 on a node without Landlock or bwrap).
+`ligus-k8s help <command>` explains each step; the ligus-deploy-k8s skill has the
+admission details. The pods run `ligus serve` and `ligus worker` with
+LIGUS_SECRET_BACKEND=k8s, LIGUS_ADMISSION_FILE and LIGUS_REQUIRE_SANDBOX=1 (exit 3 on
+a node without Landlock or bwrap).
 ",
     },
     Topic {
@@ -2053,20 +2071,26 @@ Hosts: LIGUS_REQUIRE_SANDBOX=1 refuses to start without an agent sandbox
         text: "\
 Start with:  ligus status ; ligus doctor ; ligus remote status
 
-\"this box's workspace has no relay URL\" (sync, serve, join)
-  The invite came from a workspace with no relay. In the desktop set Settings > Team
-  sync > Relay URL, copy a new invite, run `ligus enroll --file ./invite` again; or
-  set LIGUS_RELAY_URL.
+\"this box's workspace has no relay URL\" (sync, serve, worker, join)
+  A serve or worker box: it has no admission yet (ligus admit request, an Admin
+  approves, ligus admit redeem), or the admission's workspace has no relay.
+  A person's CLI device: the invite came from a workspace with no relay.
+  Either way: in the desktop set Settings > Team sync > Relay URL, then a new
+  admission (box) or a new invite and `ligus enroll --file ./invite` (person);
+  or set LIGUS_RELAY_URL.
 
 \"this box isn't a member of workspace … and couldn't join\" / prints a join request
-  The box has no admission: ligus admit request, an Admin approves, ligus admit redeem.
+  The box has no admission: ligus admit request, an Admin approves (desktop:
+  workspace menu > Admit a box…), ligus admit redeem, start it again.
 
-\"this box has no copy of workspace … yet\"
-  ligus sync first (needs the relay, the token and the workspace key).
+\"this box has no copy of workspace … yet\" (serve, worker)
+  The box syncs first at start and the relay gave it nothing: check the relay URL,
+  the relay access token, LIGUS_WORKSPACE and that the admission is for this
+  workspace. A box never founds a workspace. (register-worker: run ligus sync first.)
 
 Relay 401 (unauthorized)
-  The relay is gated: ligus enroll --file ./invite --token @./relay-token, or
-  LIGUS_RELAY_ACCESS_TOKEN, or ligus auth login.
+  The relay is gated: LIGUS_RELAY_ACCESS_TOKEN (or _FILE), or ligus auth login; a
+  person's CLI can also pass it at enrollment: ligus enroll --file ./invite --token @./relay-token.
 
 Phone: \"add this phone first\" (close 4040 device_not_certified)
   The box doesn't know the phone's key as yours: add the phone (ligus help phone),
@@ -2118,21 +2142,23 @@ as \"error: …\", and exits 0 on success, 1 on an error, 2 on a usage error (se
 command's EXIT CODES). Read commands take --json. Never run a ligus binary against
 the person's real data dir to experiment: use
   export LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file
-Human-only steps: enrolling with a real invite (it carries the workspace key),
-approving an admission with a passkey, pairing the phone, exposing a port.
+Human-only steps: approving a box admission with a passkey, enrolling a person's
+own CLI device with a real invite (it carries the workspace key; never for a box),
+pairing the phone, exposing a port. A box (serve, worker) never runs ligus enroll.
 
 Set up a box (serve) on this machine:
   L=deploy/local/ligus-local
   $L preflight --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
   $L install-cli --json                                              # verify: ligus --version
-  $L configure --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
-  HUMAN: ligus enroll --file ./invite (with the env file loaded)     # verify: ligus status --json
-  ligus admit request --label <name>; HUMAN approves; ligus admit redeem --file ./admission
+  $L configure --role serve --data-dir ~/.ligus-serve --json         # exit 4 until admitted; prints next[]
+  (env file loaded) ligus admit request --label <name>               # prints ligusjoin1:… + fingerprint
+  HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…) and sends a code
+  ligus admit redeem ligusadmit1:…                                   # verify: ligus status --json (admissionKept)
   $L start --role serve --data-dir ~/.ligus-serve --systemd|--launchd --json
   $L verify --role serve --data-dir ~/.ligus-serve --json            # verify: ok true
   LIGUS_DATA_DIR=~/.ligus-serve ligus status --json                  # verify: member true
 
-Add an agent:
+Add an agent (from a person's CLI device or the desktop, not the box):
   ligus setup --apply                                                # verify: ligus runtimes --json
   ligus add-agent <name> <runtime-id> --host <host-id> && ligus sync # verify: ligus agents --json
   ligus send <chat-id> \"@<name> ping\" --push                        # verify: ligus queue (empty), ligus tail <chat-id>
@@ -2185,7 +2211,7 @@ pub fn overview() -> String {
     }
     s.push_str(
         "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
-         connection `ligus enroll` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
+         connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
          next argument (--label box, not --label=box).\n\nEXIT CODES\n  0 success   1 error (\"error: …\" on stderr)   \
          2 usage error (unknown command, missing or bad argument)\n  Some commands add their own: see `ligus <command> --help`.\n\n\
          An agent setting Ligus up: ligus help agents-guide\n",
@@ -2274,7 +2300,7 @@ pub fn command_help(c: &Cmd) -> String {
 pub fn env_help() -> String {
     let mut s = String::from(
         "Every LIGUS_* variable the ligus CLI reads. A blank value is unset; booleans take 1/true/on/yes\n\
-         and 0/false/off/no. Env wins over config.toml (ligus enroll). The *_FILE variables read the\n\
+         and 0/false/off/no. Env wins over config.toml (ligus enroll, ligus admit redeem). The *_FILE variables read the\n\
          secret from a file instead (not both). Other names: LIGUS_MCP_MAX_* turn budgets,\n\
          LIGUS_ACP_*, LIGUS_AGENT_MAX_*, LIGUS_OLLAMA_WIRE, LIGUS_PATCH_LEAVING_CALLS (see the docs:\n\
          Environment variables).\n",
@@ -2631,6 +2657,30 @@ mod tests {
             for bad in ["pricing", "Hive", "hosted plan", "swarmwatch"] {
                 assert!(!t.text.contains(bad), "topic {} says {bad}", t.name);
             }
+        }
+    }
+
+    /// A box (serve, worker, k8s) joins only through an admission: its
+    /// guides never tell it to run `ligus enroll`, and they use admit.
+    #[test]
+    fn box_guides_never_enroll() {
+        for name in ["box", "worker", "kubernetes"] {
+            let t = find_topic(name).unwrap().text;
+            for line in t.lines() {
+                let l = line.trim_start();
+                assert!(!(l.contains("ligus enroll") && !l.contains("never") && !l.contains("is for a person") && !l.contains("person's")), "topic {name} tells a box to enroll: {line}");
+            }
+            assert!(t.contains("admission"), "topic {name} doesn't name the admission");
+        }
+        for name in ["box", "worker"] {
+            let t = find_topic(name).unwrap().text;
+            assert!(t.contains("ligus admit request") && t.contains("ligus admit redeem"), "{name}");
+        }
+        let guide = find_topic("agents-guide").unwrap().text;
+        let setup = guide.split("Add an agent").next().unwrap();
+        assert!(!setup.lines().any(|l| l.contains("ligus enroll") && !l.contains("never")), "agents-guide box setup enrolls");
+        for c in ["serve", "worker", "admit", "admit request", "admit redeem"] {
+            assert!(!find_cmd(c).unwrap().examples.iter().any(|x| x.contains("enroll")), "{c} example enrolls");
         }
     }
 
