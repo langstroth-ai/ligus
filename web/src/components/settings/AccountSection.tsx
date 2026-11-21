@@ -326,7 +326,7 @@ export function DevicesSection() {
         !adding && !addingPhone ? (
           <div className="flex gap-2">
             <Button size="sm" onClick={() => setAddingPhone(true)}>
-              Add this phone
+              Add a phone
             </Button>
             <Button size="sm" onClick={() => setAdding(true)}>
               Add a device

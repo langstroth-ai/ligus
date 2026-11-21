@@ -32,6 +32,8 @@ tracing.workspace = true
 # instead of vanishing to a stderr no one sees in a GUI launch.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
+# QR encoder for the add-a-phone offer (already in the lockfile through ligus-cli).
+qrcodegen = "1.8"
 # join_all for parallel workflow stages (already in the graph via tauri).
 futures = "0.3"
 # `devtools` enables the web inspector in release builds too (right-click →

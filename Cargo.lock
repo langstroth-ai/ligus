@@ -3457,6 +3457,7 @@ dependencies = [
  "objc2-authentication-services",
  "objc2-foundation",
  "portable-pty",
+ "qrcodegen",
  "reqwest",
  "rfd",
  "serde",
