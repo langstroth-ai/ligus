@@ -43,7 +43,7 @@ pub(crate) fn standing_dto(s: PhoneStanding) -> (String, Option<String>) {
         PhoneStanding::AlreadyMine => ("alreadyMine".into(), None),
         PhoneStanding::Revoked => (
             "revoked".into(),
-            Some("This phone was revoked here. In the app, reset its device key and use the new code.".into()),
+            Some("This phone was revoked here. In the app, choose Reset this phone's key, then add it again with its new code.".into()),
         ),
         PhoneStanding::Conflict(why) => ("conflict".into(), Some(why)),
     }

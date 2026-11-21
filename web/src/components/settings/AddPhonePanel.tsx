@@ -377,7 +377,11 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
               {phone.fingerprint}
             </code>
           </div>
-          {phone.standing === "alreadyMine" && <div className="opacity-70">Already one of your devices.</div>}
+          {phone.standing === "alreadyMine" && (
+            <div className="opacity-70" data-testid="phone-already-mine">
+              Already one of your devices. Adding it again keeps it and updates its name in My devices.
+            </div>
+          )}
           {phone.problem && <div style={{ color: "var(--ligus-danger-ink)" }}>{phone.problem}</div>}
           {canAdd && (
             <label className="flex items-center gap-2">
@@ -503,7 +507,9 @@ export function PastePhoneCode({ onDone, onCancel }: { onDone: () => void; onCan
     }
   }
 
-  const blocked = !preview || preview.standing !== "new";
+  // A phone that is already yours can be added again: nothing is written to
+  // the workspace, and My devices takes the name it gives itself now.
+  const blocked = !preview || (preview.standing !== "new" && preview.standing !== "alreadyMine");
   return (
     <div className="space-y-2" data-testid="add-phone-paste">
       <p className="text-xs text-ink-soft">
@@ -539,9 +545,13 @@ export function PastePhoneCode({ onDone, onCancel }: { onDone: () => void; onCan
             </code>
           </div>
           <div className="truncate font-mono text-[11px] text-ink-soft">device {preview.deviceId}</div>
-          {preview.standing === "alreadyMine" && <div className="opacity-70">Already one of your devices.</div>}
+          {preview.standing === "alreadyMine" && (
+            <div className="opacity-70" data-testid="paste-phone-already-mine">
+              Already one of your devices. Adding it again keeps it and updates its name in My devices.
+            </div>
+          )}
           {preview.problem && <div style={{ color: "var(--ligus-danger-ink)" }}>{preview.problem}</div>}
-          {preview.standing === "new" && (
+          {(preview.standing === "new" || preview.standing === "alreadyMine") && (
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={matches} onChange={(e) => setMatches(e.target.checked)} />
               The phone's screen shows the same fingerprint

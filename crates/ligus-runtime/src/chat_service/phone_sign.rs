@@ -355,7 +355,7 @@ impl ChatService {
             crate::phone_enroll::PhoneStanding::AlreadyMine => return Ok(code.device_id),
             crate::phone_enroll::PhoneStanding::Revoked => {
                 return Err(ChatError::Unauthorized(
-                    "this phone was revoked here: reset its device key in the app (Settings > This phone) and use its new code".into(),
+                    "this phone was revoked here: in the app, choose Reset this phone's key (on the screen that says it was revoked, or Settings > This phone), then add it again".into(),
                 ))
             }
             crate::phone_enroll::PhoneStanding::Conflict(why) => return Err(ChatError::Unauthorized(why)),

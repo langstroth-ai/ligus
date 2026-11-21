@@ -165,6 +165,9 @@ const STREAM_HOLD: usize = 512;
 /// an Admin's device closes it naming no redemption (a lagging push).
 pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
+/// The longest workspace name [`ChatService::publish_workspace_name`] writes.
+pub const MAX_WORKSPACE_NAME_CHARS: usize = 120;
+
 impl ChatService {
     /// A service signing with `keypair`: its device id is the one that key
     /// derives (`ligus_core::crypto::device_id_for`).
@@ -1585,6 +1588,32 @@ impl ChatService {
             },
         )?;
         Ok(())
+    }
+
+    /// Name the workspace on its config log (the config log's title), so its
+    /// boxes, and the phones paired with them, show the name the founder
+    /// gave it. The name otherwise lives only in each desktop's settings and
+    /// in its invites; a box joins from an admission and never learns it.
+    ///
+    /// Only an Owner or Admin names it, and only while the config log has no
+    /// title: a title already there is kept. Returns whether it was written.
+    pub fn publish_workspace_name(&mut self, workspace_id: Uuid, name: &str) -> Result<bool> {
+        let name = crate::display::shown(name);
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(false);
+        }
+        let config_id = workspace_config_session_id(workspace_id);
+        let Some(config) = self.load(config_id)? else { return Ok(false) };
+        if !config.title.trim().is_empty() {
+            return Ok(false);
+        }
+        if !matches!(self.actor_role(&config), WorkspaceRole::Owner | WorkspaceRole::Admin) {
+            return Ok(false);
+        }
+        let name: String = name.chars().take(MAX_WORKSPACE_NAME_CHARS).collect();
+        self.set_title(config_id, workspace_id, name)?;
+        Ok(true)
     }
 
     // ── Channels (spec §11) ────────────────────────────────────────────────
@@ -4297,6 +4326,36 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, ligus_core::ActorKind::Human);
         ChatService::new(store, kp, account_kp, author)
+    }
+
+    /// The founder names the workspace on its config log once; a later
+    /// name, an empty one, or a non-admin's leaves it as it is.
+    #[test]
+    fn the_founder_names_the_workspace_on_its_config_log_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let mut founder = svc_on(&path, "f", "Mara");
+        let cfg = founder.ensure_workspace_config(wid).unwrap();
+        let title = |s: &ChatService| s.load(cfg).unwrap().unwrap().title;
+        assert!(!founder.publish_workspace_name(wid, "  ").unwrap(), "an empty name is never written");
+        assert_eq!(title(&founder), "");
+        // Someone the roster doesn't name as Owner or Admin can't name it.
+        let mut other = svc_on(&path, "o", "Ola");
+        assert!(!other.publish_workspace_name(wid, "Not it").unwrap());
+        assert_eq!(title(&founder), "");
+        assert!(founder.publish_workspace_name(wid, " Comb Council ").unwrap());
+        assert_eq!(title(&founder), "Comb Council");
+        assert!(!founder.publish_workspace_name(wid, "Another name").unwrap(), "a title already there is kept");
+        assert_eq!(title(&founder), "Comb Council");
+        // Bidi controls are cleaned and the length is bounded.
+        let wid2 = Uuid::new_v4();
+        let cfg2 = founder.ensure_workspace_config(wid2).unwrap();
+        assert!(founder.publish_workspace_name(wid2, &format!("Comb\u{202E}{}", "x".repeat(400))).unwrap());
+        let t = founder.load(cfg2).unwrap().unwrap().title;
+        assert!(!t.contains('\u{202E}') && t.chars().count() == MAX_WORKSPACE_NAME_CHARS, "{t}");
+        // A workspace this device has no config log for: nothing is founded.
+        assert!(!founder.publish_workspace_name(Uuid::new_v4(), "Ghost").unwrap());
     }
 
     /// A3: with an agent vault, an agent bound to this device signs its own

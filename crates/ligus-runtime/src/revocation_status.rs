@@ -31,6 +31,8 @@ use crate::relay_client::{RelayClient, RelayError};
 pub const REPORT_CONTEXT: &[u8] = b"ligus-revocation-report-v1\0";
 /// FROZEN signature context for a desktop's retry request.
 pub const RETRY_CONTEXT: &[u8] = b"ligus-revocation-retry-v1\0";
+/// FROZEN signature context for a box's paired-phones report.
+pub const PAIRING_CONTEXT: &[u8] = b"ligus-pairing-report-v1\0";
 
 /// `context ‖ canonical JSON of v without its signature`.
 fn preimage(context: &[u8], v: &impl Serialize) -> Vec<u8> {
@@ -274,6 +276,85 @@ pub async fn request_retry(relay: &RelayClient, room: &str, ring: &KeyringEngine
     relay.publish_presence(room, &retry_slot(&req.device_id), &blob).await
 }
 
+// ── Which phones a box has paired ────────────────────────────────────────────
+//
+// So My devices can say "paired with home-server, seen 2 min ago" next to a
+// phone, and the revoke confirmation can name the phone in the person's hand.
+// Sealed and device-signed like a revocation report; display only.
+
+/// One phone a box has paired (an active pairing bound to its workspace device).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedPhone {
+    pub device_id: String,
+    /// The pairing's name on this box.
+    #[serde(default)]
+    pub name: String,
+    /// When the phone last talked to this box (unix seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<i64>,
+}
+
+/// A box's report of the phones it has paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingReport {
+    /// The serve box's workspace device id (its host id); it signs.
+    pub host_id: String,
+    pub at: i64,
+    pub phones: Vec<PairedPhone>,
+    /// Ed25519 by the box's device key over [`PAIRING_CONTEXT`] and the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signature: Vec<u8>,
+}
+
+/// Pairing reports carry at most this many phones.
+pub const MAX_PAIRED_REPORTED: usize = 32;
+
+impl PairingReport {
+    fn unsigned(&self) -> Self {
+        Self { signature: Vec::new(), ..self.clone() }
+    }
+
+    pub fn sign(mut self, keypair: &SigningKeypair) -> Self {
+        self.signature = keypair.sign(&preimage(PAIRING_CONTEXT, &self.unsigned())).to_vec();
+        self
+    }
+
+    pub fn verify(&self, device_public_key: &[u8]) -> bool {
+        !self.signature.is_empty() && ligus_core::verify(device_public_key, &preimage(PAIRING_CONTEXT, &self.unsigned()), &self.signature).is_ok()
+    }
+}
+
+pub fn pairing_slot(host_id: &str) -> String {
+    format!("pairings:{host_id}")
+}
+
+pub fn seal_pairing_report(ring: &KeyringEngine, report: &PairingReport) -> Option<Value> {
+    seal(ring, "pairingReport", report)
+}
+
+/// Every box's pairing report in a presence listing, keyed by host id. A
+/// report in another host's slot, or not signed by that host's device key
+/// (`device_key` resolves a certified, unrevoked device), is dropped.
+pub fn open_pairing_reports(
+    blobs: &HashMap<String, Value>,
+    ring: &KeyringEngine,
+    device_key: impl Fn(uuid::Uuid) -> Option<Vec<u8>>,
+) -> HashMap<String, PairingReport> {
+    open_all::<PairingReport>(blobs, ring, "pairingReport", "pairings:")
+        .into_iter()
+        .filter(|(slot, r)| *slot == pairing_slot(&r.host_id))
+        .filter(|(_, r)| uuid::Uuid::parse_str(&r.host_id).ok().and_then(&device_key).is_some_and(|pk| r.verify(&pk)))
+        .map(|(_, r)| (r.host_id.clone(), r))
+        .collect()
+}
+
+pub async fn publish_pairing_report(relay: &RelayClient, room: &str, ring: &KeyringEngine, report: &PairingReport) -> Result<(), RelayError> {
+    let Some(blob) = seal_pairing_report(ring, report) else { return Ok(()) };
+    relay.publish_presence(room, &pairing_slot(&report.host_id), &blob).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +414,46 @@ mod tests {
         }
         // A box whose device was revoked (no certified key): dropped too.
         assert!(open_reports(&blobs, &k, |_| None).is_empty());
+    }
+
+    /// A pairing report shows only when its own box signed it, in its own
+    /// slot: a workspace-key holder can't claim a box paired some phone.
+    #[test]
+    fn pairing_reports_are_sealed_signed_and_only_in_their_own_slot() {
+        let k = key("room");
+        let (bx, other, holder) = (dev(), dev(), dev());
+        let keys = |d: uuid::Uuid| [&bx, &other].into_iter().find(|x| x.id == d).map(|x| x.kp.public_key_bytes().to_vec());
+        let phone = PairedPhone { device_id: "p1".into(), name: "Ana's iPhone".into(), last_seen: Some(40) };
+        let r = PairingReport { host_id: bx.id.to_string(), at: 41, phones: vec![phone.clone()], signature: Vec::new() }.sign(&bx.kp);
+        let mut blobs = HashMap::new();
+        blobs.insert(pairing_slot(&bx.id.to_string()), seal_pairing_report(&k, &r).unwrap());
+        // Another box's signature over a report naming `bx`, in its own slot.
+        blobs.insert(pairing_slot(&other.id.to_string()), seal_pairing_report(&k, &PairingReport { host_id: bx.id.to_string(), ..r.clone() }.sign(&other.kp)).unwrap());
+        // A revocation report is not a pairing report.
+        blobs.insert(report_slot(&bx.id.to_string()), seal_report(&k, &RevocationReport { host_id: bx.id.to_string(), ..Default::default() }.sign(&bx.kp)).unwrap());
+        let got = open_pairing_reports(&blobs, &k, keys);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[&bx.id.to_string()], r);
+        assert!(!serde_json::to_string(&blobs[&pairing_slot(&bx.id.to_string())]).unwrap().contains("Ana"), "the relay sees ciphertext only");
+        let slot = pairing_slot(&bx.id.to_string());
+        let fake = PairingReport { phones: vec![PairedPhone { device_id: "p2".into(), ..phone }], ..r.clone() };
+        for forged in [PairingReport { signature: Vec::new(), ..fake.clone() }, fake.clone().sign(&holder.kp), fake.clone()] {
+            let mut b = HashMap::new();
+            b.insert(slot.clone(), seal_pairing_report(&k, &forged).unwrap());
+            assert!(open_pairing_reports(&b, &k, keys).is_empty(), "a forged pairing report was shown");
+        }
+        // A revocation report's signature doesn't make a pairing report.
+        let crossed = PairingReport { signature: RevocationReport { host_id: bx.id.to_string(), at: 41, devices: Vec::new(), signature: Vec::new() }.sign(&bx.kp).signature, ..r.clone() };
+        let mut b = HashMap::new();
+        b.insert(slot.clone(), seal_pairing_report(&k, &crossed).unwrap());
+        assert!(open_pairing_reports(&b, &k, keys).is_empty());
+        assert!(open_pairing_reports(&blobs, &k, |_| None).is_empty(), "a revoked box's report is dropped");
+    }
+
+    #[test]
+    fn pairing_context_is_frozen() {
+        assert_eq!(PAIRING_CONTEXT, b"ligus-pairing-report-v1\0");
+        assert_eq!(pairing_slot("h"), "pairings:h");
     }
 
     #[test]

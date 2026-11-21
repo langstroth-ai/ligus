@@ -40,6 +40,17 @@ For a `ligus serve` box (or another device) enrolled as **your** device.
    treat it as a [compromised device](#compromised-device) meanwhile.
 5. To bring a box back later: start it from a fresh data dir and admit it
    again ([Admitting a box](../ops/admitting-a-box.md)).
+6. **A phone is revoked for good under its key.** Its device id comes from
+   its Secure Enclave key, which survives reinstalling the app. My devices
+   says which box a phone is paired with and when it was last seen, and the
+   confirmation names the phone you're holding ("This is the iPhone paired
+   with home-server right now"): check it before you revoke. To use a
+   revoked phone again, on the phone choose **Reset this phone's key** (on
+   the screen that says it was revoked, or **This phone was revoked? Reset
+   its key** on the first screen of a phone with no workspace), confirm
+   with Face ID or the passcode, then add it again with **Add to my
+   devices**
+   ([Revoking a phone, and getting it back](../../ligus/features/phone-app.md#revoked-phone)).
 
 ## Lost phone {#lost-phone}
 
@@ -76,6 +87,11 @@ openssl rand -hex 32 > "$LIGUS_DATA_DIR/serve.token"
 
 Then re-pair your remaining phones. If the phone app's Face ID lock was on,
 the thief also needed your face or passcode; revoke anyway.
+
+Also revoke the phone's device key on your desktop
+([Revoke one of your devices](#revoke-device)), so no member accepts what it
+signs. If you find the phone again, it comes back only with a new key
+(**Reset this phone's key** in the app, then **Add to my devices**).
 
 !!! warning "Pairing codes in the journal"
     `ligus serve --pair` prints the pairing link to stdout, and with a

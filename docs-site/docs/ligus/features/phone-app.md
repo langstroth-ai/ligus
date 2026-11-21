@@ -40,9 +40,13 @@ itself, through your `ligus serve` box.
    connection, or your account has no passkey or recovery key), the panel
    says "Adding a phone by scanning a code isn't available here right now",
    lists what is missing and offers [Can't scan?](#cant-scan) instead.
-2. **On the phone:** **Settings → This phone → Add to my devices**, then
-   point the camera at the desktop's code. Use the scanner inside the Ligus
-   app; the phone's camera app doesn't read this code.
+2. **On the phone:** **Settings → This phone → Add to my devices**. If the
+   phone would call itself just "iPhone" (iOS doesn't let apps read the
+   name you gave your iPhone), the app first asks you to **Name this
+   phone**: type a name your desktop will show, such as "Ana's iPhone", and
+   choose **Save name**. Then point the camera at the desktop's code. Use
+   the scanner inside the Ligus app; the phone's camera app doesn't read
+   this code.
 3. The phone asks the box who showed the code and says "Add this phone to
    *Ana* (*role*)'s devices in *workspace*?". Check that it is you, then
    choose **Add**. The phone then shows its fingerprint
@@ -63,11 +67,17 @@ itself, through your `ligus serve` box.
    "This phone is now one of your devices". There is nothing to retry by
    hand.
 
-**My devices** lists the phone under the name it gave itself (cleaned, as
-every name is). That name is remembered only on the desktop that added the
-phone, in its local settings: your other desktops list the same phone as
-"Device" and the first 8 characters of its device id (for example
-"Device 6f1c2a9b"). Both flows ([Can't scan?](#cant-scan) too) remember it.
+**My devices** lists the phone once, under the name it gave itself
+(cleaned, as every name is). That name is remembered only on the desktop
+that added the phone, in its local settings. Your other desktops show the
+name the phone's box knows it by, or "Device" and the first 8 characters of
+its device id (for example "Device 6f1c2a9b"). Both flows
+([Can't scan?](#cant-scan) too) remember it, and adding a phone that is
+already yours again replaces the old name rather than adding a second row:
+the phone says "This phone is already one of *Ana*'s devices in
+*workspace*. Update its name there?" and **Update name** sends its current
+name to the desktop, which needs no passkey for it. When a box has the phone paired, the row also says so:
+"Paired with home-server · seen 2 min ago".
 
 The phone is added to the workspace the desktop showed the code for, under
 the account of the person at that desktop. The phone warns you before
@@ -106,8 +116,9 @@ can't show the code (no relay connection, or no passkey on this account), or
 a box older than 0.1.1:
 
 1. In the app, open **Settings → This phone → Can't scan? Show this phone's
-   code**. It shows the phone's code (`ligusphone1:…`, as a QR code and as
-   text) and its fingerprint.
+   code**. A phone still called just "iPhone" is asked to name itself
+   first (**Save name**). It then shows the phone's code (`ligusphone1:…`,
+   as a QR code and as text) and its fingerprint.
 2. On the desktop, under **Add a phone**, open **Can't scan?** and paste or
    type the code. The phone's copy is local to the phone and never goes
    through the shared clipboard, so on a Mac you either type it or move it
@@ -136,6 +147,20 @@ and capped by your role; it never changes members, devices or keys.
 After pairing, the app asks the box `GET /v1/me` and fills in the workspace,
 your account, your role and the passkey relying party by itself.
 
+### The workspace's name {#workspace-name}
+
+The phone shows the workspace under the name you gave it on the desktop:
+the Chats header shows the workspace's name, and the host switcher and
+**Settings → This phone** show it with the box it goes through after it,
+"Comb Council · via home-server".
+A desktop keeps a workspace's name in its own settings and in the invites
+it makes; a box joins from an admission and never sees one. So the
+desktop of the workspace's Owner (or an Admin) also writes the name to the
+workspace's config log, once, the next time it opens the workspace, and
+the box gives it to the phone (`workspaceName` in `GET /v1/me` and in the
+add-a-phone check). Until that has synced to the box, the phone shows the
+box's name only. A name already on the config log is kept.
+
 ### If adding the phone fails {#add-phone-troubleshooting}
 
 | The app or desktop says | Why | What to do |
@@ -146,8 +171,8 @@ your account, your role and the passkey relying party by itself.
 | "This box can't reach the workspace's relay. Use Can't scan?" | the box syncs only peer to peer, or it hasn't been admitted to the workspace yet, so it can't pass the request to the desktop | use [Can't scan?](#cant-scan), give the box a relay, or [admit the box](../../operate/ops/admitting-a-box.md) first |
 | "Update ligus serve, or use Can't scan?" | the box is older than 0.1.1 | update the box, or use [Can't scan?](#cant-scan) |
 | "this code is for another workspace" | the phone is paired with another workspace's box | pair with this workspace's box, or show the code from the right workspace |
-| "this phone belongs to someone else here" | the phone is already certified for another person in this workspace | reset the phone's device key in the app and add it again |
-| "this phone's device is revoked here" | the phone was revoked | reset the phone's device key in the app and add it again |
+| "this phone belongs to someone else here" | the phone is already certified for another person in this workspace | [reset this phone's key](#revoked-phone) and add it again |
+| "This phone was revoked here … can't be added again with this key" | this phone's device key was revoked in My devices | [reset this phone's key](#revoked-phone) and add it again |
 | the desktop declined | **Not my phone** was chosen | show a new code and scan again |
 | "Two phones answered this code. Someone else may have seen it. Nothing was added." (desktop) | a second phone answered before you approved | **Show a new code**, keep it off shared screens and out of sight of cameras, and scan again |
 | "this box is taking too many add-a-phone requests; try again in a minute", or the box is busy with other phones (pairing closes with `4043 provisional_busy`) | the box takes 30 requests a minute and 4 unpaired phones at once | wait a minute and scan again (show a new code if it expired) |
@@ -176,6 +201,41 @@ If the phone you revoked had already paired with your box, also revoke its
 pairing on the box (`ligus phones revoke`; see
 [Lost phone](../../operate/security/runbooks.md#lost-phone)). Then check
 **My devices** for any other phone you don't recognise.
+
+### Revoking a phone, and getting it back {#revoked-phone}
+
+Revoking a phone in **My devices** is permanent **for its key**. A phone's
+device id is derived from its Secure Enclave key, and that key survives
+deleting and reinstalling the app, so the same phone can't be added again
+until it has a new key. Every box that paired it cuts the pairing.
+
+Before you revoke, check the row: My devices lists each device once, says
+which box a phone is paired with and when it was last seen, and the
+confirmation names it ("This is the iPhone paired with home-server right
+now; it will be signed out of this workspace and can't be added back with
+its current key"). If that is the phone in your hand, you probably don't
+want to revoke it.
+
+To bring a revoked phone back:
+
+1. **On the phone:** on the screen that says this phone was revoked (the
+   pairing refusal, or "This phone was revoked here" in Add to my devices),
+   choose **Reset this phone's key**. A phone with no workspace has the same
+   action as a small link, **This phone was revoked? Reset its key**, on its
+   first screen and on the Connect screen; Settings isn't needed. On a
+   phone that is still connected somewhere, it is under **Settings → This
+   phone → Advanced**.
+2. Read the sheet ("Reset this phone's key?") and choose **Reset key with
+   Face ID**, then pass Face ID (or your passcode). The phone deletes its
+   old key, makes a new one and gets a new device id. Anything signed with
+   the old key stays in the workspace's history, and the old key stays
+   revoked. The app never does this by itself, and refuses on an iPhone
+   with no passcode.
+3. The sheet then opens **Add to my devices** (naming the phone first if
+   it is still called just "iPhone"): add it again from your desktop as in
+   [Add your phone](#add-this-phone). It is a new device to every workspace
+   it was in, so add it on each one, and pair with each box again
+   (`ligus pair`) if its pairing was removed.
 
 ## Pairing: direct or through the relay
 

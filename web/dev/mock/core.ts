@@ -241,7 +241,12 @@ function handle(cmd: string, args: Args): unknown {
     case "workspace_list_invites":
       return [];
     case "list_my_devices":
-      return [{ deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null }];
+      return [
+        { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
+        { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
+      ];
+    case "list_device_pairings":
+      return [{ deviceId: "p1", hostId: "h1", hostLabel: "home-server", name: "Ana's iPhone", lastSeen: Math.floor(Date.now() / 1000) - 120, reportedAt: Math.floor(Date.now() / 1000) }];
     case "list_device_requests":
       return [];
     case "list_device_revocations":

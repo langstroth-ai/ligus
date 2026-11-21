@@ -1249,6 +1249,10 @@ export interface MyDeviceDto {
   thisDevice: boolean;
   revoked: boolean;
   lastSeen: string | null;
+  /** A phone (its certificate is the phone tier). */
+  phone: boolean;
+  /** The label is a real name, not the "Device 1a2b3c4d" fallback. */
+  named: boolean;
 }
 export interface DeviceRequestDto {
   hostId: string;
@@ -1368,6 +1372,20 @@ export const onPhoneEnrollTripwire = (cb: (e: PhoneEnrollTripwireDto) => void): 
 export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_requests");
 /// Revoke one of your devices: every member stops accepting its events.
 export const revokeMyDevice = (deviceId: string) => invoke<void>("revoke_my_device", { deviceId });
+
+/// A phone a serve box reports it has paired (its sealed, signed report).
+export interface DevicePairingDto {
+  deviceId: string;
+  hostId: string;
+  hostLabel: string;
+  /** The pairing's name on that box. */
+  name: string;
+  /** When the phone last talked to that box (unix seconds, to the minute). */
+  lastSeen: number | null;
+  reportedAt: number;
+}
+/// The phones the workspace's boxes report they have paired.
+export const listDevicePairings = () => invoke<DevicePairingDto[]>("list_device_pairings");
 
 export type RevocationStepState = "pending" | "done" | "failed" | "not_applicable";
 export interface RevocationStep {
