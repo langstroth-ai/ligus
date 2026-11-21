@@ -68,7 +68,8 @@ equivalent.
 | Pairing link v1 (`url`, `token`) and v2 (`v=2&hid&hs&relay&ps&exp`) | Same parser (Rust core) | `relay` MUST be `https` (http only in debug builds or for loopback); refuse a link with `exp < now − 300` |
 | Pair confirm sheet (direct and remote) | Same | |
 | Pairing refusals 4040 / 4041 / 4042 / 4001 | Same text and policy | 4040: Retry while the link lasts, at most 5 attempts. 4041 and 4042 are final. 4001 during enrollment reads "pairing code expired or already used" |
-| Settings > This phone: `ligusphone1:` code as a QR code and text, plus the fingerprint | Same | The code's text isn't selectable. Copy is sensitive and cleared after 600 s (section 2.11). `FLAG_SECURE` (section 2.12) |
+| Settings > This phone: `ligusphone1:` code as a QR code and text, plus the fingerprint | Same, under **Can't scan? Show this phone's code** (0.1.1) | The code's text isn't selectable. Copy is sensitive and cleared after 600 s (section 2.11). `FLAG_SECURE` (section 2.12) |
+| Add to my devices (0.1.1): scan the desktop's `ligusenroll1:` QR, the request goes to the desktop through the box, the desktop approves with its passkey | Same (section 3.9). CameraX with ML Kit barcode scanning (QR only), in-app scanner only; ZXing core in the FOSS flavor | The `ligusphone1:` code stays under Can't scan?. Through the relay an uncertified phone uses E3b provisional enrollment (section 2.9) |
 | Device key: Secure Enclave P-256, `.privateKeyUsage` | Android Keystore P-256, StrongBox when available, non-exportable, not auth-bound (section 2.3) | A software-only Keystore is refused outside debug builds |
 | `GET /v1/me` after pairing; first answer pinned per device | Same (section 3.3) | |
 | Host profiles (several), path preference Auto / Direct only / Relay only, 1.5 s direct probe | Same | |
@@ -81,7 +82,7 @@ equivalent.
 | Repo chip, repo picker (all code hosts), clone or clone via fork, pull, draft PR/MR sheet | Same | Plain bearer API calls, not signed |
 | Chat details, DM person view | Same | |
 | "Propose as a memory note" (`proposeMemory`) | Same | |
-| Agents tab with host badges | Same (read-only) | Moving an agent is refused for a box; leave it out, as the desktop does |
+| Agents tab with host badges, and whether you may use each agent | Same (read-only) | Moving an agent is refused for a box; leave it out, as the desktop does. Grey out an agent with `available: false` and show its `unavailableReason`; `access` is `owner` or `everyone` (`docs/ios-app.md`, `GET /v1/agents`) |
 | Review: list, swipe to approve or request changes, proposal detail, votes, discussion, request changes, diff, rendered Markdown (Diff / Rendered, Before / After), Implement-plan card, Apply on ‹host› / Withdraw, proposal sets, dearth banner, Flow | Same | A swipe never signs on its own: it opens the review sheet |
 | Dashboard panels (stat, gauge, timeseries, table, rows, text, status), lab fallback | Same | |
 | People and safety codes, look-alike badges, link chips, invites (inspect, accept, dismiss), DMs | Same | Invite calls go through the tunnel whenever the host has remote access |
@@ -308,7 +309,8 @@ The phone runs a WebAuthn **get** ceremony over the box's `challenge`. It
 uses the 32 bytes decoded from the base64url string, never the string's
 UTF-8. It uses the RP from `/v1/me` (`rpId`, `origins`) and the
 `allowCredentials` from the prepare `preview`, with user verification
-required. It never registers passkeys.
+required. It never registers passkeys. Add to my devices (section 3.9)
+adds nothing here: the passkey that certifies the phone is the desktop's.
 
 - **API:** `androidx.credentials.CredentialManager.getCredential` with a
   `GetPublicKeyCredentialOption(requestJson)`. The `requestJson` is
@@ -569,6 +571,10 @@ and no deep link: iOS finding IOS-1, relay-forged notifications.
   - `ligus://proposal/<id>`.
 
   An unknown link shows fixed text and never echoes the URL (IOS-7).
+- **No link for Add to my devices.** The desktop's `ligusenroll1:` code
+  isn't a URL and no `ligus://` link starts enrollment: only the in-app
+  scanner opened from Add to my devices reads it, so another app or a web
+  page can't start the flow with a code it made.
 - **Ids** are validated before use (section 3.6).
 - **No https App Links in v1.** iOS has no universal links, and an
   `autoVerify` https filter would need `handle_all_urls` in `assetlinks.json`
@@ -665,6 +671,19 @@ Costs:
 The iOS app could adopt the same crate later through UniFFI's Swift
 bindings, an open question in section 7.
 
+**Add to my devices (0.1.1).** The surface gains `ligus_runtime::phone_enroll_qr`'s
+phone side: `PhoneOffer::scan(text, now_ms)`, `fields()`, `build_request(code,
+sign)` and `check_answer(text, my_device) -> PhoneVerdict`, so the offer,
+request and answer are parsed by the core. The tunnel client gains **E3b,
+provisional enrollment**: msg1 carries `enrollKey` (the phone's 65-byte SEC1
+P-256 key, base64url) next to `device`; where the host would close with
+`4040 device_not_certified`, a 0.1.1 host answers msg2
+`{"v":1,"provisional":true}` (no `pid`, no `cred`), and the connection reaches
+only `/v1/phone-enroll/*` for at most 5 minutes. Once the box reports
+`certified: true`, close it and enroll again with the same link (E3a). The
+provisional attempt and the final one each use one of the link's 5
+attempts. An older host ignores `enrollKey` and closes with 4040 as before.
+
 ### 2.10 Direct path and cleartext
 
 The direct path is plain HTTP inside the tailnet or LAN, with a bearer token
@@ -708,6 +727,9 @@ cross-device flag or expiry, so:
   The UI says so for the admission code.
 - **Never shared:** the bearer admission code has no share action. Only
   sealed `ligusadmit1:` codes can be shared (an iOS review fix).
+- **Never copied:** the desktop's `ligusenroll1:` offer (Add to my
+  devices) is never copied, shared or shown as text; it lives in memory
+  only (section 3.9).
 - **Public values:** the safety code and the forge device-flow user code are
   copied as plain clips, as on iOS. Markdown code blocks are plain too.
 
@@ -715,6 +737,7 @@ cross-device flag or expiry, so:
 
 - `FLAG_SECURE` on the windows that show:
   - the phone code and fingerprint;
+  - the Add to my devices waiting screen (it shows the fingerprint);
   - the review and phone-action sheet;
   - the passkey presence sheet;
   - the bearer admission code;
@@ -951,6 +974,35 @@ concatenation from an unchecked id. Encode it as a path segment (OkHttp
 | The phone code text was selectable | not selectable; Copy is the only path |
 | Invite calls on the plain direct path | invite and forge-token calls go through the tunnel whenever the host has remote access |
 
+### 3.9 Add to my devices (reverse QR)
+
+The flow and the wire formats are in [`ios-app.md`](ios-app.md), "Add a
+phone by scanning the desktop's QR", and in
+[`design/v2/phone-enroll-reverse-qr.md`](design/v2/phone-enroll-reverse-qr.md).
+Android MUST:
+
+- hold **one offer at a time**: a second scan while a request is pending
+  asks "Cancel the request to *Ana*'s desktop and use this code instead?";
+- refuse an offer with `exp` more than 120 s in the past or more than 600 s
+  ahead (`expired`, `too_far_ahead`);
+- show the confirm sheet from `POST /v1/phone-enroll/check`, never from the
+  QR, with the warnings: `nameCollision` ("Two people here are called Ana.
+  Make sure this is your desktop.") and another account (this phone's
+  pinned `/v1/me` `account.id` on another host profile differs from the
+  offer's `accountId`);
+- treat **success as the box's `certified: true`** for this phone, not the
+  desktop's answer;
+- check every answer with `check_answer` before showing it, and on
+  `AnotherPhone(certified)` show the tripwire alarm ("Another phone was added
+  with this code. Tell the person at the desktop to revoke it.") and not
+  retry;
+- keep the offer's secret, `k_req`, `k_ans` and the offer text in memory
+  only, zeroized after the flow, never logged, never in a crash report,
+  `toString()` or error string;
+- show "Update ligus serve, or use Can't scan?" on a 404 from the routes or
+  a 4040 without a provisional answer, and "This box can't reach the
+  workspace's relay. Use Can't scan?" on `503 relay_unavailable`.
+
 ---
 
 ## 4. Testing
@@ -969,6 +1021,8 @@ checks their SHA-256 against a manifest:
 | `crates/ligus-core/tests/golden/envelopes_v3.jsonl` (117 lines) | the JSON round-trip used by the parser accepts every envelope's fields |
 | `crates/ligus-core/tests/golden/presence/*.json` | `check_assertion_locally` over real authenticator output |
 | `crates/ligus-proto/tests/vectors/display-names.json` | `clean_display_name` |
+| `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl` | the offer, the keys (`rid`, `k_req`, `k_ans`), the request and the answer, and each negative with its refusal reason (`EnrollError::code`) |
+| `crates/ligus-core/tests/golden/differential/rust_parity_enroll_v1.jsonl` | mutated offers, requests and answers with the core's verdict. Through the shared core these are the core's own parsers, so the boundary parity test covers them |
 | `docs/relay-tunnel/vectors.json` | V-keys, V-cred, V-noise (as initiator, in both modes, with injected ephemerals), V-mux, V-push, and every `negative` case (§19.2) |
 
 Two fixtures exist only in the iOS repository: the 600-line label-clamp
@@ -1150,8 +1204,8 @@ engineer for the core work. They are rough.
 
 | Milestone | Scope | App size | Server / relay / desktop / site changes |
 |---|---|---|---|
-| **M0 Core** | the `crates/ligus-mobile` UniFFI crate (section 2.9 surface); moving the tunnel helpers and `phone_enroll`'s code functions into a shared crate; cargo-ndk build; the vector sync script; upstreaming the iOS-only corpora | 2–3 weeks (Rust) | This repo only: the new crate, CI targets for Android ABIs, fuzz targets. No wire change |
-| **M1 Pairing + chat read** | Keystore device key and id; This phone (code, QR, fingerprint, FLAG_SECURE, sensitive copy); pairing v1 and v2 (direct and tunnel: Noise, mux, HTTP, SSE, renewal, direct-token refresh); refusals 4040/4041/4042; `/v1/me` pinning; host profiles and the path policy; chats, messages (read, live stream), people, channels, chat details, agents, dashboard, appearance; app lock; deep links; demo mode; ntfy links work | 6–8 weeks | None. ntfy is the notification fallback |
+| **M0 Core** | the `crates/ligus-mobile` UniFFI crate (section 2.9 surface); moving the tunnel helpers and `phone_enroll`'s code functions into a shared crate; cargo-ndk build; the vector sync script; upstreaming the iOS-only corpora | 2–3 weeks (Rust) | This repo only: the new crate (including `phone_enroll_qr`'s phone side), CI targets for Android ABIs, fuzz targets. No wire change |
+| **M1 Pairing + chat read** | Keystore device key and id; This phone (code, QR, fingerprint, FLAG_SECURE, sensitive copy); pairing v1 and v2 (direct and tunnel: Noise, mux, HTTP, SSE, renewal, direct-token refresh); refusals 4040/4041/4042; **Add to my devices** (the CameraX + ML Kit scanner for `ligusenroll1:`, E3b provisional enrollment, section 3.9); `/v1/me` pinning; host profiles and the path policy; chats, messages (read, live stream), people, channels, chat details, agents with their availability (`available`, `unavailableReason`, `access`), dashboard, appearance; app lock; deep links; demo mode; ntfy links work | 6–8 weeks | None (E3b and the `/v1/phone-enroll/*` routes ship in `ligus serve` 0.1.1). ntfy is the notification fallback |
 | **M2 Signed actions + review sheet** | phone actions `post`, `vote`, `answer`, `clearLockdown`, `requestApply`, `withdrawApply` with the full check and sheet; the lamport ledger; passkeys through Credential Manager; the Review tab (proposals, diff, rendered Markdown, votes, discussion, request changes, Apply on ‹host›, proposal sets, guards, Flow); typing | 5–7 weeks | **Site:** `assetlinks.json` on ligus.ai. **Desktop:** an Owner affordance to add the app's `android:apk-key-hash:` origin to the workspace presence policy (`WorkspaceRulesSet.presence`), and new workspaces include it at genesis. Optionally, the default policy gains the published app's origin |
 | **M3 Push** | FCM registration, decryption and notification channels; Reply and Approve actions (no signing from notifications); push settings (`PUT /v1/tunnel/push`); foreground suppression | 2–3 weeks app | **Relay:** the FCM push provider (section 2.6.3), about 1–2 weeks with tests. Relay operators set the FCM env. No `ligus serve` change |
 | **M4 Memory, repos, admissions, identity** | `proposeMemory` and memory and task-state views; the repo picker, clone, pull, PR/MR, code hosts; Admit a box (`ligusjoin1:` and admission sheet); safety codes, invites, DMs | 4–5 weeks | None |

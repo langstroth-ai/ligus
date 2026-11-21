@@ -2,7 +2,7 @@
 
 `ligus serve` exposes a small JSON + Server-Sent Events API under `/v1/`.
 The phone app is its main client, but any client can use it. This page lists
-every route in 0.1.0, checked against the router in
+every route in 0.1.1, checked against the router in
 `crates/ligus-cli/src/serve/api.rs`. The contract the phone implements is in
 [`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md).
 
@@ -14,6 +14,7 @@ There are two ways in, and both reach the same router:
 |---|---|---|
 | **Direct** | plain HTTP to `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`) | `Authorization: Bearer <token>`: the phones' token in `<data dir>/serve.token` (or `LIGUS_SERVE_TOKEN_FILE`), one for every direct-path phone, or the **operator token** in `<data dir>/serve.operator.token`. Both are 64 hex characters, created 0600 at first start, compared in constant time |
 | **Relay tunnel** | the phone's Noise session through the relay (`hive-tunnel/1`) | the phone's own paired key and `hpc1` credential. Any `Authorization` header is stripped. Each request re-checks that the phone isn't revoked |
+| **Provisional tunnel** (0.1.1) | a Noise session through the relay for a phone that isn't certified yet (`relay-tunnel.md` §7.2, E3b) | the box's pairing secret and the phone's own device key, proved at enrollment. Reaches only the three [Add a phone](#phone-enroll) routes, for at most 5 minutes; everything else is 404 |
 
 - Only `GET /v1/health` answers without a token.
 - **Two bearer tokens.** `serve.token` goes to phones (in the pairing link,
@@ -61,7 +62,7 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 
 ### Who am I {#me}
 
-The phone's setup in one call: after [Add this phone](../../ligus/features/phone-app.md#add-this-phone)
+The phone's setup in one call: after [Add your phone](../../ligus/features/phone-app.md#add-this-phone)
 and pairing, the app asks the box who it is and needs nothing typed in.
 Through the relay tunnel, or with the operator token on a loopback listener
 (anything else, the phones' token on loopback included, answers
@@ -169,6 +170,61 @@ followed by `dms.changed`.
 A DM's chat is listed by `GET /v1/chats` with a `dm` object and takes
 messages through `/v1/chats/:id/messages`; agents never run there and its
 messages never push.
+
+### Add a phone {#phone-enroll}
+
+New in 0.1.1. The box's side of [Add your phone](../../ligus/features/phone-app.md#add-this-phone):
+the desktop shows a QR code (`ligusenroll1:`), the phone scans it and sends
+its request here, and the box passes it to the desktop on the relay's
+presence channel, sealed under the workspace key and signed by the box's
+device key. The box writes nothing to any log and can't certify a phone: the
+desktop certifies it with its person's passkey, exactly as the paste flow
+does. The QR's secret never reaches the box, so the box can check the
+phone's signature but not the request's MAC; the desktop checks both.
+
+Who may call: a phone on a [provisional tunnel](#reaching-the-api) (only for
+the device it proved), a paired tunnel phone (only for its pairing's
+device), the phones' token and the operator token (for the request's own
+device). Nothing these routes return is secret.
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `POST /v1/phone-enroll/check` | `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` (`deviceId` only off the tunnel; through it, the device the connection proved) | Writes nothing. `200 {workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `phone` is `null` when no device is known (off the tunnel without `deviceId`). `person` is the member whose device showed the code; `nameCollision` is true when another current member has the same cleaned display name; `standing` is `new` or `alreadyMine` (nothing to do) |
+| `POST /v1/phone-enroll/requests` | `{request: "ligusenrollreq1:…"}` | Checks the encoding, the phone's `ligusphone1:` code inside, the phone's signature, that the caller's device is the code's, and every `check` rule; then publishes the request slot. `202 {rid, state: "relayed"}`. Sending the same bytes again is idempotent. Pending requests live in memory until the code's expiry and are dropped on restart (the phone sends again after a 404 from the status route) |
+| `GET /v1/phone-enroll/requests/{rid}` | `?wait=N` (N ≤ 25 seconds; default 0, answer at once); off the tunnel also `&deviceId=<uuid>` when one caller has several requests | Long poll. `{state: "waiting" \| "answered" \| "expired", answer?: "ligusenrollres1:…", certified}`. `answer` is the desktop's answer, relayed as is (only one signed by the device that showed the code); `certified` is whether this box's roster now has the phone's certificate, which is what the phone treats as success. The box keeps polling for answers until the code expires, even after `certified` |
+
+`rid` (base64url, 16 bytes) is derived from the QR's secret and reveals
+nothing about it; `exp` is Unix seconds. The wire formats are in
+[`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md)
+("Add a phone by scanning the desktop's QR") and the codec is
+`ligus_runtime::phone_enroll_qr`.
+
+Refusals are `{error, message}`:
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `bad_request` | the body isn't valid JSON, the request doesn't decode, its `ligusphone1:` code isn't valid, or the phone's signature doesn't verify |
+| 401 | `unauthorized` | no valid credential, as on every route but `/v1/health` |
+| 403 | `device_mismatch` | the caller's channel proved another device than the phone in the request |
+| 403 | `device_revoked` | the phone's device is revoked here |
+| 409 | `wrong_workspace` | `workspaceId` isn't this box's workspace |
+| 409 | `desktop_unknown` | `desktopDeviceId` isn't a certified, unrevoked desktop (not a phone, not delegated) of exactly one current person here |
+| 409 | `offer_expired` | `exp` is more than 120 s past or more than 420 s ahead of the box's clock (the desktop issues codes for 300 s) |
+| 409 | `someone_elses` | the phone is certified here for another account |
+| 404 | `not_found` | status route: no pending request with that `rid` for this caller (the box restarted, or the request expired more than 120 s ago): submit it again |
+| 429 | `rate_limited` | the box accepted 30 requests in the last minute ("try again in a minute"), or a provisional connection already sent its 8 ("enroll again") |
+| 503 | `relay_unavailable` | the box has no relay to publish on (it syncs only peer to peer), or it isn't a certified service member of the workspace yet, so desktops wouldn't take a request it relays |
+
+Limits, so no caller can crowd out the others: one pending request per phone
+device (a new one replaces it); one per provisional connection or paired
+tunnel phone, two per bearer token; 16 pending in all (when full, the oldest
+request of the caller holding the most is dropped); at most 30 accepted per
+minute. A provisional connection may send at most 8 requests, all for its
+own device; at most 4 are open at once per box, and a fifth enrollment is
+closed with `4043 provisional_busy` (retry in a minute; the attempt counts
+against the pairing link). E3b is specified in
+[`docs/relay-tunnel.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/relay-tunnel.md)
+§7.2.1.
 
 ### Admissions {#admissions}
 
@@ -441,6 +497,7 @@ Service and NetworkPolicies).
 | Connections | 30 s to send a request's headers (also the longest an idle keep-alive connection waits); closed after 300 s with no byte either way |
 | Event streams | 8 open per credential (each tunnel pairing, the phones' token, the operator token), 64 per box; one more answers `429 {"error":"too_many_streams"}` with `Retry-After: 5` |
 | Drafts | `presence`, `admissions` and `phone-actions` drafts are kept per credential (8, 4 and 8 each; 32, 16 and 32 per box) for 5 minutes. A caller sees and spends only its own; a full box answers 503 |
+| Add a phone | codes last 300 s; status long polls up to 25 s; the box republishes a pending request every 10 s; 16 pending, 30 accepted per minute; provisional connections 5 minutes, 8 requests, 4 at once ([Add a phone](#phone-enroll)) |
 | Typing | republish at most every 3 s, expire after 6 s quiet, 30 requests per 10 s, others polled every 2 s while a stream is open |
 
 There is no separate readiness endpoint; use `/v1/health`. Relay sync state
