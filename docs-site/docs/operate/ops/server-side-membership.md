@@ -58,8 +58,17 @@ Viewer's envelopes on a claimed workspace, so a Viewer there never gets the
 rotated key. Run v0.3.2 or later if your workspaces have Viewers.
 
 **Removing someone = remove + rotate.** `DELETE …/members/:account` stops
-their access on the relay at once; pair it with a workspace-key rotation in
-the app so they also lose the key to new traffic.
+their access on the relay at once. Removing an entry from **People → Team members (server-enforced)** in the app does three things in order: removes it on the relay,
+removes the matching member from the workspace roster, then rotates the
+workspace key to the members who remain, so they also lose the key to new
+traffic. The app matches a person by their account (`ligus:<account id>`)
+and a box by the admission the bootstrapping desktop issued with its
+`ligus-box:<id>` identity, never by name. If the removal from the roster
+fails, the key isn't rotated and the app says so. An entry the app can't
+match to a workspace member is still removed from the relay and the key
+rotated, but the app warns that it may still read new traffic: remove its
+member under Members (**Remove & revoke**). See
+[Admitting a box](admitting-a-box.md#revoking-or-replacing-a-box).
 
 ## How it composes with access tokens
 

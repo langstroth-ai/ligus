@@ -5003,3 +5003,5 @@ async fn internal_errors_answer_a_generic_message() {
     let body = axum::body::to_bytes(r.into_body(), 1 << 16).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("deviceId isn't a uuid"));
 }
+
+mod box_removal;
