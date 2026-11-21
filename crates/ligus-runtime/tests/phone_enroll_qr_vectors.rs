@@ -1320,6 +1320,37 @@ fn generate_parity() -> String {
         ]);
     }
 
+    // Requests made with the offer's secret (the MAC passes) that a later
+    // check decides: labels the desktop's clamp keeps but a stricter
+    // phone-side clamp would drop (the phone's verifier must follow the
+    // desktop's rule), a high S, a label that isn't its own clamp, and
+    // another workspace under the same secret. Appended, so earlier ids stay.
+    let mut late = Vec::new();
+    for label in [
+        "Ana\u{2028}iPhone",
+        "Ana\u{2029}",
+        "Ana\u{E0041}\u{E007F}",
+        "\u{0600}Ana",
+        "Ana\u{110BD}",
+        "Ana\u{FFFC}",
+        "Ana \u{1F1EB}\u{1F1F7}",
+        "Ana\u{0301}",
+    ] {
+        late.push(req(label, &a));
+    }
+    late.push(EnrollRequest::build(&valid, &a.code("Ana's iPhone"), |m| high_s(&a.sign(m))).encode());
+    let unclamped = {
+        let label = " Ana".to_string();
+        let pre = ligus_runtime::phone_enroll::preimage(a.device_id, &a.public_key, &label);
+        PhoneCode { device_id: a.device_id, public_key: a.public_key.clone(), label, signature: a.sign(&pre) }
+    };
+    late.push(EnrollRequest::build(&valid, &unclamped, |m| a.sign(m)).encode());
+    let elsewhere = Offer { workspace_id: u(9), ..valid.clone() };
+    late.push(EnrollRequest::build(&elsewhere, &a.code("Ana's iPhone"), |m| a.sign(m)).encode());
+    for t in &late {
+        push(req_case(t, NOW_MS));
+    }
+
     let mut s = out.join("\n");
     s.push('\n');
     s

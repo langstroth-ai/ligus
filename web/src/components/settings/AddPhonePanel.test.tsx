@@ -242,7 +242,7 @@ describe("Add a phone (the phone scans the desktop's code)", () => {
   it("opens on the paste flow and says why when this desktop can't finish", async () => {
     vi.mocked(ipc.phoneEnrollPrecheck).mockResolvedValue({
       ready: false,
-      missing: ["Adding a phone needs your passkey: add a passkey (or a recovery key) under Security first."],
+      missing: ["Adding a phone needs your passkey: add a passkey (or a recovery key) under Settings → Passkeys & keys first."],
     });
     render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
     expect(await screen.findByTestId("add-phone-unavailable")).toHaveTextContent(/needs your passkey/);
