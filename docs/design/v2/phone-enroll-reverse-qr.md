@@ -713,3 +713,12 @@ the code settled it as follows (the golden vectors pin each one):
 - **An answer about another phone** that isn't `certified` (the desktop
   declined or refused whoever answered first) is `PhoneVerdict::AnotherPhone`
   too; the phone asks for a new code.
+- **An answer counts per request, not per offer** (security review, 0.1.1).
+  The box can't check a request's MAC, so one offer's `rid` may carry
+  requests naming different desktops (a co-member can send one naming their
+  own). The box takes an answer slot only for the requests whose own
+  `desktop_device_id` signed it; before this, an answer signed by any desktop
+  one request named was set on every request of the offer, so a co-member's
+  answer naming the real phone stopped the box relaying it (the offer's
+  desktop then saw no second phone: no abort, no tripwire) and the real
+  desktop's answer was refused.

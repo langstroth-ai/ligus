@@ -37,7 +37,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use ligus_runtime::phone_enroll_qr::{
     self as qr, box_check_offer, box_check_request, check_relayed_answer, open_relayed_answers, request_slot, seal_relayed_request,
-    BoxRefusal, EnrollAnswer, OfferFields, RelayedRequest, Rid,
+    BoxRefusal, EnrollAnswer, OfferFields, RelayedAnswer, RelayedRequest, Rid,
 };
 use ligus_runtime::chat_service::EnrollPhoneStanding;
 use serde::Deserialize;
@@ -341,9 +341,33 @@ impl Inner {
         out
     }
 
-    fn set_answer(&mut self, rid: Rid, answer: &str) -> bool {
+    /// Take the answer slots (opened, not yet checked) that the offers'
+    /// own desktops signed (§5.5): each is set on the requests it answers.
+    /// Returns the offers that got a new answer.
+    fn take_answers(&mut self, opened: Vec<(String, RelayedAnswer)>, now_ms: i64, desktop_key: impl Fn(Uuid) -> Option<Vec<u8>>) -> Vec<Rid> {
+        let watched = self.watched(now_ms);
+        let mut out = Vec::new();
+        for (slot, a) in opened {
+            let Ok(rid) = EnrollAnswer::decode(&a.answer).map(|x| x.rid) else { continue };
+            // Only the requests sent to the desktop that signed it: an
+            // answer from another desktop (a co-member's, for a request
+            // naming it) never answers a request for this one.
+            if !watched.contains(&(rid, a.desktop)) {
+                continue;
+            }
+            if check_relayed_answer(&slot, &a, a.desktop, now_ms, &desktop_key).is_err() {
+                continue;
+            }
+            if self.set_answer(rid, a.desktop, &a.answer) && !out.contains(&rid) {
+                out.push(rid);
+            }
+        }
+        out
+    }
+
+    fn set_answer(&mut self, rid: Rid, desktop: Uuid, answer: &str) -> bool {
         let mut changed = false;
-        for e in self.entries.iter_mut().filter(|e| e.rid == rid) {
+        for e in self.entries.iter_mut().filter(|e| e.rid == rid && e.desktop == desktop) {
             if e.answer.as_deref() != Some(answer) {
                 e.answer = Some(answer.to_string());
                 changed = true;
@@ -443,7 +467,7 @@ pub async fn relay_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     let _ = relay.publish_presence(&room, &request_slot(rid, me), &json!({})).await;
                 }
                 if !watched.is_empty() {
-                    watch_answers(&shared, &relay, &room, ring, &watched).await;
+                    watch_answers(&shared, &relay, &room, ring).await;
                 }
             }
         }
@@ -462,30 +486,20 @@ async fn watch_answers(
     relay: &ligus_runtime::RelayClient,
     room: &str,
     ring: &ligus_runtime::keyring::KeyringEngine,
-    watched: &[(Rid, Uuid)],
 ) {
     let Ok(blobs) = relay.list_presence(room).await else { return };
-    let now = now_ms();
-    let taken: Vec<(Rid, String)> = {
+    let opened = open_relayed_answers(&blobs, ring);
+    // The signers' keys first (the service's lock), then the store's lock:
+    // never both at once.
+    let keys: HashMap<Uuid, Option<Vec<u8>>> = {
         let svc = shared.lock();
-        open_relayed_answers(&blobs, ring)
-            .into_iter()
-            .filter_map(|(slot, a)| {
-                let rid = EnrollAnswer::decode(&a.answer).ok()?.rid;
-                let (_, desktop) = watched.iter().find(|(r, _)| *r == rid)?;
-                check_relayed_answer(&slot, &a, *desktop, now, |d| svc.enroll_desktop_key(shared.ws, d)).ok()?;
-                Some((rid, a.answer))
-            })
-            .collect()
+        opened.iter().map(|(_, a)| a.desktop).collect::<HashSet<_>>().into_iter().map(|d| (d, svc.enroll_desktop_key(shared.ws, d))).collect()
     };
-    let mut any = false;
-    for (rid, answer) in taken {
-        if shared.phone_enroll.lock().set_answer(rid, &answer) {
-            note(format!("request {rid}: the desktop answered"));
-            any = true;
-        }
+    let answered = shared.phone_enroll.lock().take_answers(opened, now_ms(), |d| keys.get(&d).cloned().flatten());
+    for rid in &answered {
+        note(format!("request {rid}: the desktop answered"));
     }
-    if any {
+    if !answered.is_empty() {
         // Stop re-publishing what the answer covers now, not in 10 s.
         shared.phone_enroll.kick.notify_one();
     }
@@ -803,6 +817,60 @@ mod tests {
         assert!(inner.submit(entry(200, 999, "tunnel:x", "late"), PER_PEER, now + 61_000).is_ok());
     }
 
+    /// An answer slot counts only for the requests whose own desktop signed
+    /// it (§5.5). A co-member who sends the box a request naming their own
+    /// desktop for someone else's offer (the box can't check its MAC) must
+    /// not get the box to take their desktop's answer for the other
+    /// requests of that offer: an answer naming the real phone would stop
+    /// the box relaying it, so the offer's desktop would never see the
+    /// second phone (no abort, no tripwire), and the real desktop's own
+    /// answer would be refused for the whole offer.
+    #[test]
+    fn an_answer_counts_only_for_requests_to_the_desktop_that_signed_it() {
+        let mut inner = Inner::default();
+        let now = 30_000_000;
+        let rid = Rid([7; 16]);
+        let (kx, ky) = (ligus_core::SigningKeypair::generate().unwrap(), ligus_core::SigningKeypair::generate().unwrap());
+        // X is the co-member's desktop, Y the offer's real desktop.
+        let (x, y) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let key = |d: Uuid| {
+            if d == x {
+                Some(kx.public_key_bytes().to_vec())
+            } else if d == y {
+                Some(ky.public_key_bytes().to_vec())
+            } else {
+                None
+            }
+        };
+        let mut decoy = entry(7, 100, "tunnel:mallory", "decoy");
+        decoy.desktop = x;
+        let mut real = entry(7, 200, "tunnel:ana", "real phone");
+        real.desktop = y;
+        inner.submit(decoy, PER_PEER, now).unwrap();
+        inner.submit(real, PER_PEER, now).unwrap();
+        // X's answer about the real phone (its tag can't be right: X has no secret).
+        let forged = qr::EnrollAnswer { rid, outcome: qr::Outcome::Declined, device_id: Uuid::from_u128(200), tag: [0; 32] };
+        let signed = RelayedAnswer::new(&forged, x, now).sign(&kx);
+        let taken = inner.take_answers(vec![(qr::answer_slot(rid), signed.clone())], now, key);
+        assert_eq!(taken, vec![rid], "it answers the decoy, sent to X");
+        let real = inner.entries.iter().find(|e| e.text == "real phone").unwrap();
+        assert_eq!(real.answer, None, "X's answer must not answer a request for Y");
+        let shown: HashSet<String> = (0..6).flat_map(|t| inner.plan(now + t * 4_000).0).map(|(_, text)| text).collect();
+        assert!(shown.contains("real phone"), "the box still relays the real phone: {shown:?}");
+        // Y's own answer is still taken for Y's request.
+        let real_answer = qr::EnrollAnswer { rid, outcome: qr::Outcome::Certified, device_id: Uuid::from_u128(999), tag: [1; 32] };
+        let ya = RelayedAnswer::new(&real_answer, y, now).sign(&ky);
+        assert_eq!(inner.take_answers(vec![(qr::answer_slot(rid), ya.clone())], now, key), vec![rid]);
+        let real = inner.entries.iter().find(|e| e.text == "real phone").unwrap();
+        assert_eq!(real.answer.as_deref(), Some(ya.answer.as_str()));
+        let decoy = inner.entries.iter().find(|e| e.text == "decoy").unwrap();
+        assert_eq!(decoy.answer.as_deref(), Some(signed.answer.as_str()), "and not on X's");
+        // An answer signed by a desktop no request names is ignored.
+        let kz = ligus_core::SigningKeypair::generate().unwrap();
+        let za = RelayedAnswer::new(&real_answer, Uuid::from_u128(3), now).sign(&kz);
+        assert!(inner.take_answers(vec![(qr::answer_slot(rid), za)], now, |d| (d == Uuid::from_u128(3)).then(|| kz.public_key_bytes().to_vec())).is_empty());
+    }
+
     /// Two phones on one offer share its one slot: it shows each in turn,
     /// and once the answer names one, only the other.
     #[test]
@@ -827,7 +895,7 @@ mod tests {
         // The desktop answered about phone 1: only phone 2 is shown now.
         let keys = ligus_runtime::phone_enroll_qr::EnrollSecret::from_bytes([3; 32]).keys();
         let answer = EnrollAnswer::build(&keys, qr::Outcome::Certified, Uuid::from_u128(1)).encode();
-        inner.set_answer(Rid([7; 16]), &answer);
+        inner.set_answer(Rid([7; 16]), Uuid::from_u128(1), &answer);
         for t in 0..5 {
             for (_, text) in inner.plan(now + 60_000 + t * 3_100).0 {
                 assert_eq!(text, "second");

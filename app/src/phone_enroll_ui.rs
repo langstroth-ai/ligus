@@ -613,7 +613,7 @@ pub(crate) fn precheck_reasons(svc: &ChatService, ws: Uuid, local: bool, presenc
     match svc.author().account_id {
         None => missing.push("This device has no account yet: sign in first.".into()),
         Some(a) if !local && svc.passkeys_of(ws, a).unwrap_or_default().is_empty() => {
-            missing.push("Adding a phone needs your passkey: add a passkey (or a recovery key) under Security first.".into())
+            missing.push("Adding a phone needs your passkey: add a passkey (or a recovery key) under Settings → Passkeys & keys first.".into())
         }
         Some(_) => {}
     }
