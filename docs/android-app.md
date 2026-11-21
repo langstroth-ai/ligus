@@ -111,7 +111,7 @@ equivalent.
 - **No on-device model in the demo.** The demo uses scripted replies.
 - **No Wear OS, Android Auto or home-screen widgets.**
 - **No key attestation sent to the desktop** at certification (an open
-  question, section 7).
+  question, section 8).
 - **No Play-services-free push in M3.** UnifiedPush comes after FCM (section 2.6).
 - **No phone-side passkey registration.** As on iOS, the phone uses passkeys
   the person already has (synced through Google Password Manager or another
@@ -237,7 +237,7 @@ prompt for every signature. Three things argue against it:
   creation, so changing it later means a new device id.
 
 Making it a per-install opt-in at key creation is an open question
-(section 7).
+(section 8).
 
 #### 2.3.2 Signing
 
@@ -549,7 +549,8 @@ and no deep link: iOS finding IOS-1, relay-forged notifications.
   - Messages from the same chat are grouped into one notification group.
 - **Notification channels** (the user controls them in system settings):
   replies, mentions, reviews and approvals, pairing, plus a "generic"
-  channel for undecryptable pushes. Request `POST_NOTIFICATIONS` after
+  channel for undecryptable pushes. Section 7.4 sets the channels' names, importance and
+  defaults. Request `POST_NOTIFICATIONS` after
   pairing through a relay that lists `fcm`, following the iOS order (after
   the lock offer). Then send `PUT /v1/tunnel/push {"enabled", "previews"}`.
 - **Foreground suppression:** keep `/v1/events` open through the tunnel only
@@ -589,7 +590,7 @@ and no deep link: iOS finding IOS-1, relay-forged notifications.
     link that is used first makes the real pairing fail visibly.
 
   A verified https pairing link (secrets in the fragment) is an open
-  question (section 7) and would need `ligus pair` to print it.
+  question (section 8) and would need `ligus pair` to print it.
 
 ### 2.8 Notifications that act
 
@@ -669,7 +670,7 @@ Costs:
 - the F-Droid build has to build Rust itself, which it supports.
 
 The iOS app could adopt the same crate later through UniFFI's Swift
-bindings, an open question in section 7.
+bindings, an open question in section 8.
 
 **Add to my devices (0.1.1).** The surface gains `ligus_runtime::phone_enroll_qr`'s
 phone side: `PhoneOffer::scan(text, now_ms)`, `fields()`, `build_request(code,
@@ -1216,7 +1217,338 @@ code-verified docs before it lands, as each iOS phase did.
 
 ---
 
-## 7. Open questions for the owner
+## 7. Design and experience notes
+
+The sections above fix what the Android app must do. This section says how
+it should feel, so that the two phone apps, the desktop and `lt` read as
+one product. It carries the iPhone app's design direction across to
+Material 3, and it notes where the iPhone app itself is changing, so that
+Android starts from the newer design rather than copying the older one.
+The security rules in section 3 always win over anything here.
+
+### 7.1 Calm by default
+
+Every screen has one primary focus; everything else is one tap away. When
+two designs are otherwise equal, choose the one that shows less at once.
+
+- **One question first.** The phone's main job is to answer "does anything
+  need me, and is my agent still working?". The home destination is an
+  **Inbox** (section 7.2), not the chat list.
+- **One badge.** Only the Inbox destination and the launcher show a count,
+  and the count is only items where this person is the next actor: votes
+  they can still cast, agents' questions to them, workflow gates assigned to
+  them, signing and passkey requests, device and box requests, invites, and
+  failures of runs they started. Unread messages are a dot on the chat row,
+  never a badge. The same count appears on every surface.
+- **At most one banner,** and only for states that block work (a chat in
+  lockdown, the workspace's restricted mode). The demo notice shows once,
+  not on every destination. Confirmations are a single snackbar. Errors stay
+  where they happened (inline, with a retry) and in a "Recent problems"
+  list under the person's profile; they never disappear on a timer.
+- **Restrained colour.** Neutral surfaces; the accent marks an action or a
+  state. Status colours appear only with a glyph (section 7.9).
+- **Quiet motion.** Standard transitions about 140 ms, sheets about 220 ms,
+  one short pulse on a state change, no animation per streamed token, and
+  nothing that flashes. When the system's animations are off, show static
+  text ("working · 3:12") instead of spinners.
+- **Plain words.** Operational labels use plain language: "Workspace" for the
+  queue and task board, "Workspace notes" for marks, "Restricted mode" for
+  dearth mode. Wire ids and stored keys don't change. Use one noun for the
+  machine that runs `ligus serve`: **box** (with "computer" only where a
+  person is told to type a command on it).
+
+### 7.2 Navigation and information architecture
+
+Four destinations, in a `NavigationSuiteScaffold` (a navigation bar on
+phones, a rail on tablets and unfolded foldables):
+
+| Destination | What it holds |
+|---|---|
+| **Inbox** | *Needs you* (oldest deadline first), *Running* (this person's agents and runs, with Follow), *Done today* (collapsed). The only badge. |
+| **Chats** | Direct messages, then chats by channel; a state chip on each row (working, queued, needs you, failed). |
+| **Review** | All proposals, with filters: *Needs my vote*, *Waiting on others*, *Mine*, *Workspace* (the queue and task board). |
+| **Agents** | Agents with their live state and "runs on" host, the hosts list, and the dashboard as a *Health* section. |
+
+- **Settings** opens from the person's avatar in the top app bar on every
+  destination: This phone and devices, notifications, appearance,
+  security, privacy, code hosts, connection, people and safety codes,
+  about. The workspace and host switcher sits at the start of the same bar.
+- **List and detail:** `ListDetailPaneScaffold` on wide windows, so the list
+  stays beside the open chat or proposal (the iPad split view's
+  counterpart).
+- **Deep links and notifications** open the item's own screen with the
+  Inbox beneath it in the back stack, so Back returns to the Inbox.
+- **Edge-to-edge** is the default from target SDK 35: draw behind the system
+  bars, pad content with `WindowInsets` (`safeDrawing`), and keep the
+  composer above the keyboard with `imePadding()`. Lists scroll under a
+  translucent navigation bar; the composer and the vote bar never do.
+- **Predictive back** (`android:enableOnBackInvokedCallback="true"`):
+  - Use the system's back preview for every destination and sheet;
+    `PredictiveBackHandler` only where a screen must intercept back.
+  - Back on the signing sheet means **Cancel**. It never signs, and while a
+    signature is being committed back is ignored (as the sheet's dismissal
+    is blocked on iOS).
+  - Back inside Add to my devices returns to the previous step. A request
+    that is already pending stays pending (the flow lives in the model);
+    leaving shows where it is when the person comes back.
+  - Back from a chat with an unsent draft keeps the draft.
+
+### 7.3 Material 3 equivalents
+
+| iPhone app | Android (Compose, Material 3) | Note |
+|---|---|---|
+| Tab bar that shrinks on scroll | `NavigationSuiteScaffold`; the bar hides on scroll with an exit-always scroll behaviour on long lists | Four destinations (section 7.2) |
+| Glass buttons for controls | Filled, tonal and outlined buttons; no blur | Content cards stay solid so text contrast is predictable |
+| Sheets with medium and large detents | `ModalBottomSheet` (partially expanded, then expanded); full-screen dialogs for multi-step flows | `SecureFlagPolicy.SecureOn` where section 2.12 requires it |
+| Navigation bar with large title | `LargeTopAppBar` collapsing to `TopAppBar` | Titles in sentence case |
+| Searchable list | `SearchBar` in the top bar of Chats and Review | |
+| Pull to refresh | `PullToRefreshBox` | |
+| Swipe actions on rows | `SwipeToDismissBox` only for non-committal actions: Snooze and Mark done in the Inbox, Archive in Chats | **Never** approve, reject or answer by swipe |
+| Context menu | Long press opens a `DropdownMenu` (Copy, Mention, Propose as a memory note) | Also reachable as TalkBack custom actions |
+| Alert | `AlertDialog` | Only for destructive confirmations |
+| Transient banner | `Snackbar`, one at a time, for confirmations only | Errors persist (section 7.1) |
+| Empty state view | A centred icon, one line and one action | No illustrations beyond the mark |
+| Haptic feedback on approve, reject, failure | `HapticFeedbackConstants.CONFIRM`, `REJECT` | Nothing on swipe |
+| Status capsules | `AssistChip` or a small label with a leading Material Symbol | Glyph always present (section 7.9) |
+| Lock screen view and privacy cover | An opaque composable above all windows; `setRecentsScreenshotEnabled(false)` | Section 2.5 |
+
+### 7.4 Notifications
+
+Notify only when this person is the next actor, or when something they
+started finishes or fails. Everything else waits in the app. This refines
+the channel list in section 2.6.4.
+
+| Channel | Contents | Importance | Default | Actions | Grouping |
+|---|---|---|---|---|---|
+| **Needs you** | votes this person can cast, agents' questions to them, workflow gates assigned to them | high | on | **Review** (opens the proposal or gate), **Open** (questions) | per chat or proposal |
+| **Your runs** | runs and turns this person started: done | low (silent) | on | Open | one summary per burst ("@coder and @docs finished") |
+| **Your runs: failed** | the same, failed | default | on | Open | per chat |
+| **Mentions and direct messages** | `@you` mentions and DMs | default | on | Reply (`RemoteInput`, section 3.5) | per chat, `MessagingStyle` |
+| **Devices and pairing** | new phone, device and box requests; "new phone paired" | high | on | Open | none |
+| **Other** | pushes that couldn't be decrypted (generic text) | low | on | none | one summary |
+
+- **Every other chat message is not notified.** The host is told which kinds
+  this phone wants (an additive field on `PUT /v1/tunnel/push`).
+- **The proposal action is labelled "Review", not "Approve".** It behaves
+  exactly as section 3.5 describes: it opens the proposal, and nothing is
+  signed from the notification.
+- **Lock screen privacy:** `VISIBILITY_PRIVATE` with a public version that
+  names only the event ("An agent asked a question"). The title names the
+  sender and the event, never message text; the preview text is in the body
+  only when previews are on. The in-app previews setting defaults to
+  "When unlocked".
+- **Bursts:** updates within about 60 s collapse into the group summary;
+  `setOnlyAlertOnce(true)` on updates to an existing notification.
+- **Badges:** `setShowBadge(true)` only on the Needs you channel, so the
+  launcher dot means "something needs you".
+- **Settings:** Settings → Notifications lists the channels in plain words
+  with their current state and links to the system channel screen
+  (`ACTION_CHANNEL_NOTIFICATION_SETTINGS`); it doesn't duplicate the
+  system switches.
+- **Do Not Disturb:** no channel bypasses it by default; the person can
+  allow Needs you through in system settings.
+- **Permission timing:** ask for `POST_NOTIFICATIONS` once, after the first
+  pairing and the lock offer, with one sentence on what will notify.
+
+### 7.5 Following a running agent
+
+When the person sends a message that starts a turn from the phone, starts a
+workflow, or taps **Follow** on a Running row, show one ongoing notification
+for it (one per chat; a single "3 agents working" notification when more
+than two are followed).
+
+```
+┌──────────────────────────────────────┐
+│ Ligus · working · 3:12               │
+│ @coder · Flaky checkout test         │
+│ Running the suite (step 3 of 5)      │
+│ ━━━━━━━━━━━━━━━━━━━━━━━░░░░░░░░░░    │
+│ [ Open ]                             │
+└──────────────────────────────────────┘
+```
+
+- **Android 16 and later:** use `Notification.ProgressStyle` (steps and
+  segments for workflow stages) and request promotion to a Live Update
+  (`POST_PROMOTED_NOTIFICATIONS`), so the state shows as a status-bar chip
+  and on the lock screen. Check `canPostPromotedNotifications()` and fall
+  back quietly.
+- **Older versions:** an ongoing notification with a determinate or
+  indeterminate progress bar and a chronometer (`setUsesChronometer`).
+- **States:** working (with an optional step), queued (host busy), needs
+  you, done, failed, each with its glyph (section 7.9). Updates are silent;
+  the notification alerts once, when the state becomes *needs you* or
+  *failed*. On done or failed it becomes a normal notification with a
+  one-line summary and is dismissed after 15 minutes (`setTimeoutAfter`).
+- **Where updates come from:** while the app is in the foreground, the
+  event stream; in the background, the encrypted push the app already
+  decrypts (section 2.6.4). Because Android decrypts pushes in the app, the
+  progress text can stay end-to-end encrypted; keep the payload minimal
+  anyway (state, step, timestamps, ids) and take names from local data.
+  Don't run a foreground service just to watch an agent.
+- **No push yet:** without push, show the notification while the app is
+  open and mark it "last update 2 min ago" when it goes stale; never show a
+  state the app can't vouch for.
+- **Stop** is not a notification action. Opening the notification shows
+  the chat, where stopping is a deliberate action.
+- **Lock screen:** the same `VISIBILITY_PRIVATE` rule: "An agent is working"
+  without previews.
+
+### 7.6 Widgets, Quick Settings and shortcuts
+
+Home-screen widgets are out of scope for v1 (section 1.3). When they come:
+
+- **Glance widget,** small: the Needs-you count only. Medium: the
+  Needs-you list, with titles hidden while the device is locked. A tap opens
+  the item. **No widget approves, answers, signs or stops anything.**
+- **Quick Settings tile:** not recommended; it would add a control without a
+  clear job. Revisit only if people ask for a one-tap Inbox.
+- **App shortcuts** (long press on the launcher icon): Inbox and New chat,
+  static; recent chats as dynamic shortcuts, without message text.
+
+### 7.7 Approving a proposal or a vote on a small screen
+
+The pattern is "what you see is what you sign": the confirmation restates
+the action in human terms, bound to what is signed, and nothing approves
+from a list or a notification.
+
+- **Read first.** The proposal screen shows who decides (who approved, at
+  which role, how many more are needed), what will run, the changes with a
+  file list, then the discussion. The vote bar is not pinned at first: it
+  appears once every file has been expanded or scrolled past (a per-file
+  "seen" mark), or after an explicit "I've read it" on long diffs.
+- **The signing sheet restates the change:** the title, the file count, the
+  `+`/`−` line counts, the file names, the version, and what approving does
+  ("Counts 1 of 2. Runs nothing; Implement runs on the desktop."). The
+  digest is a disclosure, not the headline. If the proposal was revised
+  after it was opened, the sheet says so and returns to the diff. Reject
+  uses the same sheet, with an optional reason, so both outcomes are equally
+  deliberate.
+- **Presence:** when the workspace needs a passkey for the vote, the button
+  says so ("Approve with passkey"), so the Credential Manager sheet that
+  follows is expected.
+- **Tapjacking and capture** protections from section 2.12 apply to this
+  sheet.
+
+### 7.8 Biometric prompt, scanner and Add to my devices
+
+**Biometric prompt (app lock, section 2.5):**
+
+- Title "Unlock Ligus"; no subtitle or description. With
+  `DEVICE_CREDENTIAL` allowed there is no negative button, so the system
+  offers the PIN or pattern itself.
+- One automatic prompt per return to the foreground. After a cancel, the
+  lock screen shows a single **Unlock** button; never loop the prompt.
+- Turning the lock on from Settings takes one successful prompt with the
+  title "Turn on app lock".
+
+**Scanner** (CameraX with ML Kit; ZXing in the FOSS flavor):
+
+- Full screen, with one line saying what to point at ("Point at the code on
+  your computer's screen"), a framing guide, a torch toggle and a close
+  button.
+- Purpose-limited: the pairing scanner takes `ligus://pair` links, the
+  enrollment scanner takes only `ligusenroll1:` codes, and anything else
+  gets "That's not a Ligus code" without leaving the scanner.
+- A confirm haptic and a TalkBack announcement ("Code scanned") on success.
+- A camera-denied state with a button to the app's system settings and the
+  alternative ("Paste the link instead" or "Can't scan? Show this phone's
+  code"), also reachable from inside the scanner.
+
+**Add to my devices** (section 3.9):
+
+- A step indicator: Name, Scan, Confirm, Check.
+- The fingerprint in groups of four in a large monospace style that wraps
+  rather than shrinks, with an optional word form from the same word list
+  as the desktop, and read to TalkBack character by character.
+- A countdown ring plus text for the code's expiry.
+- Instructions as a numbered list using the desktop's real labels.
+- `FLAG_SECURE` on the waiting step (section 2.12).
+
+### 7.9 Tokens, colour and status
+
+The palettes come from the shared token file (`ligus-brand-tokens.json`),
+authored in OKLCH with light and dark values, the same source the desktop
+and the iPhone app use. Map the shared roles onto the Material 3 colour
+scheme, and keep the rest as extended colours in a `CompositionLocal`:
+
+| Shared role | Material 3 slot | Note |
+|---|---|---|
+| `canvas` | `background`, `surface` | |
+| `panel` | `surfaceContainer` | cards, sheets |
+| `mist` | `surfaceContainerHigh` | |
+| `line` | `outlineVariant` | |
+| `ink`, `ink-soft` | `onSurface`, `onSurfaceVariant` | |
+| `accent-cool` (honey) | `primaryContainer` (a fill) | never text on its own |
+| accent ink | `primary` | links, icons, focused controls |
+| `accent-warm` | `tertiary` | "a person is involved": human turns, needs you. Never a status. |
+| `danger` | `error` | |
+| `ok`, `info`/`running`, `warn`, `neutral` | extended colours | each with an ink and an 8% tint |
+
+- **Warning has its own hue, away from honey:** light `oklch(0.62 0.15 50)`,
+  dark `oklch(0.78 0.14 55)`, always with a `!` glyph.
+- **Glyph and colour together, always.** Status is never colour alone, so it
+  survives colour-blindness and the system's colour correction:
+
+| State | Role | Material Symbol |
+|---|---|---|
+| Working / running | info | `progress_activity` (static text when animations are off) |
+| Needs you | accent-warm | `diamond` (filled) |
+| Queued / host offline | warn | `hourglass_empty` |
+| Done / applied | ok | `check_circle` |
+| Failed / error | danger | `cancel` |
+| Paused | neutral | `pause_circle` |
+| Warning / degraded | warn | `warning` |
+| Unknown / no data | neutral | `help` (outlined) |
+
+- **Diffs** carry `+`/`−` gutter glyphs as well as the add and delete tints.
+- **Dynamic colour** stays an opt-in palette, off for "Match host"
+  (section 1.2).
+- **Dark theme** is the shared dark palette, not an automatic inversion.
+  Support the system contrast setting (Android 14 and later,
+  `UiModeManager.getContrast()`) with medium- and high-contrast variants
+  generated from the same tokens.
+- **Shape and spacing:** a 4 dp grid; corner radius 8 dp for controls,
+  12 dp for cards, the Material default for sheets.
+- **Bee references** stay in the app icon and the brand mark on the connect
+  screen; none in operational UI.
+
+### 7.10 Accessibility
+
+- **TalkBack:**
+  - Merge each list row into one node with a full sentence
+    (`semantics(mergeDescendants = true)`), as the iPhone app does.
+  - Expose row actions as `CustomAccessibilityAction`s (Snooze, Mark done,
+    Copy, Mention).
+  - Mark section titles as headings (`semantics { heading() }`) so people
+    can jump between Votes, What will run, Changes and Discussion.
+  - Announce state changes once with a polite live region ("coder
+    finished", "coder asks a question", "Vote recorded"). Don't re-read a
+    streaming reply on every token; announce it when it completes.
+  - Read the fingerprint and codes character by character.
+  - Label icon-only buttons with the same words the screen shows elsewhere.
+- **Font scale:** Android 14 and later scale text non-linearly up to 200%.
+  Use `sp` for all text, avoid fixed heights, and at large scales:
+  - collapse the notes above the chat composer into one line;
+  - move the reply target into the composer's menu;
+  - let an agent's question scroll with the transcript;
+  - stack row metadata vertically.
+
+  Screenshot tests run at 100%, 150% and 200%; the chat transcript must stay
+  visible at 200%.
+- **Touch targets:** at least 48 × 48 dp, including the inline answer options
+  and chips.
+- **Motion:** honour "Remove animations" (the animator duration scale is 0).
+  No automatic scrolling while the person reads earlier turns; offer
+  "Jump to latest" instead.
+- **Colour:** glyph plus colour everywhere (section 7.9); verify every
+  status pair under the system's colour-correction modes and at 3:1
+  non-text contrast.
+- **Keyboard and switch access:** visible focus, a logical focus order, and
+  Enter to send in the composer with a hardware keyboard.
+
+---
+
+## 8. Open questions for the owner
 
 1. **Package name:** `ai.ligus.android` (recommended) or `com.zazulam.ligus`?
 2. **Public or private repository** for the Android app (public recommended;
