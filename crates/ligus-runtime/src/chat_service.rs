@@ -166,7 +166,7 @@ const STREAM_HOLD: usize = 512;
 pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
 /// The longest workspace name [`ChatService::publish_workspace_name`] writes.
-pub const MAX_WORKSPACE_NAME_CHARS: usize = 120;
+pub use crate::display::MAX_WORKSPACE_NAME_CHARS;
 
 impl ChatService {
     /// A service signing with `keypair`: its device id is the one that key
@@ -5314,6 +5314,49 @@ mod tests {
         let s = svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap();
         assert!(s.messages.iter().any(|m| m.id == early), "the removal took back a post its author held");
         assert!(!s.messages.iter().any(|m| m.id == late), "a removed member's backdated post folded");
+    }
+
+    /// The workspace's name (its config log's title) is what a phone shows
+    /// when it asks "Add this phone to Ana's devices in <workspace>?". Only an
+    /// Owner or Admin names it: a Contributor's or Viewer's title on the config
+    /// log is refused when authored and dropped by every fold when forged,
+    /// so it can neither rename the workspace nor squat the name before the
+    /// founder's desktop writes it. A chat's own title stays content.
+    #[test]
+    fn only_an_admin_names_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let chat = {
+            let mut a = svc_on(&path, "u1", "Ana");
+            let chat = a.create_chat("A", wid, "anthropic").unwrap();
+            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            a.add_member(chat.id, wid, test_member("vie", "Vie", WorkspaceRole::Viewer)).unwrap();
+            a.add_member(chat.id, wid, test_member_acct("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            chat.id
+        };
+        let title = || svc_on(&path, "u1", "Ana").load(cfg).unwrap().unwrap().title;
+        // Squatting: a Contributor forges the name before the founder writes it.
+        let mut con = svc_on(&path, "con", "Con");
+        let env = con.draft_signed(cfg, wid, SessionEvent::SessionTitleChanged { title: "Acme Payroll".into() }).unwrap();
+        con.store.ingest(&env).unwrap();
+        assert_eq!(title(), "", "a Contributor named the workspace");
+        assert!(svc_on(&path, "u1", "Ana").publish_workspace_name(wid, "Comb Council").unwrap(), "the founder's name is written");
+        assert_eq!(title(), "Comb Council");
+        // Renaming it afterwards: refused when authored, dropped when forged.
+        for (id, name) in [("con", "Con"), ("vie", "Vie")] {
+            let mut s = svc_on(&path, id, name);
+            assert!(matches!(s.set_title(cfg, wid, "Other Co"), Err(ChatError::Unauthorized(_))), "{id} renamed the workspace");
+            let env = s.draft_signed(cfg, wid, SessionEvent::SessionTitleChanged { title: "Other Co".into() }).unwrap();
+            s.store.ingest(&env).unwrap();
+            assert_eq!(title(), "Comb Council", "{id}'s forged rename folded");
+        }
+        // An Admin may rename it; a Contributor still titles a chat.
+        svc_on(&path, "adm", "Adm").set_title(cfg, wid, "Comb Council East").unwrap();
+        assert_eq!(title(), "Comb Council East");
+        con.set_title(chat, wid, "my chat").unwrap();
+        assert_eq!(svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap().title, "my chat");
     }
 
     #[test]

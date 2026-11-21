@@ -573,7 +573,7 @@ async fn check(State(s): S, prov: Option<Extension<ProvisionalPeer>>, peer: Opti
             .load(ligus_core::workspace_config_session_id(s.ws))
             .ok()
             .flatten()
-            .map(|c| ligus_runtime::display::shown(&c.title))
+            .map(|c| ligus_runtime::display::workspace_name(&c.title))
             .unwrap_or_default();
         json!({
             "workspaceId": s.ws,

@@ -384,7 +384,7 @@ fn sealed_push_stays_within_the_spec_limit() {
 
 /// One entry per workspace device with an active pairing: a phone paired
 /// twice (a re-pair) is one entry under its newest pairing's name and its
-/// latest sighting; a revoked pairing and an unbound record are left out.
+/// latest sighting; a revoked pairing and another account's phone are left out.
 #[test]
 fn the_pairing_report_has_one_entry_per_paired_device() {
     let tmp = tempfile::tempdir().unwrap();
@@ -400,12 +400,18 @@ fn the_pairing_report_has_one_entry_per_paired_device() {
     new.enrolled_at = 200;
     new.last_seen = Some(300);
     let gone = record("p-gone", &c);
+    // A co-member's phone paired with this box: not the box owner's, so
+    // left out (every workspace-key holder can open the report).
+    let theirs_keys = PhoneKeys::generate();
+    let theirs = record("p-theirs", &theirs_keys);
     reg.activate(old).unwrap();
     reg.activate(new).unwrap();
     reg.activate(gone).unwrap();
+    reg.activate(theirs).unwrap();
     reg.revoke("p-gone").unwrap();
-    let r = reg.pairing_report("host-1", 900);
-    assert_eq!((r.host_id.as_str(), r.at), ("host-1", 900));
+    let ws = uuid::Uuid::new_v4();
+    let r = reg.pairing_report("host-1", ws, 900, |d| d != theirs_keys.device_id());
+    assert_eq!((r.host_id.as_str(), r.workspace_id, r.at), ("host-1", ws, 900));
     assert_eq!(r.phones.len(), 1, "{r:?}");
     assert_eq!(r.phones[0].device_id, a.device_id().to_string());
     assert_eq!(r.phones[0].name, "Ana's iPhone", "the newest pairing's name");

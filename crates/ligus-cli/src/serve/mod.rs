@@ -1570,7 +1570,13 @@ async fn pairing_presence(
     reported: &mut bool,
 ) {
     let Some(t) = shared.tunnel.as_ref() else { return };
-    let report = t.registry.pairing_report(&shared.host_id, Timestamp::now().inner().unix_timestamp());
+    // Only the phones of this box's own account(s): the report is sealed to
+    // the workspace key, and only the owner's desktops show it.
+    let mine = uuid::Uuid::parse_str(&shared.host_id)
+        .ok()
+        .and_then(|d| shared.lock().devices_sharing_an_account(shared.ws, d).ok())
+        .unwrap_or_default();
+    let report = t.registry.pairing_report(&shared.host_id, shared.ws, Timestamp::now().inner().unix_timestamp(), |d| mine.contains(&d));
     if report.phones.is_empty() && !*reported {
         return;
     }

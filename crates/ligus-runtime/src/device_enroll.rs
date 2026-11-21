@@ -519,6 +519,62 @@ mod flow_tests {
         assert!(!config.guards.revoked_devices.contains(&mac.svc.device_id()));
     }
 
+    /// Security review of #183 (the pairing report): My devices shows a
+    /// pairing report only from one of your own boxes. Under the PR's rule
+    /// (any certified, unrevoked device of the workspace) a teammate's
+    /// desktop could sign a report naming your phone, give it a name for a
+    /// phone this desktop has none for, and have the revoke prompt say it is
+    /// "the iPhone paired with <their box> right now". A box reports only
+    /// phones of its own account(s).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_your_own_boxes_report_your_phones() {
+        use crate::revocation_status::{open_pairing_reports, pairing_slot, seal_pairing_report, PairedPhone, PairingReport};
+        let relay = spawn_relay().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Uuid::new_v4();
+        let cfg = workspace_config_session_id(ws);
+        let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+        mac.svc.ensure_self_member(cfg, ws).unwrap();
+        mac.sync().await;
+        let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+        taylor.join_via(&mut mac, ws).await;
+        // Alex's box, enrolled as his device; Taylor's spare, as hers.
+        let bx = Dev::open(&tmp.path().join("box"), "Box", &relay, ws);
+        mac.svc.certify_device(&DeviceEnrollment::decode(&bx.svc.enrollment_request(ws, "box").encode()).unwrap()).unwrap();
+        let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
+        taylor.svc.certify_device(&DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap()).unwrap();
+        taylor.sync().await;
+        mac.sync().await;
+        let (bx_id, td, sd) = (bx.svc.device_id(), taylor.svc.device_id(), spare.svc.device_id());
+
+        let ring = crate::keyring::KeyringEngine::passphrase(ws, ligus_core::derive_workspace_key("enroll flow passphrase"));
+        let now = ligus_core::Timestamp::now().inner().unix_timestamp();
+        // A report naming Alex's desktop as a phone "seen just now".
+        let claim = |host: Uuid| PairingReport {
+            host_id: host.to_string(),
+            workspace_id: ws,
+            at: now,
+            phones: vec![PairedPhone { device_id: mac.svc.device_id().to_string(), name: "Old iPhone (lost)".into(), last_seen: Some(now) }],
+            signature: Vec::new(),
+        };
+        let mut blobs = std::collections::HashMap::new();
+        blobs.insert(pairing_slot(&td.to_string()), seal_pairing_report(&ring, &taylor.svc.sign_pairing_report(claim(td))).unwrap());
+        blobs.insert(pairing_slot(&bx_id.to_string()), seal_pairing_report(&ring, &bx.svc.sign_pairing_report(claim(bx_id))).unwrap());
+        // The rule the PR used accepts Taylor's report about Alex's phone.
+        let pr_rule = open_pairing_reports(&blobs, &ring, ws, now, |d| mac.svc.certified_device_key(ws, d).ok().flatten());
+        assert!(pr_rule.contains_key(&td.to_string()), "control: a teammate's signed report verifies as a certified device's");
+        // The fix: only Alex's own box.
+        let shown = open_pairing_reports(&blobs, &ring, ws, now, |d| mac.svc.own_device_key(ws, d).ok().flatten());
+        assert_eq!(shown.keys().cloned().collect::<Vec<_>>(), vec![bx_id.to_string()], "a report from someone else's device was shown");
+        for d in [td, sd] {
+            assert!(mac.svc.own_device_key(ws, d).unwrap().is_none(), "{d} is Taylor's");
+        }
+        // The box reports only its owner's devices, never Taylor's.
+        let mine = mac.svc.devices_sharing_an_account(ws, bx_id).unwrap();
+        assert!(mine.contains(&mac.svc.device_id()) && mine.contains(&bx_id), "{mine:?}");
+        assert!(!mine.contains(&td) && !mine.contains(&sd), "{mine:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn box_enrolled_as_the_owners_device_authors_as_the_owner_until_revoked() {
         let relay = spawn_relay().await;

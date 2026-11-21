@@ -835,15 +835,29 @@ it only from a certified, unrevoked, non-phone device of a current member).
 The box also tells the desktops which phones it has paired, so **My
 devices** can say "Paired with home-server · seen 2 min ago" and the revoke
 confirmation can name the phone in the person's hand: a sealed presence
-slot `pairings:<host_id>` holding `{hostId, at, phones: [{deviceId, name,
-lastSeen?}]}`, one entry per workspace device with an active pairing (the
-newest pairing's name; `lastSeen` in unix seconds, rounded down to the
-minute, since every workspace-key holder can open it), at most 32. It is
-signed by the box's device key (Ed25519 over
-`"ligus-pairing-report-v1\0" ‖ JSON` without the signature) and verified
-by the desktop against the box's certified, unrevoked device. The box sends
-it every 30 seconds while it has a paired phone, and once more, empty, after
-its last one goes. Display only.
+slot `pairings:<host_id>` holding `{hostId, workspaceId, at, phones:
+[{deviceId, name, lastSeen?}]}`, one entry per phone of the box's own
+account with an active pairing (the newest pairing's name; `lastSeen` in
+unix seconds, rounded down to the minute), at most 32. Every workspace-key
+holder can open it, so a box enrolled as Ana's device reports only Ana's
+phones (devices that share a certifying account with the box), never a
+co-member's phone paired with it. It is signed by the box's device key
+(Ed25519 over `"ligus-pairing-report-v1\0" ‖ JSON` without the signature).
+A desktop shows a report only when:
+
+- it is signed by one of its own account's certified, unrevoked devices
+  (your own box): another member's box, or any other device holding the
+  workspace key, can't name your phones or say one is paired right now;
+- `workspaceId` is this workspace (a member of two workspaces can't move a
+  report from one to the other);
+- `at` is no more than an hour old and no more than 5 minutes ahead (an
+  old report replayed into the slot isn't shown).
+
+It keeps at most 32 phones, cleans each name (bidi and invisible characters
+removed) and cuts it to 64 characters, and drops a `lastSeen` later than
+`at`. The box sends it every 30 seconds while it has a paired phone, and
+once more, empty, after its last one goes. Display only: the relay can
+still delete or overwrite the slot (a report then just isn't shown).
 
 `ligus remote reset` generates new host keys, so a new `host_id`: every phone
 must re-pair. Use it if the host key may have leaked.

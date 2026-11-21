@@ -115,6 +115,34 @@ impl ChatService {
         Ok(roster.public_key(device).map(<[u8]>::to_vec))
     }
 
+    /// The key of `device` when it is one of this account's own certified,
+    /// unrevoked devices (a box enrolled as yours): the only boxes whose
+    /// pairing reports My devices shows. Another member's box, or any other
+    /// device holding the workspace key, can't name your phones or claim one
+    /// is "paired right now" on your revoke prompt.
+    pub fn own_device_key(&self, workspace_id: Uuid, device: Uuid) -> Result<Option<Vec<u8>>> {
+        if !self.own_devices(workspace_id)?.iter().any(|d| d.device_id == device && !d.revoked) {
+            return Ok(None);
+        }
+        self.certified_device_key(workspace_id, device)
+    }
+
+    /// The unrevoked devices that share a certifying account with `device`
+    /// (for a box enrolled as its owner's: the owner's own devices). A box
+    /// reports only these phones, so its pairing report, which every
+    /// workspace-key holder can open, doesn't tell the workspace when other
+    /// members' phones were last on it.
+    pub fn devices_sharing_an_account(&self, workspace_id: Uuid, device: Uuid) -> Result<std::collections::BTreeSet<Uuid>> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let devices = &timeline.current().devices;
+        let Some(this) = devices.get(&device).filter(|d| !d.revoked) else { return Ok(Default::default()) };
+        Ok(devices
+            .iter()
+            .filter(|(_, d)| !d.revoked && d.accounts.iter().any(|a| this.accounts.contains(a)))
+            .map(|(id, _)| *id)
+            .collect())
+    }
+
     /// The envelope's secret redaction, applied to agent output on its way into
     /// the log: credentials are masked, and the catch is recorded as a
     /// content-free hygiene signal.

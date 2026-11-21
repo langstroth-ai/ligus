@@ -563,6 +563,15 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // The config log's title is the workspace's name: the phone shows it when
+    // it asks to be added to someone's devices "in <workspace>", and boxes put
+    // it in their invites. An Admin's or Owner's, not content: a Contributor
+    // or Viewer could otherwise rename the workspace (or name it first) to
+    // pass one workspace off as another. A chat's title stays content.
+    if on_config && matches!(env.payload, SessionEvent::SessionTitleChanged { .. }) && fold.role_of(author).rank() < WorkspaceRole::Admin.rank() {
+        return Decision::deny("only an Owner or Admin names the workspace");
+    }
+
     // B3: human presence. A stamped assertion must verify, and the events of
     // the presence table need one. Passkey registrations prove themselves
     // below. Rules: every workspace is on version 2 from its seed; a version
