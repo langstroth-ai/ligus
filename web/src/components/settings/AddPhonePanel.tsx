@@ -34,7 +34,7 @@ type Phase =
   | "aborted" // two phones answered
   | "expired";
 
-/// "Add a phone" (Settings → Account → My devices). The desktop shows a QR
+/// "Add a phone" (Settings → Profile → My devices). The desktop shows a QR
 /// code; the phone scans it with the Ligus app (Settings → This phone → Add
 /// to my devices) and its request comes back through your box. Compare the
 /// fingerprint with the phone's screen and confirm with your passkey: the

@@ -6,14 +6,13 @@
 //! T10 (logs), T11/T12 (substitution, replay), T15 (same phone again).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use ligus_core::authz::{DeviceState, MemberState, RosterState};
 use ligus_core::testkit::Phone;
-use ligus_core::{ActorIdentity, ActorKind, SigningKeypair, WorkspaceRole};
+use ligus_core::{ActorIdentity, ActorKind, SigningKeypair};
 use ligus_runtime::keyring::KeyringEngine;
 use ligus_runtime::phone_enroll::{PhoneCode, PhoneStanding};
 use ligus_runtime::phone_enroll_qr::{
@@ -219,9 +218,9 @@ fn one_phone_waits_out_the_hold_then_is_certified_and_answered() {
     // The answer: signed by this device, tagged for the phone.
     let desktop = f.svc.device_id();
     let pk = f.svc.device_public_key().to_vec();
-    let (slot, blob) = watch.answer_due(NOW + 7_000, &f.ring, desktop, |a| f.svc.sign_enroll_answer(a)).unwrap();
-    assert!(watch.answer_due(NOW + 8_000, &f.ring, desktop, |a| f.svc.sign_enroll_answer(a)).is_none(), "every 10 s");
-    assert!(watch.answer_due(NOW + 17_000, &f.ring, desktop, |a| f.svc.sign_enroll_answer(a)).is_some());
+    let (slot, blob) = watch.answer_due(NOW + 7_000, &f.ring, desktop, |a| f.svc.sign_relayed_answer(a)).unwrap();
+    assert!(watch.answer_due(NOW + 8_000, &f.ring, desktop, |a| f.svc.sign_relayed_answer(a)).is_none(), "every 10 s");
+    assert!(watch.answer_due(NOW + 17_000, &f.ring, desktop, |a| f.svc.sign_relayed_answer(a)).is_some());
     let mut listing = HashMap::new();
     listing.insert(slot.clone(), blob);
     let (s, a) = open_relayed_answers(&listing, &f.ring).pop().unwrap();
@@ -308,7 +307,7 @@ fn another_phone_after_approval_trips_the_alert() {
     assert_eq!(alerts[0].rid, f.rid);
     assert!(watch.step(&blobs, &f.ring, NOW + 22_000, relay_key).is_empty(), "once per phone");
     // The answer keeps naming the added phone, so the real one raises its alarm.
-    let (_, blob) = watch.answer_due(NOW + 22_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_enroll_answer(a)).unwrap();
+    let (_, blob) = watch.answer_due(NOW + 22_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_relayed_answer(a)).unwrap();
     let mut listing = HashMap::new();
     listing.insert(answer_slot(watch.rid()), blob);
     let (_, a) = open_relayed_answers(&listing, &f.ring).pop().unwrap();
@@ -354,7 +353,7 @@ fn not_my_phone_answers_declined_and_closes() {
     let mut watch = f.desk.decline(&f.rid, &shield.f()).unwrap().expect("a phone was locked");
     assert_eq!(f.desk.current_ws(), None);
     assert_eq!(shield.last(), Some(false));
-    let (_, blob) = watch.answer_due(NOW + 1_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_enroll_answer(a)).unwrap();
+    let (_, blob) = watch.answer_due(NOW + 1_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_relayed_answer(a)).unwrap();
     let mut listing = HashMap::new();
     listing.insert(answer_slot(watch.rid()), blob);
     let (_, a) = open_relayed_answers(&listing, &f.ring).pop().unwrap();
@@ -388,7 +387,7 @@ fn a_phone_that_cant_be_added_is_refused_not_approved() {
     assert!(f.desk.begin_approve(&f.rid, &card.fingerprint, f.ws, NOW + HOLD_MS).is_err());
     f.desk.approve_failed();
     let mut watch = f.desk.decline(&f.rid, &shield.f()).unwrap().unwrap();
-    let (_, blob) = watch.answer_due(NOW + 6_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_enroll_answer(a)).unwrap();
+    let (_, blob) = watch.answer_due(NOW + 6_000, &f.ring, f.svc.device_id(), |a| f.svc.sign_relayed_answer(a)).unwrap();
     let mut listing = HashMap::new();
     listing.insert(answer_slot(watch.rid()), blob);
     let (_, a) = open_relayed_answers(&listing, &f.ring).pop().unwrap();
@@ -433,33 +432,22 @@ fn requests_not_relayed_by_a_box_or_not_made_from_this_code_are_ignored() {
     assert_eq!(f.poll(NOW + 1_000, &shield).state, "request");
 }
 
+/// T2 through the service's own signer rule: this person's own desktop (a
+/// certified human device) can't relay a request, even holding the
+/// workspace key and the code.
 #[test]
-fn only_a_service_members_device_may_relay() {
-    let (box_acct, person_acct) = (Uuid::new_v4(), Uuid::new_v4());
-    let (bx, desk, phone, revoked, stranger) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let dev = |acct: Uuid, phone: bool, revoked: bool| DeviceState {
-        accounts: BTreeSet::from([acct]),
-        holders: BTreeSet::from([acct]),
-        phone,
-        revoked,
-        ..Default::default()
-    };
-    let mut members = BTreeMap::new();
-    members.insert("box".into(), MemberState { role: WorkspaceRole::Contributor, account_id: Some(box_acct), kind: ActorKind::Service });
-    members.insert("ana".into(), MemberState { role: WorkspaceRole::Owner, account_id: Some(person_acct), kind: ActorKind::Human });
-    let mut devices = BTreeMap::new();
-    devices.insert(bx, dev(box_acct, false, false));
-    devices.insert(desk, dev(person_acct, false, false));
-    devices.insert(phone, dev(box_acct, true, false));
-    devices.insert(revoked, dev(box_acct, false, true));
-    devices.insert(stranger, dev(Uuid::new_v4(), false, false));
-    let roster = RosterState { members, devices, ..Default::default() };
-    assert!(is_relay_box(&roster, bx));
-    assert!(!is_relay_box(&roster, desk), "a person's desktop can't inject a request");
-    assert!(!is_relay_box(&roster, phone));
-    assert!(!is_relay_box(&roster, revoked));
-    assert!(!is_relay_box(&roster, stranger), "not a current member's device");
-    assert!(!is_relay_box(&roster, Uuid::new_v4()));
+fn the_desktops_own_device_cannot_relay_a_request() {
+    let shield = Shield::default();
+    let f = Flow::new(&shield);
+    let me = f.svc.device_id();
+    assert!(f.svc.enroll_relay_key(f.ws, me).is_none());
+    let mut blobs = HashMap::new();
+    let text = request_text(&f.qr, &Phone::new(), "x", NOW);
+    let rid = ligus_runtime::phone_enroll_qr::EnrollRequest::decode(&text).unwrap().rid;
+    let r = f.svc.sign_relayed_request(RelayedRequest::new(&text, me, NOW));
+    blobs.insert(request_slot(rid, me), seal_relayed_request(&f.ring, &r).unwrap());
+    let got = f.desk.poll(&blobs, &f.ring, NOW, |d| f.svc.enroll_relay_key(f.ws, d), |c| f.svc.phone_standing(f.ws, c).ok(), |_| String::new(), |_| false, &shield.f());
+    assert_eq!(got.state, "waiting");
 }
 
 // ---- the precheck (review R8) ----
@@ -566,7 +554,7 @@ fn secrets_macs_and_codes_never_reach_the_logs() {
         errors.extend(f.desk.begin_approve(&f.rid, &card.fingerprint, f.ws, NOW + 1).err());
         errors.extend(f.desk.begin_approve(&f.rid, "nope", f.ws, NOW + HOLD_MS).err());
         let (mut watch, _) = f.approve(&card.fingerprint, NOW + HOLD_MS, &shield).unwrap();
-        let (_, blob) = watch.answer_due(NOW + HOLD_MS, &f.ring, f.svc.device_id(), |x| f.svc.sign_enroll_answer(x)).unwrap();
+        let (_, blob) = watch.answer_due(NOW + HOLD_MS, &f.ring, f.svc.device_id(), |x| f.svc.sign_relayed_answer(x)).unwrap();
         let mut listing = HashMap::new();
         listing.insert(answer_slot(watch.rid()), blob);
         let (_, ans) = open_relayed_answers(&listing, &f.ring).pop().unwrap();

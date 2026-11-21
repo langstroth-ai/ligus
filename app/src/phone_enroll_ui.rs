@@ -30,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use ligus_core::authz::timeline::RosterState;
 use ligus_core::ActorKind;
 use ligus_runtime::keyring::KeyringEngine;
 use ligus_runtime::phone_enroll::{PhoneCode, PhoneStanding};
@@ -199,28 +198,10 @@ pub(crate) fn qr_svg(text: &str) -> Result<String, String> {
 }
 
 // ---- who may relay a request (review R2) ----
-
-/// Whether `device` may sign a request slot: a certified, unrevoked,
-/// non-phone device certified by the account of a current **service
-/// member** (a box). A person's own device can't inject a request, even with
-/// the workspace key and the QR's secret.
-pub(crate) fn is_relay_box(roster: &RosterState, device: Uuid) -> bool {
-    let Some(d) = roster.devices.get(&device).filter(|d| !d.revoked && !d.phone) else { return false };
-    roster
-        .members
-        .values()
-        .any(|m| m.kind == ActorKind::Service && m.account_id.is_some_and(|a| d.accounts.contains(&a)))
-}
-
-/// The key a request slot from `device` must verify under, or `None` when
-/// `device` isn't a box of this workspace.
-pub(crate) fn relay_box_key(svc: &ChatService, ws: Uuid, device: Uuid) -> Option<Vec<u8>> {
-    let (_, t) = svc.store().load_config(ws, None, None).ok()?;
-    if !is_relay_box(t.current(), device) {
-        return None;
-    }
-    svc.certified_device_key(ws, device).ok().flatten()
-}
+//
+// Only a box may sign a request slot: `ChatService::enroll_relay_key` (the
+// box's module, `chat_service/phone_enroll_relay.rs`) returns a key only for
+// a certified, unrevoked, non-phone device held by a current service member.
 
 /// Every request for `offer` in a presence listing that passes the slot and
 /// request checks, with the box that relayed it, in slot order. Refusals
@@ -753,7 +734,7 @@ pub(crate) async fn phone_enroll_offer_poll(ligus_app: AppHandle) -> Result<Poll
             &blobs,
             &ring,
             now_ms(),
-            |d| relay_box_key(&svc, ws, d),
+            |d| svc.enroll_relay_key(ws, d),
             |code| svc.phone_standing(ws, code).ok(),
             |relay| {
                 hosts
@@ -837,7 +818,7 @@ fn spawn_watch(app: AppHandle, watch: Watch) {
                 let due = {
                     let svc = state.service.lock().unwrap();
                     let desktop = svc.device_id();
-                    watch.lock().unwrap().answer_due(now_ms(), &ring, desktop, |a| svc.sign_enroll_answer(a))
+                    watch.lock().unwrap().answer_due(now_ms(), &ring, desktop, |a| svc.sign_relayed_answer(a))
                 };
                 if let Some((slot, blob)) = due {
                     if let Err(e) = relay.publish_presence(&room, &slot, &blob).await {
@@ -847,7 +828,7 @@ fn spawn_watch(app: AppHandle, watch: Watch) {
                 if let Ok(blobs) = relay.list_presence(&room).await {
                     let alerts = {
                         let svc = state.service.lock().unwrap();
-                        watch.lock().unwrap().step(&blobs, &ring, now_ms(), |d| relay_box_key(&svc, ws, d))
+                        watch.lock().unwrap().step(&blobs, &ring, now_ms(), |d| svc.enroll_relay_key(ws, d))
                     };
                     for a in alerts {
                         let _ = app.emit(TRIPWIRE_EVENT, a);
