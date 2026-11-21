@@ -6,8 +6,11 @@ description: Deploy, verify, upgrade or tear down a Ligus workspace (ligus serve
 # Deploy Ligus on Kubernetes
 
 Read the repository's `AGENTS.md` first: its hard rules (no secret values,
-no weakened defaults) apply to every step. Tool: `deploy/kubernetes/ligus-k8s`
-(run `--help`). Always pass `--context`, `-n` and `--release`, and add
+no weakened defaults) apply to every step. Tool: `deploy/kubernetes/ligus-k8s`.
+`ligus-k8s --help` prints every command, flag, default and exit code;
+`ligus-k8s help <command>` (or `<command> --help`) prints one command. The
+ligus CLI's guides cover the background: `ligus help kubernetes`,
+`ligus help agents-guide`, `ligus help troubleshooting`, `ligus help security`. Always pass `--context`, `-n` and `--release`, and add
 `--json` to read results; exit 4 means **stop and ask the human**.
 
 Set these once and reuse them:
@@ -96,13 +99,32 @@ install if they wrote that file. Other credentials (model keys for
 `$K secrets generic --name NAME --from-dir DIR`, referenced from a values
 file (`--values`) by Secret name only.
 
-0.1 note: a box joins an existing workspace only through an invite an Admin
-issued; the chart's headless join for serve is still being built (see
-`docs-site/docs/operate/deploy/kubernetes.md`, "Changing in 0.1"). If serve on a real
-workspace exits with a membership or role refusal, **stop** and hand over.
-On a fresh throwaway workspace, serve and workers started together race to
-found it (see `deploy/helm/ligus/ci/kind-values.yaml`); if one restarts with a
-role refusal, give the workers their own release (`--no-serve --workers a`).
+Real workspace: serve and every worker join as their own service member,
+each with its own single-use **admission** (**checkpoint: human**). The
+human makes one per box on a desktop (workspace menu > Admit a box > For
+Kubernetes) and saves it as a file named `admission` in a private directory;
+then:
+
+```sh
+$K secrets generic --name $R-serve-admission --from-dir ~/ligus-serve-admission --context $CTX -n $NS --release $R --json
+```
+
+and name it in a values file passed to install with `--values` (Secret
+names only, never values):
+
+```yaml
+serve:
+  admission:
+    existingSecret: <R>-serve-admission   # workers: worker.instances[].admission.existingSecret
+```
+
+Tell the human to delete the directory, and the Secret once the box has joined. The box refuses to start
+without a copy of the workspace and never founds one; if serve exits with a
+membership or role refusal, **stop** and hand over (`ligus help box`,
+`docs-site/docs/operate/deploy/kubernetes.md`). On a fresh throwaway
+workspace, serve and workers started together race to found it (see
+`deploy/helm/ligus/ci/kind-values.yaml`); if one restarts with a role
+refusal, give the workers their own release (`--no-serve --workers a`).
 
 ## 5. Render, then install
 
@@ -139,14 +161,15 @@ Ingress for serve), DNS/TLS for the relay.
 
 ## Upgrade
 
-Same `install` command with the new `--image-tag`; then `verify`. Relay
+Same `install` command with the new `--image-tag` (it runs `helm upgrade
+--install`; there is no separate upgrade command); then `verify`. Relay
 first, then workspaces. Changing access mode or the worker layout needs
 `kubectl delete statefulset --cascade=orphan` first: ask the human.
 
 ## Tear down
 
 ```sh
-$K teardown --context $CTX -n $NS --release $R --json                       # keeps PVCs and Secrets
+$K teardown --context $CTX -n $NS --release $R --json                       # keeps PVCs and Secrets (alias: uninstall)
 $K teardown --context $CTX -n $NS --release $R --delete-data --delete-secrets --delete-namespace --json
 ```
 

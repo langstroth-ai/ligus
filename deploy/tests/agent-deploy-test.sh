@@ -61,6 +61,68 @@ for s in "$K8S" "$LOCAL"; do
   if [ "$RC" = 0 ] && grep -q preflight "$TMP/h"; then pass "$(basename "$s") --help"; else fail "$(basename "$s") --help"; fi
 done
 
+# Help is complete and cannot drift: the command list comes from each
+# script's dispatcher (the last `case $CMD in`) and the flag list from its
+# argument loop's case arms, so a new command or flag without help fails.
+dispatch_cmds() { # script -> one command name per line (aliases included)
+  local start
+  # shellcheck disable=SC2016  # a literal $ in the pattern
+  start=$(grep -n '^case \$CMD in$' "$1" | tail -1 | cut -d: -f1)
+  tail -n "+$start" "$1" | sed '/^esac/q' | sed -n 's/^  \([a-z][a-z|-]*\)).*/\1/p' | tr '|' '\n'
+}
+parser_flags() { # script -> one flag per line
+  sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$1" | sed -n 's/^    \(-[-a-z|]*\)).*/\1/p' | tr '|' '\n'
+}
+has_word() { grep -qE -- "(^|[^A-Za-z0-9-])$1([^A-Za-z0-9-]|\$)" "$2"; }
+for s in "$K8S" "$LOCAL"; do
+  n=$(basename "$s")
+  cmds=$(dispatch_cmds "$s"); flags=$(parser_flags "$s")
+  if [ "$(printf '%s\n' "$cmds" | grep -c .)" -ge 5 ] && [ "$(printf '%s\n' "$flags" | grep -c .)" -ge 10 ]; then
+    pass "$n: dispatcher and flags found ($(printf '%s' "$cmds" | tr '\n' ' '))"
+  else fail "$n: could not read the dispatcher or the flags"; fi
+  run "$TMP/top" "$s" --help
+  run "$TMP/top2" "$s" help
+  if [ "$RC" = 0 ] && cmp -s "$TMP/top" "$TMP/top2"; then pass "$n help = --help"; else fail "$n help differs from --help"; fi
+  missing=""
+  for hd in SYNOPSIS COMMANDS FLAGS 'ONE-SHOT SEQUENCE' EXAMPLES ENVIRONMENT 'EXIT CODES' 'SEE ALSO' 'ligus help agents-guide'; do
+    grep -qF -- "$hd" "$TMP/top" || missing="$missing [$hd]"
+  done
+  for c in $cmds; do has_word "$c" "$TMP/top" || missing="$missing cmd:$c"; done
+  for f in $flags; do has_word "$f" "$TMP/top" || missing="$missing $f"; done
+  for code in 0 1 2 3 4; do grep -qE "^  $code  " "$TMP/top" || missing="$missing exit:$code"; done
+  if [ -z "$missing" ]; then pass "$n --help names every command, flag and exit code"; else fail "$n --help lacks:$missing"; fi
+  for c in $cmds; do
+    run "$TMP/hc1" "$s" help "$c"; rc1=$RC
+    run "$TMP/hc2" "$s" "$c" --help; rc2=$RC
+    missing=""
+    for hd in SYNOPSIS FLAGS EXAMPLES 'EXIT CODES' 'SEE ALSO' "$n help <command>" 'ligus help '; do
+      grep -qF -- "$hd" "$TMP/hc1" || missing="$missing [$hd]"
+    done
+    has_word "$c" "$TMP/hc1" || missing="$missing [$c]"
+    if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ -z "$missing" ] && cmp -s "$TMP/hc1" "$TMP/hc2" \
+      && ! grep -q '^COMMAND DETAILS' "$TMP/hc1"; then
+      pass "$n help $c / $c --help"
+    else fail "$n help $c: rc $rc1/$rc2, lacks:$missing"; fi
+  done
+  run "$TMP/hx" "$s" help no-such-command
+  if [ "$RC" = 2 ] && [ ! -s "$TMP/hx" ]; then pass "$n help <unknown> is a usage error"; else fail "$n help <unknown>: rc $RC"; fi
+done
+
+# verify --json emits the schema without a cluster or a running process.
+mkdir -p "$TMP/vh"
+run "$TMP/v1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
+  "$LOCAL" verify --json --role serve --data-dir "$TMP/vd" --env-file "$TMP/ve"
+check_json "ligus-local verify --json, nothing running" "$TMP/v1" 1 "$RC" process
+if python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["command"]=="verify" and d["role"]=="serve" and d["dataDir"] and d["envFile"]' "$TMP/v1"; then
+  pass "ligus-local verify --json names the role, data dir and env file"
+else fail "ligus-local verify --json extra members"; fi
+run "$TMP/v2" env KUBECONFIG="$TMP/empty-kubeconfig" "$K8S" verify --json --context agentdeploy-does-not-exist -n x
+if command -v kubectl >/dev/null 2>&1 && command -v helm >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; then
+  check_json "ligus-k8s verify --json, unreachable context" "$TMP/v2" 3 "$RC" kube.reachable
+else
+  check_json "ligus-k8s verify --json, tools missing" "$TMP/v2" 3 "$RC"
+fi
+
 # Usage errors: exit 2 with a JSON document
 run "$TMP/u1" "$K8S" nonsense --json; check_json "ligus-k8s unknown command" "$TMP/u1" 2 "$RC"
 run "$TMP/u2" "$K8S" install --json --namespace x; check_json "ligus-k8s install without --scenario" "$TMP/u2" 2 "$RC"

@@ -27,32 +27,392 @@ ROOT=$(cd "$HERE/../.." && pwd)
 AC_TOOL=ligus-local
 MARKER=.ligus-local
 
-usage() {
-  sed -n '2,/^# shellcheck/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
-  cat <<'EOF'
+# ------------------------------------------------------------------- help
+# `ligus-local --help` (everything), `ligus-local help <command>` and
+# `ligus-local <command> --help` (one command). Help goes to stdout, exit 0.
+# deploy/tests/agent-deploy-test.sh checks every command in the dispatcher
+# at the bottom has a section here and every flag the parser takes is named.
 
-configure flags:
-  --listen ADDR            serve: loopback, LAN or tailnet address:port (default 127.0.0.1:8787;
-                           0.0.0.0 is refused by serve). worker: health address (default 127.0.0.1:8788)
-  --label NAME             host label other members see (default: the hostname)
-  --relay-url URL          override the relay from the enrolled connection
-  --secret-backend file    keep device secrets in owner-only files (default: the OS store;
-                           macOS keychain prompts must be answered by the human)
-  --throwaway-workspace    a random workspace nobody else holds (trials and tests only;
-                           needs --relay-url)
-  --force                  rewrite an existing env file
-start flags:   --systemd (Linux: install and start a systemd user unit instead)
-               --launchd (macOS: install and load a LaunchAgent instead, so the box
-                          starts at login and is kept running; stop --launchd removes it)
-verify:        checks the systemd unit or LaunchAgent start installed for this data dir
-               by itself (--systemd / --launchd only make it required)
-Environment:   LIGUS_BIN (default: ligus on PATH, else ~/.local/bin/ligus)
+help_common_flags() {
+  cat <<'EOF'
+  --role serve|worker      which process: ligus serve (the always-on home host) or ligus worker
+  --data-dir DIR           this process's own data dir: its device identity and event log
+                           (default: $LIGUS_DATA_DIR; required with --role; never the desktop
+                           app's data dir; one data dir is one process)
+  --env-file FILE          the env file configure writes and start reads
+                           (default: ${XDG_CONFIG_HOME:-~/.config}/ligus-ROLE/ligus-ROLE.env);
+                           if you pass one, pass the same one to every command
+  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
+                           progress always goes to stderr
+  -h, --help               print this command's help and exit 0
 EOF
 }
 
+help_see_also() {
+  cat <<'EOF'
+SEE ALSO
+  ligus-local help <command>     one command's help (also: ligus-local <command> --help)
+  ligus help box                 running ligus serve as an always-on box
+  ligus help worker              ligus worker: extra capacity bound to a named host
+  ligus help agents-guide        what an agent may do alone and what needs a human
+  ligus help troubleshooting     when start, verify or the sandbox check fails
+  ligus help security            the sandbox, keys and what never leaves the device
+  ligus help env                 every environment variable ligus reads
+  ligus help kubernetes          the same on a cluster: deploy/kubernetes/ligus-k8s
+  AGENTS.md (repository root), .claude/skills/ligus-deploy-local/SKILL.md,
+  deploy/ligus-serve/README.md
+EOF
+}
+
+hc_preflight() {
+  cat <<'EOF'
+ligus-local preflight - check this machine; changes nothing
+
+SYNOPSIS
+  ligus-local preflight [--role serve|worker --data-dir DIR] [--env-file FILE] [--listen ADDR] [--json]
+
+  Without --role: the ligus CLI (0.1.0 or later), curl and the agent sandbox
+  (measured with `ligus doctor` in a scratch data dir). With --role: also the
+  data dir, whether the listen address is free or exposed, and whether a
+  workspace connection is configured.
+
+FLAGS
+  --listen ADDR            the address to check (default: the env file's, else 127.0.0.1:8787
+                           for serve, 127.0.0.1:8788 for worker)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local preflight --json
+  ligus-local preflight --role serve --data-dir ~/.ligus-serve --json
+
+EXIT CODES
+  0 ready (warnings allowed)   1 a check failed (no sandbox, port taken)   2 usage error
+  3 ligus CLI or curl missing   4 listen address on every interface, or the desktop app's data dir
+EOF
+}
+
+hc_install_cli() {
+  cat <<'EOF'
+ligus-local install-cli - install the ligus CLI
+
+SYNOPSIS
+  ligus-local install-cli [--version vX.Y.Z] [--bin-dir DIR] [--from-source] [--json]
+
+  Downloads a release with the repository's install.sh, or builds it with
+  cargo (--from-source), into DIR.
+
+FLAGS
+  --version vX.Y.Z         the release to install (default: latest; not used with --from-source)
+  --bin-dir DIR            where the binary goes (default: ~/.local/bin)
+  --from-source            cargo build --release -p ligus-cli from this checkout, then copy
+                           ${CARGO_TARGET_DIR:-<repo>/target}/release/ligus to DIR
+  --json                   one JSON object on stdout
+  -h, --help               this help
+
+EXAMPLES
+  ligus-local install-cli --version v0.1.0 --json
+  ligus-local install-cli --from-source --bin-dir ~/.local/bin --json
+
+EXIT CODES
+  0 installed (a warn says an unpinned download has no checksum to check)
+  1 download or build failed   2 usage error   3 cargo missing (--from-source)
+EOF
+}
+
+hc_configure() {
+  cat <<'EOF'
+ligus-local configure - write the env file and the data dir (no secret values)
+
+SYNOPSIS
+  ligus-local configure --role serve|worker --data-dir DIR [--env-file FILE] [--listen ADDR]
+                        [--label NAME] [--relay-url URL] [--secret-backend file|keychain|secret-service]
+                        [--throwaway-workspace] [--force] [--json]
+
+  Creates DIR (mode 0700) and the env file (mode 0600) with
+  LIGUS_REQUIRE_SANDBOX=1. Without a workspace connection it exits 4 and
+  prints the human step: the human runs `ligus enroll -` with the invite in
+  their own terminal (the invite carries the workspace key). A box that is
+  not a member yet is admitted by an Admin (`ligus admit request` on the
+  box, approved on a desktop; `ligus help box` has the details).
+
+FLAGS
+  --listen ADDR            serve: loopback, LAN or tailnet address:port (default 127.0.0.1:8787);
+                           worker: health address (default 127.0.0.1:8788). 0.0.0.0 and [::]
+                           are refused (exit 4): exposure is a human decision
+  --label NAME             host label other members see (default: <short hostname>-<role>)
+  --relay-url URL          override the relay from the enrolled connection (http or https)
+  --secret-backend B       file: owner-only files in the data dir; keychain; secret-service
+                           (default: unset, the OS store; macOS keychain prompts need the human)
+  --throwaway-workspace    a random workspace nobody else holds, for trials and tests only
+                           (needs --relay-url)
+  --force                  rewrite an existing env file (default: leave it unchanged)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local configure --role serve --data-dir ~/.ligus-serve --json
+  ligus-local configure --role worker --data-dir ~/.ligus-worker --label shed --json
+  ligus-local configure --role serve --data-dir /tmp/ligus-trial --throwaway-workspace \
+    --relay-url http://127.0.0.1:8443 --secret-backend file --force --json
+
+EXIT CODES
+  0 configured and a workspace connection exists   2 usage error   3 ligus CLI missing
+  4 stop for the human: no workspace connection yet (enroll), 0.0.0.0, or the desktop app's data dir
+EOF
+}
+
+hc_start() {
+  cat <<'EOF'
+ligus-local start - start ligus serve or ligus worker
+
+SYNOPSIS
+  ligus-local start --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
+
+  Default: a background process (pid and log, ligus-local-ROLE.log, in the
+  data dir). Already running for this data dir: reports it, starts nothing.
+
+FLAGS
+  --systemd                Linux: install ~/.config/systemd/user/ligus-ROLE.service and
+                           systemctl --user enable --now it (default: off)
+  --launchd                macOS: install ~/Library/LaunchAgents/ai.ligus.ROLE[.LABEL].plist and
+                           load it (starts at login, restarted if it exits; default: off).
+                           Exclusive with --systemd
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local start --role serve --data-dir ~/.ligus-serve --json
+  ligus-local start --role serve --data-dir ~/.ligus-serve --systemd --json
+  ligus-local start --role worker --data-dir ~/.ligus-worker --launchd --json
+
+EXIT CODES
+  0 running   1 it exited at once, or another box holds the launchd label (read the log named)
+  2 usage error, or a path with a line break   3 ligus CLI or env file missing, --systemd off
+  Linux, --launchd off macOS   4 no workspace connection (human step), or the desktop app's data dir
+EOF
+}
+
+hc_unit() {
+  cat <<'EOF'
+ligus-local unit - print the systemd unit (or LaunchAgent plist) start would install
+
+SYNOPSIS
+  ligus-local unit --role serve|worker --data-dir DIR [--env-file FILE] [--launchd]
+
+  Writes nothing. Prints the unit text on stdout (never JSON; --json is
+  accepted and ignored). NoNewPrivileges is relaxed only for a setuid bwrap
+  without unprivileged user namespaces, with the reason in the unit.
+
+FLAGS
+  --launchd                print the LaunchAgent plist start --launchd installs instead
+                           (default: the systemd user unit)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local unit --role serve --data-dir ~/.ligus-serve
+  ligus-local unit --role worker --data-dir ~/.ligus-worker --launchd
+
+EXIT CODES
+  0 printed   2 usage error, or a path or label with a line break   3 ligus CLI missing
+  4 the desktop app's data dir
+EOF
+}
+
+hc_verify() {
+  cat <<'EOF'
+ligus-local verify (alias: status) - check the running process, its health and the sandbox
+
+SYNOPSIS
+  ligus-local verify --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
+
+  Checks the process (or the systemd unit / LaunchAgent start installed for
+  this data dir, found by itself), GET http://LISTEN/v1/health (up to 10 s)
+  and LIGUS_REQUIRE_SANDBOX=1 in the env file. On success for serve, prints
+  the human step to pair the phone (`ligus pair`, which prints a secret).
+
+FLAGS
+  --systemd                require the systemd user unit ligus-ROLE to be active
+                           (default: checked only if start --systemd installed it for this env file)
+  --launchd                require the LaunchAgent (macOS only; default: checked if installed)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local verify --role serve --data-dir ~/.ligus-serve --json
+  ligus-local status --role worker --data-dir ~/.ligus-worker --launchd --json
+
+EXIT CODES
+  0 healthy   1 not running, health not 200, or the sandbox not required (read checks[].fix)
+  2 usage error   3 --launchd off macOS   4 the desktop app's data dir
+EOF
+}
+
+hc_stop() {
+  cat <<'EOF'
+ligus-local stop - stop the process
+
+SYNOPSIS
+  ligus-local stop --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
+
+  Sends SIGTERM and waits up to 25 s. A box running under launchd needs
+  --launchd (plain stop refuses: launchd would restart it).
+
+FLAGS
+  --systemd                systemctl --user disable --now ligus-ROLE (default: off)
+  --launchd                unload the LaunchAgent and delete its plist: also no start at login
+                           (default: off)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local stop --role serve --data-dir ~/.ligus-serve --json
+  ligus-local stop --role serve --data-dir ~/.ligus-serve --launchd --json
+
+EXIT CODES
+  0 stopped or not running   1 still running after 25 s, or it runs under launchd (use --launchd)
+  2 usage error   3 --launchd off macOS   4 the desktop app's data dir
+EOF
+}
+
+hc_uninstall() {
+  cat <<'EOF'
+ligus-local uninstall - stop, remove the unit or LaunchAgent, optionally delete the data
+
+SYNOPSIS
+  ligus-local uninstall --role serve|worker --data-dir DIR [--env-file FILE] [--delete-data] [--json]
+
+  Removes only a systemd unit or LaunchAgent ligus-local wrote for this data
+  dir. Uninstalling is not revoking: if the device joined a real workspace,
+  the human revokes it from a desktop.
+
+FLAGS
+  --delete-data            delete DIR (only one ligus-local created) and the env file (only one
+                           it wrote): this device's identity is gone (default: keep both)
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+EXAMPLES
+  ligus-local uninstall --role serve --data-dir ~/.ligus-serve --json
+  ligus-local uninstall --role worker --data-dir ~/.ligus-worker --delete-data --json
+
+EXIT CODES
+  0 removed   1 the LaunchAgent did not stop within 25 s   2 usage error
+  4 --delete-data on a data dir ligus-local did not create (a human deletes it), or the desktop app's
+EOF
+}
+
+# One command's section; an unknown command is a usage error (exit 2).
+help_cmd_body() {
+  case $1 in
+    preflight) hc_preflight ;;
+    install-cli) hc_install_cli ;;
+    configure) hc_configure ;;
+    start) hc_start ;;
+    unit) hc_unit ;;
+    verify|status) hc_verify ;;
+    stop) hc_stop ;;
+    uninstall) hc_uninstall ;;
+    *) ac_usage_error "no help for unknown command: $1 (ligus-local --help lists them)" ;;
+  esac
+}
+# help_cmd <command>: `help <command>` and `<command> --help`.
+help_cmd() {
+  local body
+  body=$(help_cmd_body "$1") || exit $?
+  printf '%s\n\n' "$body"
+  help_see_also
+}
+
+usage() {
+  cat <<'EOF'
+ligus-local - run Ligus's headless processes (ligus serve, ligus worker) on this machine
+
+Ligus is short for ligustica. This tool sets up a laptop, home server or CI
+box non-interactively, for a person or a coding agent. Every command is
+idempotent, never prompts and never prints a secret. The desktop app is
+installed and first opened by the human (brew install --cask
+langstroth-ai/ligus/ligus-app).
+
+SYNOPSIS
+  ligus-local <command> [flags]
+  ligus-local help [<command>]        ligus-local <command> --help
+
+COMMANDS
+  preflight      check this machine; changes nothing
+  install-cli    install the ligus CLI (a release, or --from-source)
+  configure      write the env file and the data dir (no secret values)
+  start          start serve or worker in the background (or --systemd / --launchd)
+  unit           print the systemd unit (or --launchd plist) start would install
+  verify         process, health and sandbox checks (alias: status)
+  stop           stop it (--systemd / --launchd: also no start at login)
+  uninstall      stop and remove it (--delete-data: also this device's identity)
+
+COMMON FLAGS
+EOF
+  help_common_flags
+  cat <<'EOF'
+
+ONE-SHOT SEQUENCE (an agent; the human steps are marked)
+  1. ligus-local preflight --json
+  2. ligus-local install-cli [--version vX.Y.Z | --from-source] --json
+  3. ligus-local configure --role serve --data-dir ~/.ligus-serve --json      (exits 4 until step 4)
+  4. HUMAN: in their own terminal, load the env file and run `ligus enroll -` with the invite
+     (configure prints the exact command); an Admin admits the box if it is not a member yet
+  5. ligus-local start --role serve --data-dir ~/.ligus-serve [--systemd | --launchd] --json
+  6. ligus-local verify --role serve --data-dir ~/.ligus-serve --json
+  7. HUMAN: pair the phone (`ligus pair`, prints a secret), any exposure beyond loopback
+
+EXAMPLES
+  ligus-local preflight --role serve --data-dir ~/.ligus-serve --json
+  ligus-local start --role serve --data-dir ~/.ligus-serve --launchd --json
+  ligus-local verify --role worker --data-dir ~/.ligus-worker --json
+
+ENVIRONMENT
+  LIGUS_BIN          the ligus binary (default: ligus on PATH, else ~/.local/bin/ligus)
+  LIGUS_DATA_DIR     default for --data-dir
+  XDG_CONFIG_HOME    base of the default env file (default: ~/.config)
+  XDG_DATA_HOME      where the desktop app's data dir is looked for on Linux (default: ~/.local/share)
+  CARGO_TARGET_DIR   where install-cli --from-source finds the build (default: <repo>/target)
+  HOME               ~/.local/bin, ~/Library/LaunchAgents, ~/.config/systemd/user
+  Tests only: LIGUS_LOCAL_OS (uname -s), LIGUS_LOCAL_LAUNCHCTL (launchctl),
+  LIGUS_LOCAL_BWRAP (the bwrap path), LIGUS_LOCAL_USERNS (yes|no, user namespaces).
+
+EXIT CODES
+  0  done (warnings allowed)
+  1  a check or an operation failed; checks[].fix says what to do
+  2  usage error (unknown command or flag, missing or invalid value)
+  3  a precondition is missing that you can fix and rerun (the ligus CLI, curl, cargo, the env file)
+  4  a human must decide or act (enroll, exposure, deleting data they own); stop and ask
+  With --json, stdout is one object: {schema, tool, command, ok, exitCode, checks[{id, status,
+  detail, fix}], next[], role, dataDir, envFile, bin}; a usage error adds "error".
+
+COMMAND DETAILS
+EOF
+  local c
+  for c in preflight install-cli configure start unit verify stop uninstall; do
+    echo
+    help_cmd_body "$c"
+  done
+  echo
+  help_see_also
+}
+
+
 CMD=${1:-}
 [ $# -gt 0 ] && shift
-case $CMD in -h|--help|help|"") usage; exit 0 ;; esac
+case $CMD in
+  -h|--help|"") usage; exit 0 ;;
+  help) if [ $# -gt 0 ]; then help_cmd "$1"; else usage; fi; exit 0 ;;
+esac
 
 ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
 SYSTEMD=0 LAUNCHD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
@@ -75,7 +435,7 @@ while [ $# -gt 0 ]; do
     --version) need "$@"; VERSION=$2; shift ;;
     --bin-dir) need "$@"; BIN_DIR=$2; shift ;;
     --from-source) FROM_SOURCE=1 ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help) help_cmd "$CMD"; exit 0 ;;
     *) ac_usage_error "unknown argument: $1" ;;
   esac
   shift
