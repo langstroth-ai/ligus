@@ -372,6 +372,11 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
     if let Some(class) = &p.task_class {
         v["taskClass"] = json!(class);
     }
+    // A file an agent offers (issue #118): the reference a vote binds (the
+    // digest's ninth part), so the phone can show it and recompute.
+    if let Some(a) = &p.attachment {
+        v["attachment"] = json!(a);
+    }
     collab_fields(&mut v, s, p);
     review_fields(&mut v, s, p);
     v
@@ -1751,5 +1756,35 @@ mod responder_device_tests {
         let mut person = turn(Some(acct), Some(box_dev));
         person.role = MessageRole::User;
         assert!(message_dto(chat, &person, viewer).get("responderDevice").is_none());
+    }
+
+    /// An offered file reaches the phone as the exact reference the digest
+    /// binds, and the digest the phone gets is the one over it.
+    #[test]
+    fn an_offered_file_is_sent_as_the_digest_binds_it() {
+        use super::proposal_dto_as;
+        use ligus_core::{ActionProposal, ChatSession};
+        use serde_json::json;
+        use uuid::Uuid;
+        let ws = Uuid::new_v4();
+        let chat = ChatSession::new("c", ws, "");
+        let mut p = ActionProposal::new("Share report", ligus_core::ProposalKind::Decision, "a");
+        let plain = proposal_dto_as(&chat, &p, "me");
+        assert!(plain.get("attachment").is_none(), "{plain}");
+        let offer = ligus_core::attachment::AttachmentRef {
+            id: Uuid::new_v4(),
+            blob_id: String::new(),
+            sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+            size: 4,
+            content_type: "application/pdf".into(),
+            name: "report.pdf".into(),
+            message_id: None,
+            proposal_id: None,
+        };
+        p.attachment = Some(Box::new(offer.clone()));
+        let v = proposal_dto_as(&chat, &p, "me");
+        assert_eq!(v["attachment"], serde_json::to_value(&offer).unwrap());
+        assert_eq!(v["diffDigest"], json!(ligus_core::authz::votes::diff_digest(&p)));
+        assert_ne!(v["diffDigest"], plain["diffDigest"]);
     }
 }
