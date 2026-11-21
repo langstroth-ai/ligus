@@ -189,9 +189,9 @@ device). Nothing these routes return is secret.
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/phone-enroll/check` | `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` (`deviceId` only off the tunnel; through it, the device the connection proved) | Writes nothing. `200 {workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `person` is the member whose device showed the code; `nameCollision` is true when another current member has the same cleaned display name; `standing` is `new` or `alreadyMine` (nothing to do) |
+| `POST /v1/phone-enroll/check` | `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` (`deviceId` only off the tunnel; through it, the device the connection proved) | Writes nothing. `200 {workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `phone` is `null` when no device is known (off the tunnel without `deviceId`). `person` is the member whose device showed the code; `nameCollision` is true when another current member has the same cleaned display name; `standing` is `new` or `alreadyMine` (nothing to do) |
 | `POST /v1/phone-enroll/requests` | `{request: "ligusenrollreq1:…"}` | Checks the encoding, the phone's `ligusphone1:` code inside, the phone's signature, that the caller's device is the code's, and every `check` rule; then publishes the request slot. `202 {rid, state: "relayed"}`. Sending the same bytes again is idempotent. Pending requests live in memory until the code's expiry and are dropped on restart (the phone sends again after a 404 from the status route) |
-| `GET /v1/phone-enroll/requests/{rid}` | `?wait=N` (N ≤ 25 seconds) | Long poll. `{state: "waiting" \| "answered" \| "expired", answer?: "ligusenrollres1:…", certified}`. `answer` is the desktop's answer, relayed as is (only one signed by the device that showed the code); `certified` is whether this box's roster now has the phone's certificate, which is what the phone treats as success. The box keeps polling for answers until the code expires, even after `certified` |
+| `GET /v1/phone-enroll/requests/{rid}` | `?wait=N` (N ≤ 25 seconds; default 0, answer at once); off the tunnel also `&deviceId=<uuid>` when one caller has several requests | Long poll. `{state: "waiting" \| "answered" \| "expired", answer?: "ligusenrollres1:…", certified}`. `answer` is the desktop's answer, relayed as is (only one signed by the device that showed the code); `certified` is whether this box's roster now has the phone's certificate, which is what the phone treats as success. The box keeps polling for answers until the code expires, even after `certified` |
 
 `rid` (base64url, 16 bytes) is derived from the QR's secret and reveals
 nothing about it; `exp` is Unix seconds. The wire formats are in
@@ -203,21 +203,28 @@ Refusals are `{error, message}`:
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `bad_request` | the request doesn't decode, its `ligusphone1:` code isn't valid, or the phone's signature doesn't verify |
+| 400 | `bad_request` | the body isn't valid JSON, the request doesn't decode, its `ligusphone1:` code isn't valid, or the phone's signature doesn't verify |
+| 401 | `unauthorized` | no valid credential, as on every route but `/v1/health` |
 | 403 | `device_mismatch` | the caller's channel proved another device than the phone in the request |
 | 403 | `device_revoked` | the phone's device is revoked here |
 | 409 | `wrong_workspace` | `workspaceId` isn't this box's workspace |
 | 409 | `desktop_unknown` | `desktopDeviceId` isn't a certified, unrevoked desktop (not a phone, not delegated) of exactly one current person here |
 | 409 | `offer_expired` | `exp` is more than 120 s past or more than 420 s ahead of the box's clock (the desktop issues codes for 300 s) |
 | 409 | `someone_elses` | the phone is certified here for another account |
-| 503 | `relay_unavailable` | the box has no presence connection to the workspace's relay (it syncs only peer to peer), so it can't pass the request on |
+| 404 | `not_found` | status route: no pending request with that `rid` for this caller (the box restarted, or the request expired more than 120 s ago): submit it again |
+| 429 | `rate_limited` | the box accepted 30 requests in the last minute ("try again in a minute"), or a provisional connection already sent its 8 ("enroll again") |
+| 503 | `relay_unavailable` | the box has no relay to publish on (it syncs only peer to peer), or it isn't a certified service member of the workspace yet, so desktops wouldn't take a request it relays |
 
 Limits, so no caller can crowd out the others: one pending request per phone
 device (a new one replaces it); one per provisional connection or paired
 tunnel phone, two per bearer token; 16 pending in all (when full, the oldest
 request of the caller holding the most is dropped); at most 30 accepted per
 minute. A provisional connection may send at most 8 requests, all for its
-own device; at most 4 are open at once per box.
+own device; at most 4 are open at once per box, and a fifth enrollment is
+closed with `4043 provisional_busy` (retry in a minute; the attempt counts
+against the pairing link). E3b is specified in
+[`docs/relay-tunnel.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/relay-tunnel.md)
+§7.2.1.
 
 ### Admissions {#admissions}
 

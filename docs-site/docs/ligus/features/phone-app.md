@@ -136,14 +136,15 @@ your account, your role and the passkey relying party by itself.
 | "Show a new code on your desktop and scan again" | the code is older than 5 minutes | **Show a new code** on the desktop and scan it |
 | "This code expires too far ahead: check the clock" | the phone's or the box's clock is off by several minutes | set the clocks automatically, then show a new code |
 | "Pair with this workspace's box first" | the phone has no host profile for this workspace | scan `ligus pair` from the box (see [A phone that isn't paired yet](#new-phone)) |
-| "This box can't reach the workspace's relay. Use Can't scan?" | the box syncs only peer to peer, so it can't pass the request to the desktop | use [Can't scan?](#cant-scan), or give the box a relay |
+| "This box can't reach the workspace's relay. Use Can't scan?" | the box syncs only peer to peer, or it hasn't been admitted to the workspace yet, so it can't pass the request to the desktop | use [Can't scan?](#cant-scan), give the box a relay, or [admit the box](../../operate/ops/admitting-a-box.md) first |
 | "Update ligus serve, or use Can't scan?" | the box is older than 0.1.1 | update the box, or use [Can't scan?](#cant-scan) |
 | "this code is for another workspace" | the phone is paired with another workspace's box | pair with this workspace's box, or show the code from the right workspace |
 | "this phone belongs to someone else here" | the phone is already certified for another person in this workspace | reset the phone's device key in the app and add it again |
 | "this phone's device is revoked here" | the phone was revoked | reset the phone's device key in the app and add it again |
 | the desktop declined | **Not my phone** was chosen | show a new code and scan again |
 | "Two phones answered this code. Someone else may have seen it. Nothing was added." (desktop) | a second phone answered before you approved | **Show a new code**, keep it off shared screens and out of sight of cameras, and scan again |
-| the phone keeps waiting, or the box refuses with "too many attempts" | the box keeps a few requests at a time, or the relay is rate limiting your network (`4029`, failed attempts per IP address) | stop retrying and wait 5 minutes; then show a new code and scan it once |
+| "this box is taking too many add-a-phone requests; try again in a minute", or the box is busy with other phones (pairing closes with `4043 provisional_busy`) | the box takes 30 requests a minute and 4 unpaired phones at once | wait a minute and scan again (show a new code if it expired) |
+| "Too many attempts" (close `4029`), or the phone keeps waiting | the relay is rate limiting your network (failed attempts per IP address, per /64 on IPv6) | stop retrying and wait 5 minutes; then `ligus pair` for a new link if needed, show a new code and scan it once |
 
 ### "Another phone answered this code" {#another-phone}
 

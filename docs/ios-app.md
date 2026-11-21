@@ -592,7 +592,7 @@ otherwise with `expired` or `too_far_ahead`; the box accepts
 |---|---|---|
 | POST | `/v1/phone-enroll/check` `{workspaceId, desktopDeviceId, rid, exp, deviceId?}` | Writes nothing. `{workspaceId, workspaceName, person: {accountId, memberId, displayName, role, nameCollision}, desktopLabel, phone: {standing}}`. `deviceId` only off the tunnel (through it, the device the connection proved). `standing`: `new`, or `alreadyMine` (nothing to do: say so and stop) |
 | POST | `/v1/phone-enroll/requests` `{request: "ligusenrollreq1:…"}` | `202 {rid, state: "relayed"}`. Re-sending the same bytes is idempotent. The box keeps pending requests in memory until `exp`; on a `404` from the status route (the box restarted), send the request again |
-| GET | `/v1/phone-enroll/requests/{rid}?wait=N` | `N ≤ 25`. `{state: "waiting"\|"answered"\|"expired", answer?: "ligusenrollres1:…", certified: bool}`. `certified` is whether the box's roster now has this phone's certificate |
+| GET | `/v1/phone-enroll/requests/{rid}?wait=N` | `N ≤ 25` (off the tunnel, add `&deviceId=` when one caller has several requests). `{state: "waiting"\|"answered"\|"expired", answer?: "ligusenrollres1:…", certified: bool}`. `certified` is whether the box's roster now has this phone's certificate |
 
 `rid`, `workspaceId` and `desktopDeviceId` in `check` are as the offer has
 them (`rid` as b64u, the ids as lowercase hyphenated UUIDs); `exp` is a
@@ -602,14 +602,16 @@ Box refusals, `{error, message}`:
 
 | Status | `error` | Show |
 |---|---|---|
-| 400 | `bad_request` | a bug on this side (the request didn't decode or the signature didn't verify): don't retry |
+| 400 | `bad_request` | a bug on this side (bad JSON, the request didn't decode or the signature didn't verify): don't retry |
+| 404 | `not_found` (status route) | the box lost the request (it restarted): submit the same request again |
+| 429 | `rate_limited` | the box is busy ("try again in a minute"), or this provisional connection used its 8 requests (enroll again) |
 | 403 | `device_mismatch` | the request names another device than this connection proved: don't retry |
 | 403 | `device_revoked` | "This phone's device is revoked here", and offer **Reset device key** |
 | 409 | `wrong_workspace` | "This code is for another workspace": pick another host profile or pair with the right box |
 | 409 | `desktop_unknown` | "The desktop that showed this code isn't a device of a person here" |
 | 409 | `offer_expired` | "Show a new code on your desktop and scan again" |
 | 409 | `someone_elses` | "This phone belongs to someone else here": offer **Reset device key** |
-| 503 | `relay_unavailable` | "This box can't reach the workspace's relay. Use Can't scan?" |
+| 503 | `relay_unavailable` | "This box can't reach the workspace's relay. Use Can't scan?" (also when the box isn't a certified service member yet) |
 | 404 on these routes, or a `4040` close without a provisional answer | (box older than 0.1.1) | "Update ligus serve, or use Can't scan?" |
 
 **E3b: provisional enrollment (relay tunnel).** A phone pairs only once it is
@@ -628,7 +630,10 @@ derives, and that `device.sig` verifies under it over the same
 answers msg2 `{"v":1,"provisional":true}`: no `pid`, no `cred`. The
 connection then reaches only the three `/v1/phone-enroll/*` routes (anything
 else is 404), for requests about its own device id only, at most 8
-requests, for at most 5 minutes; a box holds at most 4 at once. The attempt
+requests (then `429 rate_limited`), for at most 5 minutes; a box holds at
+most 4 at once and closes a fifth with **4043 `provisional_busy`** (retry in
+a minute; the attempt counts). Full rules in
+[`relay-tunnel.md`](relay-tunnel.md) §7.2.1. The attempt
 counts against the pairing window (5 attempts) and doesn't consume the
 pairing secret. Once `certified` is true, close the provisional connection
 and enroll again with the same link: E3a now binds. An older host ignores
