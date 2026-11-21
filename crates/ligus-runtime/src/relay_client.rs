@@ -141,6 +141,25 @@ async fn status_error(resp: reqwest::Response) -> RelayError {
     }
 }
 
+/// The error for a refused roster call (members, claim, invites, join). The
+/// roster routes answer a short plain-text reason (`forbidden`, `cannot remove
+/// the last owner`, ...), so it is carried to the user with the status instead
+/// of being read as a rejected access token: a 403 there usually means "not an
+/// Admin of this workspace", not a bad token.
+async fn roster_error(resp: reqwest::Response) -> RelayError {
+    let code = resp.status().as_u16();
+    if matches!(code, 429 | 507) {
+        return status_error(resp).await;
+    }
+    let text = resp.text().await.unwrap_or_default();
+    let reason: String = text.trim().chars().filter(|c| !c.is_control()).take(200).collect();
+    if reason.is_empty() {
+        RelayError::Message(format!("the relay refused (HTTP {code})"))
+    } else {
+        RelayError::Message(format!("the relay refused (HTTP {code}): {reason}"))
+    }
+}
+
 impl RelayError {
     /// The relay's refusal, when this is one.
     pub fn refusal(&self) -> Option<&RelayRefusal> {
@@ -833,11 +852,17 @@ impl RelayClient {
 
     /// Claim an unmanaged workspace, making the caller `Owner` and turning on
     /// server-side membership enforcement. `Ok(false)` if the relay doesn't
-    /// support membership (open/self-host → 404) or it's already claimed.
+    /// support membership (open/self-host → 404) or it's already claimed
+    /// (409). Any other refusal (an unidentified token, a server error) is an
+    /// error carrying the relay's reason.
     pub async fn claim_membership(&self, workspace: &str) -> Result<bool, RelayError> {
         let url = format!("{}/v1/workspaces/{}/members/claim", self.base, workspace);
         let resp = self.authed(self.http.post(url)).send().await?;
-        Ok(resp.status().is_success())
+        match resp.status().as_u16() {
+            200..=299 => Ok(true),
+            404 | 409 => Ok(false),
+            _ => Err(roster_error(resp).await),
+        }
     }
 
     /// List a workspace's members (membership-enforcing relays only). `Ok(None)`
@@ -861,21 +886,30 @@ impl RelayClient {
     ) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/members", self.base, workspace);
         let body = serde_json::json!({ "account": account, "login": login, "role": role });
-        self.authed(self.http.post(url)).json(&body).send().await?;
+        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(roster_error(resp).await);
+        }
         Ok(())
     }
 
     /// Remove a member (caller must be `Admin`+). Pair with a key rotation so the
-    /// ejected account also loses read access to new traffic.
+    /// ejected account also loses read access to new traffic. A refusal (not
+    /// an Admin, the last Owner, membership off) is an error, so a caller never
+    /// goes on to rotate as if the relay had removed them.
     pub async fn remove_member(&self, workspace: &str, account: &str) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/members/{}", self.base, workspace, account);
-        self.authed(self.http.delete(url)).send().await?;
+        let resp = self.authed(self.http.delete(url)).send().await?;
+        if !resp.status().is_success() {
+            return Err(roster_error(resp).await);
+        }
         Ok(())
     }
 
     /// Issue a revocable/expiring invite (caller must be `Admin`+). The raw
     /// `code` is returned ONCE. `Ok(None)` if the relay doesn't support invites
-    /// or the caller isn't authorized.
+    /// (404); any other refusal (not an Admin, a server error) is an error
+    /// carrying the relay's reason.
     pub async fn create_invite(
         &self,
         workspace: &str,
@@ -886,8 +920,11 @@ impl RelayClient {
         let url = format!("{}/v1/workspaces/{}/invites", self.base, workspace);
         let body = serde_json::json!({ "role": role, "ttlSecs": ttl_secs, "maxUses": max_uses });
         let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        if !resp.status().is_success() {
+        if resp.status().as_u16() == 404 {
             return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(roster_error(resp).await);
         }
         Ok(Some(resp.json().await?))
     }
@@ -906,13 +943,18 @@ impl RelayClient {
     /// Revoke an invite by id (caller must be `Admin`+).
     pub async fn revoke_invite(&self, workspace: &str, invite_id: &str) -> Result<(), RelayError> {
         let url = format!("{}/v1/workspaces/{}/invites/{}", self.base, workspace, invite_id);
-        self.authed(self.http.delete(url)).send().await?;
+        let resp = self.authed(self.http.delete(url)).send().await?;
+        if !resp.status().is_success() {
+            return Err(roster_error(resp).await);
+        }
         Ok(())
     }
 
     /// Redeem an invite code to self-enroll in the workspace at its role.
     /// Returns the granted role, or `Ok(None)` if the code was refused
-    /// (invalid/expired/revoked/used-up) or invites aren't supported.
+    /// (invalid/expired/revoked/used-up: 403) or invites aren't supported
+    /// (404). Any other refusal (an unidentified token, a server error) is an
+    /// error carrying the relay's reason.
     pub async fn join_via_invite(
         &self,
         workspace: &str,
@@ -922,8 +964,11 @@ impl RelayClient {
         let url = format!("{}/v1/workspaces/{}/join", self.base, workspace);
         let body = serde_json::json!({ "code": code, "login": login });
         let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        if !resp.status().is_success() {
+        if matches!(resp.status().as_u16(), 403 | 404) {
             return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(roster_error(resp).await);
         }
         #[derive(serde::Deserialize)]
         struct JoinResp {
@@ -1087,6 +1132,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// C12 `relay_errors_are_errors`: a roster call the relay refuses (403
+    /// not an Admin, 409 the last Owner, 500) is an error carrying the
+    /// relay's reason, never a silent success. Before this, `remove_member`
+    /// answered `Ok(())` on a 403 and the desktop went on to edit its roster
+    /// and rotate the key as if the relay had removed the member.
+    #[tokio::test]
+    async fn roster_helpers_surface_relay_refusals() {
+        use axum::http::StatusCode;
+        for (status, reason) in [
+            (StatusCode::FORBIDDEN, "forbidden"),
+            (StatusCode::CONFLICT, "cannot remove the last owner"),
+            (StatusCode::INTERNAL_SERVER_ERROR, "store unavailable"),
+        ] {
+            let router = axum::Router::new().fallback(move || async move { (status, reason) });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let c = RelayClient::new(format!("http://{addr}")).with_auth(Some("t".into()));
+            let ws = Uuid::new_v4().to_string();
+            let code = status.as_u16();
+            let carries = |what: &str, e: RelayError| {
+                let msg = e.to_string();
+                assert!(msg.contains(&code.to_string()) && msg.contains(reason), "{what} on {code}: {msg}");
+            };
+            carries("remove_member", c.remove_member(&ws, "ligus:a").await.expect_err("remove_member refused"));
+            carries("upsert_member", c.upsert_member(&ws, "ligus:a", "A", "viewer").await.expect_err("upsert_member refused"));
+            carries("revoke_invite", c.revoke_invite(&ws, "i").await.expect_err("revoke_invite refused"));
+            carries("create_invite", c.create_invite(&ws, "viewer", 60, 1).await.expect_err("create_invite refused"));
+            match c.claim_membership(&ws).await {
+                // 409 is "already claimed", a normal answer.
+                Ok(false) if code == 409 => {}
+                Ok(v) => panic!("claim_membership on {code} answered Ok({v})"),
+                Err(e) => carries("claim_membership", e),
+            }
+            match c.join_via_invite(&ws, "code", "").await {
+                // 403 is "that code was refused", a normal answer.
+                Ok(None) if code == 403 => {}
+                Ok(v) => panic!("join_via_invite on {code} answered Ok({v:?})"),
+                Err(e) => carries("join_via_invite", e),
+            }
+        }
+    }
+
+    /// A relay without membership (404) is still "unsupported", not an error.
+    #[tokio::test]
+    async fn roster_helpers_treat_404_as_unsupported() {
+        let router = axum::Router::new().fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "404 page not found") });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let c = RelayClient::new(format!("http://{addr}"));
+        let ws = Uuid::new_v4().to_string();
+        assert!(!c.claim_membership(&ws).await.unwrap());
+        assert!(c.create_invite(&ws, "viewer", 60, 1).await.unwrap().is_none());
+        assert!(c.join_via_invite(&ws, "code", "").await.unwrap().is_none());
+        assert!(c.list_members(&ws).await.unwrap().is_none());
     }
 
     #[tokio::test]

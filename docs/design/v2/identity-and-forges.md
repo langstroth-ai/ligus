@@ -420,7 +420,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
   - with ligus-auth, the `sub` is `<tenant>:<user>` (`relay/ligusauth/flows.go:953-957`);
   - with a desktop-minted token, it is `ligus:<account_id>`.
 
-  `generate_agent_bootstrap` (D24) mints `sub = "ligus:<agent or box account id>"`.
+  `generate_agent_bootstrap` (D24) mints `sub = "ligus-box:<random id>"`, a prefix that can't be read as an account id. Boxes bootstrapped earlier carry `ligus:<random id>`; that subject keeps working on the relay, and the client maps a `ligus:` subject to an account only when the id is an account on the workspace roster.
 
 ### 3.4 Opt-in forge index [2.1; needs D4]
 

@@ -123,7 +123,7 @@ travels in the generated line.)
 paste the Ed25519 seed once under **Settings → Team sync → Advanced → Relay
 issuer key** (local-only, never synced). Then the **People pane → Remote
 agents** section takes a role and a box label, mints the box its own random relay
-identity (`ligus:<id>`), enrolls it, and shows the
+identity (`ligus-box:<id>`), enrolls it, and shows the
 same copy-paste command in a box — no terminal needed on the admin side. See
 [Right Rail — People](../../ligus/features/right-rail.md).
 
