@@ -39,6 +39,17 @@ Full release notes are on the
 
 ### CLI
 
+- **The CLI documents itself.** `ligus help` lists every command and a set
+  of task guides (`ligus help box`, `phone`, `remote`, `worker`,
+  `kubernetes`, `repos`, `agents`, `security`, `env`, `troubleshooting`, and
+  `agents-guide` for coding agents). `ligus <command> --help` prints the
+  command's purpose, flags with defaults, environment variables, examples and
+  exit codes. Help prints to stdout and exits 0 (it was stderr and 2), and
+  never opens the data dir; a usage error now exits 2. New: `ligus status`
+  summarises the data dir, workspace, relay, admission and serve state, and
+  `--json` works on `status`, `whoami`, `chats`, `runtimes`, `agents`,
+  `hosts`, `repos list`, `remote status` and `phones list`. See the
+  [CLI reference](cli.md#help).
 - **`ligus app`** opens the desktop app and returns at once, detached from
   the terminal. See the [CLI reference](cli.md).
 - **`ligus-local verify` finds the systemd unit by itself.** On Linux, when

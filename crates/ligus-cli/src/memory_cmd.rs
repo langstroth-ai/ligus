@@ -33,6 +33,9 @@ fn id(s: &str) -> Result<Uuid> {
 }
 
 fn stdin_body() -> Result<String> {
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("type the body, then Ctrl-D on a new line (or pass --body TEXT, or pipe it)");
+    }
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s)?;
     Ok(s)

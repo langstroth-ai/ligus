@@ -28,6 +28,13 @@ relay checkout (`--relay-chart`) or a pinned fetch (`--fetch-relay-chart`).
 
 ## Commands
 
+The `ligus` CLI documents itself: `ligus help` lists every command and
+guide, `ligus <command> --help` gives a command's flags, defaults,
+environment variables, examples and exit codes, and
+`ligus help agents-guide` is a one-shot playbook for agents (set up a box,
+add an agent, deploy on Kubernetes, check health). `ligus status --json`
+summarises a data dir.
+
 Every command is non-interactive and idempotent, takes flags or environment
 variables (never prompts), prints progress on stderr and, with `--json`,
 exactly one JSON object on stdout (schema `ligus.agent-deploy.v1`: `ok`,

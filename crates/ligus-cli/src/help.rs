@@ -1,0 +1,2643 @@
+//! `ligus help`: the built-in reference and guides, so a person or an agent
+//! can find and use every capability from the CLI alone.
+//!
+//! - `ligus help` lists the commands and the topics;
+//! - `ligus <command> [<subcommand>] --help` (or `-h`), and
+//!   `ligus help <command> [<subcommand>]`, print one command's reference:
+//!   purpose, synopsis, flags with defaults, environment, examples, exit
+//!   codes and see also;
+//! - `ligus help <topic>` prints a task guide (the exact commands in order).
+//!   A name that is both a topic and a command (`agents`, `repos`,
+//!   `remote`, `worker`) prints the guide, then the command reference.
+//!
+//! Help goes to stdout and exits 0; an unknown command or topic exits 2.
+//! Tests in this file check that every command the dispatcher in `main.rs`
+//! (and its subcommand dispatchers) handles has an entry here with every
+//! section, and that every `LIGUS_*` variable the CLI reads is in
+//! `ligus help env`.
+
+use std::fmt::Write as _;
+
+/// One flag: how it is written, its default, what it does.
+pub struct Flag {
+    pub flag: &'static str,
+    pub default: &'static str,
+    pub about: &'static str,
+}
+
+const fn f(flag: &'static str, default: &'static str, about: &'static str) -> Flag {
+    Flag { flag, default, about }
+}
+
+/// One command or subcommand's reference.
+pub struct Cmd {
+    /// As typed after `ligus`: `remote enable`.
+    pub name: &'static str,
+    /// The section `ligus help` lists it under.
+    pub group: &'static str,
+    /// One line for the command list.
+    pub summary: &'static str,
+    pub purpose: &'static str,
+    pub synopsis: &'static [&'static str],
+    pub flags: &'static [Flag],
+    /// Variables read by this command besides the common ones below.
+    pub env: &'static [&'static str],
+    /// Opens the data dir (adds `LIGUS_DATA_DIR`, `LIGUS_SECRET_BACKEND`).
+    pub data: bool,
+    /// Uses the workspace connection (adds the relay and workspace variables).
+    pub conn: bool,
+    pub examples: &'static [&'static str],
+    /// Exit codes besides 0, 1 and 2.
+    pub exit: &'static [(i32, &'static str)],
+    pub see_also: &'static [&'static str],
+}
+
+const D: Cmd = Cmd {
+    name: "",
+    group: "",
+    summary: "",
+    purpose: "",
+    synopsis: &[],
+    flags: &[],
+    env: &[],
+    data: true,
+    conn: false,
+    examples: &[],
+    exit: &[],
+    see_also: &[],
+};
+
+/// Exit codes every command shares.
+pub const EXIT_OK: i32 = 0;
+pub const EXIT_ERROR: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+
+/// A wrong command line: exits [`EXIT_USAGE`]. Any error whose message starts
+/// with `usage:` counts too (see [`is_usage`]).
+#[derive(Debug)]
+pub struct UsageError(pub String);
+
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UsageError {}
+
+/// Whether `e` is a usage error (exit 2).
+pub fn is_usage(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    e.downcast_ref::<UsageError>().is_some() || msg.starts_with("usage:") || msg.starts_with("unknown `ligus ")
+}
+
+/// The help to read after a usage error on `args`: the deepest command they
+/// name, else the command list.
+pub fn hint(args: &[&str]) -> String {
+    match cmd_of(&words(args)) {
+        Some(c) => format!("see `ligus {} --help`", c.name),
+        None => "see `ligus help`".into(),
+    }
+}
+
+/// Whether `name` is a top-level command (`ligus help` lists them).
+pub fn is_command(name: &str) -> bool {
+    COMMANDS.iter().any(|c| c.name == name)
+}
+
+/// A usage error naming the help to read.
+pub fn usage_error(msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(UsageError(msg.into()))
+}
+
+const G_START: &str = "Getting started";
+const G_CHAT: &str = "Chats and messages";
+const G_AGENTS: &str = "Runtimes, agents and hosts";
+const G_BOX: &str = "Boxes: serve, worker, admission";
+const G_PHONE: &str = "Phone and remote access";
+const G_REPOS: &str = "Repositories and code hosts";
+const G_DATA: &str = "Memory, facts and dashboards";
+const G_CHECK: &str = "Checks and diagnostics";
+
+const GROUPS: &[&str] = &[G_START, G_CHAT, G_AGENTS, G_BOX, G_PHONE, G_REPOS, G_DATA, G_CHECK];
+
+const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text");
+
+pub const COMMANDS: &[Cmd] = &[
+    // ── Getting started ────────────────────────────────────────────────
+    Cmd {
+        name: "help",
+        group: G_START,
+        summary: "this help; `ligus help <command>` or `ligus help <topic>`",
+        purpose: "Print the command list and the guides (no argument), one command's reference, or a task guide. \
+                  It never opens the data dir.",
+        synopsis: &["ligus help", "ligus help <command> [<subcommand>]", "ligus help <topic>", "ligus <command> [<subcommand>] --help | -h"],
+        data: false,
+        examples: &["ligus help", "ligus help box", "ligus help remote enable"],
+        see_also: &["ligus help agents-guide", "ligus help env"],
+        ..D
+    },
+    Cmd {
+        name: "version",
+        group: G_START,
+        summary: "print the version (also --version, -V)",
+        purpose: "Print `ligus <version>`. It never opens the data dir.",
+        synopsis: &["ligus --version | -V | version"],
+        data: false,
+        examples: &["ligus --version"],
+        see_also: &["ligus status"],
+        ..D
+    },
+    Cmd {
+        name: "status",
+        group: G_START,
+        summary: "one-screen summary: data dir, identity, workspace, relay, admission, serve, sandbox",
+        purpose: "Summarise this data dir without changing it: the identity (and whether it is a box), the workspace and \
+                  its relay, whether an access token, a workspace key and a local copy of the workspace are present, \
+                  whether this identity is a member, a kept admission, the serve and remote-access state, the agent \
+                  sandbox tier, and the next step. Never creates an identity; reads only.",
+        synopsis: &["ligus status [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus status", "LIGUS_DATA_DIR=~/.ligus-serve ligus status --json"],
+        see_also: &["ligus whoami", "ligus remote status", "ligus doctor", "ligus help troubleshooting"],
+        ..D
+    },
+    Cmd {
+        name: "whoami",
+        group: G_START,
+        summary: "this client's account and device ids, name, data dir and room",
+        purpose: "Print this data dir's identity: account id, device id, display name, data dir and room. Creates the \
+                  identity on first use.",
+        synopsis: &["ligus whoami [--json]"],
+        flags: &[JSON],
+        env: &["LIGUS_WORKSPACE", "LIGUS_SERVE_LABEL"],
+        examples: &["ligus whoami", "ligus whoami --json"],
+        see_also: &["ligus status"],
+        ..D
+    },
+    Cmd {
+        name: "enroll",
+        group: G_START,
+        summary: "save a workspace connection from an invite (relay, room, key)",
+        purpose: "Decode a workspace invite (`hivews1:…`: relay URL, room, end-to-end key) and save it: the relay and \
+                  room to <data dir>/config.toml, the key and the optional relay access token to the secret store. \
+                  An invite carries the workspace key: pipe it or pass a file; on the command line it works with a \
+                  warning. Refuses an invite whose workspace has no usable relay URL.",
+        synopsis: &["ligus enroll - [--token - | @FILE]", "ligus enroll --file PATH [--token - | @FILE]", "ligus enroll <hivews1:invite> [--token …]"],
+        flags: &[
+            f("-", "", "read the invite from stdin"),
+            f("--file PATH", "none", "read the invite from a file"),
+            f("--token - | @FILE", "none", "relay access token, from stdin or an owner-only file (a literal value works with a warning)"),
+        ],
+        examples: &["pbpaste | ligus enroll -", "ligus enroll --file ./invite --token @./relay-token", "ligus enroll --file ./invite && ligus sync"],
+        see_also: &["ligus sync", "ligus admit", "ligus help box", "ligus help security"],
+        ..D
+    },
+    Cmd {
+        name: "join",
+        group: G_START,
+        summary: "redeem a relay invite code to self-enroll this identity",
+        purpose: "Redeem a relay invite code, adding this identity to the configured workspace's relay roster at the \
+                  invite's role. Needs a relay URL (from `ligus enroll` or LIGUS_RELAY_URL).",
+        synopsis: &["ligus join <invite-code>"],
+        conn: true,
+        examples: &["ligus join 7Q4K-…", "ligus join 7Q4K-… && ligus sync"],
+        see_also: &["ligus enroll", "ligus sync"],
+        ..D
+    },
+    Cmd {
+        name: "sync",
+        group: G_START,
+        summary: "push and pull once with the relay (--watch to repeat)",
+        purpose: "One sync round: push every unpushed event, then pull and ingest, paging until caught up. Prints \
+                  `pushed N, pulled M`; a relay refusal (quota, rate limit) is printed as `sync: …`.",
+        synopsis: &["ligus sync [--watch]"],
+        flags: &[f("--watch", "off", "repeat every 3 s until stopped")],
+        conn: true,
+        examples: &["ligus sync", "ligus sync --watch"],
+        see_also: &["ligus enroll", "ligus status", "ligus help troubleshooting"],
+        ..D
+    },
+    Cmd {
+        name: "setup",
+        group: G_START,
+        summary: "detect providers on this box; --apply defines keyless runtimes",
+        purpose: "Detect what this box can reach: API keys in the environment, Ollama on 127.0.0.1:11434, and the \
+                  claude, codex, agy and copilot CLIs (with their sign-in state). Key-backed providers are printed \
+                  as `ligus add-runtime … --secret-ref` commands; --apply defines the keyless ones as workspace \
+                  runtimes (share them with `ligus sync`).",
+        synopsis: &["ligus setup [--apply]"],
+        flags: &[f("--apply", "off", "define the detected keyless runtimes in the workspace")],
+        env: &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PATH"],
+        examples: &["ligus setup", "ligus setup --apply && ligus sync"],
+        see_also: &["ligus runtimes", "ligus add-runtime", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "app",
+        group: G_START,
+        summary: "open the desktop app, detached from this terminal",
+        purpose: "Open the Ligus desktop app (or bring it forward) and return at once. It takes no arguments and never \
+                  opens the data dir, the config or the secret store. macOS: Launch Services; Windows: the installer's \
+                  registry keys, the default install dirs, then PATH; Linux: ligus-desktop on PATH, then an AppImage \
+                  (needs DISPLAY or WAYLAND_DISPLAY).",
+        synopsis: &["ligus app"],
+        data: false,
+        env: &["LIGUS_APPIMAGE", "DISPLAY", "WAYLAND_DISPLAY", "PATH"],
+        examples: &["ligus app"],
+        exit: &[(1, "the app isn't installed (the message lists where it looked), or no graphical session on Linux")],
+        see_also: &["ligus help quickstart"],
+        ..D
+    },
+    Cmd {
+        name: "auth",
+        group: G_START,
+        summary: "sign in to an organization's relay through langstroth-auth",
+        purpose: "Device-code sign-in at langstroth-auth. While a session exists every command uses its short-lived \
+                  relay token and refreshes it in the background; LIGUS_RELAY_ACCESS_TOKEN, when set, wins. Signing \
+                  in opens the relay only: joining a workspace still takes an invite and an Admin.",
+        synopsis: &["ligus auth login <https://auth.example.com/t/<tenant>> [--label NAME]", "ligus auth status", "ligus auth logout"],
+        flags: &[f("--label NAME", "$HOSTNAME, else \"ligus CLI\"", "the name this box signs in under (login)")],
+        env: &["LIGUS_RELAY_URL", "LIGUS_RELAY_ACCESS_TOKEN", "HOSTNAME"],
+        examples: &["ligus auth login https://auth.example.com/t/acme --label build-box", "ligus auth status"],
+        see_also: &["ligus auth login", "ligus enroll"],
+        ..D
+    },
+    Cmd {
+        name: "auth login",
+        group: G_START,
+        summary: "device-code sign-in; saves <data dir>/ligus-auth.json",
+        purpose: "Print a code to enter in a browser, wait for approval, then save the session (owner-only) in the \
+                  data dir.",
+        synopsis: &["ligus auth login <url> [--label NAME]"],
+        flags: &[f("--label NAME", "$HOSTNAME, else \"ligus CLI\"", "the name this box signs in under")],
+        env: &["HOSTNAME", "LIGUS_RELAY_URL"],
+        examples: &["ligus auth login https://auth.example.com/t/acme"],
+        see_also: &["ligus auth status", "ligus auth logout"],
+        ..D
+    },
+    Cmd {
+        name: "auth status",
+        group: G_START,
+        summary: "the signed-in tenant, subject, workspaces and token lifetime",
+        purpose: "Print the tenant, subject, granted workspaces and access-token lifetime (never a token).",
+        synopsis: &["ligus auth status"],
+        env: &["LIGUS_RELAY_ACCESS_TOKEN"],
+        examples: &["ligus auth status"],
+        see_also: &["ligus auth login"],
+        ..D
+    },
+    Cmd {
+        name: "auth logout",
+        group: G_START,
+        summary: "revoke the session and delete it",
+        purpose: "Revoke the session at langstroth-auth and delete <data dir>/ligus-auth.json.",
+        synopsis: &["ligus auth logout"],
+        examples: &["ligus auth logout"],
+        see_also: &["ligus auth login"],
+        ..D
+    },
+    Cmd {
+        name: "config",
+        group: G_START,
+        summary: "export or import the workspace runtime set as TOML",
+        purpose: "Round-trip the workspace runtimes. `export` prints them as TOML (an inline secret is never exported: \
+                  it becomes a secretRef named after the runtime); `import` adds or replaces runtimes by id from a \
+                  file. Share imports with `ligus sync`.",
+        synopsis: &["ligus config export", "ligus config import <file.toml>"],
+        conn: true,
+        examples: &["ligus config export > runtimes.toml", "ligus config import runtimes.toml && ligus sync"],
+        see_also: &["ligus config export", "ligus config import", "ligus runtimes"],
+        ..D
+    },
+    Cmd {
+        name: "config export",
+        group: G_START,
+        summary: "print the workspace runtimes as TOML",
+        purpose: "Print the workspace runtimes as TOML on stdout; inline secrets become a secretRef.",
+        synopsis: &["ligus config export"],
+        conn: true,
+        examples: &["ligus config export > runtimes.toml"],
+        see_also: &["ligus config import"],
+        ..D
+    },
+    Cmd {
+        name: "config import",
+        group: G_START,
+        summary: "add or replace workspace runtimes from a TOML file",
+        purpose: "Read `[[runtime]]` tables from a file and add or replace each by id. `ligus sync` shares them.",
+        synopsis: &["ligus config import <file.toml>"],
+        conn: true,
+        examples: &["ligus config import runtimes.toml && ligus sync"],
+        see_also: &["ligus config export"],
+        ..D
+    },
+    // ── Chats ──────────────────────────────────────────────────────────
+    Cmd {
+        name: "chats",
+        group: G_CHAT,
+        summary: "list chats in the local store",
+        purpose: "List the chats this data dir holds (id, title, message count, channel). Run `ligus sync` first to \
+                  pull a workspace.",
+        synopsis: &["ligus chats [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus chats", "ligus chats --json"],
+        see_also: &["ligus new", "ligus tail", "ligus send"],
+        ..D
+    },
+    Cmd {
+        name: "new",
+        group: G_CHAT,
+        summary: "create a chat and print its id",
+        purpose: "Create a chat in this workspace and print its id. A workspace this CLI founds isn't secured until \
+                  its founder creates a passkey and a recovery key in the desktop app (a note on stderr says so).",
+        synopsis: &["ligus new [title…]"],
+        conn: true,
+        examples: &["ligus new Release checklist", "CHAT=$(ligus new Triage) && ligus send \"$CHAT\" hello --push"],
+        see_also: &["ligus chats", "ligus send"],
+        ..D
+    },
+    Cmd {
+        name: "tail",
+        group: G_CHAT,
+        summary: "print a chat's transcript (--watch to follow)",
+        purpose: "Print a chat's messages; --watch polls every 3 s (syncing first when a relay is set) and prints new \
+                  ones until stopped.",
+        synopsis: &["ligus tail <chat-id> [--watch]"],
+        flags: &[f("--watch", "off", "follow the chat")],
+        conn: true,
+        examples: &["ligus tail 6f1c2a9b-…", "ligus tail 6f1c2a9b-… --watch"],
+        see_also: &["ligus send", "ligus chats"],
+        ..D
+    },
+    Cmd {
+        name: "send",
+        group: G_CHAT,
+        summary: "post a signed message (--push to sync it out)",
+        purpose: "Post a message, signed by this device, to a chat; the words after the chat id are the message. \
+                  --push runs one sync round right after. A word that starts with -- is read as a flag, not text.",
+        synopsis: &["ligus send <chat-id> <message…> [--push]"],
+        flags: &[f("--push", "off", "sync the message out at once")],
+        conn: true,
+        examples: &["ligus send 6f1c2a9b-… \"@coder fix the flaky test\" --push"],
+        see_also: &["ligus tail", "ligus sync"],
+        ..D
+    },
+    Cmd {
+        name: "proposals",
+        group: G_CHAT,
+        summary: "list proposals with status and votes",
+        purpose: "Every proposal in the workspace's chats, newest first, with its status and the votes cast (who, at \
+                  what role).",
+        synopsis: &["ligus proposals"],
+        conn: true,
+        examples: &["ligus proposals"],
+        see_also: &["ligus queue"],
+        ..D
+    },
+    Cmd {
+        name: "queue",
+        group: G_CHAT,
+        summary: "unanswered agent mentions and whether each agent's host is online",
+        purpose: "Show queued work: every unanswered @mention of an agent, and whether that agent's host is online \
+                  (from the relay's presence beats, else the durable record).",
+        synopsis: &["ligus queue"],
+        conn: true,
+        examples: &["ligus queue"],
+        see_also: &["ligus set-agent-host", "ligus hosts", "ligus help worker"],
+        ..D
+    },
+    Cmd {
+        name: "task-state",
+        group: G_CHAT,
+        summary: "what the agents on a chat report about their work in progress",
+        purpose: "Print the live task state the agents on a chat publish.",
+        synopsis: &["ligus task-state <chat-id> [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus task-state 6f1c2a9b-… --json"],
+        see_also: &["ligus memory"],
+        ..D
+    },
+    // ── Runtimes, agents, hosts ────────────────────────────────────────
+    Cmd {
+        name: "runtimes",
+        group: G_AGENTS,
+        summary: "list workspace-owned runtimes",
+        purpose: "List the workspace runtimes synced onto this box: id, name, provider/model and credential (keyless, \
+                  inline, or secretRef with whether LIGUS_WS_SECRET_<ref> is set here). Never prints a secret.",
+        synopsis: &["ligus runtimes [--json]"],
+        flags: &[JSON],
+        env: &["LIGUS_WS_SECRET_<ref>"],
+        conn: true,
+        examples: &["ligus runtimes", "ligus runtimes --json"],
+        see_also: &["ligus add-runtime", "ligus setup", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "add-runtime",
+        group: G_AGENTS,
+        summary: "define (or replace by id) a workspace runtime",
+        purpose: "Define a workspace-owned runtime. <provider> is anthropic, openai, openrouter, ollama, custom (any \
+                  OpenAI-compatible server), claude-code, codex, antigravity (agy) or copilot. Credential: \
+                  --secret-ref keeps the key off the shared log (each host that runs it sets LIGUS_WS_SECRET_<name>); \
+                  --secret puts it end-to-end encrypted on the workspace config log, where every member's device \
+                  holds it; neither is keyless. Share with `ligus sync`.",
+        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE]"],
+        flags: &[
+            f("--endpoint URL", "the provider's default", "model endpoint (custom, ollama, a gateway)"),
+            f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME> (preferred)"),
+            f("--secret - | @FILE", "none", "the key itself, from stdin or an owner-only file; synced encrypted"),
+        ],
+        conn: true,
+        examples: &[
+            "ligus add-runtime claude \"Claude Code\" claude-code \"\"",
+            "ligus add-runtime anthropic Anthropic anthropic claude-sonnet-4-6 --secret-ref anthropic",
+            "ligus add-runtime local Gemma custom gemma3:12b --endpoint http://127.0.0.1:8080/v1/chat/completions",
+        ],
+        see_also: &["ligus runtimes", "ligus add-agent", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "rm-runtime",
+        group: G_AGENTS,
+        summary: "remove a workspace runtime",
+        purpose: "Remove a workspace runtime by id. Share with `ligus sync`.",
+        synopsis: &["ligus rm-runtime <id>"],
+        conn: true,
+        examples: &["ligus rm-runtime local && ligus sync"],
+        see_also: &["ligus runtimes"],
+        ..D
+    },
+    Cmd {
+        name: "agents",
+        group: G_AGENTS,
+        summary: "list the workspace's agents",
+        purpose: "List the workspace agents: name, runtime and host (an agent with no host is answered by its owner's \
+                  device).",
+        synopsis: &["ligus agents [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus agents", "ligus agents --json"],
+        see_also: &["ligus add-agent", "ligus set-agent-host", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "add-agent",
+        group: G_AGENTS,
+        summary: "define a workspace agent on a runtime",
+        purpose: "Define a workspace agent bound to a workspace runtime, optionally on a host and with a role (a short \
+                  description every member sees). Share with `ligus sync`.",
+        synopsis: &["ligus add-agent <name> <runtime-id> [--host HOST-ID] [--role TEXT]"],
+        flags: &[
+            f("--host HOST-ID", "none (its owner's device)", "the host that answers it (`ligus hosts` lists ids)"),
+            f("--role TEXT", "empty", "what the agent does, shown on the roster"),
+        ],
+        conn: true,
+        examples: &["ligus add-agent coder claude --host \"$(ligus whoami --json | jq -r .device)\" --role \"writes code\" && ligus sync"],
+        see_also: &["ligus agents", "ligus set-agent-host", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "hosts",
+        group: G_AGENTS,
+        summary: "list workspace hosts (devices and workers)",
+        purpose: "List the workspace's hosts: id, kind, label, and which one is this box.",
+        synopsis: &["ligus hosts [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus hosts", "ligus hosts --json"],
+        see_also: &["ligus register-worker", "ligus set-agent-host"],
+        ..D
+    },
+    Cmd {
+        name: "register-worker",
+        group: G_AGENTS,
+        summary: "register this box as a worker host",
+        purpose: "Register this box as a worker host and print its host id (sync to share). Needs a local copy of the \
+                  workspace (`ligus sync` first). `ligus worker` registers itself, so this is only for binding \
+                  agents before the first start.",
+        synopsis: &["ligus register-worker [--label NAME]"],
+        flags: &[f("--label NAME", "$HOSTNAME, else \"worker\"", "the label other members see")],
+        env: &["HOSTNAME", "LIGUS_MODEL_GATEWAYS_FILE"],
+        conn: true,
+        examples: &["ligus register-worker --label build-box && ligus sync"],
+        see_also: &["ligus worker", "ligus set-agent-host"],
+        ..D
+    },
+    Cmd {
+        name: "set-agent-host",
+        group: G_AGENTS,
+        summary: "bind an agent to a host",
+        purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply.",
+        synopsis: &["ligus set-agent-host <agent-name> <host-id>"],
+        conn: true,
+        examples: &["ligus set-agent-host coder 5b1c0f7e-… && ligus sync"],
+        see_also: &["ligus hosts", "ligus agents", "ligus queue"],
+        ..D
+    },
+    Cmd {
+        name: "agent",
+        group: G_AGENTS,
+        summary: "development responder on a personal credential (not for production)",
+        purpose: "Answer new un-mentioned or @primary messages as an agent, on a workspace runtime (--runtime) or a \
+                  personal key from the environment. Refuses to run unless LIGUS_ALLOW_PERSONAL_AGENT is set; in a \
+                  shared room it answers only its operator unless LIGUS_AGENT_OPEN_TO_MEMBERS=1. Use `ligus worker` \
+                  in production.",
+        synopsis: &["ligus agent [name] [--runtime RUNTIME-ID]"],
+        flags: &[f("--runtime RUNTIME-ID", "LIGUS_RUNTIME, else a personal key (LIGUS_PROVIDER/LIGUS_MODEL)", "workspace runtime to answer with")],
+        env: &[
+            "LIGUS_ALLOW_PERSONAL_AGENT",
+            "LIGUS_AGENT_OPEN_TO_MEMBERS",
+            "LIGUS_RUNTIME",
+            "LIGUS_PROVIDER",
+            "LIGUS_MODEL",
+            "LIGUS_MODEL_BASE_URL",
+            "LIGUS_PROVIDER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "HOSTNAME",
+        ],
+        conn: true,
+        examples: &["LIGUS_ALLOW_PERSONAL_AGENT=1 ligus agent helper --runtime claude"],
+        see_also: &["ligus worker", "ligus help agents"],
+        ..D
+    },
+    Cmd {
+        name: "trust",
+        group: G_AGENTS,
+        summary: "repo-supplied runtimes and MCP servers this device runs",
+        purpose: "List the runtimes and MCP servers a repository ships and whether this device trusts each (an \
+                  untrusted one is INERT), or trust one by digest prefix, or all of them.",
+        synopsis: &["ligus trust [list] [--repo PATH]", "ligus trust enable <digest> [--repo PATH]", "ligus trust enable-all [--repo PATH]"],
+        flags: &[f("--repo PATH", "the current directory", "the repository checkout")],
+        examples: &["ligus trust list --repo ~/src/app", "ligus trust enable 3fa29c1e --repo ~/src/app"],
+        see_also: &["ligus trust list", "ligus trust enable", "ligus trust enable-all", "ligus help security"],
+        ..D
+    },
+    Cmd {
+        name: "trust list",
+        group: G_AGENTS,
+        summary: "a repository's runtimes and MCP servers and their trust",
+        purpose: "List digest, kind, id, trusted or INERT, source and command line for each item the repository ships.",
+        synopsis: &["ligus trust list [--repo PATH]"],
+        flags: &[f("--repo PATH", "the current directory", "the repository checkout")],
+        examples: &["ligus trust list --repo ~/src/app"],
+        see_also: &["ligus trust enable"],
+        ..D
+    },
+    Cmd {
+        name: "trust enable",
+        group: G_AGENTS,
+        summary: "trust one item by digest prefix",
+        purpose: "Trust one repo-supplied runtime or MCP server on this device (digest prefix from `ligus trust list`).",
+        synopsis: &["ligus trust enable <digest> [--repo PATH]"],
+        flags: &[f("--repo PATH", "the current directory", "the repository checkout")],
+        examples: &["ligus trust enable 3fa29c1e --repo ~/src/app"],
+        see_also: &["ligus trust list"],
+        ..D
+    },
+    Cmd {
+        name: "trust enable-all",
+        group: G_AGENTS,
+        summary: "trust everything a repository ships",
+        purpose: "Trust every runtime and MCP server the repository ships, on this device.",
+        synopsis: &["ligus trust enable-all [--repo PATH]"],
+        flags: &[f("--repo PATH", "the current directory", "the repository checkout")],
+        examples: &["ligus trust enable-all --repo ~/src/app"],
+        see_also: &["ligus trust list"],
+        ..D
+    },
+    // ── Boxes ──────────────────────────────────────────────────────────
+    Cmd {
+        name: "serve",
+        group: G_BOX,
+        summary: "the home host for the phone app: sync + worker + HTTP/SSE API",
+        purpose: "Run the always-on box: sync with the relay, answer mentions for the agents bound here, and serve the \
+                  phone app's /v1 API. The box joins as its own service member through an admission (`ligus admit`). \
+                  The listener accepts loopback, private LAN, link-local, CGNAT (Tailscale) or IPv6 ULA addresses \
+                  only. Runs until SIGTERM or Ctrl-C.",
+        synopsis: &[
+            "ligus serve [--listen ADDR] [--token-file PATH] [--label NAME] [--name NAME] [--public-url URL]",
+            "            [--ntfy-url URL --ntfy-topic T] [--pair] [--remote-relay URL|off] [--reg-token - | @FILE] [--insecure-relay]",
+        ],
+        flags: &[
+            f("--listen ADDR", "LIGUS_SERVE_LISTEN, else 127.0.0.1:8787", "API address (IP:PORT)"),
+            f("--token-file PATH", "LIGUS_SERVE_TOKEN_FILE, else <data dir>/serve.token", "the direct-path bearer token file"),
+            f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"home host\"", "host label other members see"),
+            f("--name NAME", "LIGUS_SERVE_NAME, else the identity's name", "display name the box joins under"),
+            f("--public-url URL", "LIGUS_SERVE_PUBLIC_URL, else http://<listen>", "URL put in the pairing link"),
+            f("--ntfy-url URL", "LIGUS_NTFY_URL", "self-hosted ntfy server (https://; with --ntfy-topic)"),
+            f("--ntfy-topic T", "LIGUS_NTFY_TOPIC", "ntfy topic"),
+            f("--pair", "off", "print the pairing QR code at start"),
+            f("--remote-relay URL|off", "LIGUS_REMOTE_RELAY, else tunnel/relay.json", "serve the phone through this relay tunnel; off disables it for this run"),
+            f("--reg-token - | @FILE", "LIGUS_REMOTE_REG_TOKEN, else relay.json", "registration token for a gated relay"),
+            f("--insecure-relay", "LIGUS_REMOTE_INSECURE_RELAY, else off", "allow an http:// relay (tests, loopback)"),
+        ],
+        env: &[
+            "LIGUS_SERVE_LISTEN",
+            "LIGUS_SERVE_ALLOW_ANY_BIND",
+            "LIGUS_SERVE_TOKEN_FILE",
+            "LIGUS_SERVE_LABEL",
+            "LIGUS_SERVE_NAME",
+            "LIGUS_SERVE_PUBLIC_URL",
+            "LIGUS_SERVE_DEFAULT_AGENT",
+            "LIGUS_SERVE_PALETTE",
+            "LIGUS_SERVE_APPEARANCE",
+            "LIGUS_DESKTOP_DATA_DIR",
+            "LIGUS_SERVE_OWNER",
+            "LIGUS_ADMISSION_FILE",
+            "LIGUS_REQUIRE_SANDBOX",
+            "LIGUS_REMOTE_RELAY",
+            "LIGUS_REMOTE_REG_TOKEN",
+            "LIGUS_REMOTE_INSECURE_RELAY",
+            "LIGUS_NTFY_URL",
+            "LIGUS_NTFY_TOPIC",
+            "LIGUS_NTFY_TOKEN",
+            "LIGUS_NTFY_ALLOW_HTTP",
+            "LIGUS_NTFY_TITLES",
+            "LIGUS_DASHBOARD_FILE",
+            "LIGUS_PROMETHEUS_URL",
+            "LIGUS_LAB_TEMPS",
+            "LIGUS_REPOS_DIR",
+            "LIGUS_REPOS_MAX_CLONE_MB",
+            "LIGUS_REPOS_CLONE_TIMEOUT_SECS",
+            "LIGUS_MCP_CONFIG",
+            "LIGUS_WORKER_PERMISSION_MODE",
+            "LIGUS_WORKER_TOOLS",
+            "LIGUS_RUNTIMES_FILE",
+            "LIGUS_AUTH_ADMIN_URL",
+            "LIGUS_AUTH_ADMIN_TENANT",
+            "LIGUS_AUTH_ADMIN_TOKEN_FILE",
+            "LIGUS_WS_SECRET_<ref>",
+        ],
+        conn: true,
+        examples: &[
+            "ligus serve --listen 127.0.0.1:8787 --label home-box",
+            "ligus serve --listen 100.101.102.103:8787 --pair",
+            "ligus serve --remote-relay https://relay.example.com --reg-token @/etc/ligus/reg-token",
+        ],
+        exit: &[(3, "LIGUS_REQUIRE_SANDBOX is on and this host has no agent sandbox")],
+        see_also: &["ligus help box", "ligus admit", "ligus pair", "ligus remote", "ligus help phone"],
+        ..D
+    },
+    Cmd {
+        name: "worker",
+        group: G_BOX,
+        summary: "the worker daemon: answer queued mentions for the agents bound here",
+        purpose: "Register this box as a worker host, sync, and every 3 s answer the unanswered @mentions of the agents \
+                  bound to it (backlog included), on workspace runtimes only. Joins as its own service member through \
+                  an admission. Publishes a liveness beat, backs off on relay errors (6 s doubling to 120 s), \
+                  finishes replies interrupted by the last stop, and exits cleanly on SIGTERM or Ctrl-C (a turn in \
+                  flight gets 12 s).",
+        synopsis: &["ligus worker [--label NAME] [--health-listen ADDR]"],
+        flags: &[
+            f("--label NAME", "$HOSTNAME, else \"worker\"", "host label other members see"),
+            f("--health-listen ADDR", "LIGUS_WORKER_HEALTH_LISTEN, else off", "serve GET /v1/health and /v1/ready on ADDR"),
+        ],
+        env: &[
+            "LIGUS_WORKER_HEALTH_LISTEN",
+            "LIGUS_ADMISSION_FILE",
+            "LIGUS_REQUIRE_SANDBOX",
+            "LIGUS_WORKER_PERMISSION_MODE",
+            "LIGUS_WORKER_TOOLS",
+            "LIGUS_RUNTIMES_FILE",
+            "LIGUS_TURN_TIMEOUT_SECS",
+            "LIGUS_BUILTIN_TOOLS",
+            "LIGUS_BUILTIN_RUN_COMMAND",
+            "LIGUS_ALLOW_REMOTE_FILE_TOOLS",
+            "LIGUS_MCP_AFTER_READS",
+            "LIGUS_MCP_CONFIG",
+            "LIGUS_MCP_MIN_ROLE",
+            "LIGUS_REPOS_DIR",
+            "LIGUS_WS_SECRET_<ref>",
+            "LIGUS_WS_SECRET_DIR",
+            "LIGUS_MODEL_GATEWAYS_FILE",
+            "HOSTNAME",
+        ],
+        conn: true,
+        examples: &["ligus worker --label build-box", "ligus worker --label build-box --health-listen 127.0.0.1:8788"],
+        exit: &[(3, "LIGUS_REQUIRE_SANDBOX is on and this host has no agent sandbox")],
+        see_also: &["ligus help worker", "ligus admit", "ligus queue", "ligus doctor"],
+        ..D
+    },
+    Cmd {
+        name: "admit",
+        group: G_BOX,
+        summary: "box admission: request, redeem, issue, close",
+        purpose: "A serve or worker box joins a workspace as its own service member, never as a person's device. The \
+                  box prints a join request; an Admin approves it (desktop: workspace menu > Admit a box, or the \
+                  phone) and hands back a code sealed to the box; the box redeems it and joins on its next start.",
+        synopsis: &[
+            "ligus admit request [--label NAME]",
+            "ligus admit redeem <ligusadmit1:code> | - | --file PATH",
+            "ligus admit issue --recovery-words-file PATH [--ttl DUR] [--request ligusjoin1:…] [--out PATH]",
+            "ligus admit close",
+        ],
+        flags: &[
+            f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"box\"", "request: the label in the join request"),
+            f("--file PATH", "none", "redeem: read the code from a file"),
+        ],
+        env: &["LIGUS_SERVE_LABEL", "LIGUS_ADMISSION_FILE"],
+        conn: true,
+        examples: &["ligus admit request --label home-box", "ligus admit redeem ligusadmit1:…", "ligus admit redeem --file ./admission"],
+        see_also: &["ligus admit request", "ligus admit redeem", "ligus admit issue", "ligus admit close", "ligus help box"],
+        ..D
+    },
+    Cmd {
+        name: "admit request",
+        group: G_BOX,
+        summary: "print this box's join request for an Admin",
+        purpose: "Make this data dir a box (a service member; one way) and print its join request (`ligusjoin1:…`) and \
+                  fingerprint for an Admin to approve. Changes no workspace state.",
+        synopsis: &["ligus admit request [--label NAME]"],
+        flags: &[f("--label NAME", "LIGUS_SERVE_LABEL, else the host name, else \"box\"", "the label in the request")],
+        env: &["LIGUS_SERVE_LABEL"],
+        conn: true,
+        examples: &["ligus admit request --label home-box"],
+        see_also: &["ligus admit redeem", "ligus help box"],
+        ..D
+    },
+    Cmd {
+        name: "admit redeem",
+        group: G_BOX,
+        summary: "keep a box admission; the next serve/worker start joins with it",
+        purpose: "Keep an admission code for this box: its relay, room, workspace key and the invite it redeems when \
+                  it adds itself. A sealed `ligusadmit1:` code may be on the command line; a bearer `hivews1:` code \
+                  carries the workspace key and is read only from stdin or a file. LIGUS_ADMISSION_FILE does the same \
+                  at start-up.",
+        synopsis: &["ligus admit redeem <ligusadmit1:code>", "ligus admit redeem -", "ligus admit redeem --file PATH"],
+        flags: &[f("-", "", "read the code from stdin"), f("--file PATH", "none", "read the code from a file")],
+        conn: true,
+        examples: &["ligus admit redeem ligusadmit1:…", "ligus admit redeem --file ./admission && ligus serve"],
+        see_also: &["ligus admit request", "ligus serve", "ligus worker"],
+        ..D
+    },
+    Cmd {
+        name: "admit issue",
+        group: G_BOX,
+        summary: "headless Admin: issue a box admission confirmed with a recovery key",
+        purpose: "Issue a box admission from your own (non-box) CLI identity, confirmed with your recovery key. With \
+                  --request the code is sealed to that box. Prefer the desktop or the phone. Sync to publish it.",
+        synopsis: &["ligus admit issue --recovery-words-file PATH [--ttl DUR] [--request ligusjoin1:…] [--out PATH]"],
+        flags: &[
+            f("--recovery-words-file PATH", "required", "your recovery key's 24 words (owner-only file)"),
+            f("--ttl DUR", "1h with --request, else 24h", "lifetime: 90m, 1h, 2d or seconds (1 minute to just under 7 days)"),
+            f("--request ligusjoin1:…", "none (a bearer code)", "the box's join request to seal the code to"),
+            f("--out PATH", "stdout", "write the code owner-only (0600) into an existing directory"),
+        ],
+        conn: true,
+        examples: &["ligus admit issue --recovery-words-file ~/.ligus-words --request ligusjoin1:… --out ./admission && ligus sync"],
+        see_also: &["ligus admit redeem", "ligus recovery-key create"],
+        ..D
+    },
+    Cmd {
+        name: "admit close",
+        group: G_BOX,
+        summary: "close settled box admissions (Admin CLI identity)",
+        purpose: "Close this workspace's settled box admissions (redeemed, or lapsed unredeemed) so no later or \
+                  backdated redemption admits anyone. The desktop does it after every sync. Run `ligus sync` before \
+                  and after.",
+        synopsis: &["ligus admit close"],
+        conn: true,
+        examples: &["ligus sync && ligus admit close && ligus sync"],
+        see_also: &["ligus admit issue"],
+        ..D
+    },
+    Cmd {
+        name: "recovery-key",
+        group: G_BOX,
+        summary: "register a recovery key for this CLI identity (never a box)",
+        purpose: "Register a recovery key for this CLI identity (a CLI founder's first credential, or with presence it \
+                  already holds) and write its 24 words to PATH (owner-only; the directory must exist).",
+        synopsis: &["ligus recovery-key create --out PATH"],
+        flags: &[f("--out PATH", "required", "where to write the words; must not exist")],
+        conn: true,
+        examples: &["ligus recovery-key create --out ~/.ligus-words"],
+        see_also: &["ligus recovery-key create", "ligus admit issue", "ligus phones certify"],
+        ..D
+    },
+    Cmd {
+        name: "recovery-key create",
+        group: G_BOX,
+        summary: "create and register a recovery key, words to a file",
+        purpose: "Write the 24 words to PATH (0600) and register the key. Refused on a box and when PATH exists.",
+        synopsis: &["ligus recovery-key create --out PATH"],
+        flags: &[f("--out PATH", "required", "where to write the words; must not exist")],
+        conn: true,
+        examples: &["ligus recovery-key create --out ~/.ligus-words && ligus sync"],
+        see_also: &["ligus admit issue"],
+        ..D
+    },
+    // ── Phone and remote ───────────────────────────────────────────────
+    Cmd {
+        name: "pair",
+        group: G_PHONE,
+        summary: "print the phone pairing QR code and link",
+        purpose: "Print the pairing QR code and link for a configured (usually running) `ligus serve`, without starting \
+                  one. Reads the server's token and never creates one. A loopback URL gets a relay-only link when \
+                  remote access is on. Pairing links are one-time, last 10 minutes and allow five attempts.",
+        synopsis: &["ligus pair [--listen ADDR] [--token-file PATH] [--public-url URL] [--relay-only] [--remote-relay URL|off] [--reg-token - | @FILE] [--insecure-relay]"],
+        flags: &[
+            f("--listen ADDR", "LIGUS_SERVE_LISTEN, else 127.0.0.1:8787", "the serve address (to build the direct link)"),
+            f("--token-file PATH", "LIGUS_SERVE_TOKEN_FILE, else <data dir>/serve.token", "the serve token file"),
+            f("--public-url URL", "LIGUS_SERVE_PUBLIC_URL, else http://<listen>", "URL in the link"),
+            f("--relay-only", "off", "a link that uses the relay tunnel only"),
+            f("--remote-relay URL|off", "LIGUS_REMOTE_RELAY, else tunnel/relay.json", "the relay tunnel to include"),
+            f("--reg-token - | @FILE", "LIGUS_REMOTE_REG_TOKEN", "registration token for a gated relay"),
+            f("--insecure-relay", "off", "allow an http:// relay"),
+        ],
+        env: &["LIGUS_SERVE_LISTEN", "LIGUS_SERVE_TOKEN_FILE", "LIGUS_SERVE_PUBLIC_URL", "LIGUS_SERVE_ALLOW_ANY_BIND", "LIGUS_REMOTE_RELAY", "LIGUS_REMOTE_REG_TOKEN", "LIGUS_REMOTE_INSECURE_RELAY"],
+        conn: true,
+        examples: &["ligus pair", "ligus pair --relay-only", "set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a; ligus pair"],
+        see_also: &["ligus help phone", "ligus serve", "ligus remote enable"],
+        ..D
+    },
+    Cmd {
+        name: "remote",
+        group: G_PHONE,
+        summary: "phone remote access through a relay tunnel (off by default)",
+        purpose: "Let the phone reach `ligus serve` through a relay instead of only the LAN or tailnet. These commands \
+                  write files under <data dir>/tunnel that a running serve reads; restart serve after enable, \
+                  disable or reset.",
+        synopsis: &[
+            "ligus remote enable --relay URL [--reg-token - | @FILE] [--insecure-relay]",
+            "ligus remote [status] [--json]",
+            "ligus remote push-test [--phone PID|NAME]",
+            "ligus remote disable",
+            "ligus remote reset",
+        ],
+        flags: &[JSON],
+        examples: &["ligus remote enable --relay https://relay.example.com", "ligus remote status --json"],
+        see_also: &["ligus remote enable", "ligus remote status", "ligus remote push-test", "ligus remote disable", "ligus remote reset", "ligus help remote"],
+        ..D
+    },
+    Cmd {
+        name: "remote enable",
+        group: G_PHONE,
+        summary: "turn on the relay tunnel (creates host keys, writes tunnel/relay.json)",
+        purpose: "Turn on phone access through a relay tunnel: create this box's host keys and write \
+                  tunnel/relay.json. Restart `ligus serve` to connect, then `ligus pair`.",
+        synopsis: &["ligus remote enable --relay URL [--reg-token - | @FILE] [--insecure-relay]"],
+        flags: &[
+            f("--relay URL", "required", "relay base URL (https://)"),
+            f("--reg-token - | @FILE", "none", "registration token for a gated relay"),
+            f("--insecure-relay", "off", "allow an http:// relay (tests, loopback)"),
+        ],
+        examples: &["ligus remote enable --relay https://relay.example.com", "ligus remote enable --relay https://relay.example.com --reg-token @./reg-token"],
+        see_also: &["ligus remote status", "ligus pair"],
+        ..D
+    },
+    Cmd {
+        name: "remote status",
+        group: G_PHONE,
+        summary: "relay, host id, the running serve's link state, phones",
+        purpose: "Print the relay and whether it is enabled, the host id, what the running `ligus serve` last reported \
+                  about its relay connection, and the paired phones' notification state. `ligus remote` alone is the \
+                  same.",
+        synopsis: &["ligus remote [status] [--json]"],
+        flags: &[JSON],
+        examples: &["ligus remote status", "ligus remote status --json"],
+        see_also: &["ligus remote push-test", "ligus help troubleshooting"],
+        ..D
+    },
+    Cmd {
+        name: "remote disable",
+        group: G_PHONE,
+        summary: "stop using the relay; keys and phones are kept",
+        purpose: "Mark the relay disabled (keys and phones are kept, so enabling again needs no re-pairing). Restart \
+                  `ligus serve`.",
+        synopsis: &["ligus remote disable"],
+        examples: &["ligus remote disable"],
+        see_also: &["ligus remote enable"],
+        ..D
+    },
+    Cmd {
+        name: "remote reset",
+        group: G_PHONE,
+        summary: "new host keys and host id; every phone pairs again",
+        purpose: "Generate new host keys (a new host id), forget the paired phones and the live status. Every phone \
+                  must pair again; restart `ligus serve`.",
+        synopsis: &["ligus remote reset"],
+        examples: &["ligus remote reset && ligus pair"],
+        see_also: &["ligus remote enable", "ligus pair"],
+        ..D
+    },
+    Cmd {
+        name: "remote push-test",
+        group: G_PHONE,
+        summary: "send a test notification and show each hop",
+        purpose: "Ask the running `ligus serve` to send a test notification to the paired phones (or one), and print \
+                  each hop: phone opted in, box to relay, and what APNs answered.",
+        synopsis: &["ligus remote push-test [--phone PID|NAME]"],
+        flags: &[f("--phone PID|NAME", "every paired phone", "one phone")],
+        env: &["LIGUS_REMOTE_RELAY"],
+        examples: &["ligus remote push-test", "ligus remote push-test --phone \"Ana's iPhone\""],
+        see_also: &["ligus remote status", "ligus phones list"],
+        ..D
+    },
+    Cmd {
+        name: "phones",
+        group: G_PHONE,
+        summary: "phones paired with this box: list, revoke, certify",
+        purpose: "Manage the phones paired with this box over the relay, and certify a phone's key as one of your \
+                  devices without a desktop.",
+        synopsis: &[
+            "ligus phones [list] [--json]",
+            "ligus phones revoke <pid|name> [--keep-token] [--token-file PATH]",
+            "ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH --fingerprint F",
+        ],
+        flags: &[JSON],
+        examples: &["ligus phones", "ligus phones revoke \"Ana's iPhone\""],
+        see_also: &["ligus phones list", "ligus phones revoke", "ligus phones certify", "ligus help phone"],
+        ..D
+    },
+    Cmd {
+        name: "phones list",
+        group: G_PHONE,
+        summary: "phones paired over the relay, and revocations in progress",
+        purpose: "List each paired phone (pid, name, active or revoked, paired and last-seen dates) and the steps of \
+                  each revocation still in progress. `ligus phones` alone is the same.",
+        synopsis: &["ligus phones [list] [--json]"],
+        flags: &[JSON],
+        examples: &["ligus phones list", "ligus phones list --json"],
+        see_also: &["ligus phones revoke"],
+        ..D
+    },
+    Cmd {
+        name: "phones revoke",
+        group: G_PHONE,
+        summary: "revoke one phone; also rotates serve.token",
+        purpose: "Revoke a phone: a running `ligus serve` ends its sessions and tells the relay within seconds. Unless \
+                  --keep-token, also rotates the direct-path bearer token (phones on the direct path pair again).",
+        synopsis: &["ligus phones revoke <pid|name> [--keep-token] [--token-file PATH]"],
+        flags: &[
+            f("--keep-token", "off", "don't rotate the direct-path token"),
+            f("--token-file PATH", "LIGUS_SERVE_TOKEN_FILE, else <data dir>/serve.token", "the token file to rotate"),
+        ],
+        env: &["LIGUS_SERVE_TOKEN_FILE"],
+        examples: &["ligus phones revoke 8f3k2…", "ligus phones revoke \"Ana's iPhone\" --keep-token"],
+        see_also: &["ligus phones list", "ligus pair"],
+        ..D
+    },
+    Cmd {
+        name: "phones certify",
+        group: G_PHONE,
+        summary: "headless \"Add a phone\": certify a phone's key with your recovery key",
+        purpose: "Certify the phone whose code (`ligusphone1:…`, from the app: Settings > This phone > Can't scan? Show \
+                  this phone's code) is given as one of this identity's devices, at the phone tier, confirmed with \
+                  your recovery key. The fingerprint is required: --fingerprint, or at a terminal it shows the \
+                  fingerprint and asks; with neither (stdin not a terminal) it refuses. Never from a box. Sync to \
+                  publish, then tap Retry on the phone.",
+        synopsis: &["ligus phones certify <ligusphone1:code> | --code-file PATH  --recovery-words-file PATH [--fingerprint XXXX-XXXX-XXXX-XXXX-XXXX]"],
+        flags: &[
+            f("--code-file PATH", "none", "read the phone's code from a file"),
+            f("--recovery-words-file PATH", "required", "your recovery key's 24 words (owner-only file)"),
+            f("--fingerprint F", "asked at a terminal; required otherwise", "the fingerprint the phone shows"),
+        ],
+        conn: true,
+        examples: &["ligus phones certify --code-file ./phone-code --recovery-words-file ~/.ligus-words --fingerprint ABCD-EFGH-JKLM-NPQR-STUV && ligus sync"],
+        see_also: &["ligus help phone", "ligus recovery-key create"],
+        ..D
+    },
+    // ── Repositories ───────────────────────────────────────────────────
+    Cmd {
+        name: "repos",
+        group: G_REPOS,
+        summary: "workspace repositories and this host's checkouts of them",
+        purpose: "Workspace repositories (synced; adding, removing and aliases need an Admin with presence) and this \
+                  host's checkouts of them (device-local, never synced). Agent turns for a chat with a repository run \
+                  only in this host's confirmed checkout.",
+        synopsis: &[
+            "ligus repos [list] [--json]",
+            "ligus repos add <remote|canonical|path> [--name N] [--kind K] [--branch B]",
+            "ligus repos remove <repo> | rename <repo> <name> [--branch B]",
+            "ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>",
+            "ligus repos scan | roots [add|remove <path>]",
+            "ligus repos alias [<ssh-host> <host> | <ssh-host> --remove]",
+            "ligus repos aliases | repo-alias <repo> [names…] | host-alias <alias> <host> | <alias> --remove",
+            "ligus repos accept <alias> [--revoke]",
+            "ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default",
+        ],
+        flags: &[f("--label NAME", "LIGUS_HOST_LABEL, else $HOSTNAME, else \"this host\"", "this host's label in messages"), JSON],
+        env: &["LIGUS_HOST_LABEL", "HOSTNAME", "LIGUS_REPOS_DIR"],
+        conn: true,
+        examples: &["ligus repos", "ligus repos add git@github.com:acme/web.git --branch main", "ligus repos scan && ligus repos confirm web ~/src/web"],
+        see_also: &["ligus help repos", "ligus bind-repo", "ligus forge"],
+        ..D
+    },
+    Cmd {
+        name: "repos list",
+        group: G_REPOS,
+        summary: "repositories, this host's checkouts, the repos dir and bindings",
+        purpose: "List the workspace's repositories and this host's checkouts of each (primary, confirmed, or found \
+                  and unconfirmed), then the repos dir and the bindings. `ligus repos` alone is the same.",
+        synopsis: &["ligus repos [list] [--json]"],
+        flags: &[JSON],
+        env: &["LIGUS_REPOS_DIR"],
+        conn: true,
+        examples: &["ligus repos list", "ligus repos list --json"],
+        see_also: &["ligus repos add", "ligus repos scan"],
+        ..D
+    },
+    Cmd {
+        name: "repos add",
+        group: G_REPOS,
+        summary: "add a workspace repository (Admin, with presence)",
+        purpose: "Add a workspace repository from a remote URL, a canonical name or a local path (a path also binds \
+                  it here and takes its default branch from origin/HEAD).",
+        synopsis: &["ligus repos add <remote|canonical|path> [--name N] [--kind K] [--branch B]"],
+        flags: &[
+            f("--name N", "from the remote", "display name"),
+            f("--kind K", "guessed from the remote", "code host kind (github, gitlab, forgejo, gitea, …)"),
+            f("--branch B", "origin/HEAD of a path, else empty", "default branch"),
+        ],
+        conn: true,
+        examples: &["ligus repos add https://github.com/acme/web --branch main", "ligus repos add ~/src/web && ligus sync"],
+        see_also: &["ligus repos list", "ligus repos bind"],
+        ..D
+    },
+    Cmd {
+        name: "repos remove",
+        group: G_REPOS,
+        summary: "remove a workspace repository (Admin, with presence)",
+        purpose: "Remove a workspace repository (by id prefix or name).",
+        synopsis: &["ligus repos remove <repo>"],
+        conn: true,
+        examples: &["ligus repos remove web && ligus sync"],
+        see_also: &["ligus repos add"],
+        ..D
+    },
+    Cmd {
+        name: "repos rename",
+        group: G_REPOS,
+        summary: "rename a workspace repository (and its default branch)",
+        purpose: "Rename a workspace repository; --branch changes its default branch.",
+        synopsis: &["ligus repos rename <repo> <name> [--branch B]"],
+        flags: &[f("--branch B", "unchanged", "new default branch")],
+        conn: true,
+        examples: &["ligus repos rename web frontend"],
+        see_also: &["ligus repos list"],
+        ..D
+    },
+    Cmd {
+        name: "repos bind",
+        group: G_REPOS,
+        summary: "this host's checkout of a repository",
+        purpose: "Record PATH as this host's checkout of the repository (device-local).",
+        synopsis: &["ligus repos bind <repo> <path>"],
+        conn: true,
+        examples: &["ligus repos bind web ~/src/web"],
+        see_also: &["ligus repos confirm", "ligus repos unbind"],
+        ..D
+    },
+    Cmd {
+        name: "repos confirm",
+        group: G_REPOS,
+        summary: "confirm a found checkout",
+        purpose: "Confirm a checkout `ligus repos scan` found, so agent turns may run in it.",
+        synopsis: &["ligus repos confirm <repo> <path>"],
+        conn: true,
+        examples: &["ligus repos confirm web ~/src/web"],
+        see_also: &["ligus repos scan"],
+        ..D
+    },
+    Cmd {
+        name: "repos unbind",
+        group: G_REPOS,
+        summary: "forget this host's checkout of a repository",
+        purpose: "Forget this host's checkout (one path, or all of them) of a repository. Files are left alone.",
+        synopsis: &["ligus repos unbind <repo> [path]"],
+        conn: true,
+        examples: &["ligus repos unbind web"],
+        see_also: &["ligus repos bind"],
+        ..D
+    },
+    Cmd {
+        name: "repos takeover",
+        group: G_REPOS,
+        summary: "manage a checkout whose managing host is gone",
+        purpose: "Make this host the manager of a checkout another host on this machine managed (and is gone).",
+        synopsis: &["ligus repos takeover <path>"],
+        conn: true,
+        examples: &["ligus repos takeover ~/src/web"],
+        see_also: &["ligus repos bind"],
+        ..D
+    },
+    Cmd {
+        name: "repos scan",
+        group: G_REPOS,
+        summary: "find checkouts under the repos dir and the scan roots",
+        purpose: "Look for checkouts of the workspace's repositories under the repos dir and the scan roots; found ones \
+                  need `ligus repos confirm`.",
+        synopsis: &["ligus repos scan"],
+        env: &["LIGUS_REPOS_DIR"],
+        conn: true,
+        examples: &["ligus repos roots add ~/src && ligus repos scan"],
+        see_also: &["ligus repos roots", "ligus repos confirm"],
+        ..D
+    },
+    Cmd {
+        name: "repos roots",
+        group: G_REPOS,
+        summary: "list, add or remove scan roots",
+        purpose: "The folders `ligus repos scan` searches. A root too broad to scan (/, the home dir) is refused.",
+        synopsis: &["ligus repos roots [add|remove <path>]"],
+        conn: true,
+        examples: &["ligus repos roots add ~/src", "ligus repos roots"],
+        see_also: &["ligus repos scan"],
+        ..D
+    },
+    Cmd {
+        name: "repos alias",
+        group: G_REPOS,
+        summary: "this host's own SSH host aliases (identity only, never synced)",
+        purpose: "Map an SSH host alias (from ~/.ssh/config) to the real host, so this host recognises a checkout's \
+                  remote. No arguments lists them.",
+        synopsis: &["ligus repos alias", "ligus repos alias <ssh-host> <host>", "ligus repos alias <ssh-host> --remove"],
+        flags: &[f("--remove", "off", "remove the alias")],
+        conn: true,
+        examples: &["ligus repos alias gh-work github.com"],
+        see_also: &["ligus repos aliases"],
+        ..D
+    },
+    Cmd {
+        name: "repos aliases",
+        group: G_REPOS,
+        summary: "the workspace's synced aliases and which this host accepted",
+        purpose: "List the workspace's synced repository and host aliases, and whether this host uses each.",
+        synopsis: &["ligus repos aliases"],
+        conn: true,
+        examples: &["ligus repos aliases"],
+        see_also: &["ligus repos accept", "ligus repos repo-alias", "ligus repos host-alias"],
+        ..D
+    },
+    Cmd {
+        name: "repos repo-alias",
+        group: G_REPOS,
+        summary: "replace a repository's synced aliases (Admin, with presence)",
+        purpose: "Replace a repository's synced aliases (names only); no names clears them. Each host uses them after \
+                  `ligus repos accept`.",
+        synopsis: &["ligus repos repo-alias <repo> [names…]"],
+        conn: true,
+        examples: &["ligus repos repo-alias web acme/web-old"],
+        see_also: &["ligus repos accept"],
+        ..D
+    },
+    Cmd {
+        name: "repos host-alias",
+        group: G_REPOS,
+        summary: "a synced host alias (Admin, with presence)",
+        purpose: "Set or remove a workspace-synced host alias (identity only). Each host uses it after `ligus repos \
+                  accept`.",
+        synopsis: &["ligus repos host-alias <alias-host> <repository-host>", "ligus repos host-alias <alias-host> --remove"],
+        flags: &[f("--remove", "off", "remove the alias")],
+        conn: true,
+        examples: &["ligus repos host-alias git.internal github.com"],
+        see_also: &["ligus repos accept"],
+        ..D
+    },
+    Cmd {
+        name: "repos accept",
+        group: G_REPOS,
+        summary: "use a synced alias on this host (device-local)",
+        purpose: "Use (or with --revoke stop using) a synced alias for identity on this host. Git still connects where \
+                  it did.",
+        synopsis: &["ligus repos accept <alias> [--revoke]"],
+        flags: &[f("--revoke", "off", "stop using it")],
+        conn: true,
+        examples: &["ligus repos accept git.internal"],
+        see_also: &["ligus repos aliases"],
+        ..D
+    },
+    Cmd {
+        name: "repos chat",
+        group: G_REPOS,
+        summary: "set a chat's repository",
+        purpose: "Set (or with `none` clear) the repository a chat works in, optionally on a branch.",
+        synopsis: &["ligus repos chat <chat-id> <repo|none> [--branch B]"],
+        flags: &[f("--branch B", "the repository's default", "the chat's base branch")],
+        conn: true,
+        examples: &["ligus repos chat 6f1c2a9b-… web --branch main && ligus sync"],
+        see_also: &["ligus repos list"],
+        ..D
+    },
+    Cmd {
+        name: "repos coverage",
+        group: G_REPOS,
+        summary: "whether this host tells members which repositories it has",
+        purpose: "Turn on or off (or back to the default) this host's reports of which repositories it has checked out.",
+        synopsis: &["ligus repos coverage on|off|default"],
+        conn: true,
+        examples: &["ligus repos coverage off"],
+        see_also: &["ligus repos list"],
+        ..D
+    },
+    Cmd {
+        name: "bind-repo",
+        group: G_REPOS,
+        summary: "bind a checkout for agent file tools (legacy, per box)",
+        purpose: "Bind a checkout (a name under the repos dir, or an absolute path) for agent file tools, for the \
+                  workspace or one chat, in <data dir>/repo-bindings.toml. A chat with a workspace repository uses \
+                  `ligus repos` instead.",
+        synopsis: &["ligus bind-repo <name|path> [--chat CHAT-ID]", "ligus bind-repo --clear [--chat CHAT-ID]"],
+        flags: &[
+            f("--chat CHAT-ID", "the workspace default", "bind for one chat"),
+            f("--clear", "off", "remove the binding"),
+        ],
+        env: &["LIGUS_REPOS_DIR"],
+        examples: &["ligus bind-repo ~/src/web", "ligus bind-repo --clear --chat 6f1c2a9b-…"],
+        see_also: &["ligus repos", "ligus help repos"],
+        ..D
+    },
+    Cmd {
+        name: "forge",
+        group: G_REPOS,
+        summary: "code-host connections (tokens on stdin, kept in the secret store)",
+        purpose: "This device's code-host connections (GitHub, GitLab, Forgejo, Gitea, Codeberg). Tokens are read from \
+                  stdin, never the command line, and kept in the OS secret store.",
+        synopsis: &[
+            "ligus forge [list]",
+            "ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]",
+            "ligus forge token <id> <read|write>        (token on stdin)",
+            "ligus forge login|test|remove <id>",
+        ],
+        flags: &[
+            f("--auth token|oauth|gh|none", "gh for GitHub, else token", "add: how this device authenticates"),
+            f("--client-id ID", "the built-in app", "add: OAuth client id for `forge login`"),
+            f("--internal", "off", "add: allow a loopback, private or link-local server"),
+        ],
+        env: &["LIGUS_GITHUB_APP_CLIENT_ID", "LIGUS_GITLAB_CLIENT_ID"],
+        examples: &["ligus forge add gitlab https://gitlab.example.com", "printf %s \"$TOKEN\" | ligus forge token gitlab-gitlab.example.com write"],
+        see_also: &["ligus forge add", "ligus forge token", "ligus forge login", "ligus forge test", "ligus forge remove", "ligus help repos"],
+        ..D
+    },
+    Cmd {
+        name: "forge list",
+        group: G_REPOS,
+        summary: "connections and which tokens are present",
+        purpose: "List each connection's id, server, auth source, tokens present and login.",
+        synopsis: &["ligus forge [list]"],
+        examples: &["ligus forge list"],
+        see_also: &["ligus forge add"],
+        ..D
+    },
+    Cmd {
+        name: "forge add",
+        group: G_REPOS,
+        summary: "add a code-host connection",
+        purpose: "Add (or replace) a connection. A loopback, private or link-local address is refused without \
+                  --internal.",
+        synopsis: &["ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]"],
+        flags: &[
+            f("--auth token|oauth|gh|none", "gh for GitHub, else token", "how this device authenticates"),
+            f("--client-id ID", "the built-in app", "OAuth client id for `forge login`"),
+            f("--internal", "off", "the server is on this device's network"),
+        ],
+        examples: &["ligus forge add github https://github.com", "ligus forge add forgejo https://git.lan --internal"],
+        see_also: &["ligus forge token", "ligus forge login"],
+        ..D
+    },
+    Cmd {
+        name: "forge token",
+        group: G_REPOS,
+        summary: "store a read or write token, read from stdin",
+        purpose: "Read one token line from stdin and keep it in the OS secret store. At a terminal it asks for a paste; \
+                  piped, it just reads.",
+        synopsis: &["ligus forge token <id> <read|write>"],
+        examples: &["printf %s \"$TOKEN\" | ligus forge token gitlab-gitlab.example.com write"],
+        see_also: &["ligus forge test"],
+        ..D
+    },
+    Cmd {
+        name: "forge login",
+        group: G_REPOS,
+        summary: "device sign-in (GitHub App, GitLab app)",
+        purpose: "Print a URL and a code to approve in a browser, then keep the resulting token.",
+        synopsis: &["ligus forge login <id>"],
+        env: &["LIGUS_GITHUB_APP_CLIENT_ID", "LIGUS_GITLAB_CLIENT_ID"],
+        examples: &["ligus forge login github-github.com"],
+        see_also: &["ligus forge test"],
+        ..D
+    },
+    Cmd {
+        name: "forge test",
+        group: G_REPOS,
+        summary: "check a connection's credentials",
+        purpose: "Ask the code host who this connection is signed in as.",
+        synopsis: &["ligus forge test <id>"],
+        examples: &["ligus forge test github-github.com"],
+        see_also: &["ligus forge list"],
+        ..D
+    },
+    Cmd {
+        name: "forge remove",
+        group: G_REPOS,
+        summary: "remove a connection and its tokens",
+        purpose: "Remove a connection and delete its tokens from the secret store.",
+        synopsis: &["ligus forge remove <id>"],
+        examples: &["ligus forge remove gitlab-gitlab.example.com"],
+        see_also: &["ligus forge list"],
+        ..D
+    },
+    Cmd {
+        name: "forge git-credential",
+        group: G_REPOS,
+        summary: "git credential helper (git runs it; not for people)",
+        purpose: "Git's credential-helper protocol on stdin/stdout, for Ligus's own pushes: answers `get` with the \
+                  write token, only for that connection's own https host.",
+        synopsis: &["ligus forge git-credential <id> <get|store|erase>"],
+        examples: &["git config credential.https://gitlab.example.com.helper '!ligus forge git-credential gitlab-gitlab.example.com'"],
+        see_also: &["ligus forge token"],
+        ..D
+    },
+    // ── Memory, facts, dashboards ──────────────────────────────────────
+    Cmd {
+        name: "memory",
+        group: G_DATA,
+        summary: "workspace memory (shared notes)",
+        purpose: "Workspace memory from the command line. Writes are this identity's: a person's identity writes and \
+                  decides; a box can only read and propose. A body comes from --body or stdin.",
+        synopsis: &[
+            "ligus memory [list] [--tag a,b] [--json]",
+            "ligus memory search <words…> [--tag a,b] [--json] | show <id> [--json]",
+            "ligus memory add <title> [--body TEXT] [--tag a,b]",
+            "ligus memory edit <id> [--title T] [--body TEXT] [--tag a,b] [--base REV]",
+            "ligus memory rm <id> [--base REV]",
+            "ligus memory proposals [--json] | accept <proposal-id> | reject <proposal-id> [--note TEXT]",
+        ],
+        flags: &[f("--tag a,b", "none", "filter (list, search) or set (add, edit) tags"), JSON],
+        conn: true,
+        examples: &["ligus memory search relay --json", "echo \"The relay listens on 8443.\" | ligus memory add Relay ports --tag infra"],
+        see_also: &["ligus memory list", "ligus memory add", "ligus memory proposals"],
+        ..D
+    },
+    Cmd {
+        name: "memory list",
+        group: G_DATA,
+        summary: "the live notes, newest first",
+        purpose: "List the live notes. `ligus memory` alone is the same.",
+        synopsis: &["ligus memory [list] [--tag a,b] [--json]"],
+        flags: &[f("--tag a,b", "none", "only notes with these tags"), JSON],
+        conn: true,
+        examples: &["ligus memory list --tag infra"],
+        see_also: &["ligus memory search"],
+        ..D
+    },
+    Cmd {
+        name: "memory search",
+        group: G_DATA,
+        summary: "notes matching every word, best first",
+        purpose: "Notes matching every word (title, body or tags), best first.",
+        synopsis: &["ligus memory search <words…> [--tag a,b] [--json]"],
+        flags: &[f("--tag a,b", "none", "only notes with these tags"), JSON],
+        conn: true,
+        examples: &["ligus memory search relay port"],
+        see_also: &["ligus memory show"],
+        ..D
+    },
+    Cmd {
+        name: "memory show",
+        group: G_DATA,
+        summary: "one note with its version, author, tags and conflicts",
+        purpose: "Print one note: its version (rev), author, source chat, tags, body and any conflicts.",
+        synopsis: &["ligus memory show <id> [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus memory show 0931232f-… --json"],
+        see_also: &["ligus memory edit"],
+        ..D
+    },
+    Cmd {
+        name: "memory add",
+        group: G_DATA,
+        summary: "a new note (body from --body or stdin)",
+        purpose: "Write a new note; prints its id and rev. Without --body the body is read from stdin (at a terminal: \
+                  type it, then Ctrl-D).",
+        synopsis: &["ligus memory add <title> [--body TEXT] [--tag a,b]"],
+        flags: &[f("--body TEXT", "stdin", "the note's body"), f("--tag a,b", "none", "tags")],
+        conn: true,
+        examples: &["ligus memory add Relay ports --body \"8443\" --tag infra", "cat notes.md | ligus memory add Runbook"],
+        see_also: &["ligus memory edit"],
+        ..D
+    },
+    Cmd {
+        name: "memory edit",
+        group: G_DATA,
+        summary: "a new version of a note",
+        purpose: "Write a new version. From the current version it also settles the note's conflicts; --base edits \
+                  from an older one (kept as a conflict). Body from --body or stdin.",
+        synopsis: &["ligus memory edit <id> [--title T] [--body TEXT] [--tag a,b] [--base REV]"],
+        flags: &[
+            f("--title T", "unchanged", "new title"),
+            f("--body TEXT", "stdin", "new body"),
+            f("--tag a,b", "unchanged", "new tags"),
+            f("--base REV", "the current version", "edit from this version"),
+        ],
+        conn: true,
+        examples: &["ligus memory edit 0931232f-… --body \"8443 and 8444\""],
+        see_also: &["ligus memory show"],
+        ..D
+    },
+    Cmd {
+        name: "memory rm",
+        group: G_DATA,
+        summary: "remove a note (history stays in the log)",
+        purpose: "Remove a note; its history stays in the workspace log.",
+        synopsis: &["ligus memory rm <id> [--base REV]"],
+        flags: &[f("--base REV", "the current version", "remove from this version")],
+        conn: true,
+        examples: &["ligus memory rm 0931232f-…"],
+        see_also: &["ligus memory list"],
+        ..D
+    },
+    Cmd {
+        name: "memory proposals",
+        group: G_DATA,
+        summary: "proposed changes, open first",
+        purpose: "List proposed memory changes (from agents and boxes), open first.",
+        synopsis: &["ligus memory proposals [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus memory proposals --json"],
+        see_also: &["ligus memory accept", "ligus memory reject"],
+        ..D
+    },
+    Cmd {
+        name: "memory accept",
+        group: G_DATA,
+        summary: "accept a memory proposal",
+        purpose: "Accept a proposed memory change.",
+        synopsis: &["ligus memory accept <proposal-id>"],
+        conn: true,
+        examples: &["ligus memory accept 5d0e…"],
+        see_also: &["ligus memory proposals"],
+        ..D
+    },
+    Cmd {
+        name: "memory reject",
+        group: G_DATA,
+        summary: "reject a memory proposal",
+        purpose: "Reject a proposed memory change, with an optional note.",
+        synopsis: &["ligus memory reject <proposal-id> [--note TEXT]"],
+        flags: &[f("--note TEXT", "empty", "why")],
+        conn: true,
+        examples: &["ligus memory reject 5d0e… --note \"out of date\""],
+        see_also: &["ligus memory proposals"],
+        ..D
+    },
+    Cmd {
+        name: "facts",
+        group: G_DATA,
+        summary: "content-free facts for observability tools",
+        purpose: "Export this host's content-free facts (ligus.facts.v1) for external observability tools.",
+        synopsis: &["ligus facts export --jsonl [--since CURSOR]"],
+        examples: &["ligus facts export --jsonl"],
+        see_also: &["ligus facts export"],
+        ..D
+    },
+    Cmd {
+        name: "facts export",
+        group: G_DATA,
+        summary: "facts as JSON lines; the last line's cursor is the next --since",
+        purpose: "Print facts (measurements, guard signals, state facts) as JSON lines. Read-only: it never creates a \
+                  data dir, an identity or a database (a missing ligus.db is an error).",
+        synopsis: &["ligus facts export --jsonl [--since CURSOR | UNIX-MS]"],
+        flags: &[
+            f("--jsonl", "required", "JSON lines output"),
+            f("--since CURSOR", "0 (everything)", "the cursor from the previous export's last line, or unix milliseconds"),
+        ],
+        examples: &["ligus facts export --jsonl > facts.jsonl", "ligus facts export --jsonl --since \"$(tail -1 facts.jsonl | jq -r '.attributes[\"ligus.cursor\"]')\""],
+        see_also: &["ligus dashboard"],
+        ..D
+    },
+    Cmd {
+        name: "dashboard",
+        group: G_DATA,
+        summary: "the serve dashboard config: check, default, metrics",
+        purpose: "The dashboard `ligus serve` shows the phone, from dashboard.toml.",
+        synopsis: &["ligus dashboard check [--file PATH]", "ligus dashboard default", "ligus dashboard metrics"],
+        env: &["LIGUS_DASHBOARD_FILE", "LIGUS_PROMETHEUS_URL"],
+        examples: &["ligus dashboard default > ~/.ligus/dashboard.toml && ligus dashboard check"],
+        see_also: &["ligus dashboard check", "ligus dashboard default", "ligus dashboard metrics"],
+        ..D
+    },
+    Cmd {
+        name: "dashboard check",
+        group: G_DATA,
+        summary: "validate dashboard.toml and evaluate it once",
+        purpose: "Validate the dashboard config and evaluate every panel once; fails when the config is invalid or a \
+                  panel errors.",
+        synopsis: &["ligus dashboard check [--file PATH]"],
+        flags: &[f("--file PATH", "LIGUS_DASHBOARD_FILE, else <data dir>/dashboard.toml", "the config")],
+        env: &["LIGUS_DASHBOARD_FILE", "LIGUS_PROMETHEUS_URL", "LIGUS_MCP_CONFIG", "LIGUS_LAB_TEMPS"],
+        examples: &["ligus dashboard check", "ligus dashboard check --file ./dashboard.toml"],
+        see_also: &["ligus dashboard default"],
+        ..D
+    },
+    Cmd {
+        name: "dashboard default",
+        group: G_DATA,
+        summary: "print the generated default dashboard as TOML",
+        purpose: "Print the default dashboard (with a lab section when LIGUS_PROMETHEUS_URL is set).",
+        synopsis: &["ligus dashboard default"],
+        env: &["LIGUS_PROMETHEUS_URL", "LIGUS_LAB_TEMPS"],
+        examples: &["ligus dashboard default > dashboard.toml"],
+        see_also: &["ligus dashboard check"],
+        ..D
+    },
+    Cmd {
+        name: "dashboard metrics",
+        group: G_DATA,
+        summary: "list the built-in metrics panels can show",
+        purpose: "List the built-in Ligus metrics a panel can show.",
+        synopsis: &["ligus dashboard metrics"],
+        examples: &["ligus dashboard metrics"],
+        see_also: &["ligus dashboard default"],
+        ..D
+    },
+    // ── Checks ─────────────────────────────────────────────────────────
+    Cmd {
+        name: "doctor",
+        group: G_CHECK,
+        summary: "agent sandbox tier, held events; preflight flags exit non-zero",
+        purpose: "Print this device's agent sandbox tier (seatbelt, bwrap, landlock or unconfined), why, and what it \
+                  leaves open; whether the process is dumpable; the workspace's signed sandbox grants; and the held \
+                  events. The flags make it a preflight. --sandbox adds what an agent turn may read and write here \
+                  (printed when the checks pass).",
+        synopsis: &["ligus doctor [--require-confined] [--expect-tier TIER] [--turn-test]", "ligus doctor --sandbox [--runtime NAME] [--agent AGENT-ID]"],
+        flags: &[
+            f("--require-confined", "off", "exit 3 without an agent sandbox"),
+            f("--expect-tier TIER", "none", "exit 4 unless the tier is TIER (seatbelt, bwrap, landlock, unconfined)"),
+            f("--turn-test", "off", "run one real headless agent turn against a stub model (exit 5 on failure)"),
+            f("--sandbox", "off", "print the per-runtime read/write policy and the grants in force"),
+            f("--runtime NAME", "every runtime", "with --sandbox: claude, codex, copilot, agy, aider, pi, hermes or commands"),
+            f("--agent AGENT-ID", "none", "with --sandbox: include that agent's signed grants"),
+        ],
+        env: &["LIGUS_SANDBOX", "LIGUS_SANDBOX_GRANTS", "LIGUS_SANDBOX_READ_ALLOW", "LIGUS_SANDBOX_WRITE_ALLOW", "LIGUS_SECRETS_DIR"],
+        conn: true,
+        examples: &["ligus doctor", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
+        exit: &[(3, "--require-confined or --turn-test: no agent sandbox"), (4, "--expect-tier: another tier"), (5, "--turn-test failed or could not run")],
+        see_also: &["ligus help security", "ligus help troubleshooting", "ligus gateway-check"],
+        ..D
+    },
+    Cmd {
+        name: "gateway-check",
+        group: G_CHECK,
+        summary: "prove this host's model gateways end to end",
+        purpose: "Prove the model gateways from LIGUS_MODEL_GATEWAYS_FILE work the two ways agent turns use them: a \
+                  hosted-API turn, and a sandboxed CLI child through the egress proxy's route (which must not see the \
+                  credential). Prints nothing secret.",
+        synopsis: &["ligus gateway-check [--gateway NAME] [--model ID]"],
+        flags: &[
+            f("--gateway NAME", "every gateway", "check one gateway"),
+            f("--model ID", "ligus-gateway-check", "model id to ask for"),
+        ],
+        env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "LIGUS_WORKSPACE"],
+        examples: &["ligus gateway-check", "ligus gateway-check --gateway litellm --model gpt-4o-mini"],
+        exit: &[(6, "a check failed")],
+        see_also: &["ligus doctor"],
+        ..D
+    },
+];
+
+/// One environment variable for `ligus help env`.
+pub struct EnvVar {
+    pub name: &'static str,
+    pub default: &'static str,
+    pub about: &'static str,
+}
+
+const fn e(name: &'static str, default: &'static str, about: &'static str) -> EnvVar {
+    EnvVar { name, default, about }
+}
+
+/// `ligus help env`, by section. Booleans accept 1/true/on/yes and
+/// 0/false/off/no; a blank value is unset.
+pub const ENV: &[(&str, &[EnvVar])] = &[
+    (
+        "Data dir, connection and secrets",
+        &[
+            e("LIGUS_DATA_DIR", "~/.ligus (./ligus-data without HOME)", "this device's data dir: identity, keys, ligus.db, config.toml, serve and tunnel state"),
+            e("LIGUS_RELAY_URL", "config.toml", "relay base URL"),
+            e("LIGUS_RELAY_ACCESS_TOKEN", "secret store, or a langstroth-auth session", "relay access token"),
+            e("LIGUS_RELAY_ACCESS_TOKEN_FILE", "unset", "a file holding LIGUS_RELAY_ACCESS_TOKEN (not both)"),
+            e("LIGUS_WORKSPACE", "config.toml, else \"default\"", "relay room / workspace"),
+            e("LIGUS_WORKSPACE_KEY", "secret store", "end-to-end workspace key"),
+            e("LIGUS_WORKSPACE_KEY_FILE", "unset", "a file holding LIGUS_WORKSPACE_KEY (not both)"),
+            e("LIGUS_SECRET_BACKEND", "the OS store", "where secrets live: keychain, secret-service, systemd-creds, k8s or file"),
+            e("LIGUS_SECRETS_DIR", "/var/run/secrets/ligus with the k8s backend", "the k8s backend's mounted Secret dir"),
+            e("LIGUS_WS_SECRET_<ref>", "unset", "the key of a workspace runtime with secretRef <ref>"),
+            e("LIGUS_WS_SECRET_DIR", "unset", "a dir of files, each becoming LIGUS_WS_SECRET_<file name>"),
+            e("LIGUS_ADMISSION_FILE", "unset", "a file holding a box admission code, redeemed by serve and worker at start-up"),
+            e("LIGUS_IDENTITY_MODE", "ignored", "ignored (logs a warning)"),
+        ],
+    ),
+    (
+        "serve",
+        &[
+            e("LIGUS_SERVE_LISTEN", "127.0.0.1:8787", "API address; loopback, LAN, link-local, Tailscale or ULA only"),
+            e("LIGUS_SERVE_ALLOW_ANY_BIND", "off", "allow any address, 0.0.0.0 included"),
+            e("LIGUS_SERVE_TOKEN_FILE", "<data dir>/serve.token", "the direct-path bearer token file"),
+            e("LIGUS_SERVE_PUBLIC_URL", "http://<listen>", "URL in the pairing link"),
+            e("LIGUS_SERVE_LABEL", "the host name, else \"home host\"", "the box's host label; also the name a new box identity starts with"),
+            e("LIGUS_SERVE_NAME", "unset", "display name the box joins under"),
+            e("LIGUS_SERVE_DEFAULT_AGENT", "unset", "agent that gets phone messages mentioning nobody"),
+            e("LIGUS_SERVE_PALETTE", "unset", "theme palette for the phone's Match host"),
+            e("LIGUS_SERVE_APPEARANCE", "unset", "theme mode for the phone's Match host"),
+            e("LIGUS_DESKTOP_DATA_DIR", "the desktop's app-data dir", "where to read the desktop's theme on this machine"),
+            e("LIGUS_SERVE_OWNER", "removed", "refused with an error: a box is never a person's device"),
+            e("LIGUS_REMOTE_RELAY", "tunnel/relay.json", "relay for the phone tunnel; off disables it for this run"),
+            e("LIGUS_REMOTE_REG_TOKEN", "relay.json", "registration token for a gated relay"),
+            e("LIGUS_REMOTE_REG_TOKEN_FILE", "unset", "a file holding LIGUS_REMOTE_REG_TOKEN"),
+            e("LIGUS_REMOTE_INSECURE_RELAY", "off", "allow an http:// relay"),
+            e("LIGUS_NTFY_URL", "unset", "self-hosted ntfy server (https://; with the topic)"),
+            e("LIGUS_NTFY_TOPIC", "unset", "ntfy topic"),
+            e("LIGUS_NTFY_TOKEN", "unset", "ntfy access token"),
+            e("LIGUS_NTFY_TOKEN_FILE", "unset", "a file holding LIGUS_NTFY_TOKEN"),
+            e("LIGUS_NTFY_ALLOW_HTTP", "off", "accept an http:// ntfy URL"),
+            e("LIGUS_NTFY_TITLES", "off", "send who did what and the chat title (never message text)"),
+            e("LIGUS_DASHBOARD_FILE", "<data dir>/dashboard.toml", "dashboard config"),
+            e("LIGUS_PROMETHEUS_URL", "http://127.0.0.1:9090", "Prometheus for dashboard panels; set: a lab section is generated"),
+            e("LIGUS_LAB_TEMPS", "unset", "temperature queries for the generated lab section"),
+            e("LIGUS_REPOS_DIR", "<data dir>/repos", "checkouts agents and the phone may bind and clone into"),
+            e("LIGUS_REPOS_MAX_CLONE_MB", "2048", "clone size cap"),
+            e("LIGUS_REPOS_CLONE_TIMEOUT_SECS", "900", "clone and fetch timeout"),
+            e("LIGUS_AUTH_ADMIN_URL", "unset", "langstroth-auth admin API, to revoke a phone's sign-in (with the two below)"),
+            e("LIGUS_AUTH_ADMIN_TENANT", "unset", "its tenant"),
+            e("LIGUS_AUTH_ADMIN_TOKEN_FILE", "unset", "an owner-only file holding that tenant's device-revocation token"),
+        ],
+    ),
+    (
+        "worker and agent turns",
+        &[
+            e("LIGUS_WORKER_HEALTH_LISTEN", "unset", "worker: serve /v1/health and /v1/ready here"),
+            e("LIGUS_WORKER_PERMISSION_MODE", "read-only", "acceptEdits, runCommands or bypassPermissions raises worker CLI turns"),
+            e("LIGUS_WORKER_TOOLS", "on", "the agent tool loop for local-capable HTTP runtimes on a worker"),
+            e("LIGUS_RUNTIMES_FILE", "<data dir>/runtimes.toml", "this host's local runtimes (e.g. a mounted ConfigMap)"),
+            e("LIGUS_BUILTIN_TOOLS", "on", "built-in file tools (read, list, search; writes in an isolated worktree)"),
+            e("LIGUS_BUILTIN_RUN_COMMAND", "off", "also offer run_command, inside the turn's worktree"),
+            e("LIGUS_ALLOW_REMOTE_FILE_TOOLS", "off", "file tools even when the model endpoint isn't local or private"),
+            e("LIGUS_MCP_AFTER_READS", "off", "turns OFF the guard refusing MCP calls after a turn read project files"),
+            e("LIGUS_MCP_CONFIG", "unset", "TOML file of MCP servers for headless turns and dashboard panels"),
+            e("LIGUS_MCP_MIN_ROLE", "admin (write tier) / contributor (read-only)", "minimum author role for a turn at its configured tier"),
+            e("LIGUS_TURN_TIMEOUT_SECS", "3600", "total backstop for one turn"),
+            e("LIGUS_TURN_IDLE_TIMEOUT_SECS", "300", "how long a streaming model may stay silent"),
+            e("LIGUS_AGENT_TIMEOUT_SECS", "300", "wall-clock budget of one subprocess agent turn"),
+            e("LIGUS_MODEL_GATEWAYS_FILE", "unset", "the operator's model gateways; an unusable file stops the host (exit 2)"),
+            e("LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "on when gateways are listed", "0: also run turns that don't use a listed gateway"),
+            e("LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "generated in the data dir", "attribution key file (32+ bytes, the same on every host of a workspace)"),
+            e("LIGUS_MODEL_PRICES", "unset", "prefix=in/out,… USD per million tokens, for spend budgets"),
+            e("LIGUS_MCP_MAX_SPEND_USD", "unset", "spend per turn"),
+        ],
+    ),
+    (
+        "Agent sandbox",
+        &[
+            e("LIGUS_REQUIRE_SANDBOX", "unset", "1: serve and worker exit 3 instead of starting without an agent sandbox"),
+            e("LIGUS_SANDBOX", "on", "off runs agents unconfined (write turns refused); Linux: landlock or bwrap pins a tier"),
+            e("LIGUS_SANDBOX_GRANTS", "Owner's hosts only", "apply or ignore the workspace's signed sandbox grants"),
+            e("LIGUS_SANDBOX_READ_ALLOW", "unset", "paths under ~ agents may read after all (comma-separated)"),
+            e("LIGUS_SANDBOX_WRITE_ALLOW", "unset", "extra paths agents may write (comma-separated)"),
+            e("LIGUS_SANDBOX_EGRESS_ALLOW", "unset", "host[:port] agents may reach through the egress proxy"),
+            e("LIGUS_SANDBOX_EGRESS_PRESETS", "unset", "package-registries, claude-connectors"),
+            e("LIGUS_SANDBOX_UNIX_SOCKETS", "unset", "Linux: allow lets agents create unix sockets"),
+            e("LIGUS_CLI_HOME", "per-turn", "shared lets CLI agents write their real config dirs"),
+        ],
+    ),
+    (
+        "ligus agent (development responder)",
+        &[
+            e("LIGUS_ALLOW_PERSONAL_AGENT", "unset", "must be set for `ligus agent` to run"),
+            e("LIGUS_AGENT_OPEN_TO_MEMBERS", "unset", "1: answer every member, not only the operator"),
+            e("LIGUS_RUNTIME", "unset", "workspace runtime id (as --runtime)"),
+            e("LIGUS_PROVIDER", "anthropic", "anthropic, openai, openrouter or ollama without a workspace runtime"),
+            e("LIGUS_MODEL", "claude-sonnet-4-5", "model for that provider"),
+            e("LIGUS_MODEL_BASE_URL", "http://localhost:11434/v1/chat/completions", "Ollama endpoint"),
+            e("LIGUS_PROVIDER_API_KEY", "unset", "provider key overriding ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY"),
+        ],
+    ),
+    (
+        "Other commands",
+        &[
+            e("LIGUS_HOST_LABEL", "$HOSTNAME, else \"this host\"", "ligus repos: this host's label"),
+            e("LIGUS_APPIMAGE", "unset", "ligus app (Linux): the desktop AppImage"),
+            e("LIGUS_GITHUB_APP_CLIENT_ID", "built in", "ligus forge login: GitHub App client id"),
+            e("LIGUS_GITLAB_CLIENT_ID", "built in", "ligus forge login: GitLab application id"),
+        ],
+    ),
+];
+
+/// Names read only inside the doctor's own probe child (an internal
+/// protocol between `ligus doctor --turn-test` and itself), never by a
+/// person.
+#[cfg(test)]
+pub const INTERNAL_ENV: &[&str] = &["LIGUS_PROBE_RAN", "LIGUS_PROBE_LEAK"];
+
+/// The task guides.
+pub struct Topic {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub summary: &'static str,
+    pub text: &'static str,
+}
+
+pub const TOPICS: &[Topic] = &[
+    Topic {
+        name: "quickstart",
+        aliases: &["start"],
+        summary: "join a workspace from this machine and post a message",
+        text: "\
+Join an existing workspace from this machine with its invite, then read and post.
+Every step ends with a command that shows it worked.
+
+1. Install the CLI (macOS, Linux):
+     brew install langstroth-ai/ligus/ligus
+     # or: curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
+   verify: ligus --version
+2. Get an invite from the desktop app (workspace menu > Invite) and save it to a
+   file. It carries the workspace key: don't paste it on the command line.
+     ligus enroll --file ./invite              # add --token @./relay-token for a gated relay
+   verify: ligus status
+3. Pull the workspace:
+     ligus sync
+   verify: ligus chats
+4. Read and post:
+     ligus tail <chat-id>
+     ligus send <chat-id> \"hello\" --push
+   verify: ligus tail <chat-id>
+
+Next: an always-on box (ligus help box), a worker (ligus help worker), your
+phone (ligus help phone). The desktop app: ligus app.
+",
+    },
+    Topic {
+        name: "box",
+        aliases: &["serve-box", "home-host"],
+        summary: "a headless serve box: install, admit, serve, pair (ligus-local, systemd, launchd)",
+        text: "\
+A `ligus serve` box is an always-on Ligus device (a home server, a spare Mac) that
+syncs, runs the agents bound to it and serves the phone app. It joins as its own
+service member through an admission; it never acts as a person. Use a data dir
+only this box uses, never the desktop app's.
+
+With the deploy script (from a checkout of the repository; every step has --json):
+  L=deploy/local/ligus-local
+  1. $L preflight --role serve --data-dir ~/.ligus-serve
+  2. $L install-cli                          # or: brew install langstroth-ai/ligus/ligus
+  3. $L configure --role serve --data-dir ~/.ligus-serve --listen 127.0.0.1:8787 --label home-box
+  4. A person enrolls the box with the invite (it carries the workspace key):
+       set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a   # configure prints the env file path
+       ligus enroll --file ./invite
+  5. Admit the box, with the same environment loaded:
+       ligus sync && ligus admit request --label home-box
+       # an Admin approves it (step 6 below), then:
+       ligus admit redeem --file ./admission
+     verify: ligus status                     # admission: kept
+  6. $L start --role serve --data-dir ~/.ligus-serve --systemd    # Linux user unit
+     $L start --role serve --data-dir ~/.ligus-serve --launchd    # macOS LaunchAgent
+  7. $L verify --role serve --data-dir ~/.ligus-serve --json
+  `ligus-local help <command>` explains each step.
+
+By hand:
+  export LIGUS_DATA_DIR=~/.ligus-serve
+  1. ligus --version                          # installed
+  2. ligus doctor --require-confined          # exit 0: agents run sandboxed here
+  3. ligus enroll --file ./invite             # the relay, room and workspace key
+     verify: ligus status                     # relay set, workspace key set
+  4. ligus sync                               # the box needs a copy of the workspace
+     verify: ligus status                     # local copy: yes
+  5. ligus admit request --label home-box     # prints ligusjoin1:… and a fingerprint
+  6. An Admin approves it: desktop, workspace menu > Admit a box (or the phone),
+     checks the fingerprint, approves with a passkey and sends back a code.
+       ligus admit redeem ligusadmit1:…       # or: ligus admit redeem --file ./admission
+     (headless Admin on another identity: ligus admit issue --request … --recovery-words-file …)
+  7. ligus serve --listen 127.0.0.1:8787 --label home-box
+     verify: curl -s http://127.0.0.1:8787/v1/health ; ligus status   # member: yes
+  8. Pair the phone, from a second terminal with the same environment:
+       ligus pair
+     (ligus help phone; through a relay instead of the LAN or tailnet: ligus help remote)
+
+Keep it running: deploy/local/ligus-local start --systemd (Linux, a user unit) or
+--launchd (macOS, a LaunchAgent that starts at login); `stop` with the same flag
+removes it. Listen on loopback, a LAN or a Tailscale address; 0.0.0.0 is refused.
+On Kubernetes: ligus help kubernetes.
+",
+    },
+    Topic {
+        name: "worker",
+        aliases: &[],
+        summary: "a worker host that answers mentions for the agents bound to it",
+        text: "\
+A worker answers @mentions for the agents bound to it, on workspace runtimes only
+(never a personal key). Like a serve box it joins as its own member.
+
+  export LIGUS_DATA_DIR=~/.ligus-worker
+  1. ligus enroll --file ./invite && ligus sync
+     verify: ligus status                          # relay and key set, local copy: yes
+  2. ligus admit request --label build-box ; an Admin approves ; ligus admit redeem ligusadmit1:…
+  3. ligus setup                                    # what this box can run
+     ligus setup --apply                            # keyless runtimes (Ollama, CLIs)
+     ligus add-runtime anthropic Anthropic anthropic claude-sonnet-4-6 --secret-ref anthropic
+     export LIGUS_WS_SECRET_anthropic=…            # on this box only
+     verify: ligus runtimes                         # secretRef:anthropic ✓
+  4. ligus worker --label build-box --health-listen 127.0.0.1:8788
+     verify: curl -s 127.0.0.1:8788/v1/ready ; ligus hosts
+  5. Bind an agent to it (from any member's CLI or the desktop):
+       ligus add-agent coder anthropic --host <worker host id> && ligus sync
+       # or: ligus set-agent-host coder <worker host id> && ligus sync
+     verify: ligus agents ; ligus queue
+
+As a service: deploy/local/ligus-local start --role worker --data-dir ~/.ligus-worker --systemd.
+Claude Code on a worker is read-only unless LIGUS_WORKER_PERMISSION_MODE raises it;
+write turns need the agent sandbox (ligus doctor).
+",
+    },
+    Topic {
+        name: "phone",
+        aliases: &["pairing", "add-phone"],
+        summary: "pair the phone with your box; Add a phone by QR, or paste its code",
+        text: "\
+The phone app talks to your `ligus serve` box. It needs two things: pairing (a link
+from the box) and its own device key certified as one of your devices.
+
+Pair:
+  1. On the box, with the server's environment:  ligus pair
+     It prints a QR code and a link (one-time, 10 minutes, five attempts). Through a
+     relay (away from the LAN or tailnet): ligus help remote.
+  2. On the phone: scan it in the Ligus app.
+     verify: ligus phones list    (relay pairing) ; ligus remote status
+
+Add the phone to your devices (scan the desktop's code):
+  1. Desktop: Settings > Profile > My devices > Add a phone > Show code (5 minutes).
+  2. Phone: Settings > This phone > Add to my devices, scan it, check whose code it
+     is, choose Add. The phone shows its fingerprint. Its request reaches the desktop
+     through your box (a phone not paired yet gets a provisional connection through
+     the relay that reaches only the add-a-phone routes).
+  3. Desktop: compare the fingerprint group by group, tick the box, Add this phone,
+     confirm with your passkey. The phone pairs by itself.
+     verify: the phone says \"This phone is now one of your devices\"
+
+Can't scan? Paste the phone's code instead:
+  1. Phone: Settings > This phone > Can't scan? Show this phone's code (ligusphone1:…).
+  2. Desktop: Add a phone > Can't scan?, paste it, compare the fingerprint, confirm.
+     Without a desktop, on a CLI identity of yours (never the box):
+       ligus phones certify --code-file ./phone-code --recovery-words-file ~/.ligus-words \\
+         --fingerprint XXXX-XXXX-XXXX-XXXX-XXXX
+       ligus sync
+  3. Let the box sync a few seconds, then tap Retry on the phone (or ligus pair again).
+
+Remove a phone: ligus phones revoke <pid|name> (also rotates serve.token unless --keep-token).
+Errors: ligus help troubleshooting.
+",
+    },
+    Topic {
+        name: "remote",
+        aliases: &["relay"],
+        summary: "reach your box from the phone through a relay tunnel",
+        text: "\
+By default the phone reaches `ligus serve` only on the LAN or tailnet. A relay tunnel
+lets it connect from anywhere; the relay sees only sealed traffic.
+
+  1. ligus remote enable --relay https://relay.example.com [--reg-token @./reg-token]
+     verify: ligus remote status                # relay: … (enabled), host id
+  2. Restart serve (systemctl --user restart ligus-serve, or ligus-local stop/start).
+     verify: ligus remote status                # serve: connected …
+  3. ligus pair                                 # the link now includes the relay
+     verify: ligus phones list
+  4. ligus remote push-test                     # notifications, hop by hop
+
+For one run only: ligus serve --remote-relay URL (or LIGUS_REMOTE_RELAY; off disables).
+Stop: ligus remote disable (keeps keys and phones). New host id: ligus remote reset
+(every phone pairs again). \"status pending\": the relay operator must allow the host
+id. Rate limited (4029): ligus help troubleshooting.
+",
+    },
+    Topic {
+        name: "kubernetes",
+        aliases: &["k8s", "helm"],
+        summary: "one workspace on a cluster with deploy/kubernetes/ligus-k8s",
+        text: "\
+Kubernetes is a preview: build the image from deploy/container/Dockerfile and install
+the deploy/helm/ligus chart from a checkout. deploy/kubernetes/ligus-k8s does it
+non-interactively; always pass --context (never the current context), one namespace
+per workspace, and --json for one JSON result on stdout.
+
+  K=deploy/kubernetes/ligus-k8s
+  1. $K preflight --context CTX -n NS --release R --probe --image REPO:TAG --json
+  2. $K secrets workspace --throwaway --context CTX -n NS --release R      # trial only
+     $K secrets workspace --from-dir DIR --context CTX -n NS --release R   # real workspace
+  3. $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --dry-run --json
+     $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --json
+     (scenarios: trial, team-in-cluster-relay, team-external-relay)
+  4. $K verify --context CTX -n NS --release R --json
+  5. $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace]
+
+`ligus-k8s help <command>` explains each step. The pods run `ligus serve` and
+`ligus worker` with LIGUS_SECRET_BACKEND=k8s, LIGUS_ADMISSION_FILE for the box
+admission and LIGUS_REQUIRE_SANDBOX=1 (exit 3 on a node without Landlock or bwrap).
+",
+    },
+    Topic {
+        name: "repos",
+        aliases: &["repositories"],
+        summary: "workspace repositories, this host's checkouts, code hosts",
+        text: "\
+A workspace repository is synced; a checkout of it is per host. An agent turn for a
+chat with a repository runs only in this host's confirmed checkout, on the chat's
+branch.
+
+  1. ligus repos add https://github.com/acme/web --branch main   # Admin, with presence
+     verify: ligus repos list
+  2. On each host that should work on it, either clone into the repos dir (the phone
+     or desktop asks the host), or point at an existing checkout:
+       ligus repos bind web ~/src/web
+     or find them:
+       ligus repos roots add ~/src && ligus repos scan && ligus repos confirm web ~/src/web
+     verify: ligus repos list        # here: ~/src/web (…, confirmed)
+  3. Give a chat its repository:  ligus repos chat <chat-id> web && ligus sync
+  4. Code-host access for pushes and pull requests:
+       ligus forge add github https://github.com            # uses the gh login
+       ligus forge add gitlab https://gitlab.example.com
+       printf %s \"$TOKEN\" | ligus forge token gitlab-gitlab.example.com write
+     verify: ligus forge test <id>
+
+LIGUS_REPOS_DIR (default <data dir>/repos) holds clones. SSH host aliases:
+ligus repos alias; synced aliases: ligus repos aliases, then ligus repos accept.
+",
+    },
+    Topic {
+        name: "agents",
+        aliases: &[],
+        summary: "runtimes, agents, hosts and who may use them",
+        text: "\
+A runtime is a model or agent CLI (anthropic, openai, openrouter, ollama, custom,
+claude-code, codex, antigravity, copilot). An agent is a name on a runtime, answered
+by a host: its owner's device, or a worker or serve box.
+
+  1. ligus setup                          # what this box can reach
+     ligus setup --apply                  # define the keyless ones
+     ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME]
+     verify: ligus runtimes
+  2. ligus add-agent coder <runtime-id> --host <host-id> --role \"writes code\"
+     ligus sync
+     verify: ligus agents ; ligus hosts
+  3. In a chat: @coder … ; on the CLI: ligus send <chat-id> \"@coder …\" --push
+     verify: ligus queue                  # empty once answered ; ligus tail <chat-id>
+
+Credentials: --secret-ref NAME keeps the key off the shared log; every host running
+the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). --secret
+syncs it encrypted to every member's device; prefer --secret-ref.
+
+Access controls:
+- Who may use an agent (only its owner, or everyone; daily turn limits; spending
+  cap) is set on the agent in the desktop app (Workspace > Agent roster).
+- LIGUS_MCP_MIN_ROLE: the author's minimum role for a turn at its full tier
+  (default Admin for write-capable, Contributor for read-only); below it the turn
+  runs tool-free or read-only.
+- Workers run Claude Code read-only unless LIGUS_WORKER_PERMISSION_MODE is
+  acceptEdits, runCommands or bypassPermissions; edits land in an isolated worktree
+  as a proposal. Write tiers need the agent sandbox (ligus doctor).
+- Repo-supplied runtimes and MCP servers stay inert until trusted: ligus trust list.
+- ligus agent (development only) needs LIGUS_ALLOW_PERSONAL_AGENT and answers only
+  its operator unless LIGUS_AGENT_OPEN_TO_MEMBERS=1.
+",
+    },
+    Topic {
+        name: "security",
+        aliases: &["secrets", "data-dir"],
+        summary: "the data dir, secret backends, LIGUS_DATA_DIR, LIGUS_SECRET_BACKEND",
+        text: "\
+The data dir is one Ligus device: its identity and keys, the decrypted event log
+(ligus.db), config.toml (relay and room only), and for serve the phone credentials.
+- LIGUS_DATA_DIR picks it (default ~/.ligus; ./ligus-data without HOME). It is
+  created owner-only (0700). One process per data dir; never share one between
+  machines, and never point a box at the desktop app's.
+- Agents never read the data dir, the secret files or the secret store.
+
+Secrets (the relay token, the workspace key, keys of runtimes) live in a secret
+store, chosen by LIGUS_SECRET_BACKEND:
+  keychain        macOS default: a Ligus keychain file in the data dir, unlocked by a
+                  password in your login keychain. Each new build of the CLI asks once
+                  to read it (a keychain prompt).
+  secret-service  Linux desktop default (GNOME Keyring, KWallet)
+  systemd-creds   Linux service hosts
+  k8s             a mounted Kubernetes Secret (LIGUS_SECRETS_DIR)
+  file            owner-only files in the data dir: the explicit opt-in for headless
+                  boxes, scripts and tests (no prompts)
+
+Secrets on the command line leak to ps and shell history: flags that take one
+(--secret, --token, --reg-token) accept - (stdin) or @FILE (an owner-only file), and
+*_FILE variables (LIGUS_WORKSPACE_KEY_FILE, LIGUS_RELAY_ACCESS_TOKEN_FILE,
+LIGUS_REMOTE_REG_TOKEN_FILE, LIGUS_NTFY_TOKEN_FILE) read them from files.
+
+For scripts and agents that run a ligus binary without touching your real
+identity:  LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file ligus …
+Hosts: LIGUS_REQUIRE_SANDBOX=1 refuses to start without an agent sandbox
+(ligus doctor --require-confined is the same check).
+",
+    },
+    Topic {
+        name: "env",
+        aliases: &["environment"],
+        summary: "every LIGUS_* variable the CLI reads",
+        text: "",
+    },
+    Topic {
+        name: "troubleshooting",
+        aliases: &["errors", "fix"],
+        summary: "common errors and their fixes",
+        text: "\
+Start with:  ligus status ; ligus doctor ; ligus remote status
+
+\"this box's workspace has no relay URL\" (sync, serve, join)
+  The invite came from a workspace with no relay. In the desktop set Settings > Team
+  sync > Relay URL, copy a new invite, run `ligus enroll --file ./invite` again; or
+  set LIGUS_RELAY_URL.
+
+\"this box isn't a member of workspace … and couldn't join\" / prints a join request
+  The box has no admission: ligus admit request, an Admin approves, ligus admit redeem.
+
+\"this box has no copy of workspace … yet\"
+  ligus sync first (needs the relay, the token and the workspace key).
+
+Relay 401 (unauthorized)
+  The relay is gated: ligus enroll --file ./invite --token @./relay-token, or
+  LIGUS_RELAY_ACCESS_TOKEN, or ligus auth login.
+
+Phone: \"add this phone first\" (close 4040 device_not_certified)
+  The box doesn't know the phone's key as yours: add the phone (ligus help phone),
+  let the box sync, tap Retry; ligus pair again if the link used its five attempts.
+
+Phone: \"Too many attempts\" (close 4029 rate_limited); box log: \"the relay is rate
+limiting this network\"
+  10 failed attempts a minute from one IP address (one /64) block it for 5 minutes;
+  a phone on the box's network shares its address. Wait 5 minutes, check
+  ligus remote status, then ligus pair once.
+
+Keychain password prompts on macOS with a development build
+  The keychain trusts a build by its code hash, so each rebuild asks again. Sign
+  the build, or for tests and scripts use a throwaway data dir:
+  LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file ligus …
+
+Ubuntu: \"agent sandbox: landlock\" instead of bwrap, or bwrap fails to create a
+user namespace
+  Ubuntu 24.04 restricts unprivileged user namespaces (AppArmor,
+  kernel.apparmor_restrict_unprivileged_userns=1) and ships no profile for bwrap, so
+  Ligus falls back to the Landlock tier (Linux 6.7+). For bwrap install the profile:
+    sudo install -m 0644 deploy/linux/apparmor/ligus-bwrap /etc/apparmor.d/ligus-bwrap
+    sudo apparmor_parser -r /etc/apparmor.d/ligus-bwrap
+  verify: ligus doctor --expect-tier bwrap. No sandbox at all: install bubblewrap.
+
+serve won't start: \"refusing to listen on 0.0.0.0\"
+  Use a loopback, LAN or Tailscale address (or LIGUS_SERVE_ALLOW_ANY_BIND=1 behind
+  something else that controls access).
+
+serve or worker exits 3
+  LIGUS_REQUIRE_SANDBOX=1 and no agent sandbox: ligus doctor says why.
+
+Every command exits 2 at start with a model gateway error
+  The file LIGUS_MODEL_GATEWAYS_FILE names can't be used: fix it or unset the
+  variable. ligus gateway-check tests the gateways.
+
+A worker doesn't answer: ligus agents (bound to this host?), ligus queue (host
+online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
+",
+    },
+    Topic {
+        name: "agents-guide",
+        aliases: &["AGENTS", "agents-playbook", "playbook", "agent-guide"],
+        summary: "a one-shot playbook for coding agents: set up, add an agent, k8s, health",
+        text: "\
+For coding agents operating Ligus. Every ligus command is non-interactive when
+stdin isn't a terminal (no prompts; pass the flag instead), prints errors on stderr
+as \"error: …\", and exits 0 on success, 1 on an error, 2 on a usage error (see each
+command's EXIT CODES). Read commands take --json. Never run a ligus binary against
+the person's real data dir to experiment: use
+  export LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file
+Human-only steps: enrolling with a real invite (it carries the workspace key),
+approving an admission with a passkey, pairing the phone, exposing a port.
+
+Set up a box (serve) on this machine:
+  L=deploy/local/ligus-local
+  $L preflight --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
+  $L install-cli --json                                              # verify: ligus --version
+  $L configure --role serve --data-dir ~/.ligus-serve --json         # verify: ok true
+  HUMAN: ligus enroll --file ./invite (with the env file loaded)     # verify: ligus status --json
+  ligus admit request --label <name>; HUMAN approves; ligus admit redeem --file ./admission
+  $L start --role serve --data-dir ~/.ligus-serve --systemd|--launchd --json
+  $L verify --role serve --data-dir ~/.ligus-serve --json            # verify: ok true
+  LIGUS_DATA_DIR=~/.ligus-serve ligus status --json                  # verify: member true
+
+Add an agent:
+  ligus setup --apply                                                # verify: ligus runtimes --json
+  ligus add-agent <name> <runtime-id> --host <host-id> && ligus sync # verify: ligus agents --json
+  ligus send <chat-id> \"@<name> ping\" --push                        # verify: ligus queue (empty), ligus tail <chat-id>
+
+Deploy on Kubernetes:
+  K=deploy/kubernetes/ligus-k8s   (always --context; confirm the cluster with the human)
+  $K preflight --context CTX -n NS --release R --json
+  $K secrets workspace --throwaway|--from-dir DIR --context CTX -n NS --release R --json
+  $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --json
+  $K verify --context CTX -n NS --release R --json                   # verify: ok true
+
+Check health:
+  ligus status --json                 # relay, key, local copy, member, serve, sandbox tier
+  ligus doctor --require-confined     # exit 3: no agent sandbox
+  ligus remote status --json          # serve's relay link and phones
+  curl -s http://<listen>/v1/health   # serve ; worker: --health-listen /v1/ready
+  ligus hosts --json ; ligus queue
+
+Find more: ligus help (commands and topics), ligus <command> --help,
+ligus help env, ligus help troubleshooting, AGENTS.md in the repository.
+",
+    },
+];
+
+fn find_cmd(name: &str) -> Option<&'static Cmd> {
+    COMMANDS.iter().find(|c| c.name == name)
+}
+
+fn find_topic(name: &str) -> Option<&'static Topic> {
+    TOPICS.iter().find(|t| t.name == name || t.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
+}
+
+/// `ligus help` with no argument.
+pub fn overview() -> String {
+    let mut s = format!(
+        "ligus {}: the headless Ligus client (Ligus is short for ligustica)\n\n\
+         USAGE\n  ligus <command> [<subcommand>] [flags]\n  ligus help <command> [<subcommand>] | <topic>\n  \
+         ligus <command> --help\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    for g in GROUPS {
+        let _ = write!(s, "\n{}\n", g.to_uppercase());
+        for c in COMMANDS.iter().filter(|c| c.group == *g && !c.name.contains(' ')) {
+            let _ = writeln!(s, "  {:<16} {}", c.name, c.summary);
+        }
+    }
+    s.push_str("\nTOPICS (ligus help <topic>)\n");
+    for t in TOPICS {
+        let _ = writeln!(s, "  {:<16} {}", t.name, t.summary);
+    }
+    s.push_str(
+        "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
+         connection `ligus enroll` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
+         next argument (--label box, not --label=box).\n\nEXIT CODES\n  0 success   1 error (\"error: …\" on stderr)   \
+         2 usage error (unknown command, missing or bad argument)\n  Some commands add their own: see `ligus <command> --help`.\n\n\
+         An agent setting Ligus up: ligus help agents-guide\n",
+    );
+    s
+}
+
+fn env_lookup(name: &str) -> Option<&'static EnvVar> {
+    ENV.iter().flat_map(|(_, vs)| vs.iter()).find(|v| v.name == name)
+}
+
+/// Variables a command reads, common ones included.
+fn env_of(c: &Cmd) -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = Vec::new();
+    if c.data {
+        v.extend(["LIGUS_DATA_DIR", "LIGUS_SECRET_BACKEND"]);
+    }
+    if c.conn {
+        v.extend(["LIGUS_RELAY_URL", "LIGUS_RELAY_ACCESS_TOKEN", "LIGUS_WORKSPACE", "LIGUS_WORKSPACE_KEY"]);
+    }
+    for n in c.env {
+        if !v.contains(n) {
+            v.push(n);
+        }
+    }
+    v
+}
+
+/// One command's reference.
+pub fn command_help(c: &Cmd) -> String {
+    let mut s = format!("ligus {}: {}\n\nPURPOSE\n", c.name, c.summary);
+    for line in wrap(c.purpose, 86) {
+        let _ = writeln!(s, "  {line}");
+    }
+    s.push_str("\nSYNOPSIS\n");
+    for l in c.synopsis {
+        let _ = writeln!(s, "  {l}");
+    }
+    let subs: Vec<&Cmd> = COMMANDS
+        .iter()
+        .filter(|x| x.name.strip_prefix(c.name).is_some_and(|r| r.starts_with(' ') && !r[1..].contains(' ')))
+        .collect();
+    if !subs.is_empty() {
+        s.push_str("\nSUBCOMMANDS\n");
+        for x in subs {
+            let _ = writeln!(s, "  {:<16} {}", &x.name[c.name.len() + 1..], x.summary);
+        }
+    }
+    s.push_str("\nFLAGS\n");
+    for fl in c.flags.iter().chain(std::iter::once(&f("-h, --help", "", "print this help"))) {
+        let def = if fl.default.is_empty() { String::new() } else { format!(" (default: {})", fl.default) };
+        let _ = writeln!(s, "  {:<28} {}{def}", fl.flag, fl.about);
+    }
+    s.push_str("\nENVIRONMENT\n");
+    let env = env_of(c);
+    let width = env.iter().map(|n| n.len()).max().unwrap_or(0).max(28);
+    if env.is_empty() {
+        s.push_str("  (none)\n");
+    }
+    for n in env {
+        let about = env_lookup(n).map(|v| v.about).unwrap_or(match n {
+            "HOSTNAME" => "the host name, for default labels",
+            "PATH" => "where installed programs are found",
+            "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "OPENROUTER_API_KEY" => "a provider's API key",
+            "DISPLAY" | "WAYLAND_DISPLAY" => "the graphical session (Linux)",
+            _ => "",
+        });
+        let _ = writeln!(s, "  {n:<width$} {about}");
+    }
+    s.push_str("\nEXAMPLES\n");
+    for x in c.examples {
+        let _ = writeln!(s, "  {x}");
+    }
+    s.push_str("\nEXIT CODES\n  0  success\n  1  error (the message is on stderr)\n  2  usage error: missing or bad argument, unknown subcommand\n");
+    for (code, why) in c.exit {
+        if *code > EXIT_USAGE {
+            let _ = writeln!(s, "  {code}  {why}");
+        }
+    }
+    s.push_str("\nSEE ALSO\n");
+    let _ = writeln!(s, "  {}", c.see_also.join(", "));
+    s
+}
+
+/// `ligus help env`.
+pub fn env_help() -> String {
+    let mut s = String::from(
+        "Every LIGUS_* variable the ligus CLI reads. A blank value is unset; booleans take 1/true/on/yes\n\
+         and 0/false/off/no. Env wins over config.toml (ligus enroll). The *_FILE variables read the\n\
+         secret from a file instead (not both). Other names: LIGUS_MCP_MAX_* turn budgets,\n\
+         LIGUS_ACP_*, LIGUS_AGENT_MAX_*, LIGUS_OLLAMA_WIRE, LIGUS_PATCH_LEAVING_CALLS (see the docs:\n\
+         Environment variables).\n",
+    );
+    for (section, vars) in ENV {
+        let _ = write!(s, "\n{}\n", section.to_uppercase());
+        for v in *vars {
+            let _ = writeln!(s, "  {:<40} {}  [default: {}]", v.name, v.about, v.default);
+        }
+    }
+    s
+}
+
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for w in text.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + w.len() > width {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(w);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
+/// The command `words` name: `<command> <subcommand>` when that exists,
+/// else `<command>`.
+fn cmd_of(words: &[&str]) -> Option<&'static Cmd> {
+    let first = match *words.first()? {
+        "--version" | "-V" => "version",
+        w => w,
+    };
+    words.get(1).and_then(|w| find_cmd(&format!("{first} {w}"))).or_else(|| find_cmd(first))
+}
+
+/// The words of a command line, without flags (`--help`, `-h`, `--json`, `-`).
+fn words<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().filter(|a| !a.starts_with('-')).collect()
+}
+
+/// `ligus <args> --help`: that command's reference (the overview with no
+/// command). Topics are only for `ligus help <topic>`.
+pub fn lookup_flag(args: &[&str]) -> Option<String> {
+    let w = words(args);
+    if w.is_empty() {
+        return Some(overview());
+    }
+    cmd_of(&w).map(command_help)
+}
+
+/// `ligus help <args>`: a command's reference, a topic, or both when a name
+/// is both (the guide first).
+pub fn lookup(args: &[&str]) -> Option<String> {
+    let words = words(args);
+    if words.is_empty() {
+        return Some(overview());
+    }
+    let topic = (words.len() == 1).then(|| find_topic(words[0])).flatten();
+    let cmd = cmd_of(&words);
+    match (topic, cmd) {
+        (Some(t), Some(c)) => Some(format!("{}\n{}\n{}", topic_text(t), "─".repeat(60), command_help(c))),
+        (Some(t), None) => Some(topic_text(t)),
+        (None, Some(c)) => Some(command_help(c)),
+        (None, None) => None,
+    }
+}
+
+fn topic_text(t: &Topic) -> String {
+    if t.name == "env" {
+        return env_help();
+    }
+    format!("ligus help {}: {}\n\n{}", t.name, t.summary, t.text)
+}
+
+/// `ligus help …` (`topics`) / `ligus … --help`: print and exit 0, or name
+/// the unknown one and exit 2.
+pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
+    match if topics { lookup(args) } else { lookup_flag(args) } {
+        Some(text) => {
+            print!("{text}");
+            std::process::exit(EXIT_OK);
+        }
+        None => {
+            eprintln!(
+                "error: no command or topic {:?}. `ligus help` lists the commands and topics.",
+                args.iter().filter(|a| !a.starts_with('-')).copied().collect::<Vec<_>>().join(" ")
+            );
+            std::process::exit(EXIT_USAGE);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    fn src(rel: &str) -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel)).unwrap()
+    }
+
+    /// The text between `start` and the next line equal to `end` after it.
+    fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+        let i = text.find(start).unwrap_or_else(|| panic!("{start:?} not found"));
+        let rest = &text[i..];
+        let j = rest.find(end).unwrap_or(rest.len());
+        &rest[..j]
+    }
+
+    /// `"name"` arms (`"x" =>`, `"x" if … =>`) at the start of a line.
+    fn top_arms(block: &str) -> BTreeSet<String> {
+        block
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim_start();
+                let rest = t.strip_prefix('"')?;
+                let (name, after) = rest.split_once('"')?;
+                (after.trim_start().starts_with("=>") || after.trim_start().starts_with("if ")).then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    /// `Some("x")` and `Some(v @ ("x" | "y"))` literals in a block.
+    fn some_arms(block: &str) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        for part in block.split("Some(").skip(1) {
+            let part = part.trim_start();
+            if let Some(r) = part.strip_prefix('"') {
+                if let Some((n, _)) = r.split_once('"') {
+                    out.insert(n.to_string());
+                }
+            } else if let Some((_, alts)) = part.split_once("@ (") {
+                let alts = alts.split(')').next().unwrap_or("");
+                for a in alts.split('|') {
+                    out.insert(a.trim().trim_matches('"').to_string());
+                }
+            }
+        }
+        out
+    }
+
+    fn sections_ok(name: &str) {
+        let c = find_cmd(name).unwrap_or_else(|| panic!("no help entry for `ligus {name}`"));
+        let h = command_help(c);
+        for sec in ["PURPOSE", "SYNOPSIS", "FLAGS", "ENVIRONMENT", "EXAMPLES", "EXIT CODES", "SEE ALSO"] {
+            assert!(h.contains(&format!("\n{sec}\n")), "`ligus {name} --help` lacks {sec}:\n{h}");
+        }
+        assert!(!c.purpose.is_empty() && !c.synopsis.is_empty(), "{name}: empty purpose or synopsis");
+        assert!((1..=3).contains(&c.examples.len()), "{name}: 1-3 examples, has {}", c.examples.len());
+        assert!(!c.see_also.is_empty(), "{name}: no see also");
+        assert!(c.examples.iter().all(|x| x.contains("ligus")), "{name}: examples must be ligus command lines");
+        for fl in c.flags {
+            assert!(!fl.about.is_empty(), "{name} {}: no description", fl.flag);
+        }
+        // `ligus help <name>` and `ligus <name> --help` both reach it.
+        let words: Vec<&str> = name.split(' ').collect();
+        assert!(lookup(&words).unwrap().contains(&h), "ligus help {name}");
+        let mut with_flag = words.clone();
+        with_flag.push("--help");
+        assert_eq!(lookup_flag(&with_flag).as_deref(), Some(h.as_str()), "ligus {name} --help");
+    }
+
+    /// Every command the dispatcher handles has a complete help entry, and
+    /// every help entry is a real command.
+    #[test]
+    fn every_dispatched_command_has_complete_help() {
+        let main = src("main.rs");
+        let run = between(&main, "    match cmd {\n", "\n    }\n}\n");
+        let mut want: BTreeSet<String> = top_arms(run);
+        assert!(want.len() >= 35, "dispatcher parse found only {want:?}");
+        want.insert("help".into());
+        want.insert("version".into());
+        want.insert("app".into());
+        for name in &want {
+            sections_ok(name);
+        }
+        // Subcommands, from each subcommand dispatcher. Each entry: the
+        // command, its source and the block that dispatches it, and the
+        // `Some("…")` literals in it that aren't subcommands.
+        let groups: &[(&str, String, &str, &str, &[&str])] = &[
+            ("auth", src("auth.rs"), "pub fn cmd_auth", "\n}\n", &[]),
+            ("admit", src("admit.rs"), "pub fn cmd_admit", "\n}\n", &[]),
+            ("recovery-key", src("admit.rs"), "pub fn cmd_recovery_key", "\n}\n", &[]),
+            ("config", main.clone(), "\"config\" => match", "\n        },\n", &[]),
+            ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),
+            ("phones", main.clone(), "\"phones\" => {", "\n        \"dashboard\"", &[]),
+            ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
+            ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
+            ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),
+            ("memory", src("memory_cmd.rs"), "pub fn run(", "\n}\n", &[]),
+            ("repos", src("repos_cmd.rs"), "pub fn cmd(", "\n}\n", &["on", "off", "default"]),
+            ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
+        ];
+        let mut seen_subs = BTreeSet::new();
+        for (cmd, text, start, end, not_subs) in groups {
+            let block = between(text, start, end);
+            let subs: BTreeSet<String> = some_arms(block).into_iter().filter(|s| !not_subs.contains(&s.as_str())).collect();
+            assert!(!subs.is_empty(), "no subcommands parsed for {cmd}");
+            for s in subs {
+                // `repos roots add` and `forge add --auth token` reuse names
+                // a subcommand has: they're covered by that subcommand.
+                let name = format!("{cmd} {s}");
+                sections_ok(&name);
+                seen_subs.insert(name);
+            }
+            sections_ok(cmd);
+        }
+        // No help entry for something that doesn't exist.
+        for c in COMMANDS {
+            let top = c.name.split(' ').next().unwrap();
+            assert!(want.contains(top), "help entry `{}` is not a command", c.name);
+            if c.name.contains(' ') {
+                assert!(seen_subs.contains(c.name) || c.name == "forge git-credential", "help entry `{}` is not a dispatched subcommand", c.name);
+            }
+        }
+    }
+
+    /// Every flag the source reads (`flag_val("--x")`, `has("--x")`,
+    /// `flag("--x")`) is documented on some command.
+    #[test]
+    fn every_flag_read_is_documented() {
+        let documented: BTreeSet<String> = COMMANDS
+            .iter()
+            .flat_map(|c| c.flags.iter())
+            .flat_map(|fl| fl.flag.split([' ', ',']).filter(|w| w.starts_with("--")).map(|w| w.to_string()).collect::<Vec<_>>())
+            .collect();
+        let mut missing = Vec::new();
+        for file in ["main.rs", "admit.rs", "repos_cmd.rs"] {
+            let text = src(file);
+            for pat in ["flag_val(\"", "has(\"", "flag(\""] {
+                for part in text.split(pat).skip(1) {
+                    let name = part.split('"').next().unwrap();
+                    if name.starts_with("--") && !documented.contains(name) && name != "--help" {
+                        missing.push(format!("{file}: {name}"));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "flags read but in no command's help: {missing:?}");
+    }
+
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rs_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// Every `LIGUS_*` variable the CLI's own (non-test) code names is in
+    /// `ligus help env`, and every variable a command lists is described.
+    #[test]
+    fn every_env_var_read_is_in_help_env() {
+        let mut files = Vec::new();
+        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let env = env_help();
+        let mut missing = BTreeSet::new();
+        for p in files {
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if name == "tests.rs" || name.ends_with("_tests.rs") || name == "testkit.rs" || name == "help.rs" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&p).unwrap();
+            // The unit tests at the end of a file aren't what the CLI reads.
+            let code = text.split("#[cfg(test)]\nmod tests").next().unwrap();
+            for part in code.split("\"LIGUS_").skip(1) {
+                let var: String = part.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+                let var = format!("LIGUS_{var}");
+                if part[var.len() - 6..].starts_with('"') && !INTERNAL_ENV.contains(&var.as_str()) && !env.contains(&format!("  {var} ")) {
+                    missing.insert(format!("{var} ({name})"));
+                }
+            }
+        }
+        for name in crate::hardening::FILE_SECRETS {
+            for v in [name.to_string(), format!("{name}_FILE")] {
+                if !env.contains(&format!("  {v} ")) {
+                    missing.insert(v);
+                }
+            }
+        }
+        assert!(missing.is_empty(), "LIGUS_* variables read but not in `ligus help env`: {missing:?}");
+        for c in COMMANDS {
+            for n in env_of(c) {
+                if n.starts_with("LIGUS_") {
+                    assert!(env_lookup(n).is_some(), "{}: {n} is not in ENV", c.name);
+                }
+            }
+        }
+    }
+
+    /// The docs' CLI reference lists every command and mentions the topics.
+    #[test]
+    fn docs_cli_reference_lists_every_command() {
+        let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-site/docs/ligus/reference/cli.md")).unwrap();
+        let mut missing = Vec::new();
+        for c in COMMANDS {
+            let shown = match c.name {
+                "version" => "ligus --version".to_string(),
+                n => format!("ligus {n}"),
+            };
+            if !md.contains(&shown) {
+                missing.push(shown);
+            }
+        }
+        for t in TOPICS {
+            if !md.contains(&format!("`{}`", t.name)) {
+                missing.push(format!("topic {}", t.name));
+            }
+        }
+        assert!(missing.is_empty(), "docs-site/docs/ligus/reference/cli.md is missing: {missing:?}");
+    }
+
+    #[test]
+    fn topics_and_lookup() {
+        for t in TOPICS {
+            let h = lookup(&[t.name]).unwrap();
+            assert!(h.len() > 200, "topic {} is empty", t.name);
+            for a in t.aliases {
+                assert!(lookup(&[a]).unwrap().starts_with(&topic_text(t)), "alias {a}");
+            }
+        }
+        // A topic that is also a command prints both.
+        let both = lookup(&["agents"]).unwrap();
+        assert!(both.contains("Access controls") && both.contains("ligus agents [--json]"), "{both}");
+        // Unknown.
+        assert_eq!(lookup(&["no-such-thing"]), None);
+        assert!(lookup(&[]).unwrap().contains("TOPICS"));
+        // The overview lists every top-level command and topic.
+        let o = overview();
+        for c in COMMANDS.iter().filter(|c| !c.name.contains(' ')) {
+            assert!(o.contains(&format!("  {} ", c.name)), "overview lacks {}", c.name);
+        }
+        // `ligus remote enable --relay x --help`: the subcommand's help.
+        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("ligus remote enable"));
+        // `ligus agents --help` is the command only; `ligus box --help` is no command.
+        assert!(!lookup_flag(&["agents", "--help"]).unwrap().contains("Access controls"));
+        assert_eq!(lookup_flag(&["box", "--help"]), None);
+        // A guide ends each step with a verify command.
+        for name in ["quickstart", "box", "worker", "agents-guide"] {
+            assert!(lookup(&[name]).unwrap().contains("verify:"), "{name}");
+        }
+        // No business intent, no old name.
+        for t in TOPICS {
+            for bad in ["pricing", "Hive", "hosted plan", "swarmwatch"] {
+                assert!(!t.text.contains(bad), "topic {} says {bad}", t.name);
+            }
+        }
+    }
+
+    #[test]
+    fn usage_errors_are_recognised() {
+        assert!(is_usage(&usage_error("unknown `ligus remote x`")));
+        assert!(is_usage(&anyhow::anyhow!("usage: ligus tail <chat-id>")));
+        assert!(!is_usage(&anyhow::anyhow!("unknown chat 123")));
+    }
+}

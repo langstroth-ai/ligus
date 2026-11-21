@@ -46,6 +46,7 @@ mod auth;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
+mod help;
 mod mcp_config;
 mod memory_cmd;
 mod selftest;
@@ -482,9 +483,22 @@ async fn materialize_turns(cfg: &Config, session: &ligus_core::ChatSession, head
     }
 }
 
-fn cmd_whoami(cfg: &Config) -> Result<()> {
+fn cmd_whoami(cfg: &Config, json: bool) -> Result<()> {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let stored = bootstrap_identity(&identity)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "account": stored.account.id,
+                "device": stored.device.id,
+                "name": shown(&stored.account.display_name),
+                "dataDir": cfg.data_dir,
+                "room": cfg.room,
+            })
+        );
+        return Ok(());
+    }
     println!("account : {}", stored.account.id);
     println!("device  : {}", stored.device.id);
     println!("name    : {}", shown(&stored.account.display_name));
@@ -493,10 +507,141 @@ fn cmd_whoami(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-fn cmd_chats(cfg: &Config) -> Result<()> {
+/// What `ligus status` reports, read-only: never creates an identity.
+fn status_report(cfg: &Config) -> serde_json::Value {
+    use serde_json::json;
+    let db = cfg.data_dir.join("ligus.db");
+    let ws = uuid_of_room(&cfg.room);
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
+    let stored = identity.load().ok().flatten();
+    let relay_problem = relay_url_problem(cfg.relay_url.as_deref());
+    // The local copy and membership, only from a store that exists.
+    let (mut copy, mut member, mut standing, mut admission) = (false, false, None::<String>, false);
+    if let (Some(_), true) = (&stored, db.is_file()) {
+        if let Ok(svc) = open_service(cfg) {
+            if let Ok(Some(c)) = svc.load(workspace_config_session_id(ws)) {
+                copy = true;
+                member = c.members.iter().any(|m| m.id == svc.author().id);
+            }
+            standing = svc.device_standing(ws, None).ok().map(|s| match s {
+                ligus_runtime::device_enroll::Standing::Own => "own".to_string(),
+                ligus_runtime::device_enroll::Standing::OwnerDevice(_) => "owner-device".to_string(),
+                ligus_runtime::device_enroll::Standing::Revoked => "revoked".to_string(),
+            });
+            admission = svc.store().join_invite(ws).ok().flatten().is_some();
+        }
+    }
+    let tunnel = serve::tunnel::tunnel_dir(&cfg.data_dir);
+    let remote = serve::tunnel::RelaySettings::file(&tunnel);
+    let remote: Option<serve::tunnel::RelaySettings> = std::fs::read(&remote).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let live: Option<serve::tunnel::LiveStatus> = std::fs::read(tunnel.join("status.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let sandbox = ligus_runtime::executor::sandbox_status();
+    let next = if stored.is_none() && cfg.relay_url.is_none() {
+        "ligus enroll --file ./invite   (ligus help quickstart)"
+    } else if relay_problem.is_some() {
+        "set a relay: ligus enroll with an invite from a workspace that has one, or LIGUS_RELAY_URL"
+    } else if cfg.key.is_none() {
+        "no workspace key: ligus enroll --file ./invite (or ligus admit redeem for a box)"
+    } else if !copy {
+        "ligus sync"
+    } else if !member && stored.as_ref().is_some_and(|s| s.service) {
+        "admit this box: ligus admit request, then ligus admit redeem (ligus help box)"
+    } else {
+        "ready"
+    };
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "dataDir": cfg.data_dir,
+        "database": db.is_file(),
+        "identity": stored.as_ref().map(|s| json!({
+            "account": s.account.id,
+            "device": s.device.id,
+            "name": shown(&s.account.display_name),
+            "box": s.service,
+        })),
+        "workspace": {
+            "room": cfg.room,
+            "relayUrl": cfg.relay_url,
+            "relayProblem": relay_problem,
+            "accessToken": cfg.token.is_some() || auth::cell().is_some(),
+            "workspaceKey": cfg.key.is_some(),
+            "localCopy": copy,
+            "member": member,
+            "deviceStanding": standing,
+            "admissionKept": admission,
+        },
+        "serve": {
+            "tokenFile": cfg.data_dir.join("serve.token").is_file(),
+            "remoteRelay": remote.as_ref().map(|r| json!({ "url": r.relay, "enabled": r.enabled })),
+            "live": live.as_ref().map(|l| json!({
+                "connected": l.connected,
+                "status": l.status,
+                "push": l.push,
+                "lastError": l.last_error,
+                "description": serve::tunnel::cli::describe_status(l, serve::tunnel::now()),
+            })),
+        },
+        "sandbox": { "tier": sandbox.tier(), "summary": sandbox.summary },
+        "next": next,
+    })
+}
+
+/// `ligus status`: the data dir, identity, workspace, relay, admission and
+/// serve state at a glance.
+fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
+    let r = status_report(cfg);
+    if json {
+        println!("{r}");
+        return Ok(());
+    }
+    let yn = |v: &serde_json::Value| if v.as_bool().unwrap_or(false) { "yes" } else { "no" };
+    let w = &r["workspace"];
+    println!("ligus {}", env!("CARGO_PKG_VERSION"));
+    println!("data dir      : {}{}", cfg.data_dir.display(), if r["database"].as_bool() == Some(true) { "" } else { " (no ligus.db yet)" });
+    match r["identity"].as_object() {
+        Some(i) => println!(
+            "identity      : {} (account {}, device {}){}",
+            i["name"].as_str().unwrap_or(""),
+            i["account"].as_str().unwrap_or(""),
+            i["device"].as_str().unwrap_or(""),
+            if i["box"].as_bool() == Some(true) { ", a box (service member)" } else { "" }
+        ),
+        None => println!("identity      : none yet (created on first use)"),
+    }
+    println!("workspace     : {}", cfg.room);
+    match w["relayProblem"].as_str() {
+        Some(p) => println!("relay         : {p}"),
+        None => println!("relay         : {}", w["relayUrl"].as_str().unwrap_or("")),
+    }
+    println!("access token  : {}", yn(&w["accessToken"]));
+    println!("workspace key : {}", yn(&w["workspaceKey"]));
+    println!("local copy    : {}", yn(&w["localCopy"]));
+    println!("member        : {}{}", yn(&w["member"]), w["deviceStanding"].as_str().map(|s| format!(" (device standing: {s})")).unwrap_or_default());
+    if w["admissionKept"].as_bool() == Some(true) {
+        println!("admission     : kept; the next serve or worker start joins with it");
+    }
+    let sv = &r["serve"];
+    println!("serve token   : {}", yn(&sv["tokenFile"]));
+    match sv["remoteRelay"].as_object() {
+        Some(rr) => println!(
+            "remote access : {} ({})",
+            rr["url"].as_str().unwrap_or(""),
+            if rr["enabled"].as_bool() == Some(true) { "enabled" } else { "disabled" }
+        ),
+        None => println!("remote access : off"),
+    }
+    if let Some(d) = sv["live"]["description"].as_str() {
+        println!("serve link    : {d}");
+    }
+    println!("agent sandbox : {}", r["sandbox"]["tier"].as_str().unwrap_or(""));
+    println!("next          : {}", r["next"].as_str().unwrap_or(""));
+    Ok(())
+}
+
+fn cmd_chats(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let config_id = workspace_config_session_id(uuid_of_room(&cfg.room));
-    let mut any = false;
+    let (mut rows, mut any) = (Vec::new(), false);
     for id in svc.store().list_session_ids()? {
         // Never list the workspace-config log — it isn't a chat.
         if id == config_id {
@@ -507,12 +652,19 @@ fn cmd_chats(cfg: &Config) -> Result<()> {
             if id == workspace_config_session_id(s.workspace_id) {
                 continue;
             }
+            let n = s.messages.iter().filter(|m| !m.superseded).count();
+            if json {
+                rows.push(serde_json::json!({ "id": s.id, "title": shown(&s.title), "messages": n, "channel": s.channel_id }));
+                continue;
+            }
             any = true;
             let ch = if s.channel_id.is_empty() { String::new() } else { format!("  #{}", s.channel_id) };
-            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&shown(&s.title), 32), s.messages.iter().filter(|m| !m.superseded).count(), ch);
+            println!("{}  {:<32}  {} msgs{}", s.id, truncate(&shown(&s.title), 32), n, ch);
         }
     }
-    if !any {
+    if json {
+        println!("{}", serde_json::Value::Array(rows));
+    } else if !any {
         println!("(no chats — run `ligus sync` to pull a workspace, or open the app to create one)");
     }
     Ok(())
@@ -875,9 +1027,35 @@ fn cmd_config_import(cfg: &Config, path: &str) -> Result<()> {
 }
 
 /// List the workspace-owned runtimes synced onto this box (spec §12.5).
-fn cmd_runtimes(cfg: &Config) -> Result<()> {
+fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let rts = svc.list_workspace_runtimes(uuid_of_room(&cfg.room))?;
+    if json {
+        let rows: Vec<serde_json::Value> = rts
+            .iter()
+            .map(|r| {
+                let (kind, secret_ref, present) = match &r.credential {
+                    WorkspaceCredential::SecretRef { secret_ref } => {
+                        ("secretRef", Some(secret_ref.clone()), Some(ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok()))
+                    }
+                    WorkspaceCredential::Inline { .. } => ("inline", None, None),
+                    WorkspaceCredential::None => ("keyless", None, None),
+                };
+                serde_json::json!({
+                    "id": r.id,
+                    "name": shown(&r.name),
+                    "provider": r.provider,
+                    "model": r.model,
+                    "endpoint": r.endpoint,
+                    "credential": kind,
+                    "secretRef": secret_ref,
+                    "secretPresent": present,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(rows));
+        return Ok(());
+    }
     if rts.is_empty() {
         println!("(no workspace runtimes — define one in the app, or `ligus sync` a workspace that has them)");
     }
@@ -1158,10 +1336,26 @@ fn cmd_add_agent(
     Ok(())
 }
 
-fn cmd_agents(cfg: &Config) -> Result<()> {
+fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let agents = svc.load(workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
+    if json {
+        let rows: Vec<serde_json::Value> = agents
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "name": shown(&a.name),
+                    "runtimeId": a.runtime_id,
+                    "hostId": (!a.host_id.is_empty()).then_some(&a.host_id),
+                    "role": shown(&a.role),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(rows));
+        return Ok(());
+    }
     if agents.is_empty() {
         println!("(no agents — `ligus add-agent <name> <runtime-id>`)");
     }
@@ -1174,10 +1368,26 @@ fn cmd_agents(cfg: &Config) -> Result<()> {
 
 // ── Hosts + worker daemon (spec §12.4) ──────────────────────────────────────
 
-fn cmd_hosts(cfg: &Config) -> Result<()> {
+fn cmd_hosts(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let me = svc.device_id().to_string();
     let hosts = svc.list_hosts(uuid_of_room(&cfg.room))?;
+    if json {
+        let rows: Vec<serde_json::Value> = hosts
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "id": h.id,
+                    "kind": h.kind,
+                    "label": shown(&h.label),
+                    "thisBox": h.id == me,
+                    "modelGateways": h.model_gateways,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(rows));
+        return Ok(());
+    }
     if hosts.is_empty() {
         println!("(no hosts — `ligus register-worker` to register this box)");
     }
@@ -1631,81 +1841,6 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
     Ok(0)
 }
 
-const USAGE: &str = "ligus — headless Ligus client\n\n\
-         USAGE:\n  \
-         ligus --version\n  \
-         ligus whoami\n  \
-         ligus app                       open the Ligus desktop app, detached from this terminal\n  \
-         ligus gateway-check [--gateway <name>] [--model <id>]\n                                       prove this host's model gateways: a hosted-API turn and a\n                                       sandboxed CLI child through the egress proxy's route\n  \
-         ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]\n                                       this device's agent sandbox tier and what it leaves open;\n                                       the flags make it a preflight (non-zero exit on failure)\n  \
-         ligus doctor --sandbox [--runtime <name>] [--agent <id>]\n                                       what an agent turn may read and write on this host (the\n                                       home is denied by default), why, the shell rule, and the\n                                       signed grants in force\n  \
-         ligus chats\n  \
-         ligus new [title]\n  \
-         ligus tail <chat-id> [--watch]\n  \
-         ligus send <chat-id> <message…> [--push]\n  \
-         ligus sync [--watch]\n  \
-         ligus runtimes                  list workspace-owned runtimes (spec §12.5)\n  \
-         ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret - | @FILE]\n                                       define a workspace-owned runtime\n  \
-         ligus rm-runtime <id>           remove a workspace-owned runtime\n  \
-         ligus agents                    list the workspace's agents\n  \
-         ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]   add a workspace agent\n  \
-         ligus agent [name] [--runtime <id>]   reply as the primary agent; --runtime uses a\n                                       workspace-owned credential (else a personal env key)\n  \
-         ligus hosts                     list workspace hosts (devices + workers)\n  \
-         ligus register-worker [--label <name>]   register this box as a worker host\n  \
-         ligus set-agent-host <agent> <host-id>   bind an agent to a host\n  \
-         ligus proposals                 list the workspace's proposals with status + votes\n  \
-         ligus worker [--label <name>] [--health-listen <addr>]\n                                       run the worker daemon (host detached agents, §12.4);\n                                       --health-listen serves GET /v1/health and /v1/ready\n  \
-         ligus queue                     show queued work (unanswered mentions + host status)\n  \
-         ligus serve [--listen ADDR] [--pair] [--token-file PATH] [--label NAME]\n                                       \
-         run the home host for the iOS app (sync + worker + HTTP/SSE API);\n                                       \
-         --remote-relay URL / LIGUS_REMOTE_RELAY also serves it through a relay\n  \
-         ligus admit request [--label NAME]   print this box's join request (an Admin admits it)\n  \
-         ligus admit redeem <ligusadmit1:code> | - | --file PATH   keep a box admission (serve and worker join as their own member)\n  \
-         ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:...] [--out PATH]\n                                       \
-         headless Admin: issue a box admission confirmed with your recovery key\n  \
-         ligus recovery-key create --out PATH   register a recovery key for this CLI identity (never a box)\n  \
-         ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
-         ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
-         ligus repos [list]              the workspace's repositories, this host's checkouts, the repos dir\n  \
-         ligus repos add <remote|canonical|path> [--name N] [--kind K] [--branch B]   add a workspace repository (Admin)\n  \
-         ligus repos remove|rename <repo> …   remove (Admin) or rename a workspace repository\n  \
-         ligus repos bind|confirm <repo> <path> | unbind <repo> [path] | takeover <path>\n                                       this host's checkout of a repository (device-local)\n  \
-         ligus repos scan | roots [add|remove <path>] | alias <ssh-host> <host> [--remove]\n                                       find checkouts under scan roots; SSH host aliases for identity\n  \
-         ligus repos chat <chat-id> <repo|none> [--branch B] | coverage on|off|default\n  \
-         ligus repos aliases | repo-alias <repo> [names…] | host-alias <alias> <host>|--remove\n                                       \
-         workspace-synced aliases, names only (Admin, passkey)\n  \
-         ligus repos accept <alias> [--revoke]   use a synced alias for identity on this host\n  \
-         ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
-         ligus remote enable --relay URL [--reg-token - | @FILE] | status | disable | reset\n                                       \
-         phone remote access through a relay tunnel (off by default)\n  \
-         ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
-         ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
-         ligus phones certify <ligusphone1:code> | --code-file PATH --recovery-words-file PATH --fingerprint F\n                                       \
-         certify a phone's key as one of your devices (headless \"Add this phone\")\n  \
-         ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
-         ligus memory list | search <words…> | show <id> | add <title> | edit <id> | rm <id> | proposals | accept|reject <id>\n                                       \
-         the workspace memory (shared notes); bodies from --body or stdin, --tag a,b, --json\n  \
-         ligus task-state <chat-id> [--json]   what the agents on a chat report about their work in progress\n  \
-         ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
-         ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
-         ligus dashboard default         print the generated default dashboard as TOML\n  \
-         ligus dashboard metrics         list the built-in ligus metrics panels can show\n\n\
-         Setup:\n  \
-         ligus enroll - | --file PATH [--token @FILE]   one-shot: save the workspace connection (the invite\n                                       \
-         piped or in a file: it carries the workspace key)\n  \
-         ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
-         ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
-         token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
-         ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
-         ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
-         Config via env (override the saved config.toml from `enroll`):\n  \
-         LIGUS_DATA_DIR, LIGUS_RELAY_URL, LIGUS_RELAY_ACCESS_TOKEN, LIGUS_WORKSPACE, LIGUS_WORKSPACE_KEY.";
-
-fn usage() -> ! {
-    eprintln!("{USAGE}");
-    std::process::exit(2);
-}
-
 /// Whether the command line asks for help (`-h` / `--help` / `help` anywhere
 /// before a `--` separator).
 fn wants_help(args: &[String]) -> bool {
@@ -1719,7 +1854,12 @@ fn main() {
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
-        std::process::exit(1);
+        if help::is_usage(&e) {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            eprintln!("{}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
+            std::process::exit(help::EXIT_USAGE);
+        }
+        std::process::exit(help::EXIT_ERROR);
     }
 }
 
@@ -1735,15 +1875,28 @@ fn run() -> Result<()> {
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_ligus::init_local_offset();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if matches!(args.first().map(String::as_str), Some("--version" | "-V" | "version")) {
+    // Help never opens the data dir, the config or the secret store (a bare
+    // `ligus serve --help` once started a real server on the default one).
+    if args.first().map(String::as_str) == Some("help") {
+        help::print_and_exit(&args[1..].iter().map(String::as_str).collect::<Vec<_>>(), true);
+    }
+    if wants_help(&args) {
+        help::print_and_exit(&args.iter().take_while(|a| *a != "--").map(String::as_str).collect::<Vec<_>>(), false);
+    }
+    let Some(first) = args.first().map(String::as_str) else {
+        eprint!("{}", help::overview());
+        std::process::exit(help::EXIT_USAGE);
+    };
+    if matches!(first, "--version" | "-V" | "version") {
         println!("ligus {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // An unknown command never creates a data dir.
+    if !help::is_command(first) {
+        return Err(help::usage_error(format!("unknown command `{first}`: `ligus help` lists the commands and topics")));
+    }
     // `ligus app` only opens the desktop app: no data dir, config or secrets.
-    if args.first().map(String::as_str) == Some("app") {
-        if wants_help(&args) {
-            usage();
-        }
+    if first == "app" {
         return app_cmd::cmd_app(&args[1..]);
     }
     // Also before any thread starts: `*_FILE` secrets and LIGUS_WS_SECRET_DIR
@@ -1774,11 +1927,6 @@ fn run() -> Result<()> {
     ligus_runtime::secret_redact::register_env_secrets();
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest = &args[args.len().min(1)..];
-    // `ligus <cmd> --help` prints usage instead of running the command (a bare
-    // `ligus serve --help` used to start a real server on the default data dir).
-    if wants_help(&args) {
-        usage();
-    }
     let has = |flag: &str| rest.iter().any(|a| a == flag);
     let flag_val = |flag: &str| {
         rest.iter()
@@ -1804,7 +1952,8 @@ fn run() -> Result<()> {
 
     match cmd {
         "auth" => auth::cmd_auth(&cfg.data_dir, &positional, flag_val("--label")),
-        "whoami" => cmd_whoami(&cfg),
+        "whoami" => cmd_whoami(&cfg, has("--json")),
+        "status" => cmd_status(&cfg, has("--json")),
         "doctor" => {
             let code = cmd_doctor(has("--require-confined"), flag_val("--expect-tier"), has("--turn-test"), &cfg)?;
             if code == 0 && has("--sandbox") {
@@ -1824,7 +1973,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
-        "chats" => cmd_chats(&cfg),
+        "chats" => cmd_chats(&cfg, has("--json")),
         "new" => cmd_new(&cfg, positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")),
         "tail" => {
             let id = positional
@@ -1848,7 +1997,7 @@ fn run() -> Result<()> {
             rt()?.block_on(cmd_send(&cfg, chat_id, body, has("--push")))
         }
         "sync" => rt()?.block_on(cmd_sync(&cfg, has("--watch"))),
-        "runtimes" => cmd_runtimes(&cfg),
+        "runtimes" => cmd_runtimes(&cfg, has("--json")),
         "add-runtime" => {
             if positional.len() < 4 {
                 bail!("usage: ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret - | @FILE]");
@@ -1897,7 +2046,7 @@ fn run() -> Result<()> {
             }
             _ => bail!("usage: ligus config <export|import <file.toml>>"),
         },
-        "agents" => cmd_agents(&cfg),
+        "agents" => cmd_agents(&cfg, has("--json")),
         "proposals" => cmd_proposals(&cfg),
         "add-agent" => {
             if positional.len() < 2 {
@@ -1905,7 +2054,7 @@ fn run() -> Result<()> {
             }
             cmd_add_agent(&cfg, positional[0], positional[1], flag_val("--host"), flag_val("--role"))
         }
-        "hosts" => cmd_hosts(&cfg),
+        "hosts" => cmd_hosts(&cfg, has("--json")),
         "register-worker" => {
             let id = cmd_register_worker(&cfg, flag_val("--label"))?;
             println!("registered this box as worker host {id} (sync to share).");
@@ -1981,7 +2130,7 @@ fn run() -> Result<()> {
                     has("--insecure-relay"),
                 ),
                 Some("disable") => cli::remote_disable(&cfg.data_dir),
-                Some("status") | None => cli::remote_status(&cfg.data_dir),
+                Some("status") | None => cli::remote_status(&cfg.data_dir, has("--json")),
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
                 Some("push-test") => cli::remote_push_test(&cfg.data_dir, flag_val("--phone").as_deref()),
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"),
@@ -2020,7 +2169,7 @@ fn run() -> Result<()> {
         "phones" => {
             use serve::tunnel::cli;
             match positional.first().map(|s| s.as_str()) {
-                Some("list") | None => cli::phones_list(&cfg.data_dir),
+                Some("list") | None => cli::phones_list(&cfg.data_dir, has("--json")),
                 Some("revoke") => {
                     let token_file = flag_val("--token-file")
                         .or_else(|| env_opt("LIGUS_SERVE_TOKEN_FILE"))
@@ -2080,7 +2229,7 @@ fn run() -> Result<()> {
             let runtime_id = flag_val("--runtime").or_else(|| env_opt("LIGUS_RUNTIME"));
             rt()?.block_on(cmd_agent(&cfg, name, runtime_id))
         }
-        _ => usage(),
+        other => Err(help::usage_error(format!("unknown command `{other}`: `ligus help` lists the commands and topics"))),
     }
 }
 
@@ -2141,6 +2290,8 @@ const VALUE_FLAGS: &[&str] = &[
     "--phone",
     "--recovery-words-file",
     "--token",
+    "--ttl",
+    "--request",
 ];
 
 /// The positional arguments: everything that is not a flag or a flag's value.
@@ -2375,11 +2526,28 @@ mod cli_tests {
 
     #[test]
     fn app_command_parses_and_is_listed() {
-        assert!(USAGE.contains("ligus app "));
+        assert!(help::overview().contains("  app "));
         assert!(wants_help(&argv(&["app", "--help"])));
         assert!(!wants_help(&argv(&["app"])));
         // A stray argument is refused before anything is looked up or run.
         assert!(app_cmd::cmd_app(&argv(&["somewhere"])).is_err());
+    }
+
+    /// `ligus status` on a fresh data dir: reads only, never creates an
+    /// identity, and names the next step.
+    #[test]
+    fn status_reads_without_creating_an_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        std::fs::create_dir_all(&cfg.data_dir).unwrap();
+        let r = status_report(&cfg);
+        assert!(r["identity"].is_null(), "{r}");
+        assert_eq!(r["workspace"]["room"], "r");
+        assert_eq!(r["workspace"]["localCopy"], false);
+        assert!(r["workspace"]["relayProblem"].as_str().unwrap().contains("no relay URL"));
+        assert!(r["next"].as_str().unwrap().starts_with("ligus enroll"), "{r}");
+        assert!(IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir)).load().unwrap().is_none());
+        assert!(!cfg.data_dir.join("ligus.db").exists());
     }
 
     #[test]

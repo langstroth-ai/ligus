@@ -101,7 +101,9 @@ ligus sync                         # push and fetch once
 ligus chats                        # list chats
 ligus send <chat-id> "hello" --push
 ligus tail <chat-id> --watch
-ligus --help                       # every command
+ligus help                         # every command, and the guides
+ligus help box                     # a guide: an always-on box, step by step
+ligus send --help                  # one command: flags, defaults, env, examples
 ```
 
 **An always-on box.** On a spare machine, after `ligus enroll`:
