@@ -700,7 +700,9 @@ implement these):
 - The box checks everything it can (encoding, the code, `phone_sig`, the
   caller's device, the `check` rules, limits), then publishes the request
   on the relay's presence channel at `phone-enroll:<b64u rid>:<box device
-  id>` (field `phoneEnrollRequest`, `{request, relay, at, signature}`),
+  id>:<phone tag>`, one slot per request (the tag is
+  `b64u(SHA-256("ligus-enroll-slot-v1\0" ‖ rid ‖ the code's device id)[..16])`;
+  field `phoneEnrollRequest`, `{request, relay, at, signature}`),
   sealed under the workspace key and signed (Ed25519, context
   `ligus-enroll-relay-v1\0`) by its device key. Only a slot signed by a
   certified device of a current service member counts, so a person's own
@@ -708,7 +710,8 @@ implement these):
   can't certify a phone.
 - The desktop opens the slot and checks, in order: the slot signature,
   `rid`, `mac` (constant time), that `ws`, `D` and `exp` are the offer's,
-  the expiry, `phone_sig`, the code, the phone's standing. The first valid
+  the expiry, `phone_sig`, the code, the phone's standing (and once more,
+  itself, right before certifying). The first valid
   request locks the offer to that phone (device id and key; a new label is
   the same phone). **Add this phone** is allowed from 5000 ms after the
   request first appeared (the hold); a valid request from another phone

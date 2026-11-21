@@ -72,6 +72,7 @@ fn wire_constants_are_pinned() {
     assert_eq!(RELAY_CONTEXT, b"ligus-enroll-relay-v1\0");
     assert_eq!(ANSWER_RELAY_CONTEXT, b"ligus-enroll-answer-relay-v1\0");
     assert_eq!(REQUEST_SLOT_PREFIX, "phone-enroll:");
+    assert_eq!(SLOT_TAG_CONTEXT, b"ligus-enroll-slot-v1\0");
     assert_eq!(ANSWER_SLOT_PREFIX, "phone-enroll-answer:");
     assert_eq!(REQUEST_SLOT_FIELD, "phoneEnrollRequest");
     assert_eq!(ANSWER_SLOT_FIELD, "phoneEnrollAnswer");
@@ -666,6 +667,38 @@ fn ring(s: &str) -> KeyringEngine {
     KeyringEngine::passphrase(Uuid::nil(), ligus_core::derive_workspace_key(s))
 }
 
+/// A request slot's name: `phone-enroll:<rid>:<box>:<tag>`, the tag
+/// 16 bytes of SHA-256 over the context, `rid` and the phone's device id
+/// (22 characters), so two phones on one offer never share a slot, and the
+/// same phone's tag differs between offers. Well under the relay's 256
+/// characters for a presence name.
+#[test]
+fn request_slots_are_per_phone_and_unlinkable_across_offers() {
+    use sha2::Digest as _;
+    let (bx, a, b) = (
+        Uuid::from_u128(0xb0),
+        Uuid::from_u128(0xa1),
+        Uuid::from_u128(0xa2),
+    );
+    let rid = Rid([7; 16]);
+    let mut pre = SLOT_TAG_CONTEXT.to_vec();
+    pre.extend_from_slice(&rid.0);
+    pre.extend_from_slice(a.as_bytes());
+    let want = URL_SAFE_NO_PAD.encode(&sha2::Sha256::digest(&pre)[..16]);
+    assert_eq!(phone_slot_tag(rid, a), want);
+    assert_eq!(
+        request_slot(rid, bx, a),
+        format!("phone-enroll:{}:{bx}:{want}", rid.to_b64u())
+    );
+    assert_ne!(request_slot(rid, bx, a), request_slot(rid, bx, b));
+    assert_ne!(phone_slot_tag(rid, a), phone_slot_tag(Rid([8; 16]), a));
+    assert!(
+        !request_slot(rid, bx, a).contains(&a.to_string()),
+        "the relay never sees the phone's device id"
+    );
+    assert_eq!(request_slot(rid, bx, a).len(), 13 + 22 + 1 + 36 + 1 + 22);
+}
+
 /// T2 and §5.5: request slots are sealed, bound to their slot, fresh, and
 /// signed by a service member's device; a person's device is refused.
 #[test]
@@ -681,7 +714,7 @@ fn request_slots_are_sealed_bound_fresh_and_box_signed() {
     let service_key = |id: Uuid| (id == bx).then(|| bkp.public_key_bytes().to_vec());
     let text = req_text(&d.offer, &p, "x");
     let r = RelayedRequest::new(&text, bx, NOW_MS).sign(&bkp);
-    let slot = request_slot(d.rid(), bx);
+    let slot = request_slot(d.rid(), bx, p.device_id);
     assert!(slot.starts_with(&d.request_slot_prefix()));
     assert_eq!(
         check_relayed_request(&slot, &r, NOW_MS, service_key),
@@ -710,7 +743,7 @@ fn request_slots_are_sealed_bound_fresh_and_box_signed() {
         .unwrap(),
     );
     blobs.insert(
-        request_slot(d.rid(), person),
+        request_slot(d.rid(), person, p.device_id),
         seal_relayed_request(&ring("other"), &r).unwrap(),
     );
     assert_eq!(
@@ -719,11 +752,41 @@ fn request_slots_are_sealed_bound_fresh_and_box_signed() {
     );
     // Wrong slot: another box's name, another rid's.
     assert_eq!(
-        check_relayed_request(&request_slot(d.rid(), person), &r, NOW_MS, service_key),
+        check_relayed_request(
+            &request_slot(d.rid(), person, p.device_id),
+            &r,
+            NOW_MS,
+            service_key
+        ),
         Err(EnrollError::WrongSlot)
     );
     assert_eq!(
-        check_relayed_request(&request_slot(Rid([1; 16]), bx), &r, NOW_MS, service_key),
+        check_relayed_request(
+            &request_slot(Rid([1; 16]), bx, p.device_id),
+            &r,
+            NOW_MS,
+            service_key
+        ),
+        Err(EnrollError::WrongSlot)
+    );
+    // Another phone's slot (one slot per offer, box and phone).
+    assert_eq!(
+        check_relayed_request(
+            &request_slot(d.rid(), bx, Uuid::from_u128(0xa2)),
+            &r,
+            NOW_MS,
+            service_key
+        ),
+        Err(EnrollError::WrongSlot)
+    );
+    // The old one-slot-per-box name isn't taken either.
+    assert_eq!(
+        check_relayed_request(
+            &format!("{}{bx}", d.request_slot_prefix()),
+            &r,
+            NOW_MS,
+            service_key
+        ),
         Err(EnrollError::WrongSlot)
     );
     // Freshness: 30 s ahead, 60 s old.
@@ -741,7 +804,7 @@ fn request_slots_are_sealed_bound_fresh_and_box_signed() {
     let by_person = RelayedRequest::new(&text, person, NOW_MS).sign(&pkp);
     assert_eq!(
         check_relayed_request(
-            &request_slot(d.rid(), person),
+            &request_slot(d.rid(), person, p.device_id),
             &by_person,
             NOW_MS,
             service_key

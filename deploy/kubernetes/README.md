@@ -17,7 +17,11 @@ image for the `ligus` binary is in
 [`ligus-k8s`](ligus-k8s) runs preflight (with a `--probe` that measures Pod
 Security, NetworkPolicy enforcement and Landlock), secret bootstrap, install
 from a scenario in [`scenarios/`](scenarios), verify and teardown,
-non-interactively with `--json`. See [`AGENTS.md`](../../AGENTS.md).
+non-interactively with `--json`. `ligus-k8s --help` lists every command,
+flag, default, environment variable and exit code; `ligus-k8s help <command>`
+(or `ligus-k8s <command> --help`) prints one command. See
+[`AGENTS.md`](../../AGENTS.md) and the ligus CLI's guides (`ligus help
+kubernetes`, `ligus help agents-guide`, `ligus help troubleshooting`).
 
 ## What runs where
 

@@ -8,9 +8,11 @@
 //! - `POST /v1/phone-enroll/requests` `{request: "ligusenrollreq1:…"}`: every
 //!   check the box can make (not the MAC: it never has the QR's secret), the
 //!   limits, then the request is published on the relay's presence channel
-//!   at `phone-enroll:<rid>:<this box's device id>`, sealed under the
-//!   workspace key and signed by this box's device key. `202 {rid, state:
-//!   "relayed"}`.
+//!   at `phone-enroll:<rid>:<this box's device id>:<phone tag>`, one slot
+//!   per request (so every request the box holds for an offer is on the
+//!   relay at once, and the desktop sees each within its 5-second hold),
+//!   sealed under the workspace key and signed by this box's device key.
+//!   `202 {rid, state: "relayed"}`.
 //! - `GET /v1/phone-enroll/requests/{rid}?wait=N`: long-polls (N ≤ 25 s) for
 //!   the desktop's answer, relayed as is when the offer's own desktop signed
 //!   it, and says whether this box's roster now has the phone's certificate
@@ -61,9 +63,6 @@ pub const PER_PEER: usize = 1;
 pub const PROVISIONAL_MAX_REQUESTS: usize = 8;
 /// How often the box looks for answers while a request is pending.
 const ANSWER_POLL: Duration = Duration::from_secs(2);
-/// With two phones on one offer, the slot shows each in turn this often (it
-/// holds one request): the desktop, polling every 2 s, sees both.
-const ROTATE: Duration = Duration::from_secs(3);
 /// How long the loop reuses its keyring.
 const RING_TTL: Duration = Duration::from_secs(ligus_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64);
 /// A request past its `exp` still answers `expired` this long, then goes.
@@ -202,22 +201,25 @@ impl Entry {
     fn answered_for_me(&self) -> bool {
         self.answer.as_deref().and_then(|a| EnrollAnswer::decode(a).ok()).is_some_and(|a| a.device_id == self.device)
     }
+
+    fn slot(&self) -> SlotKey {
+        (self.rid, self.device)
+    }
 }
 
-/// What one offer's slot shows.
-#[derive(Debug, Default)]
-struct Slot {
-    shown: Option<u64>,
-    published_ms: i64,
-}
+/// A request slot: its offer and its phone (with this box's device id, the
+/// slot's name, [`request_slot`]). At most one pending request per phone, so
+/// one entry per slot.
+type SlotKey = (Rid, Uuid);
 
 #[derive(Default)]
 struct Inner {
     entries: Vec<Entry>,
     accepted: VecDeque<i64>,
-    slots: HashMap<Rid, Slot>,
-    /// Slots to clear (`{}`): their offer has nothing left to relay.
-    clear: HashSet<Rid>,
+    /// The slots on the relay, with when each was last published.
+    slots: HashMap<SlotKey, i64>,
+    /// Slots to clear (`{}`): their request has nothing left to relay.
+    clear: HashSet<SlotKey>,
     seq: u64,
 }
 
@@ -232,9 +234,9 @@ impl Inner {
         let (gone, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.entries).into_iter().partition(|e| pred(e));
         self.entries = keep;
         for e in &gone {
-            if !self.entries.iter().any(|x| x.rid == e.rid) {
-                self.slots.remove(&e.rid);
-                self.clear.insert(e.rid);
+            // Only a slot on the relay needs clearing.
+            if self.slots.remove(&e.slot()).is_some() {
+                self.clear.insert(e.slot());
             }
         }
         gone
@@ -279,7 +281,7 @@ impl Inner {
         }
         self.seq += 1;
         e.seq = self.seq;
-        self.clear.remove(&e.rid);
+        self.clear.remove(&e.slot());
         self.entries.push(e);
         self.accepted.push_back(now_ms);
         Ok(evicted)
@@ -289,48 +291,44 @@ impl Inner {
     fn purge(&mut self, now_ms: i64) {
         let limit = |e: &Entry| now_ms as i128 > (e.exp as i128 + KEEP_EXPIRED_SECS as i128) * 1000;
         self.remove(limit);
-        let live: HashSet<Rid> = self.entries.iter().filter(|e| !e.expired(now_ms)).map(|e| e.rid).collect();
-        let dead: Vec<Rid> = self.slots.keys().filter(|r| !live.contains(r)).copied().collect();
+        let live: HashSet<SlotKey> = self.entries.iter().filter(|e| !e.expired(now_ms)).map(Entry::slot).collect();
+        let dead: Vec<SlotKey> = self.slots.keys().filter(|k| !live.contains(k)).copied().collect();
         for r in dead {
             self.slots.remove(&r);
             self.clear.insert(r);
         }
     }
 
-    /// The slots to (re)publish now: per offer, the request to show (the
-    /// phones the answer doesn't name yet, in turn), and the slots to clear.
-    fn plan(&mut self, now_ms: i64) -> (Vec<(Rid, String)>, Vec<Rid>) {
+    /// The slots to (re)publish now, with their request text, and the slots
+    /// to clear. Every pending request has its own slot: a new one is
+    /// published at once, then every [`qr::REPUBLISH_SECS`]; one the answer
+    /// names, or past its offer's `exp`, is cleared.
+    fn plan(&mut self, now_ms: i64) -> (Vec<(SlotKey, String)>, Vec<SlotKey>) {
         self.purge(now_ms);
-        let mut by_rid: HashMap<Rid, Vec<&Entry>> = HashMap::new();
-        for e in self.entries.iter().filter(|e| !e.expired(now_ms) && !e.answered_for_me()) {
-            by_rid.entry(e.rid).or_default().push(e);
-        }
-        let mut publish = Vec::new();
-        let mut settled: Vec<Rid> = self.slots.keys().filter(|r| !by_rid.contains_key(r)).copied().collect();
-        for (rid, mut list) in by_rid {
-            list.sort_by_key(|e| e.seq);
-            let slot = self.slots.entry(rid).or_default();
-            let age = now_ms - slot.published_ms;
-            let current = list.iter().position(|e| Some(e.seq) == slot.shown);
-            let next = match current {
-                None => Some(0),
-                Some(i) if list.len() > 1 && age >= ROTATE.as_millis() as i64 => Some((i + 1) % list.len()),
-                Some(_) if age >= qr::REPUBLISH_SECS as i64 * 1000 => current,
-                Some(_) => None,
-            };
-            if let Some(i) = next {
-                slot.shown = Some(list[i].seq);
-                slot.published_ms = now_ms;
-                publish.push((rid, list[i].text.clone()));
+        let show: HashMap<SlotKey, &Entry> =
+            self.entries.iter().filter(|e| !e.expired(now_ms) && !e.answered_for_me()).map(|e| (e.slot(), e)).collect();
+        let mut publish: Vec<(SlotKey, String, u64)> = Vec::new();
+        for (key, e) in &show {
+            let due = self.slots.get(key).is_none_or(|at| now_ms - at >= qr::REPUBLISH_SECS as i64 * 1000);
+            if due {
+                publish.push((*key, e.text.clone(), e.seq));
             }
         }
-        for r in &settled {
-            self.slots.remove(r);
+        let mut settled: Vec<SlotKey> = self.slots.keys().filter(|k| !show.contains_key(k)).copied().collect();
+        for (key, _, _) in &publish {
+            self.slots.insert(*key, now_ms);
+            self.clear.remove(key);
+        }
+        for k in &settled {
+            self.slots.remove(k);
         }
         settled.extend(self.clear.drain());
         settled.sort();
         settled.dedup();
-        (publish, settled)
+        // Oldest request first, so a desktop listing mid-publish sees the
+        // first phone before the ones after it.
+        publish.sort_by_key(|(_, _, seq)| *seq);
+        (publish.into_iter().map(|(k, t, _)| (k, t)).collect(), settled)
     }
 
     /// The offers whose answer the box still watches for (until `exp`).
@@ -432,9 +430,9 @@ fn keyring(s: &Shared) -> Option<ligus_runtime::keyring::KeyringEngine> {
     }
 }
 
-/// Publish the pending requests' slots (at once for a new one, then every
-/// 10 s; clearing settled ones with `{}`), and watch for the desktops'
-/// answers while any offer is open.
+/// Publish the pending requests' slots, one per request (at once for a new
+/// one, then every 10 s; clearing settled ones with `{}`), and watch for
+/// the desktops' answers while any offer is open.
 pub async fn relay_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let Ok(relay) = crate::relay_client(&shared.cfg) else { return };
     let room = shared.cfg.room.clone();
@@ -453,18 +451,18 @@ pub async fn relay_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             }
             if let Some((_, ring)) = &ring {
                 let me = shared.lock().device_id();
-                for (rid, text) in publish {
+                for ((rid, phone), text) in publish {
                     let r = shared.lock().sign_relayed_request(RelayedRequest::new(&text, me, now_ms()));
                     let Some(blob) = seal_relayed_request(ring, &r) else {
                         note(format!("request {rid}: no workspace key to seal it under"));
                         continue;
                     };
-                    if let Err(e) = relay.publish_presence(&room, &request_slot(rid, me), &blob).await {
+                    if let Err(e) = relay.publish_presence(&room, &request_slot(rid, me, phone), &blob).await {
                         note(format!("request {rid}: publishing failed: {e}"));
                     }
                 }
-                for rid in clear {
-                    let _ = relay.publish_presence(&room, &request_slot(rid, me), &json!({})).await;
+                for (rid, phone) in clear {
+                    let _ = relay.publish_presence(&room, &request_slot(rid, me, phone), &json!({})).await;
                 }
                 if !watched.is_empty() {
                     watch_answers(&shared, &relay, &room, ring).await;
@@ -804,10 +802,11 @@ mod tests {
         }
         assert_eq!((inner.entries.len(), inner.accepted.len()), (1, 1));
         // The same phone's fresh request replaces its old one.
+        assert_eq!(inner.plan(now).0.len(), 1);
         inner.submit(entry(2, 1, "bearer", "b"), PER_BEARER, now).unwrap();
         assert_eq!(inner.entries.len(), 1);
         assert_eq!(inner.entries[0].text, "b");
-        assert!(inner.clear.contains(&Rid([1; 16])), "the old offer's slot is cleared");
+        assert!(inner.clear.contains(&(Rid([1; 16]), Uuid::from_u128(1))), "the old offer's slot is cleared");
         // 30 a minute.
         let mut inner = Inner::default();
         for i in 0..MAX_PER_MINUTE as u128 {
@@ -871,42 +870,207 @@ mod tests {
         assert!(inner.take_answers(vec![(qr::answer_slot(rid), za)], now, |d| (d == Uuid::from_u128(3)).then(|| kz.public_key_bytes().to_vec())).is_empty());
     }
 
-    /// Two phones on one offer share its one slot: it shows each in turn,
-    /// and once the answer names one, only the other.
+    // ── The hold sees every phone (design §8.3) ──────────────────────────
+
+    const T0: i64 = 1_800_000_000_000;
+    const BOX_ID: Uuid = Uuid::from_u128(0xb0);
+
+    /// A real offer (the desktop checks every MAC), and the phones' requests
+    /// for it as the box stores them.
+    fn real_offer(phones: usize) -> (qr::DesktopOffer, Vec<(ligus_core::testkit::Phone, Entry)>) {
+        let offer = qr::Offer {
+            workspace_id: Uuid::from_u128(0x5),
+            desktop_device_id: Uuid::from_u128(1),
+            secret: qr::EnrollSecret::from_bytes([9; 32]),
+            exp: (T0 / 1000) as u64 + qr::OFFER_TTL_SECS,
+        };
+        let scanned = qr::PhoneOffer::scan(&offer.encode(), T0).unwrap();
+        let out = (0..phones)
+            .map(|i| {
+                let p = ligus_core::testkit::Phone::new();
+                let code = ligus_runtime::phone_enroll::PhoneCode::new_signed(p.device_id, p.public_key(), &format!("phone {i}"), |m| {
+                    ligus_core::crypto::sign_p256(&p.key, m)
+                });
+                let req = scanned.build_request(&code, |m| ligus_core::crypto::sign_p256(&p.key, m));
+                let e = Entry {
+                    rid: req.rid,
+                    text: req.encode(),
+                    device: p.device_id,
+                    public_key: p.public_key(),
+                    desktop: req.desktop_device_id,
+                    account: Uuid::from_u128(2),
+                    exp: req.exp,
+                    channel: format!("tunnel:{i}"),
+                    seq: 0,
+                    answer: None,
+                };
+                (p, e)
+            })
+            .collect();
+        (qr::DesktopOffer::from_offer(offer), out)
+    }
+
+    /// The box's loop as [`relay_loop`] runs it (a pass on every new request,
+    /// then every [`ANSWER_POLL`]), writing into a model of the relay's
+    /// presence map (slot name → request text).
+    struct Sim {
+        inner: Inner,
+        presence: HashMap<String, String>,
+        next_pass: i64,
+    }
+
+    impl Sim {
+        fn new() -> Self {
+            Self { inner: Inner::default(), presence: HashMap::new(), next_pass: i64::MAX }
+        }
+
+        fn pass(&mut self, now: i64) {
+            let (publish, clear) = self.inner.plan(now);
+            for (key, text) in publish {
+                self.presence.insert(slot_name(key, BOX_ID), text);
+            }
+            for key in clear {
+                self.presence.remove(&slot_name(key, BOX_ID));
+            }
+            self.next_pass = now + ANSWER_POLL.as_millis() as i64;
+        }
+
+        fn run_until(&mut self, t: i64) {
+            while self.next_pass <= t {
+                self.pass(self.next_pass);
+            }
+        }
+
+        fn submit(&mut self, e: Entry, t: i64) {
+            self.run_until(t);
+            self.inner.submit(e, PER_PEER, t).unwrap();
+            self.pass(t); // the kick
+        }
+
+        /// Every request for `offer` a desktop listing presence now sees
+        /// (each passes the desktop's request checks).
+        fn visible(&self, offer: &qr::DesktopOffer, now: i64) -> Vec<qr::EnrollRequest> {
+            let prefix = offer.request_slot_prefix();
+            let mut slots: Vec<_> = self.presence.iter().filter(|(s, _)| s.starts_with(&prefix)).collect();
+            slots.sort();
+            slots.into_iter().filter_map(|(_, text)| offer.check_request(text, now).ok()).collect()
+        }
+
+        /// One `phone_enroll_offer_poll`.
+        fn desktop_poll(&mut self, offer: &mut qr::DesktopOffer, now: i64) {
+            self.run_until(now);
+            for req in self.visible(offer, now) {
+                if offer.observe(&req, now) == Ok(qr::Seen::TwoPhones) {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn slot_name((rid, phone): SlotKey, bx: Uuid) -> String {
+        request_slot(rid, bx, phone)
+    }
+
+    /// A second phone that answers just after the first is seen before the
+    /// hold ends, whatever the desktop's poll phase: the desktop polls every
+    /// 2 s and approves at exactly the hold, without a last look (that is
+    /// the approve command's own check, tested in the app crate). Before
+    /// the fix the box showed one request per offer at a time, rotating
+    /// every 3 s on a 2 s loop, so the second phone first showed about 4 s
+    /// after it arrived and the approval went through.
     #[test]
-    fn two_phones_on_one_offer_take_turns_in_the_slot() {
+    fn a_second_phone_just_after_the_first_aborts_the_offer_within_the_hold() {
+        for phase in (0..2_000).step_by(250) {
+            for delta in (0..4_000).step_by(300) {
+                let (mut offer, phones) = real_offer(2);
+                let mut sim = Sim::new();
+                sim.submit(phones[0].1.clone(), T0);
+                // The desktop polls every 2 s; the first sighting is at its first poll.
+                let first_seen = T0 + phase;
+                let mut t = first_seen;
+                sim.desktop_poll(&mut offer, t);
+                assert!(offer.locked_request().is_some(), "phase {phase}: the first phone wasn't seen");
+                sim.submit(phones[1].1.clone(), first_seen + delta);
+                let approve_at = first_seen + qr::HOLD_MS;
+                while t + 2_000 < approve_at {
+                    t += 2_000;
+                    sim.desktop_poll(&mut offer, t);
+                }
+                let code_fp = offer.locked_request().map(|r| r.code.fingerprint()).unwrap_or_default();
+                assert_eq!(
+                    offer.check_approve(offer.rid(), &code_fp, approve_at).map(|_| ()),
+                    Err(qr::EnrollError::OfferClosed),
+                    "phase {phase} ms, second phone {delta} ms after the first sighting: approved without seeing it"
+                );
+            }
+        }
+    }
+
+    /// At the most pending requests the box holds (all on one offer), one
+    /// desktop poll sees every one of them, and a request evicted by the
+    /// limits leaves the presence map with its slot.
+    #[test]
+    fn every_pending_request_for_an_offer_is_visible_at_once() {
+        let (offer, phones) = real_offer(MAX_PENDING + 1);
+        let mut sim = Sim::new();
+        let mut t = T0;
+        for (_, e) in phones.iter().take(MAX_PENDING) {
+            sim.submit(e.clone(), t);
+            t += 10;
+        }
+        let seen: HashSet<Uuid> = sim.visible(&offer, t).iter().map(|r| r.device_id()).collect();
+        assert_eq!(seen.len(), MAX_PENDING, "one poll sees every pending request");
+        // Re-published every 10 s, all of them.
+        sim.run_until(t + qr::REPUBLISH_SECS as i64 * 1000 + 2_000);
+        assert_eq!(sim.visible(&offer, t + 11_000).len(), MAX_PENDING);
+        // One more evicts one: still MAX_PENDING slots, each a pending request.
+        sim.submit(phones[MAX_PENDING].1.clone(), t + 12_000);
+        let visible = sim.visible(&offer, t + 12_000);
+        assert_eq!(visible.len(), MAX_PENDING);
+        assert_eq!(sim.inner.entries.len(), MAX_PENDING);
+        for r in &visible {
+            assert!(sim.inner.entries.iter().any(|e| e.device == r.device_id()), "an evicted request is still shown");
+        }
+        let prefix = qr::REQUEST_SLOT_PREFIX;
+        assert!(sim.presence.keys().filter(|k| k.starts_with(prefix)).count() <= MAX_PENDING, "at most 16 slots at once");
+    }
+
+    /// Two phones on one offer each have their own slot, both published at
+    /// once; once the answer names one, its slot is cleared and the other's
+    /// stays.
+    #[test]
+    fn two_phones_on_one_offer_have_a_slot_each() {
         let mut inner = Inner::default();
         let now = 20_000_000;
+        let (r, a, b) = (Rid([7; 16]), Uuid::from_u128(1), Uuid::from_u128(2));
         inner.submit(entry(7, 1, "tunnel:a", "first"), PER_PEER, now).unwrap();
         let (p, c) = inner.plan(now);
-        assert_eq!((p.len(), c.len()), (1, 0));
-        assert_eq!(p[0].1, "first");
+        assert_eq!((p, c), (vec![((r, a), "first".to_string())], vec![]));
         // Nothing new within 10 s.
         assert!(inner.plan(now + 1_000).0.is_empty());
-        assert_eq!(inner.plan(now + 10_500).0[0].1, "first", "re-published every 10 s");
-        inner.submit(entry(7, 2, "bearer", "second"), PER_BEARER, now + 11_000).unwrap();
-        let mut seen = HashSet::new();
-        for t in 0..10 {
-            for (_, text) in inner.plan(now + 11_000 + t * 3_100).0 {
-                seen.insert(text);
-            }
-        }
-        assert_eq!(seen, ["first".to_string(), "second".to_string()].into_iter().collect());
-        // The desktop answered about phone 1: only phone 2 is shown now.
+        inner.submit(entry(7, 2, "bearer", "second"), PER_BEARER, now + 2_000).unwrap();
+        assert_eq!(inner.plan(now + 2_000).0, vec![((r, b), "second".to_string())], "the second at once, in its own slot");
+        assert_eq!(inner.plan(now + 10_500).0, vec![((r, a), "first".to_string())], "each re-published every 10 s");
+        assert_eq!(inner.plan(now + 12_500).0, vec![((r, b), "second".to_string())]);
+        // The desktop answered about phone 1: its slot is cleared, phone 2's stays.
         let keys = ligus_runtime::phone_enroll_qr::EnrollSecret::from_bytes([3; 32]).keys();
-        let answer = EnrollAnswer::build(&keys, qr::Outcome::Certified, Uuid::from_u128(1)).encode();
-        inner.set_answer(Rid([7; 16]), Uuid::from_u128(1), &answer);
-        for t in 0..5 {
-            for (_, text) in inner.plan(now + 60_000 + t * 3_100).0 {
-                assert_eq!(text, "second");
-            }
-        }
-        // Past exp: the slot is cleared.
+        let answer = EnrollAnswer::build(&keys, qr::Outcome::Certified, a).encode();
+        inner.set_answer(r, Uuid::from_u128(1), &answer);
+        let (p, c) = inner.plan(now + 13_000);
+        assert!(p.is_empty());
+        assert_eq!(c, vec![(r, a)]);
+        assert_eq!(inner.plan(now + 23_000).0, vec![((r, b), "second".to_string())]);
+        // The same phone's new request replaces its slot's content, not the slot.
+        inner.submit(entry(7, 2, "bearer", "second, rescanned"), PER_BEARER, now + 24_000).unwrap();
+        let (p, c) = inner.plan(now + 24_000);
+        assert_eq!(p, vec![((r, b), "second, rescanned".to_string())]);
+        assert!(c.is_empty(), "never cleared and published in one pass: {c:?}");
+        // Past exp: every slot is cleared.
         for e in inner.entries.iter_mut() {
             e.exp = 1;
         }
         let (p, c) = inner.plan(now + 70_000);
         assert!(p.is_empty());
-        assert_eq!(c, vec![Rid([7; 16])]);
+        assert_eq!(c, vec![(r, b)]);
     }
 }

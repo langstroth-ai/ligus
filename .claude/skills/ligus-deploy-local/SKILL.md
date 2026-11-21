@@ -6,7 +6,11 @@ description: Set up Ligus on this machine - the desktop app, an always-on ligus 
 # Set up Ligus on this machine
 
 Read the repository's `AGENTS.md` first; its hard rules apply. Tool:
-`deploy/local/ligus-local` (run `--help`). Add `--json` to read results;
+`deploy/local/ligus-local`. `ligus-local --help` prints every command, flag,
+default and exit code; `ligus-local help <command>` (or `<command> --help`)
+prints one command. The ligus CLI's guides cover the background:
+`ligus help box`, `ligus help worker`, `ligus help agents-guide`,
+`ligus help troubleshooting`, `ligus help security`, `ligus help env`. Add `--json` to read results;
 exit 4 means **stop and ask the human**.
 
 ## 1. Decide what to run (checkpoint: human)
@@ -51,6 +55,8 @@ $L preflight --role serve --data-dir ~/.ligus-serve --json
 $L configure --role serve --data-dir ~/.ligus-serve [--listen 127.0.0.1:8787] [--label NAME] --json
 ```
 
+`--label` defaults to `<short hostname>-<role>`; `--secret-backend` takes
+`file`, `keychain` or `secret-service`; `--force` rewrites an existing env file.
 Writes the env file (`~/.config/ligus-serve/ligus-serve.env`, mode 0600, no
 secret values) and the data dir (0700), with `LIGUS_REQUIRE_SANDBOX=1`.
 `--listen` takes a loopback, LAN or tailnet address; choosing anything but
@@ -68,6 +74,11 @@ the invite carries the workspace key, so never ask for it:
 set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
 ligus enroll -                    # paste the invite, Ctrl-D; add --token @FILE if the relay needs one
 ```
+
+A box that is not a member of the workspace yet is then admitted by an
+Admin: `ligus admit request` on the box prints its join request, the Admin
+approves it on a desktop (workspace menu > Admit a box) and the human runs
+`ligus admit redeem` with the code (`ligus help box`).
 
 For a quick test with nothing real at stake: `configure --throwaway-workspace
 --relay-url URL --force` makes a random workspace nobody else holds. It needs

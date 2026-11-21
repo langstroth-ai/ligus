@@ -20,7 +20,10 @@
 //!   `PhoneOffer::check_answer`: `ok mine <outcome>`, `ok another <outcome>`.
 //! - `requestSlot` / `answerSlot`: the slot's JSON (`relayed`), its name,
 //!   `nowMs`, the signer's Ed25519 `slotKey` (hex) → `check_relayed_request`
-//!   / `check_relayed_answer`, with the `preimage` they sign.
+//!   / `check_relayed_answer`, with the `preimage` they sign. A request
+//!   slot's name is `phone-enroll:<rid>:<relay>:<phoneTag>`; its line also
+//!   carries the expected `phoneTag` (`phone_slot_tag` of the `rid` and the
+//!   request's own device id).
 //!
 //! `crates/ligus-core/tests/golden/differential/rust_parity_enroll_v1.jsonl`:
 //! the iOS app's differential corpus (as `rust_parity_v1.jsonl` for phone
@@ -702,6 +705,7 @@ fn generate_golden() -> String {
     let desk_kp = SigningKeypair::from_seed(&[0x42; 32]).unwrap();
     let box_id = u(0xb0);
     let rr = RelayedRequest::new(&ra, box_id, NOW_MS).sign(&box_kp);
+    let ra_device = req_a.device_id();
     let slot_line = |label: &str,
                      check: &str,
                      slot: &str,
@@ -710,7 +714,10 @@ fn generate_golden() -> String {
                      signer: &SigningKeypair,
                      now_ms: i64,
                      expect: String| {
-        line(vec![
+        // A request slot's name ends with the phone's tag (SHA-256 of
+        // the context, `rid` and the code's device id, 16 bytes).
+        let tag = (check == "requestSlot").then(|| phone_slot_tag(keys.rid, ra_device));
+        let mut pairs = vec![
             ("label", json!(label)),
             ("check", json!(check)),
             ("slot", json!(slot)),
@@ -719,7 +726,11 @@ fn generate_golden() -> String {
             ("slotKey", json!(hex(&signer.public_key_bytes()))),
             ("nowMs", json!(now_ms)),
             ("expect", json!(expect)),
-        ])
+        ];
+        if let Some(tag) = tag {
+            pairs.push(("phoneTag", json!(tag)));
+        }
+        line(pairs)
     };
     let req_check =
         |slot: &str, r: &RelayedRequest, now_ms: i64, signer: &SigningKeypair, signer_id: Uuid| {
@@ -730,7 +741,7 @@ fn generate_golden() -> String {
                 Err(e) => e.code().to_string(),
             }
         };
-    let rslot = request_slot(keys.rid, box_id);
+    let rslot = request_slot(keys.rid, box_id, ra_device);
     out.push(slot_line(
         "requestSlot/valid",
         "requestSlot",
@@ -741,7 +752,7 @@ fn generate_golden() -> String {
         NOW_MS,
         req_check(&rslot, &rr, NOW_MS, &box_kp, box_id),
     ));
-    let other_slot = request_slot(keys.rid, u(0xb1));
+    let other_slot = request_slot(keys.rid, u(0xb1), ra_device);
     out.push(slot_line(
         "requestSlot/in another box's slot",
         "requestSlot",
@@ -751,6 +762,17 @@ fn generate_golden() -> String {
         &box_kp,
         NOW_MS,
         req_check(&other_slot, &rr, NOW_MS, &box_kp, box_id),
+    ));
+    let other_phone = request_slot(keys.rid, box_id, u(0xa2));
+    out.push(slot_line(
+        "requestSlot/in another phone's slot",
+        "requestSlot",
+        &other_phone,
+        serde_json::to_value(&rr).unwrap(),
+        &rr.preimage(),
+        &box_kp,
+        NOW_MS,
+        req_check(&other_phone, &rr, NOW_MS, &box_kp, box_id),
     ));
     out.push(slot_line(
         "requestSlot/61 s old",
@@ -1338,14 +1360,24 @@ fn generate_parity() -> String {
     ] {
         late.push(req(label, &a));
     }
-    late.push(EnrollRequest::build(&valid, &a.code("Ana's iPhone"), |m| high_s(&a.sign(m))).encode());
+    late.push(
+        EnrollRequest::build(&valid, &a.code("Ana's iPhone"), |m| high_s(&a.sign(m))).encode(),
+    );
     let unclamped = {
         let label = " Ana".to_string();
         let pre = ligus_runtime::phone_enroll::preimage(a.device_id, &a.public_key, &label);
-        PhoneCode { device_id: a.device_id, public_key: a.public_key.clone(), label, signature: a.sign(&pre) }
+        PhoneCode {
+            device_id: a.device_id,
+            public_key: a.public_key.clone(),
+            label,
+            signature: a.sign(&pre),
+        }
     };
     late.push(EnrollRequest::build(&valid, &unclamped, |m| a.sign(m)).encode());
-    let elsewhere = Offer { workspace_id: u(9), ..valid.clone() };
+    let elsewhere = Offer {
+        workspace_id: u(9),
+        ..valid.clone()
+    };
     late.push(EnrollRequest::build(&elsewhere, &a.code("Ana's iPhone"), |m| a.sign(m)).encode());
     for t in &late {
         push(req_case(t, NOW_MS));

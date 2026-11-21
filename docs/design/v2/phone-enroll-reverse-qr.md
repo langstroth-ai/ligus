@@ -51,7 +51,7 @@ a fallback.
 | D4 | The desktop's QR | `ligusenroll1:` + workspace id, the desktop's device id, a 32-byte one-time secret, an expiry. The secret travels only optically. |
 | D5 | Binding | The phone's request carries its unchanged `ligusphone1:` code, a P-256 signature by the phone over the request, and an **HMAC keyed from the QR's secret**. A box, relay or member without the secret can't substitute a key, replay into another offer, or have a request accepted. One use, 5-minute expiry. Against a *stolen* QR: only a box may relay, a second phone aborts the offer, and the desktop keeps listening after approval and raises a revoke alert (the "tripwire", §8.3). |
 | D6 | Authorization | The desktop certifies through the **same** `certify_phone_code` as paste: the same `DeviceCertificateAdded`, the same fold rules, the passkey every phone enrollment needs. The box writes nothing to any log. |
-| D7 | Wire names | All new: `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`, HKDF salt `ligus-enroll-qr-v1`, contexts `ligus-enroll-request-v1\0` (phone signature and request MAC, §5.3), `ligus-enroll-answer-v1\0` (answer tag, §5.4), `ligus-enroll-relay-v1\0` and `ligus-enroll-answer-relay-v1\0` (presence-slot signatures, §5.5). Nothing existing is renamed or changed. Golden vectors in `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`. |
+| D7 | Wire names | All new: `ligusenroll1:`, `ligusenrollreq1:`, `ligusenrollres1:`, HKDF salt `ligus-enroll-qr-v1`, contexts `ligus-enroll-request-v1\0` (phone signature and request MAC, §5.3), `ligus-enroll-answer-v1\0` (answer tag, §5.4), `ligus-enroll-relay-v1\0` and `ligus-enroll-answer-relay-v1\0` (presence-slot signatures, §5.5), `ligus-enroll-slot-v1\0` (a request slot's phone tag, §5.5). Nothing existing is renamed or changed. Golden vectors in `crates/ligus-core/tests/golden/phone_enroll_qr_v1.jsonl`. |
 
 ## 3. What this builds on (code-verified)
 
@@ -111,7 +111,7 @@ Why not the alternatives:
                                                                         in <workspace>?"  [Add]
                                      ◄─ POST /v1/phone-enroll/requests {request: ligusenrollreq1:…}
                                      checks (§7.3), then publishes presence slot
-                                     phone-enroll:<rid>:<box>  (sealed, box-signed)
+                                     phone-enroll:<rid>:<box>:<phone>  (sealed, box-signed)
  polls presence, opens the slot,
  checks MAC (s), phone sig, code,
  offer, standing                                                       shows its fingerprint, waits
@@ -212,12 +212,20 @@ and the sealed JSON is signed by the writer's device key over
 
 | Slot | Field | Writer | Plaintext | Signature context |
 |---|---|---|---|---|
-| `phone-enroll:<b64u rid>:<box device id>` | `phoneEnrollRequest` | the box that took the request | `{request, relay: <box device id>, at}` | `ligus-enroll-relay-v1\0` |
+| `phone-enroll:<b64u rid>:<box device id>:<phone tag>` | `phoneEnrollRequest` | the box that took the request (one slot per request) | `{request, relay: <box device id>, at}` | `ligus-enroll-relay-v1\0` |
 | `phone-enroll-answer:<b64u rid>` | `phoneEnrollAnswer` | the desktop that showed the QR | `{answer, desktop: <device id>, at}` | `ligus-enroll-answer-relay-v1\0` |
 
+`phone tag` = `b64u(SHA-256("ligus-enroll-slot-v1\0" ‖ rid ‖ phone_device_id)[..16])`
+(22 characters), with `phone_device_id` the device id of the request's
+code. One slot per (offer, box, phone): a box publishes every request it
+holds for an offer at once, so a desktop listing presence sees all of them
+(the hold, §8.3), and the tag keyed by `rid` keeps a phone's slots
+unlinkable across offers and to its device id. A name is at most 95
+characters (the relay allows 256).
+
 Readers drop a blob that doesn't open at or after the authorized head, isn't
-in the slot its `rid` (and, for a request, its `relay`) names, or whose `at`
-is more than 30 s ahead or 60 s old. Signers are narrowed (review R2):
+in the slot its `rid` (and, for a request, its `relay` and its code's
+device id) names, or whose `at` is more than 30 s ahead or 60 s old. Signers are narrowed (review R2):
 
 - a **request** slot counts only when signed by a certified, unrevoked
   device of a current **service member** (a box;
@@ -228,8 +236,9 @@ is more than 30 s ahead or 60 s old. Signers are narrowed (review R2):
   `desktop_device_id` (the box checks it against the roster, the phone
   checks the tag).
 
-The box re-publishes every 10 s while the request is pending and writes `{}`
-when it settles; the desktop does the same for its answer until the offer's
+The box publishes a request's slot as soon as it takes the request,
+re-publishes it every 10 s while it is pending, and writes `{}` when it
+settles (answered for its phone, replaced, evicted or expired); the desktop does the same for its answer until the offer's
 expiry.
 
 The relay sees two slot names per enrollment and the timing; the slot's
@@ -339,11 +348,11 @@ everything it can:
      operator caller, 1 per paired tunnel peer;
    - 16 pending in all; when full, the oldest pending request of the caller
      holding the most is evicted (a flood evicts itself);
-   - at most 30 accepted per minute; at most 16 `phone-enroll:*` slots
-     published at once.
+   - at most 30 accepted per minute; one `phone-enroll:*` slot per pending
+     request, so at most 16 published at once.
 
 It can't check `mac` (it never has `s`). Then it publishes the
-`phone-enroll:<rid>:<its device id>` slot (§5.5) and answers `202 {rid,
+`phone-enroll:<rid>:<its device id>:<phone tag>` slot (§5.5) at once and answers `202 {rid,
 state: "relayed"}`. Re-submitting the same bytes is idempotent; pending requests
 live in memory until `exp` and are dropped on restart (the phone
 re-submits on a 404 from the status route).
@@ -398,8 +407,11 @@ New Tauri commands (`app/src/phones_ui.rs`):
   `phone_sig`, `PhoneCode::decode(code_body)`, `phone_standing`. Returns
   `waiting`, `request {label, fingerprint, deviceId, standing, via}`, or a
   refusal.
-- `phone_enroll_offer_approve(fingerprint, rid)`: re-runs the checks, then
-  `confirm_matches_preview` (`phones_ui.rs:74`, fingerprint and workspace),
+- `phone_enroll_offer_approve(fingerprint, rid)`: first lists presence
+  itself and runs the poll's checks on every slot for the offer (a request
+  from another phone aborts the offer and refuses: "Two phones answered
+  this code", the poll's `aborted`; no listing, no approval), then re-runs
+  the checks, then `confirm_matches_preview` (`phones_ui.rs:74`, fingerprint and workspace),
   then `certify_phone_code(ws, &code)`: the passkey sheet names the
   fingerprint (`phone_enroll.rs` test `the_passkey_sheet_names_the_fingerprint`).
   Refused within 5 s of the request first appearing (the hold, §8.3).
@@ -448,7 +460,11 @@ phones answer one code**. So:
 
 - **Hold.** **Add this phone** stays disabled for 5 s after the request
   first appears. A second phone answering within that time aborts the
-  offer before anything is certified.
+  offer before anything is certified. Every request a box holds for the
+  offer is on the relay at once (one slot each, published when the box
+  takes it, §5.5), so each poll sees all of them, and the approval itself
+  looks once more right before certifying (§8.1), so a page that stopped
+  polling can't skip the abort.
 - **Tripwire.** After approval the offer is *watched* until `exp`: the
   desktop keeps polling, and a different valid request raises a blocking
   alert, "Another phone answered this code after you added *label*
@@ -722,3 +738,33 @@ the code settled it as follows (the golden vectors pin each one):
   answer naming the real phone stopped the box relaying it (the offer's
   desktop then saw no second phone: no abort, no tripwire) and the real
   desktop's answer was refused.
+
+### Resolved in the security review of the build (0.1.1)
+
+- **The hold saw only one request at a time** (concern A). The box showed
+  one request per offer in a single slot `phone-enroll:<rid>:<box>`,
+  rotating every 3 s on a 2 s loop, so each request showed for about 4 s.
+  With the desktop polling every 2 s, a second phone arriving just after
+  the first could first be visible about 6 s after the first sighting, past
+  the 5-second hold (more pending requests made it later), and the
+  approval went through; only the tripwire caught it. Now each pending
+  request has its own slot, `phone-enroll:<rid>:<box>:<phone tag>` (§5.5),
+  published as soon as the box takes it: a desktop poll sees every request
+  the box holds for the offer, with no timing dependency. The slot's
+  payload, signature and seal are unchanged; only its name gained the
+  phone tag (new, unreleased). Chosen over a slot carrying a list (a
+  larger signed payload, the iOS port's preimage changes, and one bad entry
+  would spoil the rest) and over a count or a rotation contract (both keep
+  the desktop's safety tied to the box's timing). Tests:
+  `a_second_phone_just_after_the_first_aborts_the_offer_within_the_hold`
+  and `every_pending_request_for_an_offer_is_visible_at_once`
+  (`crates/ligus-cli/src/serve/phone_enroll_api.rs`).
+- **Approval didn't look again** (concern B). `phone_enroll_offer_approve`
+  enforced the hold, the lock and the fingerprint but read no presence, so
+  a page that stopped polling after the first sighting skipped the
+  two-phones abort. Now the command lists presence itself and runs the
+  poll's checks right before certifying; another phone aborts the offer
+  and refuses ("Two phones answered this code"), and with no listing
+  there is no approval. Test:
+  `approve_looks_again_and_refuses_when_a_second_phone_answered`
+  (`app/src/phone_enroll_ui/tests.rs`).
