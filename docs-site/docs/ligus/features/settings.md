@@ -264,7 +264,9 @@ Per-device settings for [Flow](flow.md):
 - **Check for updates** — reports the version you're on and checks
   whether a newer **signed** build is available, then installs it.  When an
   in-place update can't be applied, Ligus links to the release on GitHub
-  instead.
+  instead. A newer release also shows as **Update available** in the status
+  bar; click it for **Download**, **Later** (until the next launch) or
+  **Skip this version**.
 - **Export data** — download a copy of this device's local data.
 
 ## Diagnostics
