@@ -9,11 +9,11 @@
     | `langstroth-relay` image | yes, 0.3.0 (amd64, arm64) | `ghcr.io/langstroth-ai/langstroth-relay:0.3.0` |
     | `langstroth-auth` chart | yes, 0.1.0 | `oci://ghcr.io/langstroth-ai/charts/langstroth-auth --version 0.1.0` |
     | `langstroth-auth` image | yes, 0.3.0 | `ghcr.io/langstroth-ai/langstroth-auth:0.3.0` |
-    | `ligus` chart | no | [`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus) in this repository (chart 0.1.0) |
+    | `ligus` chart | no | [`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus) in this repository (chart 0.1.1) |
     | `ligus` image | no | build it from [`deploy/container/Dockerfile`](https://github.com/langstroth-ai/ligus/blob/main/deploy/container/Dockerfile) |
 
     The relay pieces are pulled anonymously; no registry login is needed.
-    The Ligus 0.1.0 release publishes the desktop apps and the `ligus` CLI
+    Each Ligus release publishes the desktop apps and the `ligus` CLI
     binaries (including static Linux builds), not a container image or a
     chart: its Kubernetes check builds the image and installs the chart on
     a throwaway kind cluster, then discards both. Install the `ligus` chart
@@ -204,9 +204,9 @@ pull from. The relay chart and image are published, so the relay needs no
 build:
 
 ```sh
-# in a ligus checkout at v0.1.0
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
-docker push registry.example.com/ligus:0.1.0
+# in a ligus checkout at v0.1.1
+docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.1 .
+docker push registry.example.com/ligus:0.1.1
 ```
 
 ### Relay
@@ -283,7 +283,7 @@ Create the workspace on a desktop first (**Add workspace → Create**) and take
 the room and key from its invite, or from **Settings → Team sync**. Then:
 
 ```sh
-# in a ligus checkout at v0.1.0: fetch the chart's one dependency, the
+# in a ligus checkout at v0.1.1: fetch the chart's one dependency, the
 # published langstroth-relay chart (optional at runtime, needed to render)
 helm dependency build deploy/helm/ligus
 
@@ -296,7 +296,7 @@ kubectl -n ligus-ws-acme create secret generic acme-workspace \
 kubectl -n ligus-ws-acme create secret generic acme-serve-admission \
   --from-file=admission=./serve-admission.txt
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
-  --set image.repository=registry.example.com/ligus --set image.tag=0.1.0 \
+  --set image.repository=registry.example.com/ligus --set image.tag=0.1.1 \
   --set relayUrl=https://relay.example.com \
   --set workspace.existingSecret=acme-workspace \
   --set workspace.relayAccessToken=true \
