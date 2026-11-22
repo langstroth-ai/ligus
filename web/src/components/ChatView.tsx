@@ -1460,7 +1460,7 @@ export function ChatView({
               </button>
               <button
                 type="button"
-                className="ml-auto shrink-0 opacity-60 hover:opacity-100"
+                className="ml-auto shrink-0 text-ink-soft hover:text-ink"
                 aria-label="Dismiss"
                 title="Dismiss"
                 onClick={() => setModelNotice(null)}

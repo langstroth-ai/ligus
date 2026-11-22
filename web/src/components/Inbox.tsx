@@ -151,7 +151,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" data-testid="inbox">
       <div className="mx-auto w-full max-w-[760px] px-6 py-6">
-        <h1 className="text-[17px] font-semibold" style={{ color: "var(--ligus-ink)" }}>
+        <h1 className="ligus-title" style={{ color: "var(--ligus-ink)" }}>
           Inbox
         </h1>
         <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you right now."}</p>

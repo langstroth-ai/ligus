@@ -104,7 +104,7 @@ export function UpdateStatusItem() {
           panelClassName="w-[380px] max-w-full rounded-2xl border p-5"
           panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
         >
-          <h2 className="text-sm font-semibold">Update available</h2>
+          <h2 className="ligus-section">Update available</h2>
           <div className="mt-0.5 text-sm text-ink-soft">{u.info.name || u.info.tag}</div>
           {u.info.notes && <div className="mt-2 text-xs text-ink-soft">{u.info.notes}</div>}
           <div className="mt-4 flex items-center justify-end gap-2">
