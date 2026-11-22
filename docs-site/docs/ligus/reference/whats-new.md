@@ -4,6 +4,20 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Desktop
+
+- **Pick the model while you chat.** The route pill under the composer
+  opens a second step for each runtime: **Default**, the models its harness
+  offers (Claude Code, Codex, Copilot CLI, Antigravity, Ollama and
+  OpenAI-compatible servers), and **Other…**. The choice is kept per chat
+  on this computer and shows in the line under the chat title, and each
+  reply is labelled with the model it ran with. A model your account can't
+  use is reported in one line with **Pick another model** instead of a
+  failed reply. Settings offers the same lists. See
+  [Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model).
+
 ## 0.1.1
 
 A patch release: add your phone by scanning the desktop's code, Face ID
