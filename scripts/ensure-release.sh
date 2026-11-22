@@ -18,10 +18,8 @@
 # docs/packaging.md. Two drafts for one tag are refused too, since uploads
 # by tag would not know which one to use.
 #
-# After publish, the owner writes the notes and promotes it by hand:
-#
-#   gh release edit <tag> --title "Ligus <tag>" --notes-file notes.md \
-#     --prerelease=false --latest
+# After publish, an admin promotes it to Latest with promote-release.yml
+# (notes from docs/release-notes/<tag>.md).
 #
 # Needs GH_TOKEN with contents: write (drafts are invisible without it).
 set -euo pipefail
