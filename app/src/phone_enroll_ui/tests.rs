@@ -496,13 +496,18 @@ fn the_desktops_own_device_cannot_relay_a_request() {
 
 // ---- the precheck (review R8) ----
 
+fn has(reasons: &[PrecheckReason], code: &str, words: &str) -> bool {
+    reasons.iter().any(|r| r.code == code && r.text.contains(words))
+}
+
 #[test]
 fn the_precheck_names_what_is_missing() {
     let (svc, ws) = desktop();
-    assert!(precheck_reasons(&svc, ws, true, false).iter().any(|r| r.contains("shared workspace")));
-    assert!(precheck_reasons(&svc, ws, false, false).iter().any(|r| r.contains("relay connection")));
+    let online = BoxReach::Online;
+    assert!(has(&precheck_reasons(&svc, ws, true, false, &online), "localWorkspace", "shared"));
+    assert!(has(&precheck_reasons(&svc, ws, false, false, &online), "noRelay", "relay connection"));
     // No passkey or recovery key yet on this workspace.
-    assert!(precheck_reasons(&svc, ws, false, true).iter().any(|r| r.contains("passkey")));
+    assert!(has(&precheck_reasons(&svc, ws, false, true, &online), "noPasskey", "passkey"));
     let mut nobody = ChatService::new(
         EventStore::open_in_memory().unwrap(),
         SigningKeypair::generate().unwrap(),
@@ -510,7 +515,7 @@ fn the_precheck_names_what_is_missing() {
         ActorIdentity::new("x", "X", ActorKind::Human),
     );
     nobody.ensure_workspace_config(ws).ok();
-    assert!(precheck_reasons(&nobody, ws, false, true).iter().any(|r| r.contains("no account")));
+    assert!(has(&precheck_reasons(&nobody, ws, false, true, &online), "noAccount", "no account"));
     let mut boxed = ChatService::new(
         EventStore::open_in_memory().unwrap(),
         SigningKeypair::generate().unwrap(),
@@ -518,7 +523,7 @@ fn the_precheck_names_what_is_missing() {
         ActorIdentity::new("b", "Box", ActorKind::Service),
     );
     boxed.ensure_workspace_config(ws).ok();
-    assert!(precheck_reasons(&boxed, ws, false, true).iter().any(|r| r.contains("your own desktop")));
+    assert!(has(&precheck_reasons(&boxed, ws, false, true, &online), "notYourDevice", "your own desktop"));
 }
 
 #[test]
@@ -527,7 +532,49 @@ fn the_precheck_passes_once_the_account_has_a_credential() {
     // The test presence registers a recovery key on first use: certify a phone.
     let p = Phone::new();
     svc.certify_phone_code(ws, &code_of(&p, "x")).unwrap();
-    assert!(precheck_reasons(&svc, ws, false, true).is_empty(), "{:?}", precheck_reasons(&svc, ws, false, true));
+    let reasons = precheck_reasons(&svc, ws, false, true, &BoxReach::Online);
+    assert!(reasons.is_empty(), "{reasons:?}");
+    assert!(PrecheckDto::from_reasons(reasons).ready);
+}
+
+#[test]
+fn the_precheck_says_when_no_box_can_carry_the_request() {
+    let (mut svc, ws) = desktop();
+    svc.certify_phone_code(ws, &code_of(&Phone::new(), "x")).unwrap();
+
+    // No box at all blocks: the phone has nothing to go through.
+    let dto = PrecheckDto::from_reasons(precheck_reasons(&svc, ws, false, true, &BoxReach::None));
+    assert!(!dto.ready);
+    assert_eq!(dto.reasons.iter().map(|r| r.code).collect::<Vec<_>>(), vec!["noBox"]);
+    assert_eq!(dto.missing.len(), 1);
+
+    // A box that's only quiet warns but doesn't block: presence may lag.
+    let quiet = BoxReach::Quiet { label: "serve-box".into(), minutes: 12 };
+    let dto = PrecheckDto::from_reasons(precheck_reasons(&svc, ws, false, true, &quiet));
+    assert!(dto.ready, "{dto:?}");
+    assert!(dto.missing.is_empty());
+    assert!(has(&dto.reasons, "noBoxOnline", "serve-box was last seen 12 min ago"));
+    assert!(!dto.reasons[0].blocking);
+
+    // Without a relay, box presence can't be read: no guess about it.
+    assert!(!precheck_reasons(&svc, ws, false, false, &quiet).iter().any(|r| r.code == "noBoxOnline"));
+    // A local workspace already says what to do; no box advice on top.
+    assert!(!precheck_reasons(&svc, ws, true, true, &BoxReach::None).iter().any(|r| r.code == "noBox"));
+}
+
+#[test]
+fn box_reach_reads_the_roster_and_presence() {
+    use ligus_core::{HostKind, WorkspaceHost};
+    let desk = WorkspaceHost::new("d", HostKind::Device, "Mac");
+    let a = WorkspaceHost::new("a", HostKind::Worker, "old-box");
+    let b = WorkspaceHost::new("b", HostKind::Worker, "serve-box");
+    let seen = |h: &WorkspaceHost| if h.id == "b" { 1_000 } else { 400 };
+    assert_eq!(box_reach(&[desk.clone()], |_| true, 2_000, seen), BoxReach::None);
+    assert_eq!(box_reach(&[desk.clone(), a.clone(), b.clone()], |h| h.id == "a", 2_000, seen), BoxReach::Online);
+    assert_eq!(
+        box_reach(&[desk, a, b], |_| false, 1_000 + 12 * 60, seen),
+        BoxReach::Quiet { label: "serve-box".into(), minutes: 12 }
+    );
 }
 
 // ---- T10: log hygiene ----

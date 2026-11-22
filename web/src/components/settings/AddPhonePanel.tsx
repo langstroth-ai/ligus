@@ -15,7 +15,9 @@ import {
   type PhoneCodeDto,
   type PhoneEnrollOfferDto,
   type PhoneEnrollPrecheckDto,
+  type PhoneEnrollPrecheckReasonDto,
 } from "@/lib/ipc";
+import { openAdmitBox, openSettingsTab } from "@/lib/nav";
 import { Button, LinkButton, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 
@@ -33,6 +35,49 @@ type Phase =
   | "approving" // the passkey sheet is up
   | "aborted" // two phones answered
   | "expired";
+
+/// The precheck's findings, split into what stops Show code and what's only
+/// worth knowing. Older builds send texts only. Exported for tests.
+export function splitPrecheck(p: PhoneEnrollPrecheckDto | null): {
+  blockers: PhoneEnrollPrecheckReasonDto[];
+  warnings: PhoneEnrollPrecheckReasonDto[];
+} {
+  if (!p) return { blockers: [], warnings: [] };
+  const reasons = p.reasons ?? p.missing.map((text) => ({ code: "", text, blocking: true }));
+  return { blockers: reasons.filter((r) => r.blocking), warnings: reasons.filter((r) => !r.blocking) };
+}
+
+/// The link that fixes a precheck finding, when the fix is a place in the app.
+/// Exported for tests.
+export function precheckFix(code: string): { label: string; run: () => void } | null {
+  switch (code) {
+    case "noBox":
+    case "noBoxOnline":
+      return { label: "Admit a box", run: openAdmitBox };
+    case "noRelay":
+      return { label: "Open Team & sync", run: () => openSettingsTab("team-sync") };
+    case "noPasskey":
+      return { label: "Add a passkey", run: () => openSettingsTab("passkeys") };
+    default:
+      return null;
+  }
+}
+
+/// One finding: what's missing, then "→ the fix".
+function PrecheckItem({ reason }: { reason: PhoneEnrollPrecheckReasonDto }) {
+  const fix = precheckFix(reason.code);
+  return (
+    <li className="flex flex-wrap items-baseline gap-x-1.5" data-code={reason.code || undefined}>
+      <span className={reason.blocking ? "" : "text-ink-soft"}>{reason.text}</span>
+      {fix && (
+        <>
+          <span aria-hidden className="text-ink-soft">→</span>
+          <LinkButton onClick={fix.run}>{fix.label}</LinkButton>
+        </>
+      )}
+    </li>
+  );
+}
 
 /// "Add a phone" (Settings → Profile → My devices). The desktop shows a QR
 /// code; the phone scans it with the Ligus app (Settings → This phone → Add
@@ -62,6 +107,8 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
   const cardRef = useRef<HTMLDivElement>(null);
   const announced60 = useRef(false);
 
+  // Bumped by "Check again" to rerun the precheck.
+  const [checkNonce, setCheckNonce] = useState(0);
   useEffect(() => {
     let alive = true;
     phoneEnrollPrecheck()
@@ -80,7 +127,7 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
     return () => {
       alive = false;
     };
-  }, []);
+  }, [checkNonce]);
 
   // Closing the panel drops an offer nobody answered yet (an approved one is
   // already watched in the background).
@@ -255,6 +302,7 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
   const holding = now < holdUntil;
   const holdS = Math.max(1, Math.ceil((holdUntil - now) / 1000));
   const unavailable = precheck !== null && !precheck.ready;
+  const { blockers, warnings } = splitPrecheck(precheck);
 
   return (
     <div className="space-y-3 rounded-xl border px-3 py-3" style={fieldStyle} data-testid="add-phone">
@@ -263,13 +311,16 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
       </div>
       {phase === "checking" && <p className="text-xs text-ink-soft">Checking this desktop…</p>}
       {unavailable && (
-        <div className="space-y-1 text-xs" data-testid="add-phone-unavailable">
-          <p>Adding a phone by scanning a code isn't available here right now:</p>
-          <ul className="list-disc pl-4 text-ink-soft">
-            {precheck.missing.length ? (
-              precheck.missing.map((m) => <li key={m}>{m}</li>)
+        <div className="space-y-1.5 text-xs" data-testid="add-phone-unavailable">
+          <p>To add a phone by scanning a code, this desktop needs:</p>
+          <ul className="space-y-1">
+            {blockers.length ? (
+              blockers.map((r) => <PrecheckItem key={r.code + r.text} reason={r} />)
             ) : (
-              <li>The app couldn't check this desktop.</li>
+              <li className="flex flex-wrap items-baseline gap-x-2 text-ink-soft">
+                <span>Couldn't check this desktop just now.</span>
+                <LinkButton onClick={() => setCheckNonce((n) => n + 1)}>Check again</LinkButton>
+              </li>
             )}
           </ul>
           <p className="text-ink-soft">You can still add it with the phone's code below.</p>
@@ -282,6 +333,13 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
             Show a code here, then scan it with the Ligus app on your phone. Your phone needs to reach a box of this
             workspace (its pairing link).
           </p>
+          {warnings.length > 0 && (
+            <ul className="space-y-1 text-xs" data-testid="add-phone-warnings">
+              {warnings.map((r) => (
+                <PrecheckItem key={r.code + r.text} reason={r} />
+              ))}
+            </ul>
+          )}
           <div className="flex gap-2">
             <Button variant="primary" size="md" onClick={() => void showCode()}>
               Show code

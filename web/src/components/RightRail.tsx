@@ -63,7 +63,9 @@ import {
   type WorkspaceHostDto,
   type WorkspaceAgentDto,
   deleteMemberAttachments,
+  openExternal,
 } from "@/lib/ipc";
+import { docsUrl, PANE_DOCS } from "@/lib/docs";
 import { confirmDialog } from "@/components/Dialog";
 import { groupProposals, isSettled, isVotable, myVote } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
@@ -76,6 +78,7 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
+import { MoreMenu } from "@/components/MoreMenu";
 import {
   Button,
   IconButton,
@@ -245,12 +248,17 @@ const railScroll = new Map<string, number>();
 
 export function RailFrame({
   title,
-  subtitle,
+  about,
+  docs,
   children,
   actions,
 }: {
   title: string;
-  subtitle: string;
+  /// What the pane is for, in a sentence. Not shown on screen: it's the "?"
+  /// link's tooltip and accessible name, so the pane opens on its content.
+  about: string;
+  /// The docs page the "?" link opens (a path under the docs site).
+  docs: string;
   children: ReactNode;
   /// Optional header controls, right-aligned under the close button's row.
   actions?: ReactNode;
@@ -289,14 +297,41 @@ export function RailFrame({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <h2 className="ligus-title pr-8">{title}</h2>
-        <p className="mt-0.5 pr-2 text-xs leading-[1.45] text-ink-soft">{subtitle}</p>
+        <div className="flex items-center gap-1.5 pr-8">
+          <h2 className="ligus-title">{title}</h2>
+          <PaneHelpLink title={title} about={about} docs={docs} />
+        </div>
         {actions && <div className="mt-2">{actions}</div>}
       </div>
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
         {children}
       </div>
     </div>
+  );
+}
+
+/// The one help affordance in every rail pane: a small "?" beside the title.
+/// Hover (or focus) shows what the pane is for; clicking opens its docs page.
+export function PaneHelpLink({ title, about, docs }: { title: string; about: string; docs: string }) {
+  const url = docsUrl(docs);
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      title={`${about} Opens the docs.`}
+      aria-label={`About ${title}: ${about} Opens the docs.`}
+      data-testid="pane-help"
+      onClick={(e) => {
+        // The desktop webview can't open a new window: hand it to the OS browser.
+        e.preventDefault();
+        void openExternal(url).catch(() => window.open(url, "_blank", "noopener"));
+      }}
+      className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border text-[11px] font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
+      style={{ borderColor: "var(--ligus-line)" }}
+    >
+      ?
+    </a>
   );
 }
 
@@ -414,7 +449,7 @@ function ToolsPane({
   const enabledMcp = mcpList.filter((s) => s.enabled);
 
   return (
-    <RailFrame title="Tools" subtitle="What the agents here can reach, and where it's configured.">
+    <RailFrame title="Tools" about="What the agents here can reach, and where it's configured." docs={PANE_DOCS.tools}>
       <ScopeToggle scope={scope} onScope={setScope} />
 
       {scope === "chat" ? (
@@ -520,12 +555,16 @@ function ToolsPane({
         </>
       ) : (
         <>
-          <Section title="Agent roster">
-            <p className="px-1 pb-1 text-[11.5px] leading-snug" style={{ color: "var(--ligus-ink-soft)" }}>
-              Agents are personas you @mention — each bound to a host. Their host
-              is where they run: this device, or a Worker (a headless box you
-              enroll under People → Remote agents).
-            </p>
+          <Section
+            title="Agent roster"
+            action={
+              <PaneHelpLink
+                title="agents"
+                about="Agents are personas you @mention, each bound to a host: this device, or a worker (a headless box you enroll under People → Remote agents)."
+                docs="ligus/concepts/agents/"
+              />
+            }
+          >
             {agentList.length === 0 ? (
               <EmptyHint text="No workspace agents yet. Add one below." />
             ) : (
@@ -536,7 +575,11 @@ function ToolsPane({
                   agent={agent}
                   hosts={hostList}
                   onRemove={() =>
-                    confirmThen("Remove this agent?", () => removeAgentMutation.mutate(agent.id))
+                    void confirmDialog(agentRemovalConsequences(agent.name), {
+                      title: `Remove @${agent.name}?`,
+                      confirmLabel: "Remove agent",
+                      danger: true,
+                    }).then((ok) => ok && removeAgentMutation.mutate(agent.id))
                   }
                   onChanged={() => qc.invalidateQueries({ queryKey: ["agents", sessionId] })}
                 />
@@ -849,6 +892,17 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
   );
 }
 
+/// What removing a workspace agent costs, said before it happens. The roster
+/// is workspace-wide and synced, so it's gone for everyone; workflow stages
+/// that name it fail ("its agent is no longer in the roster").
+export function agentRemovalConsequences(name: string): string {
+  return (
+    `@${name} leaves every chat in this workspace, for everyone. ` +
+    `Mentions of @${name} go unanswered, and workflow stages that use it stop with an error. ` +
+    `Its avatar and access settings are deleted; adding it again starts from scratch.`
+  );
+}
+
 /// Editable agent row (Workspace scope): avatar upload + host badge + remove.
 function AgentRosterRow({
   sessionId,
@@ -916,30 +970,29 @@ function AgentRosterRow({
                 <AgentAccessPanel sessionId={sessionId} agent={agent} />
               </div>
             )}
-            {agent.avatarUrl && (
-              <button
-                onClick={async () => {
-                  try {
-                    await setAgentAvatar(sessionId, agent.id, null, null);
-                    onChanged();
-                  } catch (err) {
-                    toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
-                  }
-                }}
-                className="mt-1 text-xs text-ink-soft hover:text-ink"
-              >
-                Remove avatar
-              </button>
-            )}
           </div>
         </div>
-        <button
-          onClick={onRemove}
-          className="text-xs hover:opacity-80"
-          style={{ color: "var(--ligus-danger-ink)" }}
-        >
-          Remove
-        </button>
+        <MoreMenu
+          label={`More actions for @${agent.name}`}
+          items={[
+            ...(agent.avatarUrl
+              ? [
+                  {
+                    label: "Clear avatar",
+                    onSelect: async () => {
+                      try {
+                        await setAgentAvatar(sessionId, agent.id, null, null);
+                        onChanged();
+                      } catch (err) {
+                        toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
+                      }
+                    },
+                  },
+                ]
+              : []),
+            { label: "Remove from workspace…", danger: true, onSelect: onRemove },
+          ]}
+        />
       </div>
       {agent.canManageAccess && <AgentAccessPanel sessionId={sessionId} agent={agent} />}
     </Card>
@@ -1939,7 +1992,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   const loading = proposals.isPending || sets.isPending;
   const failed = proposals.isError || sets.isError;
   return (
-    <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
+    <RailFrame title="Review" about="Pending decisions and proposal quorum for this chat." docs={PANE_DOCS.review}>
       <AgentAsks sessionId={sessionId} />
       <QueuedWorkSection />
       {failed && (
@@ -2244,7 +2297,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <RailFrame title="People" subtitle="Workspace members and governance roles for this chat.">
+    <RailFrame title="People" about="Workspace members and governance roles for this chat." docs={PANE_DOCS.people}>
       <Section title="Members">
         {error && (
           <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
@@ -2763,7 +2816,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
   const placeholder = kind === "https" ? "https://…/file.md" : "owner/repo/path.md@main";
 
   return (
-    <RailFrame title="Vaults" subtitle="Reference material mounted into this workspace.">
+    <RailFrame title="Vaults" about="Reference material mounted into this workspace." docs={PANE_DOCS.vaults}>
       <Section title="Sources">
         {(vaults.data ?? []).map((vault) => (
           <Card key={vault.url} className="px-3 py-3">
@@ -2864,7 +2917,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <RailFrame title="Skills" subtitle="Instruction bundles injected into the active participants.">
+    <RailFrame title="Skills" about="Instruction bundles injected into the active participants." docs={PANE_DOCS.skills}>
       <Section title="Loaded Skills">
         {(skills.data ?? []).map((skill) => (
           <Card key={skill.id} className="px-3 py-3">
@@ -2929,7 +2982,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
 
 function ActivityPane() {
   return (
-    <RailFrame title="Activity" subtitle="Recent runtime activity (agents, sync, errors) + the live chat stream.">
+    <RailFrame title="Activity" about="Recent runtime activity (agents, sync, errors) + the live chat stream." docs={PANE_DOCS.activity}>
       <div className="h-[calc(100vh-12rem)] min-h-[18rem] rounded-2xl border p-1.5" style={panelStyle}>
         <div className="h-full overflow-hidden rounded-xl">
           <LogsView />
@@ -3018,14 +3071,14 @@ function ContextPane({
 
   if (telemetry.isError) {
     return (
-      <RailFrame title="Context" subtitle="Real backend context budget and compaction state.">
+      <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
         <EmptyHint text="Context telemetry is temporarily unavailable. Keep chatting and retry this tab." />
       </RailFrame>
     );
   }
 
   return (
-    <RailFrame title="Context" subtitle="Real backend context budget and compaction state.">
+    <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
       <Section title="Budget">
         <div className="rounded-2xl border p-3" style={panelStyle}>
           <div className="mb-2 flex items-center justify-between text-xs">

@@ -159,7 +159,67 @@ pub(crate) struct TripwireDto {
 pub(crate) struct PrecheckDto {
     pub ready: bool,
     /// What's missing, in words; the panel opens on the paste flow then.
+    /// The blocking reasons' texts (kept for older pages).
     pub missing: Vec<String>,
+    /// Every finding, blocking or not, with a stable code the panel turns
+    /// into a link to the fix ("No box reachable → Admit a box").
+    pub reasons: Vec<PrecheckReason>,
+}
+
+/// One precheck finding.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrecheckReason {
+    /// `localWorkspace`, `noRelay`, `notYourDevice`, `noAccount`,
+    /// `noPasskey`, `noBox` or `noBoxOnline`.
+    pub code: &'static str,
+    pub text: String,
+    /// False for a warning that doesn't stop Show code (a box that hasn't
+    /// been seen lately may only be slow to report in).
+    pub blocking: bool,
+}
+
+impl PrecheckReason {
+    fn blocking(code: &'static str, text: impl Into<String>) -> Self {
+        Self { code, text: text.into(), blocking: true }
+    }
+}
+
+impl PrecheckDto {
+    pub(crate) fn from_reasons(reasons: Vec<PrecheckReason>) -> Self {
+        let missing: Vec<String> = reasons.iter().filter(|r| r.blocking).map(|r| r.text.clone()).collect();
+        Self { ready: missing.is_empty(), missing, reasons }
+    }
+}
+
+/// Whether a box (an always-on `ligus serve` host) can carry the phone's
+/// request to this desktop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoxReach {
+    /// At least one box was seen recently.
+    Online,
+    /// Boxes are registered but none was seen lately: the newest one's label
+    /// and how many minutes ago it was seen.
+    Quiet { label: String, minutes: i64 },
+    /// The workspace has no box at all.
+    None,
+}
+
+/// Where the workspace's boxes stand, from the host roster and presence.
+pub(crate) fn box_reach(hosts: &[ligus_core::WorkspaceHost], online: impl Fn(&ligus_core::WorkspaceHost) -> bool, now_s: i64, last_seen_s: impl Fn(&ligus_core::WorkspaceHost) -> i64) -> BoxReach {
+    let boxes: Vec<_> = hosts.iter().filter(|h| h.kind == ligus_core::HostKind::Worker).collect();
+    if boxes.is_empty() {
+        return BoxReach::None;
+    }
+    if boxes.iter().any(|h| online(h)) {
+        return BoxReach::Online;
+    }
+    let newest = boxes.iter().max_by_key(|h| last_seen_s(h)).expect("non-empty");
+    let label = crate::shown(&newest.label);
+    BoxReach::Quiet {
+        label: if label.trim().is_empty() { "your box".into() } else { label },
+        minutes: ((now_s - last_seen_s(newest)) / 60).max(1),
+    }
 }
 
 fn phone_dto(code: &PhoneCode, standing: &PhoneStanding, via: String, duplicate_label: bool) -> EnrollPhoneDto {
@@ -646,26 +706,55 @@ fn shield_for(app: &AppHandle) -> impl Fn(bool) + '_ {
     }
 }
 
-/// The reasons this desktop can't finish an enrollment in `ws`.
-pub(crate) fn precheck_reasons(svc: &ChatService, ws: Uuid, local: bool, presence: bool) -> Vec<String> {
-    let mut missing = Vec::new();
+/// The reasons this desktop can't finish an enrollment in `ws`, and the
+/// warnings worth knowing first. Each names what's missing; the panel adds
+/// the link to the fix.
+pub(crate) fn precheck_reasons(svc: &ChatService, ws: Uuid, local: bool, presence: bool, boxes: &BoxReach) -> Vec<PrecheckReason> {
+    let mut out = Vec::new();
     if local {
-        missing.push("Open a shared workspace first: phones join a workspace you share through a box.".into());
+        out.push(PrecheckReason::blocking(
+            "localWorkspace",
+            "This workspace is only on this device. Phones join a workspace you share through a box: switch to a shared one.",
+        ));
     }
     if !presence {
-        missing.push("This workspace has no relay connection, so the phone's answer can't reach this desktop.".into());
+        out.push(PrecheckReason::blocking(
+            "noRelay",
+            "No relay connection, so the phone's answer can't reach this desktop.",
+        ));
     }
     if svc.is_delegated() || svc.author().kind == ActorKind::Service {
-        missing.push("This device acts for an account it doesn't hold: add the phone from your own desktop.".into());
+        out.push(PrecheckReason::blocking(
+            "notYourDevice",
+            "This device acts for an account it doesn't hold. Add the phone from your own desktop.",
+        ));
     }
     match svc.author().account_id {
-        None => missing.push("This device has no account yet: sign in first.".into()),
-        Some(a) if !local && svc.passkeys_of(ws, a).unwrap_or_default().is_empty() => {
-            missing.push("Adding a phone needs your passkey: add a passkey (or a recovery key) under Settings → Passkeys & keys first.".into())
-        }
+        None => out.push(PrecheckReason::blocking("noAccount", "This device has no account yet. Sign in first.")),
+        Some(a) if !local && svc.passkeys_of(ws, a).unwrap_or_default().is_empty() => out.push(PrecheckReason::blocking(
+            "noPasskey",
+            "No passkey or recovery key for your account here. Adding a phone is approved with one.",
+        )),
         Some(_) => {}
     }
-    missing
+    if !local {
+        match boxes {
+            BoxReach::None => out.push(PrecheckReason::blocking(
+                "noBox",
+                "No box in this workspace. The phone reaches you through an always-on box (ligus serve).",
+            )),
+            // Without a relay, presence can't be read: don't guess.
+            BoxReach::Quiet { label, minutes } if presence => out.push(PrecheckReason {
+                code: "noBoxOnline",
+                text: format!(
+                    "No box reachable right now: {label} was last seen {minutes} min ago. The phone's request goes through it, so start it first."
+                ),
+                blocking: false,
+            }),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn account_for(svc: &ChatService, ws: Uuid, workspace_name: String) -> EnrollAccountDto {
@@ -702,6 +791,18 @@ fn conn_for(state: &AppState, ws: Uuid) -> Option<(ligus_runtime::RelayClient, S
     crate::active_presence_conn(state).filter(|(_, room, _)| crate::room_workspace_id(room) == ws)
 }
 
+/// [`box_reach`] for `ws`, with this app's host presence.
+fn box_reach_for(state: &AppState, svc: &ChatService, ws: Uuid) -> BoxReach {
+    let hosts = svc.list_hosts(ws).unwrap_or_default();
+    let now = ligus_core::Timestamp::now();
+    box_reach(
+        &hosts,
+        |h| state.host_presence.is_online(h, &now),
+        now.inner().unix_timestamp(),
+        |h| state.host_presence.last_seen(h).inner().unix_timestamp(),
+    )
+}
+
 /// Can this desktop add a phone by QR right now? Otherwise the panel opens
 /// on the paste flow and says what's missing.
 #[tauri::command]
@@ -712,8 +813,8 @@ pub(crate) async fn phone_enroll_precheck(ligus_app: AppHandle) -> Result<Preche
         let presence = conn_for(&state, ws).is_some();
         let local = ws == state.local_workspace_id;
         let svc = state.service.lock().unwrap();
-        let missing = precheck_reasons(&svc, ws, local, presence);
-        Ok(PrecheckDto { ready: missing.is_empty(), missing })
+        let boxes = box_reach_for(&state, &svc, ws);
+        Ok(PrecheckDto::from_reasons(precheck_reasons(&svc, ws, local, presence, &boxes)))
     })
     .await
 }
@@ -729,9 +830,9 @@ pub(crate) async fn phone_enroll_offer_start(ligus_app: AppHandle) -> Result<Off
         let name = workspace_name(&state, ws);
         let (account, desktop) = {
             let svc = state.service.lock().unwrap();
-            let missing = precheck_reasons(&svc, ws, local, presence);
-            if let Some(first) = missing.into_iter().next() {
-                return Err(first);
+            let boxes = box_reach_for(&state, &svc, ws);
+            if let Some(first) = precheck_reasons(&svc, ws, local, presence, &boxes).into_iter().find(|r| r.blocking) {
+                return Err(first.text);
             }
             (account_for(&svc, ws, name), svc.device_id())
         };

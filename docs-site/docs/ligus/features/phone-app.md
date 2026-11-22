@@ -37,9 +37,12 @@ itself, through your `ligus serve` box.
    when Ligus isn't in front (the code stays valid); choose **Show code** to
    bring it back, and **Show a new code** once it expires. If this desktop
    can't show a code (the workspace isn't shared, it has no relay
-   connection, or your account has no passkey or recovery key), the panel
-   says "Adding a phone by scanning a code isn't available here right now",
-   lists what is missing and offers [Can't scan?](#cant-scan) instead.
+   connection, the workspace has no box, or your account has no passkey or
+   recovery key), the panel lists each missing piece with a link to the fix
+   ("No box in this workspace → **Admit a box**", "→ **Add a passkey**",
+   "→ **Open Team & sync**") and offers [Can't scan?](#cant-scan) instead.
+   If the workspace has a box that hasn't been seen for a while, the panel
+   says so above **Show code** but still lets you try.
 2. **On the phone:** **Settings → This phone → Add to my devices**. If the
    phone would call itself just "iPhone" (iOS doesn't let apps read the
    name you gave your iPhone), the app first asks you to **Name this

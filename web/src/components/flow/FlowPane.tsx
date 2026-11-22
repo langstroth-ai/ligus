@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { SegmentedTabs } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
+import { PANE_DOCS } from "@/lib/docs";
 import { RoutingSection } from "@/components/flow/RoutingSection";
 import { QueueSection } from "@/components/flow/QueueSection";
 import { MarksSection } from "@/components/flow/MarksSection";
@@ -34,7 +35,7 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
     setTab(t);
   };
   return (
-    <RailFrame title="Flow" subtitle="Who picks up work, where it waits, and what agents left for each other.">
+    <RailFrame title="Flow" about="Who picks up work, where it waits, and what agents left for each other." docs={PANE_DOCS.flow}>
       <div className="mb-3">
         <SegmentedTabs tabs={TABS} value={tab} onChange={selectTab} label="Flow sections" />
       </div>
