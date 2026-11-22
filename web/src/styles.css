@@ -317,6 +317,15 @@
 .pop-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pop-t b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pop-t span { font-family: var(--ligus-mono); font-size: 10.5px; color: var(--ligus-ink-faint); }
+.pop-row { display: flex; align-items: center; gap: 2px; }
+.pop-row > .pop-i { flex: 1; min-width: 0; }
+.pop-more, .pop-back { flex: none; display: inline-grid; place-items: center; font: inherit; color: var(--ligus-ink-faint); background: none; border: 0; border-radius: 7px; cursor: pointer; }
+.pop-more { width: 26px; height: 30px; }
+.pop-back { width: 18px; height: 18px; }
+.pop-more:hover, .pop-back:hover, .pop-more:focus-visible, .pop-back:focus-visible { background: var(--ligus-hover); color: var(--ligus-ink); }
+.pop-back:disabled { opacity: 0.4; cursor: default; }
+.pop-in { display: block; width: calc(100% - 10px); margin: 2px 5px 4px; font: inherit; font-size: 12px; color: var(--ligus-ink); background: var(--ligus-panel); border: 1px solid var(--ligus-line); border-radius: 7px; padding: 5px 8px; }
+.pop-s { font-size: 11px; color: var(--ligus-ink-faint); padding: 5px 9px; }
 .pop-n { font-size: 11px; line-height: 1.5; color: var(--ligus-ink-faint); padding: 8px 9px 5px; margin-top: 4px; border-top: 1px solid var(--ligus-line); }
 
 html,
