@@ -2138,7 +2138,7 @@ online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
         text: "\
 For coding agents operating Ligus. Every ligus command is non-interactive when
 stdin isn't a terminal (no prompts; pass the flag instead), prints errors on stderr
-as \"error: …\", and exits 0 on success, 1 on an error, 2 on a usage error (see each
+as \"ligus: …\", and exits 0 on success, 1 on an error, 2 on a usage error (see each
 command's EXIT CODES). Read commands take --json. Never run a ligus binary against
 the person's real data dir to experiment: use
   export LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file
@@ -2212,7 +2212,7 @@ pub fn overview() -> String {
     s.push_str(
         "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
          connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
-         next argument (--label box, not --label=box).\n\nEXIT CODES\n  0 success   1 error (\"error: …\" on stderr)   \
+         next argument or follows an equals sign (--label box, or --label=box).\n\nEXIT CODES\n  0 success   1 error (\"ligus: …\" on stderr)   \
          2 usage error (unknown command, missing or bad argument)\n  Some commands add their own: see `ligus <command> --help`.\n\n\
          An agent setting Ligus up: ligus help agents-guide\n",
     );
@@ -2391,7 +2391,7 @@ pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
         }
         None => {
             eprintln!(
-                "error: no command or topic {:?}. `ligus help` lists the commands and topics.",
+                "ligus: no command or topic {:?}. `ligus help` lists the commands and topics.",
                 args.iter().filter(|a| !a.starts_with('-')).copied().collect::<Vec<_>>().join(" ")
             );
             std::process::exit(EXIT_USAGE);
@@ -2642,6 +2642,12 @@ mod tests {
         let o = overview();
         for c in COMMANDS.iter().filter(|c| !c.name.contains(' ')) {
             assert!(o.contains(&format!("  {} ", c.name)), "overview lacks {}", c.name);
+        }
+        // The overview says both flag spellings work and names the one
+        // error prefix; no help text names another prefix.
+        assert!(o.contains("--label box, or --label=box") && o.contains("\"ligus: …\" on stderr"), "{o}");
+        for t in TOPICS {
+            assert!(!t.text.contains("\"error: "), "topic {} names the old error prefix", t.name);
         }
         // `ligus remote enable --relay x --help`: the subcommand's help.
         assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("ligus remote enable"));

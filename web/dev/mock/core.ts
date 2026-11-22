@@ -323,6 +323,24 @@ function handle(cmd: string, args: Args): unknown {
       return "mock-apply-request";
     case "withdraw_apply_request":
       return null;
+    case "phone_enroll_precheck":
+      // ?phone=nobox shows the add-a-phone check with nothing to go through.
+      return params.get("phone") === "nobox"
+        ? {
+            ready: false,
+            missing: ["No box in this workspace. The phone reaches you through an always-on box (ligus serve)."],
+            reasons: [
+              { code: "noBox", text: "No box in this workspace. The phone reaches you through an always-on box (ligus serve).", blocking: true },
+              { code: "noPasskey", text: "No passkey or recovery key for your account here. Adding a phone is approved with one.", blocking: true },
+            ],
+          }
+        : {
+            ready: true,
+            missing: [],
+            reasons: [
+              { code: "noBoxOnline", text: "No box reachable right now: serve box was last seen 2 min ago. The phone's request goes through it, so start it first.", blocking: false },
+            ],
+          };
     default:
       if (cmd.startsWith("list_")) return [];
       return null;

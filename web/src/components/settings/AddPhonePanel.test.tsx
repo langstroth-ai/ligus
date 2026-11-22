@@ -249,6 +249,58 @@ describe("Add a phone (the phone scans the desktop's code)", () => {
     expect(screen.queryByRole("button", { name: "Show code" })).toBeNull();
     expect(screen.getByLabelText("Phone code")).toBeTruthy();
   });
+
+  it("names each missing piece and links its fix", async () => {
+    vi.mocked(ipc.phoneEnrollPrecheck).mockResolvedValue({
+      ready: false,
+      missing: ["No box in this workspace.", "No passkey."],
+      reasons: [
+        { code: "noBox", text: "No box in this workspace.", blocking: true },
+        { code: "noPasskey", text: "No passkey.", blocking: true },
+        { code: "notYourDevice", text: "Add the phone from your own desktop.", blocking: true },
+      ],
+    });
+    const admit = vi.fn();
+    const settings = vi.fn();
+    window.addEventListener("ligus:admit-box", admit);
+    window.addEventListener("ligus:open-settings", settings);
+    try {
+      render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+      const box = await screen.findByTestId("add-phone-unavailable");
+      expect(box).toHaveTextContent(/No box in this workspace\.\s*→\s*Admit a box/);
+      expect(box).toHaveTextContent(/No passkey\.\s*→\s*Add a passkey/);
+      // Nothing in the app fixes this one, so no link.
+      expect(box.querySelector('[data-code="notYourDevice"] button')).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Admit a box" }));
+      expect(admit).toHaveBeenCalledTimes(1);
+      await userEvent.click(screen.getByRole("button", { name: "Add a passkey" }));
+      expect((settings.mock.calls[0][0] as CustomEvent<string>).detail).toBe("passkeys");
+    } finally {
+      window.removeEventListener("ligus:admit-box", admit);
+      window.removeEventListener("ligus:open-settings", settings);
+    }
+  });
+
+  it("shows a quiet box warning without blocking Show code", async () => {
+    vi.mocked(ipc.phoneEnrollPrecheck).mockResolvedValue({
+      ready: true,
+      missing: [],
+      reasons: [{ code: "noBoxOnline", text: "No box reachable right now: serve-box was last seen 12 min ago.", blocking: false }],
+    });
+    render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByTestId("add-phone-warnings")).toHaveTextContent(/serve-box was last seen 12 min ago\.\s*→\s*Admit a box/);
+    expect(screen.getByRole("button", { name: "Show code" })).toBeEnabled();
+    expect(screen.queryByTestId("add-phone-unavailable")).toBeNull();
+  });
+
+  it("offers to check again when the check itself failed", async () => {
+    vi.mocked(ipc.phoneEnrollPrecheck).mockRejectedValueOnce(new Error("boom"));
+    render(<AddPhonePanel onDone={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByTestId("add-phone-unavailable")).toHaveTextContent("Couldn't check this desktop just now.");
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByRole("button", { name: "Show code" })).toBeInTheDocument();
+    expect(ipc.phoneEnrollPrecheck).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("Can't scan? (paste the phone's code)", () => {

@@ -55,7 +55,11 @@ Open **Workflows** in the right rail. For each workflow you get:
   starts it;
 - **Pause / Resume**: a paused workflow stays listed but can't be started.
   Runs already going are unaffected;
-- **Delete**: removes the definition. Past runs stay in the history;
+- **⋯ → Delete workflow…**: removes the definition for everyone in the
+  chat. Ligus asks first and says what goes (the workflow and its stages);
+  runs already going finish and past runs stay in the history. For a few
+  seconds afterwards the card reads *Deleted "…"* with **Undo**; nothing is
+  sent until that passes (or you close the pane);
 - **Ask an agent to change this**: type what should change. Ligus posts a
   message to the chat with your request and the current definition, the
   agent answers with a revision, and the revision arrives in the Review
@@ -186,7 +190,11 @@ Exactly one device drives a run at a time, and it holds the run's
 run is going, that device renews it with a signed heartbeat every 15
 seconds on the relay's presence channel (end-to-end encrypted, never part of
 the chat log). The run card shows who drives it: *Driven by this device*,
-or the other device's name and how long ago its last heartbeat arrived.
+or the other device's name. When the driver's heartbeat is late or has
+stopped, the line becomes a labelled notice (*Heartbeat late* or *No
+heartbeat*) that says how long ago it last checked in. On the driving
+device the notice has a **Hand over to** picker of the workspace's other
+online devices.
 
 - **Crash recovery.** If the driving device quits or crashes, its heartbeat
   stops. After one lease (60 seconds) with no heartbeat, a device of the
@@ -195,8 +203,9 @@ or the other device's name and how long ago its last heartbeat arrived.
   that restarts resumes its own runs straight away.
 - **Hand over.** The driving device can pass a run on purpose with **Hand
   over** on the run card (say, before closing a laptop). The run goes to
-  another online device of the workspace, which takes it within one
-  heartbeat; nobody else can grab it in between.
+  another online device of the workspace (the one you pick, or any online
+  one), which takes it within one heartbeat; nobody else can grab it in
+  between.
 - **Two drivers at once.** Each lease carries an *epoch* number that only
   goes up. If two devices both decide to take over at the same moment,
   every device agrees on one winner, and anything the other writes under

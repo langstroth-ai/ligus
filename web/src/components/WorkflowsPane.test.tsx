@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WorkflowsPane, statusTone, statusLabel, readingOrder } from "./WorkflowsPane";
+import { WorkflowsPane, statusTone, statusLabel, readingOrder, UNDO_MS, workflowDeleteConsequences } from "./WorkflowsPane";
+import { DialogHost } from "@/components/Dialog";
 import * as ipc from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
@@ -42,6 +43,9 @@ vi.mock("@/lib/ipc", () => ({
     },
   ]),
   listAgents: vi.fn(async () => [{ id: "a1", name: "Coder" }]),
+  listWorkspaceHosts: vi.fn(async () => []),
+  handOverWorkflowRun: vi.fn(async () => "dev-2"),
+  openExternal: vi.fn(async () => {}),
   removeWorkflow: vi.fn(async () => {}),
   setWorkflowEnabled: vi.fn(async () => {}),
   workflowChangeRequest: vi.fn(async () => "Please revise the workflow"),
@@ -62,9 +66,10 @@ vi.mock("@/components/Toast", () => ({
 
 function setup() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={qc}>
       <WorkflowsPane sessionId="s1" />
+      <DialogHost />
     </QueryClientProvider>,
   );
 }
@@ -138,6 +143,97 @@ describe("WorkflowsPane", () => {
     await user.type(screen.getByLabelText("Requested change"), "add a test stage{Enter}");
     expect(ipc.workflowChangeRequest).toHaveBeenCalledWith("s1", "wf-1", "add a test stage");
     expect(ipc.sendMessage).toHaveBeenCalledWith("s1", "Please revise the workflow");
+  });
+});
+
+describe("WorkflowsPane: deleting a workflow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  async function askToDelete(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findAllByText("Review gate");
+    // No Delete button on the card: it lives in the ⋯ menu.
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More actions for workflow Review gate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete workflow…" }));
+  }
+
+  it("confirms in the page, naming what's lost", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    setup();
+    await askToDelete(user);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Delete “Review gate”?");
+    expect(dialog).toHaveTextContent("its 2 stages are removed from this chat for everyone");
+    expect(dialog).toHaveTextContent("past runs stay in the history");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNDO_MS + 100);
+    });
+    expect(ipc.removeWorkflow).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("workflow-deleted")).toBeNull();
+  });
+
+  it("can be undone before the delete is sent", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    setup();
+    await askToDelete(user);
+    await user.click(await screen.findByRole("button", { name: "Delete workflow" }));
+    expect(await screen.findByTestId("workflow-deleted")).toHaveTextContent("Deleted “Review gate”.");
+    expect(ipc.removeWorkflow).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNDO_MS + 100);
+    });
+    expect(ipc.removeWorkflow).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "More actions for workflow Review gate" })).toBeInTheDocument();
+  });
+
+  it("sends the delete once the undo window passes", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    setup();
+    await askToDelete(user);
+    await user.click(await screen.findByRole("button", { name: "Delete workflow" }));
+    await screen.findByTestId("workflow-deleted");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNDO_MS + 100);
+    });
+    expect(ipc.removeWorkflow).toHaveBeenCalledTimes(1);
+    expect(ipc.removeWorkflow).toHaveBeenCalledWith("s1", "wf-1");
+  });
+
+  it("sends a confirmed delete when the pane closes inside the window", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { unmount } = setup();
+    await askToDelete(user);
+    await user.click(await screen.findByRole("button", { name: "Delete workflow" }));
+    await screen.findByTestId("workflow-deleted");
+    unmount();
+    await waitFor(() => expect(ipc.removeWorkflow).toHaveBeenCalledWith("s1", "wf-1"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNDO_MS + 100);
+    });
+    expect(ipc.removeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a single stage in the singular", () => {
+    expect(
+      workflowDeleteConsequences({ id: "w", name: "One", description: "", inputLabel: null, disabled: false, nodes: [{}] } as never),
+    ).toContain("its 1 stage are");
+  });
+});
+
+describe("WorkflowsPane: help", () => {
+  it("has a ? link to the docs instead of an intro paragraph", async () => {
+    setup();
+    await screen.findAllByText("Review gate");
+    const help = screen.getByTestId("pane-help");
+    expect(help).toHaveAttribute("href", "https://docs.langstroth.ai/ligus/features/workflows/");
+    expect(help.getAttribute("aria-label")).toContain("Multi-stage agent pipelines");
+    expect(screen.queryByText(/^Multi-stage agent pipelines/)).toBeNull();
   });
 });
 

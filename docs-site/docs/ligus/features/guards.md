@@ -146,9 +146,10 @@ loops and are not affected.
 
 ## Growing the workspace when it's ready
 
-A workspace starts with one agent on your device, and a
-small card above the chat suggests growing it only when the workspace's
-occupancy says so:
+A workspace starts with one agent on your device, and a quiet one-line tip
+at the foot of the window suggests growing it only when the workspace's
+occupancy says so (banners at the top are kept for states that block work,
+like lockdown and dearth mode):
 
 - **Add an always-on host** when requests keep waiting for an agent whose
   machine is offline (a `ligus serve` box answers while laptops sleep);
