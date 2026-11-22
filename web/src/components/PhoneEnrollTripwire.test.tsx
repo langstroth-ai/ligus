@@ -73,4 +73,16 @@ describe("the add-a-phone tripwire", () => {
     expect(screen.queryByTestId("phone-tripwire")).toBeNull();
     expect(ipc.revokeMyDevice).not.toHaveBeenCalled();
   });
+
+  it("closing it puts it aside in the Inbox instead of dismissing it", async () => {
+    mount();
+    await waitFor(() => expect(ipc.onPhoneEnrollTripwire).toHaveBeenCalled());
+    act(() => emit(alert));
+    await screen.findByTestId("phone-tripwire");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("phone-tripwire")).toBeNull());
+    expect(phoneAlerts.snapshot().alerts).toHaveLength(1);
+    act(() => phoneAlerts.show());
+    expect(await screen.findByTestId("phone-tripwire")).toBeInTheDocument();
+  });
 });

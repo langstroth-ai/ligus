@@ -5,6 +5,8 @@
 // Scenario knobs (URL query): ?scenario=onboarding|empty|default
 //   &dearth=1 (dearth mode on)  &lockdown=1 (open chat locked down)
 //   &loading=1 (every call hangs) &error=1 (every list call fails)
+//   &inbox=1 (an agent question, an invite, a box request, repo commands
+//   to enable and changed sandbox grants, for the Inbox)
 import * as fx from "./fixtures";
 
 const params = new URLSearchParams(window.location.search);
@@ -14,6 +16,7 @@ const flags = {
   lockdown: params.get("lockdown") === "1",
   loading: params.get("loading") === "1",
   error: params.get("error") === "1",
+  inbox: params.get("inbox") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
 };
 
@@ -317,6 +320,26 @@ function handle(cmd: string, args: Args): unknown {
   }
 }
 
+/// Extra things that need you, for previewing the Inbox (`&inbox=1`).
+function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
+  switch (cmd) {
+    case "list_asks":
+      return args?.sessionId === "chat-3"
+        ? [{ askId: "ask-1", agentName: "scout", question: "Retry cap: **30 s** or **60 s**?", options: ["30 s", "60 s"], expiresAtMs: Date.now() + 600_000, open: true }]
+        : base;
+    case "list_pending_invites":
+      return { contacts: "on", invites: [{ relay: "wss://relay.example", seq: 7, isDm: false, workspaceName: "Hive scale data", founderName: "Maya", trust: "known", safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92" }] };
+    case "list_device_requests":
+      return [{ hostId: "h-box", label: "serve box" }];
+    case "get_workspace_trust":
+      return { root: "/mock/repo", items: [{ kind: "mcpServer", id: "hive-sensors", commandLine: "npx hive-sensors-mcp", source: "ligus.config.toml", digest: "d1", enabled: false }] };
+    case "get_sandbox_policy":
+      return { ...(base as object), changed: true, appliesHere: true, grants: { workspace: { readWrite: ["~/scratch"] } } };
+    default:
+      return base;
+  }
+}
+
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
   if (flags.loading && !["get_app_settings", "list_workspaces", "list_runtimes"].includes(cmd)) {
     return new Promise<T>(() => {});
@@ -325,7 +348,8 @@ export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
     throw new Error(`${cmd}: relay unreachable (mock)`);
   }
   await new Promise((r) => setTimeout(r, 15));
-  return structuredClone(handle(cmd, args)) as T;
+  const out = handle(cmd, args);
+  return structuredClone(flags.inbox ? inboxExtras(cmd, args, out) : out) as T;
 }
 
 export function convertFileSrc(path: string): string {

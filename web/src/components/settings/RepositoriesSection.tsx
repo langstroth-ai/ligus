@@ -460,14 +460,10 @@ export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto;
 }
 
 /// The "Add WeFit to the workspace?" prompt after a folder is bound, shown
-/// anywhere in the app (bottom left) until added or dismissed.
-export function RepoSuggestionBanner() {
+/// under Suggestions in the Inbox until added or dismissed.
+export function RepoSuggestionNotice() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: REPOS_KEY, queryFn: listWorkspaceRepos, retry: false });
   if (!q.data?.suggestion) return null;
-  return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[360px] shadow-xl" role="status">
-      <RepoSuggestion data={q.data} onDone={() => void qc.invalidateQueries({ queryKey: REPOS_KEY })} />
-    </div>
-  );
+  return <RepoSuggestion data={q.data} onDone={() => void qc.invalidateQueries({ queryKey: REPOS_KEY })} />;
 }

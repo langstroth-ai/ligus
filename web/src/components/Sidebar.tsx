@@ -44,6 +44,7 @@ import {
   IconPlus,
   IconCheck,
   IconMessage,
+  IconStateNeedsYou,
   IconActivity,
   IconGear,
   IconEllipsis,
@@ -77,12 +78,14 @@ export function Sidebar({
   displayName,
   utilityPane,
   onAdmitBox,
+  inboxCount = 0,
+  onOpenInbox,
 }: {
   width: number;
   selectedId: string | null;
   sessionId: string | null;
   onSelect: (id: string) => void;
-  view: "workspace" | "settings" | "friends";
+  view: "workspace" | "settings" | "friends" | "inbox";
   onOpenSettings: () => void;
   onAddWorkspace: () => void | Promise<void>;
   onRemoveWorkspace: (path: string) => void | Promise<void>;
@@ -97,6 +100,9 @@ export function Sidebar({
   /// Admit a box (a `ligus serve` or worker) to the active workspace. Passed
   /// only for a shared (room) workspace; the entry sits in the workspace menu.
   onAdmitBox?: () => void;
+  /// How many things need you (the Inbox's badge; absent at zero).
+  inboxCount?: number;
+  onOpenInbox?: () => void;
 }) {
   const qc = useQueryClient();
   // Scope chats + channels by the *active workspace id*. listChats/listChannels
@@ -521,6 +527,17 @@ export function Sidebar({
         {/* 3 — Views (cross-channel filters) sit ABOVE the channel tree (spec
             §11 rule 8). Clicking an active View toggles back to the tree.
             "Needs review" awaits a per-chat review signal on the summary DTO. */}
+        {onOpenInbox && (
+          <NavRow
+            icon={<IconStateNeedsYou size={15} />}
+            label="Inbox"
+            title="Everything that needs you"
+            active={view === "inbox"}
+            attn
+            count={inboxCount > 0 ? inboxCount : undefined}
+            onClick={onOpenInbox}
+          />
+        )}
         <NavRow
           icon={<IconMessage size={15} />}
           label="All chats"
