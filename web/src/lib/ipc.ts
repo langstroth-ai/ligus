@@ -1120,6 +1120,9 @@ export const listQueuedWork = () => invoke<QueuedWorkDto[]>("list_queued_work");
 export type { ChatAttention } from "@/lib/sessionState";
 export const listChatAttention = () =>
   invoke<import("@/lib/sessionState").ChatAttention[]>("list_chat_attention");
+/// Show how many things need you on the dock icon (macOS) and the tray
+/// tooltip; 0 clears it.
+export const setNeedsYouCount = (count: number) => invoke<void>("set_needs_you_count", { count });
 
 /// The active workspace's registered hosts (devices + workers) with live state.
 export const listWorkspaceHosts = () =>

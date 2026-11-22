@@ -64,6 +64,7 @@ import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
 import { ErrorLogSheet } from "@/components/ErrorLogSheet";
+import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
 import { matchShortcut } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
@@ -631,6 +632,9 @@ export function App() {
   // Settings and grant commands act on this workspace, the one on screen.
   setShownWorkspace(activeWorkspaceId);
   const activeWorkspaceName = activeWorkspace?.name?.trim();
+  // What waits on you: the Inbox lists it; the dock and tray count it.
+  const needsYou = useNeedsYou(activeWorkspaceId);
+  useDockBadge(needsYou);
 
   // Default view on workspace open/switch: land on the workspace's most-recent
   // chat so the chat-scoped panes (People, Agents, Review, …) populate instead of
