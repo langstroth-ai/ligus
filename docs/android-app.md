@@ -187,8 +187,11 @@ iOS 26, so a fairly recent floor is consistent.
 On iOS the device key is a Secure Enclave
 `SecureEnclave.P256.Signing.PrivateKey`. Its access control is
 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` with `.privateKeyUsage` only.
-There is **no** `.userPresence` and no biometry: Face ID doesn't gate signing,
-and the app lock only hides the UI.
+Since 2026-11-22 the app asks for Face ID, Touch ID or the passcode right
+before **every** signature (each phone action and each admission). It runs a
+fresh LocalAuthentication evaluation with no reuse of an earlier one, in the
+app rather than as a key flag: a `.userPresence` key would mean a new device
+id for every phone. The app lock only hides the UI.
 
 Android equivalent:
 
@@ -198,9 +201,21 @@ KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
     .setDigests(KeyProperties.DIGEST_SHA256)
     .setIsStrongBoxBacked(true)          // retry without on StrongBoxUnavailableException
     .setUnlockedDeviceRequired(true)     // ≈ WhenUnlocked
-    .setUserAuthenticationRequired(false) // ≈ .privateKeyUsage (no per-use prompt)
+    .setUserAuthenticationRequired(false) // ≈ .privateKeyUsage; the app prompts per signature (below)
     .build()
 ```
+
+**A prompt before every signature (parity with iOS).** Right before the key
+signs a phone action or an admission, show BiometricPrompt with
+`setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)`, a new
+prompt every time. Don't reuse the app-lock unlock or an earlier
+signature (no timeout window). The title names the action ("Approve “Capped
+retry backoff”"), and the sign button says how it asks ("Approve with
+fingerprint", "Approve with screen lock"). If it is cancelled or fails,
+nothing is signed, recorded in the ledger or sent, and the sheet stays with
+"Not approved: authentication was cancelled." A device with no screen lock
+never signs. CI scripts the prompt behind the `Authenticator` interface
+(section 4.4), in debug builds only.
 
 - **Non-exportable** by construction (`AndroidKeyStore`). The alias is fixed
   (`ligus.device.v1`). The app stores nothing but the alias and the public key.
@@ -220,16 +235,15 @@ KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
   excluding everything, the equivalent of `ThisDeviceOnly`. Keystore keys
   never leave the device anyway.
 
-**Why not auth-bound?** iOS's `.userPresence` corresponds to
+**Why not an auth-bound key?** The prompt above is enforced by the app, as
+on iOS. A key that enforces it in hardware is a possible follow-up. iOS's `.userPresence` corresponds to
 `setUserAuthenticationRequired(true)` with
 `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG |
 AUTH_DEVICE_CREDENTIAL)`, which needs a `BiometricPrompt.CryptoObject`
-prompt for every signature. Three things argue against it:
+prompt for every signature. Two things argue against it for now:
 
-- **Parity.** iOS doesn't do it.
-- **It's mostly redundant.** High-value actions (votes on gated proposals,
-  `clearLockdown`, admissions) already need the person's passkey, which runs
-  user verification.
+- **Parity.** iOS gates in the app too: its key is created without
+  `.userPresence`.
 - **It's costly to undo.** An auth-bound key is permanently invalidated when
   the lock screen changes or biometrics are re-enrolled (unless
   `setInvalidatedByBiometricEnrollment(false)`), and each invalidation forces
@@ -1562,10 +1576,9 @@ scheme, and keep the rest as extended colours in a `CompositionLocal`:
 3. **Shared Rust core:** adopt UniFFI for Android (recommended)? Should the
    iOS app move onto the same crate later, retiring its Swift port and parity
    corpus?
-4. **Device key auth:** keep parity with iOS (Keystore key not
-   auth-bound; the passkey gates high-value actions), or offer an opt-in
-   auth-bound key at creation (per-signature biometric, re-certified after
-   lock-screen changes)?
+4. **Device key auth:** the app asks before every signature (decided
+   2026-11-22, as on iOS). Should a later key generation also be auth-bound
+   in hardware (a new device id, re-certified after lock-screen changes)?
 5. **Presence policy for Android:** the owner signs with one app signing key
    for Play and the APK (recommended), and adds its
    `android:apk-key-hash:` origin to `DEFAULT_ORIGINS` for new workspaces. Is

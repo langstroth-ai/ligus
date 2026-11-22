@@ -688,6 +688,12 @@ through it:
 | Apply on ‹host› | an apply request naming that host | when the proposal is human-gated |
 | Withdraw an apply request | the withdrawal | no |
 
+The phone asks for Face ID (or Touch ID, or your passcode) before it signs
+anything, every time: the sign button says **Approve with Face ID**, and the
+prompt names what you are approving. Cancel, and nothing is signed or sent;
+the sheet stays so you can try again. A phone with no passcode doesn't sign.
+Admitting a box asks the same way.
+
 For each, the box drafts the exact event and the phone reads it before
 signing: it signs only if the bytes are exactly what you asked for, in this
 workspace and chat, as you, from this phone, with the passkey confirmation

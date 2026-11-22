@@ -761,7 +761,17 @@ key is a new device with a new id, enrolled again.
    `POST /v1/phone-actions/presence {prepareId, assertion: {credentialId,
    authenticatorData, clientDataJSON, signature}}` → `{preimage}`.
 3. Check the preimage (below). If it fails, don't sign; show the error.
-4. Sign the preimage bytes with the Secure Enclave key (ECDSA P-256,
+4. Ask the owner, for this signature only: a fresh `LAContext`
+   `.deviceOwnerAuthentication` evaluation (Face ID, Touch ID or Optic ID,
+   with the passcode as fallback), with
+   `touchIDAuthenticationAllowableReuseDuration = 0`. It never reuses the
+   app-lock unlock or an earlier signature. The prompt's `localizedReason`
+   names the action ("Approve “Capped retry backoff”"), and the sheet's
+   button says how it asks ("Approve with Face ID"). If it is cancelled or
+   fails, nothing is signed, recorded or sent, and the sheet stays with "Not
+   approved: authentication was cancelled." A device with no passcode never
+   signs. Box admissions (`/v1/admissions/commit`) ask the same way.
+5. Sign the preimage bytes with the Secure Enclave key (ECDSA P-256,
    SHA-256), encode r‖s (64 bytes, low-S: replace s with n − s when s > n/2),
    base64url, and `POST /v1/phone-actions/commit {prepareId, signature}` →
    `{committed, eventId, kind, messageId?, requestId?}`.
