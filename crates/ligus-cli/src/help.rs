@@ -121,7 +121,8 @@ const G_CHECK: &str = "Checks and diagnostics";
 
 const GROUPS: &[&str] = &[G_START, G_CHAT, G_AGENTS, G_BOX, G_PHONE, G_REPOS, G_DATA, G_CHECK];
 
-const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text");
+const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text (also: -o json)");
+const DRY_RUN: Flag = f("--dry-run", "off", "check the arguments and print what would change; sign and write nothing");
 
 pub const COMMANDS: &[Cmd] = &[
     // ── Getting started ────────────────────────────────────────────────
@@ -368,6 +369,7 @@ pub const COMMANDS: &[Cmd] = &[
         synopsis: &["ligus tail <chat-id> [--watch]"],
         flags: &[f("--watch", "off", "follow the chat")],
         conn: true,
+        exit: &[(5, "unknown chat")],
         examples: &["ligus tail 6f1c2a9b-…", "ligus tail 6f1c2a9b-… --watch"],
         see_also: &["ligus send", "ligus chats"],
         ..D
@@ -378,10 +380,18 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "post a signed message (--push to sync it out)",
         purpose: "Post a message, signed by this device, to a chat; the words after the chat id are the message. \
                   --push runs one sync round right after. A word that starts with -- is read as a flag, not text.",
-        synopsis: &["ligus send <chat-id> <message…> [--push]"],
-        flags: &[f("--push", "off", "sync the message out at once")],
+        synopsis: &["ligus send <chat-id> <message…> [--push] [--wait [--timeout DURATION]]"],
+        flags: &[
+            f("--push", "off", "sync the message out at once"),
+            f("--wait", "off", "push, then wait for someone else's answer in the chat and print it"),
+            f("--timeout DURATION", "5m with --wait", "how long --wait waits (90s, 5m, 1h; implies --wait); no answer by then exits 7"),
+        ],
         conn: true,
-        examples: &["ligus send 6f1c2a9b-… \"@coder fix the flaky test\" --push"],
+        examples: &[
+            "ligus send 6f1c2a9b-… \"@coder fix the flaky test\" --push",
+            "ligus send 6f1c2a9b-… \"@coder status?\" --wait --timeout 10m",
+        ],
+        exit: &[(5, "unknown chat"), (7, "--wait: no answer before --timeout, or the relay can't be reached")],
         see_also: &["ligus tail", "ligus sync"],
         ..D
     },
@@ -445,11 +455,12 @@ pub const COMMANDS: &[Cmd] = &[
                   --secret-ref keeps the key off the shared log (each host that runs it sets LIGUS_WS_SECRET_<name>); \
                   --secret puts it end-to-end encrypted on the workspace config log, where every member's device \
                   holds it; neither is keyless. Share with `ligus sync`.",
-        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE]"],
+        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE] [--dry-run]"],
         flags: &[
             f("--endpoint URL", "the provider's default", "model endpoint (custom, ollama, a gateway)"),
             f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME> (preferred)"),
             f("--secret - | @FILE", "none", "the key itself, from stdin or an owner-only file; synced encrypted"),
+            DRY_RUN,
         ],
         conn: true,
         examples: &[
@@ -465,8 +476,10 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "remove a workspace runtime",
         purpose: "Remove a workspace runtime by id. Share with `ligus sync`.",
-        synopsis: &["ligus rm-runtime <id>"],
+        synopsis: &["ligus rm-runtime <id> [--dry-run]"],
+        flags: &[DRY_RUN],
         conn: true,
+        exit: &[(5, "--dry-run: no runtime with that id")],
         examples: &["ligus rm-runtime local && ligus sync"],
         see_also: &["ligus runtimes"],
         ..D
@@ -490,10 +503,11 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "define a workspace agent on a runtime",
         purpose: "Define a workspace agent bound to a workspace runtime, optionally on a host and with a role (a short \
                   description every member sees). Share with `ligus sync`.",
-        synopsis: &["ligus add-agent <name> <runtime-id> [--host HOST-ID] [--role TEXT]"],
+        synopsis: &["ligus add-agent <name> <runtime-id> [--host HOST-ID] [--role TEXT] [--dry-run]"],
         flags: &[
             f("--host HOST-ID", "none (its owner's device)", "the host that answers it (`ligus hosts` lists ids)"),
             f("--role TEXT", "empty", "what the agent does, shown on the roster"),
+            DRY_RUN,
         ],
         conn: true,
         examples: &["ligus add-agent coder claude --host \"$(ligus whoami --json | jq -r .device)\" --role \"writes code\" && ligus sync"],
@@ -532,8 +546,10 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "bind an agent to a host",
         purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply.",
-        synopsis: &["ligus set-agent-host <agent-name> <host-id>"],
+        synopsis: &["ligus set-agent-host <agent-name> <host-id> [--dry-run]"],
+        flags: &[DRY_RUN],
         conn: true,
+        exit: &[(5, "no agent with that name")],
         examples: &["ligus set-agent-host coder 5b1c0f7e-… && ligus sync"],
         see_also: &["ligus hosts", "ligus agents", "ligus queue"],
         ..D
@@ -2321,7 +2337,11 @@ pub fn overview() -> String {
     s.push_str(
         "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
          connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
-         next argument or follows an equals sign (--label box, or --label=box).\n\nEXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
+         next argument or follows an equals sign (--label box, or --label=box).\n  \
+         Every command also takes -o json|text (-o json is --json; jsonl for streams), -q (only what needs\n  \
+         attention) and --color auto|always|never (colour only on a terminal; NO_COLOR and CLICOLOR_FORCE\n  \
+         count; JSON is never coloured). ligus never asks for confirmation, so there is no --yes; a passkey\n  \
+         step is always a person's.\n\nEXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
          0 done   1 failed (\"ligus: …\" on stderr)   2 usage error   3 a precondition you can fix   \
          4 a person must decide\n  5 not found   6 refused by workspace rules   7 offline or timed out\n\n\
          An agent setting Ligus up: ligus help agents-guide\n",
@@ -2371,7 +2391,8 @@ pub fn command_help(c: &Cmd) -> String {
         }
     }
     s.push_str("\nFLAGS\n");
-    for fl in c.flags.iter().chain(std::iter::once(&f("-h, --help", "", "print this help"))) {
+    let common = [f("-h, --help", "", "print this help"), f("-o, -q, --color", "", "every command: -o json|text, quiet, colour (ligus help)")];
+    for fl in c.flags.iter().chain(common.iter()) {
         let def = if fl.default.is_empty() { String::new() } else { format!(" (default: {})", fl.default) };
         let _ = writeln!(s, "  {:<28} {}{def}", fl.flag, fl.about);
     }

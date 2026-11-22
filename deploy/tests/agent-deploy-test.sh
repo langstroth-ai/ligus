@@ -181,6 +181,16 @@ run "$TMP/eq2" "$K8S" install --json --context=x --namespace=x --scenario=team-e
 check_json "ligus-k8s --flag=value (external relay without --relay-url)" "$TMP/eq2" 2 "$RC"
 if grep -q 'needs --relay-url' "$TMP/eq2"; then pass "ligus-k8s reads --scenario=VALUE"; else fail "ligus-k8s --scenario=VALUE not read: $(cat "$TMP/eq2")"; fi
 
+# -o json is --json; -o text undoes it; -q prints only warn and FAIL checks.
+run "$TMP/o1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
+  "$LOCAL" verify -o json --role serve --data-dir "$TMP/vd" --env-file "$TMP/ve"
+check_json "ligus-local -o json" "$TMP/o1" 1 "$RC" process
+run "$TMP/o2" "$LOCAL" verify -o yaml
+if [ "$RC" = 2 ]; then pass "-o takes json or text only"; else fail "-o yaml: rc $RC"; fi
+# shellcheck disable=SC2016  # $1 expands in the inner bash
+q=$(env -u NO_COLOR bash -c '. "$1"; AC_QUIET=1; ac_check a fail x fix; ac_check b warn y; ac_check c pass z; ac_check d info i; ac_check e skip s' _ "$ROOT/deploy/lib/agent-common.sh" 2>&1 >/dev/null)
+case $q in *"a: x"*"b: y"*) case $q in *"c: z"*|*"d: i"*|*"e: s"*) fail "-q still prints ok, info and skip: $q" ;; *) pass "-q prints only warn and FAIL" ;; esac ;; *) fail "-q dropped a failure or warning: $q" ;; esac
+
 # Colour: [FAIL] and [WARN] are coloured only on a terminal (or when asked),
 # never with NO_COLOR or --color never, and never on stdout.
 marks() { # env... -> stderr of one fail, one warn and one pass check

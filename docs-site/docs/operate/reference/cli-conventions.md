@@ -1,4 +1,4 @@
-# CLI conventions: checks, exit codes and errors
+# CLI conventions
 
 Every Ligus command-line tool reports checks the same way: `ligus doctor`,
 `langstroth-relay check`, and the deploy scripts `deploy/local/ligus-local`
@@ -127,6 +127,26 @@ A usage error's fix names the help to read, for example ``fix: see `ligus tail -
 `error`. `langstroth-relay` prints the same document. The deploy scripts keep
 their profile: a usage error is a report with one failed `usage` check (its
 `fix` names the help) and `"error": "<message>"`.
+
+## Common flags {#flags}
+
+| Flag | `ligus` | `ligus-local`, `ligus-k8s` | `langstroth-relay` |
+|---|---|---|---|
+| `--flag=value` | every flag | every flag | every flag |
+| `--json` | read, status and check commands | every command | `check` |
+| `-o json\|text` | every command (`-o json` is `--json`; `-o jsonl` is `--jsonl`) | every command | `check` |
+| `-q`, `--quiet` | `ligus doctor`: only the checks that need attention | only the warn and FAIL checks | |
+| `--color auto\|always\|never` | `ligus doctor`'s text | the `[FAIL]` and `[WARN]` marks on stderr | |
+| `--dry-run` | `add-runtime`, `rm-runtime`, `add-agent`, `set-agent-host` | `ligus-k8s install` | |
+| `--wait`, `--timeout` | `ligus send` (wait for an answer) | `ligus-k8s install` (`--timeout`) | |
+| `--force` | | `ligus-local configure` (rewrite the env file) | |
+
+Colour is only ever on a terminal unless asked for: `NO_COLOR` turns it off,
+`CLICOLOR_FORCE` turns it on for a pipe, and `--color` overrides both. JSON is
+never coloured. None of the tools ask for a confirmation, so there is no
+`--yes`; a step that needs a person (a passkey, an approval) is never one a
+flag can take. Commands name things by id (a chat id, a host id), never by
+their position in a list.
 
 ## Profiles {#profiles}
 

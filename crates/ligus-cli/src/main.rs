@@ -44,6 +44,7 @@ mod admit;
 mod app_cmd;
 mod auth;
 mod checks;
+mod cli_flags;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
@@ -755,18 +756,49 @@ fn cmd_tail(cfg: &Config, chat_id: Uuid, watch: bool) -> Result<()> {
     }
 }
 
-async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool) -> Result<()> {
+/// `ligus send`. With `wait`, it also pushes, then syncs every few seconds
+/// until someone else (a person or an agent) posts in the chat, prints what
+/// they posted, and exits 0; after `wait` without an answer it exits 7.
+async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool, wait: Option<Duration>) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let Some(session) = svc.load(chat_id)? else {
         return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     svc.post_user_message(chat_id, session.workspace_id, body)?;
     println!("posted.");
-    if push {
+    if push || wait.is_some() {
         let (pushed, pulled) = sync_once(cfg).await?;
         println!("synced: pushed {pushed}, pulled {pulled}");
     }
-    Ok(())
+    let Some(wait) = wait else {
+        return Ok(());
+    };
+    // Ours is the last message now; an answer is any later one by another author.
+    let posted = svc.load(chat_id)?.map(|s| s.messages.clone()).unwrap_or_default();
+    let (seen, me) = (posted.len(), posted.last().map(|m| m.author.clone()).unwrap_or_default());
+    drop(svc);
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        if let Some(s) = open_service(cfg)?.load(chat_id)? {
+            let answers: Vec<_> = s.messages.iter().skip(seen).filter(|m| !m.superseded && m.author != me).collect();
+            if !answers.is_empty() {
+                for m in answers {
+                    println!("{:>9}  {}", m.author, m.body);
+                }
+                return Ok(());
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow::Error::new(problem::Problem {
+                exit: problem::EXIT_OFFLINE,
+                code: "timeout",
+                message: format!("no answer in chat {chat_id} within {}s", wait.as_secs()),
+                fix: Some(format!("wait longer (--timeout 15m), or follow it with ligus tail {chat_id} --watch")),
+            }));
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let _ = sync_once(cfg).await;
+    }
 }
 
 async fn cmd_sync(cfg: &Config, watch: bool) -> Result<()> {
@@ -880,6 +912,7 @@ fn cmd_add_runtime(
     endpoint: Option<String>,
     secret_ref: Option<String>,
     secret: Option<String>,
+    dry_run: bool,
 ) -> Result<()> {
     let mut wr = WorkspaceRuntime::new(id, name, provider_kind(provider)?, model);
     wr.endpoint = endpoint.unwrap_or_default();
@@ -888,13 +921,32 @@ fn cmd_add_runtime(
         (None, Some(s)) => WorkspaceCredential::Inline { secret: s },
         (None, None) => WorkspaceCredential::None,
     };
+    if dry_run {
+        let cred = match &wr.credential {
+            WorkspaceCredential::SecretRef { secret_ref } => format!("the secret ref {secret_ref}"),
+            WorkspaceCredential::Inline { .. } => "an inline key (stored encrypted in the workspace)".into(),
+            WorkspaceCredential::None => "no key".into(),
+        };
+        println!("dry run: would define runtime '{id}' ({name}: {provider}, model {model}, {cred}); nothing was signed or written.");
+        return Ok(());
+    }
     let mut svc = open_service(cfg)?;
     svc.add_workspace_runtime(uuid_of_room(&cfg.room), wr)?;
     println!("runtime '{id}' defined (sync to share it with the workspace).");
     Ok(())
 }
 
-fn cmd_rm_runtime(cfg: &Config, id: &str) -> Result<()> {
+fn cmd_rm_runtime(cfg: &Config, id: &str, dry_run: bool) -> Result<()> {
+    if dry_run {
+        let svc = open_service(cfg)?;
+        let ws = uuid_of_room(&cfg.room);
+        let known = svc.list_workspace_runtimes(ws)?.iter().any(|r| r.id == id);
+        if !known {
+            return Err(problem::not_found(format!("no runtime '{id}' in this workspace (ligus runtimes lists them)")));
+        }
+        println!("dry run: would remove runtime '{id}'; nothing was signed or written.");
+        return Ok(());
+    }
     let mut svc = open_service(cfg)?;
     svc.remove_workspace_runtime(uuid_of_room(&cfg.room), id)?;
     println!("removed.");
@@ -1336,7 +1388,13 @@ fn cmd_add_agent(
     runtime_id: &str,
     host: Option<String>,
     role: Option<String>,
+    dry_run: bool,
 ) -> Result<()> {
+    if dry_run {
+        let on = host.as_deref().map(|h| format!(" on host {h}")).unwrap_or_default();
+        println!("dry run: would create agent @{name} on runtime '{runtime_id}'{on}; nothing was signed or written.");
+        return Ok(());
+    }
     let ws = uuid_of_room(&cfg.room);
     let mut agent = WorkspaceAgent::new(name, runtime_id);
     agent.role = role.unwrap_or_default();
@@ -1428,7 +1486,7 @@ fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
     Ok(id)
 }
 
-fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str) -> Result<()> {
+fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bool) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let agents = svc
@@ -1438,8 +1496,12 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str) -> Result<(
     let agent = agents
         .iter()
         .find(|a| a.name == agent_name)
-        .ok_or_else(|| anyhow!("no agent '{agent_name}' in this workspace"))?;
+        .ok_or_else(|| problem::not_found(format!("no agent '{agent_name}' in this workspace (ligus agents lists them)")))?;
     let aid = agent.id;
+    if dry_run {
+        println!("dry run: would bind @{agent_name} ({aid}) to host {host_id}; nothing was signed or written.");
+        return Ok(());
+    }
     svc.set_agent_host(ws, aid, host_id)?;
     println!("bound @{agent_name} to host {host_id} (sync to apply).");
     Ok(())
@@ -1922,7 +1984,8 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
     if o.json {
         println!("{}", r.to_json(code));
     } else {
-        print!("{}", doctor_text(&r));
+        let g = cli_flags::globals();
+        print!("{}", doctor_text(&r, g.quiet, cli_flags::stdout_color()));
     }
     Ok(code)
 }
@@ -1930,7 +1993,10 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
 /// The text form. The sandbox tier comes first as `agent sandbox: <tier>`
 /// with its summary on the next line, and the turn test's findings as
 /// `turn test: …` lines, as before: deploy scripts and CI read those lines.
-fn doctor_text(r: &checks::Report) -> String {
+///
+/// `quiet` leaves out the checks that are ok or skipped; `color` colours a
+/// failure red and a warning yellow.
+fn doctor_text(r: &checks::Report, quiet: bool, color: bool) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
     for c in &r.checks {
@@ -1950,7 +2016,7 @@ fn doctor_text(r: &checks::Report) -> String {
                     let _ = writeln!(s, "turn test: {n}");
                 }
                 if c.status != checks::Status::Ok {
-                    s.push_str(&checks::Report::check_text(&checks::Check { notes: Vec::new(), ..c.clone() }));
+                    s.push_str(&checks::Report::check_text_styled(&checks::Check { notes: Vec::new(), ..c.clone() }, color));
                 }
             }
             "sandbox.policy" => {
@@ -1958,7 +2024,8 @@ fn doctor_text(r: &checks::Report) -> String {
                     let _ = writeln!(s, "{n}");
                 }
             }
-            _ => s.push_str(&checks::Report::check_text(c)),
+            _ if quiet && matches!(c.status, checks::Status::Ok | checks::Status::Skip) => {}
+            _ => s.push_str(&checks::Report::check_text_styled(c, color)),
         }
     }
     let _ = writeln!(s, "{}", r.summary());
@@ -2093,7 +2160,7 @@ fn run() -> Result<()> {
     gateway_check::maybe_run_probe();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_ligus::init_local_offset();
-    let args = split_flag_values(std::env::args().skip(1).collect());
+    let args = cli_flags::extract(split_flag_values(std::env::args().skip(1).collect()))?;
     // Help never opens the data dir, the config or the secret store (a bare
     // `ligus serve --help` once started a real server on the default one).
     if args.first().map(String::as_str) == Some("help") {
@@ -2213,7 +2280,7 @@ fn run() -> Result<()> {
         "send" => {
             let id = positional
                 .first()
-                .ok_or_else(|| anyhow!("usage: ligus send <chat-id> <message…> [--push]"))?;
+                .ok_or_else(|| anyhow!("usage: ligus send <chat-id> <message…> [--push] [--wait [--timeout DURATION]]"))?;
             let chat_id = chat_id_arg(id)?;
             let body = positional[1..]
                 .iter()
@@ -2223,7 +2290,12 @@ fn run() -> Result<()> {
             if body.trim().is_empty() {
                 bail!("message is empty");
             }
-            rt()?.block_on(cmd_send(&cfg, chat_id, body, has("--push")))
+            let wait = match (has("--wait"), flag_val("--timeout")) {
+                (false, None) => None,
+                (_, Some(t)) => Some(cli_flags::parse_duration(&t)?),
+                (true, None) => Some(Duration::from_secs(300)),
+            };
+            rt()?.block_on(cmd_send(&cfg, chat_id, body, has("--push"), wait))
         }
         "sync" => rt()?.block_on(cmd_sync(&cfg, has("--watch"))),
         "runtimes" => cmd_runtimes(&cfg, has("--json")),
@@ -2240,11 +2312,12 @@ fn run() -> Result<()> {
                 flag_val("--endpoint"),
                 flag_val("--secret-ref"),
                 secret_arg::secret_flag_warn("--secret", flag_val("--secret"), &mut secret_arg::stdin_once())?,
+                has("--dry-run"),
             )
         }
         "rm-runtime" => {
             let id = positional.first().ok_or_else(|| anyhow!("usage: ligus rm-runtime <id>"))?;
-            cmd_rm_runtime(&cfg, id)
+            cmd_rm_runtime(&cfg, id, has("--dry-run"))
         }
         "enroll" => {
             let mut stdin = secret_arg::stdin_once();
@@ -2281,7 +2354,7 @@ fn run() -> Result<()> {
             if positional.len() < 2 {
                 bail!("usage: ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]");
             }
-            cmd_add_agent(&cfg, positional[0], positional[1], flag_val("--host"), flag_val("--role"))
+            cmd_add_agent(&cfg, positional[0], positional[1], flag_val("--host"), flag_val("--role"), has("--dry-run"))
         }
         "hosts" => cmd_hosts(&cfg, has("--json")),
         "register-worker" => {
@@ -2293,7 +2366,7 @@ fn run() -> Result<()> {
             if positional.len() < 2 {
                 bail!("usage: ligus set-agent-host <agent-name> <host-id>");
             }
-            cmd_set_agent_host(&cfg, positional[0], positional[1])
+            cmd_set_agent_host(&cfg, positional[0], positional[1], has("--dry-run"))
         }
         "worker" => {
             hardening::require_sandbox_or_exit("this worker");
@@ -2484,6 +2557,7 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// flag read with `flag_val` must be listed here, or its value is taken as a
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
+    "--timeout",
     "--gateway",
     "--model",
     "--runtime",
@@ -2856,7 +2930,7 @@ mod cli_tests {
             "passed (tier landlock)".to_string(),
         ]));
         r.add(Check::warn("workspace.joined", "workspace", "not joined").fix("ligus help quickstart"));
-        let t = doctor_text(&r);
+        let t = doctor_text(&r, false, false);
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(lines[0], "agent sandbox: landlock");
         assert_eq!(lines[1], "  Landlock (ABI 6): confined");
@@ -2866,6 +2940,12 @@ mod cli_tests {
         assert!(lines.contains(&"warn  workspace       not joined"), "{t}");
         assert!(lines.contains(&"      fix: ligus help quickstart"), "{t}");
         assert_eq!(*lines.last().unwrap(), "1 warning · next: nothing to do");
+        // Quiet: the header and the turn test stay, ok checks go.
+        r.add(Check::ok("secrets.backend", "secret store", "file"));
+        let q = doctor_text(&r, true, false);
+        assert!(q.starts_with("agent sandbox: landlock\n") && q.contains("turn test: passed") && q.contains("warn  workspace"), "{q}");
+        assert!(!q.contains("secret store"), "{q}");
+        assert!(doctor_text(&r, false, true).contains("\x1b[33mwarn"), "colour on request");
     }
 
     /// A bare doctor runs everything; --sandbox, --gateways and the

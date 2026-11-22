@@ -101,11 +101,18 @@ command prompts when standard input isn't a terminal: the one question
   `ligus help` and `--help` never open the data dir, the config or the
   secret store; `ligus status` and `ligus facts export` never create an
   identity.
-- **Errors** print `ligus: …` on stderr and exit 1; usage errors exit 2 and add a
-  line naming the help to read ([exit codes](#exit-codes)).
+- **Errors** print `ligus: <what>` on stderr, then `why:` and `fix:` lines
+  when known (a usage error's fix names the help to read); with `--json` the
+  error is also one `ligus.error.v1` document on stdout
+  ([errors](../../operate/reference/cli-conventions.md#errors), [exit codes](#exit-codes)).
 - Flags are matched anywhere after the command; a value follows the flag as
   the next argument or after an equals sign (`--label box` or
   `--label=box`).
+- Every command also takes `-o json|text` (`-o json` is `--json`; `-o jsonl`
+  is `--jsonl` for `ligus facts export`), `-q` (`ligus doctor` prints only the
+  checks that need attention) and `--color auto|always|never` (colour only on
+  a terminal, honouring `NO_COLOR` and `CLICOLOR_FORCE`; JSON is never
+  coloured). `ligus` never asks for a confirmation, so there is no `--yes`.
 
 ## Version and identity
 
@@ -226,7 +233,7 @@ an invite and an Admin.
 | `ligus chats [--json]` | lists chats in the local store |
 | `ligus new [title…]` | creates a chat, prints its id |
 | `ligus tail <chat-id> [--watch]` | prints a transcript; `--watch` follows it |
-| `ligus send <chat-id> <message…> [--push]` | posts a signed message; `--push` syncs it out at once |
+| `ligus send <chat-id> <message…> [--push] [--wait [--timeout <duration>]]` | posts a signed message; `--push` syncs it out at once; `--wait` also pushes, then syncs until someone else answers in the chat and prints the answer (`--timeout`, default 5m, as `90s`, `5m` or `1h`; no answer by then exits 7) |
 | `ligus proposals` | lists proposals with status and votes |
 | `ligus queue` | unanswered agent mentions and whether each agent's host is online |
 
@@ -235,16 +242,16 @@ an invite and an Admin.
 | Command | What it does |
 |---|---|
 | `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>]` | defines (or replaces by id) a workspace runtime. |
-| `ligus rm-runtime <id>` | removes a workspace runtime. |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`). |
+| `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes |
 | `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
 | `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
 | `ligus agents [--json]` | lists workspace agents. |
-| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]` | defines an agent. |
+| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
-| `ligus set-agent-host <agent> <host-id>` | binds an agent to a host |
+| `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
 
 `<provider>` is one of `anthropic`, `openai`, `openrouter`, `ollama`,
