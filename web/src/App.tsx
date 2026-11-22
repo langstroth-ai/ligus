@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { limitedLabel } from "@/lib/syncState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,6 +16,7 @@ import {
   maybeRespond,
   notifyMentions,
   onChatStream,
+  onChatActivity,
   pickWorkspaceFolder,
   onTrayNavigate,
   onWorkspaceSynced,
@@ -32,8 +33,10 @@ import {
 } from "@/lib/ipc";
 import { setShownWorkspace } from "@/lib/shownWorkspace";
 import { Sidebar } from "@/components/Sidebar";
-import { ChatView } from "@/components/ChatView";
+import { ChatView, runtimePickerLabel } from "@/components/ChatView";
+import { ChatRunsOn } from "@/components/ChatRepoChip";
 import { editorStore } from "@/state/editorStore";
+import { liveTurns } from "@/state/liveTurns";
 // Lazy so Monaco (the bulk of the bundle) only loads when the Diff view opens.
 const DiffView = lazy(() => import("@/components/DiffView").then((m) => ({ default: m.DiffView })));
 // Lazy so Monaco + xterm (the code view's heavy deps) only load when it opens.
@@ -59,16 +62,17 @@ import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
 import { StatusDot } from "@/components/ui";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ShortcutsSheet } from "@/components/ShortcutsSheet";
+import { matchShortcut } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
-import { PANES } from "@/lib/panes";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -155,6 +159,7 @@ export function App() {
   }
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [addWsOpen, setAddWsOpen] = useState(false);
   // "Admit a box" for the active workspace, from the workspace menu or ⌘K
   // (the rail's right-click menu keeps its own entry).
@@ -321,76 +326,64 @@ export function App() {
   const togglePaneRef = useRef<(pane: UtilityPane) => void>(() => {});
 
   useEffect(() => {
+    // The bindings live in lib/shortcuts (the ⌘/ sheet reads the same list).
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey)) return;
-
-      // ⌘⇧] / ⌘⇧[ — next / previous chat, in the sidebar's own order.
-      if (event.shiftKey && !event.altKey && (event.code === "BracketRight" || event.code === "BracketLeft")) {
-        event.preventDefault();
-        stepChatRef.current(event.code === "BracketRight" ? 1 : -1);
-        return;
-      }
-      // ⌘⌥1…9 — open the nth rail pane (sidebar Workspace order); again closes it.
-      if (event.altKey && !event.shiftKey && /^Digit[1-9]$/.test(event.code)) {
-        const pane = PANES[Number(event.code.slice(5)) - 1];
-        if (!pane) return;
-        event.preventDefault();
-        togglePaneRef.current(pane.id);
-        return;
-      }
-      if (event.altKey) return;
-
-      // ⌘L — focus the composer (from anywhere: rail, sidebar, a dialog-free canvas).
-      if (event.key.toLowerCase() === "l" && !event.shiftKey) {
-        const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]");
-        if (composer) {
+      const hit = matchShortcut(event);
+      if (!hit) return;
+      switch (hit.id) {
+        case "nextChat":
+        case "prevChat":
           event.preventDefault();
-          composer.focus();
+          stepChatRef.current(hit.id === "nextChat" ? 1 : -1);
+          return;
+        case "pane":
+          event.preventDefault();
+          togglePaneRef.current(hit.pane as UtilityPane);
+          return;
+        case "composer": {
+          // From anywhere: rail, sidebar, a dialog-free canvas.
+          const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]");
+          if (composer) {
+            event.preventDefault();
+            composer.focus();
+          }
+          return;
         }
-        return;
-      }
-
-      if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setPaletteOpen((v) => !v);
-        return;
-      }
-
-      // Focus mode: ⌘B hides the sidebar, ⌘J the tools rail (VS Code's
-      // muscle memory). Both persist.
-      if (event.key.toLowerCase() === "b") {
-        event.preventDefault();
-        setSidebarVisible((v) => !v);
-        return;
-      }
-      if (event.key.toLowerCase() === "j") {
-        event.preventDefault();
-        setShowUtilityPane((v) => !v);
-        return;
-      }
-
-      // ⌘, opens Settings (the platform-standard preferences shortcut).
-      if (event.key === ",") {
-        event.preventDefault();
-        openSettings();
-        return;
-      }
-
-      if (event.key === "0") {
-        event.preventDefault();
-        setUiScale(DEFAULT_UI_SCALE);
-        return;
-      }
-
-      if (event.key === "+" || event.key === "=" || event.key === "NumpadAdd") {
-        event.preventDefault();
-        setUiScale((value) => clampUiScale(Number((value + 0.05).toFixed(2))));
-        return;
-      }
-
-      if (event.key === "-" || event.key === "NumpadSubtract") {
-        event.preventDefault();
-        setUiScale((value) => clampUiScale(Number((value - 0.05).toFixed(2))));
+        case "palette":
+          event.preventDefault();
+          setShortcutsOpen(false);
+          setPaletteOpen((v) => !v);
+          return;
+        case "shortcuts":
+          event.preventDefault();
+          setPaletteOpen(false);
+          setShortcutsOpen((v) => !v);
+          return;
+        // Focus mode (VS Code's muscle memory). Both persist.
+        case "toggleSidebar":
+          event.preventDefault();
+          setSidebarVisible((v) => !v);
+          return;
+        case "toggleTools":
+          event.preventDefault();
+          setShowUtilityPane((v) => !v);
+          return;
+        case "settings":
+          event.preventDefault();
+          openSettings();
+          return;
+        case "zoomReset":
+          event.preventDefault();
+          setUiScale(DEFAULT_UI_SCALE);
+          return;
+        case "zoomIn":
+          event.preventDefault();
+          setUiScale((value) => clampUiScale(Number((value + 0.05).toFixed(2))));
+          return;
+        case "zoomOut":
+          event.preventDefault();
+          setUiScale((value) => clampUiScale(Number((value - 0.05).toFixed(2))));
+          return;
       }
     };
 
@@ -520,6 +513,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // In-app links to "Admit a box" (the add-a-phone check). The dialog renders
+  // above Settings, so the person comes back to where they were.
+  useEffect(() => {
+    const onAdmit = () => setAdmitBoxOpen(true);
+    window.addEventListener(ADMIT_BOX_EVENT, onAdmit);
+    return () => window.removeEventListener(ADMIT_BOX_EVENT, onAdmit);
+  }, []);
+
   // System-tray navigation: the native menu emits a route string and we switch
   // the in-window view to match (Settings/Friends are views, not OS windows).
   useEffect(() => {
@@ -561,6 +562,24 @@ export function App() {
       })
       .catch(() => {});
   }, [qc, selectedId, view]);
+
+  // Live turn state for every chat (not just the open one), for the
+  // sidebar's state chips. One subscription for the app's lifetime.
+  useEffect(() => {
+    const unStream = onChatStream((e) => liveTurns.onStream(e));
+    const unActivity = onChatActivity((e) => liveTurns.onActivity(e.sessionId));
+    // A turn that went silent stops reading as working without an event.
+    const tick = window.setInterval(() => liveTurns.refresh(), 30_000);
+    return () => {
+      window.clearInterval(tick);
+      unStream.then((fn) => fn());
+      unActivity.then((fn) => fn());
+    };
+  }, []);
+  // The chat on screen: a turn you watch finish isn't news.
+  useEffect(() => {
+    liveTurns.setViewing(view === "workspace" && mode === "chat" ? selectedId : null);
+  }, [selectedId, view, mode]);
 
   useEffect(() => {
     const unlisten = onChatStream((event) => {
@@ -967,9 +986,12 @@ export function App() {
       <WorkspaceTrustBanner />
       <RepoSuggestionBanner />
       <SandboxGrantsBanner />
+      {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
+        sessionId={selectedId}
+        workspaceId={activeWorkspaceId}
         actions={{
           newChat: startNewChat,
           openSettings: () => openSettings(),
@@ -1014,6 +1036,21 @@ export function App() {
           takeTour: () => startTour(),
           admitBox: activeWorkspace?.kind === "room" ? () => setAdmitBoxOpen(true) : undefined,
           stepChat: (dir) => stepChatRef.current(dir),
+          openProposal: (sessionId) => {
+            rememberChat(sessionId);
+            setSelectedId(sessionId);
+            setView("workspace");
+            setMode("chat");
+            openUtilityPane("review");
+          },
+          mentionAgent: (name) => {
+            setView("workspace");
+            setMode("chat");
+            setComposerSeed(`@${name} `);
+            window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0);
+          },
+          addPhone: () => requestAddPhone(),
+          showShortcuts: () => setShortcutsOpen(true),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
@@ -1029,9 +1066,6 @@ export function App() {
         settingsActive={settingsOpen}
       />
       <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
-      {admitBoxOpen && activeWorkspace?.kind === "room" && (
-        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
-      )}
       {sidebarVisible && (
       <Sidebar
         width={menuPaneWidth}
@@ -1084,7 +1118,6 @@ export function App() {
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DearthBanner onManage={() => openSettings("guards")} />
-        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
         {view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
@@ -1155,6 +1188,15 @@ export function App() {
           <>
             <ChatHeaderBar
               title={activeChat.data?.title ?? "New Chat"}
+              runsOn={
+                selectedId ? (
+                  <ChatRunsOn
+                    sessionId={selectedId}
+                    runtime={currentRuntime ? runtimePickerLabel(currentRuntime) : null}
+                    runtimeDto={currentRuntime}
+                  />
+                ) : undefined
+              }
               contextPct={
                 contextTelemetry.data
                   ? Math.min(
@@ -1271,6 +1313,9 @@ export function App() {
             </div>
           </>
         )}
+        {/* Suggestions are a quiet status-bar tip at the foot of the canvas;
+            only blocking states (Lockdown, Dearth) get a banner up top. */}
+        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
       </main>
 
       {/* Settings presents OVER the workspace — the chat behind it stays mounted.
@@ -1286,6 +1331,10 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
           activeChat={selectedId ? { id: selectedId, title: activeChat.data?.title ?? "" } : null}
         />
+      )}
+      {/* After Settings so it stacks above it when opened from there. */}
+      {admitBoxOpen && activeWorkspace?.kind === "room" && (
+        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}
     </div>
   );
@@ -1458,6 +1507,7 @@ function CanvasModeTabs({
 
 function ChatHeaderBar({
   title,
+  runsOn,
   syncPill,
   mode,
   onChangeMode,
@@ -1470,6 +1520,8 @@ function ChatHeaderBar({
   workspaceCrumb,
 }: {
   title: string;
+  /// One quiet line under the title: where the chat runs.
+  runsOn?: ReactNode;
   syncPill: SyncPill;
   mode: CanvasMode;
   onChangeMode: (m: CanvasMode) => void;
@@ -1492,7 +1544,8 @@ function ChatHeaderBar({
       className="flex items-center gap-3 border-b px-4 py-2"
       style={{ borderColor: "var(--ligus-line)" }}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 items-center gap-1.5">
         {workspaceCrumb && (
           <>
             <span className="shrink-0 truncate text-base font-semibold tracking-tight opacity-55">
@@ -1511,6 +1564,8 @@ function ChatHeaderBar({
           <IconPencil size={13} />
         </button>
         <SyncPillChip pill={syncPill} onFix={onFixSync} />
+      </div>
+      {runsOn}
       </div>
 
       {contextPct !== null && (

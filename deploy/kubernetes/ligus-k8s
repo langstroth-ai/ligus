@@ -93,7 +93,7 @@ FLAGS
   --image REPO:TAG         the Ligus image for the Landlock probe (ligus doctor --turn-test in a
                            restricted pod); without it that probe is skipped. Also accepted:
                            --image-repository R [--image-tag T | --image-digest sha256:...]
-                           (tag default 0.1.0 when only a repository is given)
+                           (tag default 0.1.1 when only a repository is given)
   --probe-image REF        the image for the probe pods, with httpd and wget (default busybox:1.37)
   --storage-class NAME     check this StorageClass instead of the default one
 EOF
@@ -632,7 +632,7 @@ EOF
   # Landlock: run ligus doctor in a restricted pod, as the chart's init container does.
   local img=""
   if [ -n "$IMG_REPO" ]; then
-    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-0.1.0}"
+    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-0.1.1}"
   fi
   if [ -z "$img" ]; then
     ac_check sandbox.landlock.probe skip "no Ligus image given, so the Landlock probe did not run" "rerun with --probe --image <repository:tag> (the image you will install)"

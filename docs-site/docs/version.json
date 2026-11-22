@@ -1,6 +1,6 @@
 {
-  "tag": "v0.1.0",
-  "name": "Ligus 0.1.0",
+  "tag": "v0.1.1",
+  "name": "Ligus 0.1.1",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "Ligus 0.1.0, the first release of Ligus (short for ligustica): the desktop app, the iOS app and the ligus CLI, with end-to-end-encrypted workspaces synced over a self-hostable relay. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "A patch release of Ligus (short for ligustica): adding a phone by scanning the desktop's code, a faster desktop launch, clearer buttons and proposals, and security and membership fixes. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }

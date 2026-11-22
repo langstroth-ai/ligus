@@ -216,9 +216,60 @@ preferred_model = ""   # blank = the CLI's default model
 ## Picking which runtime a chat uses
 
 When you create a new chat, Ligus picks the workspace's
-`default_runtime`. Switch per chat from the **Primary runtime** select
-just above the composer — it lists every configured runtime; choosing
-one re-points that chat.
+`default_runtime`. Switch per chat from the route pill under the composer
+(`→ @ligus · via …`): it lists every configured runtime, and choosing one
+re-points that chat.
+
+<a id="pick-a-model"></a>
+## Picking the model for a chat
+
+Each runtime row in the route pill's list has a **›** (or press **→** on
+the row). It opens that runtime's models: **Default** (the runtime's own
+model) at the top, then the models the harness offers, then **Other…** to
+type a name. Picking one switches the chat to that runtime and remembers
+the model for this chat. The line under the chat title shows it
+(`Runs on MacBook · copilot / gpt-5.3-codex`), and each reply is labelled
+with the model it actually ran with. Use the arrow keys to move, Enter to
+pick, and Escape or **←** to go back to the runtimes.
+
+The choice is kept on this computer only, per chat and per runtime, and is
+never synced:
+
+- It applies to the chat's untagged messages (`@ligus`) that this computer
+  answers. In a shared chat those are answered by the computer of the person
+  who created the chat; if that isn't you, the list says so, and the other
+  person's own model is used. A choice made here never changes another
+  member's agent or spends their quota.
+- `@`-mentioned agents keep their own runtime and model.
+- Switching the chat to another runtime and back brings your choice back.
+  **Default** clears it.
+
+Where each list comes from (nothing is sent to a model, so listing spends
+no quota; lists are reused for five minutes, and the refresh button asks
+again):
+
+| Runtime | List |
+|---|---|
+| Claude Code | its aliases (`sonnet`, `opus`, `haiku`) and the models Claude Code lists for your account |
+| Codex | `codex debug models` |
+| GitHub Copilot CLI | the models `copilot help config` names; your plan may not include all of them |
+| Google Antigravity (`agy`) | `agy models`, your account's models |
+| Ollama | the models installed on the server |
+| OpenAI-compatible servers, OpenAI, OpenRouter, Anthropic | the provider's `/models` list |
+| pi, aider, Hermes, a named model gateway | none; use **Other…** |
+
+**When a model won't run.** If a turn on this computer fails because the
+model isn't available (for example a Copilot model your plan doesn't
+include), the composer shows one line, such as *claude-opus-4.8 isn't
+available to this Copilot account*, with **Pick another model**, instead
+of a failed reply. Until you pick that model again, Ligus stops a message
+that would use it before sending. For Antigravity, Ollama and local
+OpenAI-compatible servers, whose lists are complete, a model that isn't on
+the list is caught the same way, and **Other…** won't take it.
+
+Settings → **Models & runtimes** offers the same lists on the runtime
+form's model field and on the subscription CLIs' model field, and says when
+a typed model isn't on a complete list.
 
 To have a named agent always use a specific runtime, configure a
 [Workspace Agent](../concepts/agents.md) in **Settings → Models** and

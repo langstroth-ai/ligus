@@ -925,6 +925,12 @@ impl ChatSession {
                 let mut proposal = proposal.clone();
                 if let Some(slot) = self.proposals.iter_mut().find(|p| p.id == proposal.id) {
                     proposal.repo_id = slot.repo_id;
+                    // The comment thread is append-only: it grows by signed
+                    // `ProposalRefined` events, never by an edit. An edit
+                    // that carries a stale copy (an older client re-upserting
+                    // to set `superseded_by`) or extra comments changes
+                    // nothing here.
+                    proposal.refinements = std::mem::take(&mut slot.refinements);
                     // A verified human approval is for the change that was
                     // reviewed: a re-upsert that changes what would be
                     // applied (patch, files, kind, workflow, command, base)
@@ -935,6 +941,8 @@ impl ChatSession {
                     *slot = proposal.clone();
                 } else {
                     proposal.repo_id = self.repo.as_ref().and_then(|r| r.repo_id);
+                    // A new proposal starts with an empty thread.
+                    proposal.refinements.clear();
                     self.proposals.push(proposal.clone());
                 }
                 crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
@@ -2142,8 +2150,30 @@ fn fold_pass(
                     rewritten = SessionEvent::ProposalVoteCast { proposal_id: *proposal_id, approval };
                     &rewritten
                 }
+                // A comment carries its signer's real role, as a vote does.
+                SessionEvent::ProposalRefined { proposal_id, refinement } if checked && !trusted => {
+                    let mut refinement = refinement.clone();
+                    if let Some(role) = at.and_then(|r| authz::counted_role(r, author)) {
+                        refinement.role = role;
+                    }
+                    rewritten = SessionEvent::ProposalRefined { proposal_id: *proposal_id, refinement };
+                    &rewritten
+                }
                 other => other,
             };
+            // Who wrote each comment (see `AuthzState::refinement_authors`).
+            if trusted || checked {
+                if let SessionEvent::ProposalRefined { proposal_id, refinement } = payload {
+                    let first = session
+                        .proposals
+                        .iter()
+                        .find(|p| p.id == *proposal_id)
+                        .is_some_and(|p| !p.refinements.iter().any(|r| r.id == refinement.id));
+                    if first && refinement.actor_id == author {
+                        session.authz.refinement_authors.insert(refinement.id, author.to_string());
+                    }
+                }
+            }
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
                 session.authz.lockdown_raisers.entry(lockdown.raise_event_id.unwrap_or(lockdown.id)).or_insert_with(|| author.to_string());
             }
