@@ -36,6 +36,7 @@ Topics:
 | `security` | the data dir, the secret backends, `LIGUS_DATA_DIR`, `LIGUS_SECRET_BACKEND` |
 | `env` | every `LIGUS_*` variable the CLI reads (a test checks it against the code) |
 | `troubleshooting` | the common errors and their fixes |
+| `exit-codes` | the exit codes every Ligus tool shares (0 to 7), and `--legacy-exit-codes` ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes)) |
 | `checks` | the `ligus.checks.v1` report `ligus doctor --json`, `langstroth-relay check --json` and the deploy scripts print ([CLI conventions](../../operate/reference/cli-conventions.md)) |
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
