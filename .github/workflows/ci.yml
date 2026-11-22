@@ -4,8 +4,8 @@ name: ci
 # frontend (web/). Docs-only changes (docs/, docs-site/, root *.md)
 # match none of the paths below and skip this workflow entirely.
 #
-#   web      one Linux job: bun install, vitest, typecheck + vite build (was
-#            repeated on all three OSes).
+#   web      one Linux job: bun install, the colour-token check, vitest,
+#            typecheck + vite build (was repeated on all three OSes).
 #   rust     Linux + macOS: ts-rs bindings check (Linux), nextest over the
 #            whole workspace, doctests, a debug build of every binary.
 #   windows  on PRs: build + every test except the pure-logic property suites
@@ -41,6 +41,7 @@ on:
       - "crates/**"
       - "app/**"
       - "web/**"
+      - "assets/branding/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".config/nextest.toml"
@@ -89,7 +90,7 @@ jobs:
             { echo code=true; echo cli=true; } >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "$BASE" HEAD)
-          if grep -qE '^(crates/|app/|web/|Cargo\.toml$|Cargo\.lock$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)' <<<"$files"; then
+          if grep -qE '^(crates/|app/|web/|assets/branding/|Cargo\.toml$|Cargo\.lock$|\.config/nextest\.toml$|\.github/workflows/ci\.yml$)' <<<"$files"; then
             echo code=true >> "$GITHUB_OUTPUT"
           else
             echo code=false >> "$GITHUB_OUTPUT"
@@ -121,6 +122,13 @@ jobs:
           node-version: "24"
       - name: Install web deps
         run: bun install --frozen-lockfile
+      # One colour source (assets/branding/ligus-brand-tokens.json) for the
+      # desktop, the phone and lt: the generated files must be current, and
+      # every palette must pass the contrast and colour-vision checks.
+      - name: Colour tokens are generated and legible
+        run: |
+          node ../assets/branding/tokens/generate.mjs --check
+          node ../assets/branding/tokens/validate.mjs
       - name: Web tests (vitest)
         run: bun run test
       - name: Web typecheck + build
