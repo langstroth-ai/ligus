@@ -7,7 +7,16 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode, RefObject } from "react";
-import { IconAlertTriangle } from "@/lib/icons";
+import {
+  IconAlertTriangle,
+  IconStateDone,
+  IconStateFailed,
+  IconStateNeedsYou,
+  IconStatePaused,
+  IconStateQueued,
+  IconStateWorking,
+} from "@/lib/icons";
+import { SESSION_STATE_META, type SessionState } from "@/lib/sessionState";
 
 type Variant = "primary" | "ghost" | "danger" | "success" | "quiet";
 type Size = "sm" | "md";
@@ -109,6 +118,11 @@ function focusables(panel: HTMLElement): HTMLElement[] {
 // Stack of open modals so only the top-most one reacts to Escape/Tab when
 // modals nest (e.g. a confirm dialog launched from inside another modal).
 const modalStack: symbol[] = [];
+
+/// Whether any modal dialog is open (keys like Esc belong to it then).
+export function isModalOpen(): boolean {
+  return modalStack.length > 0;
+}
 
 /// Modal shell: overlay + panel with the focus management every dialog needs.
 /// - Tab / Shift-Tab cycle inside the panel (focus can't escape behind the overlay)
@@ -341,10 +355,39 @@ export function SectionCap({ children, action }: { children: ReactNode; action?:
 
 /// §5.2 — the two-line, 46px chat row. Shows recency + participants, never a
 /// message count. `options` renders a hover ⋯ button; `menu` is its Popover.
+const SESSION_STATE_GLYPH: Record<Exclude<SessionState, "idle">, (p: { size?: number }) => ReactNode> = {
+  working: IconStateWorking,
+  needsYou: IconStateNeedsYou,
+  queued: IconStateQueued,
+  done: IconStateDone,
+  failed: IconStateFailed,
+  paused: IconStatePaused,
+};
+
+/// A chat's state as a small glyph + word ("◆ Needs you"). The glyph carries
+/// the meaning, the colour only repeats it. Renders nothing when idle.
+export function SessionStateChip({ state, compact = false }: { state: SessionState | undefined; compact?: boolean }) {
+  if (!state || state === "idle") return null;
+  const meta = SESSION_STATE_META[state];
+  const Glyph = SESSION_STATE_GLYPH[state];
+  return (
+    <span
+      data-session-state={state}
+      title={meta.describe}
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium"
+      style={{ color: meta.ink }}
+    >
+      <Glyph size={12} />
+      {compact ? <span className="sr-only">{meta.word}</span> : <span>{meta.word}</span>}
+    </span>
+  );
+}
+
 export function ChatRow({
   chatId,
   title,
   when,
+  state,
   unread = 0,
   active = false,
   onClick,
@@ -359,6 +402,8 @@ export function ChatRow({
   chatId?: string;
   title: string;
   when?: string;
+  /// The chat's session state; a non-idle state shows in place of the time.
+  state?: SessionState;
   unread?: number;
   active?: boolean;
   onClick?: () => void;
@@ -391,10 +436,14 @@ export function ChatRow({
           >
             {title}
           </span>
-          {when && (
-            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--ligus-ink-soft)" }}>
-              {when}
-            </span>
+          {state && state !== "idle" ? (
+            <SessionStateChip state={state} />
+          ) : (
+            when && (
+              <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--ligus-ink-soft)" }}>
+                {when}
+              </span>
+            )
           )}
         </span>
         {(avatars || sub) && (
@@ -916,7 +965,11 @@ export function Popover({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDismiss();
+      if (e.key !== "Escape") return;
+      // Claim the key, so Esc closes the menu and does nothing else (such as
+      // stopping a running turn).
+      e.preventDefault();
+      onDismiss();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

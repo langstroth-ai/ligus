@@ -32,3 +32,21 @@ export const OPEN_SETTINGS_EVENT = "ligus:open-settings";
 export function openSettingsTab(tab: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));
 }
+
+/// "Add a phone" from anywhere (the palette): open Settings on Profile with
+/// the add-a-phone panel already open. The devices section reads the flag
+/// when it mounts and then clears it.
+let addPhoneRequestPending = false;
+
+export function requestAddPhone() {
+  addPhoneRequestPending = true;
+  openSettingsTab("account");
+}
+
+export function addPhoneRequested(): boolean {
+  return addPhoneRequestPending;
+}
+
+export function clearAddPhoneRequest() {
+  addPhoneRequestPending = false;
+}
