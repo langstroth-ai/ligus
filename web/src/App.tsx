@@ -53,15 +53,15 @@ import { LockdownBar } from "@/components/guards/LockdownBar";
 import { AppStatusBar } from "@/components/AppStatusBar";
 import { blockingBanner } from "@/lib/banners";
 import { DialogHost, promptDialog } from "@/components/Dialog";
-import { IconPencil, IconHexagon } from "@/lib/icons";
+import { IconPencil, IconHexagon, IconStateNeedsYou } from "@/lib/icons";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
 import { ErrorLogSheet } from "@/components/ErrorLogSheet";
 import { Inbox } from "@/components/Inbox";
 import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
-import { needsYouCount } from "@/lib/needsYou";
-import { matchShortcut } from "@/lib/shortcuts";
+import { needsYouCount, needsYouLabel } from "@/lib/needsYou";
+import { keyLabel, matchShortcut, shortcutKey } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
@@ -159,6 +159,12 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [errorsOpen, setErrorsOpen] = useState(false);
+  // Focus mode: only the chat and the message box. It hides the workspace
+  // rail, sidebar, tools rail and status bar without forgetting whether they
+  // were open, so leaving it puts everything back.
+  const [focusMode, setFocusMode] = useState(false);
+  const focusRef = useRef(false);
+  focusRef.current = focusMode;
   const [addWsOpen, setAddWsOpen] = useState(false);
   // "Admit a box" for the active workspace, from the workspace menu or ⌘K
   // (the rail's right-click menu keeps its own entry).
@@ -357,14 +363,29 @@ export function App() {
           setPaletteOpen(false);
           setShortcutsOpen((v) => !v);
           return;
-        // Focus mode (VS Code's muscle memory). Both persist.
+        // VS Code's muscle memory. Both persist. In focus mode either key
+        // leaves it and shows that panel.
         case "toggleSidebar":
           event.preventDefault();
+          if (focusRef.current) {
+            setFocusMode(false);
+            setSidebarVisible(true);
+            return;
+          }
           setSidebarVisible((v) => !v);
           return;
         case "toggleTools":
           event.preventDefault();
+          if (focusRef.current) {
+            setFocusMode(false);
+            setShowUtilityPane(true);
+            return;
+          }
           setShowUtilityPane((v) => !v);
+          return;
+        case "focusMode":
+          event.preventDefault();
+          setFocusMode((v) => !v);
           return;
         case "settings":
           event.preventDefault();
@@ -794,7 +815,11 @@ export function App() {
   function openUtilityPane(pane: UtilityPane) {
     setUtilityPane(pane);
     setShowUtilityPane(true);
+    // Asking for a pane leaves focus mode, so the pane actually shows.
+    setFocusMode(false);
   }
+  const showSidebar = sidebarVisible && !focusMode;
+  const showRail = showUtilityPane && !focusMode;
 
   function startMenuResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -1060,11 +1085,13 @@ export function App() {
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
           openInbox: () => setView("inbox"),
+          toggleFocusMode: () => setFocusMode((v) => !v),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
         }}
       />
+      {!focusMode && (
       <WorkspaceRail
         onJoinRoom={() => setAddWsOpen(true)}
         onOpenFriends={() => setView("friends")}
@@ -1074,8 +1101,9 @@ export function App() {
         onOpenHelp={() => startTour()}
         settingsActive={settingsOpen}
       />
+      )}
       <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
-      {sidebarVisible && (
+      {showSidebar && (
       <Sidebar
         width={menuPaneWidth}
         selectedId={selectedId}
@@ -1123,7 +1151,7 @@ export function App() {
       />
       )}
 
-      {sidebarVisible && (
+      {showSidebar && (
         <PaneResizeHandle onPointerDown={startMenuResize} ariaLabel="Resize menu and chat panes" />
       )}
 
@@ -1176,6 +1204,16 @@ export function App() {
                   {workspaceLabel}
                 </span>
               </div>
+              {focusMode && (
+                <FocusControls
+                  needsYou={needsYouCount(needsYou)}
+                  onExit={() => setFocusMode(false)}
+                  onOpenInbox={() => {
+                    setFocusMode(false);
+                    setView("inbox");
+                  }}
+                />
+              )}
               <CanvasModeTabs mode={mode} onChangeMode={setMode} />
             </div>
 
@@ -1240,10 +1278,11 @@ export function App() {
                   : null
               }
               onOpenContext={() => openUtilityPane("context")}
-              workspaceCrumb={sidebarVisible ? undefined : workspaceLabel}
+              workspaceCrumb={showSidebar ? undefined : workspaceLabel}
+              focus={focusMode ? { needsYou: needsYouCount(needsYou), onExit: () => setFocusMode(false), onOpenInbox: () => { setFocusMode(false); setView("inbox"); } } : undefined}
               mode={mode}
               onChangeMode={setMode}
-              utilityPaneVisible={showUtilityPane}
+              utilityPaneVisible={showRail}
               onToggleTools={() => {
                 if (showUtilityPane) {
                   setShowUtilityPane(false);
@@ -1314,7 +1353,7 @@ export function App() {
                 </PaneErrorBoundary>
               </div>
 
-              {showUtilityPane && (
+              {showRail && (
                 <>
                   <PaneResizeHandle
                     onPointerDown={startUtilityResize}
@@ -1349,7 +1388,8 @@ export function App() {
             openUtilityPane("review");
           }}
           onShowErrors={() => setErrorsOpen(true)}
-          inboxCount={sidebarVisible ? 0 : needsYouCount(needsYou)}
+          hidden={focusMode}
+          inboxCount={showSidebar ? 0 : needsYouCount(needsYou)}
           onOpenInbox={() => setView("inbox")}
           dearthAside={dearthOn && banner !== "dearth"}
         />
@@ -1443,6 +1483,36 @@ function CanvasModeTabs({
   );
 }
 
+/// In focus mode, the header's only extra: how many things need you (one
+/// quiet badge that opens the Inbox) and a way back.
+function FocusControls({ needsYou, onExit, onOpenInbox }: { needsYou: number; onExit: () => void; onOpenInbox: () => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 text-xs text-ink-soft" data-testid="focus-controls">
+      {needsYou > 0 && (
+        <button
+          type="button"
+          onClick={onOpenInbox}
+          title="Open the Inbox"
+          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
+        >
+          <span aria-hidden style={{ color: "var(--ligus-state-needs-you, var(--ligus-warm-ink))" }}>
+            <IconStateNeedsYou size={11} />
+          </span>
+          {needsYouLabel(needsYou)}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onExit}
+        title={`Leave focus mode (${keyLabel(shortcutKey("focusMode")!)})`}
+        className="rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
+      >
+        Leave focus
+      </button>
+    </div>
+  );
+}
+
 /// Single compact chat header: title + rename, where the chat runs, the
 /// Chat/Diff mode tabs, and the Tools toggle. Sync state lives in the status
 /// bar at the foot of the canvas.
@@ -1457,6 +1527,7 @@ function ChatHeaderBar({
   contextPct,
   onOpenContext,
   workspaceCrumb,
+  focus,
 }: {
   title: string;
   /// One quiet line under the title: where the chat runs.
@@ -1473,6 +1544,8 @@ function ChatHeaderBar({
   /// until telemetry loads). Clicking the pill opens the Context pane.
   contextPct: number | null;
   onOpenContext: () => void;
+  /// Focus mode is on: one quiet needs-you badge and a way out.
+  focus?: { needsYou: number; onExit: () => void; onOpenInbox: () => void };
 }) {
   return (
     <div
@@ -1501,6 +1574,8 @@ function ChatHeaderBar({
       </div>
       {runsOn}
       </div>
+
+      {focus && <FocusControls {...focus} />}
 
       {contextPct !== null && (
         <button
