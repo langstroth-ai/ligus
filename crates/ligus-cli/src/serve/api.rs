@@ -1507,15 +1507,19 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
                 "this proposal came from the chat's primary runtime — send it back from the desktop".into(),
             )
         })?;
-    let mut current = p.clone();
     if let Some(note) = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
-        current = add_note(&s, &chat, p.id, &note, true)?;
+        add_note(&s, &chat, p.id, &note, true)?;
     }
+    let folded = load_chat(&s, &chat.id.to_string()).unwrap_or_else(|_| chat.clone());
+    let current = folded.proposals.iter().find(|q| q.id == p.id).cloned().unwrap_or_else(|| p.clone());
     // Prefer explicit change requests; fall back to all notes so a plain
-    // comment thread can still drive a revision (as the desktop does).
-    let mut notes: Vec<&ProposalRefinement> = current.refinements.iter().filter(|r| r.request_changes).collect();
+    // comment thread can still drive a revision (as the desktop does). Only
+    // comments whose author is verified (signed by the member they name)
+    // reach the agent.
+    let verified: Vec<&ProposalRefinement> = folded.verified_refinements(&current).collect();
+    let mut notes: Vec<&ProposalRefinement> = verified.iter().copied().filter(|r| r.request_changes).collect();
     if notes.is_empty() {
-        notes = current.refinements.iter().collect();
+        notes = verified;
     }
     if notes.is_empty() {
         return Err(ApiError::bad_request("add a refinement note before sending it back to the agent"));
