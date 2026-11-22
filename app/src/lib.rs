@@ -226,10 +226,29 @@ struct AppState {
 }
 
 /// The concrete debounced-watcher type held alive in `AppState`.
-type FsWatcher = notify_debouncer_full::Debouncer<
-    notify::RecommendedWatcher,
-    notify_debouncer_full::RecommendedCache,
->;
+///
+/// `NoCache`, never the platform's `RecommendedCache`: on macOS and Windows
+/// that is a file-id map that `watch` fills by walking the whole watched
+/// tree, synchronously, on the caller's thread. A workspace folder like
+/// `~/projects` (hundreds of thousands of files, build dirs included) held
+/// the app's launch for over ten seconds before the window could show. The
+/// file ids only pair up rename halves, and the handler only forwards the
+/// changed paths, so nothing is lost without them.
+type FsWatcher = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, notify_debouncer_full::NoCache>;
+
+/// A recursive, debounced watch of `root` that returns at once, whatever the
+/// size of the tree (see [`FsWatcher`]).
+fn start_fs_watch(root: &Path, handler: impl notify_debouncer_full::DebounceEventHandler) -> notify::Result<FsWatcher> {
+    let mut d = notify_debouncer_full::new_debouncer_opt::<_, notify::RecommendedWatcher, notify_debouncer_full::NoCache>(
+        std::time::Duration::from_millis(300),
+        None,
+        handler,
+        notify_debouncer_full::NoCache,
+        notify::Config::default(),
+    )?;
+    d.watch(root, notify::RecursiveMode::Recursive)?;
+    Ok(d)
+}
 
 /// A live embedded terminal. `writer` feeds keystrokes to the PTY master;
 /// `master` is kept alive (dropping it closes the PTY) and used for resize;
@@ -3445,9 +3464,9 @@ impl AppState {
         }
         let app = self.app_handle.clone();
         let handler_root = root_path.clone();
-        let debouncer = notify_debouncer_full::new_debouncer(
-            std::time::Duration::from_millis(300),
-            None,
+        let started = std::time::Instant::now();
+        let watched = start_fs_watch(
+            &root_path,
             move |res: notify_debouncer_full::DebounceEventResult| {
                 let Ok(events) = res else { return };
                 let mut paths: Vec<String> = Vec::new();
@@ -3472,16 +3491,12 @@ impl AppState {
                 }
             },
         );
-        match debouncer {
-            Ok(mut d) => {
-                // The debouncer registers the file-id cache root itself.
-                if let Err(e) = d.watch(&root_path, notify::RecursiveMode::Recursive) {
-                    tracing::warn!("fs watcher failed to watch {root}: {e}");
-                } else {
-                    *slot = Some(d);
-                }
+        match watched {
+            Ok(d) => {
+                tracing::debug!(target: "startup", "fs watcher armed on {} in {:?}", root_path.display(), started.elapsed());
+                *slot = Some(d);
             }
-            Err(e) => tracing::warn!("fs watcher init failed: {e}"),
+            Err(e) => tracing::warn!("fs watcher failed to watch {root}: {e}"),
         }
     }
 
@@ -12388,6 +12403,7 @@ fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
 }
 
 fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String> {
+    let mut clock = StartupClock::start();
     prepare_data_dir(&data_dir)?;
 
     // B2: Ligus's own secrets (identity seeds, settings secrets) live in the OS
@@ -12398,9 +12414,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let stored = identity.bootstrap("You", "you", "This device").map_err(map_err)?;
     let device_kp = identity.device_keypair(stored.device.id).map_err(map_err)?;
     let account_kp = identity.account_keypair(stored.account.id).map_err(map_err)?;
+    clock.phase("  secret store and identity");
 
     let db_path = data_dir.join("ligus.db");
     let store = EventStore::open(&db_path).map_err(map_err)?;
+    clock.phase("  event store");
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
     // the events table on every launch and blocked first paint.
@@ -12447,6 +12465,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
     let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
+    clock.phase("  workspace catalogs");
 
     let fallback_model =
         ligus_core::names::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
@@ -12521,6 +12540,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         passkey_policy: None,
     };
     let settings = Arc::new(Mutex::new(load_or_seed_settings(&data_dir, env_seed)));
+    clock.phase("  settings");
     {
         let mut s = settings.lock().unwrap();
         if migrate_catalog_mcp_auth(&mut s, &managed_mcp) {
@@ -12650,6 +12670,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             workspace_root = bound;
         }
     }
+    clock.phase("  workspace ownership and bindings");
 
     Ok(AppState {
         service: BlockingLock::new(service),
@@ -15671,6 +15692,169 @@ fn init_logging(app: &tauri::App) {
     tracing::info!("Ligus {} starting", env!("CARGO_PKG_VERSION"));
 }
 
+/// Launch timing: each setup phase's duration at debug level
+/// (`LIGUS_LOG=startup=debug`), and one info line when the window can show.
+struct StartupClock {
+    start: std::time::Instant,
+    last: std::time::Instant,
+}
+
+impl StartupClock {
+    fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self { start: now, last: now }
+    }
+
+    fn phase(&mut self, name: &str) -> std::time::Duration {
+        let now = std::time::Instant::now();
+        let took = now - self.last;
+        self.last = now;
+        tracing::debug!(target: "startup", "{name}: {:.3}s", took.as_secs_f64());
+        took
+    }
+
+    fn ready(&self) -> std::time::Duration {
+        let total = self.start.elapsed();
+        tracing::info!(target: "startup", "ready in {:.2}s", total.as_secs_f64());
+        total
+    }
+}
+
+/// Probe the agent sandbox tier on a background thread, so launch never
+/// waits on it (on Linux the probe runs bubblewrap). The probe is one-time
+/// per process: a caller that needs the tier before it finishes waits for
+/// that same probe instead of starting another.
+fn warm_sandbox_probe() -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("sandbox-probe".into())
+        .spawn(|| {
+            let started = std::time::Instant::now();
+            let _ = ligus_runtime::executor::default_executor();
+            tracing::debug!(target: "startup", "sandbox probe: {:.3}s (background)", started.elapsed().as_secs_f64());
+        })
+        .expect("spawn the sandbox probe thread")
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    /// The setup closure, from its start to the command list.
+    fn setup_body() -> &'static str {
+        let src = include_str!("lib.rs");
+        let start = src.rfind(concat!(".setup(", "|app| {")).expect("the setup closure");
+        let end = start + src[start..].find(".invoke_handler(").expect("its end");
+        &src[start..end]
+    }
+
+    /// A big workspace folder (the owner's ~/projects: 500k files) held the
+    /// launch for 11 s: the debouncer's file-id cache walked the whole tree
+    /// inside `watch`, on the setup thread. Arming the watcher now costs the
+    /// same whatever the tree's size, and changes still arrive.
+    #[test]
+    fn arming_the_fs_watcher_does_not_walk_the_tree() {
+        let dir = std::env::temp_dir().join(format!("ligus-fswatch-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dunce::canonicalize(&dir).unwrap();
+        for d in 0..200 {
+            let sub = root.join(format!("d{d}/nested/deeper"));
+            std::fs::create_dir_all(&sub).unwrap();
+            for f in 0..100 {
+                std::fs::write(sub.join(format!("f{f}.txt")), b"x").unwrap();
+            }
+        }
+        // What the old watcher did on watch: one walk with a stat per entry.
+        let walk = std::time::Instant::now();
+        let mut old = notify_debouncer_full::FileIdMap::new();
+        notify_debouncer_full::FileIdCache::add_path(&mut old, &root, notify::RecursiveMode::Recursive);
+        let walk = walk.elapsed();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let armed = std::time::Instant::now();
+        let watcher = start_fs_watch(&root, move |res: notify_debouncer_full::DebounceEventResult| {
+            if let Ok(events) = res {
+                for e in events {
+                    for p in &e.paths {
+                        let _ = tx.send(p.clone());
+                    }
+                }
+            }
+        })
+        .unwrap();
+        let armed = armed.elapsed();
+        eprintln!("walk of 20k files: {walk:?}; arming the watcher: {armed:?}");
+        assert!(armed < std::time::Duration::from_secs(1), "arming took {armed:?}");
+
+        let changed = root.join("d7/nested/deeper/new.txt");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(&changed, b"y").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut seen = false;
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match rx.recv_timeout(left) {
+                Ok(p) if dunce::canonicalize(&p).unwrap_or(p.clone()) == changed || p == changed => {
+                    seen = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        drop(watcher);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(seen, "the change under the watched tree never arrived");
+    }
+
+    /// Nothing in the app builds a debouncer with the platform's default
+    /// (tree-walking) file-id cache.
+    #[test]
+    fn no_watcher_uses_the_tree_walking_cache() {
+        for (name, src) in [("lib.rs", include_str!("lib.rs")), ("guards.rs", include_str!("guards.rs")), ("repos_ui.rs", include_str!("repos_ui.rs"))] {
+            let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+            assert!(!code.contains(concat!("notify_debouncer_full::", "new_debouncer(")), "{name} builds a debouncer with the default cache");
+            assert!(!code.contains(concat!("Recommended", "Cache")), "{name} names the default cache");
+        }
+    }
+
+    /// Setup never probes the agent sandbox itself: it hands the probe to a
+    /// background thread, and nothing on the setup path asks for the tier.
+    #[test]
+    fn setup_does_not_wait_for_the_sandbox_probe() {
+        let body = setup_body();
+        assert!(body.contains("warm_sandbox_probe();"), "setup starts the background probe");
+        for call in ["default_executor(", "sandbox_status(", "app_info(", "refuses_writes(", "local_tools_allowed(", "turn_allowed("] {
+            assert!(!body.contains(call), "setup calls {call} on the launch path");
+        }
+        let src = include_str!("lib.rs");
+        let start = src.find("fn build_state_in(").unwrap();
+        let end = start + src[start..].find("\n}\n").unwrap();
+        for call in ["default_executor(", "sandbox_status(", "refuses_writes("] {
+            assert!(!src[start..end].contains(call), "build_state_in calls {call}");
+        }
+        // The warm-up returns at once and the tier is then known.
+        let t = std::time::Instant::now();
+        let probe = warm_sandbox_probe();
+        assert!(t.elapsed() < std::time::Duration::from_millis(500));
+        probe.join().unwrap();
+        let _ = ligus_runtime::executor::sandbox_status().tier();
+    }
+
+    /// Setup's phases are timed and it reports readiness once, at its end.
+    #[test]
+    fn setup_logs_its_phases_and_readiness() {
+        let body = setup_body();
+        assert!(body.matches("clock.phase(").count() >= 4);
+        let ready = body.find("clock.ready();").expect("the ready line");
+        assert!(ready > body.rfind("clock.phase(").unwrap());
+        let mut clock = StartupClock::start();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let a = clock.phase("one");
+        let b = clock.phase("two");
+        assert!(a >= std::time::Duration::from_millis(5));
+        assert!(clock.ready() >= a + b);
+    }
+}
+
 /// Build and run the Tauri application.
 pub fn run() {
     // reqwest 0.13 / rustls: one process-wide crypto provider (ring).
@@ -15682,13 +15866,16 @@ pub fn run() {
         // surfaces a friendly "not configured yet" until then.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            let mut clock = StartupClock::start();
             // Structured logging first, so everything below is captured.
             init_logging(app);
+            clock.phase("logging");
             // Before anything spawns a subprocess: repair the minimal PATH that
             // Finder/Dock/DMG launches inherit, so `claude`/`aider`/`pi`/`git`
             // installed in the user's shell PATH are actually found.
             #[cfg(not(target_os = "windows"))]
             hydrate_process_path();
+            clock.phase("login shell PATH");
 
             // A failure here (a cancelled keychain prompt, say) gets a
             // recovery dialog, never a setup error: tauri panics on those.
@@ -15697,6 +15884,10 @@ pub fn run() {
                 tracing::info!(target: "startup", "quit from the startup recovery dialog");
                 std::process::exit(0);
             };
+            clock.phase("backend state");
+            // The agent sandbox tier is probed off the launch path; whatever
+            // needs it first (a turn, Settings) waits on the same one-time probe.
+            warm_sandbox_probe();
             let settings = state.settings.clone();
             let db_path = state.db_path.clone();
             #[cfg(feature = "p2p")]
@@ -15714,6 +15905,7 @@ pub fn run() {
                 let root = st.workspace_root.lock().unwrap().clone();
                 st.arm_fs_watcher(&root);
             }
+            clock.phase("auth, passkeys and fs watcher");
 
             // Deferred one-time DB maintenance (chunk-row shrink). Kept off the
             // launch path entirely: we wait a few seconds so first paint and the
@@ -15823,6 +16015,8 @@ pub fn run() {
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(run_peer_sync_supervisor(h, data_dir, p2p_db, secret));
             }
+            clock.phase("tray and background tasks");
+            clock.ready();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
