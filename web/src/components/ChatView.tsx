@@ -1463,7 +1463,7 @@ export function ChatView({
                 type="button"
                 className="ml-auto shrink-0 text-ink-soft hover:text-ink"
                 aria-label="Dismiss"
-                title="Dismiss"
+                data-tip="Dismiss"
                 onClick={() => setModelNotice(null)}
               >
                 <IconX size={11} />

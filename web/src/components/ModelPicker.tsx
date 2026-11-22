@@ -12,6 +12,7 @@ import {
   type RuntimeSummaryDto,
 } from "@/lib/ipc";
 import { IconCheck, IconChevronLeft, IconRefresh } from "@/lib/icons";
+import { tip } from "@/components/Tooltip";
 
 /// The chat's model choice on this device (null = the runtime's own).
 export function useChatModel(sessionId: string) {
@@ -217,7 +218,7 @@ export function ModelStep({
           type="button"
           className="pop-back"
           aria-label="Back to runtimes"
-          title="Back to runtimes (←)"
+          {...tip("Back to runtimes", "←")}
           onMouseDown={(e) => e.preventDefault()}
           onClick={onBack}
         >
@@ -230,7 +231,7 @@ export function ModelStep({
           type="button"
           className="pop-back"
           aria-label="List models again"
-          title="List models again"
+          data-tip="List models again"
           disabled={refreshing || list.isFetching}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => void refresh()}

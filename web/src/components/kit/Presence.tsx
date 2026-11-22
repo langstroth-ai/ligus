@@ -34,7 +34,7 @@ export function PresenceDot({
     <span
       role="img"
       aria-label={label}
-      title={label}
+      data-tip={label}
       data-presence={presence}
       className="inline-block shrink-0 rounded-full"
       style={{
@@ -74,7 +74,7 @@ export function AvatarStack({
   const rest = people.length - shown.length;
   const names = people.map((p) => (p.presence ? `${p.name} (${PRESENCE_WORD[p.presence].toLowerCase()})` : p.name)).join(", ");
   return (
-    <span role="img" aria-label={names} title={people.map((p) => p.name).join(", ")} className="inline-flex items-center">
+    <span role="img" aria-label={names} data-tip={people.map((p) => p.name).join(", ")} className="inline-flex items-center">
       {shown.map((p, i) => (
         <span
           key={`${p.name}-${i}`}
