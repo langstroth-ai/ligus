@@ -42,6 +42,12 @@ export interface PaletteActions {
   addPhone?: () => void;
   /// The ⌘/ keyboard shortcuts sheet.
   showShortcuts?: () => void;
+  /// Errors this session, including ones whose toast already faded.
+  showErrors?: () => void;
+  /// Everything that needs you.
+  openInbox?: () => void;
+  /// Hide everything but the chat and the message box (and back).
+  toggleFocusMode?: () => void;
 }
 
 interface Cmd {
@@ -183,6 +189,18 @@ export function CommandPalette({
         run: run(actions.showShortcuts),
       });
     }
+    if (actions.openInbox) {
+      items.push({ id: "inbox", label: "Open Inbox", hint: "Go", keywords: "needs you asks votes invites", run: run(actions.openInbox) });
+    }
+    if (actions.showErrors) {
+      items.push({
+        id: "errors",
+        label: "Recent errors",
+        hint: "Help",
+        keywords: "log failures problems toast",
+        run: run(actions.showErrors),
+      });
+    }
     if (actions.admitBox) {
       items.push({ id: "admit-box", label: "Admit a box…", hint: "Workspace", run: run(actions.admitBox) });
     }
@@ -205,6 +223,15 @@ export function CommandPalette({
         label: "Toggle sidebar",
         hint: `View · ${keyLabel(shortcutKey("toggleSidebar")!)}`,
         run: run(actions.toggleSidebar),
+      });
+    }
+    if (actions.toggleFocusMode) {
+      items.push({
+        id: "focus-mode",
+        label: "Focus mode",
+        hint: `View · ${keyLabel(shortcutKey("focusMode")!)}`,
+        keywords: "zen distraction hide panels calm",
+        run: run(actions.toggleFocusMode),
       });
     }
     if (actions.toggleTools) {

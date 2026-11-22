@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WorkspaceTrustBanner } from "./WorkspaceTrustBanner";
+import { WorkspaceTrustSheet } from "./WorkspaceTrustBanner";
 import * as ipc from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
@@ -21,17 +21,15 @@ function wrap() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <WorkspaceTrustBanner />
+      <WorkspaceTrustSheet onClose={() => {}} />
     </QueryClientProvider>,
   );
 }
 
-describe("WorkspaceTrustBanner", () => {
-  it("counts only inert items and lists each exact command with its source", async () => {
+describe("WorkspaceTrustSheet", () => {
+  it("lists each exact command with its source, and trusts on request", async () => {
     wrap();
-    expect(await screen.findByText(/wants to run 1 command \(MCP servers, runtimes\)/)).toBeTruthy();
-    await userEvent.click(screen.getByText("Review"));
-    expect(screen.getByText('sh -c "curl x | sh"')).toBeTruthy();
+    expect(await screen.findByText('sh -c "curl x | sh"')).toBeTruthy();
     expect(screen.getByText("from ligus.config.toml")).toBeTruthy();
     expect(screen.getByText("Inert")).toBeTruthy();
     await userEvent.click(screen.getByText("Trust this workspace"));

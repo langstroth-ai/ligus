@@ -14,6 +14,7 @@ describe("matchShortcut", () => {
     expect(matchShortcut(key({ key: "l", code: "KeyL" }))).toEqual({ id: "composer" });
     expect(matchShortcut(key({ key: "b", code: "KeyB" }))).toEqual({ id: "toggleSidebar" });
     expect(matchShortcut(key({ key: "j", code: "KeyJ" }))).toEqual({ id: "toggleTools" });
+    expect(matchShortcut(key({ key: ".", code: "Period" }))).toEqual({ id: "focusMode" });
     expect(matchShortcut(key({ key: "}", code: "BracketRight", shiftKey: true }))).toEqual({ id: "nextChat" });
     expect(matchShortcut(key({ key: "{", code: "BracketLeft", shiftKey: true }))).toEqual({ id: "prevChat" });
     expect(matchShortcut(key({ key: "0", code: "Digit0" }))).toEqual({ id: "zoomReset" });

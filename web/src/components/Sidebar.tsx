@@ -11,14 +11,9 @@ import {
   renameChat,
   getAppSettings,
   getGitStatus,
-  listAgents,
   listChannels,
   listChats,
-  listMembers,
   listMentionStates,
-  listProposals,
-  listSkills,
-  listVaults,
   renameChannel,
   type ChannelDto,
   type ChatSummaryDto,
@@ -31,9 +26,9 @@ import { Avatar } from "@/components/Avatar";
 import { confirmDialog, promptDialog } from "@/components/Dialog";
 import { useContextMenu } from "@/components/ContextMenu";
 import { confirmThen } from "@/lib/confirm";
-import { groupProposals } from "@/lib/proposals";
 import { relTime } from "@/lib/time";
-import { useSessionStates } from "@/state/useSessionStates";
+import { useChatAttention, useSessionStates } from "@/state/useSessionStates";
+import { reviewBadge } from "@/lib/needsYou";
 import {
   NavRow,
   ChatRow,
@@ -49,6 +44,7 @@ import {
   IconPlus,
   IconCheck,
   IconMessage,
+  IconStateNeedsYou,
   IconActivity,
   IconGear,
   IconEllipsis,
@@ -82,12 +78,14 @@ export function Sidebar({
   displayName,
   utilityPane,
   onAdmitBox,
+  inboxCount = 0,
+  onOpenInbox,
 }: {
   width: number;
   selectedId: string | null;
   sessionId: string | null;
   onSelect: (id: string) => void;
-  view: "workspace" | "settings" | "friends";
+  view: "workspace" | "settings" | "friends" | "inbox";
   onOpenSettings: () => void;
   onAddWorkspace: () => void | Promise<void>;
   onRemoveWorkspace: (path: string) => void | Promise<void>;
@@ -102,6 +100,9 @@ export function Sidebar({
   /// Admit a box (a `ligus serve` or worker) to the active workspace. Passed
   /// only for a shared (room) workspace; the entry sits in the workspace menu.
   onAdmitBox?: () => void;
+  /// How many things need you (the Inbox's badge; absent at zero).
+  inboxCount?: number;
+  onOpenInbox?: () => void;
 }) {
   const qc = useQueryClient();
   // Scope chats + channels by the *active workspace id*. listChats/listChannels
@@ -114,34 +115,10 @@ export function Sidebar({
   const channels = useQuery({ queryKey: ["channels", activeWorkspaceId], queryFn: listChannels });
   const mentionStates = useQuery({ queryKey: ["mention-states"], queryFn: listMentionStates });
   const settings = useQuery({ queryKey: ["settings"], queryFn: getAppSettings });
-  const members = useQuery({
-    queryKey: ["members", sessionId],
-    queryFn: () => listMembers(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const agents = useQuery({
-    queryKey: ["agents", sessionId],
-    queryFn: () => listAgents(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const vaults = useQuery({
-    queryKey: ["vaults", sessionId],
-    queryFn: () => listVaults(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const skills = useQuery({
-    queryKey: ["skills", sessionId],
-    queryFn: () => listSkills(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const proposals = useQuery({
-    queryKey: ["proposals", sessionId],
-    queryFn: () => listProposals(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  // Proposals + gates awaiting a human decision — the Review pane is the only
-  // time-sensitive pane, so it gets a badge like the others.
-  const reviewCount = groupProposals(proposals.data ?? []).active.length;
+  // The Review pane's badge counts only what waits on you in this chat: a
+  // proposal you can still vote on, or one approved and ready to apply.
+  const attention = useChatAttention(activeWorkspaceId);
+  const reviewCount = reviewBadge(attention.data, sessionId);
 
   // Git branch for the workspace header line 2 (F14) — otherwise it just
   // repeats the folder name. Keyed on the path so switching workspaces refetches;
@@ -281,16 +258,11 @@ export function Sidebar({
     ? openChannels.find((c) => c.id === channelMenuFor) ?? null
     : null;
   const canRemoveCurrentWorkspace = workspacePath.trim().length > 0;
-  const memberCount = (members.data ?? []).filter((m) => !m.isSelf).length;
-  // Live counts per pane, keyed by the shared PANES id. Panes without a count
-  // (Review/Context/Workflows/Activity) simply omit the badge.
+  // Badges count only what needs you (never totals, news or activity): the
+  // Review pane's proposals waiting on your decision. Other panes show their
+  // contents when opened.
   const paneCounts: Partial<Record<UtilityPane, number>> = {
-    people: memberCount,
-    // +1 for the always-present default agent (@ligus) so it never reads 0.
-    tools: (agents.data ?? []).length + 1,
-    review: reviewCount || undefined,
-    skills: (skills.data ?? []).length,
-    vaults: (vaults.data ?? []).length,
+    review: reviewCount,
   };
   const deviceName = settings.data?.deviceName ?? "";
 
@@ -555,6 +527,17 @@ export function Sidebar({
         {/* 3 — Views (cross-channel filters) sit ABOVE the channel tree (spec
             §11 rule 8). Clicking an active View toggles back to the tree.
             "Needs review" awaits a per-chat review signal on the summary DTO. */}
+        {onOpenInbox && (
+          <NavRow
+            icon={<IconStateNeedsYou size={15} />}
+            label="Inbox"
+            title="Everything that needs you"
+            active={view === "inbox"}
+            attn
+            count={inboxCount > 0 ? inboxCount : undefined}
+            onClick={onOpenInbox}
+          />
+        )}
         <NavRow
           icon={<IconMessage size={15} />}
           label="All chats"

@@ -105,6 +105,15 @@ pub fn find_on_path(bin: &str, path: &OsString) -> Option<PathBuf> {
 /// Returns (exited successfully, stdout + stderr) or `None` if it couldn't
 /// start or timed out.
 fn run_bounded(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration) -> Option<(bool, String)> {
+    run_bounded_split(program, args, env, timeout).map(|(ok, mut out, err)| {
+        out.push_str(&err);
+        (ok, out)
+    })
+}
+
+/// [`run_bounded`] with stdout and stderr kept apart: (exited successfully,
+/// stdout, stderr).
+pub(crate) fn run_bounded_split(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration) -> Option<(bool, String, String)> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
@@ -142,9 +151,7 @@ fn run_bounded(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration
             }
         }
     };
-    let mut text = t_out.join().unwrap_or_default();
-    text.push_str(&t_err.join().unwrap_or_default());
-    Some((status.success(), text))
+    Some((status.success(), t_out.join().unwrap_or_default(), t_err.join().unwrap_or_default()))
 }
 
 /// The first version-looking token (`1.5.1`, `1.0.106-6`) in `--version`

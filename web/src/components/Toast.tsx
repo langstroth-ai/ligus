@@ -13,13 +13,18 @@ export interface Toast {
 // External store: dispatching a toast re-renders only <ToastHost>, never the
 // component that fired it — so toasts are free to call from anywhere (including
 // non-React mutation callbacks) with zero render cost on the caller side.
-let toasts: Toast[] = [];
+//
+// One toast is visible at a time; the rest wait their turn (a burst of the
+// same message counts once). Every error also lands in the error log, which
+// stays reopenable after its toast is gone.
+let queue: Toast[] = [];
 const listeners = new Set<() => void>();
 let nextId = 1;
+let timer: ReturnType<typeof setTimeout> | undefined;
 
 function emit() {
   // New array identity so useSyncExternalStore detects the change.
-  toasts = toasts.slice();
+  queue = queue.slice();
   for (const l of listeners) l();
 }
 
@@ -28,27 +33,48 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export function dismissToast(id: number) {
-  toasts = toasts.filter((t) => t.id !== id);
-  for (const l of listeners) l();
-}
-
 const DEFAULT_TTL: Record<ToastKind, number> = {
   success: 3000,
   info: 4000,
   error: 7000, // errors linger longer so they're not missed
 };
 
-/// Cap the visible stack so a burst of errors can't fill the screen; the oldest
-/// beyond the cap are dropped (they'd have aged out on their TTL anyway).
-const MAX_TOASTS = 5;
+/// How many toasts may wait behind the visible one. Older waiting ones drop
+/// first (errors are still in the log).
+const MAX_WAITING = 3;
+
+const ttls = new Map<number, number>();
+
+/// Start the visible toast's clock (once it is the one on screen).
+function arm() {
+  if (timer) clearTimeout(timer);
+  timer = undefined;
+  const head = queue[0];
+  if (!head) return;
+  const life = ttls.get(head.id) ?? DEFAULT_TTL[head.kind];
+  if (life > 0) timer = setTimeout(() => dismissToast(head.id), life);
+}
+
+export function dismissToast(id: number) {
+  const wasHead = queue[0]?.id === id;
+  queue = queue.filter((t) => t.id !== id);
+  ttls.delete(id);
+  for (const l of listeners) l();
+  if (wasHead) arm();
+}
 
 function push(kind: ToastKind, message: string, action?: Toast["action"], ttl?: number) {
+  const same = queue.find((t) => t.kind === kind && t.message === message);
+  if (same) return same.id;
+  if (kind === "error") logError(message);
   const id = nextId++;
-  toasts = [...toasts, { id, kind, message, action }].slice(-MAX_TOASTS);
+  if (ttl !== undefined) ttls.set(id, ttl);
+  const head = queue[0];
+  const waiting = [...queue.slice(1), { id, kind, message, action }];
+  while (waiting.length > MAX_WAITING) ttls.delete(waiting.shift()!.id);
+  queue = head ? [head, ...waiting] : waiting;
   emit();
-  const life = ttl ?? DEFAULT_TTL[kind];
-  if (life > 0) setTimeout(() => dismissToast(id), life);
+  if (!head) arm();
   return id;
 }
 
@@ -58,6 +84,73 @@ export const toast = {
   error: (message: string, action?: Toast["action"]) => push("error", message, action),
   info: (message: string, action?: Toast["action"]) => push("info", message, action),
 };
+
+// --- Error log --------------------------------------------------------------
+
+export interface LoggedError {
+  id: number;
+  message: string;
+  /** Epoch ms. */
+  at: number;
+}
+
+/// Most recent last; the oldest drop beyond the cap.
+const LOG_CAP = 50;
+let errorLog: LoggedError[] = [];
+let unseenErrors = 0;
+const logListeners = new Set<() => void>();
+let logSnapshot = { entries: errorLog, unseen: 0 };
+
+function emitLog() {
+  logSnapshot = { entries: errorLog, unseen: unseenErrors };
+  for (const l of logListeners) l();
+}
+
+function logError(message: string) {
+  errorLog = [...errorLog, { id: nextId++, message, at: Date.now() }].slice(-LOG_CAP);
+  unseenErrors += 1;
+  emitLog();
+}
+
+export const errorLogStore = {
+  subscribe(l: () => void) {
+    logListeners.add(l);
+    return () => {
+      logListeners.delete(l);
+    };
+  },
+  snapshot() {
+    return logSnapshot;
+  },
+  /// The person opened the log.
+  markSeen() {
+    if (unseenErrors === 0) return;
+    unseenErrors = 0;
+    emitLog();
+  },
+  clear() {
+    errorLog = [];
+    unseenErrors = 0;
+    emitLog();
+  },
+};
+
+/** The error log (most recent last) and how many errors arrived since it was last opened. */
+export function useErrorLog() {
+  return useSyncExternalStore(errorLogStore.subscribe, errorLogStore.snapshot, errorLogStore.snapshot);
+}
+
+/** Tests only: empty the queue and the log. */
+export function _resetToasts() {
+  if (timer) clearTimeout(timer);
+  timer = undefined;
+  queue = [];
+  ttls.clear();
+  errorLog = [];
+  unseenErrors = 0;
+  emit();
+  emitLog();
+}
 
 /** Coerce an unknown thrown value into a readable message. */
 export function errMsg(e: unknown): string {
@@ -76,53 +169,53 @@ const KIND_STYLE: Record<ToastKind, { bar: string; label: string }> = {
   info: { bar: "var(--ligus-accent-cool)", label: "Note" },
 };
 
-/** Mount once near the app root. */
+/** Mount once near the app root. Shows one toast at a time, top right under
+ *  the header, clear of the composer and the window's edges. */
 export function ToastHost() {
-  const items = useSyncExternalStore(subscribe, () => toasts);
-  if (items.length === 0) return null;
+  const items = useSyncExternalStore(subscribe, () => queue);
+  const t = items[0];
+  if (!t) return null;
+  const s = KIND_STYLE[t.kind];
+  const waiting = items.length - 1;
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[1000] flex max-w-sm flex-col gap-2">
-      {items.map((t) => {
-        const s = KIND_STYLE[t.kind];
-        return (
-          <div
-            key={t.id}
-            role="status"
-            className="pointer-events-auto flex items-start gap-3 rounded-xl border px-3 py-2.5 text-sm shadow-lg"
-            style={{
-              borderColor: "var(--ligus-line)",
-              background: "var(--ligus-panel)",
-              color: "var(--ligus-ink)",
-              borderLeft: `3px solid ${s.bar}`,
+    <div className="pointer-events-none fixed right-4 top-[68px] z-[1000] flex w-[300px] max-w-[calc(100vw-2rem)] flex-col">
+      <div
+        key={t.id}
+        role={t.kind === "error" ? "alert" : "status"}
+        className="ligus-enter pointer-events-auto flex items-start gap-3 rounded-xl border px-3 py-2.5 text-sm shadow-lg"
+        style={{
+          borderColor: "var(--ligus-line)",
+          background: "var(--ligus-panel)",
+          color: "var(--ligus-ink)",
+          borderLeft: `3px solid ${s.bar}`,
+        }}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-soft">
+            {s.label}
+            {waiting > 0 && <span className="ml-1.5 font-normal normal-case tracking-normal">· {waiting} more</span>}
+          </div>
+          <div className="mt-0.5 break-words">{t.message}</div>
+        </div>
+        {t.action && (
+          <button
+            className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-ink-soft underline hover:text-ink"
+            onClick={() => {
+              t.action!.run();
+              dismissToast(t.id);
             }}
           >
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-soft">
-                {s.label}
-              </div>
-              <div className="mt-0.5 break-words">{t.message}</div>
-            </div>
-            {t.action && (
-              <button
-                className="shrink-0 rounded-md px-2 py-1 text-xs font-medium underline text-ink-soft hover:text-ink"
-                onClick={() => {
-                  t.action!.run();
-                  dismissToast(t.id);
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
-            <button
-              className="shrink-0 px-1 leading-none text-ink-soft hover:text-ink"
-              aria-label="Dismiss"
-              onClick={() => dismissToast(t.id)}
-            >
-              <IconX size={13} />
-            </button>
-          </div>
-        );
-      })}
+            {t.action.label}
+          </button>
+        )}
+        <button
+          className="shrink-0 px-1 leading-none text-ink-soft hover:text-ink"
+          aria-label="Dismiss"
+          onClick={() => dismissToast(t.id)}
+        >
+          <IconX size={13} />
+        </button>
+      </div>
     </div>
   );
 }

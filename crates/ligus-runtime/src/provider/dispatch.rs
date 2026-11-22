@@ -60,6 +60,47 @@ pub struct ResolvedRuntime {
     pub gateway: Option<crate::model_gateway::GatewaySelection>,
 }
 
+impl ResolvedRuntime {
+    /// The model this runtime runs: `model`, or for Claude Code (whose model
+    /// rides in its args) the `--model` value. Empty = the harness default.
+    pub fn effective_model(&self) -> String {
+        if !self.model.trim().is_empty() {
+            return self.model.trim().to_string();
+        }
+        if self.provider == ModelProviderKind::ClaudeCode {
+            if let Some(i) = self.args.iter().rposition(|a| a == "--model") {
+                return self.args.get(i + 1).map(|m| m.trim().to_string()).unwrap_or_default();
+            }
+        }
+        String::new()
+    }
+
+    /// Run `model` instead of the runtime's own (a per-chat choice). Claude
+    /// Code takes it as `--model`, replacing any it already has.
+    pub fn set_model(&mut self, model: &str) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        self.model = model.to_string();
+        if self.provider == ModelProviderKind::ClaudeCode {
+            let mut out = Vec::with_capacity(self.args.len() + 2);
+            let mut it = self.args.drain(..);
+            while let Some(a) = it.next() {
+                if a == "--model" {
+                    it.next();
+                } else if !a.starts_with("--model=") {
+                    out.push(a);
+                }
+            }
+            drop(it);
+            out.push("--model".into());
+            out.push(model.to_string());
+            self.args = out;
+        }
+    }
+}
+
 /// Tools to offer a turn: neutral definitions (`{name, description,
 /// input_schema}`) and the executor that runs them. Consumed by
 /// [`stream_with_tools`] for native Ollama and every OpenAI-wire provider;
@@ -888,6 +929,32 @@ mod tests {
             driver: Default::default(),
             gateway: None,
         }
+    }
+
+    #[test]
+    fn a_chosen_model_replaces_the_runtimes_own() {
+        let mut rt = ollama_rt();
+        assert_eq!(rt.effective_model(), "qwen3.5");
+        rt.set_model(" gpt-oss:20b ");
+        assert_eq!((rt.model.as_str(), rt.effective_model()), ("gpt-oss:20b", "gpt-oss:20b".to_string()));
+        rt.set_model("");
+        assert_eq!(rt.model, "gpt-oss:20b", "an empty choice changes nothing");
+
+        // Claude Code takes its model as --model in its args: replaced, never doubled.
+        let mut cc = ResolvedRuntime {
+            provider: ModelProviderKind::ClaudeCode,
+            model: String::new(),
+            args: vec!["--permission-mode".into(), "acceptEdits".into(), "--model".into(), "opus".into()],
+            ..ollama_rt()
+        };
+        assert_eq!(cc.effective_model(), "opus");
+        cc.set_model("haiku");
+        assert_eq!(cc.args, ["--permission-mode", "acceptEdits", "--model", "haiku"]);
+        assert_eq!(cc.effective_model(), "haiku");
+        let mut bare = ResolvedRuntime { provider: ModelProviderKind::ClaudeCode, model: String::new(), args: vec![], ..ollama_rt() };
+        assert_eq!(bare.effective_model(), "", "no --model: the CLI's default");
+        bare.set_model("sonnet");
+        assert_eq!(bare.args, ["--model", "sonnet"]);
     }
 
     #[test]

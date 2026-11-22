@@ -33,7 +33,6 @@ use ligus_runtime::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
@@ -56,6 +55,8 @@ mod memory_ui;
 mod repos_ui;
 mod turn_host;
 mod attention;
+mod notices;
+mod chat_models;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -320,6 +321,11 @@ struct LiveSettings {
     /// "opus", "haiku", or a full model id. Empty = the CLI's own default.
     #[serde(default)]
     claude_code_model: String,
+    /// The model picked per chat on this device, per runtime: chat id →
+    /// runtime id → model (`crate::chat_models`). Device-local, never synced;
+    /// it applies only to the chat's untagged turns this device runs.
+    #[serde(default)]
+    chat_models: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// Custom instruction for `/summarize` (also used by the automatic
     /// overflow windowing). None/empty = the built-in default.
     #[serde(default)]
@@ -636,6 +642,7 @@ impl Default for LiveSettings {
             api_key: None,
             claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
+            chat_models: Default::default(),
             summarize_prompt: None,
             compact_prompt: None,
             utility_runtime_id: None,
@@ -4173,6 +4180,7 @@ pub(crate) fn delete_chat_sync(state: State<AppState>, session_id: String) -> Re
         svc.delete_chat(id).map_err(map_err)?;
         (ws.unwrap_or_else(|| state.active_workspace_id()), svc.device_id())
     };
+    crate::chat_models::forget_chat(&state, id);
     // Phase 2a: best-effort teardown of the chat's persistent base worktree and
     // its `ligus/chat/<id>` branch in its workspace's bound folder. Only
     // meaningful in a git workspace; a failure (or non-git root) just leaves a
@@ -4355,7 +4363,7 @@ fn notify_agent_use_synced(app: &AppHandle, state: &AppState, sid: Uuid, ids: &[
     };
     for (id, body) in notices {
         if state.notified.lock().unwrap().insert(id, NOTIFIED_CAP) {
-            let _ = app.notification().builder().title("Ligus").body(body).show();
+            notices::post(app, notices::Notice::new(notices::NoticeKind::Used, Some(sid), body));
         }
     }
 }
@@ -7200,6 +7208,9 @@ struct Responder {
     /// The host the agent was sent to (`WorkspaceAgent::host_id`, a device id);
     /// empty for the primary and for an agent on its owner's device.
     host_id: String,
+    /// The model this device's person picked for the chat (primary only,
+    /// `crate::chat_models`), applied over the runtime's own model.
+    model_override: Option<String>,
 }
 
 struct ContextSnapshot {
@@ -7503,10 +7514,19 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
                 runtime,
                 owner_actor_id: a.owner_actor_id.clone(),
                 host_id: a.host_id.clone(),
+                // Agents keep their own runtime and model.
+                model_override: None,
             }
         }
         None => {
-            let runtime = state.resolve_runtime(&session.runtime_id);
+            // The chat's model choice on this device, for its runtime: read
+            // here, where this device builds the turn it runs, so it never
+            // reaches a turn another device runs.
+            let model_override = crate::chat_models::override_for(state, session.id, &session.runtime_id);
+            let mut runtime = state.resolve_runtime(&session.runtime_id);
+            if let Some(m) = &model_override {
+                crate::chat_models::apply_model(&mut runtime, m);
+            }
             Responder {
                 system_base: with_identity(prompt::primary_system_prompt(session), &runtime),
                 agent_id: None,
@@ -7515,6 +7535,7 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
                 runtime,
                 owner_actor_id: session.creator_actor_id.clone(),
                 host_id: String::new(),
+                model_override,
             }
         }
     }
@@ -7525,8 +7546,12 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
 /// runtime-identity blocks, to swap in the system prompt); `None` when it
 /// is the same runtime.
 fn rebind_to_catalog(state: &AppState, responder: &Responder, catalog: &RootCatalog) -> Option<(Responder, String, String)> {
-    let here = state.resolve_runtime_in(&catalog.runtimes, &responder.runtime_id);
-    let window = state.resolve_runtime(&responder.runtime_id);
+    let mut here = state.resolve_runtime_in(&catalog.runtimes, &responder.runtime_id);
+    let mut window = state.resolve_runtime(&responder.runtime_id);
+    if let Some(m) = &responder.model_override {
+        crate::chat_models::apply_model(&mut here, m);
+        crate::chat_models::apply_model(&mut window, m);
+    }
     if format!("{here:?}") == format!("{window:?}") {
         return None;
     }
@@ -7543,6 +7568,7 @@ fn rebind_to_catalog(state: &AppState, responder: &Responder, catalog: &RootCata
             runtime: here,
             owner_actor_id: responder.owner_actor_id.clone(),
             host_id: responder.host_id.clone(),
+            model_override: responder.model_override.clone(),
         },
         old_block,
         new_block,
@@ -8989,6 +9015,9 @@ async fn run_prepared_turn(
         svc.load(session_id).ok().flatten().map(|s| s.messages.len()).unwrap_or(0)
     };
     let result = run_prepared_turn_inner(app, state, session_id, workspace_id, responder, session, system, turns).await;
+    if let Err(e) = &result {
+        crate::chat_models::note_turn_error(app, session_id, responder, e);
+    }
     // The reply this turn produced: from the outcome, else (an error) the
     // placeholder it appended.
     let message_id = match &result {
@@ -9959,12 +9988,7 @@ async fn send_message(
             .find(|m| m.id == reply_id)
             .is_some_and(|m| !m.superseded && message_mentions_me(m, &reloaded, &local_actor_id, my_role));
         if pinged {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(format!("{} mentioned you", shown(&responder.author)))
-                .show();
+            notices::post(&app, notices::Notice::new(notices::NoticeKind::NeedsYou, Some(sid), format!("{} mentioned you", shown(&responder.author))));
         }
 
         // Cascade to the one agent the reply hands off to, if it's new
@@ -10344,6 +10368,7 @@ fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uu
     }
     for (sid, ids) in by_chat {
         notify_agent_use_synced(app, &state, sid, &ids);
+        notices::synced_replies(app, &state, sid, &ids);
         let triggers = {
             let svc = state.service.lock().unwrap();
             match svc.load(sid) {
@@ -10424,12 +10449,7 @@ pub(crate) fn notify_mentions_sync(
     };
     if let Some((msg_id, who)) = hit {
         if state.notified.lock().unwrap().insert(msg_id, NOTIFIED_CAP) {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(format!("{} mentioned you", shown(&who)))
-                .show();
+            notices::post(&app, notices::Notice::new(notices::NoticeKind::NeedsYou, Some(sid), format!("{} mentioned you", shown(&who))));
         }
     }
     Ok(())
@@ -12493,6 +12513,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
         claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
+            chat_models: Default::default(),
             summarize_prompt: None,
             compact_prompt: None,
             utility_runtime_id: None,
@@ -14235,6 +14256,12 @@ fn list_claude_code_models() -> Vec<ClaudeModelOption> {
         }
     }
     opts
+}
+
+/// [`list_claude_code_models`] as (value, label) pairs, for the chat model
+/// picker (`chat_models`).
+fn claude_code_model_options() -> Vec<(String, String)> {
+    list_claude_code_models().into_iter().map(|o| (o.value, o.label)).collect()
 }
 
 /// Parse `additionalModelOptionsCache` out of `~/.claude.json`. Best-effort:
@@ -16058,6 +16085,10 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_poll,
             ligus_auth_ui::ligus_auth_sign_out,
             phones_ui::inspect_phone_code,
+            chat_models::list_runtime_models,
+            chat_models::get_chat_model,
+            chat_models::set_chat_model,
+            chat_models::chat_model_problem,
             phones_ui::certify_phone_code,
             phone_enroll_ui::phone_enroll_precheck,
             phone_enroll_ui::phone_enroll_offer_start,
@@ -16086,6 +16117,7 @@ pub fn run() {
             flow::flow_queue_report,
             agent_iface::list_asks,
             attention::list_chat_attention,
+            notices::set_needs_you_count,
             get_implement_plan,
             agent_iface::answer_ask,
             flow::flow_marks,

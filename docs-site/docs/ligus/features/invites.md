@@ -96,7 +96,7 @@ administer. Ligus:
    key for them disputes it.
 2. Issues a single-use invite on the target workspace's log.
 3. **Seals it to their devices** and drops it into their contact box on the
-   relay (relay v0.3). It shows up for them as a banner they accept or dismiss.
+   relay (relay v0.3). It shows up in their [Inbox](inbox.md), where they accept or dismiss it.
 
 If they have no contact yet, or the relay doesn't support contacts, you get the
 single-use link to send them yourself.
