@@ -1114,6 +1114,13 @@ export type { WorkspaceHostDto } from "@/bindings/WorkspaceHostDto";
 /// agent's host status ("online" | "offline" | "device" | "unknown").
 export const listQueuedWork = () => invoke<QueuedWorkDto[]>("list_queued_work");
 
+/// What each chat of the active workspace is waiting on (open agent
+/// questions, proposals awaiting a decision, a lockdown). Chats waiting on
+/// nothing are left out. Feeds the sidebar's state chips and the palette.
+export type { ChatAttention } from "@/lib/sessionState";
+export const listChatAttention = () =>
+  invoke<import("@/lib/sessionState").ChatAttention[]>("list_chat_attention");
+
 /// The active workspace's registered hosts (devices + workers) with live state.
 export const listWorkspaceHosts = () =>
   invoke<WorkspaceHostDto[]>("list_workspace_hosts");
