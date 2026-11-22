@@ -1511,8 +1511,9 @@ scheme, and keep the rest as extended colours in a `CompositionLocal`:
 | `danger` | `error` | |
 | `ok`, `info`/`running`, `warn`, `neutral` | extended colours | each with an ink and an 8% tint |
 
-- **Warning has its own hue, away from honey:** light `oklch(0.62 0.15 50)`,
-  dark `oklch(0.78 0.14 55)`, always with a `!` glyph.
+- **Warning has its own hue, away from honey:** light
+  `oklch(0.5211 0.1301 45.31)`, dark `oklch(0.85 0.08 47)` (the values in
+  `ligus-brand-tokens.json`), always with a `!` glyph.
 - **Glyph and colour together, always.** Status is never colour alone, so it
   survives colour-blindness and the system's colour correction:
 
