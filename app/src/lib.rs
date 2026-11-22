@@ -33,7 +33,6 @@ use ligus_runtime::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
@@ -56,6 +55,7 @@ mod memory_ui;
 mod repos_ui;
 mod turn_host;
 mod attention;
+mod notices;
 mod chat_models;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -4363,7 +4363,7 @@ fn notify_agent_use_synced(app: &AppHandle, state: &AppState, sid: Uuid, ids: &[
     };
     for (id, body) in notices {
         if state.notified.lock().unwrap().insert(id, NOTIFIED_CAP) {
-            let _ = app.notification().builder().title("Ligus").body(body).show();
+            notices::post(app, notices::Notice::new(notices::NoticeKind::Used, Some(sid), body));
         }
     }
 }
@@ -9991,12 +9991,7 @@ async fn send_message(
             .find(|m| m.id == reply_id)
             .is_some_and(|m| !m.superseded && message_mentions_me(m, &reloaded, &local_actor_id, my_role));
         if pinged {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(format!("{} mentioned you", shown(&responder.author)))
-                .show();
+            notices::post(&app, notices::Notice::new(notices::NoticeKind::NeedsYou, Some(sid), format!("{} mentioned you", shown(&responder.author))));
         }
 
         // Cascade to the one agent the reply hands off to, if it's new
@@ -10376,6 +10371,7 @@ fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uu
     }
     for (sid, ids) in by_chat {
         notify_agent_use_synced(app, &state, sid, &ids);
+        notices::synced_replies(app, &state, sid, &ids);
         let triggers = {
             let svc = state.service.lock().unwrap();
             match svc.load(sid) {
@@ -10456,12 +10452,7 @@ pub(crate) fn notify_mentions_sync(
     };
     if let Some((msg_id, who)) = hit {
         if state.notified.lock().unwrap().insert(msg_id, NOTIFIED_CAP) {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(format!("{} mentioned you", shown(&who)))
-                .show();
+            notices::post(&app, notices::Notice::new(notices::NoticeKind::NeedsYou, Some(sid), format!("{} mentioned you", shown(&who))));
         }
     }
     Ok(())
