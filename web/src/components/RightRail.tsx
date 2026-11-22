@@ -65,7 +65,7 @@ import {
   deleteMemberAttachments,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
-import { groupProposals, isSettled, isVotable } from "@/lib/proposals";
+import { groupProposals, isSettled, isVotable, myVote } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
 import { LogsView } from "@/components/LogsView";
@@ -96,7 +96,9 @@ import {
   PopoverHeader,
   PopoverItem,
   SELECT_TINT,
+  LinkButton,
 } from "@/components/ui";
+import { Markdown } from "@/components/Markdown";
 import {
   IconX,
   IconChevronDown,
@@ -186,7 +188,7 @@ export function RightRail({
             <button
               key={item.id}
               onClick={() => onChangePane(item.id)}
-              className="relative flex h-10 w-10 items-center justify-center rounded-2xl transition-colors"
+              className="ligus-press relative flex h-10 w-10 items-center justify-center rounded-2xl"
               style={{
                 background: pane === item.id ? "var(--ligus-mist)" : "transparent",
                 color: pane === item.id ? "var(--ligus-accent-ink)" : "var(--ligus-ink)",
@@ -429,7 +431,7 @@ function ToolsPane({
             <span>These are inherited from the workspace.</span>
             <button
               onClick={() => setScope("workspace")}
-              className="font-medium underline underline-offset-2"
+              className="font-medium underline underline-offset-2 hover:opacity-80"
               style={{ color: "var(--ligus-accent-ink)" }}
             >
               Edit in Workspace
@@ -704,7 +706,7 @@ function ScopeToggle({ scope, onScope }: { scope: ToolsScope; onScope: (s: Tools
             key={o.id}
             onClick={() => onScope(o.id)}
             aria-pressed={active}
-            className="flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors"
+            className="ligus-press flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium"
             style={
               active
                 ? {
@@ -1192,7 +1194,7 @@ function DiffFileBlock({
     <div className="overflow-hidden rounded-lg border" style={{ borderColor: "var(--ligus-line)" }}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
+        className="ligus-press flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
         style={{ background: "var(--ligus-mist)" }}
       >
         <span className="text-ink-soft" aria-hidden>{open ? "▾" : "▸"}</span>
@@ -1303,6 +1305,10 @@ function ProposalCard({
   // reviewing them), settled ones start collapsed (they're history).
   const [expanded, setExpanded] = useState(!settled);
   const hasDetail = Boolean(proposal.body) || Boolean(proposal.diff) || Boolean(proposal.workflow);
+  // Who "you" are, to show your own vote (shares the People pane's cache).
+  const members = useQuery({ queryKey: ["members", sessionId], queryFn: () => listMembers(sessionId) });
+  const selfActorId = members.data?.find((m) => m.isSelf)?.actorId;
+  const mine = myVote(proposal, selfActorId);
   // A workflow proposal renders its stages; they name agents by id.
   const agents = useQuery({
     queryKey: ["agents", sessionId],
@@ -1432,7 +1438,7 @@ function ProposalCard({
       <div className="flex items-start justify-between gap-3">
         <button
           type="button"
-          className="flex min-w-0 items-start gap-1.5 text-left"
+          className="-mx-1 -my-0.5 flex min-w-0 items-start gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors enabled:hover:bg-[color:var(--ligus-hover)]"
           onClick={() => hasDetail && setExpanded((v) => !v)}
           aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
@@ -1477,7 +1483,7 @@ function ProposalCard({
           {proposal.workflow ? (
             <>
               {proposal.workflow.description && (
-                <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.workflow.description}</p>
+                <Markdown content={proposal.workflow.description} size="sm" className="mt-2 text-ink-soft" />
               )}
               <div className="mt-2 text-xs text-ink-soft">
                 Approving adds this workflow to the Workflows pane. Runs still start only when someone presses Run.
@@ -1488,7 +1494,11 @@ function ProposalCard({
               />
             </>
           ) : (
-            proposal.body && <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.body}</p>
+            proposal.body && (
+              <div data-testid="proposal-body">
+                <Markdown content={proposal.body} size="sm" className="mt-2 text-ink-soft" />
+              </div>
+            )
           )}
           {/* Issue #118: an agent's file offer. The reviewer sees exactly
               what approving shares (its content was checked when offered; the
@@ -1519,7 +1529,7 @@ function ProposalCard({
                 </span>
                 <button
                   type="button"
-                  className="rounded-md px-2 py-0.5 text-xs font-medium transition-colors hover:brightness-110"
+                  className="ligus-press rounded-md px-2 py-0.5 text-xs font-medium hover:border-[color:var(--tint-cool-line)]"
                   style={{ border: "1px solid var(--ligus-line)", color: "var(--ligus-accent-ink)" }}
                   onClick={() => setDiffOpen(true)}
                 >
@@ -1568,31 +1578,48 @@ function ProposalCard({
         </div>
       )}
 
-      <div className="mt-3 flex gap-2">
-        {isVotable(proposal) && (
+      {/* Your own vote, once cast: said plainly, with the other choice offered as
+          a change (votes are latest-per-person, so changing one is allowed). */}
+      {mine !== null && isVotable(proposal) && (
+        <div
+          data-testid="my-vote"
+          className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
+        >
+          <span
+            className="inline-flex items-center gap-1 font-medium"
+            style={{ color: mine ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)" }}
+          >
+            <span aria-hidden>{mine ? "✓" : "✕"}</span>
+            {mine ? "You approved" : "You rejected"}
+          </span>
+          <LinkButton disabled={busy} onClick={() => vote.mutate(!mine)}>
+            {vote.isPending ? "Changing…" : mine ? "Change to reject" : "Change to approve"}
+          </LinkButton>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {/* Vote buttons only while you haven't voted; once you have, the line
+            above holds your vote and its change. When quorum is already met
+            the vote is secondary, so it goes quiet beside Implement. */}
+        {isVotable(proposal) && mine === null && (
           <>
-            <button
+            <Button
+              size="md"
+              variant={proposal.quorumMet ? "quiet" : "success"}
               disabled={busy}
-              className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-              style={{
-                background: "color-mix(in srgb, var(--ligus-success) 20%, transparent)",
-                color: "var(--ligus-success-ink)",
-              }}
               onClick={() => vote.mutate(true)}
             >
               {vote.isPending && vote.variables === true ? "Approving…" : "Approve"}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="md"
+              variant={proposal.quorumMet ? "quiet" : "danger"}
               disabled={busy}
-              className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-              style={{
-                background: "color-mix(in srgb, var(--ligus-danger) 18%, transparent)",
-                color: "var(--ligus-danger-ink)",
-              }}
               onClick={() => vote.mutate(false)}
             >
               {vote.isPending && vote.variables === false ? "Rejecting…" : "Reject"}
-            </button>
+            </Button>
           </>
         )}
         {/* Agreement gate: an approved proposal only runs when a human explicitly
@@ -1600,6 +1627,7 @@ function ProposalCard({
         {proposal.quorumMet && proposal.status !== "applied" && (
           <Button
             variant="primary"
+            size="md"
             className="ml-auto"
             disabled={busy || Boolean(openRequest)}
             title={
@@ -1616,6 +1644,11 @@ function ProposalCard({
           <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
+      {proposal.quorumMet && proposal.status !== "applied" && !openRequest && (
+        <div data-testid="next-step" className="mt-1.5 text-xs text-ink-soft">
+          Quorum met. Next: implement it{proposal.canRequestApply && applyHosts.length > 0 ? ", or ask a host to apply it" : ""}.
+        </div>
+      )}
 
       {applyConflict && proposal.status !== "applied" && (
         <ApplyConflictActions
@@ -1646,14 +1679,9 @@ function ProposalCard({
               )}
               {r.state === "withdrawn" && <span>Withdrawn</span>}
               {r.state === "open" && r.mine && (
-                <button
-                  className="rounded text-xs hover:underline disabled:opacity-50"
-                  style={{ color: "var(--ligus-accent-ink)" }}
-                  disabled={busy}
-                  onClick={() => withdraw.mutate(r.id)}
-                >
+                <LinkButton disabled={busy} onClick={() => withdraw.mutate(r.id)}>
                   Withdraw
-                </button>
+                </LinkButton>
               )}
             </div>
           ))}
@@ -1676,15 +1704,14 @@ function ProposalCard({
               ))}
             </select>
           )}
-          <button
-            className="rounded-xl px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
-            style={{ border: "1px solid var(--ligus-line)", color: "var(--ligus-accent-ink)" }}
+          <Button
+            variant="ghost"
             disabled={busy || !pickedHost}
             title="That host applies it once, on its checkout, and reports the result. Nobody else applies it meanwhile."
             onClick={() => pickedHost && requestApply.mutate(pickedHost.id)}
           >
             {requestApply.isPending ? "Asking…" : `Apply on ${pickedHost?.label ?? "host"}`}
-          </button>
+          </Button>
           {applyHosts.length === 1 && (
             <span className="text-xs text-ink-soft">{pickedHost?.online ? "online" : "offline"}</span>
           )}
@@ -1694,14 +1721,14 @@ function ProposalCard({
       {/* Send-back-to-agent: available while the proposal is still live and there's
           feedback to act on. The agent produces a linked new version. */}
       {!superseded && proposal.status !== "applied" && hasChangeRequests && (
-        <button
+        <Button
+          size="md"
           disabled={busy}
-          className="mt-2 w-full rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
-          style={{ border: "1px dashed var(--ligus-line)", color: "var(--ligus-ink)" }}
+          className="mt-2 w-full border-dashed"
           onClick={() => sendBack.mutate()}
         >
           {sendBack.isPending ? "Sending to agent…" : "Send to agent to revise"}
-        </button>
+        </Button>
       )}
 
       {previewOpen && (
@@ -1809,8 +1836,8 @@ function RefinementThread({
                 )}
                 <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
-              <div className="mt-0.5 whitespace-pre-wrap break-words leading-5 opacity-80">
-                {r.text}
+              <div data-testid="refinement-text" className="mt-0.5 break-words opacity-80">
+                <Markdown content={r.text} size="xs" />
               </div>
             </div>
           ))}
@@ -1839,14 +1866,13 @@ function RefinementThread({
             />
             Request changes
           </label>
-          <button
+          <Button
+            variant="primary"
             disabled={disabled || submitting || !note.trim()}
             onClick={onSubmit}
-            className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}
           >
             {submitting ? "Adding…" : asChangeRequest ? "Request changes" : "Comment"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -2481,7 +2507,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
               >
                 <code className="truncate text-xs">{lastCode}</code>
-                <button className="shrink-0 text-xs underline" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
+                <button className="shrink-0 text-xs underline hover:opacity-80" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
                   Copy
                 </button>
               </div>
@@ -2496,7 +2522,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
                   </span>
                 </span>
-                <button className="shrink-0 text-xs" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
+                <button className="shrink-0 text-xs underline-offset-2 hover:underline" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
                   Revoke
                 </button>
               </div>

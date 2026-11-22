@@ -122,6 +122,12 @@
   --ligus-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--ligus-line);
   --ligus-dur: 140ms;
   --ligus-ease: cubic-bezier(0.2, 0, 0, 1);
+  /* Press feedback: a faint wash laid over any control's own fill (an inset
+     shadow, so it works whatever background the control sets inline). */
+  --ligus-press-hover: color-mix(in srgb, var(--ligus-ink) 6%, transparent);
+  --ligus-press-active: color-mix(in srgb, var(--ligus-ink) 11%, transparent);
+  --ligus-press-fill-hover: color-mix(in srgb, #000 8%, transparent);
+  --ligus-press-fill-active: color-mix(in srgb, #000 15%, transparent);
 }
 
 /* Tailwind reads its scale from the tokens, so `text-xs`, `rounded-xl`,
@@ -342,6 +348,109 @@ body {
   select,
   option {
     font: inherit;
+  }
+
+  /* Tailwind's preflight gives buttons `cursor: default`, so nothing in the
+     app read as clickable. Every enabled control gets the pointer, every
+     disabled one says so. In the base layer, so a `cursor-*` utility still wins. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  select:not(:disabled),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]),
+  [role="menuitemcheckbox"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not(:disabled),
+  label:has(> input[type="checkbox"]:not(:disabled)),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
+/* Shared control feedback (ui.tsx Button / IconButton / PopoverItem and hand-
+   built buttons that opt in with .ligus-press): a calm hover and active wash,
+   a visible keyboard ring, no motion beyond a short colour fade (and none when
+   the OS asks for reduced motion; see the rule above). */
+@layer components {
+  .ligus-press,
+  .ligus-btn {
+    transition:
+      background-color var(--ligus-dur) var(--ligus-ease),
+      border-color var(--ligus-dur) var(--ligus-ease),
+      box-shadow var(--ligus-dur) var(--ligus-ease),
+      color var(--ligus-dur) var(--ligus-ease),
+      opacity var(--ligus-dur) var(--ligus-ease);
+  }
+  .ligus-press:not(:disabled):not([aria-disabled="true"]):hover,
+  .ligus-btn:not(:disabled):not([aria-disabled="true"]):hover {
+    box-shadow: var(--ligus-btn-shadow, 0 0 #0000), inset 0 0 0 100vmax var(--ligus-press-hover);
+  }
+  .ligus-press:not(:disabled):not([aria-disabled="true"]):active,
+  .ligus-btn:not(:disabled):not([aria-disabled="true"]):active {
+    box-shadow: inset 0 0 0 100vmax var(--ligus-press-active);
+  }
+  .ligus-press:focus-visible,
+  .ligus-btn:focus-visible {
+    outline: 2px solid var(--ligus-focus);
+    outline-offset: 2px;
+  }
+  .ligus-btn:disabled,
+  .ligus-btn[aria-disabled="true"] {
+    opacity: 0.4;
+    box-shadow: none;
+  }
+
+  .ligus-btn-primary {
+    --ligus-btn-shadow: var(--ligus-shadow-1);
+    --ligus-press-hover: var(--ligus-press-fill-hover);
+    --ligus-press-active: var(--ligus-press-fill-active);
+    background: var(--ligus-accent-fill);
+    color: var(--ligus-on-accent);
+    box-shadow: var(--ligus-btn-shadow);
+  }
+  .ligus-btn-ghost {
+    border: 1px solid var(--ligus-line);
+    background: var(--ligus-mist);
+    color: var(--ligus-ink);
+  }
+  .ligus-btn-ghost:not(:disabled):not([aria-disabled="true"]):hover {
+    border-color: var(--tint-cool-line);
+  }
+  .ligus-btn-danger {
+    border: 1px solid var(--ligus-danger-line);
+    background: var(--ligus-danger-tint);
+    color: var(--ligus-danger-ink);
+  }
+  .ligus-btn-danger:not(:disabled):not([aria-disabled="true"]):hover {
+    border-color: color-mix(in srgb, var(--ligus-danger) 55%, transparent);
+  }
+  .ligus-btn-success {
+    border: 1px solid var(--ligus-success-line);
+    background: var(--ligus-success-tint);
+    color: var(--ligus-success-ink);
+  }
+  .ligus-btn-success:not(:disabled):not([aria-disabled="true"]):hover {
+    border-color: color-mix(in srgb, var(--ligus-success) 55%, transparent);
+  }
+  /* Quiet: no fill until hovered (secondary actions beside a primary one). */
+  .ligus-btn-quiet {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ligus-ink-soft);
+  }
+  .ligus-btn-quiet:not(:disabled):not([aria-disabled="true"]):hover {
+    color: var(--ligus-ink);
+    border-color: var(--ligus-line);
   }
 }
 

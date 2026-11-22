@@ -88,13 +88,24 @@ export const Markdown = memo(function Markdown({
   content,
   youName,
   youIsMe = false,
+  size = "md",
+  className = "",
 }: {
   content: string;
   youName?: string;
   youIsMe?: boolean;
+  /// Type size: `md` for chat turns, `sm`/`xs` for denser cards (Review).
+  size?: "md" | "sm" | "xs";
+  className?: string;
 }) {
+  const sizeClass =
+    size === "xs"
+      ? "text-xs leading-[1.5]"
+      : size === "sm"
+        ? "text-sm leading-6"
+        : "text-[length:var(--ligus-text-md)] leading-[1.6]";
   return (
-    <div className="ligus-md text-[length:var(--ligus-text-md)] leading-[1.6]">
+    <div className={`ligus-md ${sizeClass} ${className}`}>
       <ReactMarkdown
         remarkPlugins={
           youName ? [remarkGfm, remarkBreaks, remarkYouMention({ name: youName, me: youIsMe })] : [remarkGfm, remarkBreaks]

@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode, RefObject } from "react";
 import { IconAlertTriangle } from "@/lib/icons";
 
-type Variant = "primary" | "ghost" | "danger";
+type Variant = "primary" | "ghost" | "danger" | "success" | "quiet";
 type Size = "sm" | "md";
 
 const SIZE: Record<Size, string> = {
@@ -17,44 +17,31 @@ const SIZE: Record<Size, string> = {
   md: "h-9 px-4 text-sm",
 };
 
+/// Variant classes live in styles.css (`.ligus-btn-*`), not inline styles: an
+/// inline background or border colour beats every `hover:` utility, which is
+/// why the buttons used to show no hover change at all.
+export const BUTTON_VARIANT_CLASS: Record<Variant, string> = {
+  primary: "ligus-btn-primary",
+  ghost: "ligus-btn-ghost",
+  danger: "ligus-btn-danger",
+  success: "ligus-btn-success",
+  quiet: "ligus-btn-quiet",
+};
+
 /// The app button. `primary` = accent call-to-action, `ghost` = neutral
-/// control on mist, `danger` = destructive.
+/// control on mist, `danger` = destructive, `success` = an affirming choice
+/// (Approve), `quiet` = a secondary action with no fill until hovered.
+/// Every variant shares the `.ligus-btn` hover/active wash and focus ring.
 export function Button({
   variant = "ghost",
   size = "sm",
   className = "",
-  style,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
-  const base = `inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${SIZE[size]}`;
-  const variants: Record<Variant, { className: string; style: React.CSSProperties }> = {
-    primary: {
-      className: "shadow-sm hover:brightness-105 disabled:shadow-none",
-      style: { background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" },
-    },
-    ghost: {
-      className: "border hover:border-[color:var(--ligus-accent-cool)]",
-      style: {
-        borderColor: "var(--ligus-line)",
-        background: "var(--ligus-mist)",
-        color: "var(--ligus-ink)",
-      },
-    },
-    danger: {
-      className: "border hover:brightness-110",
-      style: {
-        borderColor: "var(--ligus-danger-line)",
-        background: "var(--ligus-danger-tint)",
-        color: "var(--ligus-danger-ink)",
-      },
-    },
-  };
-  const v = variants[variant];
   return (
     <button
       {...rest}
-      className={`${base} ${v.className} ${className}`}
-      style={{ ...v.style, ...style }}
+      className={`ligus-btn ${BUTTON_VARIANT_CLASS[variant]} inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl font-medium ${SIZE[size]} ${className}`}
     />
   );
 }
@@ -77,7 +64,7 @@ export function IconButton({
       {...rest}
       aria-label={label}
       title={rest.title ?? label}
-      className={`inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 transition-all hover:opacity-100 hover:bg-[color:var(--ligus-overlay)] disabled:cursor-not-allowed disabled:opacity-30 ${className}`}
+      className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 hover:opacity-100 disabled:opacity-30 ${className}`}
       style={{ width: size, height: size, color: "var(--ligus-ink)", ...rest.style }}
     >
       {children}
@@ -734,7 +721,7 @@ export function LinkButton({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline disabled:opacity-50"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline active:opacity-70 disabled:opacity-50"
       style={{ color: tone === "accent" ? "var(--ligus-accent-ink)" : "var(--ligus-ink)" }}
     >
       {children}
@@ -1010,7 +997,7 @@ export function PopoverItem({
         e.preventDefault();
         if (!disabled) onSelect?.();
       }}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
+      className="ligus-press flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px]"
       style={{
         background: active ? SELECT_TINT : "transparent",
         color: danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
