@@ -1,39 +1,7 @@
 {
   "known": {
     "contrast": [],
-    "smallText": [
-      "1@10.5",
-      "Zaz's device@10",
-      "done@9.5",
-      "error@9.5",
-      "feature@10.5",
-      "front-runner@10.5",
-      "offline · queued@10.5",
-      "scouting@10.5",
-      "test@10.5"
-    ]
+    "smallText": []
   },
-  "counts": {
-    "chat-guards--pollen-light": {
-      "banners": 2
-    },
-    "chat-guards--pollen-dark": {
-      "banners": 2
-    },
-    "chat-guards--studio-light": {
-      "banners": 2
-    },
-    "chat-guards--harbor-dark": {
-      "banners": 2
-    },
-    "chat-guards--slate-light": {
-      "banners": 2
-    },
-    "chat-guards--meadow-dark": {
-      "banners": 2
-    },
-    "chat-guards--obsidian-dark": {
-      "banners": 2
-    }
-  }
+  "counts": {}
 }
