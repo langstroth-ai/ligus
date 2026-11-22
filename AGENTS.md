@@ -38,8 +38,11 @@ summarises a data dir.
 Every command is non-interactive and idempotent, takes flags or environment
 variables (never prompts), prints progress on stderr and, with `--json`,
 exactly one JSON object on stdout (schema `ligus.agent-deploy.v1`: `ok`,
-`exitCode`, `checks[]` of `{id, status, detail, fix}`, `next[]`). No command
-prints a secret.
+`exitCode`, `checks[]` of `{id, status, detail, fix}`, `next[]`). That schema
+is a conforming profile of `ligus.checks.v1`, the shape `ligus doctor --json`
+and `langstroth-relay check --json` print too (`ligus help checks`;
+docs-site/docs/operate/reference/cli-conventions.md). No command prints a
+secret.
 
 Kubernetes (`--context` is required, never the current context; one namespace per workspace):
 
