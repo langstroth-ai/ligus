@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { Markdown, nodeText } from "./Markdown";
+import { Markdown, nodeText, copyText } from "./Markdown";
 
 const openExternal = vi.fn((_url: string) => Promise.resolve());
 vi.mock("@/lib/ipc", () => ({ openExternal: (url: string) => openExternal(url) }));
@@ -98,8 +98,39 @@ describe("Markdown", () => {
     render(<Markdown content={"```ts\nconst a = 1;\nconst b = 2;\n```"} />);
     fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
     expect(writeText).toHaveBeenCalledTimes(1);
-    expect(writeText.mock.calls[0][0]).toContain("const a = 1;");
-    expect(writeText.mock.calls[0][0]).toContain("const b = 2;");
+    expect(writeText).toHaveBeenCalledWith("const a = 1;\nconst b = 2;");
+  });
+
+  it("Copy leaves a shell command at the prompt: no trailing newline", () => {
+    // Pasting a trailing newline into a terminal runs the command immediately.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<Markdown content={"```sh\nnpm run build\ncargo test\n```"} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(writeText).toHaveBeenCalledWith("npm run build\ncargo test");
+  });
+
+  it("Copy keeps an indented code block's inner indentation", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    // Four-space indent is the block marker; the inner two spaces are content.
+    render(<Markdown content={"    if x:\n      pass"} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(writeText).toHaveBeenCalledWith("if x:\n  pass");
+  });
+
+  it("copyText strips every trailing line break", () => {
+    expect(copyText("npm run build\n")).toBe("npm run build");
+    expect(copyText("a\nb\n\n\n")).toBe("a\nb");
+    expect(copyText("a\r\nb\r\n\r\n")).toBe("a\r\nb");
+  });
+
+  it("copyText keeps interior blank lines and leading indentation", () => {
+    expect(copyText("def f():\n\n    return 1\n")).toBe("def f():\n\n    return 1");
+  });
+
+  it("copyText keeps trailing whitespace that is not a newline", () => {
+    expect(copyText("a\n  \n")).toBe("a\n  ");
   });
 });
 
