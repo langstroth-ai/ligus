@@ -99,7 +99,10 @@ jobs:
           fi
           python3 deploy/helm/ligus/ci/security_test.py
       - name: agent deploy tooling (shellcheck, exit codes, --json schema)
-        run: bash deploy/tests/agent-deploy-test.sh
+        run: |
+          # zsh and fish parse the hand-written completions (deploy/completions).
+          sudo apt-get install -y --no-install-recommends zsh fish >/dev/null
+          bash deploy/tests/agent-deploy-test.sh
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ligus-e2e

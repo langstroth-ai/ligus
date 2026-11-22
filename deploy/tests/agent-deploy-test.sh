@@ -104,7 +104,11 @@ for s in "$K8S" "$LOCAL"; do
     esac
   done
   if [ -z "$missing" ]; then pass "$n completions name every command and flag"; else fail "$n completions lack:$missing"; fi
-  if zsh -n "$z" 2>"$TMP/zerr"; then pass "$n zsh completion parses"; else fail "$n zsh completion: $(cat "$TMP/zerr")"; fi
+  if command -v zsh >/dev/null 2>&1; then
+    if zsh -n "$z" 2>"$TMP/zerr"; then pass "$n zsh completion parses"; else fail "$n zsh completion: $(cat "$TMP/zerr")"; fi
+  else
+    printf 'skip %s zsh completion parse (zsh not installed)\n' "$n"
+  fi
   if command -v fish >/dev/null 2>&1; then
     if fish -n "$fi_" 2>"$TMP/ferr"; then pass "$n fish completion parses"; else fail "$n fish completion: $(cat "$TMP/ferr")"; fi
   else
