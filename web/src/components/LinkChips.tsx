@@ -25,12 +25,12 @@ export function LinkChips({ links }: { links: LinkChipDto[] | undefined }) {
             key={`${l.provider}/${l.host}/${l.subjectId}`}
             className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
             style={{ borderColor: c.border, color: c.ink }}
-            title={`${chip!.title}${idNote}`}
+            data-tip={`${chip!.title}${idNote}`}
             data-chip={chip!.kind}
           >
             <span className="font-medium">{forgeLabel(l.provider, l.host)}</span>
             <bdi className="font-mono">{handle}</bdi>
-            <span className="opacity-70">· {chip!.label}</span>
+            <span className="text-ink-soft">· {chip!.label}</span>
           </span>
         );
       })}

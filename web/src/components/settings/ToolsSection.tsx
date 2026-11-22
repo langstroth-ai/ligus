@@ -198,7 +198,7 @@ export function ToolsSection() {
               [{s.transport}] {s.detail}
             </span>
             {s.hasBearerToken && (
-              <span className="ml-2 text-xs text-ink-soft" title="A static bearer token is saved on this device">
+              <span className="ml-2 text-xs text-ink-soft" data-tip="A static bearer token is saved on this device">
                 · token set
               </span>
             )}
@@ -209,7 +209,7 @@ export function ToolsSection() {
               <span
                 className="ml-2 text-xs font-medium"
                 style={{ color: "var(--ligus-danger-ink)" }}
-                title="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
+                data-tip="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
               >
                 · offers a shell ({s.shellTools.join(", ")}): Owner turns only
               </span>
@@ -217,7 +217,7 @@ export function ToolsSection() {
             {s.enabled && s.shellTools === null && (
               <span
                 className="ml-2 text-xs text-ink-soft"
-                title="Until this device has listed the server's tools, turns without the shell don't get it."
+                data-tip="Until this device has listed the server's tools, turns without the shell don't get it."
               >
                 · tools not checked yet
               </span>
@@ -225,7 +225,7 @@ export function ToolsSection() {
             {s.secretForOtherUrl && (
               <span
                 className="ml-2 text-xs text-ink-soft"
-                title="This server's URL changed since its token was saved, so the token is not sent. Set the token again or reconnect."
+                data-tip="This server's URL changed since its token was saved, so the token is not sent. Set the token again or reconnect."
               >
                 · token saved for a different URL
               </span>
@@ -234,10 +234,10 @@ export function ToolsSection() {
           <span className="flex items-center gap-3">
             {s.transport === "http" && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={setToken.isPending}
                 onClick={() => setToken.mutate({ id: s.id, clear: s.hasBearerToken })}
-                title={
+                data-tip={
                   s.hasBearerToken
                     ? "Remove the saved bearer token"
                     : "Save a static bearer token (stored on this device only)"
@@ -248,20 +248,20 @@ export function ToolsSection() {
             )}
             {s.transport === "http" && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={connect.isPending}
                 onClick={() => connect.mutate(s.id)}
-                title="Authorize this server in your browser (OAuth)"
+                data-tip="Authorize this server in your browser (OAuth)"
               >
                 Connect
               </button>
             )}
             {s.enabled && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={inspect.isPending}
                 onClick={() => inspect.mutate(s.id)}
-                title="List this server's tools now and flag any that run shell commands"
+                data-tip="List this server's tools now and flag any that run shell commands"
               >
                 Check tools
               </button>

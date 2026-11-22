@@ -28,6 +28,10 @@ import {
   compactChat,
   linearIssuesContext,
   setChatRuntime,
+  setChatModel,
+  chatModelProblem,
+  onModelUnavailable,
+  type ModelProblemDto,
   syncStatus,
   founderStatus,
   toggleReaction,
@@ -72,10 +76,20 @@ import {
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
+import {
+  ModelStep,
+  effectiveModel,
+  looksModelUnavailable,
+  modelProblemText,
+  popoverArrowKeys,
+  runtimeLabelWithModel,
+  useChatModel,
+} from "@/components/ModelPicker";
 import { liveTurns } from "@/state/liveTurns";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState, isModalOpen } from "@/components/ui";
 import { escStopsTurn } from "@/lib/shortcuts";
 import { Markdown } from "@/components/Markdown";
+import { Kbd } from "@/components/Tooltip";
 import { agentMentionCandidates, detectMention, filterMentions, mentionSelectable, type MentionCandidate } from "@/lib/mentions";
 import { editorStore } from "@/state/editorStore";
 import { applyStreamDelta, handleTerminal } from "@/lib/streams";
@@ -205,6 +219,13 @@ export function ChatView({
   const emojiPanelRef = useRef<HTMLDivElement>(null);
   // Composer route pill: the "default recipient when no @mention" popover.
   const [routeOpen, setRouteOpen] = useState(false);
+  // The popover's second step: the runtime whose models are shown (null =
+  // the runtime list).
+  const [modelStep, setModelStep] = useState<string | null>(null);
+  // The one line shown when the chat's model won't run (with "Pick another
+  // model"), instead of a failed turn.
+  const [modelNotice, setModelNotice] = useState<ModelProblemDto | null>(null);
+  useEffect(() => setModelNotice(null), [sessionId]);
   // Composer focus ring (the turn-shaped card lights its accent border).
   const [composerFocused, setComposerFocused] = useState(false);
   const routeRef = useRef<HTMLDivElement>(null);
@@ -790,6 +811,14 @@ export function ChatView({
       setOptimisticUser(null);
       setInput((cur) => cur || body);
       setAttachments((cur) => (cur.length ? cur : sentAttachments));
+      if (looksModelUnavailable(errMsg(e))) {
+        // The chat shows its one line with "Pick another model" (the
+        // backend's event); no second error here.
+        if (currentRuntime) {
+          setModelNotice((cur) => cur ?? { runtimeId: currentRuntimeId, model: effectiveModel(currentRuntime, choiceFor(currentRuntimeId)), reason: "unavailable" });
+        }
+        return;
+      }
       if (isWaitingForFounder(errMsg(e))) {
         // Not a failure: the workspace's founding hasn't synced yet.
         void founder.refetch();
@@ -811,6 +840,15 @@ export function ChatView({
   async function handleSend() {
     const text = input.trim();
     if (!text && attachments.length === 0) return;
+    // An untagged message runs on the chat's model: when this device
+    // already knows that model won't run, say so instead of sending.
+    if (routeHandle === "primary") {
+      const problem = await chatModelProblem(sessionId).catch(() => null);
+      if (problem) {
+        setModelNotice(problem);
+        return;
+      }
+    }
     const sentAttachments = attachments;
     setInput("");
     setAttachments([]);
@@ -968,22 +1006,30 @@ export function ChatView({
   // Provenance for a message's turn: prefer its stamped runtime; the streaming
   // turn (still generating now) legitimately uses the current runtime. An
   // unknown/unstamped runtime yields no guess (better silent than wrong).
-  const provenanceFor = (runtimeId?: string | null) => {
+  // A reply records the model it ran with (`runtimeLabel`); older replies
+  // fall back to the runtime's current model.
+  const chatModel = useChatModel(sessionId);
+  const choiceFor = (runtimeId: string) => chatModel.data?.choices?.[runtimeId] ?? null;
+  const provenanceFor = (runtimeId?: string | null, recordedModel?: string | null, liveModel?: string | null) => {
     const rt = (runtimeId && runtimeById.get(runtimeId)) || null;
-    if (!rt) return { via: undefined, model: undefined, host: "local" as const };
+    if (!rt) return { via: undefined, model: recordedModel?.trim() || undefined, host: "local" as const };
     return {
       via: rt.provider?.trim() || rt.label?.trim() || undefined,
-      model: rt.model || undefined,
+      model: recordedModel?.trim() || liveModel?.trim() || rt.model || undefined,
       host: (rt.location?.trim().toLowerCase() === "remote" ? "remote" : "local") as
         | "local"
         | "remote",
     };
   };
   // The live/streaming turn uses the current runtime (it's what's generating).
-  const liveProvenance = provenanceFor(currentRuntimeId);
+  const liveProvenance = provenanceFor(
+    currentRuntimeId,
+    null,
+    currentRuntime ? effectiveModel(currentRuntime, choiceFor(currentRuntimeId)) : null,
+  );
   // The composer's route pill shows where a NEW message will go — the current
   // runtime — so it (unlike historical turns) legitimately labels the current one.
-  const runtimeVia = currentRuntime ? runtimePickerLabel(currentRuntime) : undefined;
+  const runtimeVia = currentRuntime ? runtimeLabelWithModel(currentRuntime, choiceFor(currentRuntimeId)) : undefined;
 
   // The composer's resolved route (mockup §7.5): the first @mention in the draft
   // routes the turn; with none, it falls back to @primary (the chat's runtime).
@@ -1012,7 +1058,51 @@ export function ChatView({
     await setChatRuntime(sessionId, id);
     qc.invalidateQueries({ queryKey: ["chat", sessionId] });
     qc.invalidateQueries({ queryKey: ["chats"] });
+    qc.invalidateQueries({ queryKey: ["chat-model", sessionId] });
   }
+
+  // A model from the second step: switch the chat to that runtime when it
+  // isn't the current one, then keep the choice (null = Default) here.
+  async function pickModel(runtimeId: string, model: string | null) {
+    setRouteOpen(false);
+    setModelStep(null);
+    try {
+      if (runtimeId !== currentRuntimeId) await setChatRuntime(sessionId, runtimeId);
+      await setChatModel(sessionId, runtimeId, model);
+      setModelNotice(null);
+    } catch (e) {
+      toast.error(`Couldn't change the model: ${errMsg(e)}`);
+    } finally {
+      qc.invalidateQueries({ queryKey: ["chat", sessionId] });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+      qc.invalidateQueries({ queryKey: ["chat-model", sessionId] });
+      qc.invalidateQueries({ queryKey: ["runtime-models", runtimeId] });
+      requestAnimationFrame(() => taRef.current?.focus());
+    }
+  }
+
+  // "Pick another model": the popover, open on the chat runtime's models.
+  function openModelPicker(runtimeId: string) {
+    setModelStep(runtimeId);
+    setRouteOpen(true);
+  }
+
+  // A turn here failed because its model isn't available: one line, not a
+  // failed send.
+  useEffect(() => {
+    const unlisten = onModelUnavailable((e) => {
+      if (e.sessionId !== sessionRef.current) return;
+      setModelNotice({ runtimeId: e.runtimeId, model: e.model, reason: "unavailable" });
+      qc.invalidateQueries({ queryKey: ["runtime-models", e.runtimeId] });
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [qc]);
+
+  useEffect(() => {
+    if (!routeOpen) setModelStep(null);
+  }, [routeOpen]);
 
   useEffect(() => {
     if (!routeOpen) return;
@@ -1020,7 +1110,10 @@ export function ChatView({
       if (routeRef.current && !routeRef.current.contains(e.target as Node)) setRouteOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setRouteOpen(false);
+      if (e.key !== "Escape") return;
+      // Escape steps back from the models to the runtimes, then closes.
+      if (modelStep) setModelStep(null);
+      else setRouteOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -1028,7 +1121,7 @@ export function ChatView({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [routeOpen]);
+  }, [routeOpen, modelStep]);
   const lastAssistantId = [...messages]
     .reverse()
     .find((m) => m.role === "assistant" || m.role === "agent")?.id;
@@ -1063,8 +1156,8 @@ export function ChatView({
               >
                 <IconMessage size={22} />
               </div>
-              <div className="mt-4 text-2xl font-semibold tracking-tight">Start a conversation</div>
-              <p className="mt-2 text-base opacity-65">
+              <h2 className="ligus-display mt-4">Start a conversation</h2>
+              <p className="mt-2 text-base text-ink-soft">
                 Ask about your code, or @mention an agent to have it make changes. Try one:
               </p>
               <div className="mt-4 flex flex-col gap-2">
@@ -1093,7 +1186,7 @@ export function ChatView({
                 ))}
               </div>
               <div
-                className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-4 text-xs opacity-55"
+                className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-4 text-xs text-ink-soft"
                 style={{ borderColor: "var(--ligus-line)" }}
               >
                 <span><code>/</code> for commands</span>
@@ -1135,7 +1228,7 @@ export function ChatView({
                 m.role === "user" || m.role === "system"
                   ? undefined
                   : rosterAgent?.name ?? (m.author === PRIMARY_NAME ? PRIMARY_HANDLE : m.author);
-              const prov = provenanceFor(m.runtimeId);
+              const prov = provenanceFor(m.runtimeId, m.runtimeLabel);
               return (
                 <Fragment key={m.id}>
                   {showDay && <DaySeparator label={dayLabel(m.createdAt)} />}
@@ -1216,7 +1309,7 @@ export function ChatView({
             );
           })}
           {queued != null && (
-            <div className="flex items-start justify-end gap-2 py-1 pr-1 text-sm opacity-60" role="status">
+            <div className="flex items-start justify-end gap-2 py-1 pr-1 text-sm text-ink-soft" role="status">
               <span aria-hidden style={{ opacity: 0.7 }}>⏳</span>
               <div className="min-w-0 max-w-[70%] whitespace-pre-wrap break-words">
                 <span style={{ fontWeight: 600 }}>Queued — sends after this turn: </span>
@@ -1225,8 +1318,8 @@ export function ChatView({
               <button
                 onClick={() => setQueued(null)}
                 aria-label="Cancel queued message"
-                title="Cancel queued message"
-                className="shrink-0 rounded-md px-1 leading-none opacity-70 hover:opacity-100"
+                data-tip="Cancel queued message"
+                className="shrink-0 rounded-md px-1 leading-none text-ink-soft hover:text-ink"
               >
                 <IconX size={12} />
               </button>
@@ -1240,14 +1333,14 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>Still working…</div>
-                <div className="mt-0.5 break-words opacity-80">
+                <div className="mt-0.5 break-words text-ink-soft">
                   This is taking longer than usual — the runtime may be stalled or waiting to log in.
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <button
                   onClick={() => void handleStop()}
-                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
+                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
                   style={{ border: "1px solid var(--ligus-line)" }}
                 >
                   Stop &amp; retry
@@ -1266,9 +1359,9 @@ export function ChatView({
                       })
                       .catch((e) => toast.error(`Couldn't reset: ${errMsg(e)}`));
                   }}
-                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
+                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
                   style={{ border: "1px solid var(--ligus-line)" }}
-                  title="Force this chat out of a stuck state"
+                  data-tip="Force this chat out of a stuck state"
                 >
                   Reset chat
                 </button>
@@ -1284,7 +1377,7 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>{founderWaitTitle(founder.data?.founderName ?? null)}</div>
-                <div className="mt-0.5 break-words opacity-80">
+                <div className="mt-0.5 break-words text-ink-soft">
                   The invite names who founded this workspace, but their signed founding hasn't reached this device yet.
                   Until it does, nothing you write is sent, so it can't land in a room someone else set up. This clears on
                   its own once they're online and it syncs.
@@ -1299,15 +1392,15 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>Generation failed or was interrupted</div>
-                <div className="mt-0.5 break-words opacity-80">{streamError}</div>
+                <div className="mt-0.5 break-words text-ink-soft">{streamError}</div>
               </div>
               <button
                 onClick={() => {
                   setStreamError(null);
                   liveTurns.clearFailure(sessionId);
                 }}
-                className="shrink-0 rounded-md px-1.5 py-0.5 leading-none opacity-60 transition-opacity hover:opacity-100"
-                title="Dismiss"
+                className="shrink-0 rounded-md px-1.5 py-0.5 leading-none text-ink-soft transition-colors hover:text-ink"
+                data-tip="Dismiss"
                 aria-label="Dismiss"
               >
                 <IconX size={12} />
@@ -1328,7 +1421,7 @@ export function ChatView({
             return (
               <button
                 onClick={scrollToBottom}
-                title={isNew ? "Jump to new messages" : "Jump to the latest"}
+                data-tip={isNew ? "Jump to new messages" : "Jump to the latest"}
                 aria-label={isNew ? "Jump to new messages" : "Jump to the latest"}
                 className={`absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full shadow-lg transition-transform hover:scale-105 ${
                   isNew ? "px-3.5 py-1.5 text-xs font-semibold" : "p-2"
@@ -1357,6 +1450,26 @@ export function ChatView({
           {/* Composer — a turn-shaped card; the "next turn" in the transcript
               (spec §7.5). Card lights its accent border on focus / while sending;
               the route pill resolves the recipient, and the @ / popovers stay. */}
+          {modelNotice && (
+            <div role="alert" data-testid="model-notice" className="mb-2 flex items-center gap-2 text-xs">
+              <span aria-hidden style={{ color: "var(--ligus-accent-warm, orange)" }}>
+                ●
+              </span>
+              <span className="min-w-0 truncate">{modelProblemText(modelNotice, runtimeById.get(modelNotice.runtimeId))}</span>
+              <button type="button" className="shrink-0 underline" onClick={() => openModelPicker(modelNotice.runtimeId)}>
+                Pick another model
+              </button>
+              <button
+                type="button"
+                className="ml-auto shrink-0 text-ink-soft hover:text-ink"
+                aria-label="Dismiss"
+                data-tip="Dismiss"
+                onClick={() => setModelNotice(null)}
+              >
+                <IconX size={11} />
+              </button>
+            </div>
+          )}
           {!embedded && (
             <PinnedHostWarning
               sessionId={sessionId}
@@ -1381,7 +1494,7 @@ export function ChatView({
               {attachments.length > 0 && (
                 <div className="cmp-chips">
                   {attachments.map((a, i) => (
-                    <span key={`${a.path}-${i}`} className="chip" title={a.path}>
+                    <span key={`${a.path}-${i}`} className="chip" data-tip={a.path}>
                       <span aria-hidden>{a.image ? <IconImage size={12} /> : <IconFile size={12} />}</span>
                       <b>{a.name}</b>
                       <button
@@ -1447,7 +1560,7 @@ export function ChatView({
                         label={
                           <span>
                             <span className="mr-2 text-lg leading-none">{c.emoji}</span>
-                            <span className="opacity-70">:{c.slug}:</span>
+                            <span className="text-ink-soft">:{c.slug}:</span>
                           </span>
                         }
                         active={i === emojiScActive}
@@ -1600,48 +1713,78 @@ export function ChatView({
                     </span>
                   </button>
                   {routeOpen && (
-                    <div className="pop">
-                      <div className="pop-h">
-                        Runtime for @{PRIMARY_HANDLE} · answers untagged messages (alias @primary)
-                      </div>
-                      {runtimes.map((rt) => (
-                        <button
-                          key={rt.id}
-                          className={`pop-i${rt.id === currentRuntimeId ? " sel" : ""}`}
-                          // onMouseDown preventDefaults to keep the textarea from
-                          // blurring on pointer select. That alone is mouse-only —
-                          // a keyboard Enter/Space fires `click`, not `mousedown`,
-                          // so also handle onClick (guarded so the mouse path, which
-                          // already ran on mousedown, doesn't double-fire).
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            void selectRuntime(rt.id);
-                          }}
-                          onClick={(e) => {
-                            if (e.detail === 0) void selectRuntime(rt.id);
-                          }}
-                        >
-                          <span className="route-glyph"><IconWrench size={11} /></span>
-                          <span className="pop-t">
-                            <b>{rt.label || rt.name}</b>
-                            <span>{runtimePickerLabel(rt)}</span>
-                          </span>
-                          {rt.id === currentRuntimeId && (
-                            <span
-                              aria-label={`backs @${PRIMARY_HANDLE}`}
-                              style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ligus-accent-fill)" }}
-                            >
-                              <span style={{ fontSize: 11, fontWeight: 600 }}>@{PRIMARY_HANDLE}</span>
-                              <IconCheck size={12} />
-                            </span>
+                    <div className="pop" onKeyDown={modelStep ? undefined : popoverArrowKeys}>
+                      {modelStep && runtimeById.get(modelStep) ? (
+                        <ModelStep
+                          runtime={runtimeById.get(modelStep)!}
+                          chosen={choiceFor(modelStep)}
+                          appliesHere={chatModel.data?.appliesHere ?? true}
+                          onBack={() => setModelStep(null)}
+                          onPick={(m) => void pickModel(modelStep, m)}
+                        />
+                      ) : (
+                        <>
+                          <div className="pop-h">
+                            Runtime for @{PRIMARY_HANDLE} · answers untagged messages (alias @primary)
+                          </div>
+                          {runtimes.map((rt) => (
+                            <div key={rt.id} className="pop-row">
+                              <button
+                                className={`pop-i${rt.id === currentRuntimeId ? " sel" : ""}`}
+                                data-pop-item
+                                // onMouseDown preventDefaults to keep the textarea from
+                                // blurring on pointer select. That alone is mouse-only —
+                                // a keyboard Enter/Space fires `click`, not `mousedown`,
+                                // so also handle onClick (guarded so the mouse path, which
+                                // already ran on mousedown, doesn't double-fire).
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  void selectRuntime(rt.id);
+                                }}
+                                onClick={(e) => {
+                                  if (e.detail === 0) void selectRuntime(rt.id);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "ArrowRight") {
+                                    e.preventDefault();
+                                    setModelStep(rt.id);
+                                  }
+                                }}
+                              >
+                                <span className="route-glyph"><IconWrench size={11} /></span>
+                                <span className="pop-t">
+                                  <b>{rt.label || rt.name}</b>
+                                  <span>{runtimeLabelWithModel(rt, choiceFor(rt.id))}</span>
+                                </span>
+                                {rt.id === currentRuntimeId && (
+                                  <span
+                                    aria-label={`backs @${PRIMARY_HANDLE}`}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ligus-accent-fill)" }}
+                                  >
+                                    <span style={{ fontSize: 11, fontWeight: 600 }}>@{PRIMARY_HANDLE}</span>
+                                    <IconCheck size={12} />
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="pop-more"
+                                aria-label={`Choose the model for ${rt.label || rt.name}`}
+                                title="Choose the model (→)"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setModelStep(rt.id)}
+                              >
+                                <IconChevronRight size={12} />
+                              </button>
+                            </div>
+                          ))}
+                          {currentRuntime?.provider === "claude-code" && (
+                            <div className="pop-n">
+                              Claude Code answers with its own tools &amp; permissions, via your Claude
+                              subscription.
+                            </div>
                           )}
-                        </button>
-                      ))}
-                      {currentRuntime?.provider === "claude-code" && (
-                        <div className="pop-n">
-                          Claude Code answers with its own tools &amp; permissions, via your Claude
-                          subscription.
-                        </div>
+                        </>
                       )}
                     </div>
                   )}
@@ -1651,7 +1794,7 @@ export function ChatView({
                   <button
                     type="button"
                     className="ib"
-                    title="Emoji"
+                    data-tip="Emoji"
                     aria-label="Insert emoji"
                     onClick={() => setShowEmoji((v) => !v)}
                   >
@@ -1667,7 +1810,7 @@ export function ChatView({
                     />
                   )}
                 </div>
-                <label className="ib" title="Attach files" aria-label="Attach files">
+                <label className="ib" data-tip="Attach files" aria-label="Attach files">
                   <IconPaperclip size={15} />
                   <input
                     type="file"
@@ -1684,7 +1827,7 @@ export function ChatView({
                   onClick={() => void addFileRef()}
                   className="ib"
                   style={{ width: "auto", padding: "0 8px", fontSize: 12 }}
-                  title="Reference a workspace file (@file)"
+                  data-tip="Reference a workspace file (@file)"
                 >
                   @file
                 </button>
@@ -1696,7 +1839,7 @@ export function ChatView({
                     onClick={() => void handleStop()}
                     className="send"
                     aria-label="Stop generating"
-                    title="Stop generating"
+                    data-tip="Stop generating"
                   >
                     <IconStop size={15} />
                   </button>
@@ -1706,7 +1849,7 @@ export function ChatView({
                   disabled={waitingForFounder || (!input.trim() && attachments.length === 0)}
                   className="send"
                   aria-label={waitingForFounder ? "Waiting for the workspace's founder" : busy ? "Queue as next turn" : "Send message"}
-                  title={
+                  data-tip={
                     waitingForFounder
                       ? "Waiting for the workspace's founder to sync"
                       : busy
@@ -1721,8 +1864,7 @@ export function ChatView({
 
             {/* Footer hint (spec §7.5) — the affordance legend under the composer. */}
             <div className="hint">
-              Live — type <span className="kbd">@</span> or <span className="kbd">/</span>, send with{" "}
-              <span className="kbd">↵</span>, newline with <span className="kbd">⇧↵</span>.
+              Live — type <Kbd>@</Kbd> or <Kbd>/</Kbd>, send with <Kbd>↵</Kbd>, newline with <Kbd>⇧↵</Kbd>.
             </div>
           </div>
         </div>
@@ -1742,7 +1884,7 @@ export function ChatView({
 function DaySeparator({ label }: { label: string }) {
   if (!label) return null;
   return (
-    <div className="my-2 flex items-center gap-3 px-1 opacity-60" aria-label={label}>
+    <div className="my-2 flex items-center gap-3 px-1 text-ink-soft" aria-label={label}>
       <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
       <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
       <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
@@ -1843,9 +1985,9 @@ function MessageBody({
               onClick={() => editorStore.requestOpen(p)}
               className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 font-mono text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
               style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
-              title={`Open ${p} in the editor`}
+              data-tip={`Open ${p} in the editor`}
             >
-              <span aria-hidden className="opacity-60">
+              <span aria-hidden className="text-ink-soft">
                 <IconFile size={12} />
               </span>
               <span className="max-w-[16rem] truncate">{p}</span>
@@ -1863,9 +2005,9 @@ function MessageBody({
           {foreignPaths.map((p, i) => (
             <span
               key={`f-${p}-${i}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft"
               style={{ borderColor: "var(--ligus-line)" }}
-              title="A file on the sender's device; it wasn't shared"
+              data-tip="A file on the sender's device; it wasn't shared"
             >
               <IconFile size={13} /> {fileBaseName(p)} (on the sender's device)
             </span>
@@ -1873,7 +2015,7 @@ function MessageBody({
           {sessionId && shown.map((v) => <SharedAttachmentCard key={v.id} sessionId={sessionId} view={v} />)}
           {files.isFetched &&
             unplaced.map((id) => (
-              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--ligus-line)" }}>
+              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs text-ink-soft" style={{ borderColor: "var(--ligus-line)" }}>
                 An attachment that isn't available
               </span>
             ))}
@@ -1890,9 +2032,9 @@ function AttachmentChip({ path, image }: { path: string; image?: boolean }) {
     <span
       className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-      title={path}
+      data-tip={path}
     >
-      <span aria-hidden className="opacity-60">
+      <span aria-hidden className="text-ink-soft">
         {image ?? isImagePath(path) ? <IconImage size={13} /> : <IconFile size={13} />}
       </span>
       <span className="max-w-[14rem] truncate">{fileBaseName(path)}</span>
@@ -1915,12 +2057,12 @@ function ImageAttachment({ path }: { path: string }) {
       <div
         className="h-32 w-32 animate-pulse rounded-lg border"
         style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-        title={fileBaseName(path)}
+        data-tip={fileBaseName(path)}
       />
     );
   }
   return (
-    <a href={img.data} target="_blank" rel="noreferrer" title={fileBaseName(path)}>
+    <a href={img.data} target="_blank" rel="noreferrer" aria-label={fileBaseName(path)} data-tip={fileBaseName(path)}>
       <img
         src={img.data}
         alt={fileBaseName(path)}
@@ -2110,7 +2252,7 @@ const Bubble = memo(function Bubble({
   ) : body ? (
     <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} sessionId={sessionId} messageId={messageId} />
   ) : toolCalls && toolCalls.length > 0 ? null : (
-    <span className="opacity-50">…</span>
+    <span className="text-ink-soft">…</span>
   );
 
   // System messages (summaries, notices) read as centered meta, not a reply.
@@ -2119,7 +2261,7 @@ const Bubble = memo(function Bubble({
       <div className="tt-system">
         <span className="ln" />
         <span>{body}</span>
-        {timeLabel && <span className="opacity-70">{timeLabel}</span>}
+        {timeLabel && <span className="text-ink-soft">{timeLabel}</span>}
         <span className="ln" />
       </div>
     );
@@ -2172,7 +2314,7 @@ const Bubble = memo(function Bubble({
           {(() => {
             const badge = responderBadge(responderName, responderDevice);
             return badge && (
-              <span className="tt-badge" title={badge.title}>
+              <span className="tt-badge" data-tip={badge.title}>
                 {badge.label}
               </span>
             );
@@ -2192,7 +2334,7 @@ const Bubble = memo(function Bubble({
             </span>
           )}
           <span className="tt-spacer" />
-          {timeLabel && <span className="tt-time" title={timeTitle}>{timeLabel}</span>}
+          {timeLabel && <span className="tt-time" data-tip={timeTitle}>{timeLabel}</span>}
         </div>
         {via && !isUser && <div className="tt-attr">via {via}</div>}
 
@@ -2292,7 +2434,7 @@ function FilePickerModal({
         }}
       />
       <div className="max-h-[50vh] overflow-y-auto py-1">
-        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm opacity-50">No files match.</div>}
+        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-soft">No files match.</div>}
         {filtered.map((f, i) => (
           <button
             key={f}
@@ -2342,9 +2484,9 @@ function IconAction({
   return (
     <button
       onClick={onClick}
-      title={title}
+      data-tip={title}
       aria-label={title}
-      className="flex h-6 w-6 items-center justify-center rounded-md opacity-60 transition-all hover:opacity-100"
+      className="flex h-6 w-6 items-center justify-center rounded-md text-ink-soft transition-all hover:text-ink"
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-mist)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >

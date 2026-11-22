@@ -62,6 +62,7 @@ pub mod ligus_mcp;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
+pub mod model_catalog;
 pub mod model_gateway;
 pub mod patch_leaving;
 pub mod peer;

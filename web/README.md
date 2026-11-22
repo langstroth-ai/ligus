@@ -40,6 +40,12 @@ handy for design work and screenshots. Query knobs: `?scenario=onboarding|empty`
 `&dearth=1`, `&lockdown=1`, `&loading=1`, `&error=1`. The production build never
 references `dev/`.
 
+The shared presentational components (`src/components/kit/`: session status
+and card, sheet, stepper, data table, combobox, fingerprint, presence and
+avatar stack, inbox item, status bar shell, countdown, virtual list) have a
+gallery page in mock mode at `/dev/gallery/` (`?theme=harbor&mode=dark`,
+`&sheet=1` to open the sheet).
+
 ### Design QA
 
 `bun run design-qa` (with `bun run dev:mock` running) renders the mock app in

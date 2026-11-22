@@ -95,13 +95,11 @@ import {
   Badge,
   StatusDot,
   type Tone,
-  Popover,
-  PopoverHeader,
-  PopoverItem,
   SELECT_TINT,
   LinkButton,
 } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
+import { Menu } from "@/components/Menu";
 import {
   IconX,
   IconChevronDown,
@@ -197,7 +195,7 @@ export function RightRail({
                 color: pane === item.id ? "var(--ligus-accent-ink)" : "var(--ligus-ink)",
                 opacity: pane === item.id ? 1 : 0.72,
               }}
-              title={item.label}
+              data-tip={item.label}
               aria-label={`${item.label} pane`}
               data-pane={item.id}
               aria-pressed={pane === item.id}
@@ -205,7 +203,7 @@ export function RightRail({
               {item.icon(17)}
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
-                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
+                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[11px] font-semibold leading-none"
                   style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
@@ -220,9 +218,8 @@ export function RightRail({
           toggle (and Escape). Sits in the pane header's empty right edge. */}
       <button
         onClick={onClose}
-        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg opacity-55 transition-opacity hover:opacity-100"
-        style={{ color: "var(--ligus-ink)" }}
-        title="Close panel (Esc)"
+        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-ink-soft transition-colors hover:text-ink"
+        data-tip="Close panel (Esc)"
         aria-label="Close panel"
       >
         <IconX size={15} />
@@ -299,7 +296,7 @@ export function RailFrame({
     <div className="flex h-full flex-col">
       <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--ligus-line)" }}>
         <div className="flex items-center gap-1.5 pr-8">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
+          <h2 className="ligus-title">{title}</h2>
           <PaneHelpLink title={title} about={about} docs={docs} />
         </div>
         {actions && <div className="mt-2">{actions}</div>}
@@ -320,7 +317,7 @@ export function PaneHelpLink({ title, about, docs }: { title: string; about: str
       href={url}
       target="_blank"
       rel="noreferrer"
-      title={`${about} Opens the docs.`}
+      data-tip={`${about} Opens the docs.`}
       aria-label={`About ${title}: ${about} Opens the docs.`}
       data-testid="pane-help"
       onClick={(e) => {
@@ -792,7 +789,7 @@ function McpServerCard({
         <button
           onClick={() => setOpen((o) => !o)}
           aria-label={open ? `Collapse ${server.id}` : `Expand ${server.id}`}
-          title={open ? "Collapse" : "Expand"}
+          data-tip={open ? "Collapse" : "Expand"}
           className="grid h-6 w-6 shrink-0 place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
           style={{ color: "var(--ligus-ink-soft)" }}
         >
@@ -825,7 +822,7 @@ function McpServerCard({
           />
         ) : (
           <span
-            className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+            className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase"
             style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
           >
             {disabled ? "off" : "on"}
@@ -863,7 +860,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
       <span
         className="inline-flex items-center gap-1 text-[11px]"
         style={{ color: "var(--ligus-ink-soft)" }}
-        title="Runs on this device — a local persona"
+        data-tip="Runs on this device — a local persona"
       >
         <span className="h-2 w-2 rounded-full" style={{ background: "var(--ligus-line)" }} aria-hidden />
         This device
@@ -877,7 +874,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
     <span
       className="inline-flex items-center gap-1 text-[11px]"
       style={{ color: "var(--ligus-ink-soft)" }}
-      title={
+      data-tip={
         online
           ? `Headless — runs on worker “${label}”`
           : `Worker “${label}” is offline; queued work waits until it reconnects`
@@ -922,7 +919,7 @@ function AgentRosterRow({
     <Card className="px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
-          <label className="group/av relative cursor-pointer" title="Upload an avatar for this agent">
+          <label className="group/av relative cursor-pointer" data-tip="Upload an avatar for this agent">
             <Avatar
               name={agent.name}
               url={agent.avatarUrl}
@@ -931,7 +928,7 @@ function AgentRosterRow({
               size={32}
             />
             <span
-              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[9px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
+              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
               style={{
                 background: "color-mix(in srgb, var(--ligus-ink) 55%, transparent)",
                 color: "var(--ligus-canvas)",
@@ -1025,9 +1022,9 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
+            className="rounded-full px-2 py-1 text-[11px] font-semibold uppercase text-ink-soft"
             style={{ background: "var(--ligus-mist)" }}
-            title="A runtime you configured (vs. an auto-detected local CLI)"
+            data-tip="A runtime you configured (vs. an auto-detected local CLI)"
           >
             Configured
           </span>
@@ -1107,32 +1104,30 @@ function RunOnWorkerMenu({
       <button
         ref={anchorRef}
         onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="shrink-0 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors hover:bg-[color:var(--ligus-overlay)]"
         style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
       >
         Run on worker
       </button>
-      {open && (
-        <Popover anchorRef={anchorRef} onDismiss={() => setOpen(false)} align="right" minWidth={200}>
-          <PopoverHeader>Online workers</PopoverHeader>
-          {workers.length === 0 ? (
-            <div className="px-2 py-1.5 text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              No online workers.
-            </div>
-          ) : (
-            workers.map((w) => (
-              <PopoverItem
-                key={w.id}
-                label={hostGatewaysLabel(w) ? `${w.label || w.id} · gateways: ${hostGatewaysLabel(w)}` : w.label || w.id}
-                onSelect={() => {
-                  setOpen(false);
-                  onReassign(w.id);
-                }}
-              />
-            ))
-          )}
-        </Popover>
-      )}
+      <Menu
+        open={open}
+        anchorRef={anchorRef}
+        onClose={() => setOpen(false)}
+        align="right"
+        minWidth={200}
+        label="Online workers"
+        items={[
+          { type: "header", label: "Online workers" },
+          ...(workers.length === 0
+            ? [{ label: "No online workers", onClick: () => {}, disabled: true }]
+            : workers.map((w) => ({
+                label: hostGatewaysLabel(w) ? `${w.label || w.id} · gateways: ${hostGatewaysLabel(w)}` : w.label || w.id,
+                onClick: () => onReassign(w.id),
+              }))),
+        ]}
+      />
     </>
   );
 }
@@ -1878,7 +1873,7 @@ function RefinementThread({
                 <span className="text-ink-soft">{r.role}</span>
                 {r.requestChanges && (
                   <span
-                    className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                    className="rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
                     style={{
                       color: "var(--ligus-warm-ink)",
                       background: "color-mix(in srgb, var(--ligus-accent-warm) 15%, transparent)",
@@ -1889,7 +1884,7 @@ function RefinementThread({
                 )}
                 <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
-              <div data-testid="refinement-text" className="mt-0.5 break-words opacity-80">
+              <div data-testid="refinement-text" className="mt-0.5 break-words text-ink-soft">
                 <Markdown content={r.text} size="xs" />
               </div>
             </div>
@@ -2027,7 +2022,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
           title="Settled"
           action={
             <button
-              className="text-xs opacity-60 transition-opacity hover:opacity-100"
+              className="text-xs text-ink-soft transition-colors hover:text-ink"
               onClick={() => dismiss(groups.settled.map((p) => p.id), true)}
             >
               Clear settled
@@ -2340,7 +2335,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 {dup && (
                   <span
                     className="text-xs text-ink-soft"
-                    title={`Mention precisely with @${member.displayName}#${member.index}`}
+                    data-tip={`Mention precisely with @${member.displayName}#${member.index}`}
                   >
                     #{member.index}
                   </span>
@@ -2387,7 +2382,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       removeMutation.mutate(member.id),
                     )
                   }
-                  title={member.removeRefusal ?? "Remove from the member list only"}
+                  data-tip={member.removeRefusal ?? "Remove from the member list only"}
                 >
                   Remove
                 </button>
@@ -2395,7 +2390,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
                   disabled={Boolean(member.regrantRefusal)}
                   onClick={() => regrantMutation.mutate(member.id)}
-                  title={
+                  data-tip={
                     member.regrantRefusal ??
                     "Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
                   }
@@ -2412,7 +2407,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       () => revokeMutation.mutate(member.id),
                     )
                   }
-                  title={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
+                  data-tip={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
                 >
                   Remove &amp; revoke
                 </button>
@@ -2463,7 +2458,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     </span>{" "}
                     <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
                   </span>
-                  <span className="shrink-0 text-ink-soft" title={e.at}>
+                  <span className="shrink-0 text-ink-soft" data-tip={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
                 </div>
@@ -2498,7 +2493,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       srvRemoveMutation.mutate(m.account),
                     )
                   }
-                  title="Remove them on the relay and from the workspace, then rotate the key"
+                  data-tip="Remove them on the relay and from the workspace, then rotate the key"
                 >
                   Remove
                 </button>
@@ -2649,7 +2644,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   style={fieldStyle}
                 />
                 <button
-                  className="mt-1 text-xs underline opacity-70 hover:opacity-100"
+                  className="mt-1 text-xs underline text-ink-soft hover:text-ink"
                   onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
                 >
                   Copy again
@@ -2682,7 +2677,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
         <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
         <span
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider"
           style={{
             background: "color-mix(in srgb, var(--ligus-accent-cool) 15%, transparent)",
             color: "var(--ligus-accent-ink)",
@@ -2696,7 +2691,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
       </span>
     </div>
     {gateways && (
-      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} title="Model gateways this host's operator lists">
+      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} data-tip="Model gateways this host's operator lists">
         Gateways: {gateways}
       </div>
     )}
@@ -2776,7 +2771,7 @@ function AgentTargetPicker({
 function TargetBadge({ agentIds, agents }: { agentIds: string[]; agents: WorkspaceAgentDto[] }) {
   return (
     <span
-      className="inline-block rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+      className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
       style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
     >
       {targetLabel(agentIds, agents)}
@@ -2832,7 +2827,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
               <div className="flex gap-2 text-xs">
-                <button className="opacity-70 hover:opacity-100" onClick={() => previewVaultMutation.mutate(vault.url)}>
+                <button className="text-ink-soft hover:text-ink" onClick={() => previewVaultMutation.mutate(vault.url)}>
                   Preview
                 </button>
                 <button
@@ -3229,9 +3224,9 @@ export function SubtleSelectField({
     <label
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", opacity: disabled ? 0.6 : 1 }}
-      title={title}
+      data-tip={title}
     >
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
@@ -3254,7 +3249,7 @@ function ContextStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border py-2 text-center" style={panelStyle}>
       <div className="text-base font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
     </div>
   );
 }

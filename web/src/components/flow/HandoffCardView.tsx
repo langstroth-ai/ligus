@@ -64,7 +64,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
           className="inline-flex items-center gap-0.5 font-medium underline-offset-2 hover:underline"
           style={{ color: "var(--ligus-accent-ink)" }}
           onClick={() => setMissing(!revealHandoffReply(card))}
-          title={`Jump to @${card.toName}'s reply`}
+          data-tip={`Jump to @${card.toName}'s reply`}
         >
           Go to reply
         </button>
@@ -107,7 +107,7 @@ function ParcelList({ title, items, mono = false }: { title: string; items?: str
   if (!items?.length) return null;
   return (
     <div>
-      <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{title}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{title}</div>
       <ul className="ml-4 list-disc">
         {items.map((i) => (
           <li key={i} className={mono ? "font-mono text-[11px]" : undefined}>

@@ -58,6 +58,11 @@ the app data dir; the theme is stored locally per device.
   **obsidian is a true dark, monochrome theme** — a neutral near-black
   glass with an achromatic silver accent that stays dark regardless of
   the Mode toggle.
+- **Density** — how much room rows, cards and messages take:
+  **Compact** (shorter rows, tighter turns, a slightly smaller message
+  body), **Comfortable** (the default) or **Spacious** (taller rows, more
+  space between turns). Stored on this device. It is separate from zoom
+  (⌘+ and ⌘−), which scales everything.
 
 ## Folder & Git
 
@@ -144,6 +149,9 @@ LLM access is organized as a hierarchy:
   OpenAI-compatible endpoint); the CLI agents use their own login and need
   no key.
 - **Models (runtimes)** — a model on a provider (id + capability flags).
+  The model field offers the harness's own list and says when a typed
+  model isn't on a complete one; a chat can also pick its model from the
+  route pill ([Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model)).
   The add form includes an optional **Context window in tokens** — set
   it for Ollama/custom models whose window Ligus can't infer from the
   name; the [context planner](voice-and-slash.md) budgets against it.
@@ -264,7 +272,9 @@ Per-device settings for [Flow](flow.md):
 - **Check for updates** — reports the version you're on and checks
   whether a newer **signed** build is available, then installs it.  When an
   in-place update can't be applied, Ligus links to the release on GitHub
-  instead.
+  instead. A newer release also shows as **Update available** in the status
+  bar; click it for **Download**, **Later** (until the next launch) or
+  **Skip this version**.
 - **Export data** — download a copy of this device's local data.
 
 ## Diagnostics
@@ -300,11 +310,18 @@ developer to copy and run on the agent's box. Detached agents run on
 - **System tray / menu bar** — the tray icon's menu jumps straight to
   **Friends**, **Team & Relay Sync** (this page's Team sync tab), and
   **Settings**, besides showing/quitting the app.
-- **Focus mode** — collapse the sidebar with **⌘B** (or the panel button
-  at the bottom of the workspace rail) and the tools rail with **⌘J** (or
-  the **Tools** button in the chat header). Both persist across restarts,
-  and both live in the ⌘K palette as "Toggle sidebar" / "Toggle tools
-  rail".
+- **Focus mode** — **⌘.** (or "Focus mode" in the ⌘K palette) hides
+  everything but the chat and the message box: the workspace rail, the
+  sidebar, the tools rail and the status bar. A lockdown or dearth-mode
+  banner still shows. The chat header keeps one quiet "N need you" badge
+  that opens the [Inbox](inbox.md), and **Leave focus**. Press **⌘.** again
+  to bring everything back as it was; **⌘B**, **⌘J** or opening a pane also
+  leaves focus mode. Focus mode lasts until you leave it or restart.
+- **Sidebar and tools rail** — collapse the sidebar with **⌘B** (or the
+  panel button at the bottom of the workspace rail) and the tools rail with
+  **⌘J** (or the **Tools** button in the chat header). Both persist across
+  restarts, and both live in the ⌘K palette as "Toggle sidebar" / "Toggle
+  tools rail".
 - Workspace config round-trips through the TOML encoder, so hand-edited
   and GUI-edited `ligus.config.toml` files stay compatible (comments
   aren't preserved). See

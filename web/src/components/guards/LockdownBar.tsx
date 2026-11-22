@@ -79,7 +79,7 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
       icon={<IconAlertTriangle size={14} />}
       title="Locked down"
       detail={
-        <span title={`${why}. No network for agents; every proposal needs a human.`}>
+        <span data-tip={`${why}. No network for agents; every proposal needs a human.`}>
           {why}
           <span className="text-ink-soft"> · no network for agents · every proposal needs a human</span>
         </span>

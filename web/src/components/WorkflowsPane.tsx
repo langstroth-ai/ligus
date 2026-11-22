@@ -109,14 +109,14 @@ export function WorkflowStages({
             {n.dependsOn.length > 0 && <span className="text-ink-soft">after {n.dependsOn.join(", ")}</span>}
           </div>
           {n.kind === "gate" ? (
-            <div className="mt-0.5 opacity-70">
+            <div className="mt-0.5 text-ink-soft">
               {n.gateTitle}
               {" · "}
               {n.onReject === "routeTo" && n.rejectTarget ? `reject retries from ${n.rejectTarget}` : "reject halts the run"}
             </div>
           ) : (
             n.promptTemplate && (
-              <div className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words opacity-70">
+              <div className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words text-ink-soft">
                 {n.promptTemplate}
               </div>
             )
@@ -570,7 +570,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
           cursor: hasDetail ? "pointer" : "default",
         }}
         aria-expanded={hasDetail ? open : undefined}
-        title={`${node.name}: ${statusLabel(node.status)}`}
+        data-tip={`${node.name}: ${statusLabel(node.status)}`}
       >
         {node.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
         {node.name}
@@ -581,7 +581,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
           className="mt-1 max-w-full rounded-lg border p-2 text-[11px] leading-[1.5]"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-overlay)" }}
         >
-          <div className="opacity-55">
+          <div className="text-ink-soft">
             {statusLabel(node.status)}
             {node.attempts > 1 ? ` · ${node.attempts} attempts` : ""}
           </div>
@@ -591,7 +591,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
             </div>
           )}
           {node.outputExcerpt && (
-            <div className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words opacity-80">
+            <div className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-ink-soft">
               {node.outputExcerpt}
             </div>
           )}

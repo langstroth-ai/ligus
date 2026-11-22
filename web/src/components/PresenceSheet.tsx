@@ -52,7 +52,7 @@ export function PresenceSheet() {
   return (
     <Modal onClose={cancel} panelClassName="w-[420px] max-w-full rounded-2xl border p-5 space-y-3">
       <div role="dialog" aria-label="Confirm with passkey" className="space-y-3">
-        <h2 className="text-base font-semibold">{prompt.op === "create" ? "Create a passkey" : "Confirm with passkey"}</h2>
+        <h2 className="ligus-title">{prompt.op === "create" ? "Create a passkey" : "Confirm with passkey"}</h2>
         <p className="text-sm">{prompt.summary}</p>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-ink-soft">
           <dt>Event</dt>

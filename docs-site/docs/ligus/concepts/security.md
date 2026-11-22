@@ -460,9 +460,10 @@ device**.
   the workspace Owner applies them. `ligus doctor` prints the decision and
   why, `ligus doctor --sandbox` lists the grants and whether they are in
   force here.
-- **A change shows a notice.** When the signed grants differ from what this
-  device's user last saw, a notice says so (and whether this device applies
-  them) until they review it in Settings → Sandbox or dismiss it. Your own
+- **A change waits in the Inbox.** When the signed grants differ from what
+  this device's user last saw, the [Inbox](../features/inbox.md) says so (and
+  whether this device applies them) until they review it in Settings →
+  Sandbox or dismiss it. Your own
   change needs no notice.
 
 #### See the effective policy {#effective-policy}
@@ -776,8 +777,9 @@ id to carry a grant, so only the Owner's turns get a shell there).
 
 A repository can ship runtimes and MCP servers (`ligus.config.toml`,
 `.ligus/runtimes.json`, `.ligus/mcp-servers.json`): commands Ligus would run
-and endpoints it would send prompts to. They load **inert**. Ligus shows
-*"This workspace wants to run N commands (MCP servers, runtimes)"*; **Review**
+and endpoints it would send prompts to. They load **inert**. The
+[Inbox](../features/inbox.md) shows *"This workspace wants to run N
+commands"*; **Review**
 lists each exact command line and the file it came from, and you enable
 items one by one or **Trust this workspace** for all current ones.
 

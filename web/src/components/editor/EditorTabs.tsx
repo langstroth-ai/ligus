@@ -38,7 +38,7 @@ export function EditorTabs() {
             key={t.path}
             role="tab"
             aria-selected={active}
-            title={t.path}
+            data-tip={t.path}
             onMouseDown={(e) => onAuxClick(e, t.path)}
             onClick={() => editorStore.setActive(t.path)}
             className="group flex min-w-0 cursor-pointer select-none items-center gap-1.5 border-r px-3 py-1.5 text-xs transition-colors"
@@ -51,7 +51,7 @@ export function EditorTabs() {
                 : undefined,
             }}
           >
-            <span className="shrink-0 opacity-60">
+            <span className="shrink-0 text-ink-soft">
               <IconFile size={13} />
             </span>
             <span className="max-w-[14rem] truncate font-mono">{baseName(t.path)}</span>
@@ -71,9 +71,8 @@ export function EditorTabs() {
                   editorStore.closeTab(t.path);
                 }}
                 className={`absolute inset-0 flex items-center justify-center rounded transition-opacity hover:bg-[color:var(--ligus-overlay)] ${
-                  t.dirty ? "opacity-0 group-hover:opacity-100" : "opacity-50 group-hover:opacity-100"
+                  t.dirty ? "opacity-0 group-hover:opacity-100" : "text-ink-soft group-hover:text-ink"
                 }`}
-                style={{ color: "var(--ligus-ink)" }}
                 tabIndex={active ? 0 : -1}
               >
                 <IconX size={12} />

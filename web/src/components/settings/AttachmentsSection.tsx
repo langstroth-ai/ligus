@@ -59,7 +59,7 @@ export function AttachmentsSection() {
   if (r.localOnly) {
     return (
       <Section title="File attachments">
-        <p className="text-sm opacity-80">Files you attach in your own workspace stay on this device.</p>
+        <p className="text-sm text-ink-soft">Files you attach in your own workspace stay on this device.</p>
       </Section>
     );
   }
@@ -73,7 +73,7 @@ export function AttachmentsSection() {
   return (
     <>
       <Section title="File attachments">
-        <p className="mb-3 text-sm opacity-80">
+        <p className="mb-3 text-sm text-ink-soft">
           Shared files are end-to-end encrypted, so the relay can't scan them: every check happens on members' devices.
           Nothing opens automatically; risky files need a second confirmation and are marked as downloaded.
           {edit ? " Changes need your passkey." : " Only an Admin can change these."}
@@ -147,9 +147,9 @@ export function AttachmentsSection() {
         </fieldset>
       </Section>
       <Section title="Blocked files">
-        <p className="mb-2 text-sm opacity-80">Files with these SHA-256 hashes are refused when shared and when downloaded, wherever they were shared.</p>
+        <p className="mb-2 text-sm text-ink-soft">Files with these SHA-256 hashes are refused when shared and when downloaded, wherever they were shared.</p>
         <ul className="mb-2 flex flex-col gap-1 font-mono text-xs">
-          {r.blocked.length === 0 && <li className="opacity-60">None</li>}
+          {r.blocked.length === 0 && <li className="text-ink-soft">None</li>}
           {r.blocked.map((h) => (
             <li key={h} className="flex items-center gap-2">
               <span className="truncate">{h}</span>

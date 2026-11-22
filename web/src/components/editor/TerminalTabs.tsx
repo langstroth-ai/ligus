@@ -44,7 +44,7 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
               type="button"
               className="max-w-[10rem] truncate"
               onClick={() => select(t.id)}
-              title={t.title}
+              data-tip={t.title}
             >
               {t.title}
             </button>
@@ -52,7 +52,7 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
               <button
                 type="button"
                 aria-label={`Close ${t.title}`}
-                title="Close terminal"
+                data-tip="Close terminal"
                 className="inline-flex h-4 w-4 items-center justify-center rounded opacity-0 transition-opacity hover:bg-[color:var(--ligus-overlay)] group-hover:opacity-70"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -69,9 +69,8 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
         <button
           type="button"
           aria-label="New terminal"
-          title="New terminal"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
-          style={{ color: "var(--ligus-ink)" }}
+          data-tip="New terminal"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-ink-soft transition-all hover:bg-[color:var(--ligus-overlay)] hover:text-ink"
           onClick={onNew}
         >
           <IconPlus size={14} />

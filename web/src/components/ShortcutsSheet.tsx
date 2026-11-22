@@ -1,5 +1,6 @@
 import { Modal } from "@/components/ui";
 import { SHORTCUTS, keyLabel, type ShortcutGroup } from "@/lib/shortcuts";
+import { Kbd } from "@/components/Tooltip";
 
 const GROUPS: ShortcutGroup[] = ["General", "Chat", "Panes", "View", "Code"];
 
@@ -15,7 +16,7 @@ export function ShortcutsSheet({ onClose, mac }: { onClose: () => void; mac?: bo
       panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <div className="flex items-center justify-between border-b px-5 py-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+        <h2 className="ligus-title">Keyboard shortcuts</h2>
         <button
           type="button"
           onClick={onClose}
@@ -31,18 +32,13 @@ export function ShortcutsSheet({ onClose, mac }: { onClose: () => void; mac?: bo
           if (rows.length === 0) return null;
           return (
             <section key={g} aria-label={g}>
-              <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-soft">{g}</h3>
+              <h3 className="ligus-cap mb-1.5">{g}</h3>
               <dl className="flex flex-col gap-1">
                 {rows.map((s) => (
                   <div key={`${s.id}-${s.keys}`} className="flex items-baseline justify-between gap-3 text-[13px]">
                     <dt className="min-w-0">{s.label}</dt>
                     <dd className="shrink-0">
-                      <kbd
-                        className="rounded-md border px-1.5 py-0.5 font-sans text-[11px] tabular-nums"
-                        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-                      >
-                        {keyLabel(s.keys, mac)}
-                      </kbd>
+                      <Kbd>{keyLabel(s.keys, mac)}</Kbd>
                     </dd>
                   </div>
                 ))}

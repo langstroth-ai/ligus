@@ -105,7 +105,7 @@ export function DialogHost() {
       panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       {req.title && <div className="text-base font-semibold">{req.title}</div>}
-      <div className={`text-sm ${req.title ? "mt-1 opacity-70" : "font-medium"}`}>{req.message}</div>
+      <div className={`text-sm ${req.title ? "mt-1 text-ink-soft" : "font-medium"}`}>{req.message}</div>
 
       {req.kind === "prompt" && (
         <input

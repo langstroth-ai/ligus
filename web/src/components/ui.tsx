@@ -45,11 +45,20 @@ export function Button({
   variant = "ghost",
   size = "sm",
   className = "",
+  title,
+  kbd,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+  size?: Size;
+  /// Shown as a tooltip (see Tooltip.tsx), with `kbd` as its shortcut.
+  kbd?: string;
+}) {
   return (
     <button
       {...rest}
+      data-tip={title}
+      data-tip-kbd={title ? kbd : undefined}
       className={`ligus-btn ${BUTTON_VARIANT_CLASS[variant]} inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl font-medium ${SIZE[size]} ${className}`}
     />
   );
@@ -61,20 +70,27 @@ export function IconButton({
   label,
   size = 32,
   className = "",
+  title,
+  kbd,
   children,
   ...rest
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label"> & {
   label: string;
   size?: number;
+  /// The tooltip, when it should say more than the label.
+  title?: string;
+  /// A shortcut shown in the tooltip ("⌘J").
+  kbd?: string;
   children: ReactNode;
 }) {
   return (
     <button
       {...rest}
       aria-label={label}
-      title={rest.title ?? label}
-      className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 hover:opacity-100 disabled:opacity-30 ${className}`}
-      style={{ width: size, height: size, color: "var(--ligus-ink)", ...rest.style }}
+      data-tip={title ?? label}
+      data-tip-kbd={kbd}
+      className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg text-ink-soft hover:text-ink disabled:opacity-30 ${className}`}
+      style={{ width: size, height: size, ...rest.style }}
     >
       {children}
     </button>
@@ -97,7 +113,7 @@ export function Section({
   return (
     <section className={`mb-5 ${className}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-[13px] font-semibold tracking-[-0.01em] opacity-90">{title}</h2>
+        <h2 className="ligus-section">{title}</h2>
         {action}
       </div>
       <div className="space-y-2.5">{children}</div>
@@ -139,6 +155,7 @@ export function Modal({
   overlayStyle,
   panelClassName = "",
   panelStyle,
+  labelledBy,
   children,
 }: {
   onClose: () => void;
@@ -146,6 +163,8 @@ export function Modal({
   overlayStyle?: CSSProperties;
   panelClassName?: string;
   panelStyle?: CSSProperties;
+  /// The id of the element that names the dialog (its title).
+  labelledBy?: string;
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -211,6 +230,7 @@ export function Modal({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={labelledBy}
         tabIndex={-1}
         className={panelClassName}
         style={{ outline: "none", ...panelStyle }}
@@ -290,8 +310,8 @@ export function NavRow({
   return (
     <button
       onClick={onClick}
-      title={title}
-      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+      data-tip={title}
+      className="flex h-[var(--row-h)] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={active ? { background: SELECT_TINT } : undefined}
     >
       {icon != null && (
@@ -324,7 +344,7 @@ export function NavRow({
       {typeof count === "number" &&
         (attn ? (
           <span
-            className="shrink-0 rounded-full px-1.5 text-[10.5px] font-bold tabular-nums"
+            className="shrink-0 rounded-full px-1.5 text-[11px] font-bold tabular-nums"
             style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
           >
             {count}
@@ -342,12 +362,7 @@ export function NavRow({
 export function SectionCap({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex h-[26px] items-center justify-between px-2.5">
-      <span
-        className="text-[11px] font-bold uppercase"
-        style={{ letterSpacing: "0.08em", color: "var(--ligus-ink-soft)" }}
-      >
-        {children}
-      </span>
+      <span className="ligus-cap">{children}</span>
       {action}
     </div>
   );
@@ -373,7 +388,7 @@ export function SessionStateChip({ state, compact = false }: { state: SessionSta
   return (
     <span
       data-session-state={state}
-      title={meta.describe}
+      data-tip={meta.describe}
       className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium"
       style={{ color: meta.ink }}
     >
@@ -460,7 +475,7 @@ export function ChatRow({
             onOptions(e.currentTarget);
           }}
           aria-label="Chat options"
-          title="Chat options"
+          data-tip="Chat options"
           className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md opacity-0 transition-opacity hover:bg-[color:var(--ligus-overlay)] group-hover/crow:opacity-100"
           style={{ color: "var(--ligus-ink-soft)" }}
         >
@@ -543,7 +558,7 @@ export function PermissionPicker({
             key={p.id}
             type="button"
             disabled={disabled || !onChange}
-            title={p.id === "auto" ? "Runs without asking" : p.id === "ask" ? "Prompts each call" : "Never offered to the model"}
+            data-tip={p.id === "auto" ? "Runs without asking" : p.id === "ask" ? "Prompts each call" : "Never offered to the model"}
             onClick={() => onChange?.(p.id)}
             className={`rounded-md font-medium transition-colors ${compact ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}
             style={active ? p.on : { color: "var(--ligus-ink-soft)", background: "transparent" }}
@@ -692,8 +707,8 @@ export function Badge({
 }) {
   return (
     <span
-      title={title}
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[10.5px] font-semibold leading-4 tracking-[0.02em] ${className}`}
+      data-tip={title}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[11px] font-semibold leading-4 tracking-[0.02em] ${className}`}
       style={TONE_STYLE[tone]}
     >
       {icon && (
@@ -768,7 +783,7 @@ export function LinkButton({
   return (
     <button
       type="button"
-      title={title}
+      data-tip={title}
       disabled={disabled}
       onClick={onClick}
       className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline active:opacity-70 disabled:opacity-50"
@@ -786,7 +801,7 @@ export function StatusDot({ on, label, size = 8 }: { on: boolean; label: string;
     <span
       role="img"
       aria-label={label}
-      title={label}
+      data-tip={label}
       className="inline-block shrink-0 rounded-full"
       style={{
         width: size,
@@ -1045,7 +1060,7 @@ export function PopoverItem({
     <button
       role="menuitem"
       aria-disabled={disabled || undefined}
-      title={title}
+      data-tip={title}
       onMouseEnter={onHover}
       onMouseDown={(e) => {
         e.preventDefault();

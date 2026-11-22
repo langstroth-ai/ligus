@@ -1341,7 +1341,6 @@ fn unseen_recruits_for_me(state: &AppState, view: &WorkspaceView, now: i64) -> V
 /// reviewer-recruit notifications for this device's user.
 pub(crate) async fn run_tick(app: AppHandle) {
     use tauri::Manager;
-    use tauri_plugin_notification::NotificationExt;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         let state = app.state::<AppState>();
@@ -1350,12 +1349,8 @@ pub(crate) async fn run_tick(app: AppHandle) {
         let now = flow::now_ms();
         auto_pickup(&app, &state).await;
         for r in unseen_recruits_for_me(&state, &view, now) {
-            let _ = app
-                .notification()
-                .builder()
-                .title("Ligus")
-                .body(format!("The review queue needs you: {} proposal(s) waiting", r.queue_len))
-                .show();
+            let line = if r.queue_len == 1 { "A proposal waits on your vote".to_string() } else { format!("{} proposals wait on your vote", r.queue_len) };
+            crate::notices::post(&app, crate::notices::Notice::new(crate::notices::NoticeKind::Vote, None, line));
         }
     }
 }

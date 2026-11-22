@@ -23,8 +23,9 @@ Adding or removing a repository is an Admin's act, confirmed with a passkey
 (rules v2). Renaming it or changing its default branch needs no passkey.
 
 - **From a folder you bound.** Link a folder to the workspace (**Choose
-  folder…**). If its remote isn't a workspace repository yet, an Admin sees
-  "This folder is github.com/acme/wefit. Add WeFit to the workspace?"
+  folder…**). If its remote isn't a workspace repository yet, an Admin sees,
+  under Suggestions in the [Inbox](inbox.md), "This folder is
+  github.com/acme/wefit. Add WeFit to the workspace?"
   **Add** adds it and records the folder as this device's checkout. Others see
   "Ask an admin to add WeFit".
 - **In Settings → Repositories**, paste a remote URL in any git form or a

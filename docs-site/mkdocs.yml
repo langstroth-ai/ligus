@@ -205,6 +205,7 @@ nav:
           - Multi-agent collaboration: ligus/features/multi-agent.md
           - Who can use your agents: ligus/features/agent-access.md
           - Exploring options (proposal sets): ligus/features/proposal-sets.md
+          - Inbox: ligus/features/inbox.md
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
