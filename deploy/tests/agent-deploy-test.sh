@@ -111,7 +111,7 @@ for s in "$K8S" "$LOCAL"; do
   run "$TMP/top2" "$s" help
   if [ "$RC" = 0 ] && cmp -s "$TMP/top" "$TMP/top2"; then pass "$n help = --help"; else fail "$n help differs from --help"; fi
   missing=""
-  for hd in SYNOPSIS COMMANDS FLAGS 'ONE-SHOT SEQUENCE' EXAMPLES ENVIRONMENT 'EXIT CODES' 'SEE ALSO' 'ligus help agents-guide'; do
+  for hd in NAME USAGE COMMANDS FLAGS 'ONE-SHOT SEQUENCE' EXAMPLES ENVIRONMENT 'EXIT CODES' 'SEE ALSO' 'ligus help agents-guide'; do
     grep -qF -- "$hd" "$TMP/top" || missing="$missing [$hd]"
   done
   for c in $cmds; do has_word "$c" "$TMP/top" || missing="$missing cmd:$c"; done
@@ -122,7 +122,7 @@ for s in "$K8S" "$LOCAL"; do
     run "$TMP/hc1" "$s" help "$c"; rc1=$RC
     run "$TMP/hc2" "$s" "$c" --help; rc2=$RC
     missing=""
-    for hd in SYNOPSIS FLAGS EXAMPLES 'EXIT CODES' 'SEE ALSO' "$n help <command>" 'ligus help '; do
+    for hd in NAME USAGE FLAGS EXAMPLES ENVIRONMENT 'EXIT CODES' 'SEE ALSO' "$n help <command>" 'ligus help '; do
       grep -qF -- "$hd" "$TMP/hc1" || missing="$missing [$hd]"
     done
     has_word "$c" "$TMP/hc1" || missing="$missing [$c]"
@@ -131,6 +131,18 @@ for s in "$K8S" "$LOCAL"; do
       pass "$n help $c / $c --help"
     else fail "$n help $c: rc $rc1/$rc2, lacks:$missing"; fi
   done
+  # One section order for every Ligus tool, in each command's help.
+  order_bad=""
+  for c in $cmds; do
+    run "$TMP/ho" "$s" help "$c"
+    last=0
+    for hd in NAME USAGE FLAGS EXAMPLES ENVIRONMENT 'EXIT CODES' 'SEE ALSO'; do
+      ln=$(grep -nx -- "$hd" "$TMP/ho" | head -1 | cut -d: -f1)
+      if [ -z "$ln" ] || [ "$ln" -lt "$last" ]; then order_bad="$order_bad $c:$hd"; break; fi
+      last=$ln
+    done
+  done
+  if [ -z "$order_bad" ]; then pass "$n: every command's help keeps the shared section order"; else fail "$n: section order:$order_bad"; fi
   run "$TMP/hx" "$s" help no-such-command
   if [ "$RC" = 2 ] && [ ! -s "$TMP/hx" ]; then pass "$n help <unknown> is a usage error"; else fail "$n help <unknown>: rc $RC"; fi
 done
