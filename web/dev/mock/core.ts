@@ -5,6 +5,9 @@
 // Scenario knobs (URL query): ?scenario=onboarding|empty|default
 //   &dearth=1 (dearth mode on)  &lockdown=1 (open chat locked down)
 //   &loading=1 (every call hangs) &error=1 (every list call fails)
+//   &runtime=rt-copilot (the open chat's runtime) &chatmodel=gpt-5.3-codex
+//   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
+//   model failed as unavailable: the composer's one-line note)
 import * as fx from "./fixtures";
 
 const params = new URLSearchParams(window.location.search);
@@ -14,10 +17,18 @@ const flags = {
   lockdown: params.get("lockdown") === "1",
   loading: params.get("loading") === "1",
   error: params.get("error") === "1",
+  modelProblem: params.get("modelproblem") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
 };
 
 type Args = Record<string, unknown> | undefined;
+
+// The chat model picker's state (per runtime, like the device's settings).
+const chatModels: Record<string, string> = params.get("chatmodel") ? { "rt-copilot": params.get("chatmodel")! } : {};
+const chatRuntimes: Record<string, string> = {};
+function chatRuntime(sid: string): string {
+  return chatRuntimes[sid] ?? params.get("runtime") ?? "rt-claude";
+}
 
 function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
@@ -35,7 +46,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_channels":
       return flags.empty ? [] : fx.channels;
     case "get_chat":
-      return flags.empty ? null : fx.chatSession(sid);
+      return flags.empty ? null : { ...fx.chatSession(sid), runtimeId: chatRuntime(sid) };
     case "get_context_telemetry":
       return flags.empty ? null : fx.telemetry(sid);
     case "sync_status":
@@ -230,6 +241,25 @@ function handle(cmd: string, args: Args): unknown {
       return { contacts: "on", invites: [] };
     case "list_schedules":
       return fx.schedules;
+    case "list_runtime_models": {
+      const rid = String(args?.runtimeId ?? "");
+      const l = fx.runtimeModels[rid] ?? { models: [], source: "none", complete: false, note: "This harness has no model list; type a model name." };
+      return { ...l, unavailable: flags.modelProblem && rid === "rt-copilot" ? ["claude-opus-4.8"] : [] };
+    }
+    case "get_chat_model":
+      return { runtimeId: chatRuntime(sid), model: chatModels[chatRuntime(sid)] ?? null, runtimeModel: "", choices: { ...chatModels }, appliesHere: true };
+    case "set_chat_model": {
+      const rid = String(args?.runtimeId ?? "");
+      const m = (args?.model as string | null)?.trim();
+      if (m) chatModels[rid] = m;
+      else delete chatModels[rid];
+      return null;
+    }
+    case "set_chat_runtime":
+      chatRuntimes[sid] = String(args?.runtimeId ?? "");
+      return null;
+    case "chat_model_problem":
+      return flags.modelProblem ? { runtimeId: "rt-copilot", model: "claude-opus-4.8", reason: "unavailable" } : null;
     case "list_claude_code_models":
       return [{ value: "default", label: "Default", description: "Recommended" }, { value: "opus", label: "Opus", description: null }];
     case "get_claude_code_model":
