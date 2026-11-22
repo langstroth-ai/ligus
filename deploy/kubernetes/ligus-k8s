@@ -49,7 +49,10 @@ help_common_flags() {
   --release NAME           the Helm release (default: $LIGUS_RELEASE, else ligus)
   --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
                            progress always goes to stderr
+  --color WHEN             auto, always or never: colour [FAIL] and [WARN] on stderr (default
+                           auto: only on a terminal, and never when NO_COLOR is set)
   -h, --help               print this command's help and exit 0
+  A flag's value is the next argument or follows an equals sign (--release r or --release=r).
 EOF
 }
 
@@ -89,7 +92,7 @@ FLAGS
   --image REPO:TAG         the Ligus image for the Landlock probe (ligus doctor --turn-test in a
                            restricted pod); without it that probe is skipped. Also accepted:
                            --image-repository R [--image-tag T | --image-digest sha256:...]
-                           (tag default 0.1.0 when only a repository is given)
+                           (tag default 0.1.1 when only a repository is given)
   --probe-image REF        the image for the probe pods, with httpd and wget (default busybox:1.37)
   --storage-class NAME     check this StorageClass instead of the default one
 EOF
@@ -369,6 +372,8 @@ ENVIRONMENT
   LIGUS_PROBE_NS_PREFIX    preflight --probe's namespace prefix (default ligus-preflight-)
   TMPDIR                   where install writes its values file and rendered manifest
   KUBECONFIG               read by kubectl and helm as usual
+  NO_COLOR                 set: no colour on stderr (--color always still colours)
+  CLICOLOR_FORCE           set (not 0): colour on stderr even when it isn't a terminal
 
 EXIT CODES
   0  done (warnings allowed)
@@ -412,7 +417,9 @@ PROBE_IMAGE=busybox:1.37 REPLACE=0
 need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
   case $1 in
+    --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;  # --flag=value is --flag value
     --json) AC_JSON=1 ;;
+    --color) need "$@"; ac_set_color "$2"; shift ;;
     --context) need "$@"; CTX=$2; shift ;;
     --namespace|-n) need "$@"; NS=$2; shift ;;
     --release) need "$@"; REL=$2; shift ;;
@@ -622,7 +629,7 @@ EOF
   # Landlock: run ligus doctor in a restricted pod, as the chart's init container does.
   local img=""
   if [ -n "$IMG_REPO" ]; then
-    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-0.1.0}"
+    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-0.1.1}"
   fi
   if [ -z "$img" ]; then
     ac_check sandbox.landlock.probe skip "no Ligus image given, so the Landlock probe did not run" "rerun with --probe --image <repository:tag> (the image you will install)"

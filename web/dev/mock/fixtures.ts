@@ -357,6 +357,17 @@ export const workflowRuns = [
   },
 ];
 
+// What each chat waits on (list_chat_attention): the open chat has a proposal
+// for you, the varroa chat's agent asked a question.
+export const chatAttention = [
+  {
+    sessionId: "chat-1",
+    openAsks: 0,
+    paused: false,
+    proposals: [{ id: "p1", title: "Cold-day floor for inspections", status: "open", needsMe: true }],
+  },
+  { sessionId: "chat-3", openAsks: 1, paused: false, proposals: [] },
+];
 export const queuedWork = [{ sessionId: "chat-2", chatTitle: "Relay reconnect backoff", agentId: "ag-builder", agentName: "builder", hostId: "h-box", hostLabel: "serve box", hostStatus: "offline" }];
 export const hosts = [
   { id: "h-mac", kind: "desktop", label: "MacBook Pro", online: true, lastSeen: iso(0) },

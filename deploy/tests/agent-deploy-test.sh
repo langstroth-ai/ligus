@@ -129,6 +129,63 @@ run "$TMP/u2" "$K8S" install --json --namespace x; check_json "ligus-k8s install
 run "$TMP/u3" "$K8S" install --json --namespace x --scenario team-external-relay; check_json "ligus-k8s external relay without --relay-url" "$TMP/u3" 2 "$RC"
 run "$TMP/u4" "$LOCAL" start --json --data-dir "$TMP/d"; check_json "ligus-local start without --role" "$TMP/u4" 2 "$RC"
 
+# --flag=value reads the same as --flag value.
+run "$TMP/eq1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
+  "$LOCAL" verify --json --role=serve --data-dir="$TMP/vd" --env-file="$TMP/ve"
+check_json "ligus-local verify --flag=value" "$TMP/eq1" 1 "$RC" process
+if cmp -s "$TMP/v1" "$TMP/eq1"; then pass "--flag=value gives the same result as --flag value"; else fail "--flag=value differs from --flag value"; fi
+run "$TMP/eq2" "$K8S" install --json --context=x --namespace=x --scenario=team-external-relay
+check_json "ligus-k8s --flag=value (external relay without --relay-url)" "$TMP/eq2" 2 "$RC"
+if grep -q 'needs --relay-url' "$TMP/eq2"; then pass "ligus-k8s reads --scenario=VALUE"; else fail "ligus-k8s --scenario=VALUE not read: $(cat "$TMP/eq2")"; fi
+
+# Colour: [FAIL] and [WARN] are coloured only on a terminal (or when asked),
+# never with NO_COLOR or --color never, and never on stdout.
+marks() { # env... -> stderr of one fail, one warn and one pass check
+  # shellcheck disable=SC2016,SC2069  # $1 expands in the inner bash; only stderr is kept
+  env -u NO_COLOR -u CLICOLOR_FORCE "$@" bash -c '. "$1"; [ -n "${COLOR:-}" ] && ac_set_color "$COLOR"; ac_check a fail x fix; ac_check b warn y; ac_check c pass z' _ "$ROOT/deploy/lib/agent-common.sh" 2>&1 >/dev/null
+}
+esc=$(printf '\033')
+has_esc() { case $1 in *"$esc"*) return 0 ;; esac; return 1; }
+if ! has_esc "$(marks)"; then pass "no colour when stderr isn't a terminal"; else fail "colour on a pipe"; fi
+out=$(marks COLOR=always)
+case $out in *"${esc}[1;31m[FAIL]${esc}[0m a: x"*"${esc}[33m[WARN]${esc}[0m b: y"*) red_yellow=1 ;; *) red_yellow=0 ;; esac
+if [ "$red_yellow" = 1 ] && ! has_esc "$(printf '%s\n' "$out" | grep "c: z")"; then pass "--color always colours FAIL red and WARN yellow, not ok"; else fail "--color always: $out"; fi
+if has_esc "$(marks CLICOLOR_FORCE=1)"; then pass "CLICOLOR_FORCE colours a pipe"; else fail "CLICOLOR_FORCE"; fi
+if ! has_esc "$(marks CLICOLOR_FORCE=1 NO_COLOR=1)"; then pass "NO_COLOR wins over CLICOLOR_FORCE"; else fail "NO_COLOR with CLICOLOR_FORCE"; fi
+if ! has_esc "$(marks CLICOLOR_FORCE=1 COLOR=never)"; then pass "--color never wins over CLICOLOR_FORCE"; else fail "--color never"; fi
+# On a terminal (a pseudo-terminal from python): colour unless NO_COLOR.
+on_tty() { # NO_COLOR value ("" = unset) -> what the terminal showed
+  python3 -I - "$ROOT/deploy/lib/agent-common.sh" "$1" <<'PY'
+import os, pty, sys
+lib, no_color = sys.argv[1], sys.argv[2]
+env = {k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "CLICOLOR_FORCE")}
+if no_color:
+    env["NO_COLOR"] = no_color
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvpe("bash", ["bash", "-c", '. "$1"; ac_check a fail x fix', "_", lib], env)
+out = b""
+while True:
+    try:
+        chunk = os.read(fd, 1024)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+os.waitpid(pid, 0)
+sys.stdout.write(out.decode(errors="replace"))
+PY
+}
+if has_esc "$(on_tty "")"; then pass "colour on a terminal"; else fail "no colour on a terminal"; fi
+if ! has_esc "$(on_tty 1)"; then pass "NO_COLOR turns colour off on a terminal"; else fail "NO_COLOR on a terminal"; fi
+run "$TMP/c1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
+  "$LOCAL" verify --json --color=always --role serve --data-dir "$TMP/vd" --env-file "$TMP/ve"
+check_json "ligus-local --color=always --json" "$TMP/c1" 1 "$RC" process
+if has_esc "$(cat "$TMP/c1.err")" && ! has_esc "$(cat "$TMP/c1")"; then pass "--color always colours stderr, never the JSON"; else fail "--color always: stderr or stdout wrong"; fi
+run "$TMP/c2" "$K8S" verify --json --color sometimes --context x -n x
+check_json "ligus-k8s --color with a bad value" "$TMP/c2" 2 "$RC"
+
 # An unreachable context: exit 3, says what to do
 if command -v kubectl >/dev/null 2>&1 && command -v helm >/dev/null 2>&1; then
   run "$TMP/p1" env KUBECONFIG="$TMP/empty-kubeconfig" "$K8S" preflight --json --context agentdeploy-does-not-exist

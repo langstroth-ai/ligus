@@ -1,0 +1,378 @@
+# Promote a published prerelease to Latest, from GitHub:
+#
+#   gh workflow run promote-release.yml --repo langstroth-ai/ligus -f version=0.1.1
+#   gh workflow run promote-release.yml --repo langstroth-ai/ligus -f version=0.1.1 -f dry-run=true
+#
+# cut-release.yml (through release.yml) leaves a release published as a
+# PRERELEASE with placeholder notes, and the tap bumped. This workflow is the
+# last step (docs/packaging.md, "How to cut a release"):
+#
+# job `promote`
+#   1. checks that whoever started (or re-ran) it is a repository admin, and
+#      that it was started from main (the notes are read from main);
+#   2. checks the release: the tag v<version> exists, its release is
+#      published (not a draft), and it is either still a prerelease or
+#      already Latest (then nothing changes but the title and notes, if they
+#      differ); a version older than the current Latest is refused;
+#   3. checks every asset again (scripts/check-release-assets.py: each CLI
+#      binary with its matching .sha256, the DMG, finished uploads;
+#      scripts/verify-latest-json.py: latest.json covers macOS, Windows and
+#      Linux with signed bundles on this release);
+#   4. checks the Homebrew tap: the cask names this version with the DMG's
+#      sha256, and the formula points at this tag for all four CLI targets;
+#   5. checks the notes file (docs/release-notes/v<version>.md by default):
+#      it exists, mentions the version and has a summary
+#      (scripts/release-version-json.py summary);
+#   6. sets the title "Ligus v<version>" and the notes, and marks it a full
+#      release and Latest (gh release edit ... --prerelease=false --latest).
+#
+# job `version-json` (only after `promote`, and only once the GitHub API says
+# the release IS Latest) moves docs-site/docs/version.json forward to the tag
+# (never back: release-version-json.py update), which shipped desktops read
+# from the live docs site to show "update available". main takes changes only
+# through the merge queue, so it pushes the branch
+# release-bot/version-json-v<version>, opens a PR and enables auto-merge.
+# Events caused by GITHUB_TOKEN start no workflows, so the PR's own
+# pull_request run of ci.yml never happens; workflow_dispatch is the exception,
+# so the job dispatches ci.yml on the branch, which reports ci-ok on the PR's
+# head commit. If the repository does not let GitHub Actions create pull
+# requests, or the queue never starts CI for the entry, the job (or the docs)
+# says what the owner does by hand.
+#
+# dry-run=true runs every check and prints what would change, and changes
+# nothing. Re-running is safe: a release that is already Latest is left as
+# it is, version.json never moves backwards, and an existing branch or PR is
+# reused.
+name: Promote a release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote, without the v (e.g. 0.1.1)"
+        required: true
+      notes:
+        description: "Notes file (default: docs/release-notes/v<version>.md)"
+        required: false
+        default: ""
+      dry-run:
+        description: "Run every check and print what would change, change nothing"
+        required: false
+        type: boolean
+        default: false
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: promote-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # edit the release (title, notes, prerelease, Latest)
+    outputs:
+      tag: ${{ steps.inputs.outputs.tag }}
+      notes: ${{ steps.inputs.outputs.notes }}
+    steps:
+      # workflow_dispatch already needs write access; releasing needs admin.
+      # Both the original actor and whoever re-runs this attempt must be.
+      - name: Only repository admins can promote a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          for who in "$ACTOR" "$TRIGGERING_ACTOR"; do
+            perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$who/permission" --jq .permission)
+            if [ "$perm" != admin ]; then
+              echo "::error::$who has '$perm' permission on $GITHUB_REPOSITORY; promoting a release needs admin"
+              exit 1
+            fi
+          done
+
+      - name: Validate the inputs
+        id: inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::version '$VERSION' is not like 0.1.1 (no v prefix; a -suffix version stays a prerelease)"; exit 1; }
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::run it from main (the notes are read from the ref it runs on), not $GITHUB_REF"
+            exit 1
+          fi
+          notes="${NOTES:-docs/release-notes/v$VERSION.md}"
+          [[ "$notes" =~ ^docs/release-notes/[A-Za-z0-9._-]+\.md$ ]] || {
+            echo "::error::notes '$notes' must be a file under docs/release-notes/"; exit 1; }
+          { echo "tag=v$VERSION"; echo "notes=$notes"; } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The tag has a published release that may become Latest
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::tag $TAG does not exist; cut it with cut-release.yml first"
+            exit 1
+          fi
+          # The tags endpoint never returns drafts: a 404 means no published
+          # release (none, or still a draft).
+          if ! rel=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '"\(.id) \(.draft) \(.prerelease)"' 2>/dev/null); then
+            drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id") || drafts=""
+            if [ -n "$drafts" ]; then
+              echo "::error::$TAG is still a draft: its release run has not published it (see the release.yml run; docs/packaging.md, When a release run fails)"
+            else
+              echo "::error::$TAG has no release; cut-release.yml makes one"
+            fi
+            exit 1
+          fi
+          read -r id draft prerelease <<<"$rel"
+          [[ "$id" =~ ^[0-9]+$ ]] && [ "$draft" = false ] || { echo "::error::unexpected release state for $TAG: '$rel'"; exit 1; }
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "$latest" = "$TAG" ]; then
+            state=latest
+            echo "$TAG is already Latest."
+          else
+            if [ -n "$latest" ] && [ "$(python3 -I scripts/release-version-json.py compare "$latest" "$TAG")" = 1 ]; then
+              echo "::error::Latest is $latest, newer than $TAG; promoting $TAG would move Latest backwards"
+              exit 1
+            fi
+            state=promote
+            echo "$TAG (release $id, prerelease=$prerelease) can be promoted; Latest is now ${latest:-none}."
+          fi
+          { echo "id=$id"; echo "state=$state"; } >> "$GITHUB_OUTPUT"
+
+      # The same checks release.yml's publish job ran on the draft.
+      - name: Every asset is on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/check-release-assets.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG"
+          python3 -I scripts/verify-latest-json.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG" --platforms macos,windows,linux
+
+      # The public tap, read without a token. release.yml's cask and formula
+      # jobs (or update-cask.yml) bump it after publish.
+      - name: The Homebrew tap serves this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          tap=https://raw.githubusercontent.com/langstroth-ai/homebrew-ligus/main
+          cask=$(curl -fsSL --retry 3 "$tap/Casks/ligus-app.rb")
+          formula=$(curl -fsSL --retry 3 "$tap/Formula/ligus.rb")
+          fix="rerun the cask or formula job of the $TAG release run, or run update-cask.yml with -f tag=$TAG"
+          if ! grep -qx "  version \"$version\"" <<<"$cask"; then
+            echo "::error::the tap's Casks/ligus-app.rb is not at $version; $fix"
+            exit 1
+          fi
+          digest=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" --paginate \
+            --jq ".[] | select(.name == \"Ligus_${version}_aarch64.dmg\") | .digest // \"\"")
+          if [[ "$digest" == sha256:* ]] && ! grep -q "sha256 \"${digest#sha256:}\"" <<<"$cask"; then
+            echo "::error::the tap's Casks/ligus-app.rb sha256 is not the release DMG's ($digest); $fix"
+            exit 1
+          fi
+          n=$(grep -c "/releases/download/$TAG/ligus-" <<<"$formula" || true)
+          if [ "$n" != 4 ]; then
+            echo "::error::the tap's Formula/ligus.rb points at $TAG for $n of 4 CLI targets; $fix"
+            exit 1
+          fi
+          echo "The tap serves ligus-app and ligus $version."
+
+      - name: The notes are ready
+        id: notes
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ steps.inputs.outputs.notes }}
+        run: |
+          set -euo pipefail
+          if [ ! -s "$NOTES" ]; then
+            echo "::error::$NOTES is missing or empty on main; commit the release notes first (docs/packaging.md)"
+            exit 1
+          fi
+          grep -qF "$VERSION" "$NOTES" || { echo "::error::$NOTES never mentions $VERSION; is it the right file?"; exit 1; }
+          summary=$(python3 -I scripts/release-version-json.py summary "$NOTES")
+          echo "Summary for version.json: $summary"
+
+      - name: Set the title and notes, and make it Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+          NOTES: ${{ steps.inputs.outputs.notes }}
+          STATE: ${{ steps.release.outputs.state }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          title="Ligus $TAG"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .body > "$RUNNER_TEMP/body.md"
+          have_title=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .name)
+          same_text=false
+          # GitHub may store the body with CRLF and without the final newline.
+          if [ "$have_title" = "$title" ] && python3 -I -c 'import sys
+          a, b = (open(p, encoding="utf-8").read().replace("\r\n", "\n").strip() for p in sys.argv[1:])
+          sys.exit(a != b)' "$RUNNER_TEMP/body.md" "$NOTES"; then
+            same_text=true
+          fi
+          if [ "$STATE" = latest ] && [ "$same_text" = true ]; then
+            echo "$TAG is already Latest with this title and these notes; nothing to do."
+            exit 0
+          fi
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run: would run gh release edit $TAG --title \"$title\" --notes-file $NOTES --prerelease=false --latest"
+            [ "$same_text" = true ] || echo "Dry run: the title or notes would change."
+            exit 0
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$NOTES" --prerelease=false --latest
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [ "$latest" = "$TAG" ] || { echo "::error::GitHub reports Latest as $latest after the edit, not $TAG"; exit 1; }
+          echo "$TAG is Latest: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+
+  # Moves docs-site/docs/version.json to the tag through a PR (main is
+  # merge-queue only). Runs only after promote, re-checks that the release is
+  # Latest, and never moves the file backwards.
+  version-json:
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the release-bot/ branch (never main)
+      pull-requests: write # open the PR and enable auto-merge
+      actions: write # dispatch ci.yml on the branch (see the header)
+    steps:
+      # Again here: "Re-run failed jobs" reruns only this job.
+      - name: Only repository admins can promote a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          for who in "$ACTOR" "$TRIGGERING_ACTOR"; do
+            perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$who/permission" --jq .permission)
+            if [ "$perm" != admin ]; then
+              echo "::error::$who has '$perm' permission on $GITHUB_REPOSITORY; promoting a release needs admin"
+              exit 1
+            fi
+          done
+
+      - name: The release is Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.promote.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "$latest" != "$TAG" ]; then
+            if [ "$DRY_RUN" = true ]; then
+              echo "Dry run: Latest is ${latest:-none}; version.json would move only once $TAG is Latest."
+              exit 0
+            fi
+            echo "::error::Latest is ${latest:-none}, not $TAG; version.json follows Latest only"
+            exit 1
+          fi
+
+      # main, the branch the PR goes to. GITHUB_TOKEN credentials: the branch
+      # push below must not start workflows by itself (CI is dispatched).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Write version.json
+        id: file
+        env:
+          TAG: ${{ needs.promote.outputs.tag }}
+          NOTES: ${{ needs.promote.outputs.notes }}
+        run: |
+          set -euo pipefail
+          # The notes from the commit this run started on (main when it was
+          # dispatched); main may have moved since.
+          git fetch -q --depth=1 origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:$NOTES" > "$RUNNER_TEMP/notes.md"
+          result=$(python3 -I scripts/release-version-json.py update --file docs-site/docs/version.json --tag "$TAG" --notes-file "$RUNNER_TEMP/notes.md")
+          case "$result" in
+            updated) git diff ;;
+            current) echo "version.json on main already names $TAG." ;;
+            newer) echo "version.json on main already names a newer release; left alone." ;;
+            *) echo "::error::unexpected result '$result'"; exit 1 ;;
+          esac
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Open the version.json PR with auto-merge
+        if: steps.file.outputs.result == 'updated'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.promote.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          branch="release-bot/version-json-$TAG"
+          title="docs: version.json to $TAG"
+          compare="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run: would push $branch with the diff above, dispatch ci.yml on it, open \"$title\" and enable auto-merge."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -q -m "$title" -m "Promoted by $ACTOR with promote-release.yml (run $GITHUB_RUN_ID)." docs-site/docs/version.json
+          if [ -n "$(git ls-remote --heads origin "refs/heads/$branch")" ]; then
+            # A rerun: reuse the branch if it already carries this file.
+            git fetch -q origin "refs/heads/$branch"
+            if ! git diff --quiet HEAD FETCH_HEAD -- docs-site/docs/version.json; then
+              echo "::error::$branch exists with another version.json; delete it (git push origin :refs/heads/$branch) and re-run this job"
+              exit 1
+            fi
+            sha=$(git rev-parse FETCH_HEAD)
+          else
+            git push -q origin "HEAD:refs/heads/$branch"
+            sha=$(git rev-parse HEAD)
+          fi
+          # ci-ok on the head commit, from GitHub Actions: dispatch ci.yml
+          # unless a run already passed or is still going.
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?check_name=ci-ok&filter=latest&per_page=100" \
+            --jq '[.check_runs[] | select(.app.slug == "github-actions" and (.status != "completed" or .conclusion == "success"))] | length')
+          if [ "$runs" -lt 1 ]; then
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+            echo "Dispatched ci.yml on $branch for ci-ok."
+          fi
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            body="Moves docs-site/docs/version.json to $TAG, which is now Latest, so shipped desktops show the update. Opened by promote-release.yml (run $GITHUB_RUN_ID). CI was dispatched on the branch (a pull request opened with GITHUB_TOKEN starts no workflows)."
+            if ! url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "$title" --body "$body"); then
+              {
+                echo "::error::could not open the PR (is 'Allow GitHub Actions to create and approve pull requests' off?)."
+                echo "::error::Open it by hand: $compare, then: gh pr merge <number> --repo $GITHUB_REPOSITORY --auto"
+              } >&2
+              echo "version.json: open $compare and enable auto-merge (gh pr merge <number> --auto)." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            pr="${url##*/}"
+          fi
+          if ! gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto; then
+            echo "::error::could not enable auto-merge on #$pr; run: gh pr merge $pr --repo $GITHUB_REPOSITORY --auto"
+            exit 1
+          fi
+          echo "version.json PR: https://github.com/$GITHUB_REPOSITORY/pull/$pr (auto-merge on)" | tee -a "$GITHUB_STEP_SUMMARY"

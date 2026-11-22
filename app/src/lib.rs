@@ -55,6 +55,7 @@ mod attachments;
 mod memory_ui;
 mod repos_ui;
 mod turn_host;
+mod attention;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -16084,6 +16085,7 @@ pub fn run() {
             flow::flow_clear_route_stop,
             flow::flow_queue_report,
             agent_iface::list_asks,
+            attention::list_chat_attention,
             get_implement_plan,
             agent_iface::answer_ask,
             flow::flow_marks,

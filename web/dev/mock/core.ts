@@ -88,6 +88,8 @@ function handle(cmd: string, args: Args): unknown {
       return fx.workflowRuns;
     case "list_queued_work":
       return fx.queuedWork;
+    case "list_chat_attention":
+      return flags.empty ? [] : fx.chatAttention;
     case "list_workspace_hosts":
       return fx.hosts;
     case "list_mention_states":

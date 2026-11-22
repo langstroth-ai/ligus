@@ -33,6 +33,24 @@ export function openSettingsTab(tab: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));
 }
 
+/// "Add a phone" from anywhere (the palette): open Settings on Profile with
+/// the add-a-phone panel already open. The devices section reads the flag
+/// when it mounts and then clears it.
+let addPhoneRequestPending = false;
+
+export function requestAddPhone() {
+  addPhoneRequestPending = true;
+  openSettingsTab("account");
+}
+
+export function addPhoneRequested(): boolean {
+  return addPhoneRequestPending;
+}
+
+export function clearAddPhoneRequest() {
+  addPhoneRequestPending = false;
+}
+
 /// Open "Admit a box" for the active shared workspace from anywhere (e.g. the
 /// add-a-phone check when no box is reachable); App owns the dialog.
 export const ADMIT_BOX_EVENT = "ligus:admit-box";
