@@ -66,6 +66,7 @@ SEE ALSO
   ligus help security            the sandbox, keys and what never leaves the device
   ligus help env                 every environment variable ligus reads
   ligus help kubernetes          the same on a cluster: deploy/kubernetes/ligus-k8s
+  deploy/completions/ (zsh and fish completions for ligus-k8s and ligus-local)
   AGENTS.md (repository root), .claude/skills/ligus-deploy-local/SKILL.md,
   deploy/ligus-serve/README.md
 EOF

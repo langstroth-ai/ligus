@@ -90,3 +90,19 @@ starts at login and is kept running; `stop --launchd` removes it. See
 [Start at login on macOS](personal-fleet.md#start-at-login-on-macos). The desktop app itself is installed with Homebrew and opened by you:
 see [Install with Homebrew](../../ligus/getting-started/homebrew.md). More on the
 home box: [Personal fleet](personal-fleet.md).
+
+## Shell completions
+
+`deploy/completions/` has hand-written zsh and fish completions for both
+tools (commands, flags, scenarios and, for `--context`, your kube contexts):
+
+```sh
+# zsh: a directory on $fpath, then compinit
+mkdir -p ~/.zsh/completions && cp deploy/completions/_ligus-k8s deploy/completions/_ligus-local ~/.zsh/completions/
+# fish
+cp deploy/completions/ligus-k8s.fish deploy/completions/ligus-local.fish ~/.config/fish/completions/
+```
+
+They complete the tools by name, so put `deploy/kubernetes` and `deploy/local`
+on your `PATH` (or link the scripts into it). The test suite checks they name
+every command and flag the scripts take.
