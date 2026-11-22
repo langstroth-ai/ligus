@@ -529,7 +529,7 @@ export function EditorView() {
             <span
               className="shrink-0 rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
               style={{ color: "var(--ligus-accent-ink)", background: "var(--ligus-mist)" }}
-              title="Lines changed vs the last commit (HEAD)"
+              data-tip="Lines changed vs the last commit (HEAD)"
             >
               {changedLines} changed vs HEAD
             </span>

@@ -39,7 +39,7 @@ export function RunLeaseLine({
       <span style={{ color: TONE[tone] }}>●</span>
       <span className="text-ink-soft">{text}</span>
       {!lease.verified && !lease.isMe && (
-        <span className="text-ink-soft" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
+        <span className="text-ink-soft" data-tip="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
           unverified
         </span>
       )}
@@ -47,7 +47,7 @@ export function RunLeaseLine({
         <span
           className="rounded px-1.5 py-0.5"
           style={{ color: "var(--ligus-danger-ink)", background: "color-mix(in srgb, var(--ligus-danger) 12%, transparent)" }}
-          title="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
+          data-tip="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
         >
           {lease.fencedClaims} competing claim{lease.fencedClaims === 1 ? "" : "s"} fenced
         </span>
@@ -57,7 +57,7 @@ export function RunLeaseLine({
           type="button"
           className="rounded-lg px-2 py-0.5 font-medium underline-offset-2 hover:underline"
           onClick={onHandOver}
-          title="Hand this run to another online device of the workspace"
+          data-tip="Hand this run to another online device of the workspace"
         >
           Hand over
         </button>

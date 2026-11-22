@@ -213,7 +213,7 @@ function QuorumDial({
               key={d.id}
               role="radio"
               aria-checked={on}
-              title={d.hint}
+              data-tip={d.hint}
               disabled={disabled}
               onClick={() => !on && onDial(d.id)}
               className="ligus-press flex-1 rounded-md px-2 py-1 font-medium"

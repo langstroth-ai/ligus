@@ -94,7 +94,7 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
               type="button"
               className="mt-1 block w-full rounded-lg border-t px-2 py-1 text-left hover:bg-black/5"
               style={{ borderColor: "var(--ligus-line)" }}
-              title={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
+              data-tip={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
               onClick={() => void repin()}
             >
               Move the base to the latest {current.baseBranch || "default branch"}
@@ -165,7 +165,7 @@ export function PinnedHostWarning({
           type="button"
           className="underline disabled:no-underline disabled:opacity-50"
           disabled={!p.canRunHere}
-          title={p.canRunHere ? undefined : `This device needs ${repo} checked out and ${p.agentName}'s runtime, and ${p.agentName} must be yours`}
+          data-tip={p.canRunHere ? undefined : `This device needs ${repo} checked out and ${p.agentName}'s runtime, and ${p.agentName} must be yours`}
           onClick={() => onRunHere(true)}
         >
           Run here this time
@@ -218,7 +218,7 @@ export function ChatRunsOn({ sessionId, runtime }: { sessionId: string; runtime:
       data-testid="chat-runs-on"
       className="flex min-w-0 items-center gap-1.5 truncate text-[11px] leading-4"
       style={{ color: "var(--ligus-ink-soft)" }}
-      title={branch && branch !== shortBranch(branch) ? `Branch ${branch}` : undefined}
+      data-tip={branch && branch !== shortBranch(branch) ? `Branch ${branch}` : undefined}
     >
       {parts.map((p, i) => (
         <span key={i} className={i === 0 ? "shrink-0" : "min-w-0 truncate"}>

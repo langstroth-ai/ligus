@@ -45,11 +45,20 @@ export function Button({
   variant = "ghost",
   size = "sm",
   className = "",
+  title,
+  kbd,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+  size?: Size;
+  /// Shown as a tooltip (see Tooltip.tsx), with `kbd` as its shortcut.
+  kbd?: string;
+}) {
   return (
     <button
       {...rest}
+      data-tip={title}
+      data-tip-kbd={title ? kbd : undefined}
       className={`ligus-btn ${BUTTON_VARIANT_CLASS[variant]} inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl font-medium ${SIZE[size]} ${className}`}
     />
   );
@@ -61,18 +70,25 @@ export function IconButton({
   label,
   size = 32,
   className = "",
+  title,
+  kbd,
   children,
   ...rest
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label"> & {
   label: string;
   size?: number;
+  /// The tooltip, when it should say more than the label.
+  title?: string;
+  /// A shortcut shown in the tooltip ("⌘J").
+  kbd?: string;
   children: ReactNode;
 }) {
   return (
     <button
       {...rest}
       aria-label={label}
-      title={rest.title ?? label}
+      data-tip={title ?? label}
+      data-tip-kbd={kbd}
       className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg text-ink-soft hover:text-ink disabled:opacity-30 ${className}`}
       style={{ width: size, height: size, ...rest.style }}
     >
@@ -290,7 +306,7 @@ export function NavRow({
   return (
     <button
       onClick={onClick}
-      title={title}
+      data-tip={title}
       className="flex h-[var(--row-h)] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={active ? { background: SELECT_TINT } : undefined}
     >
@@ -368,7 +384,7 @@ export function SessionStateChip({ state, compact = false }: { state: SessionSta
   return (
     <span
       data-session-state={state}
-      title={meta.describe}
+      data-tip={meta.describe}
       className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium"
       style={{ color: meta.ink }}
     >
@@ -455,7 +471,7 @@ export function ChatRow({
             onOptions(e.currentTarget);
           }}
           aria-label="Chat options"
-          title="Chat options"
+          data-tip="Chat options"
           className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md opacity-0 transition-opacity hover:bg-[color:var(--ligus-overlay)] group-hover/crow:opacity-100"
           style={{ color: "var(--ligus-ink-soft)" }}
         >
@@ -538,7 +554,7 @@ export function PermissionPicker({
             key={p.id}
             type="button"
             disabled={disabled || !onChange}
-            title={p.id === "auto" ? "Runs without asking" : p.id === "ask" ? "Prompts each call" : "Never offered to the model"}
+            data-tip={p.id === "auto" ? "Runs without asking" : p.id === "ask" ? "Prompts each call" : "Never offered to the model"}
             onClick={() => onChange?.(p.id)}
             className={`rounded-md font-medium transition-colors ${compact ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs"}`}
             style={active ? p.on : { color: "var(--ligus-ink-soft)", background: "transparent" }}
@@ -687,7 +703,7 @@ export function Badge({
 }) {
   return (
     <span
-      title={title}
+      data-tip={title}
       className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[11px] font-semibold leading-4 tracking-[0.02em] ${className}`}
       style={TONE_STYLE[tone]}
     >
@@ -762,7 +778,7 @@ export function LinkButton({
   return (
     <button
       type="button"
-      title={title}
+      data-tip={title}
       disabled={disabled}
       onClick={onClick}
       className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline active:opacity-70 disabled:opacity-50"
@@ -780,7 +796,7 @@ export function StatusDot({ on, label, size = 8 }: { on: boolean; label: string;
     <span
       role="img"
       aria-label={label}
-      title={label}
+      data-tip={label}
       className="inline-block shrink-0 rounded-full"
       style={{
         width: size,
@@ -1039,7 +1055,7 @@ export function PopoverItem({
     <button
       role="menuitem"
       aria-disabled={disabled || undefined}
-      title={title}
+      data-tip={title}
       onMouseEnter={onHover}
       onMouseDown={(e) => {
         e.preventDefault();

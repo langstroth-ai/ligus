@@ -60,7 +60,7 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
                   <button
                     type="button"
                     className="min-w-0 truncate underline-offset-2 hover:text-ink hover:underline"
-                    title={`Open “${r.chatTitle}”`}
+                    data-tip={`Open “${r.chatTitle}”`}
                     onClick={() => openChat(r.sessionId)}
                   >
                     in “{r.chatTitle}”
@@ -70,13 +70,13 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
                   <button
                     type="button"
                     className="min-w-0 truncate font-mono text-[11px] underline-offset-2 hover:text-ink hover:underline"
-                    title={`Open ${r.files[0]} in the editor`}
+                    data-tip={`Open ${r.files[0]} in the editor`}
                     onClick={() => editorStore.requestOpen(r.files![0])}
                   >
                     {r.files[0]}
                   </button>
                 )}
-                <span title="How strongly this item calls for an agent">stimulus {r.stimulus.toFixed(1)}</span>
+                <span data-tip="How strongly this item calls for an agent">stimulus {r.stimulus.toFixed(1)}</span>
               </div>
               <div className="mt-2 flex items-center justify-end gap-2">
                 {r.claimedBy ? (

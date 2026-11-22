@@ -125,7 +125,7 @@ export function SafetyCodeSection() {
         </p>
       )}
       {profile.data?.accountId && (
-        <p className="truncate font-mono text-[11px] text-ink-soft" title="Your account id: random, made on this device">
+        <p className="truncate font-mono text-[11px] text-ink-soft" data-tip="Your account id: random, made on this device">
           Account {profile.data.accountId}
         </p>
       )}
@@ -196,7 +196,7 @@ function IdentitySection() {
   return (
     <Section title="Profile">
       <div className="mb-4 flex items-center gap-3">
-        <label className="group/av relative cursor-pointer" title="Upload an avatar">
+        <label className="group/av relative cursor-pointer" data-tip="Upload an avatar">
           <Avatar name={settings.data?.displayName || name || "You"} url={settings.data?.avatarUrl} kind="human" size={52} />
           <span
             className="absolute inset-0 flex items-center justify-center rounded-full text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
@@ -508,7 +508,7 @@ function RevocationStatus({ r, onRetry }: { r: DeviceRevocationDto; onRetry: () 
       </div>
       <ul className="ml-3">
         {steps.map(([label, s]) => (
-          <li key={label} title={s.detail}>
+          <li key={label} data-tip={s.detail}>
             <span style={{ color: s.state === "failed" ? "var(--ligus-danger-ink)" : undefined }}>
               {label}: {STEP_LABEL[s.state]}
             </span>

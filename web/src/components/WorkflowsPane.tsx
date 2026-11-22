@@ -459,7 +459,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
           cursor: hasDetail ? "pointer" : "default",
         }}
         aria-expanded={hasDetail ? open : undefined}
-        title={`${node.name}: ${statusLabel(node.status)}`}
+        data-tip={`${node.name}: ${statusLabel(node.status)}`}
       >
         {node.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
         {node.name}

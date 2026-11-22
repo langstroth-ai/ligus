@@ -108,7 +108,7 @@ export function UpdateBanner() {
                 <button
                   onClick={skipVersion}
                   className="rounded-lg px-2 py-1.5 text-xs text-ink-soft hover:text-ink"
-                  title="Don't show this version again"
+                  data-tip="Don't show this version again"
                 >
                   Skip
                 </button>

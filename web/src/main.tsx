@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/App";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { TooltipLayer } from "@/components/Tooltip";
 import "@/styles.css";
 import { applyDensity, loadDensity } from "@/lib/density";
 // NOTE: Monaco is intentionally NOT imported here — it's the bulk of the JS
@@ -33,6 +34,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <QueryClientProvider client={queryClient}>
         <App />
       </QueryClientProvider>
+      <TooltipLayer />
     </ErrorBoundary>
   </React.StrictMode>,
 );

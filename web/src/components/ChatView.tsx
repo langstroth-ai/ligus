@@ -76,6 +76,7 @@ import { liveTurns } from "@/state/liveTurns";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState, isModalOpen } from "@/components/ui";
 import { escStopsTurn } from "@/lib/shortcuts";
 import { Markdown } from "@/components/Markdown";
+import { Kbd } from "@/components/Tooltip";
 import { agentMentionCandidates, detectMention, filterMentions, mentionSelectable, type MentionCandidate } from "@/lib/mentions";
 import { editorStore } from "@/state/editorStore";
 import { applyStreamDelta, handleTerminal } from "@/lib/streams";
@@ -1225,7 +1226,7 @@ export function ChatView({
               <button
                 onClick={() => setQueued(null)}
                 aria-label="Cancel queued message"
-                title="Cancel queued message"
+                data-tip="Cancel queued message"
                 className="shrink-0 rounded-md px-1 leading-none text-ink-soft hover:text-ink"
               >
                 <IconX size={12} />
@@ -1268,7 +1269,7 @@ export function ChatView({
                   }}
                   className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
                   style={{ border: "1px solid var(--ligus-line)" }}
-                  title="Force this chat out of a stuck state"
+                  data-tip="Force this chat out of a stuck state"
                 >
                   Reset chat
                 </button>
@@ -1307,7 +1308,7 @@ export function ChatView({
                   liveTurns.clearFailure(sessionId);
                 }}
                 className="shrink-0 rounded-md px-1.5 py-0.5 leading-none text-ink-soft transition-colors hover:text-ink"
-                title="Dismiss"
+                data-tip="Dismiss"
                 aria-label="Dismiss"
               >
                 <IconX size={12} />
@@ -1328,7 +1329,7 @@ export function ChatView({
             return (
               <button
                 onClick={scrollToBottom}
-                title={isNew ? "Jump to new messages" : "Jump to the latest"}
+                data-tip={isNew ? "Jump to new messages" : "Jump to the latest"}
                 aria-label={isNew ? "Jump to new messages" : "Jump to the latest"}
                 className={`absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full shadow-lg transition-transform hover:scale-105 ${
                   isNew ? "px-3.5 py-1.5 text-xs font-semibold" : "p-2"
@@ -1381,7 +1382,7 @@ export function ChatView({
               {attachments.length > 0 && (
                 <div className="cmp-chips">
                   {attachments.map((a, i) => (
-                    <span key={`${a.path}-${i}`} className="chip" title={a.path}>
+                    <span key={`${a.path}-${i}`} className="chip" data-tip={a.path}>
                       <span aria-hidden>{a.image ? <IconImage size={12} /> : <IconFile size={12} />}</span>
                       <b>{a.name}</b>
                       <button
@@ -1651,7 +1652,7 @@ export function ChatView({
                   <button
                     type="button"
                     className="ib"
-                    title="Emoji"
+                    data-tip="Emoji"
                     aria-label="Insert emoji"
                     onClick={() => setShowEmoji((v) => !v)}
                   >
@@ -1667,7 +1668,7 @@ export function ChatView({
                     />
                   )}
                 </div>
-                <label className="ib" title="Attach files" aria-label="Attach files">
+                <label className="ib" data-tip="Attach files" aria-label="Attach files">
                   <IconPaperclip size={15} />
                   <input
                     type="file"
@@ -1684,7 +1685,7 @@ export function ChatView({
                   onClick={() => void addFileRef()}
                   className="ib"
                   style={{ width: "auto", padding: "0 8px", fontSize: 12 }}
-                  title="Reference a workspace file (@file)"
+                  data-tip="Reference a workspace file (@file)"
                 >
                   @file
                 </button>
@@ -1696,7 +1697,7 @@ export function ChatView({
                     onClick={() => void handleStop()}
                     className="send"
                     aria-label="Stop generating"
-                    title="Stop generating"
+                    data-tip="Stop generating"
                   >
                     <IconStop size={15} />
                   </button>
@@ -1706,7 +1707,7 @@ export function ChatView({
                   disabled={waitingForFounder || (!input.trim() && attachments.length === 0)}
                   className="send"
                   aria-label={waitingForFounder ? "Waiting for the workspace's founder" : busy ? "Queue as next turn" : "Send message"}
-                  title={
+                  data-tip={
                     waitingForFounder
                       ? "Waiting for the workspace's founder to sync"
                       : busy
@@ -1721,8 +1722,7 @@ export function ChatView({
 
             {/* Footer hint (spec §7.5) — the affordance legend under the composer. */}
             <div className="hint">
-              Live — type <span className="kbd">@</span> or <span className="kbd">/</span>, send with{" "}
-              <span className="kbd">↵</span>, newline with <span className="kbd">⇧↵</span>.
+              Live — type <Kbd>@</Kbd> or <Kbd>/</Kbd>, send with <Kbd>↵</Kbd>, newline with <Kbd>⇧↵</Kbd>.
             </div>
           </div>
         </div>
@@ -1843,7 +1843,7 @@ function MessageBody({
               onClick={() => editorStore.requestOpen(p)}
               className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 font-mono text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
               style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
-              title={`Open ${p} in the editor`}
+              data-tip={`Open ${p} in the editor`}
             >
               <span aria-hidden className="text-ink-soft">
                 <IconFile size={12} />
@@ -1865,7 +1865,7 @@ function MessageBody({
               key={`f-${p}-${i}`}
               className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft"
               style={{ borderColor: "var(--ligus-line)" }}
-              title="A file on the sender's device; it wasn't shared"
+              data-tip="A file on the sender's device; it wasn't shared"
             >
               <IconFile size={13} /> {fileBaseName(p)} (on the sender's device)
             </span>
@@ -1890,7 +1890,7 @@ function AttachmentChip({ path, image }: { path: string; image?: boolean }) {
     <span
       className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-      title={path}
+      data-tip={path}
     >
       <span aria-hidden className="text-ink-soft">
         {image ?? isImagePath(path) ? <IconImage size={13} /> : <IconFile size={13} />}
@@ -1915,12 +1915,12 @@ function ImageAttachment({ path }: { path: string }) {
       <div
         className="h-32 w-32 animate-pulse rounded-lg border"
         style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-        title={fileBaseName(path)}
+        data-tip={fileBaseName(path)}
       />
     );
   }
   return (
-    <a href={img.data} target="_blank" rel="noreferrer" title={fileBaseName(path)}>
+    <a href={img.data} target="_blank" rel="noreferrer" aria-label={fileBaseName(path)} data-tip={fileBaseName(path)}>
       <img
         src={img.data}
         alt={fileBaseName(path)}
@@ -2172,7 +2172,7 @@ const Bubble = memo(function Bubble({
           {(() => {
             const badge = responderBadge(responderName, responderDevice);
             return badge && (
-              <span className="tt-badge" title={badge.title}>
+              <span className="tt-badge" data-tip={badge.title}>
                 {badge.label}
               </span>
             );
@@ -2192,7 +2192,7 @@ const Bubble = memo(function Bubble({
             </span>
           )}
           <span className="tt-spacer" />
-          {timeLabel && <span className="tt-time" title={timeTitle}>{timeLabel}</span>}
+          {timeLabel && <span className="tt-time" data-tip={timeTitle}>{timeLabel}</span>}
         </div>
         {via && !isUser && <div className="tt-attr">via {via}</div>}
 
@@ -2342,7 +2342,7 @@ function IconAction({
   return (
     <button
       onClick={onClick}
-      title={title}
+      data-tip={title}
       aria-label={title}
       className="flex h-6 w-6 items-center justify-center rounded-md text-ink-soft transition-all hover:text-ink"
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-mist)")}

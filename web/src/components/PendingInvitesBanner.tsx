@@ -94,7 +94,7 @@ export function PendingInvitesBanner() {
                   {trustNote(inv.trust, inv.founderName)}
                 </div>
                 {inv.safetyCode && (
-                  <code className="mt-1 block font-mono text-[11px] text-ink-soft" title="The founder's safety code">
+                  <code className="mt-1 block font-mono text-[11px] text-ink-soft" data-tip="The founder's safety code">
                     {inv.safetyCode}
                   </code>
                 )}

@@ -184,7 +184,7 @@ function SyncSection() {
             {s.encrypted ? (
               <span
                 className="flex items-center gap-1"
-                title="Messages sealed with the workspace key"
+                data-tip="Messages sealed with the workspace key"
                 style={{ color: "var(--ligus-success-ink)" }}
               >
                 <IconLock size={12} /> encrypted

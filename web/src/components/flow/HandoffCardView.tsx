@@ -64,7 +64,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
           className="inline-flex items-center gap-0.5 font-medium underline-offset-2 hover:underline"
           style={{ color: "var(--ligus-accent-ink)" }}
           onClick={() => setMissing(!revealHandoffReply(card))}
-          title={`Jump to @${card.toName}'s reply`}
+          data-tip={`Jump to @${card.toName}'s reply`}
         >
           Go to reply
         </button>

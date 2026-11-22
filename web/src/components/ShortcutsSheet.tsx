@@ -1,5 +1,6 @@
 import { Modal } from "@/components/ui";
 import { SHORTCUTS, keyLabel, type ShortcutGroup } from "@/lib/shortcuts";
+import { Kbd } from "@/components/Tooltip";
 
 const GROUPS: ShortcutGroup[] = ["General", "Chat", "Panes", "View", "Code"];
 
@@ -37,12 +38,7 @@ export function ShortcutsSheet({ onClose, mac }: { onClose: () => void; mac?: bo
                   <div key={`${s.id}-${s.keys}`} className="flex items-baseline justify-between gap-3 text-[13px]">
                     <dt className="min-w-0">{s.label}</dt>
                     <dd className="shrink-0">
-                      <kbd
-                        className="rounded-md border px-1.5 py-0.5 font-sans text-[11px] tabular-nums"
-                        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-                      >
-                        {keyLabel(s.keys, mac)}
-                      </kbd>
+                      <Kbd>{keyLabel(s.keys, mac)}</Kbd>
                     </dd>
                   </div>
                 ))}

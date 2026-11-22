@@ -37,7 +37,7 @@ export function AgentAccessPanel({ sessionId, agent }: { sessionId: string; agen
       <span
         className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px]"
         style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
-        title={ACCESS_HINT}
+        data-tip={ACCESS_HINT}
         aria-label={`Who can use this agent: ${accessLabel(agent)}`}
       >
         {accessLabel(agent)}

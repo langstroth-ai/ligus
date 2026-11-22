@@ -41,7 +41,7 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
       testId="growth-suggestion"
       icon={<span style={{ color: "var(--ligus-accent-ink)" }}><IconSparkle size={14} /></span>}
       title={`${next.title}.`}
-      detail={<span title={next.reason}>{next.reason}</span>}
+      detail={<span data-tip={next.reason}>{next.reason}</span>}
       actions={
         <>
           <LinkButton onClick={() => onOpen(next.kind)}>Set up</LinkButton>

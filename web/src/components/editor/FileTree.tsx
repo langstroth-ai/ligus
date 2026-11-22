@@ -291,7 +291,7 @@ export function FileTree() {
         <div className="flex items-center gap-1">
           <button
             aria-label="New file"
-            title="New file"
+            data-tip="New file"
             onClick={() => void doNewEntry(ROOT, false)}
             className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-soft hover:text-ink"
             style={{ background: "transparent" }}
@@ -305,7 +305,7 @@ export function FileTree() {
           </button>
           <button
             aria-label="New folder"
-            title="New folder"
+            data-tip="New folder"
             onClick={() => void doNewEntry(ROOT, true)}
             className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-soft hover:text-ink"
             style={{ background: "transparent" }}
@@ -535,7 +535,7 @@ function RowButton({
       </button>
       <button
         aria-label="More actions"
-        title="More actions"
+        data-tip="More actions"
         onClick={onKebab}
         className="mr-1 hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-soft hover:text-ink group-hover:flex"
       >

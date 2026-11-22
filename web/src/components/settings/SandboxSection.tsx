@@ -278,7 +278,7 @@ export function SandboxSection() {
             <PathsField label={`@${agent.name}: read and write`} value={cur.rw} onChange={(v) => setCur({ rw: v })} disabled={!d.canEditPaths} />
             <div
               className="flex items-center justify-between gap-2"
-              title={d.canEditShell ? undefined : "Only the workspace Owner grants the shell"}
+              data-tip={d.canEditShell ? undefined : "Only the workspace Owner grants the shell"}
             >
               <span className="text-[12.5px]">Keep the shell for other members' turns</span>
               <Switch

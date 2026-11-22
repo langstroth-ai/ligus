@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui";
 import { IconMessage, IconPlus } from "@/lib/icons";
+import { Kbd } from "@/components/Tooltip";
 
 /// A faint honeycomb: three comb cells, the one bee note on an otherwise
 /// quiet surface (Ligus is short for ligustica, the Italian honeybee).
@@ -15,8 +16,6 @@ function CombMark() {
     </svg>
   );
 }
-
-const kbd = "rounded border border-b-2 px-1.5 font-mono text-[11px]";
 
 /// The canvas when no chat is open: what this place is and the one next step,
 /// plus the keyboard routes in.
@@ -46,13 +45,13 @@ export function EmptyCanvas({
       </div>
       <p className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-ink-soft">
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘K</kbd> anything
+          <Kbd>⌘K</Kbd> anything
         </span>
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘⇧]</kbd> next chat
+          <Kbd>⌘⇧]</Kbd> next chat
         </span>
         <span>
-          <kbd className={kbd} style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>⌘J</kbd> tools rail
+          <Kbd>⌘J</Kbd> tools rail
         </span>
       </p>
     </div>

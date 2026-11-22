@@ -170,7 +170,7 @@ export function CodeView({
           type="button"
           aria-label={treeVisible ? "Hide file tree" : "Show file tree"}
           aria-pressed={treeVisible}
-          title="Toggle file tree"
+          data-tip="Toggle file tree"
           onClick={toggleTree}
           className="inline-flex h-7 w-7 items-center justify-center rounded-lg transition-all hover:bg-[color:var(--ligus-overlay)]"
           style={{ color: "var(--ligus-ink)", opacity: treeVisible ? 1 : 0.5 }}
@@ -181,7 +181,7 @@ export function CodeView({
           type="button"
           aria-label={termVisible ? "Hide terminal" : "Show terminal"}
           aria-pressed={termVisible}
-          title="Toggle terminal"
+          data-tip="Toggle terminal"
           onClick={() => setTermVisible((v) => !v)}
           className="inline-flex h-7 w-7 items-center justify-center rounded-lg font-mono text-[11px] leading-none transition-all hover:bg-[color:var(--ligus-overlay)]"
           style={{ color: "var(--ligus-ink)", opacity: termVisible ? 1 : 0.5 }}

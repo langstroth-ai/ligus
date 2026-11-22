@@ -293,7 +293,7 @@ export function TerminalPanel({ onCollapse }: Props) {
           <button
             type="button"
             aria-label="Hide terminal"
-            title="Hide terminal"
+            data-tip="Hide terminal"
             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-ink-soft transition-all hover:bg-[color:var(--ligus-overlay)] hover:text-ink"
             onClick={onCollapse}
           >

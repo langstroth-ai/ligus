@@ -214,7 +214,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1500);
           }}
-          title="Copy code"
+          data-tip="Copy code"
           aria-label="Copy code"
         >
           {copied ? "Copied ✓" : "Copy"}

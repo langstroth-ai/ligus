@@ -15,6 +15,7 @@ import {
 } from "@/lib/ipc";
 import { LigusBrandMark } from "@/components/LigusBrand";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
+import { MenuPanel, type MenuItemSpec } from "@/components/Menu";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { IconPlus, IconUsers, IconPanelLeft, IconGear, IconInfo } from "@/lib/icons";
@@ -150,6 +151,22 @@ export function WorkspaceRail({
       toast.error(m.message, m.action);
     }
   }
+  function workspaceMenuItems(ws: WorkspaceInfoDto): MenuItemSpec[] {
+    const items: MenuItemSpec[] = [{ type: "header", label: ws.name }, { label: "Set icon…", onClick: () => chooseIcon(ws) }];
+    if (ws.iconUrl) items.push({ label: "Remove icon", onClick: () => void removeIcon(ws) });
+    if (ws.kind === "room") {
+      items.push(
+        { label: "Share short code", onClick: () => void shareShortCode(ws) },
+        { label: "Copy invite", onClick: () => void copyInvite(ws) },
+        { label: "Admit a box…", onClick: () => setAdmitting(ws) },
+        { type: "separator" },
+        // leave() asks for confirmation itself.
+        { label: "Leave workspace", danger: true, onClick: () => leave(ws) },
+      );
+    }
+    return items;
+  }
+
   function leave(ws: WorkspaceInfoDto) {
     confirmThen(`Leave “${ws.name}”? Its chats stop syncing on this device.`, async () => {
       try {
@@ -192,7 +209,15 @@ export function WorkspaceRail({
                 e.preventDefault();
                 setMenu({ ws: w, x: e.clientX, y: e.clientY });
               }}
-              title={local ? "Personal — right-click to set an icon" : `${w.name} — right-click for options`}
+              onKeyDown={(e) => {
+                // The keyboard's menu key (or Shift+F10) opens the same menu.
+                if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setMenu({ ws: w, x: r.right, y: r.top });
+                }
+              }}
+              data-tip={local ? "Personal — right-click to set an icon" : `${w.name} — right-click for options`}
               aria-current={w.active ? "true" : undefined}
               aria-label={w.name}
               className="flex h-10 w-10 items-center justify-center overflow-hidden text-sm font-semibold transition-all hover:brightness-110"
@@ -219,7 +244,7 @@ export function WorkspaceRail({
                   boxShadow: "0 0 0 2px var(--ligus-sidebar-top)",
                 }}
                 aria-label={`${w.name} — unread mention`}
-                title={`${w.name} — you were mentioned`}
+                data-tip={`${w.name} — you were mentioned`}
               />
             )}
           </div>
@@ -227,7 +252,7 @@ export function WorkspaceRail({
       })}
       <button
         onClick={onJoinRoom}
-        title="Add a workspace — create or join a team"
+        data-tip="Add a workspace — create or join a team"
         aria-label="Add a workspace"
         className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110"
         style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
@@ -238,7 +263,7 @@ export function WorkspaceRail({
       {onOpenFriends && (
         <button
           onClick={onOpenFriends}
-          title="People — co-members, direct messages and invites"
+          data-tip="People — co-members, direct messages and invites"
           aria-label="People"
           className="mt-auto flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110"
           style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
@@ -250,7 +275,7 @@ export function WorkspaceRail({
       {onToggleSidebar && (
         <button
           onClick={onToggleSidebar}
-          title={`${sidebarVisible ? "Hide" : "Show"} sidebar (⌘B)`}
+          data-tip={`${sidebarVisible ? "Hide" : "Show"} sidebar (⌘B)`}
           aria-label={`${sidebarVisible ? "Hide" : "Show"} sidebar`}
           aria-pressed={!sidebarVisible}
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends ? "" : "mt-auto"}`}
@@ -269,7 +294,7 @@ export function WorkspaceRail({
         <button
           data-tour="help"
           onClick={onOpenHelp}
-          title="Take the tour — a quick walk through Ligus"
+          data-tip="Take the tour — a quick walk through Ligus"
           aria-label="Take the tour"
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar ? "" : "mt-auto"}`}
           style={{ background: "var(--ligus-panel)", color: "var(--ligus-ink)", border: "1px solid var(--ligus-line)", opacity: 0.85 }}
@@ -281,7 +306,7 @@ export function WorkspaceRail({
       {onOpenSettings && (
         <button
           onClick={onOpenSettings}
-          title="Settings"
+          data-tip="Settings"
           aria-label="Settings"
           aria-pressed={settingsActive}
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar || onOpenHelp ? "" : "mt-auto"}`}
@@ -297,30 +322,12 @@ export function WorkspaceRail({
       )}
 
       {menu && (
-        <>
-          {/* click-away backdrop */}
-          <div className="fixed inset-0 z-[950]" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div
-            className="fixed z-[951] min-w-44 rounded-lg border py-1 text-sm shadow-2xl"
-            style={{ left: menu.x + 4, top: menu.y, borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
-          >
-            <div className="truncate px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
-              {menu.ws.name}
-            </div>
-            <MenuItem label="Set icon…" onClick={() => { const ws = menu.ws; setMenu(null); chooseIcon(ws); }} />
-            {menu.ws.iconUrl && (
-              <MenuItem label="Remove icon" onClick={() => { removeIcon(menu.ws); setMenu(null); }} />
-            )}
-            {menu.ws.kind === "room" && (
-              <>
-                <MenuItem label="Share short code" onClick={() => { void shareShortCode(menu.ws); setMenu(null); }} />
-                <MenuItem label="Copy invite" onClick={() => { void copyInvite(menu.ws); setMenu(null); }} />
-                <MenuItem label="Admit a box…" onClick={() => { setAdmitting(menu.ws); setMenu(null); }} />
-                <MenuItem label="Leave workspace" danger onClick={() => { leave(menu.ws); setMenu(null); }} />
-              </>
-            )}
-          </div>
-        </>
+        <MenuPanel
+          label={`${menu.ws.name} actions`}
+          placement={{ at: { x: menu.x + 4, y: menu.y } }}
+          onClose={() => setMenu(null)}
+          items={workspaceMenuItems(menu.ws)}
+        />
       )}
 
       {admitting && <AdmitBoxModal workspaceId={admitting.id} workspaceName={admitting.name} onClose={() => setAdmitting(null)} />}
@@ -333,18 +340,6 @@ export function WorkspaceRail({
         onChange={(e) => void onIconFile(e)}
       />
     </div>
-  );
-}
-
-function MenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
-  return (
-    <button
-      className="block w-full px-3 py-1.5 text-left hover:bg-[color:var(--ligus-overlay)]"
-      style={danger ? { color: "var(--ligus-danger-ink)" } : undefined}
-      onClick={onClick}
-    >
-      {label}
-    </button>
   );
 }
 

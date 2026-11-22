@@ -125,7 +125,7 @@ function Pill({ children, title }: { children: React.ReactNode; title?: string }
   return (
     <div className="pointer-events-none absolute bottom-2 right-3 z-10">
       <style>{PILL_CSS}</style>
-      <span className="lsp-pill" title={title}>
+      <span className="lsp-pill" data-tip={title}>
         {children}
       </span>
     </div>

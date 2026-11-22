@@ -1410,7 +1410,7 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
 function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
   if (!pill.color) {
     return (
-      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" title={pill.title}>
+      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" data-tip={pill.title}>
         <StatusDot on={false} size={7} label={pill.label} />
         {pill.label}
       </span>
@@ -1431,14 +1431,14 @@ function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
     "ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
   if (pill.actionable && onFix) {
     return (
-      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} title={pill.title} onClick={onFix}>
+      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} data-tip={pill.title} onClick={onFix}>
         {icon}
         {pill.label}
       </button>
     );
   }
   return (
-    <span className={className} style={chipStyle} title={pill.title}>
+    <span className={className} style={chipStyle} data-tip={pill.title}>
       {icon}
       {pill.label}
     </span>
@@ -1473,7 +1473,7 @@ function CanvasModeTabs({
         <button
           key={t.id}
           role="tab"
-          title={CANVAS_TAB_HINT[t.id]}
+          data-tip={CANVAS_TAB_HINT[t.id]}
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
           className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
@@ -1542,7 +1542,7 @@ function ChatHeaderBar({
         <h1 className="ligus-title truncate">{title}</h1>
         <button
           className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
-          title="Rename chat"
+          data-tip="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
         >
@@ -1556,7 +1556,7 @@ function ChatHeaderBar({
       {contextPct !== null && (
         <button
           onClick={onOpenContext}
-          title={`${contextPct}% of the model's context window in use — open the Context pane`}
+          data-tip={`${contextPct}% of the model's context window in use — open the Context pane`}
           aria-label="Context usage"
           className="flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
           style={{
