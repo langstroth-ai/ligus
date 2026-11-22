@@ -22,6 +22,7 @@ export function SandboxGrantsBanner() {
   return (
     <div
       role="status"
+      data-calm="banner"
       className="fixed bottom-4 left-4 z-[60] flex w-[360px] items-start gap-3 rounded-2xl border p-4 shadow-xl"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >

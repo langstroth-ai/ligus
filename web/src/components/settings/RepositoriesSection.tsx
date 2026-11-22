@@ -466,7 +466,7 @@ export function RepoSuggestionBanner() {
   const q = useQuery({ queryKey: REPOS_KEY, queryFn: listWorkspaceRepos, retry: false });
   if (!q.data?.suggestion) return null;
   return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[360px] shadow-xl" role="status">
+    <div className="fixed bottom-4 left-4 z-[60] w-[360px] shadow-xl" role="status" data-calm="banner">
       <RepoSuggestion data={q.data} onDone={() => void qc.invalidateQueries({ queryKey: REPOS_KEY })} />
     </div>
   );

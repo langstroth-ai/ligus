@@ -80,6 +80,7 @@ export function UpdateBanner() {
     // bottom-20 (not bottom-4): the ToastHost owns the bottom-right corner —
     // stacking above it keeps a toast from covering the banner (and vice versa).
     <div
+      data-calm="banner"
       className="fixed bottom-20 right-4 z-[60] w-[320px] rounded-2xl border p-4 shadow-xl"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >

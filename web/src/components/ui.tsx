@@ -730,6 +730,7 @@ export function Banner({
   return (
     <div
       role={role}
+      data-calm="banner"
       data-testid={testId}
       className="ligus-enter flex min-h-[34px] shrink-0 items-center gap-2.5 border-b px-4 py-1.5 text-[12.5px]"
       style={{

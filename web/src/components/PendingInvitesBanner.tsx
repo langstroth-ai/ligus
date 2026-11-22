@@ -59,6 +59,7 @@ export function PendingInvitesBanner() {
         return (
           <div
             key={key}
+            data-calm="banner"
             className="rounded-2xl border p-4 shadow-xl"
             style={{ borderColor: bad ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
           >
