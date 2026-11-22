@@ -235,15 +235,28 @@ To bring a revoked phone back:
    phone → Advanced**.
 2. Read the sheet ("Reset this phone's key?") and choose **Reset key with
    Face ID**, then pass Face ID (or your passcode). The phone deletes its
-   old key, makes a new one and gets a new device id. Anything signed with
-   the old key stays in the workspace's history, and the old key stays
+   old key, makes a new one and gets a new device id. It also replaces its
+   pairing keys (the Noise static and auth key it pairs through a relay
+   with): a box refuses a pairing made with the keys of a revoked device's
+   pairing, whatever device it claims, so keeping them would keep the phone
+   refused (`4041 device_revoked`, naming the old device id). Its pairings
+   through a relay end; a direct pairing stays. Anything signed with the
+   old key stays in the workspace's history, and the old key stays
    revoked. The app never does this by itself, and refuses on an iPhone
    with no passcode.
 3. The sheet then opens **Add to my devices** (naming the phone first if
    it is still called just "iPhone"): add it again from your desktop as in
    [Add your phone](#add-this-phone). It is a new device to every workspace
-   it was in, so add it on each one, and pair with each box again
-   (`ligus pair`) if its pairing was removed.
+   it was in, so add it on each one, and pair with each box again with a
+   **new** code from `ligus pair` (a pairing link the phone already tried is
+   bound to its old keys).
+
+!!! note "Reset on an older app, still refused?"
+    Before Ligus for iPhone fixed this, a reset replaced only the device
+    key, so the box kept refusing the phone as the revoked device (its log
+    shows `device_revoked … workspace device <old id>` on every try). Update
+    the app, reset the key once more, then add the phone and pair with a new
+    `ligus pair` code.
 
 ## Pairing: direct or through the relay
 
