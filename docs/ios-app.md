@@ -761,7 +761,8 @@ key is a new device with a new id, enrolled again.
    `POST /v1/phone-actions/presence {prepareId, assertion: {credentialId,
    authenticatorData, clientDataJSON, signature}}` → `{preimage}`.
 3. Check the preimage (below). If it fails, don't sign; show the error.
-4. Ask the owner, for this signature only: a fresh `LAContext`
+4. Unless the action is a plain chat post (`kind` `post`), ask the owner,
+   for this signature only: a fresh `LAContext`
    `.deviceOwnerAuthentication` evaluation (Face ID, Touch ID or Optic ID,
    with the passcode as fallback), with
    `touchIDAuthenticationAllowableReuseDuration = 0`. It never reuses the
@@ -770,7 +771,11 @@ key is a new device with a new id, enrolled again.
    button says how it asks ("Approve with Face ID"). If it is cancelled or
    fails, nothing is signed, recorded or sent, and the sheet stays with "Not
    approved: authentication was cancelled." A device with no passcode never
-   signs. Box admissions (`/v1/admissions/commit`) ask the same way.
+   signs. Box admissions (`/v1/admissions/commit`) ask the same way. A chat
+   post, from the composer or a notification's reply, signs behind the app
+   lock without asking (owner decision, 2026-11-22). The exemption is an
+   allow-list holding only `post`, so every other kind, and any kind added
+   later, asks.
 5. Sign the preimage bytes with the Secure Enclave key (ECDSA P-256,
    SHA-256), encode r‖s (64 bytes, low-S: replace s with n − s when s > n/2),
    base64url, and `POST /v1/phone-actions/commit {prepareId, signature}` →
