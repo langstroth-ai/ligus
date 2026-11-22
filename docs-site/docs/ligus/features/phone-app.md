@@ -483,7 +483,9 @@ set view: an alternative is applied only after a passing pre-flight, never on
 approval.
 
 Approving a proposal from the phone never applies it: there is no
-auto-apply. Once it is approved, **Apply on ‹host›** asks one host (your
+auto-apply, for a workflow proposal either (its workflow is added when
+someone presses **Implement** on a desktop). Once it is approved,
+**Apply on ‹host›** asks one host (your
 `ligus serve` box, a worker, or a desktop) to apply it; that host, and only
 that host, applies it once and reports the commit or the reason it couldn't
 (see [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host)).
