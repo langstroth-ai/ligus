@@ -50,3 +50,11 @@ export function addPhoneRequested(): boolean {
 export function clearAddPhoneRequest() {
   addPhoneRequestPending = false;
 }
+
+/// Open "Admit a box" for the active shared workspace from anywhere (e.g. the
+/// add-a-phone check when no box is reachable); App owns the dialog.
+export const ADMIT_BOX_EVENT = "ligus:admit-box";
+
+export function openAdmitBox() {
+  window.dispatchEvent(new CustomEvent(ADMIT_BOX_EVENT));
+}

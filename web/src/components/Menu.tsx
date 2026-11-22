@@ -23,6 +23,8 @@ export type MenuItemSpec =
       /// Ask for a second press before running; the label becomes this text
       /// ("Press again to leave") until the pointer or focus moves on.
       confirm?: string;
+      /// A tooltip; for a disabled item, why it's disabled.
+      tip?: string;
     };
 
 type Item = Extract<MenuItemSpec, { label: string; onClick: () => void }>;
@@ -197,10 +199,12 @@ export function MenuPanel({
               type="button"
               role="menuitem"
               tabIndex={-1}
-              disabled={it.disabled}
+              // aria-disabled, not disabled: the item stays hoverable so its
+              // tooltip can say why it's off.
               aria-disabled={it.disabled || undefined}
+              data-tip={it.tip}
               data-danger={it.danger || undefined}
-              onMouseEnter={(e) => e.currentTarget.focus()}
+              onMouseEnter={(e) => !it.disabled && e.currentTarget.focus()}
               onBlur={() => asking && setConfirming(null)}
               onClick={() => activate(i)}
               onKeyDown={(e) => {
@@ -210,9 +214,9 @@ export function MenuPanel({
                   activate(i);
                 }
               }}
-              className="flex h-[var(--row-h,30px)] w-full items-center gap-2 rounded-lg px-2.5 text-left outline-none transition-colors focus:bg-[color:var(--ligus-overlay)] disabled:cursor-default disabled:text-ink-faint"
+              className={`flex h-[var(--row-h,30px)] w-full items-center gap-2 rounded-lg px-2.5 text-left outline-none transition-colors focus:bg-[color:var(--ligus-overlay)] ${it.disabled ? "cursor-not-allowed" : ""}`}
               style={{
-                color: it.disabled ? undefined : it.danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
+                color: it.disabled ? "var(--ligus-ink-faint)" : it.danger ? "var(--ligus-danger-ink)" : "var(--ligus-ink)",
                 background: asking ? "var(--ligus-danger-tint)" : undefined,
                 fontWeight: asking ? 600 : undefined,
               }}
