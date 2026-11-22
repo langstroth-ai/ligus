@@ -135,6 +135,27 @@ describe("the Review card", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
   });
 
+  it("hides Implement on a rejected proposal that still has quorum, with the reason", async () => {
+    proposals = [
+      {
+        ...base,
+        status: "rejected",
+        requiredApprovals: 1,
+        qualifyingApprovals: 1,
+        quorumMet: true,
+        approvals: [
+          { actorId: "maya", displayName: "Maya", role: "admin", approved: true },
+          { actorId: "me", displayName: "Ana", role: "owner", approved: false },
+        ],
+      },
+    ];
+    review();
+    // Settled, so it sits collapsed under the settled shelf.
+    fireEvent.click(await screen.findByRole("button", { name: /1 settled proposal/ }));
+    expect((await screen.findByTestId("next-step")).textContent).toMatch(/Rejected, so it can't be implemented/);
+    expect(screen.queryByRole("button", { name: "Implement…" })).toBeNull();
+  });
+
   it("keeps voting quiet beside Implement when quorum is met without you", async () => {
     proposals = [
       {

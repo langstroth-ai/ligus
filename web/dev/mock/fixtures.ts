@@ -267,9 +267,10 @@ export const proposals = [
     kind: "decision",
     status: "rejected",
     requiredApprovals: 1,
-    qualifyingApprovals: 0,
-    quorumMet: false,
-    approvals: [approval("Zaz", "owner", false)],
+    qualifyingApprovals: 1,
+    quorumMet: true,
+    // Rejected though its approvals meet quorum: a rejection outweighs them.
+    approvals: [approval("Maya", "admin", true), approval("Zaz", "owner", false)],
     changedFiles: [],
     createdAt: iso(900),
     dismissed: false,
