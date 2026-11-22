@@ -9,7 +9,9 @@ import {
   setChatWorkspaceRepo,
   type ChatWorkspaceRepoDto,
   type PinnedElsewhere,
+  type RuntimeSummaryDto,
 } from "@/lib/ipc";
+import { runtimeLabelWithModel, useChatModel } from "@/components/ModelPicker";
 import { toast, errMsg } from "@/components/Toast";
 import { REPOS_KEY } from "@/components/settings/RepositoriesSection";
 
@@ -200,8 +202,19 @@ export function runsOnParts(p: { host: string; runtime: string | null; branch: s
 /// One quiet line under the chat title: where this chat's turns run (this
 /// device), with which runtime, on which branch (the chat's own worktree
 /// branch when it has one).
-export function ChatRunsOn({ sessionId, runtime }: { sessionId: string; runtime: string | null }) {
+export function ChatRunsOn({
+  sessionId,
+  runtime: runtimeText,
+  runtimeDto,
+}: {
+  sessionId: string;
+  runtime: string | null;
+  /// The chat's runtime: its label then shows this device's model choice.
+  runtimeDto?: RuntimeSummaryDto | null;
+}) {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getAppSettings });
+  const chatModel = useChatModel(sessionId);
+  const runtime = runtimeDto ? runtimeLabelWithModel(runtimeDto, chatModel.data?.choices?.[runtimeDto.id]) : runtimeText;
   // The backend points git at the open chat's worktree; keying on that root
   // refetches once the switch lands instead of showing the last chat's branch.
   const root = settings.data?.workspaceRoot ?? "";

@@ -1261,7 +1261,11 @@ export function App() {
               title={activeChat.data?.title ?? "New Chat"}
               runsOn={
                 selectedId ? (
-                  <ChatRunsOn sessionId={selectedId} runtime={currentRuntime ? runtimePickerLabel(currentRuntime) : null} />
+                  <ChatRunsOn
+                    sessionId={selectedId}
+                    runtime={currentRuntime ? runtimePickerLabel(currentRuntime) : null}
+                    runtimeDto={currentRuntime}
+                  />
                 ) : undefined
               }
               contextPct={

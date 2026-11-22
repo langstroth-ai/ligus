@@ -483,7 +483,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     };
 
     let mid = locked(host)
-        .begin_assistant_message(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), responder.agent_id, reply_to)
+        .begin_assistant_message_with_model(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), Some(rt.effective_model()), responder.agent_id, reply_to)
         .map_err(|e| TurnError { message: e.to_string(), stopped: false, message_id: None })?;
     stop.bind_message(mid);
     host.begun(mid);

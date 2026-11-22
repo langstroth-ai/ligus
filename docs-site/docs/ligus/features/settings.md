@@ -144,6 +144,9 @@ LLM access is organized as a hierarchy:
   OpenAI-compatible endpoint); the CLI agents use their own login and need
   no key.
 - **Models (runtimes)** — a model on a provider (id + capability flags).
+  The model field offers the harness's own list and says when a typed
+  model isn't on a complete one; a chat can also pick its model from the
+  route pill ([Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model)).
   The add form includes an optional **Context window in tokens** — set
   it for Ollama/custom models whose window Ligus can't infer from the
   name; the [context planner](voice-and-slash.md) budgets against it.
