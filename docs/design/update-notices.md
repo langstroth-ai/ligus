@@ -10,6 +10,18 @@ one check a day, opt-out, on a terminal only, reading public release metadata
 only, with nothing that identifies you or your workspace. The protocol-skew
 warning is separate and needs no network at all.
 
+## Decisions
+
+Owner, 2026-11-22:
+
+- **A daily update check is accepted**: once a day, terminal only, public
+  release metadata only, no identifiers.
+- **The opt-out is documented** in every place a person or an agent looks:
+  `LT_NO_UPDATE_CHECK` in `lt help` (`src/help.rs` `ENV`) and the README;
+  `LIGUS_NO_UPDATE_CHECK` in `ligus help env`; both in the docs-site CLI
+  reference pages and in each tool's `--help` ENVIRONMENT section, with the
+  exact request made (section 2.2).
+
 ## 1. What exists today (code-verified)
 
 - **Desktop app:** `check_for_app_update` (`app/src/lib.rs:12086-12107`)
@@ -224,5 +236,3 @@ skew warning.
 - GitHub sees the IP and a daily timing pattern.
 - "Unreadable" counts include malformed events from a buggy peer, not only
   newer ones.
-</content>
-</invoke>

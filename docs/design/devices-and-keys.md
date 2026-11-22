@@ -12,6 +12,16 @@ hex line on the phone. This note gathers devices, phones, passkeys and the
 safety code on one page, and adds an optional **word form** that says exactly
 the same bytes in words that are easier to compare aloud.
 
+## Decisions
+
+Owner, 2026-11-22:
+
+- **Words for device fingerprints only** (desktops, boxes, phones, and the
+  box join-request fingerprint). The safety code keeps its hex form.
+- **Confirm the PGP word list's licence before shipping.** Checked on
+  2026-11-22; the result (not cleared) is in section 2.1, with what has to
+  happen before the list ships.
+
 ## 1. What exists today (code-verified)
 
 Line numbers are as of `origin/main` at `001a9b8a6`.
@@ -70,9 +80,35 @@ Why not the others:
 - **EFF short list:** 10.3 bits per word, same alignment problem, and an
   attribution licence.
 
-**Owner to confirm:** the PGP word list's licence terms for redistribution in
-both apps (it is widely reproduced; we need a citable statement before
-shipping).
+**Licence check (2026-11-22): not cleared.** What we found:
+
+- The list was published by Patrick Juola and Philip Zimmermann (1995) in the
+  PGPfone Owner's Manual. The manual hosted at MIT carries "© Copyright 1995
+  Philip R. Zimmermann. All rights reserved." and no licence for the list.
+- A claim that PGPfone's source is MIT-licensed exists only in secondary
+  sources (a public gist); we found no licence file in a PGPfone release, and
+  even if the code is MIT, the list as printed in the manual may not be.
+- The Wikipedia article's table of the list was the subject of a 2025
+  copyright investigation that suspected copying from the PGPfone manual, and
+  the table was removed pending clarification. The article now describes the
+  lists without reproducing them.
+- Many open-source packages ship the list (BSD, MIT and other licences on
+  their *code*), but none cites a grant for the words themselves.
+
+So we can't cite a licence today. Before the list ships, one of:
+
+1. **Written permission** from the authors (Patrick Juola; Philip
+   Zimmermann) to redistribute the two lists in Ligus's MIT-licensed code on
+   desktop and phone, recorded in a `NOTICE` file. Preferred: the list is the best
+   fit for comparing aloud.
+2. **A list we can license**, keeping every other rule in this note (two
+   lists of 256, even/odd by position, all bytes, aligned pairs): 512 words
+   chosen by a published, deterministic rule from the EFF short word list
+   (CC BY 3.0 US, attribution in `NOTICE`), or from a list written for Ligus.
+   The encoding, vectors and tests stay the same; only the words and
+   `FINGERPRINT_WORDS_V1_SHA256` change.
+
+Nothing in this design depends on which of the two it is.
 
 ### 2.2 Encoding (normative)
 
@@ -83,7 +119,7 @@ padding. The word form says **all** the bytes the hex says.
 - Device fingerprint: 10 bytes → 10 words, shown in **five pairs that line up
   with the five hex groups**:
   `7F3A-91C0-77DE-0B14-5E62` → `word word · word word · word word · word word · word word`.
-- Safety code: 16 bytes → 16 words in eight pairs, lined up the same way.
+- The safety code has no word form (owner decision).
 - Words are shown in lower case, separated by a space inside a pair and
   ` · ` between pairs.
 
@@ -92,10 +128,9 @@ padding. The word form says **all** the bytes the hex says.
 - The list lives in `crates/ligus-core/src/fingerprint_words.rs` as two
   `const [&str; 256]` arrays, with `FINGERPRINT_WORDS_V1_SHA256`: the SHA-256
   of `EVEN.join("\n") + "\n" + ODD.join("\n")`. A unit test recomputes it.
-- `device_enroll::fingerprint_words(key) -> [&'static str; 10]` and
-  `directory_trust::safety_code_words(..)` are computed from the **same
-  bytes** as the hex, in the same function family, never by parsing the
-  displayed string.
+- `device_enroll::fingerprint_words(key) -> [&'static str; 10]` (and the
+  same for `JoinRequest`) is computed from the **same bytes** as the hex, in
+  the same function family, never by parsing the displayed string.
 - DTOs gain additive fields next to every fingerprint they carry
   (`MyDeviceDto.fingerprint_words`, the add-phone and admit-box previews,
   `/v1/me` and `/v1/profile` on `ligus serve`). No field is renamed.
@@ -135,7 +170,6 @@ padding. The word form says **all** the bytes the hex says.
 | Help under the checkbox | If any group is different, choose Not my phone: someone may be trying to add their phone as you. |
 | Admit a box | Check it matches what the box printed, all five groups. |
 | Safety code | Read this to someone you're inviting, or compare it with the code they see for you. If every group matches, the invite really is from you. |
-| Safety code, words on | Reading it aloud? The words say the same as the letters. |
 
 ## 3. The Devices & keys page (desktop)
 
@@ -166,7 +200,7 @@ every ad-hoc `<code>` above: props `hex`, `words?`, `label`.
 |---|---|---|
 | T1 | Both lists have 256 unique entries, no word in both lists, lower-case ASCII only; the hash constant matches. Same test in Swift. | unit (Rust + Swift) |
 | T2 | Golden vectors: the same key gives the same hex and words in Rust and Swift (shared JSONL). | golden, both repos |
-| T3 | Property: `words` is injective over random 10- and 16-byte inputs, and decoding words back gives the bytes. | proptest |
+| T3 | Property: `words` is injective over random 10-byte inputs, and decoding words back gives the bytes. | proptest |
 | T4 | The words for a device come from the key bytes: a DTO whose `fingerprint` and `fingerprintWords` disagree can't be built (constructor test), and the web component refuses to render words if the hex has a different group count. | unit + vitest |
 | T5 | Words never appear without the hex (component snapshot with words on and off). | vitest snapshot |
 | T6 | Add a phone with words on: the approve call still sends the hex fingerprint that was compared (`phoneEnrollOfferApprove(…, fingerprint)`), unchanged. | vitest + existing Rust test |
@@ -219,7 +253,8 @@ hex when enabled, and computed words in TypeScript from the displayed string.
 #### Hidden assumptions
 
 - People actually compare every group. The design can ask but can't force it.
-- The PGP list can be redistributed (owner to confirm).
+- The word list can be redistributed. Not cleared for the PGP list (section
+  2.1): it ships only with written permission, or a licensable list replaces it.
 
 #### Counterexamples considered after revision
 
@@ -241,8 +276,8 @@ worth it for comparison by voice (a phone call with a new member).
 
 #### Residual risks
 
+- Licence: blocked until permission is recorded or the replacement list is
+  chosen (section 2.1).
 - Partial comparison by people (unchanged by this design, only discouraged by
   copy).
 - English words on non-English devices.
-</content>
-</invoke>

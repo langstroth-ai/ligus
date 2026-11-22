@@ -10,6 +10,15 @@ copy". Terminal selection breaks across wrapped lines and pane borders, and
 over SSH it is the only way. This note adds a copy action that works locally
 and over SSH (OSC 52), and decides which secrets may be copied at all.
 
+## Decisions
+
+Owner, 2026-11-22:
+
+- **Copying invite codes is on by default**, with an opt-out
+  (`copy_secrets = false`, section 2.6).
+- **A copied secret is cleared after 2 minutes** where lt can check it's
+  still there (section 2.5).
+
 ## 1. What exists today (code-verified, `ligus-term` at `a70b9c7`)
 
 - **No clipboard code.** No OSC 52, no clipboard crate, no copy key. Copying
@@ -215,6 +224,5 @@ of the markers or the clear. Copy-with-markers is safer in practice.
 #### Residual risks
 
 - OSC 52 and Linux clipboards may retain the secret; the warning says so.
-- Whether to keep `copy_secrets` default `true` is an owner choice.
-</content>
-</invoke>
+- Copying secrets is on by default (owner decision); people who don't want
+  it set `copy_secrets = false`.

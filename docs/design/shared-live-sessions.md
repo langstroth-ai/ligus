@@ -10,6 +10,19 @@ it end-to-end encrypted, on a self-hosted relay. This note settles the four
 questions that have to be answered before building: what presence leaks, what
 it costs the relay, who may steer, and how a hand-over is authorised.
 
+## Decisions
+
+Owner, 2026-11-22:
+
+- **"Show others which chat I have open" is off by default** (section 2.1).
+- **Taking over steering without an offer: only the chat's creator or an
+  Admin, with a passkey** (section 2.3).
+- **Ship in two steps.** First release: presence (typing, opt-in viewing),
+  Follow, comments on a running turn (2.4) and the synced stop request (2.5,
+  allowed for the person whose message started the turn and Admin+ until
+  steering exists). The following release: steering and hand-over (2.3),
+  once tests T3-T5 have proved the runner-side rule.
+
 ## 1. What exists today (code-verified)
 
 `hive` at `origin/main` `001a9b8a6`; the relay is
@@ -296,9 +309,9 @@ follow once the runner-side rule has been proven by T4/T5.
 
 #### Residual risks
 
+- Steering arrives one release after presence and comments (owner decision),
+  so for that release anyone allowed to trigger a turn still can.
 - Mixed-version workspaces: steering is advisory until every runner is 0.3+.
 - The relay learns when devices are active.
 - The per-room limit caps very large live sessions until presence nudges
   ship in the relay.
-</content>
-</invoke>

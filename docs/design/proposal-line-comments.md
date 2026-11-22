@@ -14,6 +14,16 @@ and what has to change in the fold so it can be trusted.
 whole-proposal. The fold gets three fixes it needs anyway (section 4), because
 today the thread is not trustworthy enough to carry line comments.
 
+## Decisions
+
+- **Owner, 2026-11-22: line comments may require an updated client.** Nobody
+  uses Ligus actively yet, so this design does not carry compromises for
+  older builds: every device that shows, writes or folds line comments runs
+  0.2 or later. What stays: new fields are additive, no existing wire id or
+  field is renamed, and no signing context changes.
+- Reuse the refinement thread with a line anchor (preferred by the owner);
+  votes stay whole-proposal.
+
 ## 1. What exists today (code-verified)
 
 Line numbers are as of `origin/main` at `001a9b8a6`.
@@ -36,17 +46,14 @@ Line numbers are as of `origin/main` at `001a9b8a6`.
 ## 2. Options
 
 **A. Reuse `proposalRefined` with an optional anchor (chosen).**
-One additive field on `ProposalRefinement`. Old clients decode the event,
-ignore the field and show the comment as an ordinary note. The bytes they
-store and relay still carry the anchor, and the signature still verifies,
-because verification runs over the received bytes (`crypto.rs:102-127`).
+Two additive fields on `ProposalRefinement`. The thread's projection,
+authz, DTO and the "Send to agent to revise" loop already exist and keep one
+source of truth.
 
-**B. A new event kind, for example `proposalLineCommented`.** Old clients
-fold it to `Unknown` and show nothing. It needs a golden vector
-(`golden_coverage.rs`), new authz rules, new projection code and a new DTO,
-and the "Send to agent to revise" loop would have to read two sources. The
-one thing it buys is that an old client can't *mis-show* an anchored comment
-as a general one. That is a smaller harm than not showing it at all.
+**B. A new event kind, for example `proposalLineCommented`.** It needs a
+golden vector (`golden_coverage.rs`), new authz rules, new projection code
+and a new DTO, and the revise loop would have to read two sources, for no
+gain once older builds are out of scope.
 
 **C. Encode the anchor in the text** (`src/a.rs:42: …`). No schema change,
 but the anchor becomes unauthenticated free text that any author can fake,
@@ -149,10 +156,10 @@ location people will act on.
 
 1. **A re-upsert never rewrites the thread.** In the `ProposalUpserted` arm,
    when a slot exists, keep `slot.refinements` and ignore the upsert's. Today
-   an older client that re-upserts a proposal (the revise loop does this to set
-   `superseded_by`) replaces every comment with its typed copy, which has no
-   `anchor`, on every device that folds it. It also lets an upsert insert
-   comments under any name. For a first upsert (no slot), keep only comments
+   a re-upsert (the revise loop does this to set `superseded_by`) replaces the
+   whole thread with the copy its author had, so a comment that author hadn't
+   yet seen (a concurrent comment) disappears on every device that folds the
+   upsert after it. It also lets an upsert insert comments under any name. For a first upsert (no slot), keep only comments
    whose `actorId` is the upsert's author; a compaction seed carries the
    thread through its own seed path and is unaffected (to verify, test T7).
 2. **A comment is by its signer.** At fold, a person's or phone's
@@ -169,10 +176,8 @@ location people will act on.
    order of arrival can put a reply before its parent on a partial sync, and
    the fold re-runs in canonical order).
 
-Fixes 2-4 tighten the fold. An old client keeps accepting a comment a new
-client denies. The thread is display-only (it never reaches the digest, the
-quorum or the apply gate), so this divergence is cosmetic; it is listed as a
-residual risk. Fix 1 changes only what an upsert does to the thread.
+Fixes 1-4 ship in the same release as anchors; all devices fold the same
+rules.
 
 ## 5. What does not change
 
@@ -189,8 +194,8 @@ residual risk. Fix 1 changes only what an upsert does to the thread.
 | # | Test | Kind |
 |---|---|---|
 | T1 | An anchored `proposalRefined` round-trips; an old-shape struct (no `anchor`) decodes; a golden vector with an anchor is added to `tests/golden/envelopes_v3.jsonl`. | unit + golden |
-| T2 | A client built at the 0.1.1 tag decodes an anchored event, shows it as a general comment, stores and re-pushes the same bytes, and the signature verifies on a 0.2 client (compat test with a frozen 0.1.1 decoder fixture). | compat |
-| T3 | Property: for any permutation of {upsert v1, N comments, re-upsert with `superseded_by` from an old-shape client, upsert of child}, every device ends with the same thread and every comment keeps its anchor. | proptest over orderings |
+| T2 | An anchored event received from another device verifies over its received bytes and re-pushes byte for byte (`ingest_stores_the_received_bytes` style). | unit |
+| T3 | Property: for any permutation of {upsert v1, N comments from several devices, re-upsert with `superseded_by` made before some comments were seen, upsert of child}, every device ends with the same thread, no comment is lost and every comment keeps its anchor. | proptest over orderings |
 | T4 | A `proposalRefined` whose `actorId` isn't the signer is denied at fold; one with a forged `role` is stored with the signer's real role. | unit |
 | T5 | A Viewer's comment signed by the Viewer's own device is denied at fold on a second device. | unit |
 | T6 | Text over 8,000 characters, an empty anchored comment and an anchor range over 500 lines are denied; 2,001 comments leave 2,000. | unit |
@@ -210,13 +215,13 @@ required. The second pass is the verdict.
 
 The first draft added `anchor` and stopped there. Findings:
 
-1. **Old-client re-upsert erases anchors everywhere** (High, confidence high).
-   Sequence: 0.2 device A posts an anchored comment; 0.1.1 device B runs
-   "Send to agent to revise", which re-upserts the parent with
-   `superseded_by` from its typed projection (no `anchor`); every device
-   folds B's upsert after A's comment and `*slot = proposal.clone()` replaces
-   the thread. Expected: the anchor survives. Actual: gone on every device,
-   including A. *Revision: fold fix 1, test T3.*
+1. **A re-upsert erases comments** (High, confidence high). Sequence:
+   device A posts an anchored comment; device B, which hasn't folded it yet,
+   runs "Send to agent to revise", which re-upserts the parent with
+   `superseded_by` from its projection; every device folds B's upsert after
+   A's comment and `*slot = proposal.clone()` replaces the thread. Expected:
+   A's comment survives. Actual: gone on every device. *Revision: fold fix 1,
+   test T3.*
 2. **Forged authorship** (High, high). A member's device signs a
    `proposalRefined` with `actorId` of the Owner; the fold checks membership
    only, so it shows as the Owner's comment, and the revise loop feeds it to the
@@ -234,7 +239,7 @@ The first draft added `anchor` and stopped there. Findings:
    instruction lets a reviewer choose text the agent will read as content.
    *Revision: path and line only, test T10.*
 
-### Second pass
+### Second pass (after the owner's decision that line comments may require an updated client)
 
 #### Decision
 
@@ -244,8 +249,8 @@ The first draft added `anchor` and stopped there. Findings:
 
 - I1. An anchored comment is readable by exactly the workspace's key holders
   (it rides an ordinary sealed envelope).
-- I2. Adding `anchor` and `reply_to` is invisible to old clients except as a
-  general comment, and never breaks their signature checks.
+- I2. The new fields are additive: no existing wire id, field or signing
+  context changes, and signatures verify over the received bytes.
 - I3. Every device converges on the same thread for the same event set, in
   any order.
 - I4. A comment is attributed to its signer at the signer's real role.
@@ -255,6 +260,9 @@ The first draft added `anchor` and stopped there. Findings:
 
 #### Hidden assumptions
 
+- Every device in the workspace runs 0.2 or later (owner decision). A device
+  on an older build would show anchored comments without their line and fold
+  the thread with the old rules; this is unsupported, not designed around.
 - `diff_digest` computed on the author's device equals the fold's value for
   the same proposal (true today; pinned by `proposal_digest_v1.jsonl`).
 - Clients parse a unified diff into the same `(path, side, line)`
@@ -267,30 +275,28 @@ The first draft added `anchor` and stopped there. Findings:
 
 | Claim | Sequence | Expected | Likely actual | Severity | Confidence |
 |---|---|---|---|---|---|
-| I3 | Old client B folds A's anchored comment, then B's own re-upsert, then a 0.2 client C folds all three | C shows the anchor | C keeps the anchor (fix 1); B shows the comment without it | Low | High |
-| I4 | Old client B accepts a forged-author comment that 0.2 client C denies | Same thread | B shows a comment C doesn't | Low (display) | High |
+| I3 | A re-upsert made before two concurrent comments folds after them, in either order | both comments kept | kept (fix 1) | Low | High |
 | I6 | Two parsers disagree on a rename-with-edit hunk | Comment under the right line | Shown as outdated on the client that disagrees | Low | Medium |
 | I1 | A removed member's device posts a comment signed before removal, delivered after | Shown if before the removal watermark, as for every event | Same as today's membership rule | Low | High |
+| I4 | A Viewer's device posts a comment | denied everywhere | denied at fold (fix 3) | Low | High |
 
 #### Required tests
 
-T1-T11 above. T2 and T3 are the ones that prove the "reuse" decision; they
-must exist before the field ships.
+T1-T11 above. T3 and T4 are the ones that prove the thread can be trusted;
+they must exist before the fields ship.
 
 #### Simpler alternatives
 
-Shipping anchors without the fold fixes would be smaller, but finding 1 makes
-the feature lose data in the first mixed-version workspace, so the fixes are
-the minimum. Leaving out `reply_to` is possible; it is kept because it costs
-one optional field and the Review screen's design needs it.
+Shipping anchors without the fold fixes would be smaller, but finding 1 loses
+comments whenever a revision races a comment, and finding 2 lets a member
+speak as the Owner to the agent, so the fixes are the minimum. Leaving out
+`reply_to` is possible; it is kept because it costs one optional field and the
+Review screen's design needs it.
 
 #### Residual risks
 
-- Mixed-version workspaces show different threads (old clients: no anchors,
-  forged-author comments still visible). Cosmetic; ends when everyone is on
-  0.2.
+- A device still on an older build sees a different thread; unsupported by
+  decision.
 - The relay learns that someone in the workspace sent N small events at
   time T (true of every event).
 - Comments from the phone arrive only once a phone comment action exists.
-</content>
-</invoke>

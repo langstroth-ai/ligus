@@ -14,6 +14,19 @@ Decided by the owner: one "Approve & apply" button only when your vote
 completes quorum; otherwise the button reads "Approve (1 more needed)".
 Votes stay whole-proposal; no partial accept of someone else's proposal.
 
+## Decisions
+
+Owner, 2026-11-22:
+
+- One "Approve & apply" button only when your vote completes quorum;
+  otherwise "Approve (N more needed)".
+- **Two simultaneous last votes: accepted**, with a clear message to the
+  person whose apply didn't count (section 3.2, step 8).
+- **The 600 ms click guard: accepted** (section 3.4).
+- **One passkey ceremony, not two**, on human-gated changes: the owner found
+  two prompts "heavy". Section 3.5 specifies one assertion that covers both
+  signed events without weakening what either proves.
+
 ## 1. What exists today (code-verified)
 
 Line numbers are as of `origin/main` at `001a9b8a6`.
@@ -140,21 +153,29 @@ diff_digest, plan_digest, target_agent_id, host)`:
 3. Re-evaluate 3.1's condition on the fresh fold. If it no longer holds (a
    reject or another approval arrived), stop before voting and refresh the
    column: "Someone else voted meanwhile. Nothing was approved."
-4. Cast the vote (`vote_on_proposal`), including the passkey ceremony if the
-   rules need presence.
+4. Cast the vote (`vote_on_proposal`). If the rules need presence for the
+   vote or the apply, this is the **only** passkey ceremony (section 3.5).
 5. Fold it. Re-run the full Implement gate on the **fresh fold**, never the
    locally projected copy that `vote_proposal_sync` returns.
 6. Do a sync pull (bounded, 5 s) and re-check: no `ProposalApplyRequested`,
    no `ProposalApplied`, no qualifying rejection, still `ready_to_apply`.
 7. Apply: `implement_proposal_targeted` with the previewed target, or
-   `request_apply` for the chosen host. A human-gated self-apply asks for the
-   passkey again (a separate signed event; the ceremony says "Apply").
+   `request_apply` for the chosen host. For a human-gated proposal the apply
+   is always an apply request (section 3.5), naming this device or the chosen
+   host, appended with the presence already gathered in step 4; no second
+   ceremony.
 8. If 5-7 refuse, the vote stands and the column says, in place (no toast):
    "You approved. Not applied: ‹reason›." with **Implement…** if it later
-   becomes possible. Nothing retries on its own.
+   becomes possible. Nothing retries on its own. When the reason is that
+   someone else's apply folded first (the accepted race), the text is:
+   "You approved. ‹Name› applied it first, so yours wasn't needed. Nothing
+   else to do." If this device had already committed on its chat branch, it
+   adds: "This device's copy of the commit was set aside." (the commit is
+   left on a `ligus/set-aside/…` ref, never on the chat branch).
 
-The vote and the apply are two signed events, exactly as today; nothing new
-goes on the wire, no wire id changes, and the fold, quorum and authz rules are
+The vote and the apply are two signed events, as today. Without a human gate,
+nothing new goes on the wire. With one, the only wire change is the additive
+presence set of section 3.5; no wire id changes and the quorum rules are
 untouched. "Approve & apply" is a client-side sequence with stricter checks
 than two clicks.
 
@@ -173,8 +194,8 @@ Built from `implement_plan`, so the words name what the runner does.
 | Apply on a host | **Asks ‹host› to apply it once**, on its checkout, and report back. Nobody else applies it meanwhile. |
 
 Always followed by the badges that apply ("Human gate applies", "Presence
-(passkey) required") and, when the apply needs a passkey too: "You'll confirm
-twice: once to approve, once to apply."
+(passkey) required") and, when a passkey is needed: "You'll confirm once with
+your passkey. It covers your approval and this apply, and nothing else."
 
 ### 3.4 Keys and accidental activation
 
@@ -185,7 +206,67 @@ The button is disabled until the plan has loaded and for 600 ms after the
 plan or the quorum line last changed, so a late re-render can't put a
 different action under a moving pointer.
 
-### 3.5 Other surfaces
+### 3.5 One passkey for the vote and the apply
+
+Today each event that needs presence carries its own WebAuthn assertion in
+its actor stamp (`ActorStamp.presence`, `crates/ligus-core/src/identity.rs:148-151`),
+over a challenge computed from that event alone (`presence::challenge`,
+`crates/ligus-core/src/presence.rs:245-270`: workspace, session, event id,
+lamport, payload, config frontier, account; **not** the actor stamp), and
+the fold checks it in `passkeys::verify_stamped` (`authz/mod.rs:575-610`).
+A human-gated proposal needs presence on the vote and on a self-apply
+(`authz/rules.rs:84-99`); an apply **request** carries the person's presence
+and the host that fulfils it needs none ("the request carried the person's").
+
+**Shape: a presence set of exactly two events.**
+
+1. The client drafts both events first, fully: the `ProposalVoteCast`
+   (approved, naming the shown digest) at lamport *L*, and a
+   `ProposalApplyRequested` at *L + 1* naming the shown digest, the proposal's
+   repo, the expected base commit, and the host: **this device** for
+   "Apply on This device", or the chosen host.
+2. It computes `c1 = challenge(vote)`, `c2 = challenge(request)` and the set
+   challenge
+   `S = SHA-256("ligus-presence-set-v1\0" ‖ u32le(2) ‖ c1 ‖ c2)`
+   (a **new** frozen context; the existing `ligus-presence-v1\0` is untouched).
+3. One ceremony signs `S`. The passkey sheet's title is "Approve and apply
+   ‹title›".
+4. Both envelopes carry the same assertion plus an additive actor-stamp field
+   `presenceSet: [c1, c2]` (hex). The device signs each envelope as usual; the
+   preimage covers the actor stamp, so the set is signed by the device too.
+5. The vote is appended; then steps 5-6 re-check; only then is the request
+   appended. If the re-check refuses, the drafted request is dropped from
+   memory, never stored or sent.
+6. This device's own apply-host loop (`apply_host::pending`, which picks up
+   requests naming this device) fulfils the request once, with its usual
+   claim, judge, apply and report steps. Non-gated proposals keep the direct
+   `implement_proposal_targeted` path.
+
+**Verification (fold, every device).** In `verify_stamped`, when the stamp
+has `presenceSet`:
+
+- it has exactly 2 entries, distinct, each 32 bytes;
+- this event's own `challenge(env)` is one of them;
+- the assertion verifies over `S` computed from the listed entries, by a
+  credential of the stamped account, with user verification, as today;
+- the event is a `ProposalVoteCast` with `approved: true` or a
+  `ProposalApplyRequested`; any other kind carrying a set is denied
+  ("a presence set covers only an approval and its apply");
+- for a request, the fold additionally requires that the same account's
+  latest vote on that proposal is an approval naming the same digest and
+  carrying a `presenceSet` that contains this request's challenge. So a set
+  can't pair a request with someone else's vote, or with a different
+  proposal's.
+
+**What each signature still proves.** The device signature on each envelope
+is unchanged. The passkey assertion proves that the person approved this
+exact pair of events: each event's challenge commits to its full payload,
+event id and lamport, and `S` commits to both. An assertion can't be moved to
+a third event (its challenge isn't in the set), the set can't be extended
+(`S` fixes *n* = 2 and both entries), and replaying an event is refused by
+event-id dedup as today.
+
+### 3.6 Other surfaces
 
 - **Phone:** never applies (the phone tier can't, and Implement runs on a
   computer). Its sign sheet uses the same "completes quorum" calculation for
@@ -203,11 +284,16 @@ different action under a moving pointer.
 | T4 | Plan changed (target agent removed, egress changed) between render and click → nothing signed. | integration |
 | T5 | Another member's reject folds between click and step 5 → my vote is cast, nothing applies, the column says "You approved. Not applied: …". | integration with two devices on the test relay |
 | T6 | Two members each see Approve & apply on a 2-of-3 proposal with 1 approval and click together → at most one `ProposalApplied` folds on every device; the loser's column says not applied; neither retries. | integration, two devices, randomized delays (100 runs) |
-| T7 | Human-gated proposal: passkey cancelled at the apply step → the vote stands, nothing applied, no second prompt. | integration with the stub authenticator |
+| T7 | Human-gated proposal: exactly one passkey ceremony for Approve & apply; cancelling it signs and appends nothing. | integration with the stub authenticator |
 | T8 | Workflow proposal: "Approve & add workflow" casts one vote and adds the definition once; an older peer reaching quorum does not add it twice. | unit |
 | T9 | The "What will run" text for each plan kind is produced from `implement_plan` (snapshot test per kind), and the runner's `executed_argv`/`executed_instruction` equal the plan shown. | unit + snapshot |
 | T10 | Implement… is not shown for a Rejected proposal that still has quorum. | web unit (vitest) |
 | T11 | `⇧A` alone never applies; `⇧A` then ⏎ does; the button ignores clicks for 600 ms after the plan changes. | web unit + Playwright |
+| T12 | Presence set: golden vectors for `S` (new context, two challenges); a set of 1 or 3 entries, a duplicate entry, an event whose own challenge isn't listed, or an assertion over `c1` alone are each denied. | unit + golden |
+| T13 | A set assertion copied onto a third event (another vote, a `DeviceRevoked`, a rules change) is denied; an apply request whose set doesn't match the same account's approving vote on the same proposal and digest is denied. | unit (forged-envelope harness) |
+| T14 | Re-check refuses after the vote (a reject folded): the drafted request never reaches the store or the relay. | integration |
+| T15 | The request names this device; `apply_host::pending` on this device fulfils it once, and a restart mid-apply doesn't apply twice. | integration |
+| T16 | The second last voter whose apply lost sees exactly the step-8 text, and a commit already made is on a set-aside ref, not the chat branch. | integration, two devices |
 
 ## 5. Adversarial assessment
 
@@ -255,8 +341,9 @@ revisions.
   `ready_to_apply` with the human-gate and sync-block checks passing.
 - G2. The vote binds the content shown on screen, and the run is the plan
   shown on screen.
-- G3. No governance rule changes: same events, same fold, same quorum, same
-  presence requirements.
+- G3. No quorum or role rule changes: same events, same quorum, same
+  presence requirements; the only fold addition is verifying a presence set
+  (section 3.5).
 - G4. The button appears only when this person's vote is what completes
   quorum.
 - G5. Approving is always possible without applying.
@@ -285,7 +372,7 @@ the combined button closes it.
 
 #### Required tests
 
-T1-T11. T1, T5 and T6 are the governance proof.
+T1-T16. T1, T5, T6, T12 and T13 are the governance proof.
 
 #### Simpler alternatives
 
@@ -299,6 +386,64 @@ happens in practice, fall back to this.
 - Offline rejects can still lose to an apply (unchanged from today).
 - Two simultaneous last voters can both start applying; only one counts, and
   the other may leave a local commit to clean up. Rare in practice; visible.
-- A human-gated apply asks for the passkey twice, which is correct but slower.
-</content>
-</invoke>
+
+### Third pass: one passkey for both events (section 3.5)
+
+Re-run on the owner's change. The first form considered was "one assertion
+over the vote's challenge, and the apply references it".
+
+#### First form: Revise
+
+1. **Apply events can't be pre-signed** (High, high). A self-apply's
+   `ProposalApplied` names the commit and tree it produces, which don't exist
+   at ceremony time, so its challenge can't be computed in advance.
+   *Revision: the apply is an apply request (known in full in advance) that
+   this device fulfils as a host, which already needs no presence of its own.*
+2. **Referencing is not binding** (High, medium). An apply that merely names
+   the vote's event id would let a compromised device file any request for
+   any host while the person saw "This device". *Revision: the request's own
+   challenge is inside the signed set (3.5, step 2), test T12.*
+3. **Set reuse** (High, medium). A set without a kind restriction lets a
+   compromised client pair the visible approval with a hidden governance event
+   (a revocation, a rules change). *Revision: only an approving vote and an
+   apply request may carry a set, and the request must match the same
+   account's vote on the same proposal and digest; test T13.*
+4. **Orphaned request** (Medium, medium). If the re-check fails after the
+   vote, a signed, presence-carrying request exists. *Revision: never stored
+   or sent (step 5), test T14. The fold would still refuse it unless the
+   proposal is approved, which is what the person agreed to.*
+
+#### Decision
+
+**Approve with risks.**
+
+#### Claimed invariants
+
+- P1. One ceremony authorises exactly two events: this person's approval and
+  one apply request for the same content.
+- P2. Neither event's authorisation is weaker than today: each still has its
+  device signature, and the passkey covers its full challenge.
+- P3. No existing signing context, wire id or field changes; the set is a new
+  context and an additive stamp field.
+
+#### Hidden assumptions
+
+- Every device runs a build that knows presence sets (owner: no older clients
+  to support). An older build would deny both events for "presence required".
+- Applying through the request path on this device gives the same result as
+  the direct self-apply (both use the chat's worktree on the expected base;
+  T15 pins it).
+
+#### Counterexamples considered
+
+| Claim | Sequence | Expected | Likely actual | Severity | Confidence |
+|---|---|---|---|---|---|
+| P1 | Compromised device shows "Apply on This device", drafts a request naming another host | person's choice | the passkey sheet can't show the host; the request is the one signed, so the wrong host would be authorised, as a compromised device could already ask for any single-event ceremony today | Medium | Medium |
+| P1 | Vote folds, request is refused (base commit moved) | vote stands, nothing applied | as expected; the person asks again with a new ceremony | Low | High |
+| P2 | Assertion lifted onto a second request for the same proposal | denied | denied: its challenge isn't in the set; one open request per proposal anyway | Low | High |
+
+#### Residual risks (third pass)
+
+- A compromised desktop can still misrepresent what a passkey ceremony
+  approves; true of every ceremony today, and the set doesn't widen it beyond
+  one approval plus one apply request.
