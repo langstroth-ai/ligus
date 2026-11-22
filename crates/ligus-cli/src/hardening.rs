@@ -218,7 +218,7 @@ pub fn require_sandbox_or_exit(what: &str) {
     }
     let s = ligus_runtime::executor::sandbox_status();
     if s.kind == ligus_runtime::executor::ExecutorKind::Unconfined {
-        eprintln!("error: LIGUS_REQUIRE_SANDBOX=1 and this host has no agent sandbox, so {what} would refuse every agent turn:");
+        eprintln!("ligus: LIGUS_REQUIRE_SANDBOX=1 and this host has no agent sandbox, so {what} would refuse every agent turn:");
         eprintln!("  {}", s.summary);
         for n in &s.notes {
             eprintln!("  - {n}");

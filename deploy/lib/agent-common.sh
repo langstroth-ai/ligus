@@ -14,11 +14,28 @@
 # object. No command ever prints a secret value.
 
 AC_JSON=0
+AC_COLOR=auto
 AC_CHECKS=""
 AC_NEXT=""
 AC_WORST=0
 
 ac_log() { printf '%s\n' "$*" >&2; }
+
+# --color auto|always|never (a script's flag). Auto colours the [FAIL] and
+# [WARN] marks only when stderr is a terminal and NO_COLOR is unset (or
+# CLICOLOR_FORCE asks for colour anyway). JSON on stdout is never coloured.
+ac_set_color() {
+  case $1 in
+    auto|always|never) AC_COLOR=$1 ;;
+    *) ac_usage_error "--color must be auto, always or never" ;;
+  esac
+}
+ac_color_on() {
+  case $AC_COLOR in always) return 0 ;; never) return 1 ;; esac
+  [ -n "${NO_COLOR:-}" ] && return 1
+  [ -n "${CLICOLOR_FORCE:-}" ] && [ "${CLICOLOR_FORCE}" != 0 ] && return 0
+  [ -t 2 ]
+}
 
 # JSON string escape (backslash, quote, control characters as spaces).
 ac_jstr() {
@@ -41,9 +58,14 @@ ac_check() {
   case $status in
     fail) [ "$AC_WORST" -lt 1 ] && AC_WORST=1 ;;
   esac
-  local mark
+  local mark tag
   case $status in pass) mark="ok  " ;; warn) mark="WARN" ;; fail) mark="FAIL" ;; skip) mark="skip" ;; *) mark="info" ;; esac
-  ac_log "[$mark] $id: $detail"
+  tag="[$mark]"
+  if { [ "$status" = fail ] || [ "$status" = warn ]; } && ac_color_on; then
+    # Red for a failure, yellow for a warning; the word stays for no colour.
+    if [ "$status" = fail ]; then tag=$(printf '\033[1;31m[%s]\033[0m' "$mark"); else tag=$(printf '\033[33m[%s]\033[0m' "$mark"); fi
+  fi
+  ac_log "$tag $id: $detail"
   if [ -n "$fix" ] && [ "$status" != pass ]; then ac_log "       -> $fix"; fi
   return 0
 }
