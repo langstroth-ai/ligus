@@ -1,4 +1,4 @@
-# CLI conventions: checks
+# CLI conventions: checks and exit codes
 
 Every Ligus command-line tool reports checks the same way: `ligus doctor`,
 `langstroth-relay check`, and the deploy scripts `deploy/local/ligus-local`
@@ -71,6 +71,34 @@ A check that fails because of another component says which tool checks that
 component. `ligus doctor`'s relay check names
 `langstroth-relay check --url <relay>`, which you run on the relay host; the
 deploy scripts name `ligus doctor` for the sandbox.
+
+## Exit codes {#exit-codes}
+
+One table for every tool. `ligus help exit-codes`, `ligus-k8s help
+exit-codes`, `ligus-local help exit-codes` and `langstroth-relay help
+exit-codes` print it.
+
+| Code | Meaning | What a person or an agent does |
+|---|---|---|
+| 0 | done (warnings allowed) | continue |
+| 1 | failed: the message or `checks[].fix` says why | read it, fix, retry |
+| 2 | usage error | fix the command line |
+| 3 | a precondition you can fix is missing (a tool, a file, a sign-in, the agent sandbox) | fix it and rerun |
+| 4 | **a person must decide or act** (a passkey, an admission, exposure, deleting owned data) | stop and ask |
+| 5 | not found (a workspace, chat, proposal, run) | check the id |
+| 6 | refused by workspace rules (a role, lockdown, agent access) | ask an Admin; don't retry |
+| 7 | offline, the relay unreachable, or timed out | retry with backoff |
+| 8+ | command-specific, listed in that command's help | |
+
+Which codes each tool uses: `ligus` all of 0 to 7 except 4 (see the
+[CLI reference](../../ligus/reference/cli.md#exit-codes)); the deploy scripts
+0 to 4 (an unreachable cluster is 3: check the context); `langstroth-relay`
+0 to 2. Every command's `--help` ends its EXIT CODES with a pointer to the
+table.
+
+A check command exits 1 when a check fails, whatever the check. Before 0.2,
+`ligus doctor`'s preflights exited 3, 4 or 5 and `ligus gateway-check` 6;
+`--legacy-exit-codes` keeps those codes for one release.
 
 ## Profiles {#profiles}
 

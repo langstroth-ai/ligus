@@ -49,6 +49,7 @@ mod gateway_check;
 mod hardening;
 mod help;
 mod mcp_config;
+mod problem;
 mod memory_cmd;
 mod selftest;
 mod reply;
@@ -728,7 +729,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
 
 fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usize> {
     let Some(s) = svc.load(chat_id)? else {
-        bail!("unknown chat {chat_id}");
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
@@ -757,7 +758,7 @@ fn cmd_tail(cfg: &Config, chat_id: Uuid, watch: bool) -> Result<()> {
 async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let Some(session) = svc.load(chat_id)? else {
-        bail!("unknown chat {chat_id}");
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     svc.post_user_message(chat_id, session.workspace_id, body)?;
     println!("posted.");
@@ -1696,15 +1697,6 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// `ligus doctor`: the agent sandbox tier this device uses, why, and what
-/// it leaves open (the same text as the Settings banner and the logs).
-///
-/// As a preflight (a Kubernetes init container, a CI step) it returns a
-/// non-zero exit code: `--require-confined` exits 3 without an agent
-/// sandbox, `--expect-tier <tier>` exits 4 on any other tier, and
-/// `--turn-test` (exit 5 on failure) runs one real headless agent turn
-/// against an in-process stub model whose `run_command` probes the sandbox
-/// (see selftest.rs).
 /// `ligus doctor --sandbox [--runtime <name>] [--agent <id>]`: what an agent
 /// turn may reach on this host (Phase C: the home is default-deny), each path
 /// with why, the shell rule, and the signed grants in force for this
@@ -1801,6 +1793,9 @@ struct DoctorOpts {
     runtime: Option<String>,
     agent: Option<String>,
     json: bool,
+    /// `--legacy-exit-codes`: the preflight failures exit 3, 4 and 5 as
+    /// before 0.2 (for one release), instead of 1.
+    legacy_exit_codes: bool,
 }
 
 impl DoctorOpts {
@@ -1836,8 +1831,10 @@ fn unconfined_fix() -> &'static str {
 fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
     use checks::{Check, Report, Status};
     let mut r = Report::new("doctor");
-    // Today's preflight codes (3, 4, 5) until they move to 1.
+    // A failed check exits 1; --legacy-exit-codes keeps the preflights' old
+    // codes (3 no sandbox, 4 another tier, 5 the turn test) for one release.
     let mut code = 0;
+    let legacy = |old: i32| if o.legacy_exit_codes { old } else { help::EXIT_ERROR };
     if o.sandbox_scope() {
         let s = ligus_runtime::executor::sandbox_status();
         let unconfined = s.kind == ligus_runtime::executor::ExecutorKind::Unconfined;
@@ -1854,7 +1851,7 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
         r.add(c);
         if (o.require_confined || o.turn_test) && unconfined {
             eprintln!("ligus: no agent sandbox on this host: every agent turn that runs local programs would be refused");
-            code = hardening::EXIT_UNCONFINED;
+            code = legacy(hardening::EXIT_UNCONFINED);
         }
         if let Some(want) = o.expect_tier.as_deref().map(|t| t.trim().to_ascii_lowercase()) {
             if want == s.tier() {
@@ -1866,7 +1863,7 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
                 );
                 eprintln!("ligus: expected agent sandbox tier {want}, this host uses {}", s.tier());
                 if code == 0 {
-                    code = 4;
+                    code = legacy(4);
                 }
             }
         }
@@ -1891,12 +1888,12 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
                 Ok(t) => {
                     eprintln!("ligus: turn test failed");
                     r.add(Check::fail("sandbox.turn-test", "turn test", "failed: the sandbox let something through or the command didn't run").fix("read the findings above; ligus help troubleshooting").notes(t.lines));
-                    code = 5;
+                    code = legacy(5);
                 }
                 Err(e) => {
                     eprintln!("ligus: turn test could not run: {e:#}");
                     r.add(Check::fail("sandbox.turn-test", "turn test", format!("could not run: {e:#}")).fix("ligus help troubleshooting"));
-                    code = 5;
+                    code = legacy(5);
                 }
             }
         }
@@ -2067,13 +2064,14 @@ fn main() {
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
         eprintln!("ligus: {e:#}");
-        if help::is_usage(&e) {
+        let (code, _) = problem::classify(&e);
+        if code == help::EXIT_USAGE {
             let args = split_flag_values(std::env::args().skip(1).collect());
             // Continues the error above it, indented under it.
             eprintln!("  {}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
             std::process::exit(help::EXIT_USAGE);
         }
-        std::process::exit(help::EXIT_ERROR);
+        std::process::exit(code);
     }
 }
 
@@ -2180,6 +2178,7 @@ fn run() -> Result<()> {
                 runtime: flag_val("--runtime"),
                 agent: flag_val("--agent"),
                 json: has("--json"),
+                legacy_exit_codes: has("--legacy-exit-codes"),
             };
             let code = cmd_doctor(&cfg, &o)?;
             if code != 0 {
@@ -2190,7 +2189,7 @@ fn run() -> Result<()> {
         "gateway-check" => {
             let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
             let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());
-            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model))?;
+            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model, has("--legacy-exit-codes")))?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -2202,13 +2201,13 @@ fn run() -> Result<()> {
             let id = positional
                 .first()
                 .ok_or_else(|| anyhow!("usage: ligus tail <chat-id> [--watch]"))?;
-            cmd_tail(&cfg, Uuid::parse_str(id)?, has("--watch"))
+            cmd_tail(&cfg, chat_id_arg(id)?, has("--watch"))
         }
         "send" => {
             let id = positional
                 .first()
                 .ok_or_else(|| anyhow!("usage: ligus send <chat-id> <message…> [--push]"))?;
-            let chat_id = Uuid::parse_str(id)?;
+            let chat_id = chat_id_arg(id)?;
             let body = positional[1..]
                 .iter()
                 .map(|s| s.as_str())
@@ -2459,6 +2458,11 @@ fn run() -> Result<()> {
 /// The invite `ligus enroll` uses: piped (`-`), from `--file PATH`, or (with a
 /// warning, since it carries the workspace key) on the command line. The bool
 /// is whether it came from the command line.
+/// A chat id from the command line: a malformed one is a usage error.
+fn chat_id_arg(s: &str) -> Result<Uuid> {
+    Uuid::parse_str(s.trim()).map_err(|_| help::usage_error(format!("not a chat id: {s:?} (ligus chats lists the ids)")))
+}
+
 fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<(String, bool)> {
     match (arg, file) {
         (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
