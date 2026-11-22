@@ -33,9 +33,10 @@ impl LigusHost for AppHost {
         });
     }
 
-    fn ask_posted(&self, _chat_id: Uuid, _ask: &HumanAsk) {
+    fn ask_posted(&self, chat_id: Uuid, ask: &HumanAsk) {
         // The open chat refetches and shows the question with its answer buttons.
         let _ = self.app.emit("workspace://synced", 1);
+        crate::notices::ask_posted(&self.app, &self.app.state::<AppState>(), chat_id, ask.turn_id, ask.ask_id);
     }
 
     fn stage_attachment(&self, proposal_id: Uuid, sha256: &str, bytes: &[u8]) -> Result<(), String> {

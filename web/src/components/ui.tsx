@@ -155,6 +155,7 @@ export function Modal({
   overlayStyle,
   panelClassName = "",
   panelStyle,
+  labelledBy,
   children,
 }: {
   onClose: () => void;
@@ -162,6 +163,8 @@ export function Modal({
   overlayStyle?: CSSProperties;
   panelClassName?: string;
   panelStyle?: CSSProperties;
+  /// The id of the element that names the dialog (its title).
+  labelledBy?: string;
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -227,6 +230,7 @@ export function Modal({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={labelledBy}
         tabIndex={-1}
         className={panelClassName}
         style={{ outline: "none", ...panelStyle }}

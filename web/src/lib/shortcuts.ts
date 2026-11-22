@@ -14,6 +14,7 @@ export type ShortcutId =
   | "prevChat"
   | "toggleSidebar"
   | "toggleTools"
+  | "focusMode"
   | "pane"
   | "zoomIn"
   | "zoomOut"
@@ -54,6 +55,7 @@ export const SHORTCUTS: Shortcut[] = [
   ),
   { id: "toggleSidebar", keys: "⌘B", label: "Show or hide the sidebar", group: "View" },
   { id: "toggleTools", keys: "⌘J", label: "Show or hide the tools rail", group: "View" },
+  { id: "focusMode", keys: "⌘.", label: "Focus mode: only the chat and the message box", group: "View" },
   { id: "zoomIn", keys: "⌘+", label: "Zoom in", group: "View" },
   { id: "zoomOut", keys: "⌘−", label: "Zoom out", group: "View" },
   { id: "zoomReset", keys: "⌘0", label: "Actual size", group: "View" },
@@ -102,6 +104,7 @@ export function matchShortcut(e: KeyLike): { id: ShortcutId; pane?: string } | n
   if (k === "k") return { id: "palette" };
   if (k === "b") return { id: "toggleSidebar" };
   if (k === "j") return { id: "toggleTools" };
+  if (e.key === "." || e.code === "Period") return { id: "focusMode" };
   if (e.key === ",") return { id: "settings" };
   if (e.key === "0") return { id: "zoomReset" };
   if (e.key === "+" || e.key === "=" || e.key === "NumpadAdd") return { id: "zoomIn" };

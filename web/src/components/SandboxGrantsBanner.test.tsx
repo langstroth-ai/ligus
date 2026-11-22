@@ -11,18 +11,18 @@ vi.mock("@/lib/ipc", () => ({ getSandboxPolicy: vi.fn(async () => state.d), ackS
 vi.mock("@/lib/nav", () => ({ openSettingsTab: (t: string) => open(t) }));
 vi.mock("@/components/Toast", () => ({ toast: { success: vi.fn(), error: vi.fn() }, errMsg: (e: unknown) => String(e) }));
 
-import { SandboxGrantsBanner } from "./SandboxGrantsBanner";
+import { SandboxGrantsNotice } from "./SandboxGrantsBanner";
 
 function renderBanner() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <SandboxGrantsBanner />
+      <SandboxGrantsNotice />
     </QueryClientProvider>,
   );
 }
 
-describe("SandboxGrantsBanner", () => {
+describe("SandboxGrantsNotice", () => {
   beforeEach(() => {
     ack.mockClear();
     open.mockClear();
@@ -33,7 +33,7 @@ describe("SandboxGrantsBanner", () => {
     renderBanner();
     expect(await screen.findByText(/sandbox grants changed/)).toBeTruthy();
     expect(screen.getByText(/This device doesn't apply them/)).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Review" })[0]);
     await waitFor(() => expect(ack).toHaveBeenCalled());
     expect(open).toHaveBeenCalledWith("sandbox");
   });
