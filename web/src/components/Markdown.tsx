@@ -32,6 +32,16 @@ export function nodeText(node: ReactNode): string {
   return "";
 }
 
+/// The text the Copy button puts on the clipboard for a code block's source.
+///
+/// A fenced code block's source always ends with a newline. Pasting that into a
+/// terminal runs the command immediately instead of leaving it at the prompt, so
+/// strip every trailing line break (LF or CRLF). Interior blank lines, leading
+/// indentation and trailing spaces before the final break are kept.
+export function copyText(source: string): string {
+  return source.replace(/(?:\r?\n)+$/, "");
+}
+
 /// Only open links with a safe scheme. react-markdown's default urlTransform
 /// already neutralizes `javascript:`/`data:` hrefs, but this is defense-in-depth
 /// so a future config change (adding rehype-raw or a custom urlTransform) can't
@@ -189,7 +199,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
           className="rounded-md px-1.5 py-0.5 opacity-0 transition-opacity group-hover/code:opacity-80 group-focus-within/code:opacity-80 focus-visible:!opacity-100 hover:!opacity-100"
           style={{ color: copied ? "var(--ligus-success-ink)" : undefined }}
           onClick={() => {
-            void navigator.clipboard.writeText(source);
+            void navigator.clipboard.writeText(copyText(source));
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1500);
           }}
