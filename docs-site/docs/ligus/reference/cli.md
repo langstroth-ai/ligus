@@ -48,7 +48,7 @@ stdout and exits 0; an unknown command or topic exits 2.
 | Code | Meaning |
 |---|---|
 | 0 | success (help included) |
-| 1 | error: the message is on stderr as `error: …` |
+| 1 | error: the message is on stderr as `ligus: …` |
 | 2 | usage error: an unknown command or subcommand, a missing or bad argument (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
 | 3 | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1`, or `ligus doctor --require-confined` or `--turn-test`, on a host without an agent sandbox |
 | 4 | `ligus doctor --expect-tier`: another tier |
@@ -88,9 +88,11 @@ command prompts when standard input isn't a terminal: the one question
   `ligus help` and `--help` never open the data dir, the config or the
   secret store; `ligus status` and `ligus facts export` never create an
   identity.
-- **Errors** print `error: …` and exit 1; usage errors exit 2 ([exit codes](#exit-codes)).
-- Flags are matched anywhere after the command; values follow the flag as
-  the next argument (`--label box`, not `--label=box`).
+- **Errors** print `ligus: …` on stderr and exit 1; usage errors exit 2 and add a
+  line naming the help to read ([exit codes](#exit-codes)).
+- Flags are matched anywhere after the command; a value follows the flag as
+  the next argument or after an equals sign (`--label box` or
+  `--label=box`).
 
 ## Version and identity
 

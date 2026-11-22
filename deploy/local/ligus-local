@@ -45,7 +45,10 @@ help_common_flags() {
                            if you pass one, pass the same one to every command
   --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
                            progress always goes to stderr
+  --color WHEN             auto, always or never: colour [FAIL] and [WARN] on stderr (default
+                           auto: only on a terminal, and never when NO_COLOR is set)
   -h, --help               print this command's help and exit 0
+  A flag's value is the next argument or follows an equals sign (--data-dir DIR or --data-dir=DIR).
 EOF
 }
 
@@ -385,6 +388,8 @@ ENVIRONMENT
   XDG_DATA_HOME      where the desktop app's data dir is looked for on Linux (default: ~/.local/share)
   CARGO_TARGET_DIR   where install-cli --from-source finds the build (default: <repo>/target)
   HOME               ~/.local/bin, ~/Library/LaunchAgents, ~/.config/systemd/user
+  NO_COLOR           set: no colour on stderr (--color always still colours)
+  CLICOLOR_FORCE     set (not 0): colour on stderr even when it isn't a terminal
   Tests only: LIGUS_LOCAL_OS (uname -s), LIGUS_LOCAL_LAUNCHCTL (launchctl),
   LIGUS_LOCAL_BWRAP (the bwrap path), LIGUS_LOCAL_USERNS (yes|no, user namespaces).
 
@@ -421,7 +426,9 @@ SYSTEMD=0 LAUNCHD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
 need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
   case $1 in
+    --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;  # --flag=value is --flag value
     --json) AC_JSON=1 ;;
+    --color) need "$@"; ac_set_color "$2"; shift ;;
     --role) need "$@"; ROLE=$2; shift ;;
     --data-dir) need "$@"; DATA=$2; shift ;;
     --env-file) need "$@"; ENVF=$2; shift ;;
