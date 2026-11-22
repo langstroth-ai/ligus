@@ -188,7 +188,8 @@ On iOS the device key is a Secure Enclave
 `SecureEnclave.P256.Signing.PrivateKey`. Its access control is
 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` with `.privateKeyUsage` only.
 Since 2026-11-22 the app asks for Face ID, Touch ID or the passcode right
-before **every** signature (each phone action and each admission). It runs a
+before **every** signature with consequences (each phone action except a
+plain chat post, and each admission). It runs a
 fresh LocalAuthentication evaluation with no reuse of an earlier one, in the
 app rather than as a key flag: a `.userPresence` key would mean a new device
 id for every phone. The app lock only hides the UI.
@@ -205,8 +206,9 @@ KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
     .build()
 ```
 
-**A prompt before every signature (parity with iOS).** Right before the key
-signs a phone action or an admission, show BiometricPrompt with
+**A prompt before every signature except a chat post (parity with iOS).**
+Right before the key signs a phone action or an admission, show
+BiometricPrompt with
 `setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)`, a new
 prompt every time. Don't reuse the app-lock unlock or an earlier
 signature (no timeout window). The title names the action ("Approve “Capped
@@ -214,8 +216,13 @@ retry backoff”"), and the sign button says how it asks ("Approve with
 fingerprint", "Approve with screen lock"). If it is cancelled or fails,
 nothing is signed, recorded in the ledger or sent, and the sheet stays with
 "Not approved: authentication was cancelled." A device with no screen lock
-never signs. CI scripts the prompt behind the `Authenticator` interface
-(section 4.4), in debug builds only.
+never signs these. The one exemption is a plain chat post (`kind` `post`),
+from the composer or a notification's reply: it signs behind the app lock
+without a prompt. Keep it an allow-list holding only `post`, so every other
+kind (votes, rejections, answers, apply requests and withdrawals, lockdown
+clears, memory proposals) and any kind added later prompts. CI scripts the
+prompt behind the `Authenticator` interface (section 4.4), in debug builds
+only.
 
 - **Non-exportable** by construction (`AndroidKeyStore`). The alias is fixed
   (`ligus.device.v1`). The app stores nothing but the alias and the public key.
@@ -1576,8 +1583,8 @@ scheme, and keep the rest as extended colours in a `CompositionLocal`:
 3. **Shared Rust core:** adopt UniFFI for Android (recommended)? Should the
    iOS app move onto the same crate later, retiring its Swift port and parity
    corpus?
-4. **Device key auth:** the app asks before every signature (decided
-   2026-11-22, as on iOS). Should a later key generation also be auth-bound
+4. **Device key auth:** the app asks before every signature except a plain
+   chat post (decided 2026-11-22, as on iOS). Should a later key generation also be auth-bound
    in hardware (a new device id, re-certified after lock-screen changes)?
 5. **Presence policy for Android:** the owner signs with one app signing key
    for Play and the APK (recommended), and adds its
