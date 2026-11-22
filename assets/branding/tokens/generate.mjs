@@ -111,10 +111,14 @@ ${oklchLines}
 // ---- phone -----------------------------------------------------------------
 
 const hex2 = (v) => "0x" + v.toString(16).toUpperCase().padStart(2, "0");
+// Xcode reads a component without a decimal point as 0-255 (so alpha "1" is
+// 1/255, nearly transparent) and one with a decimal point as 0-1. Channels
+// are 8-bit hex; alpha is always written as a 0-1 float with three places,
+// the form Xcode itself writes ("1.000").
 function colorComponents(css) {
   const c = parse(css);
   const [r, g, b] = rgbOf(c);
-  return { "color-space": "srgb", components: { red: hex2(r), green: hex2(g), blue: hex2(b), alpha: Number(c.a.toFixed(3)).toString() } };
+  return { "color-space": "srgb", components: { red: hex2(r), green: hex2(g), blue: hex2(b), alpha: c.a.toFixed(3) } };
 }
 const INFO = { author: "xcode", version: 1 };
 const json = (o) => JSON.stringify(o, null, 2) + "\n";
