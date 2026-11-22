@@ -78,7 +78,7 @@ fn env_opt(k: &str) -> Option<String> {
 /// so it must not wait for a later private write to tighten the dir.
 fn create_data_dir_or_exit(data_dir: &std::path::Path) {
     if let Err(e) = ligus_runtime::private_file::ensure_private_dir(data_dir) {
-        eprintln!("error: could not set up {}: {e}", data_dir.display());
+        eprintln!("ligus: could not set up {}: {e}", data_dir.display());
         std::process::exit(1);
     }
 }
@@ -1819,12 +1819,12 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
         }
     }
     if (require_confined || turn_test) && unconfined {
-        eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");
+        eprintln!("ligus: no agent sandbox on this host: every agent turn that runs local programs would be refused");
         return Ok(hardening::EXIT_UNCONFINED);
     }
     if let Some(want) = expect_tier.map(|t| t.trim().to_ascii_lowercase()) {
         if want != s.tier() {
-            eprintln!("error: expected agent sandbox tier {want}, this host uses {}", s.tier());
+            eprintln!("ligus: expected agent sandbox tier {want}, this host uses {}", s.tier());
             return Ok(4);
         }
     }
@@ -1837,13 +1837,13 @@ fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bo
                     println!("turn test: {line}");
                 }
                 if !r.passed() {
-                    eprintln!("error: turn test failed");
+                    eprintln!("ligus: turn test failed");
                     return Ok(5);
                 }
                 println!("turn test: passed (tier {})", r.tier);
             }
             Err(e) => {
-                eprintln!("error: turn test could not run: {e:#}");
+                eprintln!("ligus: turn test could not run: {e:#}");
                 return Ok(5);
             }
         }
@@ -1863,10 +1863,11 @@ fn main() {
     // crypto provider (ring).
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
-        eprintln!("error: {e:#}");
+        eprintln!("ligus: {e:#}");
         if help::is_usage(&e) {
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            eprintln!("{}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
+            let args = split_flag_values(std::env::args().skip(1).collect());
+            // Continues the error above it, indented under it.
+            eprintln!("  {}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
             std::process::exit(help::EXIT_USAGE);
         }
         std::process::exit(help::EXIT_ERROR);
@@ -1884,7 +1885,7 @@ fn run() -> Result<()> {
     gateway_check::maybe_run_probe();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_ligus::init_local_offset();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = split_flag_values(std::env::args().skip(1).collect());
     // Help never opens the data dir, the config or the secret store (a bare
     // `ligus serve --help` once started a real server on the default one).
     if args.first().map(String::as_str) == Some("help") {
@@ -2305,6 +2306,28 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 
 /// The positional arguments: everything that is not a flag or a flag's value.
+/// `--flag=value` becomes `--flag value`, so every command takes both
+/// spellings. Arguments after a `--` separator are left as they are.
+fn split_flag_values(args: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.into_iter();
+    for a in it.by_ref() {
+        if a == "--" {
+            out.push(a);
+            break;
+        }
+        match a.split_once('=') {
+            Some((flag, value)) if flag.len() > 2 && flag.starts_with("--") => {
+                out.push(flag.to_string());
+                out.push(value.to_string());
+            }
+            _ => out.push(a),
+        }
+    }
+    out.extend(it);
+    out
+}
+
 fn positional_args(rest: &[String]) -> Vec<&String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -2326,6 +2349,24 @@ fn positional_args(rest: &[String]) -> Vec<&String> {
 
 #[cfg(test)]
 mod cli_tests {
+    /// `--flag=value` and `--flag value` read the same; `=` inside a value,
+    /// an empty value, positionals and anything after `--` are kept.
+    #[test]
+    fn flags_take_an_equals_sign_or_the_next_argument() {
+        let split = |a: &[&str]| super::split_flag_values(argv(a));
+        assert_eq!(split(&["worker", "--label=box", "--json"]), argv(&["worker", "--label", "box", "--json"]));
+        assert_eq!(split(&["worker", "--label", "box"]), argv(&["worker", "--label", "box"]));
+        assert_eq!(split(&["memory", "search", "--since=a=b"]), argv(&["memory", "search", "--since", "a=b"]));
+        assert_eq!(split(&["serve", "--name="]), argv(&["serve", "--name", ""]));
+        assert_eq!(split(&["send", "k=v", "-x=1"]), argv(&["send", "k=v", "-x=1"]));
+        assert_eq!(split(&["mcp", "--", "--label=x"]), argv(&["mcp", "--", "--label=x"]));
+        assert_eq!(split(&["mcp", "--=x"]), argv(&["mcp", "--=x"]));
+        // Both spellings give the same positionals.
+        let a = split(&["add-agent", "--host=sff", "coder", "claude-code"]);
+        let b = argv(&["add-agent", "--host", "sff", "coder", "claude-code"]);
+        assert_eq!(super::positional_args(&a[1..]), super::positional_args(&b[1..]));
+    }
+
     /// The invite (which carries the workspace key) can be piped or read
     /// from a file instead of sitting in argv.
     #[test]
