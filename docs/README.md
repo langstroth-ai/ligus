@@ -38,6 +38,13 @@ with the code, the code wins.
 - Agent model: [`ligus-agent-architecture-matrix.md`](ligus-agent-architecture-matrix.md) — agent modes, execution/state/tool/permission shape.
 - Relay protocol: [`langstroth-relay-api.md`](langstroth-relay-api.md) — the `/v1` wire contract (client ↔ relay).
 - Phone remote access: [`relay-tunnel.md`](relay-tunnel.md) — the open `hive-tunnel/1` protocol (host registration, phone credentials, Noise end-to-end session, stream mux, push). Golden vectors and their Go generator and Rust cross-checker are in [`relay-tunnel/`](relay-tunnel/). Where it's built: relay endpoints in [langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay), the host connector in `crates/ligus-cli/src/serve/tunnel/`, the phone client in the `ligus-ios` repo, and APNs push in the relay.
+- Proposals and collaboration (design notes, not implemented; each ends with its adversarial assessment):
+  [`design/proposal-line-comments.md`](design/proposal-line-comments.md) (line comments in the refinement thread),
+  [`design/review-screen-approve-and-apply.md`](design/review-screen-approve-and-apply.md) (the Review screen and "Approve & apply"),
+  [`design/shared-live-sessions.md`](design/shared-live-sessions.md) (presence, steering, hand-over, comments on a running turn),
+  [`design/devices-and-keys.md`](design/devices-and-keys.md) (Devices & keys and the fingerprint word list shared with the phone),
+  [`design/update-notices.md`](design/update-notices.md) (daily update notices and the unreadable-events warning),
+  [`design/lt-clipboard-copy.md`](design/lt-clipboard-copy.md) (copying from `lt`, invite codes included).
 - Kubernetes: [`design/kubernetes.md`](design/kubernetes.md) — relay, `ligus serve` and agent runners on Kubernetes, sandboxed turn executors, security model, phased plan (design; Phase 1 chart in `deploy/helm/ligus/`, image in `deploy/container/`).
 - Ligus 0.1: [`design/v2/`](design/v2/README.md) — architecture review, Phase 0 track specs, identity without GitHub and many forges, relay-directory trust.
 - Branding: [`ligus-logo-system.md`](ligus-logo-system.md) — logo/brand assets.
