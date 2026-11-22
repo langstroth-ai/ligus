@@ -2190,6 +2190,14 @@ those codes for one release.
 
 The deploy scripts use 0 to 4 (an unreachable cluster is 3); langstroth-relay
 uses 0 to 2.
+
+Errors print the same way in every tool: \"ligus: <what>\" on stderr, then
+indented \"why:\" and \"fix:\" lines when known (a usage error's fix names the
+help to read). With --json (or -o json) the error is also the one document on
+stdout: {\"schema\": \"ligus.error.v1\", \"tool\", \"command\", \"exitCode\",
+\"error\": {\"code\", \"message\", \"why\", \"fix\"}}; code is usage, not_found,
+refused, relay_unreachable, relay_busy, relay_token_rejected, unreachable or
+error.
 ",
     },
     Topic {

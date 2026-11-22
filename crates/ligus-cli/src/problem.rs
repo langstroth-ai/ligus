@@ -37,13 +37,14 @@ pub const TABLE: &[(i32, &str, &str)] = &[
     (EXIT_OFFLINE, "offline, the relay unreachable, or timed out", "retry with backoff"),
 ];
 
-/// An error with its exit code and a stable machine code
-/// (`relay_unreachable`, `not_found`).
+/// An error with its exit code, a stable machine code
+/// (`relay_unreachable`, `not_found`) and, optionally, how to fix it.
 #[derive(Debug)]
 pub struct Problem {
     pub exit: i32,
     pub code: &'static str,
     pub message: String,
+    pub fix: Option<String>,
 }
 
 impl std::fmt::Display for Problem {
@@ -56,7 +57,66 @@ impl std::error::Error for Problem {}
 
 /// Something named by id doesn't exist here (exit 5).
 pub fn not_found(message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(Problem { exit: EXIT_NOT_FOUND, code: "not_found", message: message.into() })
+    anyhow::Error::new(Problem { exit: EXIT_NOT_FOUND, code: "not_found", message: message.into(), fix: None })
+}
+
+/// What `ligus` prints for an error, and its exit code.
+pub struct Rendered {
+    pub exit: i32,
+    /// `ligus: <what>`, then `  why: …` and `  fix: …` when known.
+    pub text: String,
+    /// The `ligus.error.v1` document (printed on stdout with `--json`).
+    pub json: serde_json::Value,
+}
+
+/// The fix for an error that doesn't carry one, from its class.
+fn default_fix(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "relay_unreachable" | "unreachable" => "check the network and the relay URL; ligus doctor checks the relay",
+        "relay_busy" => "wait and retry; the relay asked this device to slow down",
+        "relay_token_rejected" => "sign in again (ligus auth login) or set a valid LIGUS_RELAY_ACCESS_TOKEN (ligus help env)",
+        "refused" => "ask an Admin of the workspace; retrying won't help",
+        _ => return None,
+    })
+}
+
+/// The error in the one shape every Ligus tool prints (`ligus help
+/// exit-codes`): the top message is what happened, the causes under it are
+/// why, and the fix says what to do. `usage_hint` is the help to read for a
+/// usage error.
+pub fn render(e: &anyhow::Error, command: &str, usage_hint: &str) -> Rendered {
+    let (exit, code) = classify(e);
+    let what = e.to_string();
+    let why: Vec<String> = e.chain().skip(1).map(|c| c.to_string()).filter(|c| !c.is_empty() && *c != what).collect();
+    let why = (!why.is_empty()).then(|| why.join(": "));
+    let fix = e
+        .chain()
+        .find_map(|c| c.downcast_ref::<Problem>().and_then(|p| p.fix.clone()))
+        .or_else(|| (exit == EXIT_USAGE).then(|| usage_hint.to_string()))
+        .or_else(|| default_fix(code).map(str::to_string));
+    let mut text = format!("ligus: {what}\n");
+    if let Some(w) = &why {
+        text.push_str(&format!("  why: {w}\n"));
+    }
+    if let Some(f) = &fix {
+        text.push_str(&format!("  fix: {f}\n"));
+    }
+    let mut err = serde_json::json!({ "code": code, "message": what });
+    if let Some(w) = why {
+        err["why"] = w.into();
+    }
+    if let Some(f) = fix {
+        err["fix"] = f.into();
+    }
+    let json = serde_json::json!({
+        "schema": "ligus.error.v1",
+        "tool": "ligus",
+        "version": env!("CARGO_PKG_VERSION"),
+        "command": command,
+        "exitCode": exit,
+        "error": err,
+    });
+    Rendered { exit, text, json }
 }
 
 /// The exit code and machine code for an error: a [`Problem`] says its own;
@@ -126,6 +186,36 @@ mod tests {
         let err = reqwest::Client::new().get("http://127.0.0.1:9/").send().await.unwrap_err();
         let e: anyhow::Error = RelayError::Http(err).into();
         assert_eq!(classify(&e), (EXIT_OFFLINE, "relay_unreachable"));
+    }
+
+    #[test]
+    fn errors_render_in_one_shape() {
+        use anyhow::Context as _;
+        let e = Err::<(), _>(anyhow::anyhow!("connection refused")).context("sync failed").unwrap_err();
+        let r = render(&e, "sync", "see `ligus sync --help`");
+        assert_eq!(r.exit, EXIT_ERROR);
+        assert_eq!(r.text, "ligus: sync failed\n  why: connection refused\n");
+        assert_eq!(r.json["schema"], "ligus.error.v1");
+        assert_eq!(r.json["command"], "sync");
+        assert_eq!(r.json["exitCode"], 1);
+        assert_eq!(r.json["error"]["code"], "error");
+        assert_eq!(r.json["error"]["why"], "connection refused");
+        assert!(r.json["error"].get("fix").is_none());
+
+        let u = render(&crate::help::usage_error("usage: ligus tail <chat-id>"), "tail", "see `ligus tail --help`");
+        assert_eq!(u.exit, EXIT_USAGE);
+        assert_eq!(u.text, "ligus: usage: ligus tail <chat-id>\n  fix: see `ligus tail --help`\n");
+
+        let n = render(&not_found("unknown chat 1"), "tail", "");
+        assert_eq!((n.exit, n.json["error"]["code"].as_str()), (EXIT_NOT_FOUND, Some("not_found")));
+
+        let p = anyhow::Error::new(Problem { exit: EXIT_FIXABLE, code: "x", message: "no CLI".into(), fix: Some("install it".into()) });
+        assert_eq!(render(&p, "x", "").text, "ligus: no CLI\n  fix: install it\n");
+
+        let t: anyhow::Error = RelayError::Unauthorized.into();
+        let t = render(&t, "sync", "");
+        assert_eq!(t.exit, EXIT_FIXABLE);
+        assert!(t.text.contains("  fix: sign in again"), "{}", t.text);
     }
 
     #[test]

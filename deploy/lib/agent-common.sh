@@ -101,12 +101,19 @@ ac_finish() {
   exit "$AC_WORST"
 }
 
+# A usage error, in the shape every Ligus tool prints: "<tool>: <what>" and
+# an indented fix line on stderr; with --json the report has one failed
+# "usage" check (and "error", the message, as before).
 ac_usage_error() {
-  ac_log "error: $1"
-  ac_log "run with --help for usage"
+  local tool=${AC_TOOL:-ligus} fix
+  fix="see $tool ${CMD:+$CMD }--help"
+  case ${CMD:-} in ""|-*|help) fix="see $tool --help" ;; esac
+  case $1 in "unknown command"*|"no help for unknown command"*) fix="see $tool --help" ;; esac
+  ac_log "$tool: $1"
+  ac_log "  fix: $fix"
   if [ "$AC_JSON" = 1 ]; then
-    printf '{"schema":"ligus.agent-deploy.v1","tool":%s,"command":"usage","ok":false,"exitCode":2,"checks":[],"next":[],"error":%s}\n' \
-      "$(ac_jstr "${AC_TOOL:-ligus}")" "$(ac_jstr "$1")"
+    printf '{"schema":"ligus.agent-deploy.v1","tool":%s,"command":"usage","ok":false,"exitCode":2,"checks":[{"id":"usage","status":"fail","detail":%s,"fix":%s}],"next":[],"error":%s}\n' \
+      "$(ac_jstr "$tool")" "$(ac_jstr "$1")" "$(ac_jstr "$fix")" "$(ac_jstr "$1")"
   fi
   exit 2
 }
@@ -128,6 +135,17 @@ ac_exit_codes() {
   These scripts use 0 to 4 (an unreachable cluster is 3: check the context and credentials).
   ligus and langstroth-relay share the table (ligus help exit-codes, langstroth-relay help exit-codes).
 EOF
+}
+
+# --json (or -o json) anywhere on the command line, before the flags are
+# parsed: a usage error found earlier in the line still prints its JSON.
+ac_prescan_json() {
+  local prev=""
+  for a in "$@"; do
+    case $a in --) return 0 ;; --json|--output=json|-o=json) AC_JSON=1 ;; json) case $prev in -o|--output) AC_JSON=1 ;; esac ;; esac
+    prev=$a
+  done
+  return 0
 }
 
 ac_have() { command -v "$1" >/dev/null 2>&1; }
