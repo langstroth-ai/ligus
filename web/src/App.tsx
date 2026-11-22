@@ -63,6 +63,7 @@ import { StatusDot } from "@/components/ui";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
+import { ErrorLogSheet } from "@/components/ErrorLogSheet";
 import { matchShortcut } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
@@ -160,6 +161,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [errorsOpen, setErrorsOpen] = useState(false);
   const [addWsOpen, setAddWsOpen] = useState(false);
   // "Admit a box" for the active workspace, from the workspace menu or ⌘K
   // (the rail's right-click menu keeps its own entry).
@@ -987,6 +989,7 @@ export function App() {
       <RepoSuggestionBanner />
       <SandboxGrantsBanner />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
+      {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1051,6 +1054,7 @@ export function App() {
           },
           addPhone: () => requestAddPhone(),
           showShortcuts: () => setShortcutsOpen(true),
+          showErrors: () => setErrorsOpen(true),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),

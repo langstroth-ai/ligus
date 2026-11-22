@@ -42,6 +42,8 @@ export interface PaletteActions {
   addPhone?: () => void;
   /// The ⌘/ keyboard shortcuts sheet.
   showShortcuts?: () => void;
+  /// Errors this session, including ones whose toast already faded.
+  showErrors?: () => void;
 }
 
 interface Cmd {
@@ -181,6 +183,15 @@ export function CommandPalette({
         hint: `Help · ${keyLabel(shortcutKey("shortcuts")!)}`,
         keywords: "keys hotkeys keybindings",
         run: run(actions.showShortcuts),
+      });
+    }
+    if (actions.showErrors) {
+      items.push({
+        id: "errors",
+        label: "Recent errors",
+        hint: "Help",
+        keywords: "log failures problems toast",
+        run: run(actions.showErrors),
       });
     }
     if (actions.admitBox) {

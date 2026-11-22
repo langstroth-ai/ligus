@@ -1,8 +1,8 @@
 # Mentions & notifications
 
 Ligus tells you when you're wanted without making you scan every chat.
-An `@`-mention that names **you** raises a desktop notification and
-lights up the channel — and the chat — in the sidebar until you read it.
+An `@`-mention that names **you** raises a desktop notification (when the
+Ligus window isn't in front) and lights up the channel — and the chat — in the sidebar until you read it.
 
 > This page is about being *notified*. For the full routing table —
 > which mention wakes an agent, the Primary Runtime, or a role group —
@@ -59,12 +59,42 @@ Agent mentions (`@agent-name`) never ping a human — they route a turn
 to that agent. An *unanswered* agent mention is **queued work**, shown
 in the [Review pane](right-rail.md), not as a personal highlight.
 
-## Desktop notification
+## Desktop notifications
 
-When a message you didn't write mentions you, Ligus raises one system
-notification — "*Name* mentioned you" — per message. Whether the app is
-focused or in the background, and whether the message was typed locally
-or arrived over sync, the trigger is the same.
+The desktop notifies you only about things that need **you**, and stays
+quiet about everything else:
+
+| Notification | When |
+|---|---|
+| *"Name mentioned you"* | a message you didn't write mentions you (see above) |
+| *builder asked you something in “Chat”* | an agent stopped in a run **you** asked for to ask a question |
+| *builder finished in “Chat”* | a run you asked for finished, on this device or on another (a worker, a box) |
+| *builder's run failed in “Chat”* | a run you asked for failed |
+| *"A proposal waits on your vote"* | the review queue needs your vote (at most hourly, see [Flow](flow.md)) |
+| *"Sam is using scout"* | someone else used an agent of yours, only if you turned on [Notify me](agent-access.md#notify-me-and-usage) for it |
+
+"A run you asked for" means the reply answers a message you wrote, through
+any hand-offs between agents. Other people's runs, replies in chats you only
+read, and stopped runs never notify.
+
+- **Nothing while you're looking.** When the Ligus window is in front, no
+  system notification is shown: the chat row's state (Working, Needs you,
+  Done, Failed) already says it.
+- **Bursts become one.** Notifications that arrive within a second or two
+  of each other are shown as one, for example *"3 chats finished"* or
+  *"1 needs you · 2 finished"*. A chat that changes twice in a burst
+  counts once.
+- Each message notifies once, whether it was typed locally or arrived over
+  sync. A reply that arrives more than ten minutes late (a first sync, a
+  long time offline) shows in the chat without a notification.
+
+### Messages in the window
+
+Short confirmations and errors inside the window appear one at a time, at
+the top right, clear of the message box. If several arrive together, the
+rest wait their turn ("2 more"), and repeats of the same message show once.
+Errors stay available after they fade: open the command palette (⌘K) and
+choose **Recent errors**.
 
 ## On your phone
 
@@ -80,8 +110,8 @@ shared workspace, other members get nothing for a reply that isn't theirs
 unless it mentions them, and then it's the one mention notification. A
 reply with no person behind it (a scheduled summary, a chain an agent
 started) notifies nobody. Alone in a workspace, every reply is yours, so
-nothing changes. The desktop has no "replied" notification: it notifies
-only for mentions. Previews are plain text, cut to a short line, and each phone
+nothing changes. The desktop notifies the same person when a run they asked
+for finishes (see above). Previews are plain text, cut to a short line, and each phone
 can turn previews off. See [Ligus on your phone](phone-app.md).
 
 ## Sidebar highlights

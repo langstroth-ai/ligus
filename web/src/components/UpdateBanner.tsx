@@ -77,7 +77,7 @@ export function UpdateBanner() {
     pct === null ? "Download" : pct < 0 ? "Starting…" : pct >= 100 ? "Restarting…" : `Installing… ${pct}%`;
 
   return (
-    // bottom-20 (not bottom-4): the ToastHost owns the bottom-right corner —
+    // bottom-20 (not bottom-4): kept clear of the bottom-right corner —
     // stacking above it keeps a toast from covering the banner (and vice versa).
     <div
       className="fixed bottom-20 right-4 z-[60] w-[320px] rounded-2xl border p-4 shadow-xl"
