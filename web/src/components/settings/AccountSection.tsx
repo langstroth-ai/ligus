@@ -110,7 +110,7 @@ export function SafetyCodeSection() {
             {code}
           </code>
           <button
-            className="text-xs underline opacity-70 hover:opacity-100"
+            className="text-xs underline text-ink-soft hover:text-ink"
             onClick={() => {
               void navigator.clipboard.writeText(code);
               toast.success("Safety code copied.");
@@ -199,7 +199,7 @@ function IdentitySection() {
         <label className="group/av relative cursor-pointer" title="Upload an avatar">
           <Avatar name={settings.data?.displayName || name || "You"} url={settings.data?.avatarUrl} kind="human" size={52} />
           <span
-            className="absolute inset-0 flex items-center justify-center rounded-full text-[10px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
+            className="absolute inset-0 flex items-center justify-center rounded-full text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
             style={{ background: "color-mix(in srgb, var(--ligus-ink) 45%, transparent)", color: "var(--ligus-canvas)" }}
           >
             Edit
@@ -218,7 +218,7 @@ function IdentitySection() {
         <div className="text-xs text-ink-soft">
           <div>Your avatar is shown to everyone in the workspace.</div>
           {settings.data?.avatarUrl && (
-            <button onClick={() => void clearAvatar()} className="mt-1 underline opacity-80 hover:opacity-100">
+            <button onClick={() => void clearAvatar()} className="mt-1 underline text-ink-soft hover:text-ink">
               Remove
             </button>
           )}
@@ -405,7 +405,7 @@ export function DevicesSection() {
                   This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
                 </div>
               )}
-              {preview.alreadyMine && <div className="opacity-70">Already your device.</div>}
+              {preview.alreadyMine && <div className="text-ink-soft">Already your device.</div>}
               {preview.replacesMember && (
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={retire} onChange={(e) => setRetire(e.target.checked)} />

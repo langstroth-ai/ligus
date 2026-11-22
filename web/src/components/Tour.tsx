@@ -193,7 +193,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
         }}
       >
         <div className="text-sm font-semibold">{step.title}</div>
-        <div className="mt-1.5 text-[13px] leading-relaxed opacity-70">{step.body}</div>
+        <div className="mt-1.5 text-[13px] leading-relaxed text-ink-soft">{step.body}</div>
         <div className="mt-4 flex items-center justify-between">
           <div className="flex items-center gap-1.5" aria-label={`Step ${i + 1} of ${steps.length}`}>
             {steps.map((_, n) => (
@@ -212,7 +212,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
               <button
                 type="button"
                 onClick={back}
-                className="rounded-lg px-2.5 py-1.5 text-xs font-medium opacity-60 hover:opacity-100"
+                className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-soft hover:text-ink"
               >
                 Back
               </button>
@@ -220,7 +220,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
             <button
               type="button"
               onClick={() => onClose(false)}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium opacity-50 hover:opacity-100"
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-soft hover:text-ink"
             >
               {atEnd ? "Close" : "Skip"}
             </button>

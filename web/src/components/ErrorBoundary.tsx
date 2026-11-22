@@ -47,7 +47,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="font-medium">
               {this.props.label ? `${this.props.label} hit a problem.` : "This panel hit a problem."}
             </div>
-            <p className="mt-1 text-xs opacity-70">The rest of the app is still working.</p>
+            <p className="mt-1 text-xs text-ink-soft">The rest of the app is still working.</p>
             <button
               onClick={this.reset}
               className="mt-3 rounded-lg px-3 py-1.5 text-xs font-medium transition-all hover:brightness-105"
@@ -56,7 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
               Try again
             </button>
             <details className="mt-3 text-left">
-              <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
+              <summary className="cursor-pointer text-xs text-ink-soft">Error details</summary>
               <pre
                 className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-lg p-2 text-[11px] leading-5"
                 style={{ background: "var(--ligus-overlay)", color: "var(--ligus-ink)" }}
@@ -80,10 +80,10 @@ export class ErrorBoundary extends Component<Props, State> {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--ligus-danger-ink)" }}>
+          <h1 className="ligus-title" style={{ color: "var(--ligus-danger-ink)" }}>
             Something went wrong
           </h1>
-          <p className="mt-2 text-sm opacity-70">
+          <p className="mt-2 text-sm text-ink-soft">
             Ligus hit an unexpected error and couldn't finish rendering. Your data is safe on disk —
             reloading usually clears it.
           </p>
@@ -95,7 +95,7 @@ export class ErrorBoundary extends Component<Props, State> {
             Reload
           </button>
           <details className="mt-4 text-left">
-            <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
+            <summary className="cursor-pointer text-xs text-ink-soft">Error details</summary>
             <pre
               className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-[11px] leading-5"
               style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}

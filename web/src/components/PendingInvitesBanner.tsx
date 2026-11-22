@@ -112,7 +112,7 @@ export function PendingInvitesBanner() {
                   <button
                     onClick={() => dismiss.mutate(inv)}
                     disabled={busy}
-                    className="rounded-lg px-3 py-1.5 text-sm opacity-60 hover:opacity-100 disabled:opacity-40"
+                    className="rounded-lg px-3 py-1.5 text-sm text-ink-soft hover:text-ink disabled:opacity-40"
                   >
                     Dismiss
                   </button>
@@ -122,7 +122,7 @@ export function PendingInvitesBanner() {
                 onClick={() => dismiss.mutate(inv)}
                 disabled={busy}
                 aria-label="Dismiss"
-                className="shrink-0 opacity-40 hover:opacity-80 disabled:opacity-20"
+                className="shrink-0 text-ink-soft hover:text-ink disabled:opacity-20"
               >
                 <IconX size={14} />
               </button>

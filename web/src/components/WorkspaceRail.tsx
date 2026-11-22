@@ -304,7 +304,7 @@ export function WorkspaceRail({
             className="fixed z-[951] min-w-44 rounded-lg border py-1 text-sm shadow-2xl"
             style={{ left: menu.x + 4, top: menu.y, borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
           >
-            <div className="truncate px-3 py-1 text-[10px] font-semibold uppercase tracking-wider opacity-50">
+            <div className="truncate px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
               {menu.ws.name}
             </div>
             <MenuItem label="Set icon…" onClick={() => { const ws = menu.ws; setMenu(null); chooseIcon(ws); }} />

@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { THEMES, type AppearanceMode, type ThemeName } from "@/lib/theme";
+import { DENSITIES, applyDensity, loadDensity, saveDensity, type Density } from "@/lib/density";
 import { Section } from "@/components/ui";
 
-/// Appearance: light/dark mode + accent family. Every control applies live.
+/// Appearance: light/dark mode, accent family and density. Every control
+/// applies live.
 export function AppearanceSection({
   palette,
   onPaletteChange,
@@ -13,6 +16,12 @@ export function AppearanceSection({
   appearanceMode: AppearanceMode;
   onAppearanceModeChange: (m: AppearanceMode) => void;
 }) {
+  const [density, setDensity] = useState<Density>(loadDensity);
+  const pickDensity = (d: Density) => {
+    setDensity(d);
+    saveDensity(d);
+    applyDensity(d);
+  };
   return (
     <Section title="Appearance">
       <label className="block text-sm text-ink-soft">Mode</label>
@@ -53,6 +62,30 @@ export function AppearanceSection({
           </button>
         ))}
       </div>
+
+      <label className="mt-3 block text-sm text-ink-soft" id="density-label">
+        Density
+      </label>
+      <div className="flex gap-2" role="radiogroup" aria-labelledby="density-label">
+        {DENSITIES.map((d) => (
+          <button
+            key={d.value}
+            role="radio"
+            aria-checked={d.value === density}
+            onClick={() => pickDensity(d.value)}
+            className="rounded-xl border px-3 py-2"
+            style={{
+              borderColor: d.value === density ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
+              background: d.value === density ? "var(--ligus-mist)" : "transparent",
+            }}
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-ink-soft">
+        How much room rows, cards and messages take. Separate from zoom (⌘+ and ⌘−).
+      </p>
     </Section>
   );
 }

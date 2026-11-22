@@ -845,10 +845,10 @@ export function App() {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--ligus-danger-ink)" }}>
+          <h1 className="ligus-title" style={{ color: "var(--ligus-danger-ink)" }}>
             Couldn't load your settings
           </h1>
-          <p className="mt-2 text-sm opacity-70">
+          <p className="mt-2 text-sm text-ink-soft">
             Ligus couldn't read this workspace's configuration. Nothing has been lost — retry the
             load, or reload the app.
           </p>
@@ -869,7 +869,7 @@ export function App() {
             </button>
           </div>
           <details className="mt-4 text-left">
-            <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
+            <summary className="cursor-pointer text-xs text-ink-soft">Error details</summary>
             <pre
               className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-[11px] leading-5"
               style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
@@ -1135,7 +1135,7 @@ export function App() {
               style={{ borderColor: "var(--ligus-line)" }}
             >
               <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                <span className="truncate text-base font-semibold tracking-tight opacity-70">
+                <span className="truncate text-base font-semibold tracking-tight text-ink-soft">
                   {workspaceLabel}
                 </span>
               </div>
@@ -1533,13 +1533,13 @@ function ChatHeaderBar({
       <div className="flex min-w-0 items-center gap-1.5">
         {workspaceCrumb && (
           <>
-            <span className="shrink-0 truncate text-base font-semibold tracking-tight opacity-55">
+            <span className="shrink-0 truncate text-base font-semibold tracking-tight text-ink-soft">
               {workspaceCrumb}
             </span>
-            <span className="shrink-0 opacity-30" aria-hidden>/</span>
+            <span className="shrink-0 text-ink-soft" aria-hidden>/</span>
           </>
         )}
-        <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
+        <h1 className="ligus-title truncate">{title}</h1>
         <button
           className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
           title="Rename chat"

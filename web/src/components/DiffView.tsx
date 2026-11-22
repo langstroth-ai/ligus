@@ -196,7 +196,7 @@ export function DiffView({
             key={f.path}
             onClick={() => setSelected(f.path)}
             className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left hover:opacity-100 ${
-              active?.path === f.path ? "opacity-100" : "opacity-75"
+              active?.path === f.path ? "text-ink" : "text-ink-soft"
             }`}
             style={{ background: active?.path === f.path ? "var(--ligus-mist)" : "transparent" }}
             title={f.path}
@@ -374,7 +374,7 @@ export function DiffView({
             </div>
           </>
         ) : (
-          <div className="flex h-full items-center justify-center opacity-50">
+          <div className="flex h-full items-center justify-center text-ink-soft">
             Select a file to view its diff.
           </div>
         )}

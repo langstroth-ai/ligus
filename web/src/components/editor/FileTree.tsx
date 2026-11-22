@@ -287,13 +287,13 @@ export function FileTree() {
         className="flex items-center justify-between gap-2 border-b px-3 py-2"
         style={{ borderColor: "var(--ligus-line)" }}
       >
-        <span className="text-[11px] font-semibold uppercase tracking-wider opacity-60">Explorer</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Explorer</span>
         <div className="flex items-center gap-1">
           <button
             aria-label="New file"
             title="New file"
             onClick={() => void doNewEntry(ROOT, false)}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-md opacity-70 hover:opacity-100"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-soft hover:text-ink"
             style={{ background: "transparent" }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -307,7 +307,7 @@ export function FileTree() {
             aria-label="New folder"
             title="New folder"
             onClick={() => void doNewEntry(ROOT, true)}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-md opacity-70 hover:opacity-100"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-soft hover:text-ink"
             style={{ background: "transparent" }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -537,7 +537,7 @@ function RowButton({
         aria-label="More actions"
         title="More actions"
         onClick={onKebab}
-        className="mr-1 hidden h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-60 hover:opacity-100 group-hover:flex"
+        className="mr-1 hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-soft hover:text-ink group-hover:flex"
       >
         <KebabIcon />
       </button>

@@ -97,14 +97,14 @@ export function ToastHost() {
             }}
           >
             <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-50">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-soft">
                 {s.label}
               </div>
               <div className="mt-0.5 break-words">{t.message}</div>
             </div>
             {t.action && (
               <button
-                className="shrink-0 rounded-md px-2 py-1 text-xs font-medium underline opacity-80 hover:opacity-100"
+                className="shrink-0 rounded-md px-2 py-1 text-xs font-medium underline text-ink-soft hover:text-ink"
                 onClick={() => {
                   t.action!.run();
                   dismissToast(t.id);
@@ -114,7 +114,7 @@ export function ToastHost() {
               </button>
             )}
             <button
-              className="shrink-0 px-1 leading-none opacity-50 hover:opacity-100"
+              className="shrink-0 px-1 leading-none text-ink-soft hover:text-ink"
               aria-label="Dismiss"
               onClick={() => dismissToast(t.id)}
             >

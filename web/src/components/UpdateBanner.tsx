@@ -102,12 +102,12 @@ export function UpdateBanner() {
             </button>
             {!installing && (
               <>
-                <button onClick={later} className="rounded-lg px-3 py-1.5 text-sm opacity-60 hover:opacity-100">
+                <button onClick={later} className="rounded-lg px-3 py-1.5 text-sm text-ink-soft hover:text-ink">
                   Later
                 </button>
                 <button
                   onClick={skipVersion}
-                  className="rounded-lg px-2 py-1.5 text-xs opacity-45 hover:opacity-80"
+                  className="rounded-lg px-2 py-1.5 text-xs text-ink-soft hover:text-ink"
                   title="Don't show this version again"
                 >
                   Skip
@@ -116,7 +116,7 @@ export function UpdateBanner() {
             )}
           </div>
         </div>
-        <button onClick={later} aria-label="Remind me later" className="shrink-0 opacity-40 hover:opacity-80">
+        <button onClick={later} aria-label="Remind me later" className="shrink-0 text-ink-soft hover:text-ink">
           <IconX size={14} />
         </button>
       </div>

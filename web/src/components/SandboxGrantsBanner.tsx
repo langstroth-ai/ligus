@@ -42,7 +42,7 @@ export function SandboxGrantsBanner() {
           >
             Review
           </button>
-          <button onClick={() => ack.mutate()} className="rounded-lg px-3 py-1.5 text-sm opacity-80 hover:opacity-100">
+          <button onClick={() => ack.mutate()} className="rounded-lg px-3 py-1.5 text-sm text-ink-soft hover:text-ink">
             Dismiss
           </button>
         </div>

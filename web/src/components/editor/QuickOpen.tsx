@@ -144,9 +144,9 @@ export function QuickOpen({ open, onClose }: { open: boolean; onClose: () => voi
         }}
       />
       <div ref={listRef} className="max-h-[50vh] overflow-y-auto py-1">
-        {files.isLoading && <div className="px-4 py-6 text-center text-sm opacity-50">Loading…</div>}
+        {files.isLoading && <div className="px-4 py-6 text-center text-sm text-ink-soft">Loading…</div>}
         {!files.isLoading && results.length === 0 && (
-          <div className="px-4 py-6 text-center text-sm opacity-50">No matching files.</div>
+          <div className="px-4 py-6 text-center text-sm text-ink-soft">No matching files.</div>
         )}
         {results.map((r, i) => {
           const dir = dirname(r.path);
@@ -160,13 +160,13 @@ export function QuickOpen({ open, onClose }: { open: boolean; onClose: () => voi
               style={{ background: i === active ? "var(--ligus-mist)" : "transparent" }}
             >
               <span className="truncate font-medium">{basename(r.path)}</span>
-              {dir && <span className="truncate text-xs opacity-45">{dir}</span>}
+              {dir && <span className="truncate text-xs text-ink-soft">{dir}</span>}
             </button>
           );
         })}
       </div>
       <div
-        className="flex items-center gap-3 border-t px-4 py-2 text-[11px] opacity-45"
+        className="flex items-center gap-3 border-t px-4 py-2 text-[11px] text-ink-soft"
         style={{ borderColor: "var(--ligus-line)" }}
       >
         <span>↑↓ navigate</span>

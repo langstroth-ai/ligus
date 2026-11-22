@@ -111,12 +111,16 @@
   --ligus-radius-lg: 10px;
   --ligus-radius-xl: 14px;
   --ligus-radius-pill: 999px;
-  --ligus-text-2xs: 0.75rem;    /* 10.5px — caps labels only */
-  --ligus-text-xs: 0.8215rem;   /* 11.5px — meta, hints */
-  --ligus-text-sm: 0.9286rem;   /* 13px — dense UI, rail rows */
-  --ligus-text-md: 1rem;        /* 14px — body */
-  --ligus-text-lg: 1.143rem;    /* 16px — pane/section titles */
-  --ligus-text-xl: 1.357rem;    /* 19px — sheet titles */
+  /* Text tokens (rem, so they follow the zoom, ⌘±). Headings use the
+     .ligus-display/.ligus-title/.ligus-section/.ligus-cap classes below, one
+     treatment per level; no text below 11px; emphasis comes from weight and
+     ink-soft, never an opacity fade. */
+  --ligus-text-2xs: 0.75rem;    /* caps labels only */
+  --ligus-text-xs: 0.8215rem;   /* meta, hints */
+  --ligus-text-sm: 0.9286rem;   /* dense UI, rail rows */
+  --ligus-text-md: 1rem;        /* body */
+  --ligus-text-lg: 1.143rem;
+  --ligus-text-xl: 1.357rem;
   --ligus-shadow-1: 0 1px 2px color-mix(in srgb, var(--ligus-ink) 10%, transparent);
   --ligus-shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--ligus-ink) 22%, transparent);
   --ligus-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--ligus-line);
@@ -129,6 +133,35 @@
   --ligus-press-fill-hover: color-mix(in srgb, #000 8%, transparent);
   --ligus-press-fill-active: color-mix(in srgb, #000 15%, transparent);
 }
+
+/* Density (Appearance → Density; lib/density.ts sets data-density on <html>).
+   Comfortable is the default; it is separate from the UI zoom (⌘±). */
+:root,
+:root[data-density="comfortable"] {
+  --row-h: 30px;
+  --pad-card: 14px;
+  --gap-turn: 16px;
+  --text-transcript: 1rem;
+}
+:root[data-density="compact"] {
+  --row-h: 26px;
+  --pad-card: 10px;
+  --gap-turn: 10px;
+  --text-transcript: 0.875rem;
+}
+:root[data-density="spacious"] {
+  --row-h: 36px;
+  --pad-card: 18px;
+  --gap-turn: 22px;
+  --text-transcript: 1rem;
+}
+
+/* One heading treatment per level: display 22 (onboarding, empty states),
+   title 17 (pages, panes, dialogs, the chat), section 13, caps 11. */
+.ligus-display { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.015em; }
+.ligus-title { font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
+.ligus-section { font-size: 13px; line-height: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.ligus-cap { font-size: 11px; line-height: 14px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ligus-ink-soft); }
 
 /* Tailwind reads its scale from the tokens, so `text-xs`, `rounded-xl`,
    `text-ink-soft`, `bg-mist`, `border-line` … all mean the design system. */
@@ -197,7 +230,7 @@
   --turn-accent: var(--ligus-accent-cool);
   --tr: oklch(from var(--turn-accent) var(--ligus-turn-rail-l) c h);
   --tn: oklch(from var(--turn-accent) var(--ligus-turn-name-l) c h);
-  display: flex; gap: 11px; padding: 9px 12px; border-radius: 8px; position: relative; outline: none;
+  display: flex; gap: 11px; padding: calc(var(--gap-turn) / 2) 12px; border-radius: 8px; position: relative; outline: none;
 }
 /* Hairline between consecutive turns (a quiet divider, not a card edge). */
 .tt + .tt { border-top: 1px solid var(--ligus-hairline); }
@@ -219,13 +252,15 @@
 .tt-time { font-size: 12px; color: var(--ligus-ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tt-attr { font-size: 12px; color: var(--ligus-ink-soft); margin-top: 1px; }
 .tt-text { font-size: 14px; margin-top: 2px; line-height: 1.5; color: var(--ligus-ink); text-wrap: pretty; }
+/* The message body follows the density (Comfortable keeps 1rem). */
+.tt-text > .ligus-md { font-size: var(--text-transcript); }
 .tt-actions { margin-top: 2px; display: flex; align-items: center; gap: 4px; min-height: 20px; flex-wrap: wrap; }
 .tt-system { text-align: center; font-size: 12px; color: var(--ligus-ink-soft); padding: 8px 0; display: flex; align-items: center; gap: 8px; justify-content: center; }
 .tt-system .ln { height: 1px; background: var(--ligus-line); flex: 1; max-width: 120px; }
 
 /* Header badge (shared / workspace agent) + live/error state tags. */
-.tt-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 1px 6px; }
-.tt-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--ligus-mono); font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 2px 6px; }
+.tt-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 1px 6px; }
+.tt-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--ligus-mono); font-size: 11px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ligus-ink-soft); background: var(--ligus-overlay); border: 1px solid var(--ligus-line); border-radius: 5px; padding: 2px 6px; }
 .tt-tag.live { color: var(--tn); border-color: color-mix(in srgb, var(--tr) 34%, transparent); }
 .tt-tag.live i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: blip 1.1s infinite; }
 .tt-tag.live i:nth-child(2) { animation-delay: 0.16s; }
@@ -252,7 +287,7 @@
 .tcall-h:hover { background: var(--ligus-hover); }
 .tcall-n { font-family: var(--ligus-mono); font-size: 11.5px; color: var(--ligus-ink); }
 .tcall-a { font-family: var(--ligus-mono); font-size: 11px; color: var(--ligus-ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tcall-badge { margin-left: auto; font-family: var(--ligus-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; border-radius: 4px; padding: 2px 5px; flex: none; }
+.tcall-badge { margin-left: auto; font-family: var(--ligus-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; border-radius: 4px; padding: 2px 5px; flex: none; }
 .tcall-badge.ok { color: var(--ligus-success-ink); background: color-mix(in srgb, var(--ligus-success) 14%, transparent); }
 .tcall-badge.bad { color: var(--ligus-danger-ink); background: color-mix(in srgb, var(--ligus-danger) 14%, transparent); }
 .tcall-o { margin: 0; padding: 10px 12px; border-top: 1px solid var(--ligus-line); font-family: var(--ligus-mono); font-size: 11px; line-height: 1.65; color: var(--ligus-ink-soft); white-space: pre-wrap; overflow-x: auto; background: var(--ligus-panel); }
@@ -267,7 +302,7 @@
 .react { font: inherit; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; background: var(--ligus-panel); border: 1px solid var(--ligus-line); border-radius: 14px; padding: 3px 9px; cursor: pointer; color: var(--ligus-ink-soft); }
 .react:hover { border-color: var(--tint-cool-line); }
 .react.on { border-color: var(--tint-cool-line); background: var(--tint-cool); }
-.react span { font-family: var(--ligus-mono); font-size: 10.5px; }
+.react span { font-family: var(--ligus-mono); font-size: 11px; }
 
 /* ===== Composer — a turn-shaped card; the "next turn" in the transcript. ===== */
 .cmp { display: flex; flex-direction: column; gap: 6px; }
@@ -310,13 +345,13 @@
 
 /* Popover (route runtime picker). Anchored above the pill. */
 .pop { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 50; min-width: 262px; background: var(--ligus-panel); border: 1px solid var(--ligus-line); border-radius: 11px; box-shadow: var(--ligus-shadow-pop); padding: 5px; max-height: 340px; overflow: auto; }
-.pop-h { font-family: var(--ligus-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ligus-ink-faint); padding: 7px 9px 4px; }
+.pop-h { font-family: var(--ligus-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ligus-ink-soft); padding: 7px 9px 4px; }
 .pop-i { display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; font-size: 12.5px; color: var(--ligus-ink); background: none; border: 0; border-radius: 8px; padding: 6px 9px; cursor: pointer; text-align: left; }
 .pop-i:hover { background: var(--ligus-hover); }
 .pop-i.sel { background: var(--tint-cool); }
 .pop-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pop-t b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pop-t span { font-family: var(--ligus-mono); font-size: 10.5px; color: var(--ligus-ink-faint); }
+.pop-t span { font-family: var(--ligus-mono); font-size: 11px; color: var(--ligus-ink-soft); }
 .pop-n { font-size: 11px; line-height: 1.5; color: var(--ligus-ink-faint); padding: 8px 9px 5px; margin-top: 4px; border-top: 1px solid var(--ligus-line); }
 
 html,

@@ -142,12 +142,12 @@ function ContextMenuView({ x, y, items, onClose }: OpenState & { onClose: () => 
               }}
             >
               {it.icon && (
-                <span aria-hidden className="shrink-0 opacity-70">
+                <span aria-hidden className="shrink-0 text-ink-soft">
                   {it.icon}
                 </span>
               )}
               <span className="min-w-0 flex-1 truncate">{it.label}</span>
-              {it.hint && <span className="shrink-0 text-xs opacity-40">{it.hint}</span>}
+              {it.hint && <span className="shrink-0 text-xs text-ink-soft">{it.hint}</span>}
             </button>
           ),
         )}

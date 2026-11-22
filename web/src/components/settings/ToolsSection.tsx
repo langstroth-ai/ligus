@@ -234,7 +234,7 @@ export function ToolsSection() {
           <span className="flex items-center gap-3">
             {s.transport === "http" && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={setToken.isPending}
                 onClick={() => setToken.mutate({ id: s.id, clear: s.hasBearerToken })}
                 title={
@@ -248,7 +248,7 @@ export function ToolsSection() {
             )}
             {s.transport === "http" && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={connect.isPending}
                 onClick={() => connect.mutate(s.id)}
                 title="Authorize this server in your browser (OAuth)"
@@ -258,7 +258,7 @@ export function ToolsSection() {
             )}
             {s.enabled && (
               <button
-                className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 disabled={inspect.isPending}
                 onClick={() => inspect.mutate(s.id)}
                 title="List this server's tools now and flag any that run shell commands"

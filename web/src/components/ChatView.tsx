@@ -1063,8 +1063,8 @@ export function ChatView({
               >
                 <IconMessage size={22} />
               </div>
-              <div className="mt-4 text-2xl font-semibold tracking-tight">Start a conversation</div>
-              <p className="mt-2 text-base opacity-65">
+              <h2 className="ligus-display mt-4">Start a conversation</h2>
+              <p className="mt-2 text-base text-ink-soft">
                 Ask about your code, or @mention an agent to have it make changes. Try one:
               </p>
               <div className="mt-4 flex flex-col gap-2">
@@ -1093,7 +1093,7 @@ export function ChatView({
                 ))}
               </div>
               <div
-                className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-4 text-xs opacity-55"
+                className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-4 text-xs text-ink-soft"
                 style={{ borderColor: "var(--ligus-line)" }}
               >
                 <span><code>/</code> for commands</span>
@@ -1216,7 +1216,7 @@ export function ChatView({
             );
           })}
           {queued != null && (
-            <div className="flex items-start justify-end gap-2 py-1 pr-1 text-sm opacity-60" role="status">
+            <div className="flex items-start justify-end gap-2 py-1 pr-1 text-sm text-ink-soft" role="status">
               <span aria-hidden style={{ opacity: 0.7 }}>⏳</span>
               <div className="min-w-0 max-w-[70%] whitespace-pre-wrap break-words">
                 <span style={{ fontWeight: 600 }}>Queued — sends after this turn: </span>
@@ -1226,7 +1226,7 @@ export function ChatView({
                 onClick={() => setQueued(null)}
                 aria-label="Cancel queued message"
                 title="Cancel queued message"
-                className="shrink-0 rounded-md px-1 leading-none opacity-70 hover:opacity-100"
+                className="shrink-0 rounded-md px-1 leading-none text-ink-soft hover:text-ink"
               >
                 <IconX size={12} />
               </button>
@@ -1240,14 +1240,14 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>Still working…</div>
-                <div className="mt-0.5 break-words opacity-80">
+                <div className="mt-0.5 break-words text-ink-soft">
                   This is taking longer than usual — the runtime may be stalled or waiting to log in.
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <button
                   onClick={() => void handleStop()}
-                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
+                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
                   style={{ border: "1px solid var(--ligus-line)" }}
                 >
                   Stop &amp; retry
@@ -1266,7 +1266,7 @@ export function ChatView({
                       })
                       .catch((e) => toast.error(`Couldn't reset: ${errMsg(e)}`));
                   }}
-                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none opacity-80 transition-opacity hover:opacity-100"
+                  className="rounded-md px-2 py-0.5 text-xs font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
                   style={{ border: "1px solid var(--ligus-line)" }}
                   title="Force this chat out of a stuck state"
                 >
@@ -1284,7 +1284,7 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>{founderWaitTitle(founder.data?.founderName ?? null)}</div>
-                <div className="mt-0.5 break-words opacity-80">
+                <div className="mt-0.5 break-words text-ink-soft">
                   The invite names who founded this workspace, but their signed founding hasn't reached this device yet.
                   Until it does, nothing you write is sent, so it can't land in a room someone else set up. This clears on
                   its own once they're online and it syncs.
@@ -1299,14 +1299,14 @@ export function ChatView({
               </span>
               <div className="min-w-0 flex-1">
                 <div style={{ fontWeight: 650 }}>Generation failed or was interrupted</div>
-                <div className="mt-0.5 break-words opacity-80">{streamError}</div>
+                <div className="mt-0.5 break-words text-ink-soft">{streamError}</div>
               </div>
               <button
                 onClick={() => {
                   setStreamError(null);
                   liveTurns.clearFailure(sessionId);
                 }}
-                className="shrink-0 rounded-md px-1.5 py-0.5 leading-none opacity-60 transition-opacity hover:opacity-100"
+                className="shrink-0 rounded-md px-1.5 py-0.5 leading-none text-ink-soft transition-colors hover:text-ink"
                 title="Dismiss"
                 aria-label="Dismiss"
               >
@@ -1447,7 +1447,7 @@ export function ChatView({
                         label={
                           <span>
                             <span className="mr-2 text-lg leading-none">{c.emoji}</span>
-                            <span className="opacity-70">:{c.slug}:</span>
+                            <span className="text-ink-soft">:{c.slug}:</span>
                           </span>
                         }
                         active={i === emojiScActive}
@@ -1742,7 +1742,7 @@ export function ChatView({
 function DaySeparator({ label }: { label: string }) {
   if (!label) return null;
   return (
-    <div className="my-2 flex items-center gap-3 px-1 opacity-60" aria-label={label}>
+    <div className="my-2 flex items-center gap-3 px-1 text-ink-soft" aria-label={label}>
       <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
       <span className="text-[11px] font-medium uppercase tracking-wide">{label}</span>
       <div className="h-px flex-1" style={{ background: "var(--ligus-line)" }} />
@@ -1845,7 +1845,7 @@ function MessageBody({
               style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
               title={`Open ${p} in the editor`}
             >
-              <span aria-hidden className="opacity-60">
+              <span aria-hidden className="text-ink-soft">
                 <IconFile size={12} />
               </span>
               <span className="max-w-[16rem] truncate">{p}</span>
@@ -1863,7 +1863,7 @@ function MessageBody({
           {foreignPaths.map((p, i) => (
             <span
               key={`f-${p}-${i}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft"
               style={{ borderColor: "var(--ligus-line)" }}
               title="A file on the sender's device; it wasn't shared"
             >
@@ -1873,7 +1873,7 @@ function MessageBody({
           {sessionId && shown.map((v) => <SharedAttachmentCard key={v.id} sessionId={sessionId} view={v} />)}
           {files.isFetched &&
             unplaced.map((id) => (
-              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--ligus-line)" }}>
+              <span key={id} className="inline-flex items-center rounded-lg border px-2 py-1 text-xs text-ink-soft" style={{ borderColor: "var(--ligus-line)" }}>
                 An attachment that isn't available
               </span>
             ))}
@@ -1892,7 +1892,7 @@ function AttachmentChip({ path, image }: { path: string; image?: boolean }) {
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
       title={path}
     >
-      <span aria-hidden className="opacity-60">
+      <span aria-hidden className="text-ink-soft">
         {image ?? isImagePath(path) ? <IconImage size={13} /> : <IconFile size={13} />}
       </span>
       <span className="max-w-[14rem] truncate">{fileBaseName(path)}</span>
@@ -2110,7 +2110,7 @@ const Bubble = memo(function Bubble({
   ) : body ? (
     <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} sessionId={sessionId} messageId={messageId} />
   ) : toolCalls && toolCalls.length > 0 ? null : (
-    <span className="opacity-50">…</span>
+    <span className="text-ink-soft">…</span>
   );
 
   // System messages (summaries, notices) read as centered meta, not a reply.
@@ -2119,7 +2119,7 @@ const Bubble = memo(function Bubble({
       <div className="tt-system">
         <span className="ln" />
         <span>{body}</span>
-        {timeLabel && <span className="opacity-70">{timeLabel}</span>}
+        {timeLabel && <span className="text-ink-soft">{timeLabel}</span>}
         <span className="ln" />
       </div>
     );
@@ -2292,7 +2292,7 @@ function FilePickerModal({
         }}
       />
       <div className="max-h-[50vh] overflow-y-auto py-1">
-        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm opacity-50">No files match.</div>}
+        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-soft">No files match.</div>}
         {filtered.map((f, i) => (
           <button
             key={f}
@@ -2344,7 +2344,7 @@ function IconAction({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="flex h-6 w-6 items-center justify-center rounded-md opacity-60 transition-all hover:opacity-100"
+      className="flex h-6 w-6 items-center justify-center rounded-md text-ink-soft transition-all hover:text-ink"
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ligus-mist)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >

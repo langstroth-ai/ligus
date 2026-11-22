@@ -47,7 +47,7 @@ export function PhoneEnrollTripwire() {
   return (
     <Modal onClose={dismiss} panelClassName="w-[440px] max-w-full rounded-2xl border p-5 space-y-3">
       <div role="alertdialog" aria-label="Another phone answered this code" className="space-y-3" data-testid="phone-tripwire">
-        <h2 className="text-base font-semibold">Another phone answered this code</h2>
+        <h2 className="ligus-title">Another phone answered this code</h2>
         <p className="text-sm">
           Another phone answered this code after you added <strong>{added}</strong> (fingerprint{" "}
           <code aria-label={spellFingerprint(a.added.fingerprint)}>{a.added.fingerprint}</code>). If the phone you added
