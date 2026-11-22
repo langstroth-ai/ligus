@@ -4600,9 +4600,13 @@ async fn phones_certify_headless_then_me_on_loopback() {
     for _ in 0..200 {
         h.handle.shared.sync_kick.notify_one();
         let (status, got) = status_of(&h, reqwest::Method::GET, &format!("/v1/me?deviceId={}", phone.device_id), None).await;
+        // The certificate can sync in before the name does: wait for both.
         if status == 200 {
+            let named = got["workspaceName"] == "Comb Council";
             v = got;
-            break;
+            if named {
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
