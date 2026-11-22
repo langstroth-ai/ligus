@@ -31,8 +31,12 @@ replies with a definition, and Ligus:
 2. **Files it as a proposal** in the **Review** pane: *Add workflow "…"*,
    with the stages listed in the order they run, who runs each one, its
    prompt, and how each gate decides.
-3. **Adds it when approved.** The approving vote adds the definition to the
-   **Workflows** pane. The authoring agent's own vote never counts. Reject
+3. **Adds it when approved.** On the desktop, the vote that approves it
+   (the one that completes the quorum) also adds the definition to the
+   **Workflows** pane, with no separate Implement step. If the vote that
+   approves it comes from a phone, the proposal shows as approved and
+   **Implement** on a desktop adds it. The authoring agent's own vote never
+   counts. Reject
    it, or add a change request and **Send to agent to revise**, and the
    agent files a new version.
 
@@ -40,8 +44,10 @@ Approving a workflow doesn't run anything. A run only starts when someone
 presses **Run**. Agents get planning authority, never execution authority.
 
 Workflow proposals show up on the phone too (as a decision with the
-stages as its text), and approving one there adds the workflow the same
-way. See [Ligus on your phone](phone-app.md).
+stages as its text), and you can approve one there (with your passkey).
+A phone's approval doesn't add the workflow by itself: once it is
+approved, **Implement** on a desktop adds it. See
+[Ligus on your phone](phone-app.md).
 
 ## The Workflows pane
 
