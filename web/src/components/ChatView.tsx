@@ -28,6 +28,10 @@ import {
   compactChat,
   linearIssuesContext,
   setChatRuntime,
+  setChatModel,
+  chatModelProblem,
+  onModelUnavailable,
+  type ModelProblemDto,
   syncStatus,
   founderStatus,
   toggleReaction,
@@ -72,6 +76,15 @@ import {
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
+import {
+  ModelStep,
+  effectiveModel,
+  looksModelUnavailable,
+  modelProblemText,
+  popoverArrowKeys,
+  runtimeLabelWithModel,
+  useChatModel,
+} from "@/components/ModelPicker";
 import { liveTurns } from "@/state/liveTurns";
 import { Modal, Popover, PopoverItem, candidateKey, ErrorState, isModalOpen } from "@/components/ui";
 import { escStopsTurn } from "@/lib/shortcuts";
@@ -205,6 +218,13 @@ export function ChatView({
   const emojiPanelRef = useRef<HTMLDivElement>(null);
   // Composer route pill: the "default recipient when no @mention" popover.
   const [routeOpen, setRouteOpen] = useState(false);
+  // The popover's second step: the runtime whose models are shown (null =
+  // the runtime list).
+  const [modelStep, setModelStep] = useState<string | null>(null);
+  // The one line shown when the chat's model won't run (with "Pick another
+  // model"), instead of a failed turn.
+  const [modelNotice, setModelNotice] = useState<ModelProblemDto | null>(null);
+  useEffect(() => setModelNotice(null), [sessionId]);
   // Composer focus ring (the turn-shaped card lights its accent border).
   const [composerFocused, setComposerFocused] = useState(false);
   const routeRef = useRef<HTMLDivElement>(null);
@@ -790,6 +810,14 @@ export function ChatView({
       setOptimisticUser(null);
       setInput((cur) => cur || body);
       setAttachments((cur) => (cur.length ? cur : sentAttachments));
+      if (looksModelUnavailable(errMsg(e))) {
+        // The chat shows its one line with "Pick another model" (the
+        // backend's event); no second error here.
+        if (currentRuntime) {
+          setModelNotice((cur) => cur ?? { runtimeId: currentRuntimeId, model: effectiveModel(currentRuntime, choiceFor(currentRuntimeId)), reason: "unavailable" });
+        }
+        return;
+      }
       if (isWaitingForFounder(errMsg(e))) {
         // Not a failure: the workspace's founding hasn't synced yet.
         void founder.refetch();
@@ -811,6 +839,15 @@ export function ChatView({
   async function handleSend() {
     const text = input.trim();
     if (!text && attachments.length === 0) return;
+    // An untagged message runs on the chat's model: when this device
+    // already knows that model won't run, say so instead of sending.
+    if (routeHandle === "primary") {
+      const problem = await chatModelProblem(sessionId).catch(() => null);
+      if (problem) {
+        setModelNotice(problem);
+        return;
+      }
+    }
     const sentAttachments = attachments;
     setInput("");
     setAttachments([]);
@@ -968,22 +1005,30 @@ export function ChatView({
   // Provenance for a message's turn: prefer its stamped runtime; the streaming
   // turn (still generating now) legitimately uses the current runtime. An
   // unknown/unstamped runtime yields no guess (better silent than wrong).
-  const provenanceFor = (runtimeId?: string | null) => {
+  // A reply records the model it ran with (`runtimeLabel`); older replies
+  // fall back to the runtime's current model.
+  const chatModel = useChatModel(sessionId);
+  const choiceFor = (runtimeId: string) => chatModel.data?.choices?.[runtimeId] ?? null;
+  const provenanceFor = (runtimeId?: string | null, recordedModel?: string | null, liveModel?: string | null) => {
     const rt = (runtimeId && runtimeById.get(runtimeId)) || null;
-    if (!rt) return { via: undefined, model: undefined, host: "local" as const };
+    if (!rt) return { via: undefined, model: recordedModel?.trim() || undefined, host: "local" as const };
     return {
       via: rt.provider?.trim() || rt.label?.trim() || undefined,
-      model: rt.model || undefined,
+      model: recordedModel?.trim() || liveModel?.trim() || rt.model || undefined,
       host: (rt.location?.trim().toLowerCase() === "remote" ? "remote" : "local") as
         | "local"
         | "remote",
     };
   };
   // The live/streaming turn uses the current runtime (it's what's generating).
-  const liveProvenance = provenanceFor(currentRuntimeId);
+  const liveProvenance = provenanceFor(
+    currentRuntimeId,
+    null,
+    currentRuntime ? effectiveModel(currentRuntime, choiceFor(currentRuntimeId)) : null,
+  );
   // The composer's route pill shows where a NEW message will go — the current
   // runtime — so it (unlike historical turns) legitimately labels the current one.
-  const runtimeVia = currentRuntime ? runtimePickerLabel(currentRuntime) : undefined;
+  const runtimeVia = currentRuntime ? runtimeLabelWithModel(currentRuntime, choiceFor(currentRuntimeId)) : undefined;
 
   // The composer's resolved route (mockup §7.5): the first @mention in the draft
   // routes the turn; with none, it falls back to @primary (the chat's runtime).
@@ -1012,7 +1057,51 @@ export function ChatView({
     await setChatRuntime(sessionId, id);
     qc.invalidateQueries({ queryKey: ["chat", sessionId] });
     qc.invalidateQueries({ queryKey: ["chats"] });
+    qc.invalidateQueries({ queryKey: ["chat-model", sessionId] });
   }
+
+  // A model from the second step: switch the chat to that runtime when it
+  // isn't the current one, then keep the choice (null = Default) here.
+  async function pickModel(runtimeId: string, model: string | null) {
+    setRouteOpen(false);
+    setModelStep(null);
+    try {
+      if (runtimeId !== currentRuntimeId) await setChatRuntime(sessionId, runtimeId);
+      await setChatModel(sessionId, runtimeId, model);
+      setModelNotice(null);
+    } catch (e) {
+      toast.error(`Couldn't change the model: ${errMsg(e)}`);
+    } finally {
+      qc.invalidateQueries({ queryKey: ["chat", sessionId] });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+      qc.invalidateQueries({ queryKey: ["chat-model", sessionId] });
+      qc.invalidateQueries({ queryKey: ["runtime-models", runtimeId] });
+      requestAnimationFrame(() => taRef.current?.focus());
+    }
+  }
+
+  // "Pick another model": the popover, open on the chat runtime's models.
+  function openModelPicker(runtimeId: string) {
+    setModelStep(runtimeId);
+    setRouteOpen(true);
+  }
+
+  // A turn here failed because its model isn't available: one line, not a
+  // failed send.
+  useEffect(() => {
+    const unlisten = onModelUnavailable((e) => {
+      if (e.sessionId !== sessionRef.current) return;
+      setModelNotice({ runtimeId: e.runtimeId, model: e.model, reason: "unavailable" });
+      qc.invalidateQueries({ queryKey: ["runtime-models", e.runtimeId] });
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [qc]);
+
+  useEffect(() => {
+    if (!routeOpen) setModelStep(null);
+  }, [routeOpen]);
 
   useEffect(() => {
     if (!routeOpen) return;
@@ -1020,7 +1109,10 @@ export function ChatView({
       if (routeRef.current && !routeRef.current.contains(e.target as Node)) setRouteOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setRouteOpen(false);
+      if (e.key !== "Escape") return;
+      // Escape steps back from the models to the runtimes, then closes.
+      if (modelStep) setModelStep(null);
+      else setRouteOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -1028,7 +1120,7 @@ export function ChatView({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [routeOpen]);
+  }, [routeOpen, modelStep]);
   const lastAssistantId = [...messages]
     .reverse()
     .find((m) => m.role === "assistant" || m.role === "agent")?.id;
@@ -1135,7 +1227,7 @@ export function ChatView({
                 m.role === "user" || m.role === "system"
                   ? undefined
                   : rosterAgent?.name ?? (m.author === PRIMARY_NAME ? PRIMARY_HANDLE : m.author);
-              const prov = provenanceFor(m.runtimeId);
+              const prov = provenanceFor(m.runtimeId, m.runtimeLabel);
               return (
                 <Fragment key={m.id}>
                   {showDay && <DaySeparator label={dayLabel(m.createdAt)} />}
@@ -1357,6 +1449,26 @@ export function ChatView({
           {/* Composer — a turn-shaped card; the "next turn" in the transcript
               (spec §7.5). Card lights its accent border on focus / while sending;
               the route pill resolves the recipient, and the @ / popovers stay. */}
+          {modelNotice && (
+            <div role="alert" data-testid="model-notice" className="mb-2 flex items-center gap-2 text-xs">
+              <span aria-hidden style={{ color: "var(--ligus-accent-warm, orange)" }}>
+                ●
+              </span>
+              <span className="min-w-0 truncate">{modelProblemText(modelNotice, runtimeById.get(modelNotice.runtimeId))}</span>
+              <button type="button" className="shrink-0 underline" onClick={() => openModelPicker(modelNotice.runtimeId)}>
+                Pick another model
+              </button>
+              <button
+                type="button"
+                className="ml-auto shrink-0 opacity-60 hover:opacity-100"
+                aria-label="Dismiss"
+                title="Dismiss"
+                onClick={() => setModelNotice(null)}
+              >
+                <IconX size={11} />
+              </button>
+            </div>
+          )}
           {!embedded && (
             <PinnedHostWarning
               sessionId={sessionId}
@@ -1600,48 +1712,78 @@ export function ChatView({
                     </span>
                   </button>
                   {routeOpen && (
-                    <div className="pop">
-                      <div className="pop-h">
-                        Runtime for @{PRIMARY_HANDLE} · answers untagged messages (alias @primary)
-                      </div>
-                      {runtimes.map((rt) => (
-                        <button
-                          key={rt.id}
-                          className={`pop-i${rt.id === currentRuntimeId ? " sel" : ""}`}
-                          // onMouseDown preventDefaults to keep the textarea from
-                          // blurring on pointer select. That alone is mouse-only —
-                          // a keyboard Enter/Space fires `click`, not `mousedown`,
-                          // so also handle onClick (guarded so the mouse path, which
-                          // already ran on mousedown, doesn't double-fire).
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            void selectRuntime(rt.id);
-                          }}
-                          onClick={(e) => {
-                            if (e.detail === 0) void selectRuntime(rt.id);
-                          }}
-                        >
-                          <span className="route-glyph"><IconWrench size={11} /></span>
-                          <span className="pop-t">
-                            <b>{rt.label || rt.name}</b>
-                            <span>{runtimePickerLabel(rt)}</span>
-                          </span>
-                          {rt.id === currentRuntimeId && (
-                            <span
-                              aria-label={`backs @${PRIMARY_HANDLE}`}
-                              style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ligus-accent-fill)" }}
-                            >
-                              <span style={{ fontSize: 11, fontWeight: 600 }}>@{PRIMARY_HANDLE}</span>
-                              <IconCheck size={12} />
-                            </span>
+                    <div className="pop" onKeyDown={modelStep ? undefined : popoverArrowKeys}>
+                      {modelStep && runtimeById.get(modelStep) ? (
+                        <ModelStep
+                          runtime={runtimeById.get(modelStep)!}
+                          chosen={choiceFor(modelStep)}
+                          appliesHere={chatModel.data?.appliesHere ?? true}
+                          onBack={() => setModelStep(null)}
+                          onPick={(m) => void pickModel(modelStep, m)}
+                        />
+                      ) : (
+                        <>
+                          <div className="pop-h">
+                            Runtime for @{PRIMARY_HANDLE} · answers untagged messages (alias @primary)
+                          </div>
+                          {runtimes.map((rt) => (
+                            <div key={rt.id} className="pop-row">
+                              <button
+                                className={`pop-i${rt.id === currentRuntimeId ? " sel" : ""}`}
+                                data-pop-item
+                                // onMouseDown preventDefaults to keep the textarea from
+                                // blurring on pointer select. That alone is mouse-only —
+                                // a keyboard Enter/Space fires `click`, not `mousedown`,
+                                // so also handle onClick (guarded so the mouse path, which
+                                // already ran on mousedown, doesn't double-fire).
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  void selectRuntime(rt.id);
+                                }}
+                                onClick={(e) => {
+                                  if (e.detail === 0) void selectRuntime(rt.id);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "ArrowRight") {
+                                    e.preventDefault();
+                                    setModelStep(rt.id);
+                                  }
+                                }}
+                              >
+                                <span className="route-glyph"><IconWrench size={11} /></span>
+                                <span className="pop-t">
+                                  <b>{rt.label || rt.name}</b>
+                                  <span>{runtimeLabelWithModel(rt, choiceFor(rt.id))}</span>
+                                </span>
+                                {rt.id === currentRuntimeId && (
+                                  <span
+                                    aria-label={`backs @${PRIMARY_HANDLE}`}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ligus-accent-fill)" }}
+                                  >
+                                    <span style={{ fontSize: 11, fontWeight: 600 }}>@{PRIMARY_HANDLE}</span>
+                                    <IconCheck size={12} />
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="pop-more"
+                                aria-label={`Choose the model for ${rt.label || rt.name}`}
+                                title="Choose the model (→)"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setModelStep(rt.id)}
+                              >
+                                <IconChevronRight size={12} />
+                              </button>
+                            </div>
+                          ))}
+                          {currentRuntime?.provider === "claude-code" && (
+                            <div className="pop-n">
+                              Claude Code answers with its own tools &amp; permissions, via your Claude
+                              subscription.
+                            </div>
                           )}
-                        </button>
-                      ))}
-                      {currentRuntime?.provider === "claude-code" && (
-                        <div className="pop-n">
-                          Claude Code answers with its own tools &amp; permissions, via your Claude
-                          subscription.
-                        </div>
+                        </>
                       )}
                     </div>
                   )}
