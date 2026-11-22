@@ -46,5 +46,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Let a test read the app stylesheet with `?raw` (vitest blanks CSS otherwise).
+    css: { include: [/styles\.css/] },
   },
 });

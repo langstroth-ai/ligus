@@ -23,6 +23,16 @@ export function isVotable(p: ProposalDto): boolean {
   return !isSettled(p);
 }
 
+/// The viewer's own standing vote: true (approved), false (rejected), or null
+/// (no vote yet, or we don't know who the viewer is). Votes are latest-per-actor
+/// (`ActionProposal::cast_vote` replaces an actor's earlier vote), so the
+/// viewer can always change it while the proposal is votable.
+export function myVote(p: ProposalDto, selfActorId: string | undefined | null): boolean | null {
+  if (!selfActorId) return null;
+  const mine = p.approvals.find((a) => a.actorId === selfActorId);
+  return mine ? mine.approved : null;
+}
+
 /// Sort rank: quorum met and waiting on Implement, then open, then settled.
 /// Within a rank the caller sorts newest-first.
 function rank(p: ProposalDto): number {

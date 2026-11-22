@@ -5,6 +5,7 @@
 // Scores appear only once a scout has posted one; a scout that's been sent but
 // hasn't answered shows as "awaiting", never as a number.
 
+import { Markdown } from "@/components/Markdown";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -215,7 +216,7 @@ function QuorumDial({
               title={d.hint}
               disabled={disabled}
               onClick={() => !on && onDial(d.id)}
-              className="flex-1 rounded-md px-2 py-1 font-medium transition-colors disabled:cursor-not-allowed"
+              className="ligus-press flex-1 rounded-md px-2 py-1 font-medium"
               style={{
                 background: on ? "var(--ligus-panel)" : "transparent",
                 boxShadow: on ? "var(--ligus-shadow-1)" : undefined,
@@ -297,7 +298,11 @@ function Alternative({
           )}
         </div>
       </div>
-      {alt.body && <p className="mt-1.5 line-clamp-3 text-xs leading-[1.5] text-ink-soft">{alt.body}</p>}
+      {alt.body && (
+        <div data-testid="alt-body" className="mt-1.5 line-clamp-3 text-ink-soft">
+          <Markdown content={alt.body} size="xs" />
+        </div>
+      )}
       {alt.changedFiles.length > 0 && (
         <div className="mt-1 flex items-center gap-2 text-[11.5px] text-ink-soft">
           <span>
@@ -385,9 +390,12 @@ function Alternative({
             alt.assessments
               .filter((a) => a.rationale)
               .map((a) => (
-                <p key={a.id} className="text-xs leading-[1.5]">
-                  <span className="font-medium">{a.scoutName}:</span> <span className="text-ink-soft">{a.rationale}</span>
-                </p>
+                <div key={a.id} className="text-xs leading-[1.5]">
+                  <span className="font-medium">{a.scoutName}:</span>{" "}
+                  <div className="text-ink-soft">
+                    <Markdown content={a.rationale} size="xs" />
+                  </div>
+                </div>
               ))}
         </div>
       )}

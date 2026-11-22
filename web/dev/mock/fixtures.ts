@@ -228,7 +228,7 @@ export const proposals = [
   {
     id: "p1",
     title: "Cold-day floor for inspections",
-    body: "Skip inspection days with a forecast high below 15°C so the brood is not chilled.",
+    body: "**Skip cold-day inspections so the brood is not chilled.**\n\n**Context**\n\n- Every Monday the scheduler books an inspection, whatever the weather.\n- Opening a hive below 15°C chills the brood.\n\nSee the [scheduler notes](https://example.org/notes) and `src/weather.rs`.",
     authorActorId: "ag-builder",
     kind: "fileDiff",
     status: "open",
@@ -246,7 +246,7 @@ export const proposals = [
   {
     id: "p2",
     title: "Run cargo fmt before commits",
-    body: "Add a pre-commit step.",
+    body: "Add a **pre-commit** step:\n\n1. `cargo fmt --check`\n2. fail the commit on a diff",
     authorActorId: "ag-scout",
     kind: "command",
     status: "approved",

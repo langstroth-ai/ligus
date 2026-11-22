@@ -1,3 +1,4 @@
+import { Markdown } from "@/components/Markdown";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge, Button } from "@/components/ui";
@@ -34,7 +35,7 @@ function AskCard({ sessionId, ask }: { sessionId: string; ask: AskDto }) {
         <Badge tone="info">{ask.agentName} asks</Badge>
         <span className="text-xs text-ink-soft">its turn is waiting</span>
       </div>
-      <p className="mt-1.5 text-sm">{ask.question}</p>
+      <Markdown content={ask.question} size="sm" className="mt-1.5" />
       {ask.options.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {ask.options.map((o, i) => (
