@@ -6396,10 +6396,13 @@ async fn request_proposal_changes(
         proposal_sets::ensure_not_frozen(&session, pid)?;
         // Prefer explicit change requests; fall back to all notes so a plain
         // comment thread can still drive a revision.
+        // Only comments whose author is verified (signed by the member they
+        // name) reach the agent: the instruction is posted as this person's.
+        let verified: Vec<&ligus_core::proposals::ProposalRefinement> = session.verified_refinements(&proposal).collect();
         let mut notes: Vec<&ligus_core::proposals::ProposalRefinement> =
-            proposal.refinements.iter().filter(|r| r.request_changes).collect();
+            verified.iter().copied().filter(|r| r.request_changes).collect();
         if notes.is_empty() {
-            notes = proposal.refinements.iter().collect();
+            notes = verified;
         }
         if notes.is_empty() {
             return Err("add a refinement note before sending it back to the agent".into());
