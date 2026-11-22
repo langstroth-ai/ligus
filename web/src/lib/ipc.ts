@@ -1341,9 +1341,19 @@ export interface PhoneEnrollApprovedDto {
   /// The desktop keeps watching for other phones until then (Unix seconds).
   watchingUntil: number;
 }
+/// One precheck finding: a stable `code` the panel turns into a link to the
+/// fix, the words, and whether it stops Show code.
+export interface PhoneEnrollPrecheckReasonDto {
+  code: "localWorkspace" | "noRelay" | "notYourDevice" | "noAccount" | "noPasskey" | "noBox" | "noBoxOnline" | (string & {});
+  text: string;
+  blocking: boolean;
+}
 export interface PhoneEnrollPrecheckDto {
   ready: boolean;
+  /// The blocking reasons' texts.
   missing: string[];
+  /// Every finding, blocking or not (absent from older builds).
+  reasons?: PhoneEnrollPrecheckReasonDto[];
 }
 export interface TripwirePhoneDto {
   deviceId: string;
