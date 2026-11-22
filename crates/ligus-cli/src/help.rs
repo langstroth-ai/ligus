@@ -1563,25 +1563,49 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "doctor",
         group: G_CHECK,
-        summary: "agent sandbox tier, held events; preflight flags exit non-zero",
-        purpose: "Print this device's agent sandbox tier (seatbelt, bwrap, landlock or unconfined), why, and what it \
-                  leaves open; whether the process is dumpable; the workspace's signed sandbox grants; and the held \
-                  events. The flags make it a preflight. --sandbox adds what an agent turn may read and write here \
-                  (printed when the checks pass).",
-        synopsis: &["ligus doctor [--require-confined] [--expect-tier TIER] [--turn-test]", "ligus doctor --sandbox [--runtime NAME] [--agent AGENT-ID]"],
+        summary: "check everything on this host; --json prints ligus.checks.v1",
+        purpose: "Run every check this host can make and say how to fix what fails: the agent sandbox tier (seatbelt, \
+                  bwrap, landlock or unconfined) and what it leaves open, whether the process is dumpable, the \
+                  workspace's signed sandbox grants, the secret store, the workspace connection, the relay (one \
+                  request, 10 s at most), the held events and this host's model gateways. --sandbox or --gateways \
+                  narrows it to those checks; a preflight flag (--require-confined, --expect-tier, --turn-test) \
+                  narrows it to the sandbox and makes it exit non-zero, for init containers and CI. With --json it \
+                  prints one ligus.checks.v1 document (ligus help checks). --sandbox adds what an agent turn may \
+                  read and write here (when the checks pass).",
+        synopsis: &[
+            "ligus doctor [--json]",
+            "ligus doctor [--require-confined] [--expect-tier TIER] [--turn-test] [--json]",
+            "ligus doctor --sandbox [--runtime NAME] [--agent AGENT-ID] [--json]",
+            "ligus doctor --gateways [--gateway NAME] [--model ID] [--json]",
+        ],
         flags: &[
-            f("--require-confined", "off", "exit 3 without an agent sandbox"),
-            f("--expect-tier TIER", "none", "exit 4 unless the tier is TIER (seatbelt, bwrap, landlock, unconfined)"),
+            f("--require-confined", "off", "fail without an agent sandbox (exit 3)"),
+            f("--expect-tier TIER", "none", "fail unless the tier is TIER: seatbelt, bwrap, landlock, unconfined (exit 4)"),
             f("--turn-test", "off", "run one real headless agent turn against a stub model (exit 5 on failure)"),
-            f("--sandbox", "off", "print the per-runtime read/write policy and the grants in force"),
+            f("--sandbox", "off", "only the sandbox checks, then the per-runtime read/write policy and the grants in force"),
             f("--runtime NAME", "every runtime", "with --sandbox: claude, codex, copilot, agy, aider, pi, hermes or commands"),
             f("--agent AGENT-ID", "none", "with --sandbox: include that agent's signed grants"),
+            f("--gateways", "off", "only the model gateway checks (the same as ligus gateway-check)"),
+            f("--gateway NAME", "every gateway", "check one model gateway (implies --gateways)"),
+            f("--model ID", "ligus-gateway-check", "the model id the gateway checks ask for"),
+            JSON,
         ],
-        env: &["LIGUS_SANDBOX", "LIGUS_SANDBOX_GRANTS", "LIGUS_SANDBOX_READ_ALLOW", "LIGUS_SANDBOX_WRITE_ALLOW", "LIGUS_SECRETS_DIR"],
+        env: &[
+            "LIGUS_SANDBOX",
+            "LIGUS_SANDBOX_GRANTS",
+            "LIGUS_SANDBOX_READ_ALLOW",
+            "LIGUS_SANDBOX_WRITE_ALLOW",
+            "LIGUS_SECRETS_DIR",
+            "LIGUS_MODEL_GATEWAYS_FILE",
+        ],
         conn: true,
-        examples: &["ligus doctor", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
-        exit: &[(3, "--require-confined or --turn-test: no agent sandbox"), (4, "--expect-tier: another tier"), (5, "--turn-test failed or could not run")],
-        see_also: &["ligus help security", "ligus help troubleshooting", "ligus gateway-check"],
+        examples: &["ligus doctor --json", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
+        exit: &[
+            (3, "--require-confined or --turn-test: no agent sandbox"),
+            (4, "--expect-tier: another tier"),
+            (5, "--turn-test failed or could not run"),
+        ],
+        see_also: &["ligus help checks", "ligus help security", "ligus help troubleshooting", "ligus gateway-check", "langstroth-relay check"],
         ..D
     },
     Cmd {
@@ -2129,6 +2153,45 @@ Every command exits 2 at start with a model gateway error
 
 A worker doesn't answer: ligus agents (bound to this host?), ligus queue (host
 online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
+",
+    },
+    Topic {
+        name: "checks",
+        aliases: &["checks.v1", "ligus.checks.v1", "doctor-json"],
+        summary: "the ligus.checks.v1 report every doctor and check command prints",
+        text: "\
+One report shape for every check command: ligus doctor --json, langstroth-relay
+check --json, and the deploy scripts (deploy/local/ligus-local and
+deploy/kubernetes/ligus-k8s, whose ligus.agent-deploy.v1 is a conforming
+profile with the same fields). One JSON document on stdout:
+
+  {\"schema\": \"ligus.checks.v1\", \"tool\": \"ligus\", \"version\": \"0.1.1\",
+   \"command\": \"doctor\", \"ok\": false, \"exitCode\": 1,
+   \"checks\": [{\"id\": \"relay.reachable\", \"title\": \"relay\", \"status\": \"fail\",
+               \"detail\": \"https://relay.example.com: connection refused\",
+               \"fix\": \"check the URL and this network; on the relay host: ...\"}],
+   \"next\": [\"langstroth-relay check --url https://relay.example.com\"]}
+
+  schema     always ligus.checks.v1 (a profile keeps its own name)
+  tool       the program; command: its subcommand; version: its version
+  ok         true when no check failed (warnings allowed)
+  exitCode   the process exit code (ligus help exit-codes)
+  checks[]   id (stable, dotted), title (for people), status (ok, warn, fail
+             or skip), detail (one line), fix (one line, when not ok), notes
+             (optional, more lines of what was found)
+  next[]     commands to run next, in order; empty when there is nothing to do
+
+Consumers ignore fields they don't know; new fields never rename old ones. In
+the deploy scripts' profile a passed check says pass (read it as ok) and info
+is a finding that is neither good nor bad.
+
+The text form: one line per check (status, title, detail), an indented fix:
+line, then a summary such as \"1 warning · next: ligus sync\". ligus doctor
+keeps its first two lines as \"agent sandbox: <tier>\" and the tier's summary,
+and the turn test's findings as \"turn test: ...\" lines (scripts read them).
+
+Each doctor names the next one down: ligus doctor's relay check says to run
+langstroth-relay check --url <relay> on the relay host.
 ",
     },
     Topic {

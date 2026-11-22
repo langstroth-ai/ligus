@@ -47,8 +47,9 @@ help_common_flags() {
                            current context)
   -n, --namespace NS       one namespace per workspace (default: $LIGUS_NAMESPACE)
   --release NAME           the Helm release (default: $LIGUS_RELEASE, else ligus)
-  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
-                           progress always goes to stderr
+  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1,
+                           a profile of ligus.checks.v1: ligus help checks); progress always
+                           goes to stderr
   --color WHEN             auto, always or never: colour [FAIL] and [WARN] on stderr (default
                            auto: only on a terminal, and never when NO_COLOR is set)
   -h, --help               print this command's help and exit 0

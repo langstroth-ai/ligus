@@ -12,6 +12,7 @@
 //!    credential file, reached the gateway directly, or didn't get an answer.
 //!
 //! Exit 0 when every check passes, 6 otherwise. Nothing secret is printed.
+//! `ligus doctor` runs the same checks ([`checks`]).
 
 use std::time::Duration;
 
@@ -21,6 +22,8 @@ use ligus_runtime::executor::{self, HostKind, Purpose, RuntimeScope, SpawnSpec, 
 use ligus_runtime::model_gateway::{self, Api, GatewaySelection};
 use ligus_runtime::provider::{ChatTurn, ResolvedRuntime};
 use uuid::Uuid;
+
+use crate::checks::{Check, Status};
 
 /// The probe subcommand the child runs (hidden).
 pub const PROBE_ARG: &str = "__gateway-probe";
@@ -32,26 +35,58 @@ pub fn check_agent_id() -> Uuid {
 }
 
 pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String) -> Result<i32> {
-    let gws = model_gateway::host();
-    if gws.is_empty() {
+    if model_gateway::host().is_empty() {
         return Err(anyhow!("this host lists no model gateways (set LIGUS_MODEL_GATEWAYS_FILE)"));
     }
-    let mut failed = 0;
+    let checks = checks(workspace, only, model, true).await;
+    Ok(if checks.iter().any(|c| c.status == Status::Fail) { 6 } else { 0 })
+}
+
+/// The gateway checks as `ligus.checks.v1` checks (`gateway.<name>.hosted`,
+/// `gateway.<name>.cli`, `gateways.unlisted`); one `skip` when this host
+/// lists none. With `print`, also prints `gateway-check`'s own text as it
+/// goes.
+pub async fn checks(workspace: Option<Uuid>, only: Option<String>, model: String, print: bool) -> Vec<Check> {
+    let say = |line: String| {
+        if print {
+            println!("{line}");
+        }
+    };
+    let gws = model_gateway::host();
+    let mut out = Vec::new();
+    if gws.is_empty() {
+        out.push(Check::skip("gateways", "model gateways", "this host lists none (LIGUS_MODEL_GATEWAYS_FILE)"));
+        return out;
+    }
+    const FIX: &str = "check the gateway's entry in LIGUS_MODEL_GATEWAYS_FILE and its credential file; ligus gateway-check prints the probe's findings";
     for g in gws.all().iter().filter(|g| only.as_deref().is_none_or(|n| n == g.name())) {
-        println!("gateway {} ({} wire, {})", g.name(), g.api().as_str(), if gws.exclusive() { "exclusive host" } else { "non-exclusive host" });
+        say(format!("gateway {} ({} wire, {})", g.name(), g.api().as_str(), if gws.exclusive() { "exclusive host" } else { "non-exclusive host" }));
         let sel = GatewaySelection::named(g.name()).with_ids(workspace, Some(check_agent_id()));
+        let (id, title) = (format!("gateway.{}.hosted", g.name()), format!("{} hosted", g.name()));
         match hosted(&sel, g.api(), &model).await {
-            Ok(n) => println!("  hosted: ok ({n} bytes of reply)"),
+            Ok(n) => {
+                say(format!("  hosted: ok ({n} bytes of reply)"));
+                out.push(Check::ok(&id, &title, format!("a hosted-API turn answered ({n} bytes)")));
+            }
             Err(e) => {
-                failed += 1;
-                println!("  hosted: FAILED: {e}");
+                say(format!("  hosted: FAILED: {e}"));
+                out.push(Check::fail(&id, &title, format!("{e:#}")).fix(FIX));
             }
         }
-        match cli(g, &sel, &model).await {
-            Ok(()) => println!("  cli: ok (credential injected by the proxy; the child never saw it)"),
+        let (id, title) = (format!("gateway.{}.cli", g.name()), format!("{} cli", g.name()));
+        let mut probe = Vec::new();
+        let r = cli(g, &sel, &model, &mut probe).await;
+        for line in &probe {
+            say(format!("    {line}"));
+        }
+        match r {
+            Ok(()) => {
+                say("  cli: ok (credential injected by the proxy; the child never saw it)".into());
+                out.push(Check::ok(&id, &title, "credential injected by the proxy; the sandboxed child never saw it").notes(probe));
+            }
             Err(e) => {
-                failed += 1;
-                println!("  cli: FAILED: {e}");
+                say(format!("  cli: FAILED: {e}"));
+                out.push(Check::fail(&id, &title, format!("{e:#}")).fix(FIX).notes(probe));
             }
         }
     }
@@ -59,14 +94,20 @@ pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String) -
     if gws.exclusive() {
         let rt = runtime(ModelProviderKind::Custom, "https://unlisted.invalid/v1/chat/completions", &model, None);
         match ligus_runtime::provider::dispatch::model_route(&rt) {
-            Err(e) => println!("unlisted endpoint: refused ({e})"),
+            Err(e) => {
+                say(format!("unlisted endpoint: refused ({e})"));
+                out.push(Check::ok("gateways.unlisted", "unlisted model", format!("an unlisted endpoint is refused ({e})")));
+            }
             Ok(_) => {
-                failed += 1;
-                println!("unlisted endpoint: FAILED: it was not refused");
+                say("unlisted endpoint: FAILED: it was not refused".into());
+                out.push(
+                    Check::fail("gateways.unlisted", "unlisted model", "an endpoint the gateways file doesn't list was not refused on an exclusive host")
+                        .fix("report it: an exclusive host must refuse every unlisted model endpoint"),
+                );
             }
         }
     }
-    Ok(if failed == 0 { 0 } else { 6 })
+    out
 }
 
 fn runtime(provider: ModelProviderKind, endpoint: &str, model: &str, gateway: Option<GatewaySelection>) -> ResolvedRuntime {
@@ -108,7 +149,7 @@ async fn hosted(sel: &GatewaySelection, api: Api, model: &str) -> Result<usize> 
     Ok(reply.len())
 }
 
-async fn cli(g: &model_gateway::Gateway, sel: &GatewaySelection, model: &str) -> Result<()> {
+async fn cli(g: &model_gateway::Gateway, sel: &GatewaySelection, model: &str, probe: &mut Vec<String>) -> Result<()> {
     let exe = std::env::current_exe()?;
     let secrets: Vec<String> = g.secret_files().iter().map(|p| p.display().to_string()).collect();
     let target = gateway_host_port(g);
@@ -141,9 +182,8 @@ async fn cli(g: &model_gateway::Gateway, sel: &GatewaySelection, model: &str) ->
     if creds.iter().any(|c| text.contains(c.as_str())) {
         return Err(anyhow!("the child's environment, argv or output contained the gateway credential"));
     }
-    for line in text.lines().filter(|l| l.starts_with("probe:")) {
-        println!("    {line}");
-    }
+    // The probe's findings (never its `env` dump, which may hold anything).
+    probe.extend(text.lines().filter(|l| l.starts_with("probe:")).map(str::to_string));
     if text.lines().any(|l| l.starts_with("probe: read ") && l.ends_with(" READABLE")) {
         return Err(anyhow!("the child could read a credential file"));
     }

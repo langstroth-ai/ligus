@@ -12,6 +12,13 @@
 #      weakening a default); stop and ask
 # Progress goes to stderr. With --json, stdout carries exactly one JSON
 # object. No command ever prints a secret value.
+#
+# The JSON is schema ligus.agent-deploy.v1, a conforming profile of
+# ligus.checks.v1 (docs-site/docs/operate/reference/cli-conventions.md,
+# `ligus help checks`): the same fields (tool, command, ok, exitCode,
+# checks[] of {id, status, detail, fix}, next[]), with a passed check
+# spelled "pass" and "info" for a neutral finding. The schema string stays
+# so nothing that parses it breaks.
 
 AC_JSON=0
 AC_COLOR=auto

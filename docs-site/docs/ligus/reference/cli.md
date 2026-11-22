@@ -36,6 +36,7 @@ Topics:
 | `security` | the data dir, the secret backends, `LIGUS_DATA_DIR`, `LIGUS_SECRET_BACKEND` |
 | `env` | every `LIGUS_*` variable the CLI reads (a test checks it against the code) |
 | `troubleshooting` | the common errors and their fixes |
+| `checks` | the `ligus.checks.v1` report `ligus doctor --json`, `langstroth-relay check --json` and the deploy scripts print ([CLI conventions](../../operate/reference/cli-conventions.md)) |
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
 A name that is both a topic and a command (`agents`, `repos`, `remote`,
@@ -61,7 +62,7 @@ unknown command exits 2 without creating a data dir.
 ## Output for scripts and agents {#json}
 
 Read and status commands take `--json` and then print one JSON document on
-stdout: `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
+stdout: `ligus doctor` (a [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report), `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
 `ligus agents`, `ligus hosts`, `ligus repos list`, `ligus remote status`,
 `ligus phones list`, `ligus memory list|search|show|proposals` and
 `ligus task-state`. `ligus facts export --jsonl` prints JSON lines. No
@@ -101,8 +102,10 @@ command prompts when standard input isn't a terminal: the one question
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus status [--json]` | one summary of this data dir without changing it: the identity (and whether it is a box), the workspace and relay, whether an access token, the workspace key and a local copy are present, membership and device standing, a kept admission, the serve token, remote access and the running server's relay link, the agent sandbox tier, and the next step |
 | `ligus whoami [--json]` | prints account id, device id, name, data dir and room |
-| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md). Also prints the room's held events (`held events: N from M device(s), D dropped by a cap (R to fetch again from the relay), L given up, E expired` and their reasons): events this device can't judge yet, which never stop sync ([held events](../../operate/security/threat-model.md#held-events)). The flags make it a preflight that exits non-zero on failure: `--require-confined` exits 3 without an agent sandbox, `--expect-tier` exits 4 on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (exit 5 on failure) |
-| `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
+| `ligus doctor [--json]` | runs every check this host can make and says how to fix what fails: the agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open (see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md)); whether the process is dumpable; the workspace's signed sandbox grants; the secret store; the workspace connection; the relay (one request, 10 seconds at most; a failure names `langstroth-relay check --url <relay>` to run on the relay host); the held events (events this device can't judge yet, which never stop sync: [held events](../../operate/security/threat-model.md#held-events)); and this host's model gateways. Exits 1 when a check fails. `--json` prints one [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report; the text form starts with `agent sandbox: <tier>` and its summary, then one line per check and a summary line |
+| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | the sandbox checks only, as a preflight that exits non-zero: `--require-confined` exits 3 without an agent sandbox, `--expect-tier` exits 4 on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (exit 5 on failure; its findings are `turn test: …` lines) |
+| `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | the sandbox checks only, then what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
+| `ligus doctor --gateways [--gateway <name>] [--model <id>]` | the model gateway checks only, the same ones `ligus gateway-check` runs, as checks |
 | `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route |
 
 ```console
