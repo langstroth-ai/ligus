@@ -68,7 +68,7 @@ import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { PANES } from "@/lib/panes";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -518,6 +518,14 @@ export function App() {
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
     // openSettings is stable (only touches setState setters).
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // In-app links to "Admit a box" (the add-a-phone check). The dialog renders
+  // above Settings, so the person comes back to where they were.
+  useEffect(() => {
+    const onAdmit = () => setAdmitBoxOpen(true);
+    window.addEventListener(ADMIT_BOX_EVENT, onAdmit);
+    return () => window.removeEventListener(ADMIT_BOX_EVENT, onAdmit);
   }, []);
 
   // System-tray navigation: the native menu emits a route string and we switch
@@ -1029,9 +1037,6 @@ export function App() {
         settingsActive={settingsOpen}
       />
       <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
-      {admitBoxOpen && activeWorkspace?.kind === "room" && (
-        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
-      )}
       {sidebarVisible && (
       <Sidebar
         width={menuPaneWidth}
@@ -1084,7 +1089,6 @@ export function App() {
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DearthBanner onManage={() => openSettings("guards")} />
-        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
         {view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
@@ -1271,6 +1275,9 @@ export function App() {
             </div>
           </>
         )}
+        {/* Suggestions are a quiet status-bar tip at the foot of the canvas;
+            only blocking states (Lockdown, Dearth) get a banner up top. */}
+        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
       </main>
 
       {/* Settings presents OVER the workspace — the chat behind it stays mounted.
@@ -1286,6 +1293,10 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
           activeChat={selectedId ? { id: selectedId, title: activeChat.data?.title ?? "" } : null}
         />
+      )}
+      {/* After Settings so it stacks above it when opened from there. */}
+      {admitBoxOpen && activeWorkspace?.kind === "room" && (
+        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}
     </div>
   );

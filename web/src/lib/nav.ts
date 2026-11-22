@@ -32,3 +32,11 @@ export const OPEN_SETTINGS_EVENT = "ligus:open-settings";
 export function openSettingsTab(tab: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));
 }
+
+/// Open "Admit a box" for the active shared workspace from anywhere (e.g. the
+/// add-a-phone check when no box is reachable); App owns the dialog.
+export const ADMIT_BOX_EVENT = "ligus:admit-box";
+
+export function openAdmitBox() {
+  window.dispatchEvent(new CustomEvent(ADMIT_BOX_EVENT));
+}

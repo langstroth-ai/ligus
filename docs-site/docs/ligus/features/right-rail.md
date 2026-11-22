@@ -18,7 +18,9 @@ vertical icon strip you click to switch contents. Nine sections:
 
 <!-- Screenshot pending (Right rail with the Tools pane active): images/right-rail.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 Switching panes preserves the visible width. Click the `×` in the
-pane header to close the rail entirely.
+pane header to close the rail entirely. Each pane's header has a small `?`
+beside its title: hover it for what the pane is for, click it to open the
+pane's page in these docs.
 
 ## When to use each
 

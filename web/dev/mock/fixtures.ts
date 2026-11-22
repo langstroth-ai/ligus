@@ -353,7 +353,7 @@ export const workflowRuns = [
       { nodeId: "n2", name: "Review", kind: "agent", status: "running", messageId: null, proposalId: null, outputExcerpt: "", attempts: 1, error: "" },
       { nodeId: "n3", name: "Human sign-off", kind: "gate", status: "pending", messageId: null, proposalId: null, outputExcerpt: "", attempts: 0, error: "" },
     ],
-    lease: { holder: "h-mac", holderLabel: "MacBook Pro", isMe: true, epoch: 3, leaseMs: 30000, health: "healthy", lastBeatAgeMs: 4000, verified: true, handoverTo: null, fencedClaims: 0 },
+    lease: { holder: "h-mac", holderLabel: "MacBook Pro", isMe: true, epoch: 3, leaseMs: 30000, health: "degraded", lastBeatAgeMs: 21000, verified: true, handoverTo: null, fencedClaims: 0 },
   },
 ];
 
@@ -361,6 +361,7 @@ export const queuedWork = [{ sessionId: "chat-2", chatTitle: "Relay reconnect ba
 export const hosts = [
   { id: "h-mac", kind: "desktop", label: "MacBook Pro", online: true, lastSeen: iso(0) },
   { id: "h-box", kind: "worker", label: "serve box", online: false, lastSeen: iso(95) },
+  { id: "h-mara", kind: "device", label: "Mara's laptop", online: true, lastSeen: iso(0) },
 ];
 
 export const dearth = (enabled: boolean) => ({
