@@ -45,10 +45,8 @@ name: Release
 # its own, so it is given neither: the draft the `release` job made is the
 # only release, and a rerun cannot touch the notes. By id it never publishes
 # anything, and the latest.json it writes points at API asset URLs, which
-# keep working after the draft is published. Promotion to Latest stays a
-# manual step, with the notes:
-#   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md \
-#     --prerelease=false --latest
+# keep working after the draft is published. Promotion to Latest, with the
+# notes from docs/release-notes/, is promote-release.yml, which an admin runs.
 #
 # The DMG is notarized and stapled separately after tauri-action (which only
 # notarizes the .app inside it) and re-uploaded to the draft before publish.
@@ -259,7 +257,7 @@ jobs:
           LIGUS_GITLAB_CLIENT_ID: ${{ vars.LIGUS_GITLAB_CLIENT_ID }}
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
-          # prompt. Bump docs-site/docs/version.json to this tag when publishing.
+          # prompt. promote-release.yml moves docs-site/docs/version.json to it.
           LIGUS_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           # APPLE_* (when present) come from the "Configure macOS signing" step
           # via $GITHUB_ENV. tauri-action signs + notarizes + staples on macOS.
@@ -374,7 +372,7 @@ jobs:
   # The only job that makes the release public. Runs only when every desktop
   # build, every CLI build and the updater check succeeded (skipped or
   # cancelled is not success), re-checks the draft itself, then publishes it
-  # as a prerelease. Promotion to Latest stays manual (see the header).
+  # as a prerelease. promote-release.yml makes it Latest (see the header).
   publish:
     needs: [release, build, cli, verify-updater]
     if: >-
