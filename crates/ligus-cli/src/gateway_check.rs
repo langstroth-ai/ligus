@@ -11,7 +11,7 @@
 //!    directly. The check fails if the child saw the credential, read a
 //!    credential file, reached the gateway directly, or didn't get an answer.
 //!
-//! Exit 0 when every check passes, 6 otherwise. Nothing secret is printed.
+//! Exit 0 when every check passes, 1 otherwise (6 with --legacy-exit-codes). Nothing secret is printed.
 //! `ligus doctor` runs the same checks ([`checks`]).
 
 use std::time::Duration;
@@ -34,12 +34,19 @@ pub fn check_agent_id() -> Uuid {
     Uuid::from_u128(0x6c69_6775_735f_6777_5f63_6865_636b_0001)
 }
 
-pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String) -> Result<i32> {
+/// Exit 0 when every check passes, else 1 (6 with `legacy_exit_codes`, as
+/// before 0.2, for one release).
+pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String, legacy_exit_codes: bool) -> Result<i32> {
     if model_gateway::host().is_empty() {
         return Err(anyhow!("this host lists no model gateways (set LIGUS_MODEL_GATEWAYS_FILE)"));
     }
     let checks = checks(workspace, only, model, true).await;
-    Ok(if checks.iter().any(|c| c.status == Status::Fail) { 6 } else { 0 })
+    let failed = checks.iter().any(|c| c.status == Status::Fail);
+    Ok(match (failed, legacy_exit_codes) {
+        (false, _) => 0,
+        (true, true) => 6,
+        (true, false) => crate::help::EXIT_ERROR,
+    })
 }
 
 /// The gateway checks as `ligus.checks.v1` checks (`gateway.<name>.hosted`,

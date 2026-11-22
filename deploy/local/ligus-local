@@ -326,6 +326,7 @@ help_cmd_body() {
     verify|status) hc_verify ;;
     stop) hc_stop ;;
     uninstall) hc_uninstall ;;
+    exit-codes) printf 'EXIT CODES (one table for every Ligus tool)\n'; ac_exit_codes ;;
     *) ac_usage_error "no help for unknown command: $1 (ligus-local --help lists them)" ;;
   esac
 }
@@ -333,7 +334,10 @@ help_cmd_body() {
 help_cmd() {
   local body
   body=$(help_cmd_body "$1") || exit $?
-  printf '%s\n\n' "$body"
+  printf '%s\n' "$body"
+  # Each command's EXIT CODES block ends its section; the shared table follows.
+  [ "$1" = exit-codes ] || printf '  The full table, shared by every Ligus tool: ligus-local help exit-codes\n'
+  printf '\n'
   help_see_also
 }
 
@@ -349,7 +353,7 @@ langstroth-ai/ligus/ligus-app).
 
 SYNOPSIS
   ligus-local <command> [flags]
-  ligus-local help [<command>]        ligus-local <command> --help
+  ligus-local help [<command> | exit-codes]        ligus-local <command> --help
 
 COMMANDS
   preflight      check this machine; changes nothing
@@ -395,11 +399,9 @@ ENVIRONMENT
   LIGUS_LOCAL_BWRAP (the bwrap path), LIGUS_LOCAL_USERNS (yes|no, user namespaces).
 
 EXIT CODES
-  0  done (warnings allowed)
-  1  a check or an operation failed; checks[].fix says what to do
-  2  usage error (unknown command or flag, missing or invalid value)
-  3  a precondition is missing that you can fix and rerun (the ligus CLI, curl, cargo, the env file)
-  4  a human must decide or act (admit the box, exposure, deleting data they own); stop and ask
+EOF
+  ac_exit_codes
+  cat <<'EOF'
   With --json, stdout is one object: {schema, tool, command, ok, exitCode, checks[{id, status,
   detail, fix}], next[], role, dataDir, envFile, bin}; a usage error adds "error".
 

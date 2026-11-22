@@ -1579,9 +1579,10 @@ pub const COMMANDS: &[Cmd] = &[
             "ligus doctor --gateways [--gateway NAME] [--model ID] [--json]",
         ],
         flags: &[
-            f("--require-confined", "off", "fail without an agent sandbox (exit 3)"),
-            f("--expect-tier TIER", "none", "fail unless the tier is TIER: seatbelt, bwrap, landlock, unconfined (exit 4)"),
-            f("--turn-test", "off", "run one real headless agent turn against a stub model (exit 5 on failure)"),
+            f("--require-confined", "off", "fail without an agent sandbox"),
+            f("--expect-tier TIER", "none", "fail unless the tier is TIER: seatbelt, bwrap, landlock, unconfined"),
+            f("--turn-test", "off", "run one real headless agent turn against a stub model; fail if it isn't confined"),
+            f("--legacy-exit-codes", "off", "exit 3, 4 or 5 for those failures, as before 0.2 (kept for one release)"),
             f("--sandbox", "off", "only the sandbox checks, then the per-runtime read/write policy and the grants in force"),
             f("--runtime NAME", "every runtime", "with --sandbox: claude, codex, copilot, agy, aider, pi, hermes or commands"),
             f("--agent AGENT-ID", "none", "with --sandbox: include that agent's signed grants"),
@@ -1601,9 +1602,9 @@ pub const COMMANDS: &[Cmd] = &[
         conn: true,
         examples: &["ligus doctor --json", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
         exit: &[
-            (3, "--require-confined or --turn-test: no agent sandbox"),
-            (4, "--expect-tier: another tier"),
-            (5, "--turn-test failed or could not run"),
+            (3, "only with --legacy-exit-codes: --require-confined or --turn-test without an agent sandbox"),
+            (4, "only with --legacy-exit-codes: --expect-tier found another tier"),
+            (5, "only with --legacy-exit-codes: --turn-test failed or could not run"),
         ],
         see_also: &["ligus help checks", "ligus help security", "ligus help troubleshooting", "ligus gateway-check", "langstroth-relay check"],
         ..D
@@ -1615,14 +1616,15 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "Prove the model gateways from LIGUS_MODEL_GATEWAYS_FILE work the two ways agent turns use them: a \
                   hosted-API turn, and a sandboxed CLI child through the egress proxy's route (which must not see the \
                   credential). Prints nothing secret.",
-        synopsis: &["ligus gateway-check [--gateway NAME] [--model ID]"],
+        synopsis: &["ligus gateway-check [--gateway NAME] [--model ID] [--legacy-exit-codes]"],
         flags: &[
             f("--gateway NAME", "every gateway", "check one gateway"),
             f("--model ID", "ligus-gateway-check", "model id to ask for"),
+            f("--legacy-exit-codes", "off", "exit 6 when a check fails, as before 0.2 (kept for one release)"),
         ],
         env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "LIGUS_WORKSPACE"],
         examples: &["ligus gateway-check", "ligus gateway-check --gateway litellm --model gpt-4o-mini"],
-        exit: &[(6, "a check failed")],
+        exit: &[(6, "only with --legacy-exit-codes: a check failed (otherwise 1)")],
         see_also: &["ligus doctor"],
         ..D
     },
@@ -2156,6 +2158,41 @@ online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
 ",
     },
     Topic {
+        name: "exit-codes",
+        aliases: &["exit", "exit-code", "codes"],
+        summary: "the exit codes every Ligus tool shares, and the error shape",
+        text: "\
+One table for every Ligus tool: ligus, langstroth-relay and the deploy scripts
+(deploy/local/ligus-local, deploy/kubernetes/ligus-k8s).
+
+  code  meaning                                                   what to do
+  0     done (warnings allowed)                                   continue
+  1     failed: the message (or checks[].fix) says why            read it, fix, retry
+  2     usage error: unknown command, missing or bad argument     fix the command line
+  3     a precondition you can fix is missing (a tool, a file,    fix it and rerun
+        a sign-in, the agent sandbox for serve and worker)
+  4     a person must decide or act (a passkey, an admission,     stop and ask
+        exposure, deleting owned data)
+  5     not found (a workspace, chat, proposal, run)              check the id
+  6     refused by workspace rules (a role, lockdown, agent       ask an Admin; don't retry
+        access)
+  7     offline, the relay unreachable, or timed out              retry with backoff
+  8+    command-specific, listed in that command's help
+
+ligus uses: 1 for a failed check or operation; 2 for usage (and a model gateways
+file that can't be used); 3 when serve or worker refuses to start without an
+agent sandbox (LIGUS_REQUIRE_SANDBOX=1) or the relay rejected the access token;
+5 for an unknown chat; 6 when the workspace refuses (a role, an agent's access);
+7 when the relay can't be reached or asks to wait. ligus doctor and ligus
+gateway-check exit 1 when a check fails; before 0.2 they exited 3, 4, 5
+(doctor's preflights) and 6 (gateway-check), and --legacy-exit-codes keeps
+those codes for one release.
+
+The deploy scripts use 0 to 4 (an unreachable cluster is 3); langstroth-relay
+uses 0 to 2.
+",
+    },
+    Topic {
         name: "checks",
         aliases: &["checks.v1", "ligus.checks.v1", "doctor-json"],
         summary: "the ligus.checks.v1 report every doctor and check command prints",
@@ -2201,8 +2238,9 @@ langstroth-relay check --url <relay> on the relay host.
         text: "\
 For coding agents operating Ligus. Every ligus command is non-interactive when
 stdin isn't a terminal (no prompts; pass the flag instead), prints errors on stderr
-as \"ligus: …\", and exits 0 on success, 1 on an error, 2 on a usage error (see each
-command's EXIT CODES). Read commands take --json. Never run a ligus binary against
+as \"ligus: …\", and exits with one table every Ligus tool shares (ligus help
+exit-codes): 0 done, 1 failed, 2 usage, 3 a precondition you can fix, 4 a person
+must decide (stop and ask), 5 not found, 6 refused by workspace rules, 7 offline. Read commands take --json. Never run a ligus binary against
 the person's real data dir to experiment: use
   export LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file
 Human-only steps: approving a box admission with a passkey, enrolling a person's
@@ -2235,7 +2273,7 @@ Deploy on Kubernetes:
 
 Check health:
   ligus status --json                 # relay, key, local copy, member, serve, sandbox tier
-  ligus doctor --require-confined     # exit 3: no agent sandbox
+  ligus doctor --require-confined     # exit 1: no agent sandbox (sandbox.tier fails)
   ligus remote status --json          # serve's relay link and phones
   curl -s http://<listen>/v1/health   # serve ; worker: --health-listen /v1/ready
   ligus hosts --json ; ligus queue
@@ -2275,8 +2313,9 @@ pub fn overview() -> String {
     s.push_str(
         "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
          connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
-         next argument or follows an equals sign (--label box, or --label=box).\n\nEXIT CODES\n  0 success   1 error (\"ligus: …\" on stderr)   \
-         2 usage error (unknown command, missing or bad argument)\n  Some commands add their own: see `ligus <command> --help`.\n\n\
+         next argument or follows an equals sign (--label box, or --label=box).\n\nEXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
+         0 done   1 failed (\"ligus: …\" on stderr)   2 usage error   3 a precondition you can fix   \
+         4 a person must decide\n  5 not found   6 refused by workspace rules   7 offline or timed out\n\n\
          An agent setting Ligus up: ligus help agents-guide\n",
     );
     s
@@ -2354,6 +2393,10 @@ pub fn command_help(c: &Cmd) -> String {
             let _ = writeln!(s, "  {code}  {why}");
         }
     }
+    s.push_str(
+        "  3 a precondition you can fix, 4 a person must decide, 5 not found, 6 refused by workspace rules,\n  \
+         7 offline or timed out: the table every Ligus tool shares (ligus help exit-codes)\n",
+    );
     s.push_str("\nSEE ALSO\n");
     let _ = writeln!(s, "  {}", c.see_also.join(", "));
     s
@@ -2758,5 +2801,23 @@ mod tests {
         assert!(is_usage(&usage_error("unknown `ligus remote x`")));
         assert!(is_usage(&anyhow::anyhow!("usage: ligus tail <chat-id>")));
         assert!(!is_usage(&anyhow::anyhow!("unknown chat 123")));
+    }
+
+    /// One exit-code table: `ligus help exit-codes` lists 0 to 7, matches the
+    /// code's table, and every command's help points to it.
+    #[test]
+    fn exit_codes_are_one_table() {
+        let t = lookup(&["exit-codes"]).unwrap();
+        for (code, meaning, _) in crate::problem::TABLE {
+            let first = meaning.split([' ', ':', '(']).next().unwrap();
+            assert!(t.contains(&format!("  {code}     ")), "exit-codes lacks {code}:\n{t}");
+            assert!(t.to_lowercase().contains(&first.to_lowercase()), "exit-codes lacks {meaning:?}");
+        }
+        assert!(t.contains("--legacy-exit-codes"));
+        for c in COMMANDS {
+            assert!(command_help(c).contains("ligus help exit-codes"), "ligus {} --help doesn't point to the table", c.name);
+        }
+        assert!(overview().contains("ligus help exit-codes"));
+        assert_eq!((EXIT_OK, EXIT_ERROR, EXIT_USAGE), (crate::problem::EXIT_OK, crate::problem::EXIT_ERROR, crate::problem::EXIT_USAGE));
     }
 }

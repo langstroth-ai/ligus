@@ -36,6 +36,7 @@ Topics:
 | `security` | the data dir, the secret backends, `LIGUS_DATA_DIR`, `LIGUS_SECRET_BACKEND` |
 | `env` | every `LIGUS_*` variable the CLI reads (a test checks it against the code) |
 | `troubleshooting` | the common errors and their fixes |
+| `exit-codes` | the exit codes every Ligus tool shares (0 to 7), and `--legacy-exit-codes` ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes)) |
 | `checks` | the `ligus.checks.v1` report `ligus doctor --json`, `langstroth-relay check --json` and the deploy scripts print ([CLI conventions](../../operate/reference/cli-conventions.md)) |
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
@@ -46,15 +47,26 @@ stdout and exits 0; an unknown command or topic exits 2.
 
 ## Exit codes {#exit-codes}
 
-| Code | Meaning |
-|---|---|
-| 0 | success (help included) |
-| 1 | error: the message is on stderr as `ligus: …` |
-| 2 | usage error: an unknown command or subcommand, a missing or bad argument (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
-| 3 | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1`, or `ligus doctor --require-confined` or `--turn-test`, on a host without an agent sandbox |
-| 4 | `ligus doctor --expect-tier`: another tier |
-| 5 | `ligus doctor --turn-test` failed or couldn't run |
-| 6 | `ligus gateway-check`: a check failed |
+One table for every Ligus tool: `ligus`, `langstroth-relay` and the deploy
+scripts ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes);
+`ligus help exit-codes`).
+
+| Code | Meaning | When `ligus` uses it |
+|---|---|---|
+| 0 | done (warnings allowed) | success, help included |
+| 1 | failed: the message (or `checks[].fix`) says why | an error (`ligus: …` on stderr); a failed `ligus doctor` or `ligus gateway-check` check |
+| 2 | usage error | an unknown command or subcommand, a missing or bad argument such as a malformed chat id (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
+| 3 | a precondition you can fix is missing | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1` on a host without an agent sandbox; the relay rejected the access token |
+| 4 | a person must decide or act | (reserved) |
+| 5 | not found | an unknown chat (`ligus tail`, `ligus send`) |
+| 6 | refused by workspace rules | the workspace refused the action (a role, an agent's access, a relay roster) |
+| 7 | offline, the relay unreachable, or timed out | the relay couldn't be reached, or asked to wait (a rate limit) |
+
+Before 0.2, `ligus doctor` exited 3 (`--require-confined` or `--turn-test`
+without an agent sandbox), 4 (`--expect-tier`: another tier) or 5
+(`--turn-test` failed), and `ligus gateway-check` exited 6 when a check
+failed. Both now exit 1 with the failing check's id in the output;
+`--legacy-exit-codes` keeps the old codes for one release.
 
 `ligus` with no command prints the command list to stderr and exits 2. An
 unknown command exits 2 without creating a data dir.
@@ -103,7 +115,7 @@ command prompts when standard input isn't a terminal: the one question
 | `ligus status [--json]` | one summary of this data dir without changing it: the identity (and whether it is a box), the workspace and relay, whether an access token, the workspace key and a local copy are present, membership and device standing, a kept admission, the serve token, remote access and the running server's relay link, the agent sandbox tier, and the next step |
 | `ligus whoami [--json]` | prints account id, device id, name, data dir and room |
 | `ligus doctor [--json]` | runs every check this host can make and says how to fix what fails: the agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open (see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md)); whether the process is dumpable; the workspace's signed sandbox grants; the secret store; the workspace connection; the relay (one request, 10 seconds at most; a failure names `langstroth-relay check --url <relay>` to run on the relay host); the held events (events this device can't judge yet, which never stop sync: [held events](../../operate/security/threat-model.md#held-events)); and this host's model gateways. Exits 1 when a check fails. `--json` prints one [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report; the text form starts with `agent sandbox: <tier>` and its summary, then one line per check and a summary line |
-| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | the sandbox checks only, as a preflight that exits non-zero: `--require-confined` exits 3 without an agent sandbox, `--expect-tier` exits 4 on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (exit 5 on failure; its findings are `turn test: …` lines) |
+| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | the sandbox checks only, as a preflight that exits 1 when one fails: `--require-confined` without an agent sandbox, `--expect-tier` on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (its findings are `turn test: …` lines). `--legacy-exit-codes` exits 3, 4 and 5 instead, as before 0.2 |
 | `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | the sandbox checks only, then what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
 | `ligus doctor --gateways [--gateway <name>] [--model <id>]` | the model gateway checks only, the same ones `ligus gateway-check` runs, as checks |
 | `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route |
