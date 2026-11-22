@@ -33,6 +33,7 @@ import { useContextMenu } from "@/components/ContextMenu";
 import { confirmThen } from "@/lib/confirm";
 import { groupProposals } from "@/lib/proposals";
 import { relTime } from "@/lib/time";
+import { useSessionStates } from "@/state/useSessionStates";
 import {
   NavRow,
   ChatRow,
@@ -180,6 +181,10 @@ export function Sidebar({
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
 
   const all: ChatSummaryDto[] = chats.data ?? [];
+  // Working / needs you / queued / done / failed / paused, per chat (idle
+  // chats are absent and show their time as before).
+  const chatIds = useMemo(() => all.map((c) => c.id), [all]);
+  const states = useSessionStates(chatIds, activeWorkspaceId);
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     let out = all.filter((c) => c.archived === showArchived);
@@ -439,6 +444,14 @@ export function Sidebar({
     "--ligus-ink": "var(--ligus-sidebar-ink)",
     "--ligus-ink-soft": "var(--ligus-sidebar-ink-muted)",
     "--ligus-overlay": "color-mix(in srgb, var(--ligus-sidebar-ink) 10%, transparent)",
+    // Session-state chips on the dark sidebar: light inks, one hue per state
+    // (the glyph is what carries the meaning).
+    "--ligus-state-working": "oklch(0.9 0.07 230)",
+    "--ligus-state-needs-you": "oklch(from var(--ligus-accent-warm) 0.9 calc(c * 0.8) h)",
+    "--ligus-state-queued": "oklch(from var(--ligus-warn) 0.9 calc(c * 0.7) h)",
+    "--ligus-state-done": "oklch(from var(--ligus-success) 0.9 calc(c * 0.7) h)",
+    "--ligus-state-failed": "oklch(from var(--ligus-danger) 0.88 calc(c * 0.6) h)",
+    "--ligus-state-paused": "var(--ligus-sidebar-ink-muted)",
   };
 
   return (
@@ -611,6 +624,7 @@ export function Sidebar({
                   chatId={c.id}
                   title={c.title || "Untitled"}
                   when={relTime(c.lastActivityAt)}
+                  state={states.get(c.id)}
                   unread={unreadSessions.has(c.id) ? 1 : 0}
                   active={c.id === selectedId && view === "workspace"}
                   onClick={() => onSelect(c.id)}
@@ -757,6 +771,7 @@ export function Sidebar({
                             chatId={c.id}
                             title={c.title || "Untitled"}
                             when={relTime(c.lastActivityAt)}
+                            state={states.get(c.id)}
                             unread={unreadSessions.has(c.id) ? 1 : 0}
                             active={c.id === selectedId && view === "workspace"}
                             onClick={() => onSelect(c.id)}
@@ -792,6 +807,7 @@ export function Sidebar({
                       chatId={c.id}
                       title={c.title || "Untitled"}
                       when={relTime(c.lastActivityAt)}
+                      state={states.get(c.id)}
                       unread={unreadSessions.has(c.id) ? 1 : 0}
                       active={c.id === selectedId && view === "workspace"}
                       onClick={() => onSelect(c.id)}

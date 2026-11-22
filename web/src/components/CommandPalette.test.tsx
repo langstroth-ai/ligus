@@ -13,9 +13,22 @@ vi.mock("@/lib/ipc", () => ({
     { id: "w1", name: "My workspace", kind: "local", active: true },
     { id: "w2", name: "team-alpha", kind: "room", active: false },
   ]),
+  listChatAttention: vi.fn(async () => [
+    {
+      sessionId: "c1",
+      openAsks: 0,
+      paused: false,
+      proposals: [
+        { id: "p1", title: "Relay backoff", status: "open", needsMe: true },
+        { id: "p2", title: "Docs typo", status: "open", needsMe: false },
+      ],
+    },
+  ]),
+  listAgents: vi.fn(async () => [{ id: "a1", name: "scout", role: "reviewer" }]),
+  listQueuedWork: vi.fn(async () => []),
 }));
 
-function setup(actions: Partial<PaletteActions> = {}) {
+function setup(actions: Partial<PaletteActions> = {}, props: { sessionId?: string; workspaceId?: string } = {}) {
   const acts: PaletteActions = {
     newChat: vi.fn(),
     openSettings: vi.fn(),
@@ -27,14 +40,17 @@ function setup(actions: Partial<PaletteActions> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <CommandPalette open onClose={onClose} actions={acts} />
+      <CommandPalette open onClose={onClose} actions={acts} {...props} />
     </QueryClientProvider>,
   );
   return { acts, onClose };
 }
 
 describe("CommandPalette", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+  });
 
   it("lists actions, workspaces, and non-archived chats", async () => {
     setup();
@@ -94,10 +110,13 @@ describe("CommandPalette", () => {
     setup({ openPane, openSettingsTab });
     for (const p of PANES) expect(screen.getByText(`Open ${p.label}`)).toBeInTheDocument();
     for (const t of SETTINGS_TABS) expect(screen.getByText(`Settings: ${t.label}`)).toBeInTheDocument();
-    // ⌘⌥1–9 cover the first nine panes; the tenth is palette-only, so no fake key.
-    expect(PANES.length).toBeGreaterThan(9);
-    expect(screen.getByText("Pane · ⌘⌥9")).toBeInTheDocument();
-    expect(screen.queryByText("Pane · ⌘⌥10")).not.toBeInTheDocument();
+    // ⌘⌥1–9 cover the first nine panes and ⌘⌥0 the tenth (Activity); no fake keys.
+    expect(PANES.length).toBe(10);
+    // Shown in the platform's own words (⌘⌥ on a Mac, Ctrl+Alt+ elsewhere).
+    const { keyLabel } = await import("@/lib/shortcuts");
+    expect(screen.getByText(`Pane · ${keyLabel("⌘⌥9")}`)).toBeInTheDocument();
+    expect(screen.getByText(`Pane · ${keyLabel("⌘⌥0")}`)).toBeInTheDocument();
+    expect(screen.queryByText(`Pane · ${keyLabel("⌘⌥10")}`)).not.toBeInTheDocument();
     const last = PANES[PANES.length - 1];
     await userEvent.setup().click(screen.getByText(`Open ${last.label}`));
     expect(openPane).toHaveBeenCalledWith(last.id);
@@ -114,5 +133,70 @@ describe("CommandPalette", () => {
     setup();
     expect(screen.queryByText("Admit a box…")).not.toBeInTheDocument();
   });
-});
 
+  it("ranks fuzzy matches, best first", async () => {
+    const user = userEvent.setup();
+    setup({ openPane: vi.fn() });
+    await screen.findByText("Fix login flow");
+    await user.type(screen.getByPlaceholderText(/search/i), "fxlgn");
+    const first = document.querySelector("[data-palette-item]");
+    expect(first?.textContent).toContain("Fix login flow");
+  });
+
+  it("lists what you ran recently first", async () => {
+    const user = userEvent.setup();
+    const openPane = vi.fn();
+    setup({ openPane });
+    await screen.findByText("Fix login flow");
+    await user.click(screen.getByText("Open Activity"));
+    expect(openPane).toHaveBeenCalledWith("activity");
+    expect(JSON.parse(window.localStorage.getItem("ligus.palette.recent") ?? "[]")).toEqual(["pane-activity"]);
+  });
+
+  it("starts with recent items when reopened", async () => {
+    window.localStorage.setItem("ligus.palette.recent", JSON.stringify(["pane-activity", "gone-item"]));
+    setup({ openPane: vi.fn() });
+    await screen.findByText("Fix login flow");
+    expect(screen.getByText("Recent")).toBeInTheDocument();
+    const first = document.querySelector("[data-palette-item]");
+    expect(first?.getAttribute("data-palette-item")).toBe("pane-activity");
+  });
+
+  it("offers open proposals, the ones waiting on you first, and opens them in Review", async () => {
+    const user = userEvent.setup();
+    const openProposal = vi.fn();
+    setup({ openProposal }, { workspaceId: "w1" });
+    expect(await screen.findByText("Review “Relay backoff”")).toBeInTheDocument();
+    expect(screen.getByText("Review “Docs typo”")).toBeInTheDocument();
+    expect(screen.getByText("Needs you")).toBeInTheDocument();
+    expect(document.querySelector("[data-palette-item]")?.getAttribute("data-palette-item")).toBe("proposal-p1");
+    await user.click(screen.getByText("Review “Relay backoff”"));
+    expect(openProposal).toHaveBeenCalledWith("c1", "p1");
+  });
+
+  it("offers the chat's agents as items that start a message to them", async () => {
+    const user = userEvent.setup();
+    const mentionAgent = vi.fn();
+    setup({ mentionAgent }, { sessionId: "c1" });
+    await user.click(await screen.findByText("@scout"));
+    expect(mentionAgent).toHaveBeenCalledWith("scout");
+  });
+
+  it("has an Add a phone command", async () => {
+    const user = userEvent.setup();
+    const addPhone = vi.fn();
+    setup({ addPhone });
+    await screen.findByText("Fix login flow");
+    await user.type(screen.getByPlaceholderText(/search/i), "iphone");
+    await user.keyboard("{Enter}");
+    expect(addPhone).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the shortcuts sheet", async () => {
+    const user = userEvent.setup();
+    const showShortcuts = vi.fn();
+    setup({ showShortcuts });
+    await user.click(await screen.findByText("Keyboard shortcuts"));
+    expect(showShortcuts).toHaveBeenCalled();
+  });
+});

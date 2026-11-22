@@ -72,7 +72,9 @@ import {
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
-import { Modal, Popover, PopoverItem, candidateKey, ErrorState } from "@/components/ui";
+import { liveTurns } from "@/state/liveTurns";
+import { Modal, Popover, PopoverItem, candidateKey, ErrorState, isModalOpen } from "@/components/ui";
+import { escStopsTurn } from "@/lib/shortcuts";
 import { Markdown } from "@/components/Markdown";
 import { agentMentionCandidates, detectMention, filterMentions, mentionSelectable, type MentionCandidate } from "@/lib/mentions";
 import { editorStore } from "@/state/editorStore";
@@ -93,7 +95,7 @@ const STARTER_PROMPTS = [
   "Add a setup section to the README.",
 ];
 
-function runtimePickerLabel(runtime: RuntimeSummaryDto) {
+export function runtimePickerLabel(runtime: RuntimeSummaryDto) {
   const provider = runtime.provider.trim();
   const model = runtime.model.trim();
   if (provider && model) return `${provider} / ${model}`;
@@ -388,7 +390,8 @@ export function ChatView({
   useEffect(() => {
     setStreams(new Map());
     setActivity(new Map());
-    setStreamError(null);
+    // A turn that failed while you were in another chat still shows here.
+    setStreamError(liveTurns.failureOf(sessionId));
     setStalled(false);
     setQueued(null);
     retiredIdsRef.current = new Set();
@@ -846,6 +849,7 @@ export function ChatView({
   // streams, the "thinking"/sending state, and the optimistic echo so the user
   // can send a new message right away rather than waiting for a stuck turn.
   async function handleStop() {
+    liveTurns.stopped(sessionId);
     try {
       await stopTurn(sessionId);
     } catch (e) {
@@ -860,6 +864,32 @@ export function ChatView({
   }
   // A turn is in flight whenever we're sending or a stream is live.
   const busy = sending || streams.size > 0 || activity.size > 0;
+  // Tell the sidebar (it can't see this view's send-to-first-delta gap).
+  useEffect(() => {
+    liveTurns.setSending(sessionId, busy);
+  }, [sessionId, busy]);
+  useEffect(() => () => liveTurns.setSending(sessionId, false), [sessionId]);
+
+  // Esc stops a streaming turn, unless something else owns the key (a dialog,
+  // a menu) or focus is in a field with text in it: Esc never costs a draft,
+  // and stopping leaves the composer as it is.
+  const escRef = useRef({ busy, menuOpen: false, stop: () => {} });
+  escRef.current = {
+    busy,
+    menuOpen: Boolean(mention || slash || emojiSc || showEmoji || routeOpen || filePicker),
+    stop: () => void handleStop(),
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const r = escRef.current;
+      if (!escStopsTurn({ busy: r.busy, defaultPrevented: e.defaultPrevented, modalOpen: isModalOpen(), menuOpen: r.menuOpen, target: e.target })) return;
+      e.preventDefault();
+      r.stop();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Mirrored into refs so the stall watchdog (deps: [busy]) reads fresh transcript
   // state without re-subscribing on every token. Assigned once `messages` is
@@ -1272,7 +1302,10 @@ export function ChatView({
                 <div className="mt-0.5 break-words opacity-80">{streamError}</div>
               </div>
               <button
-                onClick={() => setStreamError(null)}
+                onClick={() => {
+                  setStreamError(null);
+                  liveTurns.clearFailure(sessionId);
+                }}
                 className="shrink-0 rounded-md px-1.5 py-0.5 leading-none opacity-60 transition-opacity hover:opacity-100"
                 title="Dismiss"
                 aria-label="Dismiss"
