@@ -175,7 +175,7 @@ diff_digest, plan_digest, target_agent_id, host)`:
 
 The vote and the apply are two signed events, as today. Without a human gate,
 nothing new goes on the wire. With one, the only wire change is the additive
-presence set of section 3.5; no wire id changes and the quorum rules are
+approve-and-apply set of section 3.5; no wire id changes and the quorum rules are
 untouched. "Approve & apply" is a client-side sequence with stricter checks
 than two clicks.
 
@@ -218,7 +218,7 @@ A human-gated proposal needs presence on the vote and on a self-apply
 (`authz/rules.rs:84-99`); an apply **request** carries the person's presence
 and the host that fulfils it needs none ("the request carried the person's").
 
-**Shape: a presence set of exactly two events.**
+**Shape: an approve-and-apply set of exactly two events.**
 
 1. The client drafts both events first, fully: the `ProposalVoteCast`
    (approved, naming the shown digest) at lamport *L*, and a
@@ -227,12 +227,12 @@ and the host that fulfils it needs none ("the request carried the person's").
    "Apply on This device", or the chosen host.
 2. It computes `c1 = challenge(vote)`, `c2 = challenge(request)` and the set
    challenge
-   `S = SHA-256("ligus-presence-set-v1\0" ‖ u32le(2) ‖ c1 ‖ c2)`
+   `S = SHA-256("ligus-approve-apply-v1\0" ‖ u32le(2) ‖ c1 ‖ c2)`
    (a **new** frozen context; the existing `ligus-presence-v1\0` is untouched).
 3. One ceremony signs `S`. The passkey sheet's title is "Approve and apply
    ‹title›".
 4. Both envelopes carry the same assertion plus an additive actor-stamp field
-   `presenceSet: [c1, c2]` (hex). The device signs each envelope as usual; the
+   `approveApplySet: [c1, c2]` (hex). The device signs each envelope as usual; the
    preimage covers the actor stamp, so the set is signed by the device too.
 5. The vote is appended; then steps 5-6 re-check; only then is the request
    appended. If the re-check refuses, the drafted request is dropped from
@@ -243,7 +243,7 @@ and the host that fulfils it needs none ("the request carried the person's").
    `implement_proposal_targeted` path.
 
 **Verification (fold, every device).** In `verify_stamped`, when the stamp
-has `presenceSet`:
+has `approveApplySet`:
 
 - it has exactly 2 entries, distinct, each 32 bytes;
 - this event's own `challenge(env)` is one of them;
@@ -251,10 +251,10 @@ has `presenceSet`:
   credential of the stamped account, with user verification, as today;
 - the event is a `ProposalVoteCast` with `approved: true` or a
   `ProposalApplyRequested`; any other kind carrying a set is denied
-  ("a presence set covers only an approval and its apply");
+  ("an approve-and-apply set covers only an approval and its apply");
 - for a request, the fold additionally requires that the same account's
   latest vote on that proposal is an approval naming the same digest and
-  carrying a `presenceSet` that contains this request's challenge. So a set
+  carrying an `approveApplySet` that contains this request's challenge. So a set
   can't pair a request with someone else's vote, or with a different
   proposal's.
 
@@ -289,7 +289,7 @@ event-id dedup as today.
 | T9 | The "What will run" text for each plan kind is produced from `implement_plan` (snapshot test per kind), and the runner's `executed_argv`/`executed_instruction` equal the plan shown. | unit + snapshot |
 | T10 | Implement… is not shown for a Rejected proposal that still has quorum. | web unit (vitest) |
 | T11 | `⇧A` alone never applies; `⇧A` then ⏎ does; the button ignores clicks for 600 ms after the plan changes. | web unit + Playwright |
-| T12 | Presence set: golden vectors for `S` (new context, two challenges); a set of 1 or 3 entries, a duplicate entry, an event whose own challenge isn't listed, or an assertion over `c1` alone are each denied. | unit + golden |
+| T12 | Approve-and-apply set: golden vectors for `S` (new context, two challenges); a set of 1 or 3 entries, a duplicate entry, an event whose own challenge isn't listed, or an assertion over `c1` alone are each denied. | unit + golden |
 | T13 | A set assertion copied onto a third event (another vote, a `DeviceRevoked`, a rules change) is denied; an apply request whose set doesn't match the same account's approving vote on the same proposal and digest is denied. | unit (forged-envelope harness) |
 | T14 | Re-check refuses after the vote (a reject folded): the drafted request never reaches the store or the relay. | integration |
 | T15 | The request names this device; `apply_host::pending` on this device fulfils it once, and a restart mid-apply doesn't apply twice. | integration |
@@ -342,7 +342,7 @@ revisions.
 - G2. The vote binds the content shown on screen, and the run is the plan
   shown on screen.
 - G3. No quorum or role rule changes: same events, same quorum, same
-  presence requirements; the only fold addition is verifying a presence set
+  presence requirements; the only fold addition is verifying an approve-and-apply set
   (section 3.5).
 - G4. The button appears only when this person's vote is what completes
   quorum.
@@ -428,7 +428,7 @@ over the vote's challenge, and the apply references it".
 
 #### Hidden assumptions
 
-- Every device runs a build that knows presence sets (owner: no older clients
+- Every device runs a build that knows approve-and-apply sets (owner: no older clients
   to support). An older build would deny both events for "presence required".
 - Applying through the request path on this device gives the same result as
   the direct self-apply (both use the chat's worktree on the expected base;

@@ -42,7 +42,7 @@ with the code, the code wins.
   [`design/proposal-line-comments.md`](design/proposal-line-comments.md) (line comments in the refinement thread),
   [`design/review-screen-approve-and-apply.md`](design/review-screen-approve-and-apply.md) (the Review screen and "Approve & apply"),
   [`design/shared-live-sessions.md`](design/shared-live-sessions.md) (presence, steering, hand-over, comments on a running turn),
-  [`design/devices-and-keys.md`](design/devices-and-keys.md) (Devices & keys and the fingerprint word list shared with the phone),
+  [`design/devices-and-keys.md`](design/devices-and-keys.md) (Devices & keys; the fingerprint word form is deferred),
   [`design/update-notices.md`](design/update-notices.md) (daily update notices and the unreadable-events warning),
   [`design/lt-clipboard-copy.md`](design/lt-clipboard-copy.md) (copying from `lt`, invite codes included).
 - Kubernetes: [`design/kubernetes.md`](design/kubernetes.md) — relay, `ligus serve` and agent runners on Kubernetes, sandboxed turn executors, security model, phased plan (design; Phase 1 chart in `deploy/helm/ligus/`, image in `deploy/container/`).

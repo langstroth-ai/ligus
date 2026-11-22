@@ -9,18 +9,24 @@ short for *ligustica*, the Italian honeybee.
 Two people (or a person and their phone) compare a fingerprint to decide which
 key becomes trusted. Today that is 20 hex characters on a desktop and one long
 hex line on the phone. This note gathers devices, phones, passkeys and the
-safety code on one page, and adds an optional **word form** that says exactly
-the same bytes in words that are easier to compare aloud.
+safety code on one page. It also records the design of an optional
+**word form** (the same bytes in words, for comparing aloud), which is
+**deferred**: Devices & keys ships without it.
 
 ## Decisions
 
 Owner, 2026-11-22:
 
-- **Words for device fingerprints only** (desktops, boxes, phones, and the
-  box join-request fingerprint). The safety code keeps its hex form.
-- **Confirm the PGP word list's licence before shipping.** Checked on
-  2026-11-22; the result (not cleared) is in section 2.1, with what has to
-  happen before the list ships.
+- **The word form is deferred.** Devices & keys ships with grouped
+  fingerprints only (the hex characters in groups of four, larger mono text,
+  as in section 2.4), with no words. Section 2 stays as the design for later,
+  to be built only if we truly need it.
+- **If a word form is ever built, it uses our own list**: 512 words chosen
+  by a published, deterministic rule from the EFF short word list (CC BY 3.0
+  US, attributed) or a list written for Ligus. **Never the PGP word list**:
+  its licence could not be cleared (section 2.1).
+- If built: words for device fingerprints only (desktops, boxes, phones, and
+  the box join-request fingerprint); the safety code keeps its hex form.
 
 ## 1. What exists today (code-verified)
 
@@ -61,24 +67,36 @@ used by `RecoveryKey::words`, `presence.rs:696-708`). The iPhone app has no
 word list and no Rust core: it re-implements in Swift and keeps parity with
 golden vectors.
 
-## 2. The word form
+## 2. The word form (deferred)
+
+**Deferred by the owner (2026-11-22).** Nothing in this section ships with
+Devices & keys. It is kept as the design to follow if a word form is ever
+built, with the list choice below.
 
 ### 2.1 The list
 
-The **PGP word list** (two lists of 256 words: "even" words for bytes at even
-positions, "odd" words for odd positions). It was designed for reading
-fingerprints aloud: the words are phonetically distinct, the even list is
-two-syllable and the odd list three-syllable, so a swapped, dropped or
-repeated word is audible.
+Two lists of 256 words ("even" words for bytes at even positions, "odd"
+words for odd positions), so a swapped, dropped or repeated word is
+detectable. **Our own list**: 512 words selected by a published,
+deterministic rule from the EFF short word list (CC BY 3.0 US, attribution in
+a `NOTICE` file), or a list written for Ligus. The selection rule and the
+resulting list are checked in together, so anyone can reproduce it. Words in
+the even and odd lists differ in length or syllable count where the source
+allows, to make the two lists audibly different.
 
-Why not the others:
+The PGP word list was the first candidate (it was designed for exactly this:
+reading fingerprints aloud), but its licence could not be cleared (below), so
+it is **never** used.
+
+Other lists considered:
 
 - **BIP-39** (already a dependency): 11 bits per word means 80 bits doesn't
   divide into words, words don't line up with hex groups, and the list was
   chosen for writing down, not for telling words apart by ear. Reusing the
   recovery-key list for a comparison code also invites confusing the two.
-- **EFF short list:** 10.3 bits per word, same alignment problem, and an
-  attribution licence.
+- **The EFF short list used directly** (1,296 words, 10.3 bits per word):
+  same alignment problem as BIP-39. Used only as the source our 512 words
+  are drawn from.
 
 **Licence check (2026-11-22): not cleared.** What we found:
 
@@ -95,20 +113,9 @@ Why not the others:
 - Many open-source packages ship the list (BSD, MIT and other licences on
   their *code*), but none cites a grant for the words themselves.
 
-So we can't cite a licence today. Before the list ships, one of:
-
-1. **Written permission** from the authors (Patrick Juola; Philip
-   Zimmermann) to redistribute the two lists in Ligus's MIT-licensed code on
-   desktop and phone, recorded in a `NOTICE` file. Preferred: the list is the best
-   fit for comparing aloud.
-2. **A list we can license**, keeping every other rule in this note (two
-   lists of 256, even/odd by position, all bytes, aligned pairs): 512 words
-   chosen by a published, deterministic rule from the EFF short word list
-   (CC BY 3.0 US, attribution in `NOTICE`), or from a list written for Ligus.
-   The encoding, vectors and tests stay the same; only the words and
-   `FINGERPRINT_WORDS_V1_SHA256` change.
-
-Nothing in this design depends on which of the two it is.
+So no licence can be cited, and the owner chose our own list instead
+(above). The encoding, vectors and tests below don't depend on which words
+the list holds.
 
 ### 2.2 Encoding (normative)
 
@@ -192,9 +199,11 @@ it already read. To cut that too, rotate the workspace key." with a
 **Rotate key…** link to the existing `rotate_workspace_key`.
 
 A `Fingerprint` component (`web/src/components/Fingerprint.tsx`) replaces
-every ad-hoc `<code>` above: props `hex`, `words?`, `label`.
+every ad-hoc `<code>` above: props `hex` and `label` (a `words` prop only if the deferred word form is built). It shows the hex in groups of four in larger mono text, never shrunk below body size, with the copy "Compare all five groups."
 
 ## 4. Tests (executable)
+
+T1-T6 apply when the deferred word form is built; T7 and T8 apply to Devices & keys as it ships.
 
 | # | Test | Kind |
 |---|---|---|
@@ -205,6 +214,7 @@ every ad-hoc `<code>` above: props `hex`, `words?`, `label`.
 | T5 | Words never appear without the hex (component snapshot with words on and off). | vitest snapshot |
 | T6 | Add a phone with words on: the approve call still sends the hex fingerprint that was compared (`phoneEnrollOfferApprove(…, fingerprint)`), unchanged. | vitest + existing Rust test |
 | T7 | Passkeys list shows labels; Remove still requires the existing confirmation. | vitest |
+| T8 | Every fingerprint on the page renders through the `Fingerprint` component in five groups of four, never shrunk below body size, with no words. | vitest snapshot |
 
 ## 5. Adversarial assessment
 
@@ -228,7 +238,8 @@ hex when enabled, and computed words in TypeScript from the displayed string.
    hex lets a display bug change both forms together. *Revision: from key
    bytes (2.3), test T4.*
 4. **BIP-39 alignment and confusion with the recovery words** (Low, high).
-   *Revision: PGP word list (2.1).*
+   *Revision: a dedicated two-list, byte-per-word list (2.1); after the
+   licence check, our own list drawn from the EFF short list.*
 5. **Partial comparison** (Medium, high). People compare the first group or
    two. Grinding a key whose first two groups match costs about 2^32 work, so
    a partial check is weak in either form. *Revision: copy says "all five
@@ -253,8 +264,8 @@ hex when enabled, and computed words in TypeScript from the displayed string.
 #### Hidden assumptions
 
 - People actually compare every group. The design can ask but can't force it.
-- The word list can be redistributed. Not cleared for the PGP list (section
-  2.1): it ships only with written permission, or a licensable list replaces it.
+- The word list can be redistributed: true for our own list (CC BY 3.0 US
+  source, attributed); the PGP list is never used (section 2.1).
 
 #### Counterexamples considered after revision
 
@@ -276,8 +287,8 @@ worth it for comparison by voice (a phone call with a new member).
 
 #### Residual risks
 
-- Licence: blocked until permission is recorded or the replacement list is
-  chosen (section 2.1).
+- The word form is deferred; until it is built, comparison by voice means
+  reading hex groups.
 - Partial comparison by people (unchanged by this design, only discouraged by
   copy).
 - English words on non-English devices.
