@@ -24,6 +24,30 @@ The box's own votes never count as your approval
 ([Running ligus serve](../../operate/ops/serve-box.md)). For the whole
 setup end to end, see [Personal fleet](../../operate/deploy/personal-fleet.md).
 
+## Finding your way {#navigation}
+
+The app has four tabs: **Inbox**, **Chats**, **Review** and **Agents**.
+Settings opens from your avatar at the top right of each tab, and **Done**
+takes you back.
+
+- **Inbox** is home. *Needs you* lists only what waits on you: votes you can
+  still cast, approval gates, agents' questions and permission requests you
+  may answer, this phone needing to be added to your devices again, a box
+  waiting for your approval, invites, and failures of runs you started.
+  Deadlines come first. Each row opens its chat or proposal; nothing is
+  approved or answered from the list. Below it, *Running* shows chats with an
+  agent working or queued, and *Done today* (folded) what finished today.
+  The Inbox count is the only badge, on the tab and on the app icon (when
+  you allowed badges); unread messages are a dot on the chat row.
+- **Chats** and **Agents** rows say where each chat or agent stands, with a
+  glyph and a word: *Needs you*, *Failed*, *Paused*, *Working*, *Queued* or
+  *Done* (finished since you last looked). The desktop's chat rows use the
+  same words.
+- **Review** has a filter: *All*, *Needs my vote*, *Waiting on others*,
+  *Mine* and *Workspace* (the review queue, task board and notes;
+  see [Flow](#flow)).
+- **Agents → Health** is the box's dashboard ([Dashboard](#dashboard)).
+
 ## Add your phone {#add-this-phone}
 
 Before the phone can pair with your box or sign anything, your desktop
@@ -272,7 +296,12 @@ both:
 | **Relay** | a Noise session through your relay's tunnel; the relay forwards ciphertext only | the box's host id and public key, the relay URL, and the phone's own key and credential (90 days, renewed daily while used) |
 
 Pair by scanning the QR code `ligus pair` prints (or opening its
-`ligus://pair?…` link). A **v2** link carries the relay
+`ligus://pair?…` link): the Connect screen shows the command to run on the
+box and one **Scan the code** button, with pasting a link or typing an
+address under **Other ways to connect**. Before it pairs, the app says what
+pairing grants: the phone reads your chats and proposals through the box,
+posts, votes and answers as you (signed by its own key once it is one of
+your devices), and never holds your workspace keys. A **v2** link carries the relay
 details as well as, when there is a usable direct address, the URL and token.
 A box listening only on loopback (`127.0.0.1`) with remote access off prints
 no link, since the phone can't reach it; see
@@ -331,8 +360,10 @@ the app on an unlocked phone; it isn't a substitute for
 
 ## Demo mode
 
-**Try the demo** on the pairing screen opens a sample workspace that runs
-entirely on the phone, with no box or relay. Replies come from Apple's
+**Explore the demo** on the welcome screen opens a sample workspace that runs
+entirely on the phone, with no box or relay. Its card (with *Connect your
+box* and *Exit demo*) is on the Inbox; the other tabs say "Demo workspace ·
+sample data" in one line. Replies come from Apple's
 on-device model where available, otherwise from scripted text. Nothing is
 sent anywhere, and there's no push in the demo.
 
@@ -357,6 +388,11 @@ sent anywhere, and there's no push in the demo.
   off in **Settings → Share typing status** (on by default; the desktop has
   the same switch under **Settings → Profile → Privacy**). Nothing is sent
   while a chat waits for its founder.
+- **Notes above the composer** (why sending is waiting, signed actions not
+  yet published, the demo's note) fold into one line when there are several,
+  or when the text is at an accessibility size; tap it to read them. Who
+  answers a message that mentions nobody is the small menu beside the
+  message field.
 - **Which device answered.** A reply from the chat's primary `@ligus` says
   where it ran: "This device" (the box), "Your other device", or "<name>'s
   device".
@@ -516,16 +552,27 @@ ciphertext.
 | The review queue needs you | the review queue backed up and a desktop with *Recruit reviewers* on asked you to help; tapping opens the proposal that has waited longest for you |
 | New phone paired | a new phone was paired with the box |
 
-Tapping a notification opens its chat. Notifications offer **Approve** and
-**Reply** actions where they apply; a reply that can't reach the box
-within 20 seconds is queued.
+Tapping a notification opens its chat or proposal. Notifications offer
+**Review** (it opens the proposal; nothing is approved from a notification)
+and **Reply** where they apply; a reply that can't reach the box within 20
+seconds is queued.
 
-- **Previews are on by default.** A notification shows who did what as the
-  title and, for replies and mentions, the first 120 characters of the message
-  as the body. Markdown is flattened to plain text first: a table becomes
+- **What notifies.** In the app's notification settings, *Notify me about*
+  has three switches, all on: *Votes, questions and approvals for you*,
+  *Mentions and direct messages*, and *Runs you started*. Other chat
+  messages never notify. The phone sends the box the kinds it wants, but
+  boxes don't filter by them yet, so for now a box sends every kind above.
+- **How loudly.** A run that finished arrives silently and groups with other
+  finished runs; a failure alerts you. Something waiting on you is
+  time-sensitive (it can break through a Focus) only when it has a deadline
+  within the hour. In iOS Settings → Focus, a Ligus filter chooses which of
+  your boxes may notify during that Focus.
+- **Previews: When unlocked** (the default). A notification shows who did
+  what as the title and, for replies and mentions, the first 120 characters
+  of the message as the body; on a locked phone iOS hides the body. Markdown is flattened to plain text first: a table becomes
   `Header: value` lines, list items get a bullet, and headings, fences and
   link URLs are dropped.
-- **Previews are per phone.** Turn them off in the app's notification
+- **Previews are per phone.** Set them to *Never* in the app's notification
   settings and that phone gets only the title ("coder replied"). Other phones
   keep their own setting.
 - **No duplicates while you're looking.** While the app is open and following
@@ -638,7 +685,7 @@ clear. Switching dearth mode and approving joins stay on the desktop.
 ## Flow
 
 `GET /v1/flow` gives the phone a compact, read-only view of
-[Flow](flow.md): the task board (open work and who claimed it), the review
+[Flow](flow.md), under **Review → Workspace**: the task board (open work and who claimed it), the review
 queue with its backpressure alert, active workspace marks, and a summary of
 the routing shadow report. The thresholds are the defaults (queue limit 5,
 long wait two hours), since a desktop's Flow settings are its own. Hand-off
@@ -674,9 +721,22 @@ The box decides each value on its own, in this order:
 
 The box can also serve a dashboard for the phone: a built-in Ligus section
 (agents, proposals, workflow runs, turns, the host's status) plus panels you
-define in `dashboard.toml` on the box. The app hides its dashboard tab when
-the dashboard is empty. Format and examples:
+define in `dashboard.toml` on the box. It is **Agents → Health** in the app,
+shown when the dashboard isn't empty. Format and examples:
 [`docs/dashboard.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/dashboard.md).
+
+## Accessibility
+
+- **VoiceOver** says when an agent finishes or fails in the chat you have
+  open, when an agent asks you a question, and when your vote is recorded,
+  once each. A reply being written reads as "writing a reply" instead of
+  being read token by token. A proposal's sections and each agent's question
+  are headings for the rotor.
+- **Larger text:** at accessibility sizes the chat keeps the transcript on
+  screen; the notes above the composer fold into one line.
+- **Increase Contrast** strengthens secondary text and lines; **Reduce
+  Transparency** gives the top banner a solid background. Every status pairs
+  a glyph with a word, so none depends on colour.
 
 ## Phone-signed actions {#phone-signed-actions}
 
