@@ -121,6 +121,42 @@ pub const FACTS_KEEP: i64 = 50_000;
 /// Cached projections kept at most; past this the cache starts over.
 const PROJECTION_CACHE_MAX: usize = 256;
 
+/// How long a connection waits for another connection's lock on the file
+/// before it reports "database is locked".
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Put the file in WAL mode (a no-op once it is). SQLite never calls the busy
+/// handler for this pragma: switching a new file needs every other
+/// connection out of it for a moment, and one that meets another opening
+/// the same new file at once (a first start: the service and the sync loop)
+/// gets "database is locked" straight away. The switch changes nothing
+/// else and is idempotent, so it is tried again, briefly, up to the busy
+/// timeout.
+fn enable_wal(conn: &Connection) -> Result<()> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    let mut pause = std::time::Duration::from_millis(1);
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::DatabaseBusy && std::time::Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// A write transaction: `BEGIN IMMEDIATE`, so it takes the file's write lock
+/// up front, waiting for it (the busy timeout) while another connection
+/// writes. Every transaction here that writes uses it. A deferred one that
+/// reads first takes only a read snapshot, and its first write then fails at
+/// once with "database is locked" if another connection committed since
+/// (SQLite can't wait that out: the snapshot is stale).
+pub(crate) fn write_tx(conn: &Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+}
+
 impl EventStore {
     /// Open (creating if needed) the event store at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -135,15 +171,27 @@ impl EventStore {
     }
 
     fn init(conn: Connection) -> Result<Self> {
+        // First, before anything touches the file: a connection that meets
+        // another one's lock waits for it (up to the timeout) instead of
+        // failing at once with "database is locked". The pragmas below and
+        // the schema check already take locks.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         // WAL for concurrent readers (the live UI connection + the background
-        // sync connection share the same file); busy_timeout absorbs brief
-        // write contention between them.
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // sync connection share the same file).
+        enable_wal(&conn)?;
         // NORMAL is safe under WAL (no corruption; at worst the last commit is
         // lost on an OS crash/power loss) and avoids an fsync per commit — a big
         // win for chat workloads. (#2)
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // The schema is checked and migrated under the write lock, so two
+        // connections opening one file at once never both add a column.
+        let tx = write_tx(&conn)?;
+        Self::init_schema(&tx)?;
+        tx.commit()?;
+        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS events (
@@ -345,9 +393,9 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS idx_lamport_witnesses_session ON lamport_witnesses (session_id);
             "#,
         )?;
-        repo_tables::init(&conn)?;
-        held::init(&conn)?;
-        agent_usage::init(&conn)?;
+        repo_tables::init(conn)?;
+        held::init(conn)?;
+        agent_usage::init(conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn
@@ -364,7 +412,7 @@ impl EventStore {
         if !has_priority {
             conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
         }
-        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
+        Ok(())
     }
 
     /// A cached identity-link check (device-local).
@@ -520,18 +568,32 @@ impl EventStore {
         Ok(head)
     }
 
-    /// Append a pre-built envelope verbatim. Fails if its
-    /// `(session_id, sequence)` already exists (the append-only invariant).
+    /// Append an envelope this device authored, verbatim (its JSON, and so
+    /// its signed `sequence`, are stored as given). Fails if its event id is
+    /// already stored.
+    ///
+    /// Its place in this device's log (the `sequence` column, what
+    /// [`EventStore::list`] orders by) is its own sequence, or the next free
+    /// one when the log moved on since that was read: another connection to
+    /// this file (the sync loop ingesting a peer's event, another service)
+    /// may append between [`EventStore::max_sequence`] and here. Taken
+    /// under the write lock, so two appends never get one place and none is
+    /// refused for it. Ingested events are placed the same way
+    /// ([`EventStore::ingest`]); a stored row is never moved or replaced.
     pub fn append_envelope(&self, env: &SessionEventEnvelope) -> Result<()> {
-        // The cached head, if it is current: an event that names it moves it.
-        let before = self.rows_sig(env.session_id)?;
-        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&env.session_id).copied();
         let json = serde_json::to_string(env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
             .as_str()
             .unwrap_or_default()
             .to_string();
-        self.conn.execute(
+        let tx = write_tx(&self.conn)?;
+        // The cached head, if it is current: an event that names it moves it.
+        // Read under the write lock, so no other connection's event lands
+        // between this and the insert.
+        let before = self.rows_sig(env.session_id)?;
+        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&env.session_id).copied();
+        let next = self.max_sequence(env.session_id)?.unwrap_or(0) + 1;
+        tx.execute(
             r#"
             INSERT INTO events
                 (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json)
@@ -541,20 +603,22 @@ impl EventStore {
                 env.event_id.to_string(),
                 env.session_id.to_string(),
                 env.workspace_id.to_string(),
-                env.sequence,
+                env.sequence.max(next),
                 env.payload.kind_str(),
                 serde_json::to_value(env.scope)?.as_str().unwrap_or_default(),
                 timestamp,
                 json,
             ],
         )?;
+        let after = self.rows_sig(env.session_id)?;
+        tx.commit()?;
         if let Some((sig, head)) = cached {
             let names_head = env.actor_stamp.as_ref().map(|s| s.log_head) == Some(head)
                 && env.lamport == ligus_core::lamport::next(head);
             let mut cache = self.heads.lock().unwrap_or_else(|e| e.into_inner());
             if sig == before && names_head {
                 let key = ligus_core::CfgFrontier { lamport: env.lamport, event_id: env.event_id };
-                cache.insert(env.session_id, (self.rows_sig(env.session_id)?, Some(key)));
+                cache.insert(env.session_id, (after, Some(key)));
             } else {
                 cache.remove(&env.session_id);
             }
@@ -575,7 +639,7 @@ impl EventStore {
         // An authorless stamp naming the log's head, so the lamport is one the
         // fold accounts for (`ligus_core::lamport`).
         let log_head = self.lamport_head(session_id)?;
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&self.conn)?;
         let next_seq = tx
             .query_row(
                 "SELECT MAX(sequence) FROM events WHERE session_id = ?1",
@@ -789,7 +853,7 @@ impl EventStore {
     /// P-A2c). An unsigned copy of a signed event can never count, so it is
     /// refused here and kept only as a lamport witness (ingest refuses
     /// unsigned envelopes anyway; this covers every other path in).
-    fn note_equivocation(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
+    fn note_equivocation(&self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
         let stored: Option<String> = self
             .conn
             .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
@@ -882,15 +946,17 @@ impl EventStore {
     /// `equivocations` table), whichever arrived first: the fold decides
     /// which copies count (`ligus_core::copies`), so arrival order never does.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
+        // Under the write lock from the start (see [`write_tx`]): whether the
+        // id is stored and the next sequence are read and the row written
+        // with no other connection's write in between, so two connections
+        // ingesting one event (the serve sync loop and a one-shot sync, say)
+        // store it once, and the second sees it stored instead of failing.
+        let tx = write_tx(&self.conn)?;
         if self.has_event(env.event_id)? {
             self.note_equivocation(env, sealed_epoch)?;
+            tx.commit()?;
             return Ok(false);
         }
-        // IMMEDIATE: take the write lock up front (waiting out the busy
-        // timeout), so the read of the next sequence never has to upgrade a
-        // stale snapshot while another connection writes (an instant
-        // "database is locked" under WAL).
-        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let next_seq = tx
             .query_row(
                 "SELECT MAX(sequence) FROM events WHERE session_id = ?1",
@@ -1016,7 +1082,7 @@ impl EventStore {
         if bodies.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = write_tx(&self.conn)?;
         for (seq, body, priority) in bodies {
             tx.execute(
                 "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body, priority) VALUES (?1, ?2, ?3, ?4)",
@@ -1041,7 +1107,7 @@ impl EventStore {
     /// Re-rank parked bodies (the keyring changed: a rotation they wait for
     /// may now be authorized, or one they claim may have turned out junk).
     pub fn set_parked_priorities(&self, workspace: &str, priorities: &[(u64, u8)]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = write_tx(&self.conn)?;
         for (seq, priority) in priorities {
             tx.execute(
                 "UPDATE parked_bodies SET priority = ?3 WHERE workspace = ?1 AND seq = ?2",
@@ -1919,7 +1985,7 @@ impl EventStore {
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&self.conn)?;
         for (ws, _) in &doomed {
             let ws_s = ws.to_string();
             tx.execute(
@@ -2005,7 +2071,7 @@ impl EventStore {
         for env in &witnesses {
             self.note_lamport_witness(env)?;
         }
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&self.conn)?;
         let mut removed = 0;
         for event_id in &doomed {
             removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
@@ -2415,19 +2481,32 @@ mod tests {
         assert_eq!(after_2[0].sequence, 3);
     }
 
+    /// An envelope authored against a sequence another connection took in
+    /// the meantime is stored at the next place, as written (its signed
+    /// sequence unchanged); the row already there is untouched. The same
+    /// event id twice is refused.
     #[test]
-    fn duplicate_sequence_is_rejected() {
+    fn a_stale_sequence_takes_the_next_place_and_never_replaces_a_row() {
         let (store, sid, wid) = seeded_store();
+        let first = store.list(sid).unwrap();
         // snapshot already occupies sequence 1
-        let dup = SessionEventEnvelope::new(
+        let late = SessionEventEnvelope::new(
             sid,
             wid,
             1,
             SessionEvent::MessageAppended {
-                message: ChatMessage::new(MessageRole::User, "u", "dup"),
+                message: ChatMessage::new(MessageRole::User, "u", "late"),
             },
         );
-        assert!(store.append_envelope(&dup).is_err());
+        store.append_envelope(&late).unwrap();
+        let stored = store.list(sid).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].event_id, first[0].event_id, "the row at 1 stays");
+        assert_eq!(stored[1].event_id, late.event_id);
+        assert_eq!(stored[1].sequence, 1, "stored as written");
+        assert_eq!(store.max_sequence(sid).unwrap(), Some(2), "at the next place");
+        assert!(store.append_envelope(&late).is_err(), "an event id is stored once");
+        assert_eq!(store.list(sid).unwrap().len(), 2);
     }
 
     /// A newer build's envelope (an unknown top-level key, an unknown kind with

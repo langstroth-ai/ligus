@@ -894,6 +894,78 @@ async fn auth_is_required_except_for_bare_health() {
     assert_eq!(host["rows"][2]["text"], "ntfy");
 }
 
+/// The box writes into a chat (the phone posting over HTTP) while its sync
+/// loop, on its own connection to the same database, ingests the desktop's
+/// messages in that same chat: every message lands once, no write is
+/// refused and no sync round fails ("database is locked", or a sequence
+/// taken by the other connection).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_writes_and_relay_sync_into_one_chat_never_collide() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = Arc::new(harness(&endpoint, "m", &[("README.md", "x\n")]).await);
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "start" }))).await;
+    let mut seen = false;
+    for _ in 0..80 {
+        h.handle.shared.sync_kick.notify_one();
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen, "the desktop never saw the chat");
+
+    let n = 30;
+    let phone = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": format!("box {i}") }))).await;
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    let desktop = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                let desktop = h.desktop.clone();
+                tokio::task::spawn_blocking(move || open_service(&desktop).unwrap().post_user_message(chat_id, ws, format!("desk {i}")).unwrap())
+                    .await
+                    .unwrap();
+                sync_once(&h.desktop).await.unwrap();
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    phone.await.unwrap();
+    desktop.await.unwrap();
+
+    let want: Vec<String> = (0..n).flat_map(|i| [format!("box {i}"), format!("desk {i}")]).collect();
+    let mut missing = want.clone();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
+        missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
+        if missing.is_empty() {
+            for w in &want {
+                assert_eq!(bodies.iter().filter(|b| **b == w.as_str()).count(), 1, "{w} stored once");
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(missing.is_empty(), "never arrived on the box: {missing:?}");
+    let failures = h.handle.shared.sync_failures.lock().unwrap().clone();
+    assert!(failures.is_empty(), "sync rounds failed: {failures:?}");
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dashboard_serves_the_hosts_config_with_per_panel_errors() {
     use axum::routing::get;
