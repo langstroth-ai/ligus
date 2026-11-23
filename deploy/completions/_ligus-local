@@ -1,0 +1,50 @@
+#compdef ligus-local
+# zsh completion for deploy/local/ligus-local. Install: put this file in a
+# directory on $fpath (for example ~/.zsh/completions) and run compinit; or
+# source it after compinit. deploy/tests/agent-deploy-test.sh keeps it in
+# step with the script's commands and flags.
+
+_ligus-local() {
+  local -a cmds common
+  cmds=(
+    'preflight:check this machine; changes nothing'
+    'install-cli:install the ligus CLI (a release, or --from-source)'
+    'configure:write the env file and the data dir (no secret values)'
+    'start:start serve or worker in the background (or --systemd / --launchd)'
+    'unit:print the systemd unit (or --launchd plist) start would install'
+    'verify:process, health and sandbox checks'
+    'status:the same as verify'
+    'stop:stop it'
+    'uninstall:stop and remove it'
+    'help:help for a command, or exit-codes'
+  )
+  common=(
+    '--role[which process]:role:(serve worker)'
+    '--data-dir[this process'"'"'s own data dir]:dir:_files -/'
+    '--env-file[the env file configure writes]:file:_files'
+    '--json[one JSON object on stdout]'
+    '(-o --output)'{-o,--output}'[output format]:format:(json text)'
+    '(-q --quiet)'{-q,--quiet}'[only warnings and failures on stderr]'
+    '--color[colour FAIL and WARN on stderr]:when:(auto always never)'
+    '(-h --help)'{-h,--help}'[this command'"'"'s help]'
+  )
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'ligus-local command' cmds
+    return
+  fi
+  local -a svc=('(--launchd)--systemd[a systemd user unit]' '(--systemd)--launchd[a LaunchAgent]')
+  case $words[2] in
+    preflight) _arguments $common '--listen[the address to check]:addr:' ;;
+    install-cli) _arguments $common '--version[a release, vX.Y.Z]:version:' '--from-source[build from this checkout]' \
+      '--bin-dir[where to install]:dir:_files -/' ;;
+    configure) _arguments $common '--listen[serve listen address]:addr:' '--label[the box label]:label:' \
+      '--relay-url[the relay URL]:url:' '--secret-backend[secret store]:backend:(file keychain secret-service)' \
+      '--throwaway-workspace[a random throwaway workspace]' '--force[rewrite an env file]' ;;
+    start|stop|verify|status) _arguments $common $svc ;;
+    unit) _arguments $common '--launchd[the plist instead of the systemd unit]' ;;
+    uninstall) _arguments $common '--delete-data[also delete the data dir]' ;;
+    help) _arguments '2:command:(preflight install-cli configure start unit verify stop uninstall exit-codes)' ;;
+  esac
+}
+
+_ligus-local "$@"
