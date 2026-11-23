@@ -333,7 +333,10 @@ const LISTS_ON_ITS_OWN = new Set(["claude-code", "copilot", "codex", "antigravit
 /// Settings' runtime model field: the harness's models as completions
 /// (`<datalist id={listId}>`) and one quiet line saying where they came
 /// from, or that the typed model won't run. Subscription CLIs are listed at
-/// once (a local read-only command); an HTTP provider on request.
+/// once (a local read-only command); an HTTP provider only on request, and
+/// only for the provider and endpoint it was asked for: editing the endpoint
+/// afterwards asks again rather than sending the stored key to each value
+/// typed.
 export function ModelFieldHelp({
   listId,
   runtimeId,
@@ -347,7 +350,9 @@ export function ModelFieldHelp({
   endpoint?: string;
   model: string;
 }) {
-  const [asked, setAsked] = useState(false);
+  const target = `${provider}|${endpoint ?? ""}`;
+  const [askedFor, setAskedFor] = useState<string | null>(null);
+  const asked = askedFor === target;
   const auto = LISTS_ON_ITS_OWN.has(provider);
   const list = useQuery({
     queryKey: runtimeId ? ["runtime-models", runtimeId] : ["runtime-models", "form", provider, endpoint ?? ""],
@@ -380,7 +385,7 @@ export function ModelFieldHelp({
         ) : list.isFetching ? (
           "Listing models…"
         ) : !auto && !asked && !runtimeId ? (
-          <button type="button" className="underline" onClick={() => setAsked(true)}>
+          <button type="button" className="underline" onClick={() => setAskedFor(target)}>
             List this provider's models
           </button>
         ) : null}

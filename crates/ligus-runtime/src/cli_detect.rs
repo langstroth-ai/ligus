@@ -114,7 +114,22 @@ fn run_bounded(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration
 /// [`run_bounded`] with stdout and stderr kept apart: (exited successfully,
 /// stdout, stderr).
 pub(crate) fn run_bounded_split(program: &Path, args: &[&str], env: &DetectEnv, timeout: Duration) -> Option<(bool, String, String)> {
+    run_bounded_split_in(program, args, env, timeout, None)
+}
+
+/// [`run_bounded_split`] in `cwd` (when given) instead of the app's own
+/// working directory.
+pub(crate) fn run_bounded_split_in(
+    program: &Path,
+    args: &[&str],
+    env: &DetectEnv,
+    timeout: Duration,
+    cwd: Option<&Path>,
+) -> Option<(bool, String, String)> {
     let mut cmd = Command::new(program);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
