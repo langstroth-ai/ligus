@@ -488,7 +488,7 @@ while [ $# -gt 0 ]; do
     --name) need "$@"; SECRET_NAME=$2; shift ;;
     --replace) REPLACE=1 ;;
     -h|--help) help_cmd "$CMD"; exit 0 ;;
-    *) ac_usage_error "unknown argument: $1" ;;
+    *) ac_unknown_arg "$1" ;;
   esac
   shift
 done
