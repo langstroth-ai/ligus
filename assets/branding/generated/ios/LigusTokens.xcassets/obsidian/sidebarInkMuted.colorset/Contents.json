@@ -8,7 +8,7 @@
           "red": "0x8C",
           "green": "0x91",
           "blue": "0x9C",
-          "alpha": "1"
+          "alpha": "1.000"
         }
       }
     },
@@ -26,7 +26,7 @@
           "red": "0x8C",
           "green": "0x91",
           "blue": "0x9C",
-          "alpha": "1"
+          "alpha": "1.000"
         }
       }
     }

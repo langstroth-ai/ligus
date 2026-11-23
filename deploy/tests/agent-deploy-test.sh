@@ -61,6 +61,17 @@ for s in "$K8S" "$LOCAL"; do
   if [ "$RC" = 0 ] && grep -q preflight "$TMP/h"; then pass "$(basename "$s") --help"; else fail "$(basename "$s") --help"; fi
 done
 
+# The JSON is a conforming profile of ligus.checks.v1, and the help says so.
+for s in "$K8S" "$LOCAL"; do
+  run "$TMP/h" "$s" --help
+  if grep -q 'ligus.checks.v1' "$TMP/h"; then pass "$(basename "$s") --help names ligus.checks.v1"; else fail "$(basename "$s") --help names ligus.checks.v1"; fi
+done
+if grep -q 'ligus.checks.v1' "$ROOT/AGENTS.md" && grep -q 'ligus.agent-deploy.v1' "$ROOT/docs-site/docs/operate/reference/cli-conventions.md"; then
+  pass "AGENTS.md and the CLI conventions page declare the profile"
+else
+  fail "AGENTS.md and the CLI conventions page declare the profile"
+fi
+
 # Help is complete and cannot drift: the command list comes from each
 # script's dispatcher (the last `case $CMD in`) and the flag list from its
 # argument loop's case arms, so a new command or flag without help fails.
@@ -74,6 +85,22 @@ parser_flags() { # script -> one flag per line
   sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$1" | sed -n 's/^    \(-[-a-z|]*\)).*/\1/p' | tr '|' '\n'
 }
 has_word() { grep -qE -- "(^|[^A-Za-z0-9-])$1([^A-Za-z0-9-]|\$)" "$2"; }
+# One exit-code table for every Ligus tool: help exit-codes prints 0 to 7,
+# and every command's help points to it.
+for s in "$K8S" "$LOCAL"; do
+  n=$(basename "$s")
+  run "$TMP/x" "$s" help exit-codes
+  ok=1
+  for c in 0 1 2 3 4 5 6 7; do grep -qE "^  $c  " "$TMP/x" || ok=0; done
+  if [ "$RC" = 0 ] && [ $ok = 1 ]; then pass "$n help exit-codes lists 0 to 7"; else fail "$n help exit-codes lists 0 to 7"; fi
+  missing=""
+  for c in $(dispatch_cmds "$s"); do
+    run "$TMP/x" "$s" help "$c"
+    grep -q "$n help exit-codes" "$TMP/x" || missing="$missing $c"
+  done
+  if [ -z "$missing" ]; then pass "$n: every command's help names the shared table"; else fail "$n: no shared table in help for:$missing"; fi
+done
+
 for s in "$K8S" "$LOCAL"; do
   n=$(basename "$s")
   cmds=$(dispatch_cmds "$s"); flags=$(parser_flags "$s")
@@ -129,6 +156,22 @@ run "$TMP/u2" "$K8S" install --json --namespace x; check_json "ligus-k8s install
 run "$TMP/u3" "$K8S" install --json --namespace x --scenario team-external-relay; check_json "ligus-k8s external relay without --relay-url" "$TMP/u3" 2 "$RC"
 run "$TMP/u4" "$LOCAL" start --json --data-dir "$TMP/d"; check_json "ligus-local start without --role" "$TMP/u4" 2 "$RC"
 
+# Errors share one shape: "<tool>: <what>", an indented fix line naming the
+# help, and with --json (even after the bad flag) a failed "usage" check.
+run "$TMP/u5" "$K8S" verify --nope --json
+check_json "ligus-k8s a bad flag before --json still prints JSON" "$TMP/u5" 2 "$RC" usage
+if head -1 "$TMP/u5.err" | grep -qx 'ligus-k8s: unknown argument: --nope' && grep -qx '  fix: see ligus-k8s verify --help' "$TMP/u5.err"; then
+  pass "ligus-k8s error shape: what, then fix"
+else
+  fail "ligus-k8s error shape: $(cat "$TMP/u5.err")"
+fi
+run "$TMP/u6" "$LOCAL" frob
+if head -1 "$TMP/u6.err" | grep -q '^ligus-local: unknown command: frob' && grep -qx '  fix: see ligus-local --help' "$TMP/u6.err"; then
+  pass "ligus-local error shape: what, then fix"
+else
+  fail "ligus-local error shape: $(cat "$TMP/u6.err")"
+fi
+
 # --flag=value reads the same as --flag value.
 run "$TMP/eq1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
   "$LOCAL" verify --json --role=serve --data-dir="$TMP/vd" --env-file="$TMP/ve"
@@ -137,6 +180,16 @@ if cmp -s "$TMP/v1" "$TMP/eq1"; then pass "--flag=value gives the same result as
 run "$TMP/eq2" "$K8S" install --json --context=x --namespace=x --scenario=team-external-relay
 check_json "ligus-k8s --flag=value (external relay without --relay-url)" "$TMP/eq2" 2 "$RC"
 if grep -q 'needs --relay-url' "$TMP/eq2"; then pass "ligus-k8s reads --scenario=VALUE"; else fail "ligus-k8s --scenario=VALUE not read: $(cat "$TMP/eq2")"; fi
+
+# -o json is --json; -o text undoes it; -q prints only warn and FAIL checks.
+run "$TMP/o1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
+  "$LOCAL" verify -o json --role serve --data-dir "$TMP/vd" --env-file "$TMP/ve"
+check_json "ligus-local -o json" "$TMP/o1" 1 "$RC" process
+run "$TMP/o2" "$LOCAL" verify -o yaml
+if [ "$RC" = 2 ]; then pass "-o takes json or text only"; else fail "-o yaml: rc $RC"; fi
+# shellcheck disable=SC2016  # $1 expands in the inner bash
+q=$(env -u NO_COLOR bash -c '. "$1"; AC_QUIET=1; ac_check a fail x fix; ac_check b warn y; ac_check c pass z; ac_check d info i; ac_check e skip s' _ "$ROOT/deploy/lib/agent-common.sh" 2>&1 >/dev/null)
+case $q in *"a: x"*"b: y"*) case $q in *"c: z"*|*"d: i"*|*"e: s"*) fail "-q still prints ok, info and skip: $q" ;; *) pass "-q prints only warn and FAIL" ;; esac ;; *) fail "-q dropped a failure or warning: $q" ;; esac
 
 # Colour: [FAIL] and [WARN] are coloured only on a terminal (or when asked),
 # never with NO_COLOR or --color never, and never on stdout.
