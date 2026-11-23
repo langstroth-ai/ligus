@@ -789,11 +789,26 @@ impl ChatService {
 
     /// Run `f` holding the store's write lock ([`EventStore::begin_write`]);
     /// its writes commit if it succeeds and roll back if it fails.
+    ///
+    /// The transaction never outlives the call: if `f` fails or panics it is
+    /// rolled back (and the panic carries on), and a failed commit rolls back
+    /// too. `f`'s own error is the one returned.
     fn under_write_lock<R>(&mut self, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R> {
         self.store.begin_write()?;
-        let r = f(self);
-        self.store.end_write(r.is_ok())?;
-        r
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(Ok(v)) => {
+                self.store.end_write(true)?;
+                Ok(v)
+            }
+            Ok(Err(e)) => {
+                let _ = self.store.end_write(false);
+                Err(e)
+            }
+            Err(panic) => {
+                let _ = self.store.end_write(false);
+                std::panic::resume_unwind(panic)
+            }
+        }
     }
 
     /// Store an envelope this device authored. One for a synced workspace
@@ -6531,6 +6546,40 @@ mod same_key_tests {
         let (low, high) = (record(1, 9, "low"), record(2, 1, "high"));
         assert_eq!(run_initiator(&[low.clone(), high.clone()], run.id).as_deref(), Some("low"));
         assert_eq!(run_initiator(&[high, low], run.id).as_deref(), Some("low"));
+    }
+
+    /// A panic while the store's write lock is held (a redraft) rolls the
+    /// transaction back and lets the lock go: later writes of this service
+    /// commit, and other connections open and write.
+    #[test]
+    fn a_panic_under_the_write_lock_lets_the_lock_go() {
+        let device = Device::new();
+        let mut a = device.service();
+        let wid = Uuid::new_v4();
+        let chat = a.create_chat("c", wid, "anthropic").unwrap();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = a.under_write_lock(|svc| -> Result<()> {
+                svc.post_user_message(chat.id, wid, "rolled back").unwrap();
+                panic!("boom")
+            });
+        }));
+        assert!(r.is_err());
+        assert!(a.store().in_autocommit(), "the connection left its transaction");
+        a.post_user_message(chat.id, wid, "after the panic").unwrap();
+        let other = EventStore::open(&device.path).expect("another connection opens");
+        let bodies: Vec<String> = device.service().load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+        assert_eq!(bodies, ["after the panic"], "the write after the panic is stored, the one before it rolled back");
+        other.note_lamport_witness(&SessionEventEnvelope::new(chat.id, wid, 1, message("x".into()))).unwrap();
+    }
+
+    /// The error a failing `f` returns comes back as is, and the lock goes.
+    #[test]
+    fn a_failure_under_the_write_lock_returns_its_own_error() {
+        let device = Device::new();
+        let mut a = device.service();
+        let r: Result<()> = a.under_write_lock(|_| Err(ChatError::NotFound("mine".into())));
+        assert!(matches!(r, Err(ChatError::NotFound(m)) if m == "mine"));
+        assert!(a.store().in_autocommit());
     }
 
     #[derive(Debug, Clone)]

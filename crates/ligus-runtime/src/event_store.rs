@@ -36,11 +36,6 @@ pub enum EventStoreError {
     /// signer's chain, so it is refused; draft it again.
     #[error("this draft is out of date: its signer wrote something else here first; draft it again")]
     StaleDraft,
-    /// The database gained events while maintenance was deciding what to
-    /// delete (after its backup was taken): nothing was deleted; run it
-    /// again later.
-    #[error("the database changed while the cleanup ran; nothing was deleted, it runs again next time")]
-    ChangedDuringMaintenance,
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
 }
@@ -132,6 +127,19 @@ pub const FACTS_KEEP: i64 = 50_000;
 /// Cached projections kept at most; past this the cache starts over.
 const PROJECTION_CACHE_MAX: usize = 256;
 
+/// Another stored event of a signer on a log naming a given link (see
+/// `EventStore::forks_chain`). The expressions match
+/// `idx_events_by_signer` exactly, so it is an index lookup.
+const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND event_id != ?2 \
+     AND json_extract(envelope_json, '$.signerDeviceId') = ?3 \
+     AND json_extract(envelope_json, '$.actorStamp') IS NOT NULL \
+     AND json_extract(envelope_json, '$.actorStamp.prev') IS ?4 LIMIT 1";
+
+/// A signer's newest event on a log below a lamport (see
+/// `EventStore::last_signed_by`), through `idx_events_by_signer`.
+const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
+     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1";
+
 /// How long a connection waits for another connection's lock on the file
 /// before it reports "database is locked".
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -181,9 +189,12 @@ pub(crate) struct WriteTx<'a> {
 }
 
 impl WriteTx<'_> {
+    /// Commit (release, nested). One that fails is rolled back on drop, so
+    /// the connection never stays inside the transaction.
     pub(crate) fn commit(mut self) -> rusqlite::Result<()> {
+        self.conn.execute_batch(if self.nested { "RELEASE ligus_write" } else { "COMMIT" })?;
         self.done = true;
-        self.conn.execute_batch(if self.nested { "RELEASE ligus_write" } else { "COMMIT" })
+        Ok(())
     }
 }
 
@@ -196,7 +207,8 @@ impl std::ops::Deref for WriteTx<'_> {
 
 impl Drop for WriteTx<'_> {
     fn drop(&mut self) {
-        if !self.done {
+        // (Nothing to undo when SQLite already rolled the transaction back.)
+        if !self.done && !self.conn.is_autocommit() {
             let _ = self.conn.execute_batch(if self.nested { "ROLLBACK TO ligus_write; RELEASE ligus_write" } else { "ROLLBACK" });
         }
     }
@@ -255,6 +267,14 @@ impl EventStore {
                 ON events (session_id, sequence);
             CREATE INDEX IF NOT EXISTS idx_events_workspace
                 ON events (workspace_id, row_id);
+            -- Each signer's chain on a log (its events and the link each
+            -- names): what an authored append checks under the write lock
+            -- (`forks_chain`) and what a new event's link is read from
+            -- (`last_signed_by`), without a scan of the whole log. The
+            -- signer leads, so a query by session alone never picks this
+            -- index (and its order) over idx_events_session_seq.
+            CREATE INDEX IF NOT EXISTS idx_events_by_signer
+                ON events (json_extract(envelope_json, '$.signerDeviceId'), session_id, json_extract(envelope_json, '$.actorStamp.prev'));
 
             -- Durable sync state (#2), keyed by relay workspace/room. Without
             -- this the sync engine kept its cursor + pushed-set in memory only,
@@ -624,10 +644,38 @@ impl EventStore {
         Ok(())
     }
 
-    /// End [`EventStore::begin_write`]: commit, or roll back.
+    /// End [`EventStore::begin_write`]: commit, or roll back. Always leaves
+    /// the connection out of its transaction (and the file's write lock
+    /// released): a commit that fails is rolled back, and a rollback after
+    /// SQLite already rolled back on its own (some errors do) is a no-op.
+    /// Whatever didn't commit is dropped from the caches too.
     pub fn end_write(&self, commit: bool) -> Result<()> {
-        self.conn.execute_batch(if commit { "COMMIT" } else { "ROLLBACK" })?;
+        if commit {
+            if let Err(e) = self.conn.execute_batch("COMMIT") {
+                self.abandon_write();
+                return Err(e.into());
+            }
+            return Ok(());
+        }
+        self.abandon_write();
         Ok(())
+    }
+
+    /// Roll back whatever transaction this connection holds (none: nothing
+    /// to do), and forget what the caches learned inside it.
+    fn abandon_write(&self) {
+        if !self.conn.is_autocommit() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.configs.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.heads.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    }
+
+    /// Whether this connection is outside any transaction (tests).
+    #[cfg(test)]
+    pub(crate) fn in_autocommit(&self) -> bool {
+        self.conn.is_autocommit()
     }
 
     /// Whether storing `env`, authored here, would fork its signer's chain:
@@ -640,13 +688,20 @@ impl EventStore {
         let (Some(signer), Some(stamp), Some(_)) = (env.signer_device_id, env.actor_stamp.as_ref(), env.signature.as_ref()) else {
             return Ok(false);
         };
+        // A passkey-confirmed event is stored even if it forks: its
+        // confirmation names its lamport, so it can't be drafted again
+        // without asking the person again, and refusing it would make any
+        // write of this device on the log during the confirmation (an agent
+        // reply in the chat a vote is cast in) cost them the confirmation,
+        // over and over in a busy chat. Each such fork needs a person's
+        // confirmation, so they come at a human rate and stay few.
+        if stamp.presence.is_some() {
+            return Ok(false);
+        }
         Ok(self
             .conn
             .prepare_cached(
-                "SELECT 1 FROM events WHERE session_id = ?1 AND event_id != ?2 \
-                 AND json_extract(envelope_json, '$.signerDeviceId') = ?3 \
-                 AND json_extract(envelope_json, '$.actorStamp') IS NOT NULL \
-                 AND json_extract(envelope_json, '$.actorStamp.prev') IS ?4 LIMIT 1",
+                FORKS_CHAIN_SQL,
             )?
             .exists(rusqlite::params![
                 env.session_id.to_string(),
@@ -1544,8 +1599,7 @@ impl EventStore {
         let id: Option<String> = self
             .conn
             .query_row(
-                "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
-                 AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1",
+                LAST_SIGNED_BY_SQL,
                 rusqlite::params![session_id.to_string(), signer.to_string(), below.min(i64::MAX as u64) as i64],
                 |r| r.get(0),
             )
@@ -2038,17 +2092,6 @@ impl EventStore {
         Ok(n)
     }
 
-    /// (highest row, row count) of the stored events and of the copies
-    /// beside them: changes whenever either table gains or loses a row.
-    fn events_sig(&self) -> Result<(i64, i64, i64, i64)> {
-        Ok(self.conn.query_row(
-            "SELECT (SELECT COALESCE(MAX(row_id), 0) FROM events), (SELECT COUNT(*) FROM events), \
-             (SELECT COALESCE(MAX(row_id), 0) FROM equivocations), (SELECT COUNT(*) FROM equivocations)",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )?)
-    }
-
     /// Workspaces that hold events but aren't `keep` and that `own_device`
     /// never signed an event in, with their event counts — what
     /// [`purge_foreign_workspaces`](Self::purge_foreign_workspaces) would drop.
@@ -2108,30 +2151,70 @@ impl EventStore {
         backup: Option<&Path>,
         after_backup: &mut dyn FnMut(),
     ) -> Result<Vec<(Uuid, usize)>> {
-        // The backup comes first (it can't be taken inside a transaction);
-        // what it holds is pinned by the events' rows at the time. The
-        // decision is then made again under the write lock, and if any event
-        // was stored in between (another connection: the sync loop, the
-        // service), nothing is deleted: such an event might be this device's
-        // own first one in a workspace, and it would be missing from the
-        // backup too. The caller tries again later.
-        let backed_up = match backup {
-            Some(path) => {
-                if self.foreign_workspaces(keep, own_device)?.is_empty() {
-                    return Ok(Vec::new());
-                }
-                let rows = self.events_sig()?;
-                self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
-                after_backup();
-                Some(rows)
+        // The backup comes first (it can't be taken inside a transaction),
+        // with each doomed workspace's rows as they stood just before it.
+        // Under the write lock the decision is made again, and a workspace
+        // is dropped only if its rows are still exactly those: one that
+        // gained a row since (a late event of another member, or this
+        // device's own first one there) may hold a row the backup lacks, and
+        // stays for the next run. Writes elsewhere in the file never stop
+        // the cleanup. A backup that ends up covering nothing deleted (or a
+        // failure after it was taken) is removed again: no stray full copies
+        // of the database pile up.
+        let mut before: HashMap<Uuid, (i64, i64, i64, i64)> = HashMap::new();
+        if let Some(path) = backup {
+            let doomed = self.foreign_workspaces(keep, own_device)?;
+            if doomed.is_empty() {
+                return Ok(doomed);
             }
-            None => None,
-        };
-        let tx = write_tx(&self.conn)?;
-        if backed_up.is_some_and(|rows| self.events_sig().ok() != Some(rows)) {
-            return Err(EventStoreError::ChangedDuringMaintenance);
+            for (ws, _) in &doomed {
+                before.insert(*ws, self.workspace_rows(*ws)?);
+            }
+            if let Err(e) = self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]) {
+                let _ = std::fs::remove_file(path);
+                return Err(e.into());
+            }
+            after_backup();
         }
-        let doomed = self.foreign_workspaces(keep, own_device)?;
+        let dropped = self.purge_locked(keep, own_device, backup.map(|_| &before));
+        if let Some(path) = backup {
+            if !matches!(&dropped, Ok(d) if !d.is_empty()) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        dropped
+    }
+
+    /// (row count, highest row) of one workspace's events and of the copies
+    /// beside them.
+    fn workspace_rows(&self, ws: Uuid) -> Result<(i64, i64, i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM events WHERE workspace_id = ?1), (SELECT COALESCE(MAX(row_id), 0) FROM events WHERE workspace_id = ?1), \
+             (SELECT COUNT(*) FROM equivocations WHERE workspace_id = ?1), (SELECT COALESCE(MAX(row_id), 0) FROM equivocations WHERE workspace_id = ?1)",
+            [ws.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?)
+    }
+
+    /// The purge's deletes, decided under the write lock. With `backed_up`,
+    /// only workspaces whose rows are unchanged since the backup go.
+    fn purge_locked(
+        &mut self,
+        keep: &HashSet<Uuid>,
+        own_device: Uuid,
+        backed_up: Option<&HashMap<Uuid, (i64, i64, i64, i64)>>,
+    ) -> Result<Vec<(Uuid, usize)>> {
+        let tx = write_tx(&self.conn)?;
+        let mut doomed = self.foreign_workspaces(keep, own_device)?;
+        if let Some(before) = backed_up {
+            let mut unchanged = Vec::new();
+            for (ws, n) in doomed {
+                if before.get(&ws) == Some(&self.workspace_rows(ws)?) {
+                    unchanged.push((ws, n));
+                }
+            }
+            doomed = unchanged;
+        }
         if doomed.is_empty() {
             return Ok(doomed);
         }
@@ -3012,41 +3095,93 @@ mod tests {
         assert!(!dir.path().join("again").exists());
     }
 
-    /// An event this device stores in a foreign-looking workspace through
-    /// another connection after the cleanup's backup (the sync loop, the
-    /// service) makes the cleanup stop: nothing is deleted, its own event and
-    /// the workspace's others stay. The next run, with a fresh backup, keeps
-    /// that workspace (this device wrote there now).
+    /// The chain check on every authored append, and the link a new event
+    /// names, are index lookups, not scans of the log.
     #[test]
-    fn purge_stops_when_an_event_lands_after_its_backup() {
+    fn chain_checks_use_the_signer_chain_index() {
+        let store = EventStore::open_in_memory().unwrap();
+        let plan = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Vec<String> {
+            let mut stmt = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            stmt.query_map(params, |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        let forks = plan(FORKS_CHAIN_SQL, &[&"s", &"e", &"d", &"p"]);
+        assert!(forks.iter().any(|p| p.contains("idx_events_by_signer")), "{forks:?}");
+        let last = plan(LAST_SIGNED_BY_SQL, &[&"s", &"d", &5i64]);
+        assert!(last.iter().any(|p| p.contains("idx_events_by_signer")), "{last:?}");
+    }
+
+    /// A foreign-looking workspace and an unrelated one, for the purge races.
+    fn purge_fixture() -> (tempfile::TempDir, std::path::PathBuf, EventStore, Uuid, Uuid, Uuid) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ligus.db");
         let mut store = EventStore::open(&path).unwrap();
-        let me = Uuid::new_v4();
-        let ws = Uuid::new_v4();
-        let msg = |signer: Uuid| {
-            let mut e = SessionEventEnvelope::new(
-                Uuid::new_v4(),
-                ws,
-                1,
-                SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
-            );
-            e.signer_device_id = Some(signer);
-            e
-        };
-        store.ingest(&msg(Uuid::new_v4())).unwrap();
-        let keep = HashSet::new();
-        assert_eq!(store.foreign_workspaces(&keep, me).unwrap(), vec![(ws, 1)]);
+        let (me, foreign, mine) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        store.ingest(&purge_msg(foreign, Uuid::new_v4())).unwrap();
+        store.ingest(&purge_msg(mine, me)).unwrap();
+        (dir, path, store, me, foreign, mine)
+    }
 
-        let mine = msg(me);
+    fn purge_msg(ws: Uuid, signer: Uuid) -> SessionEventEnvelope {
+        let mut e = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            ws,
+            1,
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
+        );
+        e.signer_device_id = Some(signer);
+        e
+    }
+
+    fn count_in(store: &EventStore, ws: Uuid) -> i64 {
+        store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap()
+    }
+
+    /// This device's own event, stored in a foreign-looking workspace through
+    /// another connection after the cleanup's backup (the sync loop, the
+    /// service): that workspace isn't deleted (the backup lacks the row), and
+    /// a backup that covers nothing deleted is removed again.
+    #[test]
+    fn purge_keeps_a_workspace_that_gains_an_own_event_after_its_backup() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let own = purge_msg(foreign, me);
         let other = EventStore::open(&path).unwrap();
-        let err = store
-            .purge_foreign_workspaces_with(&keep, me, Some(&dir.path().join("bak")), &mut || other.append_envelope(&mine).unwrap())
-            .unwrap_err();
-        assert!(matches!(err, EventStoreError::ChangedDuringMaintenance), "{err}");
-        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap();
-        assert_eq!(left, 2, "nothing deleted");
-        assert!(store.has_event(mine.event_id).unwrap());
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || other.append_envelope(&own).unwrap()).unwrap();
+        assert!(dropped.is_empty());
+        assert_eq!(count_in(&store, foreign), 2, "nothing deleted");
+        assert!(!bak.exists(), "no backup left behind");
         assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("bak2"))).unwrap().is_empty(), "now this device's");
+    }
+
+    /// Another member's late event in the doomed workspace, after the
+    /// backup: it isn't in the backup, so the workspace stays this time.
+    #[test]
+    fn purge_keeps_a_workspace_that_gains_any_event_after_its_backup() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let late = purge_msg(foreign, Uuid::new_v4());
+        let mut other = EventStore::open(&path).unwrap();
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&late).unwrap())).unwrap();
+        assert!(dropped.is_empty());
+        assert_eq!(count_in(&store, foreign), 2);
+        assert!(!bak.exists());
+    }
+
+    /// Sync writing to an unrelated workspace during the backup doesn't stop
+    /// the cleanup: the foreign workspace goes, and the backup stays.
+    #[test]
+    fn purge_goes_ahead_when_only_other_workspaces_change() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let elsewhere = purge_msg(mine, Uuid::new_v4());
+        let mut other = EventStore::open(&path).unwrap();
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&elsewhere).unwrap())).unwrap();
+        assert_eq!(dropped, vec![(foreign, 1)]);
+        assert_eq!(count_in(&store, foreign), 0);
+        assert_eq!(count_in(&store, mine), 2);
+        assert!(bak.exists(), "the backup of what was deleted stays");
     }
 }

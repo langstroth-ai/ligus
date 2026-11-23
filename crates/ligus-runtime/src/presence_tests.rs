@@ -897,3 +897,57 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     assert!(laptop.device_confirmed(wid).unwrap());
     assert!(laptop.publish_key_agreement(wid, ka.public_key_bytes()).unwrap());
 }
+
+/// While the person confirms a passkey-gated action, this device writes
+/// something else on that log (here the workspace name; in practice an
+/// agent reply in the chat a vote is cast in). The confirmation still goes
+/// through: it can't be drafted again without asking the person again.
+#[test]
+fn an_own_write_during_a_passkey_confirmation_doesnt_cost_the_confirmation() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    let cfg = workspace_config_session_id(wid);
+    svc.capture_presence(true);
+    assert!(svc.add_member(cfg, wid, member("eli", WorkspaceRole::Viewer)).is_err());
+    let draft = svc.take_presence_draft().expect("captured");
+    let a = key.get(&draft.request.challenge);
+    assert!(svc.publish_workspace_name(wid, "Hive").unwrap(), "an own write on the log meanwhile");
+    let env = svc.commit_presence(draft, a).unwrap();
+    assert!(svc.load(cfg).unwrap().unwrap().members.iter().any(|m| m.id == "eli"));
+    assert!(env.actor_stamp.as_ref().unwrap().presence.is_some());
+}
+
+/// Each confirmation raced by an own write forks this device's chain on the
+/// log once (kept: see `forks_chain`), and that branch's tip stays a head;
+/// never more than once per confirmation, which comes at a person's pace.
+/// Every other write links on as usual, so the heads are the raced
+/// confirmations plus one, and a watermark covers every event of the device
+/// while that is within `MAX_HEADS`.
+#[test]
+fn confirmations_raced_by_own_writes_fork_at_most_once_each() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    let cfg = workspace_config_session_id(wid);
+    let races = 4;
+    for i in 0..races {
+        svc.capture_presence(true);
+        assert!(svc.add_member(cfg, wid, member(&format!("m{i}"), WorkspaceRole::Viewer)).is_err());
+        let draft = svc.take_presence_draft().expect("captured");
+        let a = key.get(&draft.request.challenge);
+        // An own write on the log meanwhile (a host record).
+        let host = |n: String| ligus_core::WorkspaceHost::new(n.clone(), ligus_core::HostKind::Worker, n);
+        assert!(svc.ensure_host(wid, host(format!("h{i}"))).unwrap());
+        svc.commit_presence(draft, a).unwrap();
+        // Ordinary writes after it link on, adding no head.
+        assert!(svc.ensure_host(wid, host(format!("h{i} later"))).unwrap());
+    }
+    let log = config_log(&svc, wid);
+    let me = svc.device_id();
+    let mine: Vec<&SessionEventEnvelope> = log.iter().filter(|e| e.signer_device_id == Some(me)).collect();
+    let named: std::collections::BTreeSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+    let heads = mine.iter().filter(|e| !named.contains(&e.event_id)).count();
+    assert!(heads <= 1 + races, "{heads} heads after {races} raced confirmations");
+    assert!(heads <= ligus_core::watermark::MAX_HEADS);
+    let wm = ligus_core::watermark::heads_of(&log, cfg, &std::iter::once(me).collect());
+    let refs: Vec<&SessionEventEnvelope> = log.iter().collect();
+    let covered = ligus_core::watermark::Chains::of(&refs).ancestors(me, &wm[0].heads, &wm[0].gaps).len();
+    assert_eq!(covered, mine.len(), "a watermark still covers every event of this device");
+}

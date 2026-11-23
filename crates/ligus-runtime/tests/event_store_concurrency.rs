@@ -343,3 +343,86 @@ fn racing_copies_under_one_id_keep_one_row_one_copy_and_one_fold() {
         assert_eq!(serde_json::to_value(store.load_session(sid).unwrap()).unwrap(), fold, "round {round}: the same fold");
     }
 }
+
+/// A signed chain of `n` events of one device on one log, stored.
+fn big_chain(path: &Path, n: usize) -> (Uuid, Uuid, Uuid, SigningKeypair, Option<Uuid>) {
+    let (sid, ws, dev) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let kp = SigningKeypair::generate().unwrap();
+    let mut store = EventStore::open(path).unwrap();
+    store.begin_write().unwrap();
+    let mut prev = None;
+    for i in 0..n {
+        let env = chained(sid, ws, dev, &kp, i as i64 + 1, prev, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400) });
+        prev = Some(env.event_id);
+        store.ingest(&env).unwrap();
+    }
+    store.end_write(true).unwrap();
+    (sid, ws, dev, kp, prev)
+}
+
+fn chained(sid: Uuid, ws: Uuid, dev: Uuid, kp: &SigningKeypair, seq: i64, prev: Option<Uuid>, payload: SessionEvent) -> SessionEventEnvelope {
+    let mut env = SessionEventEnvelope::new(sid, ws, seq, payload);
+    env.actor_stamp = Some(ligus_core::ActorStamp {
+        actor: ActorIdentity::new("u", "u", ActorKind::Human),
+        recorded_at: ligus_core::Timestamp::now(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev,
+        sig_alg: Default::default(),
+        log_head: None,
+    });
+    sign_envelope(&mut env, dev, kp);
+    env
+}
+
+/// An authored append on a long log stays cheap: its chain check (under
+/// the write lock) is an index lookup, not a scan of the log.
+/// `LIGUS_BIG_LOG` sets the log's length (default 20 000).
+#[test]
+fn an_authored_append_on_a_long_log_stays_cheap() {
+    let n: usize = std::env::var("LIGUS_BIG_LOG").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ligus.db");
+    let (sid, ws, dev, kp, mut prev) = big_chain(&path, n);
+    let store = EventStore::open(&path).unwrap();
+    let mut times = Vec::new();
+    for i in 0..21 {
+        let env = chained(sid, ws, dev, &kp, (n + i + 1) as i64, prev, SessionEvent::MessageRemoved { message_id: Uuid::new_v4() });
+        prev = Some(env.event_id);
+        let t = std::time::Instant::now();
+        store.append_envelope(&env).unwrap();
+        times.push(t.elapsed());
+    }
+    times.sort();
+    eprintln!("append on a {n}-event log: median {:?}, max {:?}", times[10], times[20]);
+    assert!(times[10] < std::time::Duration::from_millis(50), "median append {:?} on a {n}-event log", times[10]);
+}
+
+/// Pruning superseded chunks holds the write lock while it decides: another
+/// connection's write waits for it and then lands, never lost or refused.
+#[test]
+fn a_write_during_prune_waits_and_lands() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ligus.db");
+    let (sid, ws) = (Uuid::new_v4(), Uuid::new_v4());
+    {
+        let mut s = EventStore::open(&path).unwrap();
+        s.begin_write().unwrap();
+        for i in 0..5_000 {
+            let mid = Uuid::new_v4();
+            s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 1, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "c".into() })).unwrap();
+            s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 2, SessionEvent::MessageCompleted { message_id: mid, body: "x".repeat(200) })).unwrap();
+        }
+        s.end_write(true).unwrap();
+    }
+    let mut a = EventStore::open(&path).unwrap();
+    let b = EventStore::open(&path).unwrap();
+    let late = SessionEventEnvelope::new(Uuid::new_v4(), ws, 1, message("late".into()));
+    let late_id = late.event_id;
+    let h = thread::spawn(move || b.append_envelope(&late).map_err(|e| e.to_string()));
+    let removed = a.prune_superseded_chunks().unwrap();
+    h.join().unwrap().unwrap();
+    assert_eq!(removed, 5_000);
+    assert!(a.has_event(late_id).unwrap(), "the other connection's write landed");
+}

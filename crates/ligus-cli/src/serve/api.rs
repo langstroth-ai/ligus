@@ -66,6 +66,11 @@ impl From<ligus_runtime::chat_service::ChatError> for ApiError {
             }
             ChatError::Unauthorized(m) => Self(StatusCode::FORBIDDEN, format!("unauthorized: {m}")),
             ChatError::NotFound(m) => Self(StatusCode::NOT_FOUND, m),
+            // Another write of the same signer landed first: nothing was
+            // stored, and the same request made again goes through.
+            ChatError::Store(ligus_runtime::EventStoreError::StaleDraft) => {
+                Self(StatusCode::CONFLICT, format!("{}: prepare it again", ligus_runtime::EventStoreError::StaleDraft))
+            }
             other => Self(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
         }
     }
