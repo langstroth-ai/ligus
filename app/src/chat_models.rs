@@ -182,7 +182,7 @@ fn form_target(state: &AppState, provider: &str, endpoint: &str) -> Result<Targe
         let s = state.settings.lock().unwrap();
         let name = crate::provider_config_name(kind);
         (
-            s.provider_keys.get(name).cloned().filter(|k| !k.is_empty()).or_else(|| s.api_key.clone()),
+            form_key(kind, s.provider_keys.get(name).map(String::as_str), s.api_key.as_deref()),
             s.provider_base_urls.get(name).cloned().unwrap_or_default(),
         )
     };
@@ -208,6 +208,16 @@ fn form_target(state: &AppState, provider: &str, endpoint: &str) -> Result<Targe
     Ok(Target::Runtime(rt))
 }
 
+/// The key a form listing sends: the provider's own stored key, else the
+/// legacy global key, except for `custom`, whose endpoint is whatever is
+/// being typed (the legacy key belongs to some other provider and is never
+/// sent there).
+fn form_key(kind: ModelProviderKind, provider_key: Option<&str>, legacy: Option<&str>) -> Option<String> {
+    let own = provider_key.map(str::trim).filter(|k| !k.is_empty());
+    let fallback = (kind != ModelProviderKind::Custom).then_some(legacy).flatten().map(str::trim).filter(|k| !k.is_empty());
+    own.or(fallback).map(str::to_string)
+}
+
 fn runtime_target(state: &AppState, runtime_id: &str) -> Target {
     let known = state.combined_runtimes().iter().any(|r| r.id == runtime_id);
     if runtime_id == "claude-code" && !known {
@@ -224,7 +234,7 @@ fn runtime_target(state: &AppState, runtime_id: &str) -> Target {
 fn claude_code_list() -> ModelList {
     let models = crate::claude_code_model_options()
         .into_iter()
-        .filter(|(value, _)| !value.trim().is_empty() && value != "default")
+        .filter(|(value, _)| model_catalog::is_model_id(value) && value != "default")
         .map(|(value, label)| ModelOption::new(value, Some(label)))
         .collect();
     ModelList {
@@ -377,15 +387,23 @@ pub(crate) async fn set_chat_model(
     crate::off_main(ligus_app, move |app| set_chat_model_sync(&tauri::Manager::state::<AppState>(app), id, &runtime_id, model.as_deref())).await
 }
 
+/// A model name a harness can take as its `--model` argument: short, no
+/// control characters, and not starting with `-` (which would read as a
+/// flag).
+fn check_model_name(m: &str) -> Result<(), String> {
+    if m.len() > 200 || m.chars().any(char::is_control) || m.starts_with('-') {
+        return Err("that isn't a model name".to_string());
+    }
+    Ok(())
+}
+
 pub(crate) fn set_chat_model_sync(state: &AppState, id: Uuid, runtime_id: &str, model: Option<&str>) -> Result<(), String> {
     let runtime_id = runtime_id.trim();
     if runtime_id.is_empty() {
         return Err("a runtime id is required".to_string());
     }
     if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
-        if m.len() > 200 || m.chars().any(char::is_control) {
-            return Err("that isn't a model name".to_string());
-        }
+        check_model_name(m)?;
         clear_unavailable(runtime_id, m);
     }
     let mut s = state.settings.lock().unwrap();
@@ -459,6 +477,27 @@ mod tests {
         assert!(store(&mut map, a, "agy", Some("  ")), "empty = back to Default");
         assert!(map.is_empty(), "a chat with no choices leaves no entry");
         assert!(!store(&mut map, b, "copilot", None));
+    }
+
+    #[test]
+    fn a_model_starting_with_a_dash_is_refused() {
+        for bad in ["--dangerously-skip-permissions", "-m", "-", "a\nb"] {
+            assert!(check_model_name(bad).is_err(), "{bad}");
+        }
+        for ok in ["gpt-5.3-codex", "openai/gpt-6", "llama3.2:latest", "claude-opus-5-5[1m]"] {
+            assert!(check_model_name(ok).is_ok(), "{ok}");
+        }
+        // set_chat_model_sync trims first, so " -m" is caught as "-m".
+        assert!(check_model_name(" -m".trim()).is_err());
+    }
+
+    #[test]
+    fn a_custom_endpoint_never_gets_the_legacy_key() {
+        assert_eq!(form_key(ModelProviderKind::Custom, None, Some("sk-legacy")), None);
+        assert_eq!(form_key(ModelProviderKind::Custom, Some(""), Some("sk-legacy")), None);
+        assert_eq!(form_key(ModelProviderKind::Custom, Some("sk-custom"), Some("sk-legacy")).as_deref(), Some("sk-custom"));
+        assert_eq!(form_key(ModelProviderKind::OpenAI, None, Some("sk-legacy")).as_deref(), Some("sk-legacy"));
+        assert_eq!(form_key(ModelProviderKind::OpenAI, Some("sk-openai"), Some("sk-legacy")).as_deref(), Some("sk-openai"));
     }
 
     #[test]
