@@ -121,6 +121,17 @@ ac_usage_error() {
   exit 2
 }
 
+# An unknown argument is a usage error that never echoes a value: an
+# unknown flag is named without anything after "=", and a bare word (often
+# the value of a flag that takes none, as in --relay-access-token=hrt1...)
+# is not shown at all, since it may be a token or a password.
+ac_unknown_arg() {
+  case $1 in
+    -*) ac_usage_error "unknown argument: ${1%%=*}" ;;
+    *) ac_usage_error "unexpected value (not shown): a flag that takes no value was given one, or a value has no flag" ;;
+  esac
+}
+
 # The exit-code table every Ligus tool shares, for `<tool> help exit-codes`
 # and the top-level help.
 ac_exit_codes() {

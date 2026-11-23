@@ -81,7 +81,7 @@ USAGE
   ligus-local preflight [--role serve|worker --data-dir DIR] [--env-file FILE] [--listen ADDR] [--json]
 
   Without --role: the ligus CLI (0.1.0 or later), curl and the agent sandbox
-  (measured with `ligus doctor` in a scratch data dir). With --role: also the
+  (measured with `ligus doctor --sandbox` in a scratch data dir). With --role: also the
   data dir, whether the listen address is free or exposed, and whether a
   workspace connection is configured.
 
@@ -487,7 +487,7 @@ while [ $# -gt 0 ]; do
     --bin-dir) need "$@"; BIN_DIR=$2; shift ;;
     --from-source) FROM_SOURCE=1 ;;
     -h|--help) help_cmd "$CMD"; exit 0 ;;
-    *) ac_usage_error "unknown argument: $1" ;;
+    *) ac_unknown_arg "$1" ;;
   esac
   shift
 done
@@ -588,7 +588,12 @@ cmd_preflight() {
   if [ -n "$BIN" ]; then
     local tmp out tier
     tmp=$(mktemp -d)
-    out=$(LIGUS_DATA_DIR="$tmp/data" LIGUS_SECRET_BACKEND=file HOME="$tmp" "$BIN" doctor 2>&1 || true)
+    # --sandbox only, and without the caller's relay, gateways or keys:
+    # a bare doctor would probe the relay and could send (paid) gateway
+    # turns, and preflight changes and contacts nothing.
+    out=$(env -u LIGUS_RELAY_URL -u LIGUS_RELAY_ACCESS_TOKEN -u LIGUS_MODEL_GATEWAYS_FILE \
+      -u LIGUS_PROVIDER_API_KEY -u LIGUS_MODEL_BASE_URL -u LIGUS_WORKSPACE -u LIGUS_WORKSPACE_KEY \
+      LIGUS_DATA_DIR="$tmp/data" LIGUS_SECRET_BACKEND=file HOME="$tmp" "$BIN" doctor --sandbox 2>&1 </dev/null || true)
     rm -rf "$tmp"
     tier=$(printf '%s\n' "$out" | sed -n 's/^agent sandbox: *//p' | head -1)
     case $tier in
