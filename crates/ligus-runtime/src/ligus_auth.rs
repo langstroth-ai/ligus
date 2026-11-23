@@ -350,12 +350,15 @@ pub async fn start_device(
         return Err(AuthError::Protocol("malformed device authorization".into()));
     }
     // The person opens this link: keep it on langstroth-auth's own origin.
+    // Only http(s) links get an origin at all: anything else (a blob: link
+    // nested many times over, say) is refused before origin() looks inside.
     let origin = |u: &str| {
         reqwest::Url::parse(u)
             .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https"))
             .map(|u| u.origin().ascii_serialization())
     };
-    if origin(&ds.verification_uri) != origin(&base) {
+    if origin(&base).is_none() || origin(&ds.verification_uri) != origin(&base) {
         return Err(AuthError::Protocol(
             "verification link points off the langstroth-auth origin".into(),
         ));
@@ -1156,5 +1159,42 @@ mod tests {
         assert!(start_device(&http_client(), &base, "ligus-cli", "box")
             .await
             .is_err());
+    }
+
+    /// A verification link that isn't http(s) is refused without asking for
+    /// its origin: a deeply nested blob: link would otherwise recurse, and a
+    /// blob: link wrapping the server's own origin would otherwise pass.
+    #[tokio::test]
+    async fn verification_link_must_be_http() {
+        let nested = format!("{}https://auth.example/device", "blob:".repeat(10_000));
+        for (uri, complete) in [
+            (nested.clone(), None),
+            ("https://PLACEHOLDER/device".to_string(), Some(nested.clone())),
+            ("data:text/plain,device".to_string(), None),
+            // blob: takes its inner URL's origin, which here is the server's
+            // own: still not a link to hand the person.
+            ("blob:http://PLACEHOLDER/device".to_string(), None),
+        ] {
+            let app_uri = uri.clone();
+            let app_complete = complete.clone();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let app = Router::new().route(
+                "/t/home/device_authorization",
+                post(move || {
+                    let uri = app_uri.replace("PLACEHOLDER", &addr.to_string());
+                    let complete = app_complete.clone();
+                    async move {
+                        Json(serde_json::json!({"device_code": "d", "user_code": "U", "verification_uri": uri, "verification_uri_complete": complete, "interval": 5, "expires_in": 600}))
+                    }
+                }),
+            );
+            let base = format!("http://{addr}/t/home");
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let err = start_device(&http_client(), &base, "ligus-cli", "box")
+                .await
+                .expect_err("a non-http verification link is refused");
+            assert!(matches!(err, AuthError::Protocol(_)), "{err:?}");
+        }
     }
 }
