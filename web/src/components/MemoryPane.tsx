@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge, Button, EmptyHint, ErrorState, LoadingState, Section } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
+import { PANE_DOCS } from "@/lib/docs";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { cleanDisplayName } from "@/lib/names";
@@ -44,7 +45,7 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
   const done = () => void q.refetch();
   const fail = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}: ${errMsg(e)}`);
   return (
-    <RailFrame title="Memory" subtitle="Shared notes and facts. Agents read them and propose changes; people decide.">
+    <RailFrame title="Memory" about="Shared notes and facts. Agents read them and propose changes; people decide." docs={PANE_DOCS.memory}>
       {q.isError ? (
         <ErrorState text="Couldn't load the workspace memory." onRetry={() => void q.refetch()} />
       ) : q.isPending ? (

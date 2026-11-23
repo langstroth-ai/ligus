@@ -121,7 +121,8 @@ const G_CHECK: &str = "Checks and diagnostics";
 
 const GROUPS: &[&str] = &[G_START, G_CHAT, G_AGENTS, G_BOX, G_PHONE, G_REPOS, G_DATA, G_CHECK];
 
-const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text");
+const JSON: Flag = f("--json", "off", "print one JSON document on stdout instead of text (also: -o json)");
+const DRY_RUN: Flag = f("--dry-run", "off", "check the arguments and print what would change; sign and write nothing");
 
 pub const COMMANDS: &[Cmd] = &[
     // ── Getting started ────────────────────────────────────────────────
@@ -160,7 +161,7 @@ pub const COMMANDS: &[Cmd] = &[
         flags: &[JSON],
         conn: true,
         examples: &["ligus status", "LIGUS_DATA_DIR=~/.ligus-serve ligus status --json"],
-        see_also: &["ligus whoami", "ligus remote status", "ligus doctor", "ligus help troubleshooting"],
+        see_also: &["ligus whoami", "ligus remote status", "ligus doctor", "ligus help troubleshooting", "deploy/local/ligus-local verify (a box this machine runs)"],
         ..D
     },
     Cmd {
@@ -368,6 +369,7 @@ pub const COMMANDS: &[Cmd] = &[
         synopsis: &["ligus tail <chat-id> [--watch]"],
         flags: &[f("--watch", "off", "follow the chat")],
         conn: true,
+        exit: &[(5, "unknown chat")],
         examples: &["ligus tail 6f1c2a9b-…", "ligus tail 6f1c2a9b-… --watch"],
         see_also: &["ligus send", "ligus chats"],
         ..D
@@ -378,10 +380,18 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "post a signed message (--push to sync it out)",
         purpose: "Post a message, signed by this device, to a chat; the words after the chat id are the message. \
                   --push runs one sync round right after. A word that starts with -- is read as a flag, not text.",
-        synopsis: &["ligus send <chat-id> <message…> [--push]"],
-        flags: &[f("--push", "off", "sync the message out at once")],
+        synopsis: &["ligus send <chat-id> <message…> [--push] [--wait [--timeout DURATION]]"],
+        flags: &[
+            f("--push", "off", "sync the message out at once"),
+            f("--wait", "off", "push, then wait for someone else's answer in the chat and print it"),
+            f("--timeout DURATION", "5m with --wait", "how long --wait waits (90s, 5m, 1h; implies --wait); no answer by then exits 7"),
+        ],
         conn: true,
-        examples: &["ligus send 6f1c2a9b-… \"@coder fix the flaky test\" --push"],
+        examples: &[
+            "ligus send 6f1c2a9b-… \"@coder fix the flaky test\" --push",
+            "ligus send 6f1c2a9b-… \"@coder status?\" --wait --timeout 10m",
+        ],
+        exit: &[(5, "unknown chat"), (7, "--wait: no answer before --timeout, or the relay can't be reached")],
         see_also: &["ligus tail", "ligus sync"],
         ..D
     },
@@ -445,11 +455,12 @@ pub const COMMANDS: &[Cmd] = &[
                   --secret-ref keeps the key off the shared log (each host that runs it sets LIGUS_WS_SECRET_<name>); \
                   --secret puts it end-to-end encrypted on the workspace config log, where every member's device \
                   holds it; neither is keyless. Share with `ligus sync`.",
-        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE]"],
+        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE] [--dry-run]"],
         flags: &[
             f("--endpoint URL", "the provider's default", "model endpoint (custom, ollama, a gateway)"),
             f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME> (preferred)"),
             f("--secret - | @FILE", "none", "the key itself, from stdin or an owner-only file; synced encrypted"),
+            DRY_RUN,
         ],
         conn: true,
         examples: &[
@@ -465,8 +476,10 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "remove a workspace runtime",
         purpose: "Remove a workspace runtime by id. Share with `ligus sync`.",
-        synopsis: &["ligus rm-runtime <id>"],
+        synopsis: &["ligus rm-runtime <id> [--dry-run]"],
+        flags: &[DRY_RUN],
         conn: true,
+        exit: &[(5, "--dry-run: no runtime with that id")],
         examples: &["ligus rm-runtime local && ligus sync"],
         see_also: &["ligus runtimes"],
         ..D
@@ -490,10 +503,11 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "define a workspace agent on a runtime",
         purpose: "Define a workspace agent bound to a workspace runtime, optionally on a host and with a role (a short \
                   description every member sees). Share with `ligus sync`.",
-        synopsis: &["ligus add-agent <name> <runtime-id> [--host HOST-ID] [--role TEXT]"],
+        synopsis: &["ligus add-agent <name> <runtime-id> [--host HOST-ID] [--role TEXT] [--dry-run]"],
         flags: &[
             f("--host HOST-ID", "none (its owner's device)", "the host that answers it (`ligus hosts` lists ids)"),
             f("--role TEXT", "empty", "what the agent does, shown on the roster"),
+            DRY_RUN,
         ],
         conn: true,
         examples: &["ligus add-agent coder claude --host \"$(ligus whoami --json | jq -r .device)\" --role \"writes code\" && ligus sync"],
@@ -532,8 +546,10 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "bind an agent to a host",
         purpose: "Bind an agent (by name) to a host id, so that host answers its mentions. Sync to apply.",
-        synopsis: &["ligus set-agent-host <agent-name> <host-id>"],
+        synopsis: &["ligus set-agent-host <agent-name> <host-id> [--dry-run]"],
+        flags: &[DRY_RUN],
         conn: true,
+        exit: &[(5, "no agent with that name")],
         examples: &["ligus set-agent-host coder 5b1c0f7e-… && ligus sync"],
         see_also: &["ligus hosts", "ligus agents", "ligus queue"],
         ..D
@@ -758,7 +774,7 @@ pub const COMMANDS: &[Cmd] = &[
         env: &["LIGUS_SERVE_LABEL"],
         conn: true,
         examples: &["ligus admit request --label home-box"],
-        see_also: &["ligus admit redeem", "ligus help box"],
+        see_also: &["ligus admit redeem", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D
     },
     Cmd {
@@ -1563,25 +1579,58 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "doctor",
         group: G_CHECK,
-        summary: "agent sandbox tier, held events; preflight flags exit non-zero",
-        purpose: "Print this device's agent sandbox tier (seatbelt, bwrap, landlock or unconfined), why, and what it \
-                  leaves open; whether the process is dumpable; the workspace's signed sandbox grants; and the held \
-                  events. The flags make it a preflight. --sandbox adds what an agent turn may read and write here \
-                  (printed when the checks pass).",
-        synopsis: &["ligus doctor [--require-confined] [--expect-tier TIER] [--turn-test]", "ligus doctor --sandbox [--runtime NAME] [--agent AGENT-ID]"],
+        summary: "check everything on this host; --json prints ligus.checks.v1",
+        purpose: "Run every check this host can make and say how to fix what fails: the agent sandbox tier (seatbelt, \
+                  bwrap, landlock or unconfined) and what it leaves open, whether the process is dumpable, the \
+                  workspace's signed sandbox grants, the secret store, the workspace connection, the relay (one \
+                  request, 10 s at most), the held events and this host's model gateways. --sandbox or --gateways \
+                  narrows it to those checks; a preflight flag (--require-confined, --expect-tier, --turn-test) \
+                  narrows it to the sandbox and makes it exit non-zero, for init containers and CI. With --json it \
+                  prints one ligus.checks.v1 document (ligus help checks). --sandbox adds what an agent turn may \
+                  read and write here (when the checks pass).",
+        synopsis: &[
+            "ligus doctor [--json]",
+            "ligus doctor [--require-confined] [--expect-tier TIER] [--turn-test] [--json]",
+            "ligus doctor --sandbox [--runtime NAME] [--agent AGENT-ID] [--json]",
+            "ligus doctor --gateways [--gateway NAME] [--model ID] [--json]",
+        ],
         flags: &[
-            f("--require-confined", "off", "exit 3 without an agent sandbox"),
-            f("--expect-tier TIER", "none", "exit 4 unless the tier is TIER (seatbelt, bwrap, landlock, unconfined)"),
-            f("--turn-test", "off", "run one real headless agent turn against a stub model (exit 5 on failure)"),
-            f("--sandbox", "off", "print the per-runtime read/write policy and the grants in force"),
+            f("--require-confined", "off", "fail without an agent sandbox"),
+            f("--expect-tier TIER", "none", "fail unless the tier is TIER: seatbelt, bwrap, landlock, unconfined"),
+            f("--turn-test", "off", "run one real headless agent turn against a stub model; fail if it isn't confined"),
+            f("--legacy-exit-codes", "off", "exit 3, 4 or 5 for those failures, as before 0.2 (kept for one release)"),
+            f("--sandbox", "off", "only the sandbox checks, then the per-runtime read/write policy and the grants in force"),
             f("--runtime NAME", "every runtime", "with --sandbox: claude, codex, copilot, agy, aider, pi, hermes or commands"),
             f("--agent AGENT-ID", "none", "with --sandbox: include that agent's signed grants"),
+            f("--gateways", "off", "only the model gateway checks (the same as ligus gateway-check)"),
+            f("--gateway NAME", "every gateway", "check one model gateway (implies --gateways)"),
+            f("--model ID", "ligus-gateway-check", "the model id the gateway checks ask for"),
+            JSON,
         ],
-        env: &["LIGUS_SANDBOX", "LIGUS_SANDBOX_GRANTS", "LIGUS_SANDBOX_READ_ALLOW", "LIGUS_SANDBOX_WRITE_ALLOW", "LIGUS_SECRETS_DIR"],
+        env: &[
+            "LIGUS_SANDBOX",
+            "LIGUS_SANDBOX_GRANTS",
+            "LIGUS_SANDBOX_READ_ALLOW",
+            "LIGUS_SANDBOX_WRITE_ALLOW",
+            "LIGUS_SECRETS_DIR",
+            "LIGUS_MODEL_GATEWAYS_FILE",
+        ],
         conn: true,
-        examples: &["ligus doctor", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
-        exit: &[(3, "--require-confined or --turn-test: no agent sandbox"), (4, "--expect-tier: another tier"), (5, "--turn-test failed or could not run")],
-        see_also: &["ligus help security", "ligus help troubleshooting", "ligus gateway-check"],
+        examples: &["ligus doctor --json", "ligus doctor --require-confined --turn-test", "ligus doctor --sandbox --runtime claude"],
+        exit: &[
+            (3, "only with --legacy-exit-codes: --require-confined or --turn-test without an agent sandbox"),
+            (4, "only with --legacy-exit-codes: --expect-tier found another tier"),
+            (5, "only with --legacy-exit-codes: --turn-test failed or could not run"),
+        ],
+        see_also: &[
+            "ligus help checks",
+            "ligus help security",
+            "ligus help troubleshooting",
+            "ligus gateway-check",
+            "langstroth-relay check --url <relay> (on the relay host)",
+            "deploy/local/ligus-local preflight, deploy/kubernetes/ligus-k8s preflight --probe (the same sandbox check)",
+            "desktop: Settings → Sandbox (the same policy and grants)",
+        ],
         ..D
     },
     Cmd {
@@ -1591,14 +1640,15 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "Prove the model gateways from LIGUS_MODEL_GATEWAYS_FILE work the two ways agent turns use them: a \
                   hosted-API turn, and a sandboxed CLI child through the egress proxy's route (which must not see the \
                   credential). Prints nothing secret.",
-        synopsis: &["ligus gateway-check [--gateway NAME] [--model ID]"],
+        synopsis: &["ligus gateway-check [--gateway NAME] [--model ID] [--legacy-exit-codes]"],
         flags: &[
             f("--gateway NAME", "every gateway", "check one gateway"),
             f("--model ID", "ligus-gateway-check", "model id to ask for"),
+            f("--legacy-exit-codes", "off", "exit 6 when a check fails, as before 0.2 (kept for one release)"),
         ],
         env: &["LIGUS_MODEL_GATEWAYS_FILE", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "LIGUS_WORKSPACE"],
         examples: &["ligus gateway-check", "ligus gateway-check --gateway litellm --model gpt-4o-mini"],
-        exit: &[(6, "a check failed")],
+        exit: &[(6, "only with --legacy-exit-codes: a check failed (otherwise 1)")],
         see_also: &["ligus doctor"],
         ..D
     },
@@ -2132,14 +2182,97 @@ online?), ligus runtimes (secretRef ✓?), and its log for \"sync:\" lines.
 ",
     },
     Topic {
+        name: "exit-codes",
+        aliases: &["exit", "exit-code", "codes"],
+        summary: "the exit codes every Ligus tool shares, and the error shape",
+        text: "\
+One table for every Ligus tool: ligus, langstroth-relay and the deploy scripts
+(deploy/local/ligus-local, deploy/kubernetes/ligus-k8s).
+
+  code  meaning                                                   what to do
+  0     done (warnings allowed)                                   continue
+  1     failed: the message (or checks[].fix) says why            read it, fix, retry
+  2     usage error: unknown command, missing or bad argument     fix the command line
+  3     a precondition you can fix is missing (a tool, a file,    fix it and rerun
+        a sign-in, the agent sandbox for serve and worker)
+  4     a person must decide or act (a passkey, an admission,     stop and ask
+        exposure, deleting owned data)
+  5     not found (a workspace, chat, proposal, run)              check the id
+  6     refused by workspace rules (a role, lockdown, agent       ask an Admin; don't retry
+        access)
+  7     offline, the relay unreachable, or timed out              retry with backoff
+  8+    command-specific, listed in that command's help
+
+ligus uses: 1 for a failed check or operation; 2 for usage (and a model gateways
+file that can't be used); 3 when serve or worker refuses to start without an
+agent sandbox (LIGUS_REQUIRE_SANDBOX=1) or the relay rejected the access token;
+5 for an unknown chat; 6 when the workspace refuses (a role, an agent's access);
+7 when the relay can't be reached or asks to wait. ligus doctor and ligus
+gateway-check exit 1 when a check fails; before 0.2 they exited 3, 4, 5
+(doctor's preflights) and 6 (gateway-check), and --legacy-exit-codes keeps
+those codes for one release.
+
+The deploy scripts use 0 to 4 (an unreachable cluster is 3); langstroth-relay
+uses 0 to 2.
+
+Errors print the same way in every tool: \"ligus: <what>\" on stderr, then
+indented \"why:\" and \"fix:\" lines when known (a usage error's fix names the
+help to read). With --json (or -o json) the error is also the one document on
+stdout: {\"schema\": \"ligus.error.v1\", \"tool\", \"command\", \"exitCode\",
+\"error\": {\"code\", \"message\", \"why\", \"fix\"}}; code is usage, not_found,
+refused, relay_unreachable, relay_busy, relay_token_rejected, unreachable or
+error.
+",
+    },
+    Topic {
+        name: "checks",
+        aliases: &["checks.v1", "ligus.checks.v1", "doctor-json"],
+        summary: "the ligus.checks.v1 report every doctor and check command prints",
+        text: "\
+One report shape for every check command: ligus doctor --json, langstroth-relay
+check --json, and the deploy scripts (deploy/local/ligus-local and
+deploy/kubernetes/ligus-k8s, whose ligus.agent-deploy.v1 is a conforming
+profile with the same fields). One JSON document on stdout:
+
+  {\"schema\": \"ligus.checks.v1\", \"tool\": \"ligus\", \"version\": \"0.1.1\",
+   \"command\": \"doctor\", \"ok\": false, \"exitCode\": 1,
+   \"checks\": [{\"id\": \"relay.reachable\", \"title\": \"relay\", \"status\": \"fail\",
+               \"detail\": \"https://relay.example.com: connection refused\",
+               \"fix\": \"check the URL and this network; on the relay host: ...\"}],
+   \"next\": [\"langstroth-relay check --url https://relay.example.com\"]}
+
+  schema     always ligus.checks.v1 (a profile keeps its own name)
+  tool       the program; command: its subcommand; version: its version
+  ok         true when no check failed (warnings allowed)
+  exitCode   the process exit code (ligus help exit-codes)
+  checks[]   id (stable, dotted), title (for people), status (ok, warn, fail
+             or skip), detail (one line), fix (one line, when not ok), notes
+             (optional, more lines of what was found)
+  next[]     commands to run next, in order; empty when there is nothing to do
+
+Consumers ignore fields they don't know; new fields never rename old ones. In
+the deploy scripts' profile a passed check says pass (read it as ok) and info
+is a finding that is neither good nor bad.
+
+The text form: one line per check (status, title, detail), an indented fix:
+line, then a summary such as \"1 warning · next: ligus sync\". ligus doctor
+keeps its first two lines as \"agent sandbox: <tier>\" and the tier's summary,
+and the turn test's findings as \"turn test: ...\" lines (scripts read them).
+
+Each doctor names the next one down: ligus doctor's relay check says to run
+langstroth-relay check --url <relay> on the relay host.
+",
+    },
+    Topic {
         name: "agents-guide",
         aliases: &["AGENTS", "agents-playbook", "playbook", "agent-guide"],
         summary: "a one-shot playbook for coding agents: set up, add an agent, k8s, health",
         text: "\
 For coding agents operating Ligus. Every ligus command is non-interactive when
 stdin isn't a terminal (no prompts; pass the flag instead), prints errors on stderr
-as \"ligus: …\", and exits 0 on success, 1 on an error, 2 on a usage error (see each
-command's EXIT CODES). Read commands take --json. Never run a ligus binary against
+as \"ligus: …\", and exits with one table every Ligus tool shares (ligus help
+exit-codes): 0 done, 1 failed, 2 usage, 3 a precondition you can fix, 4 a person
+must decide (stop and ask), 5 not found, 6 refused by workspace rules, 7 offline. Read commands take --json. Never run a ligus binary against
 the person's real data dir to experiment: use
   export LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file
 Human-only steps: approving a box admission with a passkey, enrolling a person's
@@ -2172,7 +2305,7 @@ Deploy on Kubernetes:
 
 Check health:
   ligus status --json                 # relay, key, local copy, member, serve, sandbox tier
-  ligus doctor --require-confined     # exit 3: no agent sandbox
+  ligus doctor --require-confined     # exit 1: no agent sandbox (sandbox.tier fails)
   ligus remote status --json          # serve's relay link and phones
   curl -s http://<listen>/v1/health   # serve ; worker: --health-listen /v1/ready
   ligus hosts --json ; ligus queue
@@ -2191,18 +2324,18 @@ fn find_topic(name: &str) -> Option<&'static Topic> {
     TOPICS.iter().find(|t| t.name == name || t.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
 }
 
-/// `ligus help` with no argument.
+/// `ligus help` with no argument, in the shared section order.
 pub fn overview() -> String {
     let mut s = format!(
-        "ligus {}: the headless Ligus client (Ligus is short for ligustica)\n\n\
+        "NAME\n  ligus {} - the headless Ligus client (Ligus is short for ligustica)\n\n\
          USAGE\n  ligus <command> [<subcommand>] [flags]\n  ligus help <command> [<subcommand>] | <topic>\n  \
-         ligus <command> --help\n",
+         ligus help --json\n  ligus <command> --help\n\nCOMMANDS\n",
         env!("CARGO_PKG_VERSION")
     );
-    for g in GROUPS {
-        let _ = write!(s, "\n{}\n", g.to_uppercase());
+    for (i, g) in GROUPS.iter().enumerate() {
+        let _ = write!(s, "{}  {}\n", if i == 0 { "" } else { "\n" }, g);
         for c in COMMANDS.iter().filter(|c| c.group == *g && !c.name.contains(' ')) {
-            let _ = writeln!(s, "  {:<16} {}", c.name, c.summary);
+            let _ = writeln!(s, "    {:<16} {}", c.name, c.summary);
         }
     }
     s.push_str("\nTOPICS (ligus help <topic>)\n");
@@ -2210,11 +2343,20 @@ pub fn overview() -> String {
         let _ = writeln!(s, "  {:<16} {}", t.name, t.summary);
     }
     s.push_str(
-        "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
-         connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
-         next argument or follows an equals sign (--label box, or --label=box).\n\nEXIT CODES\n  0 success   1 error (\"ligus: …\" on stderr)   \
-         2 usage error (unknown command, missing or bad argument)\n  Some commands add their own: see `ligus <command> --help`.\n\n\
-         An agent setting Ligus up: ligus help agents-guide\n",
+        "\nFLAGS\n  Flags go anywhere after the command; a value is the next argument or follows an equals sign\n  \
+         (--label box, or --label=box). Every command also takes -o json|text (-o json is --json; jsonl for\n  \
+         streams), -q (only what needs attention) and --color auto|always|never (colour only on a terminal;\n  \
+         NO_COLOR and CLICOLOR_FORCE count; JSON is never coloured). ligus never asks for confirmation, so\n  \
+         there is no --yes; a passkey step is always a person's.\n\n\
+         EXAMPLES\n  ligus status\n  ligus doctor --json\n  ligus help agents-guide\n\n\
+         ENVIRONMENT\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
+         connection `ligus enroll` or `ligus admit redeem` saved. ligus help env lists every variable.\n\n\
+         EXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
+         0 done   1 failed (\"ligus: …\" on stderr)   2 usage error   3 a precondition you can fix   \
+         4 a person must decide\n  5 not found   6 refused by workspace rules   7 offline or timed out\n\n\
+         SEE ALSO\n  ligus help agents-guide (an agent setting Ligus up), AGENTS.md in the repository\n  \
+         deploy/local/ligus-local --help and deploy/kubernetes/ligus-k8s --help (deploying serve and workers)\n  \
+         langstroth-relay help (the relay), the desktop app (ligus app)\n",
     );
     s
 }
@@ -2240,13 +2382,14 @@ fn env_of(c: &Cmd) -> Vec<&'static str> {
     v
 }
 
-/// One command's reference.
+/// One command's reference, in the section order every Ligus tool uses:
+/// NAME, USAGE, COMMANDS, FLAGS, EXAMPLES, ENVIRONMENT, EXIT CODES, SEE ALSO.
 pub fn command_help(c: &Cmd) -> String {
-    let mut s = format!("ligus {}: {}\n\nPURPOSE\n", c.name, c.summary);
+    let mut s = format!("NAME\n  ligus {} - {}\n\n", c.name, c.summary);
     for line in wrap(c.purpose, 86) {
         let _ = writeln!(s, "  {line}");
     }
-    s.push_str("\nSYNOPSIS\n");
+    s.push_str("\nUSAGE\n");
     for l in c.synopsis {
         let _ = writeln!(s, "  {l}");
     }
@@ -2255,15 +2398,20 @@ pub fn command_help(c: &Cmd) -> String {
         .filter(|x| x.name.strip_prefix(c.name).is_some_and(|r| r.starts_with(' ') && !r[1..].contains(' ')))
         .collect();
     if !subs.is_empty() {
-        s.push_str("\nSUBCOMMANDS\n");
+        s.push_str("\nCOMMANDS\n");
         for x in subs {
             let _ = writeln!(s, "  {:<16} {}", &x.name[c.name.len() + 1..], x.summary);
         }
     }
     s.push_str("\nFLAGS\n");
-    for fl in c.flags.iter().chain(std::iter::once(&f("-h, --help", "", "print this help"))) {
+    let common = [f("-h, --help", "", "print this help"), f("-o, -q, --color", "", "every command: -o json|text, quiet, colour (ligus help)")];
+    for fl in c.flags.iter().chain(common.iter()) {
         let def = if fl.default.is_empty() { String::new() } else { format!(" (default: {})", fl.default) };
         let _ = writeln!(s, "  {:<28} {}{def}", fl.flag, fl.about);
+    }
+    s.push_str("\nEXAMPLES\n");
+    for x in c.examples {
+        let _ = writeln!(s, "  {x}");
     }
     s.push_str("\nENVIRONMENT\n");
     let env = env_of(c);
@@ -2281,19 +2429,44 @@ pub fn command_help(c: &Cmd) -> String {
         });
         let _ = writeln!(s, "  {n:<width$} {about}");
     }
-    s.push_str("\nEXAMPLES\n");
-    for x in c.examples {
-        let _ = writeln!(s, "  {x}");
-    }
     s.push_str("\nEXIT CODES\n  0  success\n  1  error (the message is on stderr)\n  2  usage error: missing or bad argument, unknown subcommand\n");
     for (code, why) in c.exit {
         if *code > EXIT_USAGE {
             let _ = writeln!(s, "  {code}  {why}");
         }
     }
+    s.push_str(
+        "  3 a precondition you can fix, 4 a person must decide, 5 not found, 6 refused by workspace rules,\n  \
+         7 offline or timed out: the table every Ligus tool shares (ligus help exit-codes)\n",
+    );
     s.push_str("\nSEE ALSO\n");
     let _ = writeln!(s, "  {}", c.see_also.join(", "));
     s
+}
+
+/// `ligus help --json`: every command and topic as one `ligus.help.v1`
+/// document, for agents and completion scripts.
+pub fn help_json() -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "schema": "ligus.help.v1",
+        "tool": "ligus",
+        "version": env!("CARGO_PKG_VERSION"),
+        "commands": COMMANDS.iter().map(|c| json!({
+            "name": c.name,
+            "group": c.group,
+            "summary": c.summary,
+            "description": c.purpose.split_whitespace().collect::<Vec<_>>().join(" "),
+            "usage": c.synopsis,
+            "flags": c.flags.iter().map(|fl| json!({ "flag": fl.flag, "default": fl.default, "about": fl.about })).collect::<Vec<_>>(),
+            "environment": env_of(c),
+            "examples": c.examples,
+            "exitCodes": c.exit.iter().map(|(code, why)| json!({ "code": code, "meaning": why })).collect::<Vec<_>>(),
+            "seeAlso": c.see_also,
+        })).collect::<Vec<_>>(),
+        "topics": TOPICS.iter().map(|t| json!({ "name": t.name, "aliases": t.aliases, "summary": t.summary })).collect::<Vec<_>>(),
+        "exitCodes": crate::problem::TABLE.iter().map(|(code, meaning, todo)| json!({ "code": code, "meaning": meaning, "do": todo })).collect::<Vec<_>>(),
+    })
 }
 
 /// `ligus help env`.
@@ -2384,6 +2557,10 @@ fn topic_text(t: &Topic) -> String {
 /// `ligus help …` (`topics`) / `ligus … --help`: print and exit 0, or name
 /// the unknown one and exit 2.
 pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
+    if topics && args == ["--json"] {
+        println!("{}", help_json());
+        std::process::exit(EXIT_OK);
+    }
     match if topics { lookup(args) } else { lookup_flag(args) } {
         Some(text) => {
             print!("{text}");
@@ -2452,8 +2629,13 @@ mod tests {
     fn sections_ok(name: &str) {
         let c = find_cmd(name).unwrap_or_else(|| panic!("no help entry for `ligus {name}`"));
         let h = command_help(c);
-        for sec in ["PURPOSE", "SYNOPSIS", "FLAGS", "ENVIRONMENT", "EXAMPLES", "EXIT CODES", "SEE ALSO"] {
-            assert!(h.contains(&format!("\n{sec}\n")), "`ligus {name} --help` lacks {sec}:\n{h}");
+        // One section order for every Ligus tool.
+        let mut at = 0;
+        for sec in ["NAME", "USAGE", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
+            let i = if sec == "NAME" { h.find("NAME\n") } else { h.find(&format!("\n{sec}\n")) };
+            let i = i.unwrap_or_else(|| panic!("`ligus {name} --help` lacks {sec}:\n{h}"));
+            assert!(i >= at, "`ligus {name} --help`: {sec} is out of order:\n{h}");
+            at = i;
         }
         assert!(!c.purpose.is_empty() && !c.synopsis.is_empty(), "{name}: empty purpose or synopsis");
         assert!((1..=3).contains(&c.examples.len()), "{name}: 1-3 examples, has {}", c.examples.len());
@@ -2650,7 +2832,7 @@ mod tests {
             assert!(!t.text.contains("\"error: "), "topic {} names the old error prefix", t.name);
         }
         // `ligus remote enable --relay x --help`: the subcommand's help.
-        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("ligus remote enable"));
+        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("NAME\n  ligus remote enable"));
         // `ligus agents --help` is the command only; `ligus box --help` is no command.
         assert!(!lookup_flag(&["agents", "--help"]).unwrap().contains("Access controls"));
         assert_eq!(lookup_flag(&["box", "--help"]), None);
@@ -2695,5 +2877,45 @@ mod tests {
         assert!(is_usage(&usage_error("unknown `ligus remote x`")));
         assert!(is_usage(&anyhow::anyhow!("usage: ligus tail <chat-id>")));
         assert!(!is_usage(&anyhow::anyhow!("unknown chat 123")));
+    }
+
+    /// One exit-code table: `ligus help exit-codes` lists 0 to 7, matches the
+    /// code's table, and every command's help points to it.
+    #[test]
+    fn exit_codes_are_one_table() {
+        let t = lookup(&["exit-codes"]).unwrap();
+        for (code, meaning, _) in crate::problem::TABLE {
+            let first = meaning.split([' ', ':', '(']).next().unwrap();
+            assert!(t.contains(&format!("  {code}     ")), "exit-codes lacks {code}:\n{t}");
+            assert!(t.to_lowercase().contains(&first.to_lowercase()), "exit-codes lacks {meaning:?}");
+        }
+        assert!(t.contains("--legacy-exit-codes"));
+        for c in COMMANDS {
+            assert!(command_help(c).contains("ligus help exit-codes"), "ligus {} --help doesn't point to the table", c.name);
+        }
+        assert!(overview().contains("ligus help exit-codes"));
+        assert_eq!((EXIT_OK, EXIT_ERROR, EXIT_USAGE), (crate::problem::EXIT_OK, crate::problem::EXIT_ERROR, crate::problem::EXIT_USAGE));
+    }
+
+    /// `ligus help --json` serialises the registry, and the overview keeps
+    /// the shared section order.
+    #[test]
+    fn help_json_and_overview_order() {
+        let d = help_json();
+        assert_eq!(d["schema"], "ligus.help.v1");
+        assert_eq!(d["commands"].as_array().unwrap().len(), COMMANDS.len());
+        assert_eq!(d["topics"].as_array().unwrap().len(), TOPICS.len());
+        assert_eq!(d["exitCodes"].as_array().unwrap().len(), 8);
+        let doctor = d["commands"].as_array().unwrap().iter().find(|c| c["name"] == "doctor").unwrap();
+        assert!(doctor["flags"].as_array().unwrap().iter().any(|f| f["flag"] == "--json"));
+        let o = overview();
+        let mut at = 0;
+        for sec in ["NAME", "USAGE", "COMMANDS", "TOPICS", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
+            let i = if sec == "NAME" { o.find("NAME\n") } else { o.find(&format!("\n{sec}")) };
+            let i = i.unwrap_or_else(|| panic!("overview lacks {sec}"));
+            assert!(i >= at, "overview: {sec} out of order");
+            at = i;
+        }
+        assert!(o.contains("langstroth-relay help") && o.contains("ligus-k8s"), "cross-references to the other tools");
     }
 }

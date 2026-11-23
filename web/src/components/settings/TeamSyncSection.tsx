@@ -184,7 +184,7 @@ function SyncSection() {
             {s.encrypted ? (
               <span
                 className="flex items-center gap-1"
-                title="Messages sealed with the workspace key"
+                data-tip="Messages sealed with the workspace key"
                 style={{ color: "var(--ligus-success-ink)" }}
               >
                 <IconLock size={12} /> encrypted
@@ -303,7 +303,7 @@ function SyncSection() {
       {/* Advanced: manual room + key (the rail normally fills these in) */}
       <button
         type="button"
-        className="flex items-center gap-1 text-xs opacity-60 hover:opacity-100"
+        className="flex items-center gap-1 text-xs text-ink-soft hover:text-ink"
         onClick={() => setShowAdvanced((v) => !v)}
       >
         {showAdvanced ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />} Advanced — set room &amp; key by hand
@@ -462,7 +462,7 @@ function PeersSection() {
       {shortCode && (
         <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--ligus-accent-cool)" }}>
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
               Share this code (expires in {Math.round(shortCode.expiresIn / 60)} min)
             </div>
             <div className="font-mono text-2xl font-bold tracking-[0.2em]">{shortCode.code}</div>

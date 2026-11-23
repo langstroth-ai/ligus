@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listAgents,
@@ -12,6 +12,7 @@ import {
   cancelWorkflowRun,
   resumeWorkflowRun,
   handOverWorkflowRun,
+  listWorkspaceHosts,
   voteProposal,
   onWorkflowRun,
   onChatStream,
@@ -20,10 +21,13 @@ import {
   type WorkflowNodeDto,
   type WorkflowRunDto,
   type WorkflowNodeRunDto,
+  type WorkspaceHostDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
-import { confirmThen } from "@/lib/confirm";
-import { Badge, Button, Section, ErrorState } from "@/components/ui";
+import { confirmDialog } from "@/components/Dialog";
+import { Badge, Button, Section, ErrorState, LinkButton } from "@/components/ui";
+import { MoreMenu } from "@/components/MoreMenu";
+import { PANE_DOCS } from "@/lib/docs";
 import { IconChevronRight, IconLock } from "@/lib/icons";
 import { RailFrame, Stack, EmptyHint, panelStyle, fieldStyle } from "@/components/RightRail";
 import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
@@ -105,14 +109,14 @@ export function WorkflowStages({
             {n.dependsOn.length > 0 && <span className="text-ink-soft">after {n.dependsOn.join(", ")}</span>}
           </div>
           {n.kind === "gate" ? (
-            <div className="mt-0.5 opacity-70">
+            <div className="mt-0.5 text-ink-soft">
               {n.gateTitle}
               {" · "}
               {n.onReject === "routeTo" && n.rejectTarget ? `reject retries from ${n.rejectTarget}` : "reject halts the run"}
             </div>
           ) : (
             n.promptTemplate && (
-              <div className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words opacity-70">
+              <div className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words text-ink-soft">
                 {n.promptTemplate}
               </div>
             )
@@ -137,7 +141,11 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
     queryKey: ["agents", sessionId],
     queryFn: () => listAgents(sessionId),
   });
+  // Online devices, for the "hand over to" picker on a run whose driver
+  // stopped beating.
+  const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts });
   const agentName = (id: string) => agents.data?.find((a) => a.id === id)?.name;
+  const deletes = usePendingDeletes(sessionId);
 
   // Live run updates: the engine emits workflow://run on every persisted
   // transition; gates also create proposals and stages post chat messages.
@@ -174,13 +182,24 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
   return (
     <RailFrame
       title="Workflows"
-      subtitle="Multi-stage agent pipelines with approval gates. Agents write them; you approve, run and pause them."
+      about="Multi-stage agent pipelines with approval gates. Agents write them; you approve, run and pause them."
+      docs={PANE_DOCS.workflows}
     >
       <Section title="Definitions">
         <Stack>
-          {(workflows.data ?? []).map((wf) => (
-            <DefinitionCard key={wf.id} sessionId={sessionId} wf={wf} agentName={agentName} />
-          ))}
+          {(workflows.data ?? []).map((wf) =>
+            deletes.pending.has(wf.id) ? (
+              <DeletedRow key={wf.id} name={wf.name} onUndo={() => deletes.undo(wf.id)} />
+            ) : (
+              <DefinitionCard
+                key={wf.id}
+                sessionId={sessionId}
+                wf={wf}
+                agentName={agentName}
+                onDelete={() => deletes.schedule(wf.id)}
+              />
+            ),
+          )}
           {workflows.isError ? (
             <ErrorState text="Couldn't load workflows." onRetry={() => void workflows.refetch()} />
           ) : (
@@ -194,7 +213,7 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
       <Section title="Runs">
         <Stack>
           {(runs.data ?? []).map((run) => (
-            <RunCard key={run.id} sessionId={sessionId} run={run} />
+            <RunCard key={run.id} sessionId={sessionId} run={run} hosts={hosts.data ?? []} />
           ))}
           {runs.isError ? (
             <ErrorState text="Couldn't load runs." onRetry={() => void runs.refetch()} />
@@ -207,16 +226,102 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
   );
 }
 
+/// How long a deleted workflow can be brought back before the delete is
+/// written (it syncs to everyone, and there's no way to re-add a definition
+/// short of a new proposal, so undo means "not sent yet").
+export const UNDO_MS = 8_000;
+
+/// Workflow deletes waiting out their undo window. Leaving the pane (or the
+/// chat) sends any still waiting: the person confirmed them.
+function usePendingDeletes(sessionId: string) {
+  const qc = useQueryClient();
+  // Timers live in a ref (state updaters may run twice); `pending` mirrors
+  // their keys for rendering.
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  const sync = () => setPending(new Set(timers.current.keys()));
+
+  const send = useCallback(
+    (id: string) =>
+      removeWorkflow(sessionId, id)
+        .catch((e) => toast.error(`Couldn't delete the workflow: ${errMsg(e)}`))
+        .finally(() => qc.invalidateQueries({ queryKey: ["workflows", sessionId] })),
+    [sessionId, qc],
+  );
+
+  const schedule = (id: string) => {
+    if (timers.current.has(id)) return;
+    timers.current.set(
+      id,
+      setTimeout(() => {
+        timers.current.delete(id);
+        sync();
+        void send(id);
+      }, UNDO_MS),
+    );
+    sync();
+  };
+
+  const undo = (id: string) => {
+    const t = timers.current.get(id);
+    if (t === undefined) return;
+    clearTimeout(t);
+    timers.current.delete(id);
+    sync();
+  };
+
+  useEffect(() => {
+    const live = timers.current;
+    return () => {
+      for (const [id, t] of live) {
+        clearTimeout(t);
+        void send(id);
+      }
+      live.clear();
+    };
+  }, [send]);
+
+  return { pending, schedule, undo };
+}
+
+/// What deleting a workflow loses, said before it happens. Runs keep a frozen
+/// copy of their definition, so runs already going finish and the history
+/// stays.
+export function workflowDeleteConsequences(wf: WorkflowDefinitionDto): string {
+  const stages = `${wf.nodes.length} stage${wf.nodes.length === 1 ? "" : "s"}`;
+  return (
+    `“${wf.name}” and its ${stages} are removed from this chat for everyone, so nobody can start it again. ` +
+    `Runs already going finish, and past runs stay in the history.`
+  );
+}
+
+/// Stands in for a deleted workflow while it can still be brought back.
+function DeletedRow({ name, onUndo }: { name: string; onUndo: () => void }) {
+  return (
+    <div
+      role="status"
+      className="ligus-enter flex items-center gap-2 rounded-xl border border-dashed px-3 py-2 text-xs text-ink-soft"
+      style={{ borderColor: "var(--ligus-line)" }}
+      data-testid="workflow-deleted"
+    >
+      <span className="min-w-0 flex-1 truncate">Deleted “{name}”.</span>
+      <LinkButton onClick={onUndo}>Undo</LinkButton>
+    </div>
+  );
+}
+
 type Open = "none" | "run" | "change";
 
 function DefinitionCard({
   sessionId,
   wf,
   agentName,
+  onDelete,
 }: {
   sessionId: string;
   wf: WorkflowDefinitionDto;
   agentName: (agentId: string) => string | undefined;
+  onDelete: () => void;
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState<Open>("none");
@@ -302,17 +407,22 @@ function DefinitionCard({
           {wf.disabled ? "Resume" : "Pause"}
         </Button>
         <span className="flex-1" />
-        <Button
-          variant="danger"
+        <MoreMenu
+          label={`More actions for workflow ${wf.name}`}
           disabled={busy}
-          onClick={() =>
-            confirmThen(`Delete workflow “${wf.name}”? Past runs stay in the history.`, () =>
-              act(() => removeWorkflow(sessionId, wf.id)),
-            )
-          }
-        >
-          Delete
-        </Button>
+          items={[
+            {
+              label: "Delete workflow…",
+              danger: true,
+              onSelect: () =>
+                void confirmDialog(workflowDeleteConsequences(wf), {
+                  title: `Delete “${wf.name}”?`,
+                  confirmLabel: "Delete workflow",
+                  danger: true,
+                }).then((ok) => ok && onDelete()),
+            },
+          ]}
+        />
       </div>
       {open !== "none" && (
         <div className="mt-2 flex gap-2">
@@ -348,7 +458,7 @@ function DefinitionCard({
   );
 }
 
-function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto }) {
+function RunCard({ sessionId, run, hosts }: { sessionId: string; run: WorkflowRunDto; hosts: WorkspaceHostDto[] }) {
   const qc = useQueryClient();
   const live = run.status === "running" || run.status === "awaitingGate";
   // A resumable run in an interruptible state whose in-process driver is gone
@@ -413,9 +523,10 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
       {live && run.lease && (
         <RunLeaseLine
           lease={run.lease}
-          onHandOver={() =>
+          hosts={hosts}
+          onHandOver={(successor) =>
             act(async () => {
-              await handOverWorkflowRun(sessionId, run.id);
+              await handOverWorkflowRun(sessionId, run.id, successor);
               toast.success("Handed over; the other device picks it up on its next heartbeat");
             })
           }
@@ -459,7 +570,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
           cursor: hasDetail ? "pointer" : "default",
         }}
         aria-expanded={hasDetail ? open : undefined}
-        title={`${node.name}: ${statusLabel(node.status)}`}
+        data-tip={`${node.name}: ${statusLabel(node.status)}`}
       >
         {node.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
         {node.name}
@@ -470,7 +581,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
           className="mt-1 max-w-full rounded-lg border p-2 text-[11px] leading-[1.5]"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-overlay)" }}
         >
-          <div className="opacity-55">
+          <div className="text-ink-soft">
             {statusLabel(node.status)}
             {node.attempts > 1 ? ` · ${node.attempts} attempts` : ""}
           </div>
@@ -480,7 +591,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
             </div>
           )}
           {node.outputExcerpt && (
-            <div className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words opacity-80">
+            <div className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-ink-soft">
               {node.outputExcerpt}
             </div>
           )}

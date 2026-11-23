@@ -122,11 +122,11 @@ export function EmojiPicker({
       </div>
 
       <div className="max-h-[260px] overflow-y-auto px-2 pb-2">
-        {groups === null && <div className="p-3 text-center text-xs opacity-50">Loading…</div>}
+        {groups === null && <div className="p-3 text-center text-xs text-ink-soft">Loading…</div>}
 
         {results !== null &&
           (results.length === 0 ? (
-            <div className="p-3 text-center text-xs opacity-50">No emoji found</div>
+            <div className="p-3 text-center text-xs text-ink-soft">No emoji found</div>
           ) : (
             <Grid items={results} onPick={pick} />
           ))}
@@ -170,7 +170,7 @@ function Grid({ items, onPick }: { items: { emoji: string; name: string }[]; onP
       {items.map((it, i) => (
         <button
           key={it.emoji + i}
-          title={it.name}
+          data-tip={it.name}
           aria-label={it.name}
           onClick={() => onPick(it.emoji)}
           className="flex h-8 w-8 items-center justify-center rounded-md text-xl leading-none transition-transform hover:scale-110"

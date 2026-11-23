@@ -18,7 +18,8 @@ every command without this site:
 | Command | What it prints |
 |---|---|
 | `ligus help` (or `ligus --help`, `-h`) | every command, by section, and the topics |
-| `ligus help <command> [<subcommand>]`, or `ligus <command> [<subcommand>] --help` | that command's purpose, synopsis, every flag with its default, the environment variables it reads, examples, exit codes and related commands |
+| `ligus help <command> [<subcommand>]`, or `ligus <command> [<subcommand>] --help` | that command's reference in the section order every Ligus tool uses: NAME (with what it does), USAGE, COMMANDS (its subcommands), FLAGS (each with its default), EXAMPLES, ENVIRONMENT (the variables it reads), EXIT CODES and SEE ALSO (related commands, the desktop menu path or the deploy script that does the same) |
+| `ligus help --json` | every command (usage, flags, environment, examples, exit codes, see also) and topic as one `ligus.help.v1` document, for agents and completion scripts |
 | `ligus help <topic>` | a task guide: the exact commands in order, each step with a command that checks it |
 
 Topics:
@@ -36,6 +37,8 @@ Topics:
 | `security` | the data dir, the secret backends, `LIGUS_DATA_DIR`, `LIGUS_SECRET_BACKEND` |
 | `env` | every `LIGUS_*` variable the CLI reads (a test checks it against the code) |
 | `troubleshooting` | the common errors and their fixes |
+| `exit-codes` | the exit codes every Ligus tool shares (0 to 7), and `--legacy-exit-codes` ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes)) |
+| `checks` | the `ligus.checks.v1` report `ligus doctor --json`, `langstroth-relay check --json` and the deploy scripts print ([CLI conventions](../../operate/reference/cli-conventions.md)) |
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
 A name that is both a topic and a command (`agents`, `repos`, `remote`,
@@ -45,15 +48,26 @@ stdout and exits 0; an unknown command or topic exits 2.
 
 ## Exit codes {#exit-codes}
 
-| Code | Meaning |
-|---|---|
-| 0 | success (help included) |
-| 1 | error: the message is on stderr as `ligus: …` |
-| 2 | usage error: an unknown command or subcommand, a missing or bad argument (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
-| 3 | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1`, or `ligus doctor --require-confined` or `--turn-test`, on a host without an agent sandbox |
-| 4 | `ligus doctor --expect-tier`: another tier |
-| 5 | `ligus doctor --turn-test` failed or couldn't run |
-| 6 | `ligus gateway-check`: a check failed |
+One table for every Ligus tool: `ligus`, `langstroth-relay` and the deploy
+scripts ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes);
+`ligus help exit-codes`).
+
+| Code | Meaning | When `ligus` uses it |
+|---|---|---|
+| 0 | done (warnings allowed) | success, help included |
+| 1 | failed: the message (or `checks[].fix`) says why | an error (`ligus: …` on stderr); a failed `ligus doctor` or `ligus gateway-check` check |
+| 2 | usage error | an unknown command or subcommand, a missing or bad argument such as a malformed chat id (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
+| 3 | a precondition you can fix is missing | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1` on a host without an agent sandbox; the relay rejected the access token |
+| 4 | a person must decide or act | (reserved) |
+| 5 | not found | an unknown chat (`ligus tail`, `ligus send`) |
+| 6 | refused by workspace rules | the workspace refused the action (a role, an agent's access, a relay roster) |
+| 7 | offline, the relay unreachable, or timed out | the relay couldn't be reached, or asked to wait (a rate limit) |
+
+Before 0.2, `ligus doctor` exited 3 (`--require-confined` or `--turn-test`
+without an agent sandbox), 4 (`--expect-tier`: another tier) or 5
+(`--turn-test` failed), and `ligus gateway-check` exited 6 when a check
+failed. Both now exit 1 with the failing check's id in the output;
+`--legacy-exit-codes` keeps the old codes for one release.
 
 `ligus` with no command prints the command list to stderr and exits 2. An
 unknown command exits 2 without creating a data dir.
@@ -61,7 +75,7 @@ unknown command exits 2 without creating a data dir.
 ## Output for scripts and agents {#json}
 
 Read and status commands take `--json` and then print one JSON document on
-stdout: `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
+stdout: `ligus doctor` (a [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report), `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
 `ligus agents`, `ligus hosts`, `ligus repos list`, `ligus remote status`,
 `ligus phones list`, `ligus memory list|search|show|proposals` and
 `ligus task-state`. `ligus facts export --jsonl` prints JSON lines. No
@@ -88,11 +102,18 @@ command prompts when standard input isn't a terminal: the one question
   `ligus help` and `--help` never open the data dir, the config or the
   secret store; `ligus status` and `ligus facts export` never create an
   identity.
-- **Errors** print `ligus: …` on stderr and exit 1; usage errors exit 2 and add a
-  line naming the help to read ([exit codes](#exit-codes)).
+- **Errors** print `ligus: <what>` on stderr, then `why:` and `fix:` lines
+  when known (a usage error's fix names the help to read); with `--json` the
+  error is also one `ligus.error.v1` document on stdout
+  ([errors](../../operate/reference/cli-conventions.md#errors), [exit codes](#exit-codes)).
 - Flags are matched anywhere after the command; a value follows the flag as
   the next argument or after an equals sign (`--label box` or
   `--label=box`).
+- Every command also takes `-o json|text` (`-o json` is `--json`; `-o jsonl`
+  is `--jsonl` for `ligus facts export`), `-q` (`ligus doctor` prints only the
+  checks that need attention) and `--color auto|always|never` (colour only on
+  a terminal, honouring `NO_COLOR` and `CLICOLOR_FORCE`; JSON is never
+  coloured). `ligus` never asks for a confirmation, so there is no `--yes`.
 
 ## Version and identity
 
@@ -101,8 +122,10 @@ command prompts when standard input isn't a terminal: the one question
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus status [--json]` | one summary of this data dir without changing it: the identity (and whether it is a box), the workspace and relay, whether an access token, the workspace key and a local copy are present, membership and device standing, a kept admission, the serve token, remote access and the running server's relay link, the agent sandbox tier, and the next step |
 | `ligus whoami [--json]` | prints account id, device id, name, data dir and room |
-| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md). Also prints the room's held events (`held events: N from M device(s), D dropped by a cap (R to fetch again from the relay), L given up, E expired` and their reasons): events this device can't judge yet, which never stop sync ([held events](../../operate/security/threat-model.md#held-events)). The flags make it a preflight that exits non-zero on failure: `--require-confined` exits 3 without an agent sandbox, `--expect-tier` exits 4 on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (exit 5 on failure) |
-| `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
+| `ligus doctor [--json]` | runs every check this host can make and says how to fix what fails: the agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open (see [The Linux agent sandbox](../../operate/ops/linux-sandbox.md)); whether the process is dumpable; the workspace's signed sandbox grants; the secret store; the workspace connection; the relay (one request, 10 seconds at most; a failure names `langstroth-relay check --url <relay>` to run on the relay host); the held events (events this device can't judge yet, which never stop sync: [held events](../../operate/security/threat-model.md#held-events)); and this host's model gateways. Exits 1 when a check fails. `--json` prints one [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report; the text form starts with `agent sandbox: <tier>` and its summary, then one line per check and a summary line |
+| `ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]` | the sandbox checks only, as a preflight that exits 1 when one fails: `--require-confined` without an agent sandbox, `--expect-tier` on any other tier, `--turn-test` runs one real headless agent turn against an in-process stub model that probes the sandbox (its findings are `turn test: …` lines). `--legacy-exit-codes` exits 3, 4 and 5 instead, as before 0.2 |
+| `ligus doctor --sandbox [--runtime <name>] [--agent <id>]` | the sandbox checks only, then what an agent turn may read and write on this host (the home is denied by default), why, the shell rule, and the signed grants in force |
+| `ligus doctor --gateways [--gateway <name>] [--model <id>]` | the model gateway checks only, the same ones `ligus gateway-check` runs, as checks |
 | `ligus gateway-check [--gateway <name>] [--model <id>]` | proves this host's [model gateways](../../operate/deploy/model-gateways.md): a hosted-API turn and a sandboxed CLI child through the egress proxy's route |
 
 ```console
@@ -211,7 +234,7 @@ an invite and an Admin.
 | `ligus chats [--json]` | lists chats in the local store |
 | `ligus new [title…]` | creates a chat, prints its id |
 | `ligus tail <chat-id> [--watch]` | prints a transcript; `--watch` follows it |
-| `ligus send <chat-id> <message…> [--push]` | posts a signed message; `--push` syncs it out at once |
+| `ligus send <chat-id> <message…> [--push] [--wait [--timeout <duration>]]` | posts a signed message; `--push` syncs it out at once; `--wait` also pushes, then syncs until someone else answers in the chat and prints the answer (`--timeout`, default 5m, as `90s`, `5m` or `1h`; no answer by then exits 7) |
 | `ligus proposals` | lists proposals with status and votes |
 | `ligus queue` | unanswered agent mentions and whether each agent's host is online |
 
@@ -220,16 +243,16 @@ an invite and an Admin.
 | Command | What it does |
 |---|---|
 | `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>]` | defines (or replaces by id) a workspace runtime. |
-| `ligus rm-runtime <id>` | removes a workspace runtime. |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret <value>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`). |
+| `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes |
 | `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
 | `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
 | `ligus agents [--json]` | lists workspace agents. |
-| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]` | defines an agent. |
+| `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
 | `ligus register-worker [--label <name>]` | registers this box as a worker host, prints its host id |
-| `ligus set-agent-host <agent> <host-id>` | binds an agent to a host |
+| `ligus set-agent-host <agent> <host-id> [--dry-run]` | binds an agent to a host |
 | `ligus agent [name] [--runtime <id>]` | development responder: answers new un-mentioned or `@primary` messages (in a shared room only its operator's, unless `LIGUS_AGENT_OPEN_TO_MEMBERS=1`). Refuses to run unless `LIGUS_ALLOW_PERSONAL_AGENT` is set; use `ligus worker` in production |
 
 `<provider>` is one of `anthropic`, `openai`, `openrouter`, `ollama`,

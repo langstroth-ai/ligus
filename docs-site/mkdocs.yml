@@ -205,6 +205,7 @@ nav:
           - Multi-agent collaboration: ligus/features/multi-agent.md
           - Who can use your agents: ligus/features/agent-access.md
           - Exploring options (proposal sets): ligus/features/proposal-sets.md
+          - Inbox: ligus/features/inbox.md
           - Mentions & notifications: ligus/features/mentions-and-notifications.md
           - Agentic workflows: ligus/features/workflows.md
           - Workspace guards: ligus/features/guards.md
@@ -277,6 +278,7 @@ nav:
           - Runbooks: operate/security/runbooks.md
       - Reference:
           - Environment variables: operate/reference/env-vars.md
+          - CLI conventions: operate/reference/cli-conventions.md
           - Configuration (TOML): operate/reference/config-toml.md
           - Serve HTTP API: operate/reference/serve-api.md
           - Invite payload format: operate/reference/invite-payload.md

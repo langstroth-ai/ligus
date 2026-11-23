@@ -33,7 +33,7 @@ export function DearthBanner({ onManage }: { onManage: () => void }) {
           {d.reason && <span className="ml-1.5 font-normal text-ink-soft">({d.reason})</span>}
         </>
       }
-      detail={<span title={dearthSummary(d)}>{dearthSummary(d)}</span>}
+      detail={<span data-tip={dearthSummary(d)}>{dearthSummary(d)}</span>}
       actions={
         <>
           {pending > 0 && (

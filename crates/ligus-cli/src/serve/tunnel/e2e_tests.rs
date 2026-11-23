@@ -1438,5 +1438,97 @@ async fn admission_prepare_is_bound_to_the_pairings_phone() {
     h.handle.shutdown();
 }
 
+/// "My role / my vote / can vote" on a proposal are the phone's own person's
+/// (the member its pairing's device is certified for), not this box's: the
+/// box is its own service member and hasn't voted, the phone's person (the
+/// desktop's Owner) rejected. Over a request and over the event stream. A
+/// pairing this box can't place claims nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phone_sees_its_own_persons_role_and_vote() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(WAIT).await.unwrap();
+    let (_t, info, keys, pid_pair, credential, phone) = pair_bound(&h, &relay).await;
+    let ws = h.handle.shared.ws;
+    let owner = {
+        let mut desk = crate::open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().id.clone()
+    };
+    let (chat_id, pid) = filed_proposal(&h, None).await;
+    // The desktop sees the proposal, rejects it, and both reach the box.
+    for _ in 0..200 {
+        sync_once(&h.desktop).await.unwrap();
+        if crate::open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == pid)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    crate::open_service(&h.desktop).unwrap().vote_on_proposal(chat_id, ws, pid, false).unwrap().expect("desktop sees it");
+    sync_once(&h.desktop).await.unwrap();
+    wait_until("the box sees the phone and the vote", WAIT, || {
+        h.handle.shared.sync_kick.notify_one();
+        let s = &h.handle.shared;
+        let phone_known = s.lock().phone_person(ws, phone.device_id).is_ok();
+        let voted = s.lock().load(chat_id).unwrap().unwrap().proposals.iter().any(|p| p.id == pid && !p.approvals.is_empty());
+        phone_known && voted
+    })
+    .await;
+    let box_id = h.handle.shared.my_actor_id();
+    assert_ne!(box_id, owner, "the box is its own member here");
+
+    // The box's own view (the operator/bearer): its identity, no vote.
+    let mine = h.get(&format!("/v1/proposals/{pid}")).await;
+    assert_eq!(mine["proposal"]["myVote"], Value::Null, "{mine}");
+    assert_ne!(mine["proposal"]["myRole"], json!("owner"), "{mine}");
+
+    // The phone's: its person's.
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    let r = c.request("GET", &format!("/v1/proposals/{pid}"), None).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    let p = &r.json()["proposal"];
+    assert_eq!((p["myRole"].clone(), p["myVote"].clone(), p["canVote"].clone()), (json!("owner"), json!("reject"), json!(true)), "{p}");
+    let list = c.request("GET", "/v1/proposals?status=all", None).await.unwrap().json();
+    let listed = list["proposals"].as_array().unwrap().iter().find(|x| x["id"] == json!(pid)).cloned().unwrap();
+    assert_eq!(listed["myVote"], json!("reject"), "{listed}");
+
+    // The event stream: a proposal event the hub built for the box arrives
+    // as the phone's person sees it.
+    let sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
+    let head = c.recv_timeout(WAIT).await.unwrap();
+    assert_eq!((head.ty, head.stream), (frame::RESPONSE, sse));
+    {
+        let s = &h.handle.shared;
+        let chat = s.lock().load(chat_id).unwrap().unwrap();
+        let prop = chat.proposals.iter().find(|p| p.id == pid).unwrap().clone();
+        s.hub.emit("proposal.updated", crate::serve::hub::wrap("proposal", crate::serve::api::proposal_dto_as(&chat, &prop, &box_id)));
+    }
+    let mut text = String::new();
+    let line = loop {
+        let f = c.recv_timeout(WAIT).await.unwrap();
+        if f.ty == frame::DATA && f.stream == sse {
+            text.push_str(&String::from_utf8_lossy(&f.payload));
+        }
+        if let Some(l) = text.lines().find(|l| l.starts_with("data: ") && l.contains(&pid.to_string()) && text.contains("event: proposal.updated")) {
+            break l.to_string();
+        }
+    };
+    let ev: Value = serde_json::from_str(line.trim_start_matches("data: ")).unwrap();
+    assert_eq!((ev["proposal"]["myRole"].clone(), ev["proposal"]["myVote"].clone()), (json!("owner"), json!("reject")), "{ev}");
+    c.send(Frame::reset(sse, frame::reset::CANCEL, "")).await.unwrap();
+
+    // A pairing that names no device this box can place claims nothing.
+    assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, &pid_pair), owner);
+    assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, "no-such-pairing"), "");
+    let chat = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let prop = chat.proposals.iter().find(|p| p.id == pid).unwrap();
+    let blank = crate::serve::api::proposal_dto_as(&chat, prop, "");
+    assert_eq!(
+        (blank["myRole"].clone(), blank["myVote"].clone(), blank["canVote"].clone(), blank["isMine"].clone()),
+        (Value::Null, Value::Null, json!(false), json!(false))
+    );
+    h.handle.shutdown();
+}
+
 #[path = "enroll_qr_e2e_tests.rs"]
 mod enroll_qr;

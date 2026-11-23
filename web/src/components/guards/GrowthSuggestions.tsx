@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { growthSuggestions } from "@/lib/ipc";
 import { IconSparkle, IconX } from "@/lib/icons";
-import { Banner, LinkButton } from "@/components/ui";
+import { LinkButton } from "@/components/ui";
 
 const KEY = "ligus.growth.dismissed";
 
@@ -22,9 +22,11 @@ function saveDismissed(ids: string[]) {
   }
 }
 
-/// A small, dismissible card that suggests adding an agent, a host or a worker
-/// when occupancy says so (queued work, a hot plan window, one busy agent),
-/// rather than up front. Shows one suggestion at a time.
+/// A quiet, dismissible tip at the foot of the canvas that suggests adding an
+/// agent, a host or a worker when occupancy says so (queued work, a hot plan
+/// window, one busy agent), rather than up front. One suggestion at a time.
+/// It sits in the status bar, not a banner: top-of-window banners are kept
+/// for states that block work (Lockdown, Dearth).
 export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }) {
   const [dismissed, setDismissed] = useState<string[]>(loadDismissed);
   const q = useQuery({ queryKey: ["growth-suggestions"], queryFn: growthSuggestions, refetchInterval: 5 * 60_000 });
@@ -36,25 +38,29 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
     saveDismissed(ids);
   };
   return (
-    <Banner
-      tone="neutral"
-      testId="growth-suggestion"
-      icon={<span style={{ color: "var(--ligus-accent-ink)" }}><IconSparkle size={14} /></span>}
-      title={`${next.title}.`}
-      detail={<span title={next.reason}>{next.reason}</span>}
-      actions={
-        <>
-          <LinkButton onClick={() => onOpen(next.kind)}>Set up</LinkButton>
-          <button
-            type="button"
-            aria-label="Dismiss suggestion"
-            className="grid h-6 w-6 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--ligus-hover)] hover:text-ink"
-            onClick={dismiss}
-          >
-            <IconX size={13} />
-          </button>
-        </>
-      }
-    />
+    <div
+      role="note"
+      aria-label="Tip"
+      data-testid="growth-suggestion"
+      className="ligus-enter flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] text-ink-soft"
+    >
+      <span aria-hidden className="inline-flex shrink-0 text-ink-faint">
+        <IconSparkle size={11} />
+      </span>
+      <span className="shrink-0 font-medium text-ink">{next.title}.</span>
+      <span className="min-w-0 flex-1 truncate" data-tip={next.reason}>
+        {next.reason}
+      </span>
+      <LinkButton onClick={() => onOpen(next.kind)}>Set up</LinkButton>
+      <button
+        type="button"
+        aria-label="Dismiss suggestion"
+        data-tip="Dismiss"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--ligus-hover)] hover:text-ink"
+        onClick={dismiss}
+      >
+        <IconX size={12} />
+      </button>
+    </div>
   );
 }

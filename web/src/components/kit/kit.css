@@ -1,0 +1,22 @@
+/* Styles the kit components can't express inline: entrance motion, the
+   one-time state pulse and hover reveals. Short, and off when the OS asks. */
+
+@keyframes ligus-sheet-in-right { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@keyframes ligus-sheet-in-center { from { opacity: 0; transform: translateY(6px) scale(0.99); } to { opacity: 1; transform: none; } }
+@keyframes ligus-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+.ligus-sheet-overlay { animation: ligus-overlay-in var(--ligus-dur, 140ms) var(--ligus-ease) both; }
+.ligus-sheet-right { animation: ligus-sheet-in-right var(--ligus-dur-slow, 220ms) var(--ligus-ease) both; }
+.ligus-sheet-center { animation: ligus-sheet-in-center var(--ligus-dur-slow, 220ms) var(--ligus-ease) both; }
+
+/* A session card's state changed: one soft wash, then gone. */
+@keyframes ligus-state-pulse { 0% { background-color: var(--ligus-pulse-tint, var(--tint-cool)); } 100% { background-color: transparent; } }
+.ligus-state-pulse { animation: ligus-state-pulse var(--ligus-dur-pulse, 300ms) var(--ligus-ease) 1; }
+
+/* Sortable table headers and list rows. */
+.ligus-row { transition: background-color var(--ligus-dur, 140ms) var(--ligus-ease); }
+.ligus-row:hover { background: var(--ligus-overlay); }
+.ligus-row[aria-selected="true"], .ligus-row[data-active="true"] { background: var(--tint-cool); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ligus-sheet-overlay, .ligus-sheet-right, .ligus-sheet-center, .ligus-state-pulse { animation: none; }
+}

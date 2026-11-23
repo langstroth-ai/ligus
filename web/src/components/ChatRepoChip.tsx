@@ -9,7 +9,9 @@ import {
   setChatWorkspaceRepo,
   type ChatWorkspaceRepoDto,
   type PinnedElsewhere,
+  type RuntimeSummaryDto,
 } from "@/lib/ipc";
+import { runtimeLabelWithModel, useChatModel } from "@/components/ModelPicker";
 import { toast, errMsg } from "@/components/Toast";
 import { REPOS_KEY } from "@/components/settings/RepositoriesSection";
 
@@ -94,7 +96,7 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
               type="button"
               className="mt-1 block w-full rounded-lg border-t px-2 py-1 text-left hover:bg-black/5"
               style={{ borderColor: "var(--ligus-line)" }}
-              title={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
+              data-tip={current.baseCommit ? `Pinned at ${current.baseCommit.slice(0, 12)}` : undefined}
               onClick={() => void repin()}
             >
               Move the base to the latest {current.baseBranch || "default branch"}
@@ -165,7 +167,7 @@ export function PinnedHostWarning({
           type="button"
           className="underline disabled:no-underline disabled:opacity-50"
           disabled={!p.canRunHere}
-          title={p.canRunHere ? undefined : `This device needs ${repo} checked out and ${p.agentName}'s runtime, and ${p.agentName} must be yours`}
+          data-tip={p.canRunHere ? undefined : `This device needs ${repo} checked out and ${p.agentName}'s runtime, and ${p.agentName} must be yours`}
           onClick={() => onRunHere(true)}
         >
           Run here this time
@@ -200,8 +202,19 @@ export function runsOnParts(p: { host: string; runtime: string | null; branch: s
 /// One quiet line under the chat title: where this chat's turns run (this
 /// device), with which runtime, on which branch (the chat's own worktree
 /// branch when it has one).
-export function ChatRunsOn({ sessionId, runtime }: { sessionId: string; runtime: string | null }) {
+export function ChatRunsOn({
+  sessionId,
+  runtime: runtimeText,
+  runtimeDto,
+}: {
+  sessionId: string;
+  runtime: string | null;
+  /// The chat's runtime: its label then shows this device's model choice.
+  runtimeDto?: RuntimeSummaryDto | null;
+}) {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getAppSettings });
+  const chatModel = useChatModel(sessionId);
+  const runtime = runtimeDto ? runtimeLabelWithModel(runtimeDto, chatModel.data?.choices?.[runtimeDto.id]) : runtimeText;
   // The backend points git at the open chat's worktree; keying on that root
   // refetches once the switch lands instead of showing the last chat's branch.
   const root = settings.data?.workspaceRoot ?? "";
@@ -218,12 +231,12 @@ export function ChatRunsOn({ sessionId, runtime }: { sessionId: string; runtime:
       data-testid="chat-runs-on"
       className="flex min-w-0 items-center gap-1.5 truncate text-[11px] leading-4"
       style={{ color: "var(--ligus-ink-soft)" }}
-      title={branch && branch !== shortBranch(branch) ? `Branch ${branch}` : undefined}
+      data-tip={branch && branch !== shortBranch(branch) ? `Branch ${branch}` : undefined}
     >
       {parts.map((p, i) => (
         <span key={i} className={i === 0 ? "shrink-0" : "min-w-0 truncate"}>
           {i > 0 && (
-            <span aria-hidden className="mr-1.5 opacity-50">
+            <span aria-hidden className="mr-1.5 text-ink-soft">
               ·
             </span>
           )}

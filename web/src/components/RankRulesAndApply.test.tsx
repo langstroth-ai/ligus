@@ -108,10 +108,10 @@ describe("the People pane follows the rank rules", () => {
     const maya = within(await card("Maya"));
     const remove = maya.getByRole("button", { name: "Remove" });
     expect(remove).toBeDisabled();
-    expect(remove).toHaveAttribute("title", "a cut goes strictly down the ranks");
+    expect(remove).toHaveAttribute("data-tip", "a cut goes strictly down the ranks");
     const revoke = maya.getByRole("button", { name: /Remove & revoke/ });
     expect(revoke).toBeDisabled();
-    expect(revoke).toHaveAttribute("title", "a cut goes strictly down the ranks");
+    expect(revoke).toHaveAttribute("data-tip", "a cut goes strictly down the ranks");
     const owner = maya.getByRole("option", { name: "owner" }) as HTMLOptionElement;
     const viewer = maya.getByRole("option", { name: "viewer" }) as HTMLOptionElement;
     expect(owner.disabled).toBe(true);
@@ -127,7 +127,7 @@ describe("the People pane follows the rank rules", () => {
     expect(box.getByText("service")).toBeInTheDocument();
     const regrant = box.getByRole("button", { name: /Allow new passkey/ });
     expect(regrant).toBeDisabled();
-    expect(regrant).toHaveAttribute("title", "a service member holds no passkey");
+    expect(regrant).toHaveAttribute("data-tip", "a service member holds no passkey");
     expect((box.getByRole("option", { name: "admin" }) as HTMLOptionElement).disabled).toBe(true);
     expect((box.getByRole("option", { name: "viewer" }) as HTMLOptionElement).disabled).toBe(false);
     expect(box.getByRole("combobox")).not.toBeDisabled();
@@ -153,7 +153,7 @@ describe("Apply on a host", () => {
     expect(await screen.findByText(/Waiting for sff to apply/)).toBeInTheDocument();
     const implement = screen.getByRole("button", { name: /Implement/ });
     expect(implement).toBeDisabled();
-    expect(implement.getAttribute("title")).toMatch(/one applier/i);
+    expect(implement.getAttribute("data-tip")).toMatch(/one applier/i);
     fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("withdraw_apply_request", { sessionId: "s1", requestId: "r1" }));
   });

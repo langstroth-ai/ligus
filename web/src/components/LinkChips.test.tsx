@@ -47,7 +47,7 @@ describe("LinkChips", () => {
     expect(container.innerHTML).not.toMatch(/https?:/);
     // The current handle from the forge, and the stable id beside it.
     expect(screen.getByText("alice2")).toBeTruthy();
-    expect(container.querySelector('[data-chip="verified"]')?.getAttribute("title")).toMatch(/id 1234567/);
+    expect(container.querySelector('[data-chip="verified"]')?.getAttribute("data-tip")).toMatch(/id 1234567/);
     expect(container.querySelector('[data-chip="unverified"]')).toBeTruthy();
   });
   /// The handle in a link is its publisher's own claim. A verified chip

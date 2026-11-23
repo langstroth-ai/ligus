@@ -1,5 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { limitedLabel } from "@/lib/syncState";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceToList,
@@ -28,8 +27,8 @@ import {
   setActiveWorkspace,
   setActiveChat,
   setWorkspaceRoot,
-  syncStatus,
-  type SyncStatusDto,
+  getChatLockdown,
+  getDearthState,
 } from "@/lib/ipc";
 import { setShownWorkspace } from "@/lib/shownWorkspace";
 import { Sidebar } from "@/components/Sidebar";
@@ -49,21 +48,20 @@ import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
 import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
-import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
-import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
-import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
-import { WorkspaceTrustBanner } from "@/components/WorkspaceTrustBanner";
-import { RepoSuggestionBanner } from "@/components/settings/RepositoriesSection";
-import { SandboxGrantsBanner } from "@/components/SandboxGrantsBanner";
+import { AppStatusBar } from "@/components/AppStatusBar";
+import { blockingBanner } from "@/lib/banners";
 import { DialogHost, promptDialog } from "@/components/Dialog";
-import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
-import { StatusDot } from "@/components/ui";
+import { IconPencil, IconHexagon, IconStateNeedsYou } from "@/lib/icons";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
-import { matchShortcut } from "@/lib/shortcuts";
+import { ErrorLogSheet } from "@/components/ErrorLogSheet";
+import { Inbox } from "@/components/Inbox";
+import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
+import { needsYouCount, needsYouLabel } from "@/lib/needsYou";
+import { keyLabel, matchShortcut, shortcutKey } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
@@ -71,8 +69,9 @@ import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
+import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
-import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
+import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -85,7 +84,7 @@ import {
   type ThemeName,
 } from "@/lib/theme";
 
-type View = "workspace" | "friends";
+type View = "workspace" | "friends" | "inbox";
 type CanvasMode = "chat" | "diff" | "code";
 type UtilityPane =
   | "tools"
@@ -160,6 +159,13 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [errorsOpen, setErrorsOpen] = useState(false);
+  // Focus mode: only the chat and the message box. It hides the workspace
+  // rail, sidebar, tools rail and status bar without forgetting whether they
+  // were open, so leaving it puts everything back.
+  const [focusMode, setFocusMode] = useState(false);
+  const focusRef = useRef(false);
+  focusRef.current = focusMode;
   const [addWsOpen, setAddWsOpen] = useState(false);
   // "Admit a box" for the active workspace, from the workspace menu or ⌘K
   // (the rail's right-click menu keeps its own entry).
@@ -278,7 +284,6 @@ export function App() {
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTour]);
-  const sync = useQuery({ queryKey: ["sync-status"], queryFn: syncStatus });
   const activeChat = useQuery({
     queryKey: ["chat", selectedId],
     queryFn: () => getChat(selectedId ?? ""),
@@ -359,14 +364,29 @@ export function App() {
           setPaletteOpen(false);
           setShortcutsOpen((v) => !v);
           return;
-        // Focus mode (VS Code's muscle memory). Both persist.
+        // VS Code's muscle memory. Both persist. In focus mode either key
+        // leaves it and shows that panel.
         case "toggleSidebar":
           event.preventDefault();
+          if (focusRef.current) {
+            setFocusMode(false);
+            setSidebarVisible(true);
+            return;
+          }
           setSidebarVisible((v) => !v);
           return;
         case "toggleTools":
           event.preventDefault();
+          if (focusRef.current) {
+            setFocusMode(false);
+            setShowUtilityPane(true);
+            return;
+          }
           setShowUtilityPane((v) => !v);
+          return;
+        case "focusMode":
+          event.preventDefault();
+          setFocusMode((v) => !v);
           return;
         case "settings":
           event.preventDefault();
@@ -513,6 +533,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // In-app links to "Admit a box" (the add-a-phone check). The dialog renders
+  // above Settings, so the person comes back to where they were.
+  useEffect(() => {
+    const onAdmit = () => setAdmitBoxOpen(true);
+    window.addEventListener(ADMIT_BOX_EVENT, onAdmit);
+    return () => window.removeEventListener(ADMIT_BOX_EVENT, onAdmit);
+  }, []);
+
   // System-tray navigation: the native menu emits a route string and we switch
   // the in-window view to match (Settings/Friends are views, not OS windows).
   useEffect(() => {
@@ -621,6 +649,19 @@ export function App() {
   // Settings and grant commands act on this workspace, the one on screen.
   setShownWorkspace(activeWorkspaceId);
   const activeWorkspaceName = activeWorkspace?.name?.trim();
+  // The one banner: a lockdown of the open chat, else dearth mode.
+  const lockdown = useQuery({
+    queryKey: ["chat-lockdown", selectedId],
+    queryFn: () => getChatLockdown(selectedId!),
+    enabled: Boolean(selectedId),
+    refetchInterval: 15000,
+  });
+  const dearth = useQuery({ queryKey: ["dearth-state"], queryFn: getDearthState, refetchInterval: 30000 });
+  const dearthOn = Boolean(dearth.data?.enabled);
+  const banner = blockingBanner({ lockdown: view === "workspace" && Boolean(lockdown.data?.active), dearth: dearthOn });
+  // What waits on you: the Inbox lists it; the dock and tray count it.
+  const needsYou = useNeedsYou(activeWorkspaceId);
+  useDockBadge(needsYou);
 
   // Default view on workspace open/switch: land on the workspace's most-recent
   // chat so the chat-scoped panes (People, Agents, Review, …) populate instead of
@@ -775,7 +816,11 @@ export function App() {
   function openUtilityPane(pane: UtilityPane) {
     setUtilityPane(pane);
     setShowUtilityPane(true);
+    // Asking for a pane leaves focus mode, so the pane actually shows.
+    setFocusMode(false);
   }
+  const showSidebar = sidebarVisible && !focusMode;
+  const showRail = showUtilityPane && !focusMode;
 
   function startMenuResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -845,10 +890,10 @@ export function App() {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--ligus-danger-ink)" }}>
+          <h1 className="ligus-title" style={{ color: "var(--ligus-danger-ink)" }}>
             Couldn't load your settings
           </h1>
-          <p className="mt-2 text-sm opacity-70">
+          <p className="mt-2 text-sm text-ink-soft">
             Ligus couldn't read this workspace's configuration. Nothing has been lost — retry the
             load, or reload the app.
           </p>
@@ -869,7 +914,7 @@ export function App() {
             </button>
           </div>
           <details className="mt-4 text-left">
-            <summary className="cursor-pointer text-xs opacity-55">Error details</summary>
+            <summary className="cursor-pointer text-xs text-ink-soft">Error details</summary>
             <pre
               className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-[11px] leading-5"
               style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
@@ -973,12 +1018,8 @@ export function App() {
       <DialogHost />
       <PresenceSheet />
       <PhoneEnrollTripwire />
-      <UpdateBanner />
-      <PendingInvitesBanner />
-      <WorkspaceTrustBanner />
-      <RepoSuggestionBanner />
-      <SandboxGrantsBanner />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
+      {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1043,11 +1084,15 @@ export function App() {
           },
           addPhone: () => requestAddPhone(),
           showShortcuts: () => setShortcutsOpen(true),
+          showErrors: () => setErrorsOpen(true),
+          openInbox: () => setView("inbox"),
+          toggleFocusMode: () => setFocusMode((v) => !v),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
         }}
       />
+      {!focusMode && (
       <WorkspaceRail
         onJoinRoom={() => setAddWsOpen(true)}
         onOpenFriends={() => setView("friends")}
@@ -1057,11 +1102,9 @@ export function App() {
         onOpenHelp={() => startTour()}
         settingsActive={settingsOpen}
       />
-      <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
-      {admitBoxOpen && activeWorkspace?.kind === "room" && (
-        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}
-      {sidebarVisible && (
+      <AddWorkspaceModal open={addWsOpen} onClose={() => setAddWsOpen(false)} />
+      {showSidebar && (
       <Sidebar
         width={menuPaneWidth}
         selectedId={selectedId}
@@ -1104,17 +1147,40 @@ export function App() {
           setView("workspace");
           openUtilityPane(pane);
         }}
+        inboxCount={needsYouCount(needsYou)}
+        onOpenInbox={() => setView((v) => (v === "inbox" ? "workspace" : "inbox"))}
       />
       )}
 
-      {sidebarVisible && (
+      {showSidebar && (
         <PaneResizeHandle onPointerDown={startMenuResize} ariaLabel="Resize menu and chat panes" />
       )}
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DearthBanner onManage={() => openSettings("guards")} />
-        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
-        {view === "friends" ? (
+        {banner === "dearth" && <DearthBanner onManage={() => openSettings("guards")} />}
+        {view === "inbox" ? (
+          <PaneErrorBoundary label="Inbox">
+            <Inbox
+              items={needsYou}
+              actions={{
+                openChat: (id) => {
+                  rememberChat(id);
+                  setSelectedId(id);
+                  setView("workspace");
+                  setMode("chat");
+                },
+                openProposal: (sessionId) => {
+                  rememberChat(sessionId);
+                  setSelectedId(sessionId);
+                  setView("workspace");
+                  setMode("chat");
+                  openUtilityPane("review");
+                },
+                openSettingsTab: (tab) => openSettings(tab),
+              }}
+            />
+          </PaneErrorBoundary>
+        ) : view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
               onOpenSettings={(tab) => openSettings(tab)}
@@ -1135,10 +1201,20 @@ export function App() {
               style={{ borderColor: "var(--ligus-line)" }}
             >
               <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                <span className="truncate text-base font-semibold tracking-tight opacity-70">
+                <span className="truncate text-base font-semibold tracking-tight text-ink-soft">
                   {workspaceLabel}
                 </span>
               </div>
+              {focusMode && (
+                <FocusControls
+                  needsYou={needsYouCount(needsYou)}
+                  onExit={() => setFocusMode(false)}
+                  onOpenInbox={() => {
+                    setFocusMode(false);
+                    setView("inbox");
+                  }}
+                />
+              )}
               <CanvasModeTabs mode={mode} onChangeMode={setMode} />
             </div>
 
@@ -1186,7 +1262,11 @@ export function App() {
               title={activeChat.data?.title ?? "New Chat"}
               runsOn={
                 selectedId ? (
-                  <ChatRunsOn sessionId={selectedId} runtime={currentRuntime ? runtimePickerLabel(currentRuntime) : null} />
+                  <ChatRunsOn
+                    sessionId={selectedId}
+                    runtime={currentRuntime ? runtimePickerLabel(currentRuntime) : null}
+                    runtimeDto={currentRuntime}
+                  />
                 ) : undefined
               }
               contextPct={
@@ -1203,12 +1283,11 @@ export function App() {
                   : null
               }
               onOpenContext={() => openUtilityPane("context")}
-              syncPill={deriveSyncPill(sync.data)}
-              onFixSync={() => openSettings("team")}
-              workspaceCrumb={sidebarVisible ? undefined : workspaceLabel}
+              workspaceCrumb={showSidebar ? undefined : workspaceLabel}
+              focus={focusMode ? { needsYou: needsYouCount(needsYou), onExit: () => setFocusMode(false), onOpenInbox: () => { setFocusMode(false); setView("inbox"); } } : undefined}
               mode={mode}
               onChangeMode={setMode}
-              utilityPaneVisible={showUtilityPane}
+              utilityPaneVisible={showRail}
               onToggleTools={() => {
                 if (showUtilityPane) {
                   setShowUtilityPane(false);
@@ -1232,7 +1311,7 @@ export function App() {
                 }
               }}
             />
-            {selectedId && <LockdownBar sessionId={selectedId} />}
+            {selectedId && banner === "lockdown" && <LockdownBar sessionId={selectedId} />}
 
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="min-w-0 flex-1">
@@ -1279,7 +1358,7 @@ export function App() {
                 </PaneErrorBoundary>
               </div>
 
-              {showUtilityPane && (
+              {showRail && (
                 <>
                   <PaneResizeHandle
                     onPointerDown={startUtilityResize}
@@ -1305,6 +1384,20 @@ export function App() {
             </div>
           </>
         )}
+        {/* State that doesn't need you lives here, at the foot of the canvas;
+            only a blocking state (Lockdown, Dearth) gets the one banner up top. */}
+        <AppStatusBar
+          onOpenSettings={(tab) => openSettings(tab)}
+          onOpenReview={() => {
+            setView("workspace");
+            openUtilityPane("review");
+          }}
+          onShowErrors={() => setErrorsOpen(true)}
+          hidden={focusMode}
+          inboxCount={showSidebar ? 0 : needsYouCount(needsYou)}
+          onOpenInbox={() => setView("inbox")}
+          dearthAside={dearthOn && banner !== "dearth"}
+        />
       </main>
 
       {/* Settings presents OVER the workspace — the chat behind it stays mounted.
@@ -1320,6 +1413,10 @@ export function App() {
           onClose={() => setSettingsOpen(false)}
           activeChat={selectedId ? { id: selectedId, title: activeChat.data?.title ?? "" } : null}
         />
+      )}
+      {/* After Settings so it stacks above it when opened from there. */}
+      {admitBoxOpen && activeWorkspace?.kind === "room" && (
+        <AdmitBoxModal workspaceId={activeWorkspace.id} workspaceName={activeWorkspace.name} onClose={() => setAdmitBoxOpen(false)} />
       )}
     </div>
   );
@@ -1343,105 +1440,6 @@ function PaneResizeHandle({
     >
       <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--ligus-line)]" />
     </div>
-  );
-}
-
-/// Single compact chat header: title + rename, sync state, the Chat/Diff mode
-/// tabs, and the Tools toggle. Replaces the old two-row WorkspaceHeader +
-/// ModeStrip stack (~130px of chrome, duplicated workspace path, a dead rename
-/// button, and near-white tab text that vanished on light palettes).
-/// The header status pill, driven by real connection health (not just "a relay
-/// URL is set"): live → success tint, error → danger tint (with the failure in
-/// the tooltip), offline → a muted neutral state. All color via --ligus-* tokens.
-type SyncPill = { label: string; color: "success" | "danger" | "warn" | null; title?: string; actionable?: boolean };
-
-function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
-  const state = s?.connectionState ?? "offline";
-  if (state === "live") {
-    return {
-      label: `Live · room ${s?.room ?? ""}`,
-      color: "success",
-      title: "Live — syncing with your team",
-    };
-  }
-  // Syncing, but the relay refused this workspace's writes (workspace full,
-  // an organisation quota) or the room is truncated: amber, with the reason.
-  if (state === "limited") {
-    return {
-      label: limitedLabel(s?.lastError ?? null),
-      color: "warn",
-      title: s?.lastError ?? "The relay isn't taking new writes for this workspace right now",
-      actionable: true,
-    };
-  }
-  if (state === "error") {
-    return {
-      label: "Sync error",
-      color: "danger",
-      title: s?.lastError ?? "Sync failed — reconnect or check your key / token",
-      actionable: true,
-    };
-  }
-  // Relay configured but no E2EE key yet — setup-incomplete, not a failure.
-  // Calm amber prompt to set a passphrase (Settings → Team), never a red error.
-  if (state === "needs_key") {
-    return {
-      label: "Set a passphrase to sync",
-      color: "warn",
-      title:
-        s?.lastError ??
-        "A relay is configured but this workspace has no encryption key — set a workspace passphrase in Settings → Team to sync encrypted, or clear the relay URL to work local-only.",
-      actionable: true,
-    };
-  }
-  return {
-    label: s?.relayConfigured ? "Offline · not syncing" : "Local only",
-    color: null,
-    title: s?.relayConfigured
-      ? "A relay is configured but nothing is syncing right now"
-      : undefined,
-  };
-}
-
-/// The header sync status. A tinted state (live/error/needs-key) reads as a
-/// chip, not amber prose beside the title (F16); actionable states (needs-key,
-/// error) are a button that opens Settings → Team. Neutral offline/local stays
-/// a quiet unboxed label.
-function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
-  if (!pill.color) {
-    return (
-      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" title={pill.title}>
-        <StatusDot on={false} size={7} label={pill.label} />
-        {pill.label}
-      </span>
-    );
-  }
-  const chipStyle: CSSProperties = {
-    color: `var(--ligus-${pill.color}-ink)`,
-    borderColor: `var(--ligus-${pill.color}-line)`,
-    background: `var(--ligus-${pill.color}-tint)`,
-  };
-  const icon =
-    pill.color === "success" ? (
-      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ligus-success)" }} />
-    ) : (
-      <IconAlertTriangle size={11} />
-    );
-  const className =
-    "ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
-  if (pill.actionable && onFix) {
-    return (
-      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} title={pill.title} onClick={onFix}>
-        {icon}
-        {pill.label}
-      </button>
-    );
-  }
-  return (
-    <span className={className} style={chipStyle} title={pill.title}>
-      {icon}
-      {pill.label}
-    </span>
   );
 }
 
@@ -1473,7 +1471,7 @@ function CanvasModeTabs({
         <button
           key={t.id}
           role="tab"
-          title={CANVAS_TAB_HINT[t.id]}
+          data-tip={CANVAS_TAB_HINT[t.id]}
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
           className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
@@ -1490,10 +1488,42 @@ function CanvasModeTabs({
   );
 }
 
+/// In focus mode, the header's only extra: how many things need you (one
+/// quiet badge that opens the Inbox) and a way back.
+function FocusControls({ needsYou, onExit, onOpenInbox }: { needsYou: number; onExit: () => void; onOpenInbox: () => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 text-xs text-ink-soft" data-testid="focus-controls">
+      {needsYou > 0 && (
+        <button
+          type="button"
+          onClick={onOpenInbox}
+          data-tip="Open the Inbox"
+          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
+        >
+          <span aria-hidden style={{ color: "var(--ligus-state-needs-you, var(--ligus-warm-ink))" }}>
+            <IconStateNeedsYou size={11} />
+          </span>
+          {needsYouLabel(needsYou)}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onExit}
+        {...tip("Leave focus mode", keyLabel(shortcutKey("focusMode")!))}
+        className="rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
+      >
+        Leave focus
+      </button>
+    </div>
+  );
+}
+
+/// Single compact chat header: title + rename, where the chat runs, the
+/// Chat/Diff mode tabs, and the Tools toggle. Sync state lives in the status
+/// bar at the foot of the canvas.
 function ChatHeaderBar({
   title,
   runsOn,
-  syncPill,
   mode,
   onChangeMode,
   utilityPaneVisible,
@@ -1501,13 +1531,12 @@ function ChatHeaderBar({
   onRename,
   contextPct,
   onOpenContext,
-  onFixSync,
   workspaceCrumb,
+  focus,
 }: {
   title: string;
   /// One quiet line under the title: where the chat runs.
   runsOn?: ReactNode;
-  syncPill: SyncPill;
   mode: CanvasMode;
   onChangeMode: (m: CanvasMode) => void;
   utilityPaneVisible: boolean;
@@ -1520,9 +1549,8 @@ function ChatHeaderBar({
   /// until telemetry loads). Clicking the pill opens the Context pane.
   contextPct: number | null;
   onOpenContext: () => void;
-  /// Opens Settings → Team, so an actionable sync chip (needs-key / error) is a
-  /// button that takes the user to the fix.
-  onFixSync?: () => void;
+  /// Focus mode is on: one quiet needs-you badge and a way out.
+  focus?: { needsYou: number; onExit: () => void; onOpenInbox: () => void };
 }) {
   return (
     <div
@@ -1533,30 +1561,31 @@ function ChatHeaderBar({
       <div className="flex min-w-0 items-center gap-1.5">
         {workspaceCrumb && (
           <>
-            <span className="shrink-0 truncate text-base font-semibold tracking-tight opacity-55">
+            <span className="shrink-0 truncate text-base font-semibold tracking-tight text-ink-soft">
               {workspaceCrumb}
             </span>
-            <span className="shrink-0 opacity-30" aria-hidden>/</span>
+            <span className="shrink-0 text-ink-soft" aria-hidden>/</span>
           </>
         )}
-        <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
+        <h1 className="ligus-title truncate">{title}</h1>
         <button
           className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
-          title="Rename chat"
+          data-tip="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
         >
           <IconPencil size={13} />
         </button>
-        <SyncPillChip pill={syncPill} onFix={onFixSync} />
       </div>
       {runsOn}
       </div>
 
+      {focus && <FocusControls {...focus} />}
+
       {contextPct !== null && (
         <button
           onClick={onOpenContext}
-          title={`${contextPct}% of the model's context window in use — open the Context pane`}
+          data-tip={`${contextPct}% of the model's context window in use — open the Context pane`}
           aria-label="Context usage"
           className="flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
           style={{

@@ -128,7 +128,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
                   <td className="py-1">{s.taskClass}</td>
                   <td>{s.agentName}</td>
                   <td>{pct(s.score)}</td>
-                  <td title={`recent ${pct(s.recent)}`}>{s.recent < s.score - 0.05 ? "falling" : s.recent > s.score + 0.05 ? "rising" : "steady"}</td>
+                  <td data-tip={`recent ${pct(s.recent)}`}>{s.recent < s.score - 0.05 ? "falling" : s.recent > s.score + 0.05 ? "rising" : "steady"}</td>
                   <td>{s.outcomes}</td>
                 </tr>
               ))}

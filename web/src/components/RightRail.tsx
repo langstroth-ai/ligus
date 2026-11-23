@@ -63,7 +63,9 @@ import {
   type WorkspaceHostDto,
   type WorkspaceAgentDto,
   deleteMemberAttachments,
+  openExternal,
 } from "@/lib/ipc";
+import { docsUrl, PANE_DOCS } from "@/lib/docs";
 import { confirmDialog } from "@/components/Dialog";
 import { groupProposals, implementRefusal, isSettled, isVotable, myVote } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
@@ -76,6 +78,7 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
+import { MoreMenu } from "@/components/MoreMenu";
 import {
   Button,
   IconButton,
@@ -92,13 +95,11 @@ import {
   Badge,
   StatusDot,
   type Tone,
-  Popover,
-  PopoverHeader,
-  PopoverItem,
   SELECT_TINT,
   LinkButton,
 } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
+import { Menu } from "@/components/Menu";
 import {
   IconX,
   IconChevronDown,
@@ -194,7 +195,7 @@ export function RightRail({
                 color: pane === item.id ? "var(--ligus-accent-ink)" : "var(--ligus-ink)",
                 opacity: pane === item.id ? 1 : 0.72,
               }}
-              title={item.label}
+              data-tip={item.label}
               aria-label={`${item.label} pane`}
               data-pane={item.id}
               aria-pressed={pane === item.id}
@@ -202,7 +203,7 @@ export function RightRail({
               {item.icon(17)}
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
-                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
+                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[11px] font-semibold leading-none"
                   style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
@@ -217,9 +218,8 @@ export function RightRail({
           toggle (and Escape). Sits in the pane header's empty right edge. */}
       <button
         onClick={onClose}
-        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg opacity-55 transition-opacity hover:opacity-100"
-        style={{ color: "var(--ligus-ink)" }}
-        title="Close panel (Esc)"
+        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-ink-soft transition-colors hover:text-ink"
+        data-tip="Close panel (Esc)"
         aria-label="Close panel"
       >
         <IconX size={15} />
@@ -246,12 +246,17 @@ const railScroll = new Map<string, number>();
 
 export function RailFrame({
   title,
-  subtitle,
+  about,
+  docs,
   children,
   actions,
 }: {
   title: string;
-  subtitle: string;
+  /// What the pane is for, in a sentence. Not shown on screen: it's the "?"
+  /// link's tooltip and accessible name, so the pane opens on its content.
+  about: string;
+  /// The docs page the "?" link opens (a path under the docs site).
+  docs: string;
   children: ReactNode;
   /// Optional header controls, right-aligned under the close button's row.
   actions?: ReactNode;
@@ -290,14 +295,41 @@ export function RailFrame({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <h2 className="pr-8 text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
-        <p className="mt-0.5 pr-2 text-xs leading-[1.45] text-ink-soft">{subtitle}</p>
+        <div className="flex items-center gap-1.5 pr-8">
+          <h2 className="ligus-title">{title}</h2>
+          <PaneHelpLink title={title} about={about} docs={docs} />
+        </div>
         {actions && <div className="mt-2">{actions}</div>}
       </div>
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
         {children}
       </div>
     </div>
+  );
+}
+
+/// The one help affordance in every rail pane: a small "?" beside the title.
+/// Hover (or focus) shows what the pane is for; clicking opens its docs page.
+export function PaneHelpLink({ title, about, docs }: { title: string; about: string; docs: string }) {
+  const url = docsUrl(docs);
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      data-tip={`${about} Opens the docs.`}
+      aria-label={`About ${title}: ${about} Opens the docs.`}
+      data-testid="pane-help"
+      onClick={(e) => {
+        // The desktop webview can't open a new window: hand it to the OS browser.
+        e.preventDefault();
+        void openExternal(url).catch(() => window.open(url, "_blank", "noopener"));
+      }}
+      className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border text-[11px] font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
+      style={{ borderColor: "var(--ligus-line)" }}
+    >
+      ?
+    </a>
   );
 }
 
@@ -415,7 +447,7 @@ function ToolsPane({
   const enabledMcp = mcpList.filter((s) => s.enabled);
 
   return (
-    <RailFrame title="Tools" subtitle="What the agents here can reach, and where it's configured.">
+    <RailFrame title="Tools" about="What the agents here can reach, and where it's configured." docs={PANE_DOCS.tools}>
       <ScopeToggle scope={scope} onScope={setScope} />
 
       {scope === "chat" ? (
@@ -521,12 +553,16 @@ function ToolsPane({
         </>
       ) : (
         <>
-          <Section title="Agent roster">
-            <p className="px-1 pb-1 text-[11.5px] leading-snug" style={{ color: "var(--ligus-ink-soft)" }}>
-              Agents are personas you @mention — each bound to a host. Their host
-              is where they run: this device, or a Worker (a headless box you
-              enroll under People → Remote agents).
-            </p>
+          <Section
+            title="Agent roster"
+            action={
+              <PaneHelpLink
+                title="agents"
+                about="Agents are personas you @mention, each bound to a host: this device, or a worker (a headless box you enroll under People → Remote agents)."
+                docs="ligus/concepts/agents/"
+              />
+            }
+          >
             {agentList.length === 0 ? (
               <EmptyHint text="No workspace agents yet. Add one below." />
             ) : (
@@ -537,7 +573,11 @@ function ToolsPane({
                   agent={agent}
                   hosts={hostList}
                   onRemove={() =>
-                    confirmThen("Remove this agent?", () => removeAgentMutation.mutate(agent.id))
+                    void confirmDialog(agentRemovalConsequences(agent.name), {
+                      title: `Remove @${agent.name}?`,
+                      confirmLabel: "Remove agent",
+                      danger: true,
+                    }).then((ok) => ok && removeAgentMutation.mutate(agent.id))
                   }
                   onChanged={() => qc.invalidateQueries({ queryKey: ["agents", sessionId] })}
                 />
@@ -749,7 +789,7 @@ function McpServerCard({
         <button
           onClick={() => setOpen((o) => !o)}
           aria-label={open ? `Collapse ${server.id}` : `Expand ${server.id}`}
-          title={open ? "Collapse" : "Expand"}
+          data-tip={open ? "Collapse" : "Expand"}
           className="grid h-6 w-6 shrink-0 place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
           style={{ color: "var(--ligus-ink-soft)" }}
         >
@@ -782,7 +822,7 @@ function McpServerCard({
           />
         ) : (
           <span
-            className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+            className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase"
             style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
           >
             {disabled ? "off" : "on"}
@@ -820,7 +860,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
       <span
         className="inline-flex items-center gap-1 text-[11px]"
         style={{ color: "var(--ligus-ink-soft)" }}
-        title="Runs on this device — a local persona"
+        data-tip="Runs on this device — a local persona"
       >
         <span className="h-2 w-2 rounded-full" style={{ background: "var(--ligus-line)" }} aria-hidden />
         This device
@@ -834,7 +874,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
     <span
       className="inline-flex items-center gap-1 text-[11px]"
       style={{ color: "var(--ligus-ink-soft)" }}
-      title={
+      data-tip={
         online
           ? `Headless — runs on worker “${label}”`
           : `Worker “${label}” is offline; queued work waits until it reconnects`
@@ -847,6 +887,17 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
         {online ? "online" : "offline"}
       </span>
     </span>
+  );
+}
+
+/// What removing a workspace agent costs, said before it happens. The roster
+/// is workspace-wide and synced, so it's gone for everyone; workflow stages
+/// that name it fail ("its agent is no longer in the roster").
+export function agentRemovalConsequences(name: string): string {
+  return (
+    `@${name} leaves every chat in this workspace, for everyone. ` +
+    `Mentions of @${name} go unanswered, and workflow stages that use it stop with an error. ` +
+    `Its avatar and access settings are deleted; adding it again starts from scratch.`
   );
 }
 
@@ -868,7 +919,7 @@ function AgentRosterRow({
     <Card className="px-3 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
-          <label className="group/av relative cursor-pointer" title="Upload an avatar for this agent">
+          <label className="group/av relative cursor-pointer" data-tip="Upload an avatar for this agent">
             <Avatar
               name={agent.name}
               url={agent.avatarUrl}
@@ -877,7 +928,7 @@ function AgentRosterRow({
               size={32}
             />
             <span
-              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[9px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
+              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
               style={{
                 background: "color-mix(in srgb, var(--ligus-ink) 55%, transparent)",
                 color: "var(--ligus-canvas)",
@@ -917,30 +968,29 @@ function AgentRosterRow({
                 <AgentAccessPanel sessionId={sessionId} agent={agent} />
               </div>
             )}
-            {agent.avatarUrl && (
-              <button
-                onClick={async () => {
-                  try {
-                    await setAgentAvatar(sessionId, agent.id, null, null);
-                    onChanged();
-                  } catch (err) {
-                    toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
-                  }
-                }}
-                className="mt-1 text-xs opacity-60 hover:opacity-100"
-              >
-                Remove avatar
-              </button>
-            )}
           </div>
         </div>
-        <button
-          onClick={onRemove}
-          className="text-xs hover:opacity-80"
-          style={{ color: "var(--ligus-danger-ink)" }}
-        >
-          Remove
-        </button>
+        <MoreMenu
+          label={`More actions for @${agent.name}`}
+          items={[
+            ...(agent.avatarUrl
+              ? [
+                  {
+                    label: "Clear avatar",
+                    onSelect: async () => {
+                      try {
+                        await setAgentAvatar(sessionId, agent.id, null, null);
+                        onChanged();
+                      } catch (err) {
+                        toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
+                      }
+                    },
+                  },
+                ]
+              : []),
+            { label: "Remove from workspace…", danger: true, onSelect: onRemove },
+          ]}
+        />
       </div>
       {agent.canManageAccess && <AgentAccessPanel sessionId={sessionId} agent={agent} />}
     </Card>
@@ -972,9 +1022,9 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
+            className="rounded-full px-2 py-1 text-[11px] font-semibold uppercase text-ink-soft"
             style={{ background: "var(--ligus-mist)" }}
-            title="A runtime you configured (vs. an auto-detected local CLI)"
+            data-tip="A runtime you configured (vs. an auto-detected local CLI)"
           >
             Configured
           </span>
@@ -1054,32 +1104,30 @@ function RunOnWorkerMenu({
       <button
         ref={anchorRef}
         onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         className="shrink-0 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors hover:bg-[color:var(--ligus-overlay)]"
         style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", color: "var(--ligus-ink)" }}
       >
         Run on worker
       </button>
-      {open && (
-        <Popover anchorRef={anchorRef} onDismiss={() => setOpen(false)} align="right" minWidth={200}>
-          <PopoverHeader>Online workers</PopoverHeader>
-          {workers.length === 0 ? (
-            <div className="px-2 py-1.5 text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              No online workers.
-            </div>
-          ) : (
-            workers.map((w) => (
-              <PopoverItem
-                key={w.id}
-                label={hostGatewaysLabel(w) ? `${w.label || w.id} · gateways: ${hostGatewaysLabel(w)}` : w.label || w.id}
-                onSelect={() => {
-                  setOpen(false);
-                  onReassign(w.id);
-                }}
-              />
-            ))
-          )}
-        </Popover>
-      )}
+      <Menu
+        open={open}
+        anchorRef={anchorRef}
+        onClose={() => setOpen(false)}
+        align="right"
+        minWidth={200}
+        label="Online workers"
+        items={[
+          { type: "header", label: "Online workers" },
+          ...(workers.length === 0
+            ? [{ label: "No online workers", onClick: () => {}, disabled: true }]
+            : workers.map((w) => ({
+                label: hostGatewaysLabel(w) ? `${w.label || w.id} · gateways: ${hostGatewaysLabel(w)}` : w.label || w.id,
+                onClick: () => onReassign(w.id),
+              }))),
+        ]}
+      />
     </>
   );
 }
@@ -1827,7 +1875,7 @@ function RefinementThread({
                 <span className="text-ink-soft">{r.role}</span>
                 {r.requestChanges && (
                   <span
-                    className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                    className="rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
                     style={{
                       color: "var(--ligus-warm-ink)",
                       background: "color-mix(in srgb, var(--ligus-accent-warm) 15%, transparent)",
@@ -1838,7 +1886,7 @@ function RefinementThread({
                 )}
                 <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
-              <div data-testid="refinement-text" className="mt-0.5 break-words opacity-80">
+              <div data-testid="refinement-text" className="mt-0.5 break-words text-ink-soft">
                 <Markdown content={r.text} size="xs" />
               </div>
             </div>
@@ -1942,7 +1990,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   const loading = proposals.isPending || sets.isPending;
   const failed = proposals.isError || sets.isError;
   return (
-    <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
+    <RailFrame title="Review" about="Pending decisions and proposal quorum for this chat." docs={PANE_DOCS.review}>
       <AgentAsks sessionId={sessionId} />
       <QueuedWorkSection />
       {failed && (
@@ -1976,7 +2024,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
           title="Settled"
           action={
             <button
-              className="text-xs opacity-60 transition-opacity hover:opacity-100"
+              className="text-xs text-ink-soft transition-colors hover:text-ink"
               onClick={() => dismiss(groups.settled.map((p) => p.id), true)}
             >
               Clear settled
@@ -2247,7 +2295,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <RailFrame title="People" subtitle="Workspace members and governance roles for this chat.">
+    <RailFrame title="People" about="Workspace members and governance roles for this chat." docs={PANE_DOCS.people}>
       <Section title="Members">
         {error && (
           <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
@@ -2289,7 +2337,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 {dup && (
                   <span
                     className="text-xs text-ink-soft"
-                    title={`Mention precisely with @${member.displayName}#${member.index}`}
+                    data-tip={`Mention precisely with @${member.displayName}#${member.index}`}
                   >
                     #{member.index}
                   </span>
@@ -2336,7 +2384,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       removeMutation.mutate(member.id),
                     )
                   }
-                  title={member.removeRefusal ?? "Remove from the member list only"}
+                  data-tip={member.removeRefusal ?? "Remove from the member list only"}
                 >
                   Remove
                 </button>
@@ -2344,7 +2392,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
                   disabled={Boolean(member.regrantRefusal)}
                   onClick={() => regrantMutation.mutate(member.id)}
-                  title={
+                  data-tip={
                     member.regrantRefusal ??
                     "Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
                   }
@@ -2361,7 +2409,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       () => revokeMutation.mutate(member.id),
                     )
                   }
-                  title={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
+                  data-tip={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
                 >
                   Remove &amp; revoke
                 </button>
@@ -2412,7 +2460,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     </span>{" "}
                     <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
                   </span>
-                  <span className="shrink-0 text-ink-soft" title={e.at}>
+                  <span className="shrink-0 text-ink-soft" data-tip={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
                 </div>
@@ -2447,7 +2495,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                       srvRemoveMutation.mutate(m.account),
                     )
                   }
-                  title="Remove them on the relay and from the workspace, then rotate the key"
+                  data-tip="Remove them on the relay and from the workspace, then rotate the key"
                 >
                   Remove
                 </button>
@@ -2598,7 +2646,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   style={fieldStyle}
                 />
                 <button
-                  className="mt-1 text-xs underline opacity-70 hover:opacity-100"
+                  className="mt-1 text-xs underline text-ink-soft hover:text-ink"
                   onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
                 >
                   Copy again
@@ -2631,7 +2679,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
         <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
         <span
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider"
           style={{
             background: "color-mix(in srgb, var(--ligus-accent-cool) 15%, transparent)",
             color: "var(--ligus-accent-ink)",
@@ -2645,7 +2693,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
       </span>
     </div>
     {gateways && (
-      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} title="Model gateways this host's operator lists">
+      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} data-tip="Model gateways this host's operator lists">
         Gateways: {gateways}
       </div>
     )}
@@ -2725,7 +2773,7 @@ function AgentTargetPicker({
 function TargetBadge({ agentIds, agents }: { agentIds: string[]; agents: WorkspaceAgentDto[] }) {
   return (
     <span
-      className="inline-block rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+      className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
       style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
     >
       {targetLabel(agentIds, agents)}
@@ -2766,7 +2814,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
   const placeholder = kind === "https" ? "https://…/file.md" : "owner/repo/path.md@main";
 
   return (
-    <RailFrame title="Vaults" subtitle="Reference material mounted into this workspace.">
+    <RailFrame title="Vaults" about="Reference material mounted into this workspace." docs={PANE_DOCS.vaults}>
       <Section title="Sources">
         {(vaults.data ?? []).map((vault) => (
           <Card key={vault.url} className="px-3 py-3">
@@ -2781,7 +2829,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
               <div className="flex gap-2 text-xs">
-                <button className="opacity-70 hover:opacity-100" onClick={() => previewVaultMutation.mutate(vault.url)}>
+                <button className="text-ink-soft hover:text-ink" onClick={() => previewVaultMutation.mutate(vault.url)}>
                   Preview
                 </button>
                 <button
@@ -2867,7 +2915,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <RailFrame title="Skills" subtitle="Instruction bundles injected into the active participants.">
+    <RailFrame title="Skills" about="Instruction bundles injected into the active participants." docs={PANE_DOCS.skills}>
       <Section title="Loaded Skills">
         {(skills.data ?? []).map((skill) => (
           <Card key={skill.id} className="px-3 py-3">
@@ -2932,7 +2980,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
 
 function ActivityPane() {
   return (
-    <RailFrame title="Activity" subtitle="Recent runtime activity (agents, sync, errors) + the live chat stream.">
+    <RailFrame title="Activity" about="Recent runtime activity (agents, sync, errors) + the live chat stream." docs={PANE_DOCS.activity}>
       <div className="h-[calc(100vh-12rem)] min-h-[18rem] rounded-2xl border p-1.5" style={panelStyle}>
         <div className="h-full overflow-hidden rounded-xl">
           <LogsView />
@@ -3021,14 +3069,14 @@ function ContextPane({
 
   if (telemetry.isError) {
     return (
-      <RailFrame title="Context" subtitle="Real backend context budget and compaction state.">
+      <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
         <EmptyHint text="Context telemetry is temporarily unavailable. Keep chatting and retry this tab." />
       </RailFrame>
     );
   }
 
   return (
-    <RailFrame title="Context" subtitle="Real backend context budget and compaction state.">
+    <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
       <Section title="Budget">
         <div className="rounded-2xl border p-3" style={panelStyle}>
           <div className="mb-2 flex items-center justify-between text-xs">
@@ -3178,9 +3226,9 @@ export function SubtleSelectField({
     <label
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", opacity: disabled ? 0.6 : 1 }}
-      title={title}
+      data-tip={title}
     >
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
@@ -3203,7 +3251,7 @@ function ContextStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border py-2 text-center" style={panelStyle}>
       <div className="text-base font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
     </div>
   );
 }

@@ -57,7 +57,7 @@ export function Avatar({
     <span style={{ position: "relative", display: "inline-flex", flex: "none" }}>
       {face}
       <span
-        title={host === "remote" ? "Runs on a remote host" : "Runs on this device"}
+        data-tip={host === "remote" ? "Runs on a remote host" : "Runs on this device"}
         style={{
           position: "absolute",
           right: -2,

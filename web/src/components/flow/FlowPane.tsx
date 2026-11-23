@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { SegmentedTabs } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
+import { PANE_DOCS } from "@/lib/docs";
 import { RoutingSection } from "@/components/flow/RoutingSection";
 import { QueueSection } from "@/components/flow/QueueSection";
 import { MarksSection } from "@/components/flow/MarksSection";
@@ -34,7 +35,7 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
     setTab(t);
   };
   return (
-    <RailFrame title="Flow" subtitle="Who picks up work, where it waits, and what agents left for each other.">
+    <RailFrame title="Flow" about="Who picks up work, where it waits, and what agents left for each other." docs={PANE_DOCS.flow}>
       <div className="mb-3">
         <SegmentedTabs tabs={TABS} value={tab} onChange={selectTab} label="Flow sections" />
       </div>
@@ -52,8 +53,8 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
 /// Small key/value tile used across flow sections.
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
-    <div className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }} title={hint}>
-      <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{label}</div>
+    <div className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }} data-tip={hint}>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{label}</div>
       <div className="mt-0.5 text-[15px] font-semibold tabular-nums">{value}</div>
     </div>
   );
