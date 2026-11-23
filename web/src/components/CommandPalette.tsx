@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listChats, listWorkspaces } from "@/lib/ipc";
+import { listAgents, listChats, listWorkspaces } from "@/lib/ipc";
 import { Modal } from "@/components/ui";
 import { PANES, type UtilityPane } from "@/lib/panes";
 import { SETTINGS_TABS } from "@/components/SettingsView";
+import { fuzzyRank } from "@/lib/fuzzy";
+import { loadRecents, noteRecent } from "@/lib/paletteRecents";
+import { keyLabel, paneKey, shortcutKey } from "@/lib/shortcuts";
+import { useChatAttention } from "@/state/useSessionStates";
 
 export interface PaletteActions {
   newChat: () => void;
@@ -30,13 +34,34 @@ export interface PaletteActions {
   takeTour?: () => void;
   /// Admit a box (ligus serve / worker) to the active shared workspace.
   admitBox?: () => void;
+  /// Open a chat's Review pane on one of its proposals.
+  openProposal?: (sessionId: string, proposalId: string) => void;
+  /// Start a message to an agent ("@name " in the composer).
+  mentionAgent?: (name: string) => void;
+  /// Settings → Profile with the add-a-phone panel open.
+  addPhone?: () => void;
+  /// The ⌘/ keyboard shortcuts sheet.
+  showShortcuts?: () => void;
+  /// Errors this session, including ones whose toast already faded.
+  showErrors?: () => void;
+  /// Everything that needs you.
+  openInbox?: () => void;
 }
 
 interface Cmd {
   id: string;
   label: string;
   hint?: string;
+  /// Extra words that match but aren't shown.
+  keywords?: string;
+  /// Waiting on you: listed first when nothing is typed.
+  needsYou?: boolean;
   run: () => void;
+}
+
+/// How much a recent item is lifted when ranking typed queries.
+function recentBonus(index: number): number {
+  return index < 0 ? 0 : 40 - index * 2;
 }
 
 /// ⌘K / Ctrl-K command palette: fuzzy-jump to a chat, switch workspace, or run
@@ -45,34 +70,66 @@ export function CommandPalette({
   open,
   onClose,
   actions,
+  sessionId = null,
+  workspaceId = "",
 }: {
   open: boolean;
   onClose: () => void;
   actions: PaletteActions;
+  /// The open chat (its agents are offered as items).
+  sessionId?: string | null;
+  /// The active workspace (its chats' open proposals are offered as items).
+  workspaceId?: string;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [recents, setRecents] = useState<string[]>([]);
 
   const chats = useQuery({ queryKey: ["chats"], queryFn: listChats, enabled: open });
   const workspaces = useQuery({ queryKey: ["workspaces-palette"], queryFn: listWorkspaces, enabled: open });
+  const attention = useChatAttention(workspaceId, open && Boolean(actions.openProposal));
+  const agents = useQuery({
+    queryKey: ["agents", sessionId],
+    queryFn: () => listAgents(sessionId ?? ""),
+    enabled: open && Boolean(sessionId) && Boolean(actions.mentionAgent),
+  });
 
   // Reset on open; Modal autofocuses the input (its first control).
   useEffect(() => {
     if (open) {
       setQuery("");
       setActive(0);
+      setRecents(loadRecents());
     }
   }, [open]);
 
   const commands = useMemo<Cmd[]>(() => {
+    const items: Cmd[] = [];
     const run = (fn: () => void) => () => {
       fn();
       onClose();
     };
-    const items: Cmd[] = [
+    // Proposals that wait on a decision, across the workspace's chats; the
+    // ones waiting on you lead the list when nothing is typed.
+    if (actions.openProposal) {
+      const titles = new Map((chats.data ?? []).map((c) => [c.id, c.title || "Untitled chat"]));
+      for (const a of attention.data ?? []) {
+        for (const p of a.proposals) {
+          items.push({
+            id: `proposal-${p.id}`,
+            label: `Review “${p.title || "Untitled proposal"}”`,
+            hint: p.status === "approved" ? "Proposal · ready to apply" : p.needsMe ? "Proposal · needs you" : "Proposal",
+            keywords: `proposal review approve ${titles.get(a.sessionId) ?? ""}`,
+            needsYou: p.needsMe,
+            run: run(() => actions.openProposal!(a.sessionId, p.id)),
+          });
+        }
+      }
+    }
+    items.push(
       { id: "new-chat", label: "New chat", hint: "Action", run: run(actions.newChat) },
-      { id: "settings", label: "Open settings", hint: "Action", run: run(actions.openSettings) },
-    ];
+      { id: "settings", label: "Open settings", hint: `Action · ${keyLabel(shortcutKey("settings")!)}`, run: run(actions.openSettings) },
+    );
     if (actions.setCanvasMode) {
       items.push(
         { id: "view-chat", label: "View: Chat", hint: "Go", run: run(() => actions.setCanvasMode!("chat")) },
@@ -80,7 +137,7 @@ export function CommandPalette({
         { id: "view-code", label: "View: Code", hint: "Go", run: run(() => actions.setCanvasMode!("code")) },
       );
       if (actions.quickOpenFile) {
-        items.push({ id: "quick-open", label: "Quick open file", hint: "Code · ⌘P", run: run(actions.quickOpenFile) });
+        items.push({ id: "quick-open", label: "Quick open file", hint: `Code · ${keyLabel(shortcutKey("quickOpen")!)}`, run: run(actions.quickOpenFile) });
       }
       if (actions.newTerminal) {
         items.push({ id: "new-terminal", label: "New terminal", hint: "Code", run: run(actions.newTerminal) });
@@ -90,27 +147,57 @@ export function CommandPalette({
       items.push({ id: "friends", label: "Open People & DMs", hint: "Go", run: run(actions.openFriends) });
     }
     if (actions.openPane) {
-      PANES.forEach((p, i) => {
+      for (const p of PANES) {
+        const key = paneKey(p.id);
         items.push({
           id: `pane-${p.id}`,
           label: `Open ${p.label}`,
-          // ⌘⌥1–9 reach the first nine panes; later ones are palette-only.
-          hint: i < 9 ? `Pane · ⌘⌥${i + 1}` : "Pane",
+          hint: key ? `Pane · ${keyLabel(key)}` : "Pane",
           run: run(() => actions.openPane!(p.id)),
         });
-      });
+      }
     }
     if (actions.stepChat) {
       items.push(
-        { id: "next-chat", label: "Next chat", hint: "Go · ⌘⇧]", run: run(() => actions.stepChat!(1)) },
-        { id: "prev-chat", label: "Previous chat", hint: "Go · ⌘⇧[", run: run(() => actions.stepChat!(-1)) },
+        { id: "next-chat", label: "Next chat", hint: `Go · ${keyLabel(shortcutKey("nextChat")!)}`, run: run(() => actions.stepChat!(1)) },
+        { id: "prev-chat", label: "Previous chat", hint: `Go · ${keyLabel(shortcutKey("prevChat")!)}`, run: run(() => actions.stepChat!(-1)) },
       );
     }
     if (actions.focusComposer) {
-      items.push({ id: "focus-composer", label: "Focus the message box", hint: "Go · ⌘L", run: run(actions.focusComposer) });
+      items.push({ id: "focus-composer", label: "Focus the message box", hint: `Go · ${keyLabel(shortcutKey("composer")!)}`, run: run(actions.focusComposer) });
     }
     if (actions.cycleAppearance) {
       items.push({ id: "appearance", label: "Toggle light / dark", hint: "Action", run: run(actions.cycleAppearance) });
+    }
+    if (actions.addPhone) {
+      items.push({
+        id: "add-phone",
+        label: "Add a phone…",
+        hint: "Devices",
+        keywords: "iphone mobile pair qr device enroll",
+        run: run(actions.addPhone),
+      });
+    }
+    if (actions.showShortcuts) {
+      items.push({
+        id: "shortcuts",
+        label: "Keyboard shortcuts",
+        hint: `Help · ${keyLabel(shortcutKey("shortcuts")!)}`,
+        keywords: "keys hotkeys keybindings",
+        run: run(actions.showShortcuts),
+      });
+    }
+    if (actions.openInbox) {
+      items.push({ id: "inbox", label: "Open Inbox", hint: "Go", keywords: "needs you asks votes invites", run: run(actions.openInbox) });
+    }
+    if (actions.showErrors) {
+      items.push({
+        id: "errors",
+        label: "Recent errors",
+        hint: "Help",
+        keywords: "log failures problems toast",
+        run: run(actions.showErrors),
+      });
     }
     if (actions.admitBox) {
       items.push({ id: "admit-box", label: "Admit a box…", hint: "Workspace", run: run(actions.admitBox) });
@@ -132,7 +219,7 @@ export function CommandPalette({
       items.push({
         id: "toggle-sidebar",
         label: "Toggle sidebar",
-        hint: "View · ⌘B",
+        hint: `View · ${keyLabel(shortcutKey("toggleSidebar")!)}`,
         run: run(actions.toggleSidebar),
       });
     }
@@ -140,7 +227,7 @@ export function CommandPalette({
       items.push({
         id: "toggle-tools",
         label: "Toggle tools rail",
-        hint: "View · ⌘J",
+        hint: `View · ${keyLabel(shortcutKey("toggleTools")!)}`,
         run: run(actions.toggleTools),
       });
     }
@@ -160,16 +247,55 @@ export function CommandPalette({
         run: run(() => actions.selectChat(c.id)),
       });
     }
-    return items;
-  }, [chats.data, workspaces.data, actions, onClose]);
+    if (actions.mentionAgent) {
+      for (const a of agents.data ?? []) {
+        items.push({
+          id: `agent-${a.id}`,
+          label: `@${a.name}`,
+          hint: "Agent · message",
+          keywords: `agent mention ${a.role}`,
+          run: run(() => actions.mentionAgent!(a.name)),
+        });
+      }
+    }
+    // Remember what was run, so it comes back first next time.
+    return items.map((c) => ({
+      ...c,
+      run: () => {
+        setRecents(noteRecent(c.id));
+        c.run();
+      },
+    }));
+  }, [chats.data, workspaces.data, attention.data, agents.data, actions, onClose]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return commands;
-    return commands.filter(
-      (c) => c.label.toLowerCase().includes(q) || (c.hint?.toLowerCase().includes(q) ?? false),
+  // Nothing typed: recent items, then what waits on you, then the rest in
+  // their usual order. Typed: fuzzy ranking, with recent items lifted.
+  const { filtered, recentCount, needsYouCount } = useMemo(() => {
+    const q = query.trim();
+    const recentIndex = new Map(recents.map((id, i) => [id, i]));
+    if (!q) {
+      const recent = recents.map((id) => commands.find((c) => c.id === id)).filter((c): c is Cmd => Boolean(c));
+      const seen = new Set(recent.map((c) => c.id));
+      const waiting = commands.filter((c) => c.needsYou && !seen.has(c.id));
+      for (const c of waiting) seen.add(c.id);
+      const rest = commands.filter((c) => !seen.has(c.id));
+      return { filtered: [...recent, ...waiting, ...rest], recentCount: recent.length, needsYouCount: waiting.length };
+    }
+    const ranked = fuzzyRank(
+      commands,
+      q,
+      (c) => `${c.label} ${c.hint ?? ""} ${c.keywords ?? ""}`,
+      (c) => recentBonus(recentIndex.get(c.id) ?? -1) + (c.needsYou ? 10 : 0),
     );
-  }, [commands, query]);
+    return { filtered: ranked, recentCount: 0, needsYouCount: 0 };
+  }, [commands, query, recents]);
+
+  // Keep the highlighted item in view while arrowing through a long list.
+  const activeId = filtered[active]?.id;
+  useEffect(() => {
+    if (!activeId) return;
+    document.querySelector<HTMLElement>(`[data-palette-item="${CSS.escape(activeId)}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeId]);
 
   // Keep the active index in range as the filtered list shrinks.
   useEffect(() => {
@@ -189,7 +315,7 @@ export function CommandPalette({
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search chats, workspaces, actions…"
+        placeholder="Search chats, proposals, agents, actions…"
         className="w-full border-b bg-transparent px-4 py-3 text-base outline-none"
         style={{ borderColor: "var(--ligus-line)" }}
         onKeyDown={(e) => {
@@ -205,19 +331,26 @@ export function CommandPalette({
           }
         }}
       />
-      <div className="max-h-[50vh] overflow-y-auto py-1">
+      <div role="listbox" aria-label="Results" className="max-h-[50vh] overflow-y-auto py-1">
         {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-soft">No matches.</div>}
         {filtered.map((c, i) => (
-          <button
-            key={c.id}
-            onMouseEnter={() => setActive(i)}
-            onClick={c.run}
-            className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm"
-            style={{ background: i === active ? "var(--ligus-mist)" : "transparent" }}
-          >
-            <span className="truncate">{c.label}</span>
-            {c.hint && <span className="shrink-0 text-xs text-ink-soft">{c.hint}</span>}
-          </button>
+          <Fragment key={c.id}>
+            {i === 0 && recentCount > 0 && <PaletteCaption text="Recent" />}
+            {i === recentCount && needsYouCount > 0 && <PaletteCaption text="Needs you" />}
+            {i === recentCount + needsYouCount && (recentCount > 0 || needsYouCount > 0) && <PaletteCaption text="Everything" />}
+            <button
+              role="option"
+              aria-selected={i === active}
+              data-palette-item={c.id}
+              onMouseEnter={() => setActive(i)}
+              onClick={c.run}
+              className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm"
+              style={{ background: i === active ? "var(--ligus-mist)" : "transparent" }}
+            >
+              <span className="truncate">{c.label}</span>
+              {c.hint && <span className="shrink-0 text-xs text-ink-soft">{c.hint}</span>}
+            </button>
+          </Fragment>
         ))}
       </div>
       <div
@@ -227,7 +360,16 @@ export function CommandPalette({
         <span>↑↓ navigate</span>
         <span>↵ select</span>
         <span>esc close</span>
+        <span className="ml-auto">{keyLabel(shortcutKey("shortcuts")!)} shortcuts</span>
       </div>
     </Modal>
+  );
+}
+
+function PaletteCaption({ text }: { text: string }) {
+  return (
+    <div className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ink-soft" aria-hidden>
+      {text}
+    </div>
   );
 }

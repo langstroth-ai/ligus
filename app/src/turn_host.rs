@@ -156,6 +156,7 @@ impl TurnHost for DesktopHost<'_> {
             Phase::Error => "error",
         };
         self.stream_event(message_id, p, text.to_string());
+        crate::notices::turn_ended(self.app, self.state, self.session_id, message_id, phase == Phase::Error);
     }
 
     fn locked_down(&self) {
@@ -196,14 +197,8 @@ impl TurnHost for DesktopHost<'_> {
             }
             s.members.into_iter().find(|m| links.person(&m.id) == use_.requester).map(|m| m.actor.display_name).unwrap_or_else(|| "Someone".into())
         };
-        use tauri_plugin_notification::NotificationExt;
-        let _ = self
-            .app
-            .notification()
-            .builder()
-            .title("Ligus")
-            .body(format!("{} is using {}", ligus_runtime::display::shown(&who), ligus_runtime::display::shown(agent)))
-            .show();
+        let line = format!("{} is using {}", ligus_runtime::display::shown(&who), ligus_runtime::display::shown(agent));
+        crate::notices::post(self.app, crate::notices::Notice::new(crate::notices::NoticeKind::Used, Some(self.session_id), line));
     }
 
     fn usage_error(&self, provider: ModelProviderKind, message: &str) {

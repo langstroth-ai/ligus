@@ -50,6 +50,7 @@ RELEASE_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/releas
 CI = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci.yml")))
 CUT = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/cut-release.yml")))
 UPDATE_CASK = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/update-cask.yml")))
+PROMOTE = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/promote-release.yml")))
 BUILD_CLI = YAML.safe_load(File.read(File.join(ROOT, ".github/actions/build-cli/action.yml")))
 TAURI_CONF = JSON.parse(File.read(File.join(ROOT, "app/tauri.conf.json")))
 ENSURE = File.join(ROOT, "scripts/ensure-release.sh")
@@ -1186,5 +1187,191 @@ class CaskAutoUpdates < Minitest::Test
       ok, _out, _err = apply(script, "cask \"ligus-app\" do\nend\n")
       refute ok, "#{name} must fail when it can't place auto_updates"
     end
+  end
+end
+
+
+# promote-release.yml: admins only (reruns too), least privilege, every
+# precondition before the one edit, and version.json only moves forward and
+# only once the release is Latest.
+class PromoteRelease < Minitest::Test
+  RAW = File.read(File.join(ROOT, ".github/workflows/promote-release.yml"))
+
+  def idx(job, text)
+    i = steps(PROMOTE, job).index { |s| s["run"].to_s.include?(text) || s["uses"].to_s.include?(text) }
+    refute_nil i, "promote-release #{job} has no step with #{text}"
+    i
+  end
+
+  def test_dispatch_only_with_version_notes_and_dry_run
+    assert_equal ["workflow_dispatch"], triggers(PROMOTE).keys
+    inputs = triggers(PROMOTE)["workflow_dispatch"]["inputs"]
+    assert_equal %w[dry-run notes version], inputs.keys.sort
+    assert inputs["version"]["required"]
+    refute inputs["notes"]["required"]
+    assert_equal "boolean", inputs["dry-run"]["type"]
+    assert_equal false, inputs["dry-run"]["default"]
+  end
+
+  def test_least_privilege
+    assert_equal({}, PROMOTE["permissions"], "nothing by default")
+    assert_equal({ "contents" => "write" }, PROMOTE.dig("jobs", "promote", "permissions"))
+    assert_equal({ "contents" => "write", "pull-requests" => "write", "actions" => "write" },
+                 PROMOTE.dig("jobs", "version-json", "permissions"))
+    assert_equal %w[promote version-json], PROMOTE["jobs"].keys.sort, "a new job needs its own permissions and guard"
+  end
+
+  # "Re-run failed jobs" reruns only the failed job, so each job checks.
+  def test_admins_only_in_every_job_including_reruns
+    PROMOTE["jobs"].each_key do |job|
+      first = steps(PROMOTE, job).first
+      assert_includes first["run"], "collaborators/$who/permission", "#{job}: the admin check must come first"
+      assert_includes first["run"], '[ "$perm" != admin ]'
+      assert_equal "${{ github.actor }}", first.dig("env", "ACTOR")
+      assert_equal "${{ github.triggering_actor }}", first.dig("env", "TRIGGERING_ACTOR")
+    end
+  end
+
+  def test_only_the_github_token_and_no_inputs_in_scripts
+    assert_equal ["secrets.GITHUB_TOKEN"], RAW.scan(/secrets\.[A-Z_]+/).uniq, "no PAT or other secret"
+    PROMOTE["jobs"].each do |job, j|
+      j["steps"].each do |st|
+        refute_match(/\$\{\{/, st["run"].to_s, "#{job}/#{st['name']}: pass expressions through env, not into the script")
+        refute_includes st.fetch("with", {}).keys, "token", "#{job}: checkout with a PAT/App token"
+      end
+    end
+    refute_match(/set -x|::add-mask::|cat .*token|echo .*TOKEN/i, RAW)
+  end
+
+  def test_every_precondition_before_the_edit
+    edit = idx("promote", "gh release edit")
+    [
+      "collaborators/$who/permission",
+      "refs/heads/main",
+      "git/ref/tags/$TAG",
+      "releases/tags/$TAG",
+      "releases/latest",
+      "scripts/check-release-assets.py",
+      "--platforms macos,windows,linux",
+      "Casks/ligus-app.rb",
+      "Formula/ligus.rb",
+      "release-version-json.py summary",
+    ].each { |t| assert_operator idx("promote", t), :<, edit, "#{t} must be checked before the edit" }
+    run = steps(PROMOTE, "promote")[edit]["run"]
+    assert_includes run, '--title "$title" --notes-file "$NOTES" --prerelease=false --latest'
+    assert_includes run, 'title="Ligus $TAG"'
+    assert_operator run.index('"$DRY_RUN" = true'), :<, run.index("gh release edit"), "dry-run stops before the edit"
+    assert_operator run.index('[ "$STATE" = latest ]'), :<, run.index("gh release edit"), "already Latest is a no-op"
+  end
+
+  def test_release_state_checks
+    run = steps(PROMOTE, "promote")[idx("promote", "releases/tags/$TAG")]["run"]
+    assert_includes run, "still a draft"
+    assert_includes run, '[ "$draft" = false ]'
+    assert_includes run, "would move Latest backwards"
+    inputs = steps(PROMOTE, "promote")[idx("promote", "refs/heads/main")]["run"]
+    assert_includes inputs, '^[0-9]+\.[0-9]+\.[0-9]+$', "no -suffix version becomes Latest"
+    assert_includes inputs, "^docs/release-notes/[A-Za-z0-9._-]+\\.md$"
+  end
+
+  def test_version_json_only_after_promote_and_only_once_latest
+    vj = PROMOTE.dig("jobs", "version-json")
+    assert_equal ["promote"], Array(vj["needs"])
+    refute vj.key?("if"), "never runs when promote failed"
+    latest = idx("version-json", "releases/latest")
+    assert_operator latest, :<, idx("version-json", "release-version-json.py update")
+    assert_operator latest, :<, idx("version-json", "gh pr create")
+    pr = steps(PROMOTE, "version-json")[idx("version-json", "gh pr create")]["run"]
+    assert_includes pr, 'branch="release-bot/version-json-$TAG"'
+    assert_includes pr, "gh workflow run ci.yml", "a GITHUB_TOKEN PR gets no CI run of its own"
+    assert_includes pr, "gh pr merge \"$pr\" --repo \"$GITHUB_REPOSITORY\" --auto"
+    refute_match(/--force|push -f|push\s+[^\n]*\+|refs\/heads\/main\b(?!\.)/, pr.gsub("compare/main...", ""), "never force, never push main")
+    assert_operator pr.index('"$DRY_RUN" = true'), :<, pr.index("git push"), "dry-run stops before the push"
+  end
+
+  def test_runs_one_at_a_time_per_version
+    assert_equal "promote-release-${{ inputs.version }}", PROMOTE.dig("concurrency", "group")
+    assert_equal false, PROMOTE.dig("concurrency", "cancel-in-progress")
+  end
+end
+
+# docs/release-notes/vX.Y.Z.md and scripts/release-version-json.py.
+class ReleaseNotesAndVersionJson < Minitest::Test
+  SCRIPT = File.join(ROOT, "scripts/release-version-json.py")
+  VERSION_JSON = File.join(ROOT, "docs-site/docs/version.json")
+
+  def run_script(*args)
+    out, err, st = Open3.capture3("python3", "-I", SCRIPT, *args)
+    [st.success?, out.strip, err]
+  end
+
+  def update(have, tag, notes)
+    Dir.mktmpdir do |d|
+      f = File.join(d, "version.json")
+      n = File.join(d, "notes.md")
+      File.write(f, JSON.pretty_generate(have) + "\n")
+      File.write(n, notes)
+      ok, out, err = run_script("update", "--file", f, "--tag", tag, "--notes-file", n)
+      [ok, out, err, JSON.parse(File.read(f))]
+    end
+  end
+
+  def test_every_committed_notes_file_has_a_summary_and_its_version
+    files = Dir[File.join(ROOT, "docs/release-notes/v*.md")]
+    refute_empty files
+    files.each do |f|
+      version = File.basename(f, ".md").delete_prefix("v")
+      assert_match(/\A\d+\.\d+\.\d+\z/, version, f)
+      ok, out, err = run_script("summary", f)
+      assert ok, "#{f}: #{err}"
+      assert out.end_with?("."), out
+      assert_includes File.read(f), version
+      refute_match(/\b(H|B|M|C)\d+\b|per the review|pricing|price|tier|subscription|paid plan/i, File.read(f), "#{f}: no review ids or business language")
+    end
+  end
+
+  def test_summary_strips_markdown_and_skips_headings
+    notes = "# Title\n\nA *patch* release with **bold**, `code` and [a link](https://x).\n\n## More\n"
+    Dir.mktmpdir do |d|
+      File.write(File.join(d, "n.md"), notes)
+      ok, out, = run_script("summary", File.join(d, "n.md"))
+      assert ok
+      assert_equal "A patch release with bold, code and a link.", out
+      File.write(File.join(d, "n.md"), "<!-- summary: Short one. -->\n\nA long first paragraph without a stop\n")
+      assert_equal "Short one.", run_script("summary", File.join(d, "n.md"))[1]
+      File.write(File.join(d, "n.md"), "## Only headings\n")
+      refute run_script("summary", File.join(d, "n.md"))[0]
+    end
+  end
+
+  def test_update_moves_forward_only
+    have = JSON.parse(File.read(VERSION_JSON))
+    notes = "A patch release of Ligus 9.9.9.\n"
+    ok, out, err, got = update(have.merge("tag" => "v0.0.1"), "v9.9.9", notes)
+    assert ok, err
+    assert_equal "updated", out
+    assert_equal %w[name notes tag url], got.keys.sort, "the shape the desktop reads"
+    assert_equal "v9.9.9", got["tag"]
+    assert_equal "Ligus 9.9.9", got["name"]
+    assert_equal "https://github.com/langstroth-ai/ligus/releases/latest", got["url"]
+    assert got["notes"].start_with?("A patch release of Ligus 9.9.9. See https://docs.langstroth.ai/")
+
+    ok, out, _err, again = update(got, "v9.9.9", notes)
+    assert ok
+    assert_equal "current", out
+    assert_equal got, again
+
+    newer = got.merge("tag" => "v10.0.0")
+    ok, out, _err, kept = update(newer, "v9.9.9", notes)
+    assert ok
+    assert_equal "newer", out
+    assert_equal newer, kept, "never downgrade"
+  end
+
+  def test_compare
+    assert_equal "1", run_script("compare", "v0.10.0", "v0.9.9")[1]
+    assert_equal "-1", run_script("compare", "v1.0.0-rc.1", "v1.0.0")[1]
+    assert_equal "0", run_script("compare", "v1.2.3", "v1.2.3")[1]
+    refute run_script("compare", "1.2.3", "v1.2.3")[0]
   end
 end

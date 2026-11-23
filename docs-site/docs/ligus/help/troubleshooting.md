@@ -43,8 +43,9 @@ at a new, empty dir.
 
 ## Sync is stuck or peers don't see each other
 
-**Start with the sync pill.** It shows **live**, **error** (with the
-reason), **offline**, or an amber **limited** state (see
+**Start with the sync state** at the left of the status bar, at the foot of
+the window. It shows **live** (with a lock when end-to-end encrypted),
+**error** (hover for the reason), **offline**, or an amber **limited** state (see
 [The relay refuses writes](#relay-refusals)). Then, on every device:
 
 1. **Same relay URL and room** (Settings → Team sync). Workspaces created
