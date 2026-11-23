@@ -305,11 +305,18 @@ developer to copy and run on the agent's box. Detached agents run on
 - **System tray / menu bar** — the tray icon's menu jumps straight to
   **Friends**, **Team & Relay Sync** (this page's Team sync tab), and
   **Settings**, besides showing/quitting the app.
-- **Focus mode** — collapse the sidebar with **⌘B** (or the panel button
-  at the bottom of the workspace rail) and the tools rail with **⌘J** (or
-  the **Tools** button in the chat header). Both persist across restarts,
-  and both live in the ⌘K palette as "Toggle sidebar" / "Toggle tools
-  rail".
+- **Focus mode** — **⌘.** (or "Focus mode" in the ⌘K palette) hides
+  everything but the chat and the message box: the workspace rail, the
+  sidebar, the tools rail and the status bar. A lockdown or dearth-mode
+  banner still shows. The chat header keeps one quiet "N need you" badge
+  that opens the [Inbox](inbox.md), and **Leave focus**. Press **⌘.** again
+  to bring everything back as it was; **⌘B**, **⌘J** or opening a pane also
+  leaves focus mode. Focus mode lasts until you leave it or restart.
+- **Sidebar and tools rail** — collapse the sidebar with **⌘B** (or the
+  panel button at the bottom of the workspace rail) and the tools rail with
+  **⌘J** (or the **Tools** button in the chat header). Both persist across
+  restarts, and both live in the ⌘K palette as "Toggle sidebar" / "Toggle
+  tools rail".
 - Workspace config round-trips through the TOML encoder, so hand-edited
   and GUI-edited `ligus.config.toml` files stay compatible (comments
   aren't preserved). See
