@@ -1,5 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { limitedLabel } from "@/lib/syncState";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceToList,
@@ -28,8 +27,8 @@ import {
   setActiveWorkspace,
   setActiveChat,
   setWorkspaceRoot,
-  syncStatus,
-  type SyncStatusDto,
+  getChatLockdown,
+  getDearthState,
 } from "@/lib/ipc";
 import { setShownWorkspace } from "@/lib/shownWorkspace";
 import { Sidebar } from "@/components/Sidebar";
@@ -49,13 +48,12 @@ import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { PresenceSheet } from "@/components/PresenceSheet";
 import { PhoneEnrollTripwire } from "@/components/PhoneEnrollTripwire";
-import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
-import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
+import { AppStatusBar } from "@/components/AppStatusBar";
+import { blockingBanner } from "@/lib/banners";
 import { DialogHost, promptDialog } from "@/components/Dialog";
-import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
-import { StatusDot } from "@/components/ui";
+import { IconPencil, IconHexagon } from "@/lib/icons";
 import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
@@ -279,7 +277,6 @@ export function App() {
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTour]);
-  const sync = useQuery({ queryKey: ["sync-status"], queryFn: syncStatus });
   const activeChat = useQuery({
     queryKey: ["chat", selectedId],
     queryFn: () => getChat(selectedId ?? ""),
@@ -630,6 +627,16 @@ export function App() {
   // Settings and grant commands act on this workspace, the one on screen.
   setShownWorkspace(activeWorkspaceId);
   const activeWorkspaceName = activeWorkspace?.name?.trim();
+  // The one banner: a lockdown of the open chat, else dearth mode.
+  const lockdown = useQuery({
+    queryKey: ["chat-lockdown", selectedId],
+    queryFn: () => getChatLockdown(selectedId!),
+    enabled: Boolean(selectedId),
+    refetchInterval: 15000,
+  });
+  const dearth = useQuery({ queryKey: ["dearth-state"], queryFn: getDearthState, refetchInterval: 30000 });
+  const dearthOn = Boolean(dearth.data?.enabled);
+  const banner = blockingBanner({ lockdown: view === "workspace" && Boolean(lockdown.data?.active), dearth: dearthOn });
   // What waits on you: the Inbox lists it; the dock and tray count it.
   const needsYou = useNeedsYou(activeWorkspaceId);
   useDockBadge(needsYou);
@@ -985,7 +992,6 @@ export function App() {
       <DialogHost />
       <PresenceSheet />
       <PhoneEnrollTripwire />
-      <UpdateBanner />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
       <CommandPalette
@@ -1122,7 +1128,7 @@ export function App() {
       )}
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DearthBanner onManage={() => openSettings("guards")} />
+        {banner === "dearth" && <DearthBanner onManage={() => openSettings("guards")} />}
         {view === "inbox" ? (
           <PaneErrorBoundary label="Inbox">
             <Inbox
@@ -1238,8 +1244,6 @@ export function App() {
                   : null
               }
               onOpenContext={() => openUtilityPane("context")}
-              syncPill={deriveSyncPill(sync.data)}
-              onFixSync={() => openSettings("team")}
               workspaceCrumb={sidebarVisible ? undefined : workspaceLabel}
               mode={mode}
               onChangeMode={setMode}
@@ -1267,7 +1271,7 @@ export function App() {
                 }
               }}
             />
-            {selectedId && <LockdownBar sessionId={selectedId} />}
+            {selectedId && banner === "lockdown" && <LockdownBar sessionId={selectedId} />}
 
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="min-w-0 flex-1">
@@ -1340,9 +1344,19 @@ export function App() {
             </div>
           </>
         )}
-        {/* Suggestions are a quiet status-bar tip at the foot of the canvas;
-            only blocking states (Lockdown, Dearth) get a banner up top. */}
-        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
+        {/* State that doesn't need you lives here, at the foot of the canvas;
+            only a blocking state (Lockdown, Dearth) gets the one banner up top. */}
+        <AppStatusBar
+          onOpenSettings={(tab) => openSettings(tab)}
+          onOpenReview={() => {
+            setView("workspace");
+            openUtilityPane("review");
+          }}
+          onShowErrors={() => setErrorsOpen(true)}
+          inboxCount={sidebarVisible ? 0 : needsYouCount(needsYou)}
+          onOpenInbox={() => setView("inbox")}
+          dearthAside={dearthOn && banner !== "dearth"}
+        />
       </main>
 
       {/* Settings presents OVER the workspace — the chat behind it stays mounted.
@@ -1385,105 +1399,6 @@ function PaneResizeHandle({
     >
       <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[color:var(--ligus-line)]" />
     </div>
-  );
-}
-
-/// Single compact chat header: title + rename, sync state, the Chat/Diff mode
-/// tabs, and the Tools toggle. Replaces the old two-row WorkspaceHeader +
-/// ModeStrip stack (~130px of chrome, duplicated workspace path, a dead rename
-/// button, and near-white tab text that vanished on light palettes).
-/// The header status pill, driven by real connection health (not just "a relay
-/// URL is set"): live → success tint, error → danger tint (with the failure in
-/// the tooltip), offline → a muted neutral state. All color via --ligus-* tokens.
-type SyncPill = { label: string; color: "success" | "danger" | "warn" | null; title?: string; actionable?: boolean };
-
-function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
-  const state = s?.connectionState ?? "offline";
-  if (state === "live") {
-    return {
-      label: `Live · room ${s?.room ?? ""}`,
-      color: "success",
-      title: "Live — syncing with your team",
-    };
-  }
-  // Syncing, but the relay refused this workspace's writes (workspace full,
-  // an organisation quota) or the room is truncated: amber, with the reason.
-  if (state === "limited") {
-    return {
-      label: limitedLabel(s?.lastError ?? null),
-      color: "warn",
-      title: s?.lastError ?? "The relay isn't taking new writes for this workspace right now",
-      actionable: true,
-    };
-  }
-  if (state === "error") {
-    return {
-      label: "Sync error",
-      color: "danger",
-      title: s?.lastError ?? "Sync failed — reconnect or check your key / token",
-      actionable: true,
-    };
-  }
-  // Relay configured but no E2EE key yet — setup-incomplete, not a failure.
-  // Calm amber prompt to set a passphrase (Settings → Team), never a red error.
-  if (state === "needs_key") {
-    return {
-      label: "Set a passphrase to sync",
-      color: "warn",
-      title:
-        s?.lastError ??
-        "A relay is configured but this workspace has no encryption key — set a workspace passphrase in Settings → Team to sync encrypted, or clear the relay URL to work local-only.",
-      actionable: true,
-    };
-  }
-  return {
-    label: s?.relayConfigured ? "Offline · not syncing" : "Local only",
-    color: null,
-    title: s?.relayConfigured
-      ? "A relay is configured but nothing is syncing right now"
-      : undefined,
-  };
-}
-
-/// The header sync status. A tinted state (live/error/needs-key) reads as a
-/// chip, not amber prose beside the title (F16); actionable states (needs-key,
-/// error) are a button that opens Settings → Team. Neutral offline/local stays
-/// a quiet unboxed label.
-function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
-  if (!pill.color) {
-    return (
-      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" title={pill.title}>
-        <StatusDot on={false} size={7} label={pill.label} />
-        {pill.label}
-      </span>
-    );
-  }
-  const chipStyle: CSSProperties = {
-    color: `var(--ligus-${pill.color}-ink)`,
-    borderColor: `var(--ligus-${pill.color}-line)`,
-    background: `var(--ligus-${pill.color}-tint)`,
-  };
-  const icon =
-    pill.color === "success" ? (
-      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ligus-success)" }} />
-    ) : (
-      <IconAlertTriangle size={11} />
-    );
-  const className =
-    "ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
-  if (pill.actionable && onFix) {
-    return (
-      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} title={pill.title} onClick={onFix}>
-        {icon}
-        {pill.label}
-      </button>
-    );
-  }
-  return (
-    <span className={className} style={chipStyle} title={pill.title}>
-      {icon}
-      {pill.label}
-    </span>
   );
 }
 
@@ -1532,10 +1447,12 @@ function CanvasModeTabs({
   );
 }
 
+/// Single compact chat header: title + rename, where the chat runs, the
+/// Chat/Diff mode tabs, and the Tools toggle. Sync state lives in the status
+/// bar at the foot of the canvas.
 function ChatHeaderBar({
   title,
   runsOn,
-  syncPill,
   mode,
   onChangeMode,
   utilityPaneVisible,
@@ -1543,13 +1460,11 @@ function ChatHeaderBar({
   onRename,
   contextPct,
   onOpenContext,
-  onFixSync,
   workspaceCrumb,
 }: {
   title: string;
   /// One quiet line under the title: where the chat runs.
   runsOn?: ReactNode;
-  syncPill: SyncPill;
   mode: CanvasMode;
   onChangeMode: (m: CanvasMode) => void;
   utilityPaneVisible: boolean;
@@ -1562,9 +1477,6 @@ function ChatHeaderBar({
   /// until telemetry loads). Clicking the pill opens the Context pane.
   contextPct: number | null;
   onOpenContext: () => void;
-  /// Opens Settings → Team, so an actionable sync chip (needs-key / error) is a
-  /// button that takes the user to the fix.
-  onFixSync?: () => void;
 }) {
   return (
     <div
@@ -1590,7 +1502,6 @@ function ChatHeaderBar({
         >
           <IconPencil size={13} />
         </button>
-        <SyncPillChip pill={syncPill} onFix={onFixSync} />
       </div>
       {runsOn}
       </div>

@@ -25,8 +25,8 @@ function saveDismissed(ids: string[]) {
 /// A quiet, dismissible tip at the foot of the canvas that suggests adding an
 /// agent, a host or a worker when occupancy says so (queued work, a hot plan
 /// window, one busy agent), rather than up front. One suggestion at a time.
-/// It's a status-bar line, not a banner: top-of-window banners are kept for
-/// states that block work (Lockdown, Dearth).
+/// It sits in the status bar, not a banner: top-of-window banners are kept
+/// for states that block work (Lockdown, Dearth).
 export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }) {
   const [dismissed, setDismissed] = useState<string[]>(loadDismissed);
   const q = useQuery({ queryKey: ["growth-suggestions"], queryFn: growthSuggestions, refetchInterval: 5 * 60_000 });
@@ -42,11 +42,10 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
       role="note"
       aria-label="Tip"
       data-testid="growth-suggestion"
-      className="ligus-enter flex h-7 shrink-0 items-center gap-2 border-t px-4 text-[11.5px] text-ink-soft"
-      style={{ borderColor: "var(--ligus-line)" }}
+      className="ligus-enter flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] text-ink-soft"
     >
       <span aria-hidden className="inline-flex shrink-0 text-ink-faint">
-        <IconSparkle size={12} />
+        <IconSparkle size={11} />
       </span>
       <span className="shrink-0 font-medium text-ink">{next.title}.</span>
       <span className="min-w-0 flex-1 truncate" title={next.reason}>

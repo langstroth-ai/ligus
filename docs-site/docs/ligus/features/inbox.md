@@ -38,3 +38,23 @@ you, such as adding the repository of a folder you linked to the workspace
 - A chat's live state (Working, Queued, Done) is on its row in the sidebar.
 - The Inbox covers the workspace on screen, plus invites and device
   requests, which reach this device whatever workspace is open.
+
+## The status bar and the one banner
+
+State that doesn't need you sits in a quiet strip at the foot of the window,
+never at the top:
+
+- **Sync**: Live · room *name* (a lock when it's end-to-end encrypted),
+  Offline, Local only, Sync error, a limited sync, or "Set a passphrase to
+  sync". Click it for Settings → Team sync.
+- **Agents working** and **queued** work (waiting for its host; click to open
+  the Review pane, where it's listed).
+- A **tip** about growing the workspace, when one applies
+  ([guards](guards.md#growing-the-workspace-when-its-ready)).
+- **Errors** you haven't looked at: click to open Recent errors.
+- **Update available**: click for Download, Later or Skip this version.
+- **N need you**, when the sidebar is hidden.
+
+Only a state that blocks work gets a banner across the top, and only one at
+a time: a **lockdown** of the open chat, or else **dearth mode**. While both
+apply, the lockdown takes the banner and dearth mode shows in the status bar.

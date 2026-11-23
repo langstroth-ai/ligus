@@ -11,7 +11,8 @@ Dearth mode is a workspace-wide **tight entrance** for hostile periods: an
 invite link that leaked, an untrusted repository being processed, a new worker
 host you're not sure of yet. An Admin or Owner switches it on with a short
 reason; every member then sees a banner at the top of the window until it is
-switched off.
+switched off. When a chat's lockdown needs that banner, dearth mode shows in
+the status bar instead: the window never stacks more than one banner.
 
 While it is on:
 
@@ -146,10 +147,10 @@ loops and are not affected.
 
 ## Growing the workspace when it's ready
 
-A workspace starts with one agent on your device, and a quiet one-line tip
-at the foot of the window suggests growing it only when the workspace's
-occupancy says so (banners at the top are kept for states that block work,
-like lockdown and dearth mode):
+A workspace starts with one agent on your device, and a quiet tip in the
+status bar at the foot of the window suggests growing it only when the
+workspace's occupancy says so (the one banner at the top is kept for states
+that block work, like lockdown and dearth mode):
 
 - **Add an always-on host** when requests keep waiting for an agent whose
   machine is offline (a `ligus serve` box answers while laptops sleep);
