@@ -18,6 +18,21 @@ Full release notes are on the
   failed reply. Settings offers the same lists. See
   [Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model).
 
+### Security
+
+- **A proposal comment is by the member who signs it.** Any member could
+  post a comment on a proposal that showed as someone else's (the Owner's,
+  for example), and **Send to agent to revise** forwarded it to the agent as
+  part of the change request. Now a comment whose named author isn't its
+  signer is refused, its role is the signer's real role, only verified
+  comments are forwarded to an agent, and an edit to a proposal can no
+  longer replace or rewrite its comment thread.
+- **Upgrade every member.** The check runs on each member's own device. In a
+  workspace that still has 0.1.x members, those older clients can still show
+  a forged comment under someone else's name and forward it to an agent when
+  their user asks for a revision. Upgrade every member's desktop (and any
+  `ligus serve` box) to this release.
+
 ## 0.1.1
 
 A patch release: add your phone by scanning the desktop's code, Face ID
