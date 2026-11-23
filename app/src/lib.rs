@@ -4504,11 +4504,26 @@ pub(crate) fn list_workspace_hosts_sync(state: State<AppState>) -> Result<Vec<Wo
     let active = state.active_workspace_id();
     let svc = state.service.lock().unwrap();
     let now = ligus_core::Timestamp::now();
+    let me = svc.author().id.clone();
+    let config = svc.load(ligus_core::workspace_config_session_id(active)).map_err(map_err)?;
+    let links = svc.device_links(active).unwrap_or_default();
+    let owner_name = |owner: &str| -> String {
+        if owner.is_empty() {
+            return String::new();
+        }
+        config
+            .as_ref()
+            .and_then(|c| c.members.iter().find(|m| m.id == owner || links.person(&m.id) == owner))
+            .map(|m| shown(&m.actor.display_name))
+            .unwrap_or_default()
+    };
     Ok(svc
         .list_hosts(active)
         .map_err(map_err)?
         .iter()
         .map(|h| WorkspaceHostDto {
+            owner_name: owner_name(&h.owner_actor_id),
+            mine: !h.owner_actor_id.is_empty() && h.owner_actor_id == me,
             id: h.id.clone(),
             kind: match h.kind {
                 ligus_core::HostKind::Device => "device",
@@ -11801,6 +11816,32 @@ fn validate_avatar_data_url(url: &Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// An agent's accent color is synced to every member and used as CSS, so it
+/// must be a plain hex color (`#rgb` to `#rrggbbaa`); empty clears it.
+fn validate_avatar_color(color: &Option<String>) -> Result<(), String> {
+    match color.as_deref() {
+        Some(c) if !c.is_empty() && !ligus_core::agent::is_valid_color_hex(c) => {
+            Err("avatar color must be a hex color like #3f72a8".to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod avatar_color_tests {
+    use super::validate_avatar_color;
+
+    #[test]
+    fn only_hex_colors_are_accepted() {
+        assert!(validate_avatar_color(&None).is_ok());
+        assert!(validate_avatar_color(&Some(String::new())).is_ok());
+        assert!(validate_avatar_color(&Some("#3f72a8".into())).is_ok());
+        for bad in ["url(https://evil.example/p.gif)", "red", "#fff url(x)", "#12"] {
+            assert!(validate_avatar_color(&Some(bad.into())).is_err(), "{bad}");
+        }
+    }
+}
+
 /// Set (or clear, with `None`) the local user's avatar. Persists it on the
 /// account and updates the live author so new messages stamp it — the avatar
 /// then rides the synced roster to every member.
@@ -11831,6 +11872,7 @@ pub(crate) fn set_agent_avatar_sync(
     color_hex: Option<String>,
 ) -> Result<(), String> {
     validate_avatar_data_url(&avatar)?;
+    validate_avatar_color(&color_hex)?;
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let aid = Uuid::parse_str(&agent_id).map_err(map_err)?;
     let wid = state.active_workspace_id();

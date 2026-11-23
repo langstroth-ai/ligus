@@ -914,6 +914,14 @@ pub struct WorkspaceHostDto {
     /// URL and credentials stay on the host).
     #[serde(default)]
     pub model_gateways: Vec<HostModelGatewayDto>,
+    /// Display name of the member who registered the host (empty when
+    /// unknown). Labels are chosen by their owners and can repeat, so a
+    /// picker names the owner too.
+    #[serde(default)]
+    pub owner_name: String,
+    /// The host belongs to the local account.
+    #[serde(default)]
+    pub mine: bool,
 }
 
 /// A model gateway a host offers: its operator-given name and wire

@@ -18,4 +18,14 @@ lastSeen: string,
  * Model gateways this host's operator lists (names and wire only; the
  * URL and credentials stay on the host).
  */
-modelGateways: Array<HostModelGatewayDto>, };
+modelGateways: Array<HostModelGatewayDto>, 
+/**
+ * Display name of the member who registered the host (empty when
+ * unknown). Labels are chosen by their owners and can repeat, so a
+ * picker names the owner too.
+ */
+ownerName: string, 
+/**
+ * The host belongs to the local account.
+ */
+mine: boolean, };

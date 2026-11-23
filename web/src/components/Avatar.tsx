@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { avColor, initials } from "@/lib/avatar";
+import { avColor, initials, safeColorHex } from "@/lib/avatar";
 
 // One avatar for every render site. Shows the uploaded image when present,
 // else initials on a color (an explicit accent, or a deterministic one from the
@@ -37,7 +37,7 @@ export function Avatar({
       className={cls}
       style={{
         ...base,
-        background: colorHex || avColor(name),
+        background: safeColorHex(colorHex) ?? avColor(name),
         color: "#fff",
         fontSize: Math.round(size * 0.4),
         fontWeight: 600,
