@@ -156,6 +156,22 @@ run "$TMP/u2" "$K8S" install --json --namespace x; check_json "ligus-k8s install
 run "$TMP/u3" "$K8S" install --json --namespace x --scenario team-external-relay; check_json "ligus-k8s external relay without --relay-url" "$TMP/u3" 2 "$RC"
 run "$TMP/u4" "$LOCAL" start --json --data-dir "$TMP/d"; check_json "ligus-local start without --role" "$TMP/u4" 2 "$RC"
 
+# Errors share one shape: "<tool>: <what>", an indented fix line naming the
+# help, and with --json (even after the bad flag) a failed "usage" check.
+run "$TMP/u5" "$K8S" verify --nope --json
+check_json "ligus-k8s a bad flag before --json still prints JSON" "$TMP/u5" 2 "$RC" usage
+if head -1 "$TMP/u5.err" | grep -qx 'ligus-k8s: unknown argument: --nope' && grep -qx '  fix: see ligus-k8s verify --help' "$TMP/u5.err"; then
+  pass "ligus-k8s error shape: what, then fix"
+else
+  fail "ligus-k8s error shape: $(cat "$TMP/u5.err")"
+fi
+run "$TMP/u6" "$LOCAL" frob
+if head -1 "$TMP/u6.err" | grep -q '^ligus-local: unknown command: frob' && grep -qx '  fix: see ligus-local --help' "$TMP/u6.err"; then
+  pass "ligus-local error shape: what, then fix"
+else
+  fail "ligus-local error shape: $(cat "$TMP/u6.err")"
+fi
+
 # --flag=value reads the same as --flag value.
 run "$TMP/eq1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
   "$LOCAL" verify --json --role=serve --data-dir="$TMP/vd" --env-file="$TMP/ve"

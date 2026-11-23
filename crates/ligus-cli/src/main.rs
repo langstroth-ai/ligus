@@ -2063,16 +2063,23 @@ fn main() {
     // crypto provider (ring).
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
-        eprintln!("ligus: {e:#}");
-        let (code, _) = problem::classify(&e);
-        if code == help::EXIT_USAGE {
-            let args = split_flag_values(std::env::args().skip(1).collect());
-            // Continues the error above it, indented under it.
-            eprintln!("  {}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
-            std::process::exit(help::EXIT_USAGE);
+        let args = split_flag_values(std::env::args().skip(1).collect());
+        let words: Vec<&str> = args.iter().take_while(|a| *a != "--").map(String::as_str).collect();
+        let command = words.iter().find(|a| !a.starts_with('-')).copied().unwrap_or("");
+        let r = problem::render(&e, command, &help::hint(&words));
+        // Errors go to stderr; with --json the same error is also the one
+        // JSON document on stdout.
+        eprint!("{}", r.text);
+        if wants_json(&words) {
+            println!("{}", r.json);
         }
-        std::process::exit(code);
+        std::process::exit(r.exit);
     }
+}
+
+/// `--json` or `-o json` on the command line.
+fn wants_json(words: &[&str]) -> bool {
+    words.iter().any(|a| *a == "--json") || words.windows(2).any(|w| matches!(w, ["-o" | "--output", "json"]))
 }
 
 fn run() -> Result<()> {

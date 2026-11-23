@@ -1,4 +1,4 @@
-# CLI conventions: checks and exit codes
+# CLI conventions: checks, exit codes and errors
 
 Every Ligus command-line tool reports checks the same way: `ligus doctor`,
 `langstroth-relay check`, and the deploy scripts `deploy/local/ligus-local`
@@ -99,6 +99,34 @@ table.
 A check command exits 1 when a check fails, whatever the check. Before 0.2,
 `ligus doctor`'s preflights exited 3, 4 or 5 and `ligus gateway-check` 6;
 `--legacy-exit-codes` keeps those codes for one release.
+
+## Errors {#errors}
+
+Every tool prints an error the same way on stderr: what happened on the first
+line, after the tool's name, then why and how to fix it when it knows:
+
+```text
+ligus: sync failed
+  why: error sending request for url (https://relay.example.com/v1/...)
+  fix: check the network and the relay URL; ligus doctor checks the relay
+```
+
+A usage error's fix names the help to read, for example ``fix: see `ligus tail --help` ``. With
+`--json` (or `-o json`), the error is also the one JSON document on stdout:
+
+```json
+{"schema": "ligus.error.v1", "tool": "ligus", "version": "0.1.1", "command": "sync",
+ "exitCode": 7,
+ "error": {"code": "relay_unreachable", "message": "sync failed",
+           "why": "error sending request for url (...)",
+           "fix": "check the network and the relay URL; ligus doctor checks the relay"}}
+```
+
+`error.code` is a stable machine code: `usage`, `not_found`, `refused`,
+`relay_unreachable`, `relay_busy`, `relay_token_rejected`, `unreachable` or
+`error`. `langstroth-relay` prints the same document. The deploy scripts keep
+their profile: a usage error is a report with one failed `usage` check (its
+`fix` names the help) and `"error": "<message>"`.
 
 ## Profiles {#profiles}
 

@@ -417,6 +417,7 @@ EOF
 }
 
 
+ac_prescan_json "$@"
 CMD=${1:-}
 [ $# -gt 0 ] && shift
 case $CMD in
