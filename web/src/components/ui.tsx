@@ -73,8 +73,8 @@ export function IconButton({
       {...rest}
       aria-label={label}
       title={rest.title ?? label}
-      className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg opacity-70 hover:opacity-100 disabled:opacity-30 ${className}`}
-      style={{ width: size, height: size, color: "var(--ligus-ink)", ...rest.style }}
+      className={`ligus-press inline-flex shrink-0 items-center justify-center rounded-lg text-ink-soft hover:text-ink disabled:opacity-30 ${className}`}
+      style={{ width: size, height: size, ...rest.style }}
     >
       {children}
     </button>
@@ -97,7 +97,7 @@ export function Section({
   return (
     <section className={`mb-5 ${className}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-[13px] font-semibold tracking-[-0.01em] opacity-90">{title}</h2>
+        <h2 className="ligus-section">{title}</h2>
         {action}
       </div>
       <div className="space-y-2.5">{children}</div>
@@ -295,7 +295,7 @@ export function NavRow({
     <button
       onClick={onClick}
       title={title}
-      className="flex h-[30px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+      className="flex h-[var(--row-h)] w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={active ? { background: SELECT_TINT } : undefined}
     >
       {icon != null && (
@@ -328,7 +328,7 @@ export function NavRow({
       {typeof count === "number" &&
         (attn ? (
           <span
-            className="shrink-0 rounded-full px-1.5 text-[10.5px] font-bold tabular-nums"
+            className="shrink-0 rounded-full px-1.5 text-[11px] font-bold tabular-nums"
             style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
           >
             {count}
@@ -346,12 +346,7 @@ export function NavRow({
 export function SectionCap({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex h-[26px] items-center justify-between px-2.5">
-      <span
-        className="text-[11px] font-bold uppercase"
-        style={{ letterSpacing: "0.08em", color: "var(--ligus-ink-soft)" }}
-      >
-        {children}
-      </span>
+      <span className="ligus-cap">{children}</span>
       {action}
     </div>
   );
@@ -697,7 +692,7 @@ export function Badge({
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[10.5px] font-semibold leading-4 tracking-[0.02em] ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[11px] font-semibold leading-4 tracking-[0.02em] ${className}`}
       style={TONE_STYLE[tone]}
     >
       {icon && (

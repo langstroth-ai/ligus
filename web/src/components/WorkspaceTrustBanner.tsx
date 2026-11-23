@@ -48,7 +48,7 @@ export function WorkspaceTrustSheet({ onClose }: { onClose: () => void }) {
             Nothing here runs until you enable it on this device. A command that changes needs enabling again.
           </div>
         </div>
-        <button onClick={() => setOpen(false)} aria-label="Close" className="opacity-60 hover:opacity-100">
+        <button onClick={() => setOpen(false)} aria-label="Close" className="text-ink-soft hover:text-ink">
           <IconX size={16} />
         </button>
       </div>
@@ -75,7 +75,7 @@ export function WorkspaceTrustSheet({ onClose }: { onClose: () => void }) {
         ))}
       </ul>
       <div className="mt-4 flex justify-end gap-2">
-        <button onClick={() => setOpen(false)} className="rounded-lg px-3 py-1.5 text-sm opacity-70 hover:opacity-100">
+        <button onClick={() => setOpen(false)} className="rounded-lg px-3 py-1.5 text-sm text-ink-soft hover:text-ink">
           Close
         </button>
         <button

@@ -112,12 +112,12 @@ export function OrgSignInSection() {
           <div className="flex items-center gap-3">
             <code className="text-xl font-bold tracking-[0.25em]">{flow.userCode}</code>
             <button
-              className="text-xs underline opacity-70 hover:opacity-100"
+              className="text-xs underline text-ink-soft hover:text-ink"
               onClick={() => void openExternal(flow.verificationUriComplete ?? flow.verificationUri).catch((e) => toast.error(errMsg(e)))}
             >
               open
             </button>
-            <button className="text-xs underline opacity-70 hover:opacity-100" onClick={() => setFlow(null)}>
+            <button className="text-xs underline text-ink-soft hover:text-ink" onClick={() => setFlow(null)}>
               cancel
             </button>
           </div>

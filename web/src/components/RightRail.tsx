@@ -205,7 +205,7 @@ export function RightRail({
               {item.icon(17)}
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
-                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
+                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[11px] font-semibold leading-none"
                   style={{ background: "var(--ligus-warm-fill)", color: "var(--ligus-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
@@ -220,8 +220,7 @@ export function RightRail({
           toggle (and Escape). Sits in the pane header's empty right edge. */}
       <button
         onClick={onClose}
-        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg opacity-55 transition-opacity hover:opacity-100"
-        style={{ color: "var(--ligus-ink)" }}
+        className="absolute right-2 top-2.5 z-10 flex h-7 w-7 items-center justify-center rounded-lg text-ink-soft transition-colors hover:text-ink"
         title="Close panel (Esc)"
         aria-label="Close panel"
       >
@@ -299,7 +298,7 @@ export function RailFrame({
     <div className="flex h-full flex-col">
       <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--ligus-line)" }}>
         <div className="flex items-center gap-1.5 pr-8">
-          <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
+          <h2 className="ligus-title">{title}</h2>
           <PaneHelpLink title={title} about={about} docs={docs} />
         </div>
         {actions && <div className="mt-2">{actions}</div>}
@@ -825,7 +824,7 @@ function McpServerCard({
           />
         ) : (
           <span
-            className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+            className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase"
             style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
           >
             {disabled ? "off" : "on"}
@@ -931,7 +930,7 @@ function AgentRosterRow({
               size={32}
             />
             <span
-              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[9px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
+              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
               style={{
                 background: "color-mix(in srgb, var(--ligus-ink) 55%, transparent)",
                 color: "var(--ligus-canvas)",
@@ -1025,7 +1024,7 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
+            className="rounded-full px-2 py-1 text-[11px] font-semibold uppercase text-ink-soft"
             style={{ background: "var(--ligus-mist)" }}
             title="A runtime you configured (vs. an auto-detected local CLI)"
           >
@@ -1878,7 +1877,7 @@ function RefinementThread({
                 <span className="text-ink-soft">{r.role}</span>
                 {r.requestChanges && (
                   <span
-                    className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                    className="rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
                     style={{
                       color: "var(--ligus-warm-ink)",
                       background: "color-mix(in srgb, var(--ligus-accent-warm) 15%, transparent)",
@@ -1889,7 +1888,7 @@ function RefinementThread({
                 )}
                 <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
-              <div data-testid="refinement-text" className="mt-0.5 break-words opacity-80">
+              <div data-testid="refinement-text" className="mt-0.5 break-words text-ink-soft">
                 <Markdown content={r.text} size="xs" />
               </div>
             </div>
@@ -2027,7 +2026,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
           title="Settled"
           action={
             <button
-              className="text-xs opacity-60 transition-opacity hover:opacity-100"
+              className="text-xs text-ink-soft transition-colors hover:text-ink"
               onClick={() => dismiss(groups.settled.map((p) => p.id), true)}
             >
               Clear settled
@@ -2649,7 +2648,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   style={fieldStyle}
                 />
                 <button
-                  className="mt-1 text-xs underline opacity-70 hover:opacity-100"
+                  className="mt-1 text-xs underline text-ink-soft hover:text-ink"
                   onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
                 >
                   Copy again
@@ -2682,7 +2681,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
         <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
         <span
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider"
           style={{
             background: "color-mix(in srgb, var(--ligus-accent-cool) 15%, transparent)",
             color: "var(--ligus-accent-ink)",
@@ -2776,7 +2775,7 @@ function AgentTargetPicker({
 function TargetBadge({ agentIds, agents }: { agentIds: string[]; agents: WorkspaceAgentDto[] }) {
   return (
     <span
-      className="inline-block rounded-full px-2 py-0.5 text-[10.5px] font-medium"
+      className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
       style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
     >
       {targetLabel(agentIds, agents)}
@@ -2832,7 +2831,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
               <div className="flex gap-2 text-xs">
-                <button className="opacity-70 hover:opacity-100" onClick={() => previewVaultMutation.mutate(vault.url)}>
+                <button className="text-ink-soft hover:text-ink" onClick={() => previewVaultMutation.mutate(vault.url)}>
                   Preview
                 </button>
                 <button
@@ -3231,7 +3230,7 @@ export function SubtleSelectField({
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)", opacity: disabled ? 0.6 : 1 }}
       title={title}
     >
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
+      <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
@@ -3254,7 +3253,7 @@ function ContextStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border py-2 text-center" style={panelStyle}>
       <div className="text-base font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
     </div>
   );
 }

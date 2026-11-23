@@ -294,8 +294,7 @@ export function TerminalPanel({ onCollapse }: Props) {
             type="button"
             aria-label="Hide terminal"
             title="Hide terminal"
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
-            style={{ color: "var(--ligus-ink)" }}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-ink-soft transition-all hover:bg-[color:var(--ligus-overlay)] hover:text-ink"
             onClick={onCollapse}
           >
             <IconX size={14} />

@@ -436,7 +436,7 @@ export function AddPhonePanel({ onDone, onCancel }: { onDone: () => void; onCanc
             </code>
           </div>
           {phone.standing === "alreadyMine" && (
-            <div className="opacity-70" data-testid="phone-already-mine">
+            <div className="text-ink-soft" data-testid="phone-already-mine">
               Already one of your devices. Adding it again keeps it and updates its name in My devices.
             </div>
           )}
@@ -604,7 +604,7 @@ export function PastePhoneCode({ onDone, onCancel }: { onDone: () => void; onCan
           </div>
           <div className="truncate font-mono text-[11px] text-ink-soft">device {preview.deviceId}</div>
           {preview.standing === "alreadyMine" && (
-            <div className="opacity-70" data-testid="paste-phone-already-mine">
+            <div className="text-ink-soft" data-testid="paste-phone-already-mine">
               Already one of your devices. Adding it again keeps it and updates its name in My devices.
             </div>
           )}

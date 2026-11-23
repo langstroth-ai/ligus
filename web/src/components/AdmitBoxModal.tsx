@@ -67,8 +67,8 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
 
   return (
     <Modal onClose={onClose} panelClassName="w-full max-w-lg rounded-xl border p-5" panelStyle={{ background: "var(--ligus-panel)", borderColor: "var(--ligus-line)", color: "var(--ligus-ink)" }}>
-      <h2 className="text-base font-semibold">Admit a box to {workspaceName}</h2>
-      <p className="mt-1 text-sm opacity-75">
+      <h2 className="ligus-title">Admit a box to {workspaceName}</h2>
+      <p className="mt-1 text-sm text-ink-soft">
         A serve or worker box joins as its own service member: at most Contributor, and its votes never count as a person's approval.
         You confirm with your passkey.
       </p>
@@ -144,7 +144,7 @@ export function AdmitBoxModal({ workspaceId, workspaceName, onClose }: { workspa
             value={hours}
             onChange={(e) => setHours(Math.min(144, Math.max(1, Number(e.target.value) || 1)))}
           />
-          <p className="text-xs opacity-75">Anyone holding this code before the box redeems it can join as that box: keep it in a Secret, never in a values file.</p>
+          <p className="text-xs text-ink-soft">Anyone holding this code before the box redeems it can join as that box: keep it in a Secret, never in a values file.</p>
           <div className="flex justify-end">
             <button
               className="rounded-md px-3 py-1 text-sm disabled:opacity-50"

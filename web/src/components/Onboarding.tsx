@@ -406,7 +406,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
       <div className="w-full max-w-md rounded-3xl border p-8" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}>
         <div className="mb-1 flex items-center gap-3">
           <LigusBrandIcon size={40} />
-          <div className="text-xl font-semibold">Welcome to Ligus</div>
+          <h1 className="ligus-display">Welcome to Ligus</h1>
         </div>
         <div className="mb-4 text-sm text-ink-soft">
           A local-first workspace where you and your AI agents build side by side — bring your own
@@ -474,7 +474,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                 type="button"
                 onClick={() => void reDetect()}
                 disabled={reChecking}
-                className="text-xs underline opacity-60 hover:opacity-100 disabled:opacity-40"
+                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
               >
                 {reChecking ? "Checking…" : "Re-check"}
               </button>
@@ -574,7 +574,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                   type="button"
                   onClick={() => void probeAgent()}
                   disabled={agentProbe === "running" || apiKey.trim().length === 0}
-                  className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                  className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
                 >
                   {agentProbe === "running" ? "Testing…" : "Test connection"}
                 </button>
@@ -729,12 +729,12 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
         {error && <p className="mt-3 text-xs" style={{ color: "var(--ligus-warm-ink)" }}>{error}</p>}
 
         <div className="mt-6 flex items-center justify-between">
-          <button className="text-xs opacity-50 hover:opacity-100 disabled:opacity-20" disabled={step === 1 || busy} onClick={() => setStep((s) => s - 1)}>
+          <button className="text-xs text-ink-soft hover:text-ink disabled:opacity-20" disabled={step === 1 || busy} onClick={() => setStep((s) => s - 1)}>
             ← Back
           </button>
           <div className="flex items-center gap-3">
             {step === 2 && (
-              <button className="text-xs opacity-50 hover:opacity-100" disabled={busy} onClick={() => setStep(step + 1)}>
+              <button className="text-xs text-ink-soft hover:text-ink" disabled={busy} onClick={() => setStep(step + 1)}>
                 Skip
               </button>
             )}

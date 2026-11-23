@@ -273,7 +273,7 @@ export function SettingsView({
           className="flex shrink-0 items-center justify-between gap-3 border-b px-6 py-3"
           style={{ borderColor: "var(--ligus-line)" }}
         >
-          <h1 className="text-[length:var(--ligus-text-xl)] font-semibold tracking-[-0.01em]">{TAB_LABEL[tab]}</h1>
+          <h1 className="ligus-title">{TAB_LABEL[tab]}</h1>
           <IconButton label="Close settings" onClick={onClose}>
             <IconX size={18} />
           </IconButton>

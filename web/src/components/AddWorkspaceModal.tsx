@@ -209,8 +209,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
       panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-base font-semibold">Add workspace</h2>
-        <button className="opacity-50 hover:opacity-100" aria-label="Close" onClick={onClose}>
+        <h2 className="ligus-title">Add workspace</h2>
+        <button className="text-ink-soft hover:text-ink" aria-label="Close" onClick={onClose}>
           ✕
         </button>
       </div>
@@ -312,12 +312,12 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
           </button>
           {lastInvite && (
             <div className="rounded-lg border p-2" style={{ borderColor: "var(--ligus-line)" }}>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
                 Invite code
               </div>
-              <code className="block break-all text-xs opacity-80">{lastInvite}</code>
+              <code className="block break-all text-xs text-ink-soft">{lastInvite}</code>
               <button
-                className="mt-2 rounded-md px-2 py-1 text-xs font-medium underline opacity-80 hover:opacity-100"
+                className="mt-2 rounded-md px-2 py-1 text-xs font-medium underline text-ink-soft hover:text-ink"
                 onClick={() => {
                   navigator.clipboard.writeText(lastInvite);
                   toast.success("Invite copied.");
@@ -379,7 +379,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
       {rooms.length > 0 && (
         <div className="mt-5 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }}>
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
             Your team workspaces
           </div>
           <ul className="space-y-1">
@@ -387,14 +387,14 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
               <li key={w.id} className="flex items-center justify-between gap-2 text-sm">
                 <span className="truncate">{w.name}</span>
                 <span className="flex shrink-0 gap-2 text-xs">
-                  <button className="underline opacity-70 hover:opacity-100" onClick={() => shareShortCode(w)}>
+                  <button className="underline text-ink-soft hover:text-ink" onClick={() => shareShortCode(w)}>
                     Short code
                   </button>
-                  <button className="underline opacity-70 hover:opacity-100" onClick={() => copyInvite(w)}>
+                  <button className="underline text-ink-soft hover:text-ink" onClick={() => copyInvite(w)}>
                     Copy invite
                   </button>
                   <button
-                    className="underline opacity-70 hover:opacity-100"
+                    className="underline"
                     style={{ color: "var(--ligus-danger-ink)" }}
                     onClick={() => leave(w)}
                   >

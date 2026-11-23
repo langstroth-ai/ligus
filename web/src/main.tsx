@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/App";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import "@/styles.css";
+import { applyDensity, loadDensity } from "@/lib/density";
 // NOTE: Monaco is intentionally NOT imported here — it's the bulk of the JS
 // bundle. It loads lazily with the Diff view (App.tsx + DiffView.tsx) so the
 // app starts light.
@@ -13,6 +14,9 @@ import "@/styles.css";
 // tab — each an IPC round-trip (and previously a git shell-out). A short
 // staleTime + no refetch-on-focus stops that storm; live data is still pushed
 // via explicit invalidateQueries after mutations and the sync event.
+// Before first paint, so rows don't jump when the stored density applies.
+applyDensity(loadDensity());
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

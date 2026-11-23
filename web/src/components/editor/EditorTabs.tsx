@@ -51,7 +51,7 @@ export function EditorTabs() {
                 : undefined,
             }}
           >
-            <span className="shrink-0 opacity-60">
+            <span className="shrink-0 text-ink-soft">
               <IconFile size={13} />
             </span>
             <span className="max-w-[14rem] truncate font-mono">{baseName(t.path)}</span>
@@ -71,9 +71,8 @@ export function EditorTabs() {
                   editorStore.closeTab(t.path);
                 }}
                 className={`absolute inset-0 flex items-center justify-center rounded transition-opacity hover:bg-[color:var(--ligus-overlay)] ${
-                  t.dirty ? "opacity-0 group-hover:opacity-100" : "opacity-50 group-hover:opacity-100"
+                  t.dirty ? "opacity-0 group-hover:opacity-100" : "text-ink-soft group-hover:text-ink"
                 }`}
-                style={{ color: "var(--ligus-ink)" }}
                 tabIndex={active ? 0 : -1}
               >
                 <IconX size={12} />

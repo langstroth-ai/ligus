@@ -23,7 +23,7 @@ export function ErrorLogSheet({ onClose }: { onClose: () => void }) {
       panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" }}
     >
       <div className="flex items-center justify-between border-b px-5 py-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <h2 className="text-sm font-semibold">Recent errors</h2>
+        <h2 className="ligus-section">Recent errors</h2>
         <div className="flex items-center gap-1">
           {rows.length > 0 && (
             <button

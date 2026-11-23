@@ -70,8 +70,7 @@ export function TerminalTabs({ onSelect, onClose, onNew }: Props) {
           type="button"
           aria-label="New terminal"
           title="New terminal"
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg opacity-60 transition-all hover:bg-[color:var(--ligus-overlay)] hover:opacity-100"
-          style={{ color: "var(--ligus-ink)" }}
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-ink-soft transition-all hover:bg-[color:var(--ligus-overlay)] hover:text-ink"
           onClick={onNew}
         >
           <IconPlus size={14} />

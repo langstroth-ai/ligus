@@ -236,7 +236,7 @@ export function ChatRunsOn({
       {parts.map((p, i) => (
         <span key={i} className={i === 0 ? "shrink-0" : "min-w-0 truncate"}>
           {i > 0 && (
-            <span aria-hidden className="mr-1.5 opacity-50">
+            <span aria-hidden className="mr-1.5 text-ink-soft">
               ·
             </span>
           )}

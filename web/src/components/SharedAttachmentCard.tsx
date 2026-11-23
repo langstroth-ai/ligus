@@ -27,7 +27,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
 
   if (view.deleted) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs opacity-60" style={{ borderColor: "var(--ligus-line)" }}>
+      <span className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs text-ink-soft" style={{ borderColor: "var(--ligus-line)" }}>
         <IconFile size={13} /> {view.name} (deleted)
       </span>
     );
@@ -101,15 +101,15 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
       style={{ borderColor: risky ? "var(--ligus-danger, #c0392b)" : "var(--ligus-line)", background: "var(--ligus-mist)" }}
     >
       <div className="flex items-center gap-1.5">
-        <span aria-hidden className="opacity-60">
+        <span aria-hidden className="text-ink-soft">
           <IconFile size={13} />
         </span>
         <span className="min-w-0 flex-1 truncate font-medium" title={view.name}>
           {view.name}
         </span>
-        <span className="opacity-60">{formatBytes(view.size)}</span>
+        <span className="text-ink-soft">{formatBytes(view.size)}</span>
       </div>
-      <div className="opacity-70">
+      <div className="text-ink-soft">
         From {view.sender}
         {view.fromAgentOffer ? " (an agent's file, approved by a person)" : ""}
       </div>
@@ -119,7 +119,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
         </div>
       )}
       {check && (
-        <div className="opacity-80" data-testid="attachment-check">
+        <div className="text-ink-soft" data-testid="attachment-check">
           Verified against what {check.sender} signed. Content: {check.assessment.detected.ext} ({check.assessment.detected.mime}).
           {check.archive && ` Archive: ${check.archive.entries} entries${check.archive.bomb ? `, ${check.archive.bomb}` : ""}.`}
           {check.archive && (check.archive.opaqueEntries ?? 0) > 0 &&
@@ -148,7 +148,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
           </button>
         )}
         {view.canDelete && (
-          <button type="button" onClick={() => void remove()} className="rounded border px-1.5 py-0.5 opacity-70" style={{ borderColor: "var(--ligus-line)" }}>
+          <button type="button" onClick={() => void remove()} className="rounded border px-1.5 py-0.5 text-ink-soft" style={{ borderColor: "var(--ligus-line)" }}>
             Delete
           </button>
         )}

@@ -110,7 +110,7 @@ export function CliRuntimesPanel() {
                 </span>
                 {c.loginDetail && <span className="text-ink-soft"> · {c.loginDetail}</span>}
                 {c.login !== "loggedIn" && (
-                  <div className="mt-0.5 opacity-70">
+                  <div className="mt-0.5 text-ink-soft">
                     To sign in, run <code>{c.loginCommand}</code> in a terminal on this machine.
                   </div>
                 )}

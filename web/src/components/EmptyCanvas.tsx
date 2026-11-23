@@ -32,7 +32,7 @@ export function EmptyCanvas({
   return (
     <div className="ligus-enter flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <CombMark />
-      <h2 className="text-[17px] font-semibold tracking-[-0.01em]">Nothing open in {workspaceName}</h2>
+      <h2 className="ligus-title">Nothing open in {workspaceName}</h2>
       <p className="max-w-[360px] text-[13px] leading-[1.55] text-ink-soft">
         Start a chat and @-mention an agent to bring it in, or pick up a conversation from the sidebar.
       </p>

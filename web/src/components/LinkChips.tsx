@@ -30,7 +30,7 @@ export function LinkChips({ links }: { links: LinkChipDto[] | undefined }) {
           >
             <span className="font-medium">{forgeLabel(l.provider, l.host)}</span>
             <bdi className="font-mono">{handle}</bdi>
-            <span className="opacity-70">· {chip!.label}</span>
+            <span className="text-ink-soft">· {chip!.label}</span>
           </span>
         );
       })}

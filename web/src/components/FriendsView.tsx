@@ -58,7 +58,7 @@ function PersonLinks({ p }: { p: CoMemberDto }) {
     <div className="flex flex-wrap items-center gap-1">
       <LinkChips links={shown} />
       {unchecked && (
-        <button type="button" className="text-[11px] underline opacity-70" onClick={() => void checkNow()}>
+        <button type="button" className="text-[11px] underline text-ink-soft" onClick={() => void checkNow()}>
           Check now
         </button>
       )}
@@ -131,7 +131,7 @@ function LinkBox({
         >
           Copy link
         </button>
-        <button className="text-xs opacity-60 hover:opacity-100" onClick={onClose}>
+        <button className="text-xs text-ink-soft hover:text-ink" onClick={onClose}>
           Done
         </button>
       </div>
@@ -298,7 +298,7 @@ export function FriendsView({
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-8" style={{ color: "var(--ligus-ink)" }}>
       <header className="flex items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-lg font-semibold">
+        <h1 className="ligus-title flex items-center gap-2">
           <IconUsers size={18} /> People
         </h1>
         {profile.data?.safetyCode && (
@@ -319,7 +319,7 @@ export function FriendsView({
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Join with an invite</h2>
+        <h2 className="ligus-cap">Join with an invite</h2>
         <textarea
           value={paste}
           onChange={(e) => void inspect(e.target.value)}
@@ -352,7 +352,7 @@ export function FriendsView({
 
       {(dms.data?.length ?? 0) > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Direct messages</h2>
+          <h2 className="ligus-cap">Direct messages</h2>
           {dms.data!.map((d) => {
             const note = d.inviteDelivery?.pending || d.inviteDelivery?.state === "expired" ? inviteDeliveryNote(d.inviteDelivery, d.name) : null;
             const warn = d.inviteDelivery?.state === "warning";
@@ -386,7 +386,7 @@ export function FriendsView({
                             Deliver anyway
                           </button>
                         )}
-                        <button className="opacity-60 hover:opacity-100" onClick={() => void stopWaiting(d)}>
+                        <button className="text-ink-soft hover:text-ink" onClick={() => void stopWaiting(d)}>
                           Stop waiting
                         </button>
                       </>
@@ -400,7 +400,7 @@ export function FriendsView({
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">People you share a workspace with</h2>
+        <h2 className="ligus-cap">People you share a workspace with</h2>
         {people.data && people.data.length === 0 && (
           <p className="text-sm text-ink-soft">Nobody yet. Create a workspace and share its invite link, or join one from a link above.</p>
         )}
@@ -418,7 +418,7 @@ export function FriendsView({
                   <span className="truncate font-medium">{p.displayName || "Unnamed"}</span>
                   {p.lookAlike && (
                     <span
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
                       style={{ color: "var(--ligus-danger-ink)", border: "1px solid var(--ligus-danger-ink)" }}
                       title="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
                     >
