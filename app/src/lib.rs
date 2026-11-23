@@ -13143,7 +13143,9 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
     // for the 20s heartbeat. A max(row_id) read; no network unless it grew.
     const LOCAL_WRITES: std::time::Duration = std::time::Duration::from_millis(250);
 
-    let mut store = match EventStore::open(&db_path) {
+    // Off the async workers: opening can wait for another connection's lock.
+    let open_path = db_path.clone();
+    let mut store = match tokio::task::spawn_blocking(move || EventStore::open(open_path)).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(target: "sync", "failed to open store: {e}");
@@ -15530,7 +15532,9 @@ async fn run_peer_sync_session(app: AppHandle, data_dir: PathBuf, db_path: PathB
     };
     eprintln!("p2p: listening as {}", node.local_id().0);
 
-    let mut store = match EventStore::open(&db_path) {
+    // Off the async workers: opening can wait for another connection's lock.
+    let open_path = db_path.clone();
+    let mut store = match tokio::task::spawn_blocking(move || EventStore::open(open_path)).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(target: "p2p", "failed to open store: {e}");

@@ -380,9 +380,16 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
 /// One sync round against the relay: push everything unpushed, then fetch +
 /// ingest. Uses its own EventStore connection (shares the WAL file), as the app
 /// does. Returns (pushed, pulled) counts.
+/// Open the store from async code: opening can wait (up to the busy
+/// timeout) for another connection's lock on the file, which must not hold
+/// up a runtime worker thread.
+async fn open_store(path: std::path::PathBuf) -> Result<EventStore> {
+    Ok(tokio::task::spawn_blocking(move || EventStore::open(path)).await??)
+}
+
 async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
     let mut engine = sync_engine(cfg)?;
-    let mut store = EventStore::open(cfg.data_dir.join("ligus.db"))?;
+    let mut store = open_store(cfg.data_dir.join("ligus.db")).await?;
     let (pushed, mut pulled) = sync_round(&mut engine, &mut store).await?;
     // A one-shot sync (a daemon's first sync, `ligus sync`, a worker tick) needs
     // the whole room before it acts: keep paging until caught up. Each round is

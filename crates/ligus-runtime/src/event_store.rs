@@ -30,6 +30,17 @@ pub enum EventStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    /// An authored draft whose signer stored another event naming the same
+    /// chain link (`ActorStamp::prev`) since it was drafted (another
+    /// connection of this device wrote first). Storing it would fork the
+    /// signer's chain, so it is refused; draft it again.
+    #[error("this draft is out of date: its signer wrote something else here first; draft it again")]
+    StaleDraft,
+    /// The database gained events while maintenance was deciding what to
+    /// delete (after its backup was taken): nothing was deleted; run it
+    /// again later.
+    #[error("the database changed while the cleanup ran; nothing was deleted, it runs again next time")]
+    ChangedDuringMaintenance,
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
 }
@@ -153,8 +164,42 @@ fn enable_wal(conn: &Connection) -> Result<()> {
 /// reads first takes only a read snapshot, and its first write then fails at
 /// once with "database is locked" if another connection committed since
 /// (SQLite can't wait that out: the snapshot is stale).
-pub(crate) fn write_tx(conn: &Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
-    rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+///
+/// Inside a write this connection already holds ([`EventStore::begin_write`])
+/// it is a savepoint: the lock is held already, and its writes still commit
+/// or roll back together. Dropped without [`WriteTx::commit`], it rolls back.
+pub(crate) fn write_tx(conn: &Connection) -> rusqlite::Result<WriteTx<'_>> {
+    let nested = !conn.is_autocommit();
+    conn.execute_batch(if nested { "SAVEPOINT ligus_write" } else { "BEGIN IMMEDIATE" })?;
+    Ok(WriteTx { conn, nested, done: false })
+}
+
+pub(crate) struct WriteTx<'a> {
+    conn: &'a Connection,
+    nested: bool,
+    done: bool,
+}
+
+impl WriteTx<'_> {
+    pub(crate) fn commit(mut self) -> rusqlite::Result<()> {
+        self.done = true;
+        self.conn.execute_batch(if self.nested { "RELEASE ligus_write" } else { "COMMIT" })
+    }
+}
+
+impl std::ops::Deref for WriteTx<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.conn
+    }
+}
+
+impl Drop for WriteTx<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self.conn.execute_batch(if self.nested { "ROLLBACK TO ligus_write; RELEASE ligus_write" } else { "ROLLBACK" });
+        }
+    }
 }
 
 impl EventStore {
@@ -568,6 +613,49 @@ impl EventStore {
         Ok(head)
     }
 
+    /// Take the file's write lock and hold it until [`EventStore::end_write`]:
+    /// no other connection writes meanwhile, so what this one reads stays
+    /// current until it writes. For a draft that has to be made again at the
+    /// head ([`EventStoreError::StaleDraft`]): drafted and stored under the
+    /// lock, it can't go stale again. Writes made meanwhile through this
+    /// store commit with `end_write(true)` and roll back otherwise.
+    pub fn begin_write(&self) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    /// End [`EventStore::begin_write`]: commit, or roll back.
+    pub fn end_write(&self, commit: bool) -> Result<()> {
+        self.conn.execute_batch(if commit { "COMMIT" } else { "ROLLBACK" })?;
+        Ok(())
+    }
+
+    /// Whether storing `env`, authored here, would fork its signer's chain:
+    /// another stored event of the same signer on the log already names the
+    /// same link (`ActorStamp::prev`, none for a first event). Only an
+    /// authored draft can be stale this way (it was drafted before a write
+    /// of the same signer through another connection); a peer's event is
+    /// never judged here, its fork is for the fold to see.
+    fn forks_chain(&self, env: &SessionEventEnvelope) -> Result<bool> {
+        let (Some(signer), Some(stamp), Some(_)) = (env.signer_device_id, env.actor_stamp.as_ref(), env.signature.as_ref()) else {
+            return Ok(false);
+        };
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT 1 FROM events WHERE session_id = ?1 AND event_id != ?2 \
+                 AND json_extract(envelope_json, '$.signerDeviceId') = ?3 \
+                 AND json_extract(envelope_json, '$.actorStamp') IS NOT NULL \
+                 AND json_extract(envelope_json, '$.actorStamp.prev') IS ?4 LIMIT 1",
+            )?
+            .exists(rusqlite::params![
+                env.session_id.to_string(),
+                env.event_id.to_string(),
+                signer.to_string(),
+                stamp.prev.map(|p| p.to_string())
+            ])?)
+    }
+
     /// Append an envelope this device authored, verbatim (its JSON, and so
     /// its signed `sequence`, are stored as given). Fails if its event id is
     /// already stored.
@@ -580,6 +668,11 @@ impl EventStore {
     /// under the write lock, so two appends never get one place and none is
     /// refused for it. Ingested events are placed the same way
     /// ([`EventStore::ingest`]); a stored row is never moved or replaced.
+    ///
+    /// A draft its own signer has since written past (a write of the same
+    /// device through another connection names the same chain link) is
+    /// refused with [`EventStoreError::StaleDraft`]: stored, it would fork
+    /// the signer's chain. The caller drafts it again.
     pub fn append_envelope(&self, env: &SessionEventEnvelope) -> Result<()> {
         let json = serde_json::to_string(env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
@@ -587,6 +680,9 @@ impl EventStore {
             .unwrap_or_default()
             .to_string();
         let tx = write_tx(&self.conn)?;
+        if self.forks_chain(env)? {
+            return Err(EventStoreError::StaleDraft);
+        }
         // The cached head, if it is current: an event that names it moves it.
         // Read under the write lock, so no other connection's event lands
         // between this and the insert.
@@ -946,6 +1042,19 @@ impl EventStore {
     /// `equivocations` table), whichever arrived first: the fold decides
     /// which copies count (`ligus_core::copies`), so arrival order never does.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
+        self.ingest_inner(env, sealed_epoch, false)
+    }
+
+    /// [`EventStore::ingest`] for an event authored for this device to store
+    /// that this device didn't sign (a phone's signature over a draft made
+    /// here): refused with [`EventStoreError::StaleDraft`] if its signer's
+    /// chain moved past the draft's link meanwhile (see
+    /// [`EventStore::append_envelope`]).
+    pub fn ingest_authored(&mut self, env: &SessionEventEnvelope) -> Result<bool> {
+        self.ingest_inner(env, env.sealed_epoch(), true)
+    }
+
+    fn ingest_inner(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>, authored: bool) -> Result<bool> {
         // Under the write lock from the start (see [`write_tx`]): whether the
         // id is stored and the next sequence are read and the row written
         // with no other connection's write in between, so two connections
@@ -956,6 +1065,9 @@ impl EventStore {
             self.note_equivocation(env, sealed_epoch)?;
             tx.commit()?;
             return Ok(false);
+        }
+        if authored && self.forks_chain(env)? {
+            return Err(EventStoreError::StaleDraft);
         }
         let next_seq = tx
             .query_row(
@@ -1926,6 +2038,17 @@ impl EventStore {
         Ok(n)
     }
 
+    /// (highest row, row count) of the stored events and of the copies
+    /// beside them: changes whenever either table gains or loses a row.
+    fn events_sig(&self) -> Result<(i64, i64, i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT (SELECT COALESCE(MAX(row_id), 0) FROM events), (SELECT COUNT(*) FROM events), \
+             (SELECT COALESCE(MAX(row_id), 0) FROM equivocations), (SELECT COUNT(*) FROM equivocations)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?)
+    }
+
     /// Workspaces that hold events but aren't `keep` and that `own_device`
     /// never signed an event in, with their event counts — what
     /// [`purge_foreign_workspaces`](Self::purge_foreign_workspaces) would drop.
@@ -1973,19 +2096,50 @@ impl EventStore {
         own_device: Uuid,
         backup: Option<&Path>,
     ) -> Result<Vec<(Uuid, usize)>> {
+        self.purge_foreign_workspaces_with(keep, own_device, backup, &mut || {})
+    }
+
+    /// [`EventStore::purge_foreign_workspaces`], running `after_backup` once
+    /// the backup is taken (tests: another connection's write there).
+    fn purge_foreign_workspaces_with(
+        &mut self,
+        keep: &HashSet<Uuid>,
+        own_device: Uuid,
+        backup: Option<&Path>,
+        after_backup: &mut dyn FnMut(),
+    ) -> Result<Vec<(Uuid, usize)>> {
+        // The backup comes first (it can't be taken inside a transaction);
+        // what it holds is pinned by the events' rows at the time. The
+        // decision is then made again under the write lock, and if any event
+        // was stored in between (another connection: the sync loop, the
+        // service), nothing is deleted: such an event might be this device's
+        // own first one in a workspace, and it would be missing from the
+        // backup too. The caller tries again later.
+        let backed_up = match backup {
+            Some(path) => {
+                if self.foreign_workspaces(keep, own_device)?.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let rows = self.events_sig()?;
+                self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
+                after_backup();
+                Some(rows)
+            }
+            None => None,
+        };
+        let tx = write_tx(&self.conn)?;
+        if backed_up.is_some_and(|rows| self.events_sig().ok() != Some(rows)) {
+            return Err(EventStoreError::ChangedDuringMaintenance);
+        }
         let doomed = self.foreign_workspaces(keep, own_device)?;
         if doomed.is_empty() {
             return Ok(doomed);
-        }
-        if let Some(path) = backup {
-            self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
         }
         let rooms: Vec<String> = {
             let mut stmt = self.conn.prepare("SELECT workspace FROM sync_cursor UNION SELECT DISTINCT workspace FROM pushed")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
-        let tx = write_tx(&self.conn)?;
         for (ws, _) in &doomed {
             let ws_s = ws.to_string();
             tx.execute(
@@ -2027,6 +2181,10 @@ impl EventStore {
                 .map(str::to_owned)
         }
 
+        // Decided and done under the write lock: an event or another copy
+        // stored meanwhile through another connection is either seen here
+        // (and kept as a witness if pruned) or comes after.
+        let tx = write_tx(&self.conn)?;
         let mut completed: std::collections::HashSet<String> = std::collections::HashSet::new();
         {
             let mut stmt = self
@@ -2071,7 +2229,6 @@ impl EventStore {
         for env in &witnesses {
             self.note_lamport_witness(env)?;
         }
-        let tx = write_tx(&self.conn)?;
         let mut removed = 0;
         for event_id in &doomed {
             removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
@@ -2853,5 +3010,43 @@ mod tests {
         assert_eq!(all, 6);
         assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again"))).unwrap().is_empty());
         assert!(!dir.path().join("again").exists());
+    }
+
+    /// An event this device stores in a foreign-looking workspace through
+    /// another connection after the cleanup's backup (the sync loop, the
+    /// service) makes the cleanup stop: nothing is deleted, its own event and
+    /// the workspace's others stay. The next run, with a fresh backup, keeps
+    /// that workspace (this device wrote there now).
+    #[test]
+    fn purge_stops_when_an_event_lands_after_its_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let mut store = EventStore::open(&path).unwrap();
+        let me = Uuid::new_v4();
+        let ws = Uuid::new_v4();
+        let msg = |signer: Uuid| {
+            let mut e = SessionEventEnvelope::new(
+                Uuid::new_v4(),
+                ws,
+                1,
+                SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
+            );
+            e.signer_device_id = Some(signer);
+            e
+        };
+        store.ingest(&msg(Uuid::new_v4())).unwrap();
+        let keep = HashSet::new();
+        assert_eq!(store.foreign_workspaces(&keep, me).unwrap(), vec![(ws, 1)]);
+
+        let mine = msg(me);
+        let other = EventStore::open(&path).unwrap();
+        let err = store
+            .purge_foreign_workspaces_with(&keep, me, Some(&dir.path().join("bak")), &mut || other.append_envelope(&mine).unwrap())
+            .unwrap_err();
+        assert!(matches!(err, EventStoreError::ChangedDuringMaintenance), "{err}");
+        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap();
+        assert_eq!(left, 2, "nothing deleted");
+        assert!(store.has_event(mine.event_id).unwrap());
+        assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("bak2"))).unwrap().is_empty(), "now this device's");
     }
 }

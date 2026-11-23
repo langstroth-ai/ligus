@@ -828,6 +828,9 @@ fn switching_to_any_later_rules_version_needs_presence() {
     forged.sequence += 100;
     forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown, presence: None };
     forged.actor_stamp.as_mut().unwrap().presence = None;
+    // A link of its own (a dangling one), so it shares none with the real
+    // switch below: this device's chain stays unforked.
+    forged.actor_stamp.as_mut().unwrap().prev = Some(Uuid::new_v4());
     forged.signature = None;
     svc.sign_for_test(&mut forged);
     let mut log = config_log(&svc, wid);

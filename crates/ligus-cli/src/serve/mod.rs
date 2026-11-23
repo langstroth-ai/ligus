@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use ligus_core::{workspace_config_session_id, ChatSession, HostKind, MessageRole, Timestamp, WorkspaceHost};
 use ligus_runtime::device_enroll::Standing;
-use ligus_runtime::{ChatService, EventStore};
+use ligus_runtime::ChatService;
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use uuid::Uuid;
@@ -1319,9 +1319,11 @@ const STREAM_STABLE_AFTER: Duration = Duration::from_secs(30);
 /// The engine and store live as long as the loop, so a round only scans what
 /// was stored since the last one.
 async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let (mut engine, mut store) = match crate::sync_engine(&shared.cfg)
-        .and_then(|e| Ok((e, EventStore::open(shared.cfg.data_dir.join("ligus.db"))?)))
-    {
+    let opened = match crate::sync_engine(&shared.cfg) {
+        Ok(e) => crate::open_store(shared.cfg.data_dir.join("ligus.db")).await.map(|s| (e, s)),
+        Err(e) => Err(e),
+    };
+    let (mut engine, mut store) = match opened {
         Ok(v) => v,
         Err(e) => {
             eprintln!("sync: cannot start: {e}");

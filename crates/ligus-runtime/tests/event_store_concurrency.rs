@@ -11,8 +11,10 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use ligus_core::{ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope};
+use ligus_core::crypto::{sign_envelope, verify_envelope, SigningKeypair};
+use ligus_core::{ActorIdentity, ActorKind, ChatMessage, MessageRole, SessionEvent, SessionEventEnvelope};
 use ligus_runtime::event_store::{EventStore, HoldItem};
+use ligus_runtime::ChatService;
 use uuid::Uuid;
 
 fn rounds() -> usize {
@@ -58,35 +60,49 @@ fn author(store: &EventStore, sid: Uuid, ws: Uuid, body: String) -> Result<Sessi
 }
 
 /// The failure seen between two devices through a relay: this device
-/// authors in a chat while its sync loop ingests the other device's events
-/// of the same chat, on another connection. Every event lands exactly once,
-/// at its own position, and an authored envelope is stored as it was signed.
+/// authors in a chat from two services (two connections, one key) while its
+/// sync loop ingests the other device's events of the same chat on a third.
+/// Every event lands exactly once, every stored envelope still verifies,
+/// and the device's chain never forks: a draft the other service wrote past
+/// is drafted again instead of stored.
 #[test]
 fn authoring_and_relay_ingest_of_one_chat_never_collide() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ligus.db");
-    let (sid, ws) = (Uuid::new_v4(), Uuid::new_v4());
-    seeded(&path, sid, ws);
+    let seed = SigningKeypair::generate().unwrap().seed_bytes();
+    let account = SigningKeypair::generate().unwrap().seed_bytes();
+    let service = {
+        let path = path.clone();
+        move || {
+            ChatService::new(
+                EventStore::open(&path).unwrap(),
+                SigningKeypair::from_seed(&seed).unwrap(),
+                SigningKeypair::from_seed(&account).unwrap(),
+                ActorIdentity::new("u", "U", ActorKind::Human),
+            )
+        }
+    };
+    let ws = Uuid::new_v4();
+    let sid = service().create_chat("c", ws, "anthropic").unwrap().id;
     let n = rounds();
 
     let mut writers: Vec<Box<dyn FnOnce() -> Vec<String> + Send>> = Vec::new();
-    let authored = Arc::new(std::sync::Mutex::new(Vec::new()));
     for w in 0..2 {
-        let (path, authored) = (path.clone(), authored.clone());
+        let service = service.clone();
         writers.push(Box::new(move || {
-            let store = EventStore::open(&path).unwrap();
-            let mut errors = Vec::new();
-            for i in 0..n {
-                match author(&store, sid, ws, format!("local {w} {i}")) {
-                    Ok(env) => authored.lock().unwrap().push(env),
-                    Err(e) => errors.push(format!("author: {e}")),
-                }
-            }
-            errors
+            let mut svc = service();
+            (0..n).filter_map(|i| svc.post_user_message(sid, ws, format!("local {w} {i}")).err().map(|e| format!("author: {e}"))).collect()
         }));
     }
-    let ingested: Vec<SessionEventEnvelope> =
-        (0..n).map(|i| SessionEventEnvelope::new(sid, ws, (i + 1) as i64, message(format!("peer {i}")))).collect();
+    let peer = SigningKeypair::generate().unwrap();
+    let peer_device = Uuid::new_v4();
+    let ingested: Vec<SessionEventEnvelope> = (0..n)
+        .map(|i| {
+            let mut env = SessionEventEnvelope::new(sid, ws, (i + 1) as i64, message(format!("peer {i}")));
+            sign_envelope(&mut env, peer_device, &peer);
+            env
+        })
+        .collect();
     {
         let (path, ingested) = (path.clone(), ingested.clone());
         writers.push(Box::new(move || {
@@ -105,21 +121,32 @@ fn authoring_and_relay_ingest_of_one_chat_never_collide() {
     let errors = race(writers);
     assert!(errors.is_empty(), "{} of {} writes failed, first: {:?}", errors.len(), 3 * n, &errors[..errors.len().min(5)]);
 
+    let svc = service();
     let store = EventStore::open(&path).unwrap();
     let stored = store.list(sid).unwrap();
-    assert_eq!(stored.len(), 1 + 3 * n, "every event stored exactly once");
     let ids: HashSet<Uuid> = stored.iter().map(|e| e.event_id).collect();
     assert_eq!(ids.len(), stored.len(), "no event stored twice");
-    for env in authored.lock().unwrap().iter().chain(&ingested) {
+    for env in &ingested {
         assert!(ids.contains(&env.event_id), "{} lost", env.event_id);
     }
-    // An authored envelope is kept exactly as written (its sequence is
-    // signed); only its place in this device's log may move.
-    let by_id: std::collections::HashMap<Uuid, &SessionEventEnvelope> = stored.iter().map(|e| (e.event_id, e)).collect();
-    for env in authored.lock().unwrap().iter() {
-        assert_eq!(by_id[&env.event_id].sequence, env.sequence, "an authored envelope's own sequence never changes");
+    let bodies: Vec<String> = svc.load(sid).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+    for w in 0..2 {
+        for i in 0..n {
+            let body = format!("local {w} {i}");
+            assert_eq!(bodies.iter().filter(|b| **b == body).count(), 1, "{body} stored once");
+        }
     }
-    assert_eq!(store.max_sequence(sid).unwrap(), Some((1 + 3 * n) as i64), "positions 1..=n, no gaps");
+    // The device's own events: each verifies as stored, one chain.
+    let me = svc.device_id();
+    let public = SigningKeypair::from_seed(&seed).unwrap().public_key_bytes().to_vec();
+    let mine: Vec<&SessionEventEnvelope> = stored.iter().filter(|e| e.signer_device_id == Some(me)).collect();
+    assert_eq!(mine.len(), 1 + 2 * n, "the chat's creation and every post");
+    for env in &mine {
+        verify_envelope(env, &public).unwrap();
+    }
+    let named: HashSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+    assert_eq!(mine.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "the device's chain has one head");
+    assert_eq!(store.max_sequence(sid).unwrap(), Some(stored.len() as i64), "positions 1..=n, no gaps");
 }
 
 /// Two sync engines (the serve loop and a one-shot sync, or the DM sync)
@@ -256,4 +283,63 @@ fn opening_the_store_while_another_connection_writes_never_reports_busy() {
     }
     let failures = race(writers);
     assert!(failures.is_empty(), "{} failed, first: {:?}", failures.len(), &failures[..failures.len().min(5)]);
+}
+
+/// Two copies under one event id (a genuine one and a forgery of it, same
+/// signer, other content) arriving at once through two connections, many
+/// times: exactly one is the log's row and the other sits beside it, and the
+/// chat folds the same whichever arrived first.
+#[test]
+fn racing_copies_under_one_id_keep_one_row_one_copy_and_one_fold() {
+    let peer = SigningKeypair::generate().unwrap();
+    let peer_device = Uuid::new_v4();
+    let signed = |env: SessionEventEnvelope| {
+        let mut env = env;
+        sign_envelope(&mut env, peer_device, &peer);
+        env
+    };
+    let (sid, ws) = (Uuid::new_v4(), Uuid::new_v4());
+    let snapshot = signed(SessionEventEnvelope::new(
+        sid,
+        ws,
+        1,
+        SessionEvent::SessionSnapshot { session: Box::new(ligus_core::ChatSession::new("c", ws, "anthropic")) },
+    ));
+    let genuine = signed(SessionEventEnvelope::new(sid, ws, 2, message("genuine".into())));
+    let mut forged = genuine.clone();
+    forged.clear_raw();
+    forged.payload = message("forged".into());
+    let forged = signed(forged);
+
+    // The fold with each order, one at a time.
+    let fold_of = |first: &SessionEventEnvelope, second: &SessionEventEnvelope| {
+        let mut store = EventStore::open_in_memory().unwrap();
+        store.ingest(&snapshot).unwrap();
+        store.ingest(first).unwrap();
+        store.ingest(second).unwrap();
+        serde_json::to_value(store.load_session(sid).unwrap()).unwrap()
+    };
+    let fold = fold_of(&genuine, &forged);
+    assert_eq!(fold, fold_of(&forged, &genuine), "arrival order never decides the fold");
+
+    let dir = tempfile::tempdir().unwrap();
+    for round in 0..(rounds() / 10).max(10) {
+        let path = dir.path().join(format!("copies-{round}.db"));
+        EventStore::open(&path).unwrap().ingest(&snapshot).unwrap();
+        let writers: Vec<Box<dyn FnOnce() -> Vec<String> + Send>> = [genuine.clone(), forged.clone()]
+            .into_iter()
+            .map(|env| {
+                let path = path.clone();
+                Box::new(move || EventStore::open(&path).unwrap().ingest(&env).err().map(|e| format!("ingest: {e}")).into_iter().collect())
+                    as Box<dyn FnOnce() -> Vec<String> + Send>
+            })
+            .collect();
+        let errors = race(writers);
+        assert!(errors.is_empty(), "round {round}: {errors:?}");
+        let store = EventStore::open(&path).unwrap();
+        let copies = store.list_copies(sid).unwrap();
+        assert_eq!(store.list(sid).unwrap().len(), 2, "round {round}: the snapshot and one row for the id");
+        assert_eq!(copies.len(), 3, "round {round}: and the other copy beside it");
+        assert_eq!(serde_json::to_value(store.load_session(sid).unwrap()).unwrap(), fold, "round {round}: the same fold");
+    }
 }

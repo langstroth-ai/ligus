@@ -236,8 +236,12 @@ impl ChatService {
             let log_head = self.store.lamport_head(env.session_id)?;
             ligus_core::lamport::stamp_next(env, log_head);
             let (_, timeline) = self.store.load_config(wid, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            // The registration is this device's newest event on the log: the
+            // chain link moves past it too (else both name the same link).
+            let prev = self.store.last_signed_by(env.session_id, self.device_id, env.lamport)?;
             if let Some(s) = env.actor_stamp.as_mut() {
                 s.cfg_frontier = timeline.head();
+                s.prev = prev;
             }
         }
         let a = key.assert(&presence::challenge(env));
@@ -287,6 +291,16 @@ impl ChatService {
         }
         env.clear_raw();
         env.sequence = self.store.max_sequence(env.session_id)?.unwrap_or(0) + 1;
+        // This device may have written on the log since the draft (the
+        // confirmation took a while): link past that, as it would have. The
+        // confirmation covers the lamport, not the link. A write of its own
+        // at the draft's lamport or later can't be linked past without a new
+        // confirmation: the store refuses that one (`StaleDraft`) rather than
+        // fork this device's chain.
+        let prev = self.store.last_signed_by(env.session_id, self.device_id, env.lamport)?;
+        if let Some(stamp) = env.actor_stamp.as_mut() {
+            stamp.prev = prev;
+        }
         sign_envelope(&mut env, self.device_id, &self.keypair);
         let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;

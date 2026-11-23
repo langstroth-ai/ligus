@@ -4414,6 +4414,98 @@ async fn phone_act(h: &Harness, phone: &ligus_core::testkit::Phone, account: Uui
     status_of(h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": id, "signature": ligus_core::presence::b64url(&sig) }))).await
 }
 
+/// The phone posts (drafted here, signed on the phone, stored under a fresh
+/// place) while the box posts over HTTP and the sync loop ingests the
+/// desktop's posts, all in one chat: every post lands once, and the phone's
+/// chain never forks. A draft another write of the phone landed past is
+/// refused as stale (409) and prepared again, never stored as drafted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_signed_posts_race_box_posts_and_sync_without_forking() {
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = Arc::new(harness(&endpoint, "m", &[("README.md", "x\n")]).await);
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let phone = Arc::new(phone);
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    for _ in 0..80 {
+        h.handle.shared.sync_kick.notify_one();
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let n = 12;
+    let phone_task = {
+        let (h, phone) = (h.clone(), phone.clone());
+        tokio::spawn(async move {
+            let mut stale = 0;
+            for i in 0..n {
+                loop {
+                    let (code, v) = phone_act(&h, &phone, account, &PhoneAction::Post { chat_id, text: format!("phone {i}") }).await;
+                    match code {
+                        200 => break,
+                        409 => stale += 1,
+                        _ => panic!("phone post {i}: {code} {v}"),
+                    }
+                }
+            }
+            stale
+        })
+    };
+    let box_task = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": format!("box {i}") }))).await;
+            }
+        })
+    };
+    let desktop_task = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                let desktop = h.desktop.clone();
+                tokio::task::spawn_blocking(move || open_service(&desktop).unwrap().post_user_message(chat_id, ws, format!("desk {i}")).unwrap())
+                    .await
+                    .unwrap();
+                sync_once(&h.desktop).await.unwrap();
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    let stale = phone_task.await.unwrap();
+    box_task.await.unwrap();
+    desktop_task.await.unwrap();
+
+    let want: Vec<String> = (0..n).flat_map(|i| [format!("phone {i}"), format!("box {i}"), format!("desk {i}")]).collect();
+    let mut missing = want.clone();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
+        missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
+        if missing.is_empty() {
+            for w in &want {
+                assert_eq!(bodies.iter().filter(|b| **b == w.as_str()).count(), 1, "{w} stored once");
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(missing.is_empty(), "never arrived on the box: {missing:?}");
+    let mine: Vec<_> = signed_by(&h._tmp.path().join("serve"), phone.device_id).into_iter().filter(|e| e.session_id == chat_id).collect();
+    assert_eq!(mine.len(), n, "every phone post stored once ({stale} stale drafts prepared again)");
+    let named: std::collections::HashSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+    assert_eq!(mine.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "the phone's chain has one head");
+    let failures = h.handle.shared.sync_failures.lock().unwrap().clone();
+    assert!(failures.is_empty(), "sync rounds failed: {failures:?}");
+    h.handle.shutdown();
+}
+
 /// Every phone action through serve, signed by the phone's own key as its
 /// person: a post, an approval that counts as the person's, an answer to an
 /// agent's question, clearing a lockdown (with the passkey), and "Apply on

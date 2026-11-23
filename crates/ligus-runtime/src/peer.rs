@@ -632,7 +632,7 @@ mod tests {
             )),
             own(plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert })),
         ] {
-            store.append_envelope(&e).unwrap();
+            store.ingest(&e).unwrap();
         }
 
         // A content event signed by `device`, stamping `claim` as author.

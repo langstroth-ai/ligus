@@ -29,7 +29,7 @@ use anyhow::Result;
 use ligus_core::{workspace_config_session_id, ChatSession};
 use ligus_runtime::keyring::DeliveredKey;
 use ligus_runtime::secret_store::SecretId;
-use ligus_runtime::{EventStore, RelayClient, SyncEngine};
+use ligus_runtime::{RelayClient, SyncEngine};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -365,7 +365,7 @@ const DM_SYNC_EVERY: Duration = Duration::from_secs(4);
 /// seconds. One engine per room, kept for the life of the loop.
 pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut engines: HashMap<String, SyncEngine> = HashMap::new();
-    let mut store = match EventStore::open(shared.cfg.data_dir.join("ligus.db")) {
+    let mut store = match crate::open_store(shared.cfg.data_dir.join("ligus.db")).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("dm sync: cannot open the store: {e}");

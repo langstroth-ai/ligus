@@ -59,6 +59,7 @@ pub enum ChatError {
 
 pub type Result<T> = std::result::Result<T, ChatError>;
 
+
 mod proposal_sets;
 pub use proposal_sets::QuorumOutcome;
 
@@ -280,23 +281,33 @@ impl ChatService {
             }
         };
         let Some((key_id, kp)) = key else { return Ok(None) };
-        let (config, timeline) =
-            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
-        let name = config
-            .as_ref()
-            .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
-            .unwrap_or_default();
-        let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
-        let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
-        // Lamport bounds: one past the newest event of the log held here.
-        let log_head = self.store.lamport_head(session_id)?;
-        env.lamport = ligus_core::lamport::next(log_head);
-        let mut actor = ActorIdentity::new(agent_id.to_string(), name, ligus_core::ActorKind::Agent);
-        actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
-        sign_envelope(&mut env, key_id, &kp);
-        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store_authored(&env)?;
+        // Drafted again, under the store's write lock, when a write of the
+        // same agent key through another connection lands first (see
+        // `store_authored_or_redraft`).
+        let draft = |svc: &mut Self| -> Result<SessionEventEnvelope> {
+            let (config, timeline) =
+                svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
+            let name = config
+                .as_ref()
+                .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
+                .unwrap_or_default();
+            let next_seq = svc.store.max_sequence(session_id)?.unwrap_or(0) + 1;
+            let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload.clone());
+            // Lamport bounds: one past the newest event of the log held here.
+            let log_head = svc.store.lamport_head(session_id)?;
+            env.lamport = ligus_core::lamport::next(log_head);
+            let mut actor = ActorIdentity::new(agent_id.to_string(), name, ligus_core::ActorKind::Agent);
+            actor.device_id = Some(key_id);
+            env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: svc.store.last_signed_by(session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
+            sign_envelope(&mut env, key_id, &kp);
+            svc.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+            svc.store_authored(&env)?;
+            Ok(env)
+        };
+        let env = match draft(self) {
+            Err(ChatError::Store(EventStoreError::StaleDraft)) => self.under_write_lock(draft)?,
+            r => r?,
+        };
         self.changes.local(&env);
         Ok(Some(env))
     }
@@ -744,9 +755,45 @@ impl ChatService {
                 r => r?,
             }
         }
-        self.store_authored(&env)?;
+        let env = self.store_authored_or_redraft(env, is_local)?;
         self.changes.local(&env);
         Ok(env)
+    }
+
+    /// Store a draft this device signed. If a write of this device's own key
+    /// on the same log landed since it was drafted (through another
+    /// connection to the store: another service of this device), storing it
+    /// would fork the device's chain ([`EventStoreError::StaleDraft`]): it
+    /// is drafted again at the new head, judged again, and stored, all under
+    /// the store's write lock so it can't go stale twice. A draft confirmed
+    /// with a passkey isn't redrafted (the confirmation names its lamport; a
+    /// new one needs the person again): its StaleDraft error goes back to the
+    /// caller, nothing stored, to try again.
+    fn store_authored_or_redraft(&mut self, env: SessionEventEnvelope, is_local: bool) -> Result<SessionEventEnvelope> {
+        match self.store_authored(&env) {
+            Err(ChatError::Store(EventStoreError::StaleDraft)) if env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_none()) => {
+                self.under_write_lock(|svc| {
+                    let env = svc.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
+                    if !is_local {
+                        let (config, timeline) =
+                            svc.store.load_config(env.workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
+                        svc.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+                    }
+                    svc.store_authored(&env)?;
+                    Ok(env)
+                })
+            }
+            r => r.map(|()| env),
+        }
+    }
+
+    /// Run `f` holding the store's write lock ([`EventStore::begin_write`]);
+    /// its writes commit if it succeeds and roll back if it fails.
+    fn under_write_lock<R>(&mut self, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R> {
+        self.store.begin_write()?;
+        let r = f(self);
+        self.store.end_write(r.is_ok())?;
+        r
     }
 
     /// Store an envelope this device authored. One for a synced workspace
@@ -3231,7 +3278,7 @@ impl ChatService {
         let Some(first) = envs
             .iter()
             .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
-            .min_by_key(|e| (e.lamport, e.sequence))
+            .min_by_key(|e| (e.lamport, e.event_id))
         else {
             return Ok(None);
         };
@@ -3776,7 +3823,7 @@ struct Chain {
 fn run_initiator(envs: &[SessionEventEnvelope], run_id: Uuid) -> Option<String> {
     envs.iter()
         .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
-        .min_by_key(|e| (e.lamport, e.sequence))
+        .min_by_key(|e| (e.lamport, e.event_id))
         .and_then(|e| e.actor_stamp.as_ref())
         .map(|s| s.actor.id.clone())
         .filter(|id| !id.is_empty())
@@ -6343,5 +6390,213 @@ mod flow_tests {
         assert_eq!((a[0].turns, a[0].window_start, a[0].host_id.as_str()), (2, day, host.as_str()));
         assert_eq!(a[0].errors_by_class.get("code"), Some(&1));
         assert_eq!(flow_kinds(&svc, workspace_config_session_id(wid)), vec!["agentOutcomeSummary", "agentOutcomeSummary"]);
+    }
+}
+
+/// One device, two services on one store (two connections), writing on the
+/// same log with the same key: a draft one of them made before the other's
+/// write is never stored as drafted (its chain link would fork the device's
+/// chain); it is drafted again at the new head, or refused.
+#[cfg(test)]
+mod same_key_tests {
+    use super::*;
+    use crate::event_store::EventStoreError;
+    use ligus_core::{ChatMessage, MessageRole};
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    struct Device {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+        seed: [u8; 32],
+        account: [u8; 32],
+    }
+
+    impl Device {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("ligus.db");
+            Device { _dir: dir, path, seed: SigningKeypair::generate().unwrap().seed_bytes(), account: SigningKeypair::generate().unwrap().seed_bytes() }
+        }
+
+        /// Another service of this device: same keys, its own connection.
+        fn service(&self) -> ChatService {
+            ChatService::new(
+                EventStore::open(&self.path).unwrap(),
+                SigningKeypair::from_seed(&self.seed).unwrap(),
+                SigningKeypair::from_seed(&self.account).unwrap(),
+                ActorIdentity::new("u", "U", ligus_core::ActorKind::Human),
+            )
+        }
+    }
+
+    fn message(body: String) -> SessionEvent {
+        SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "U", body) }
+    }
+
+    /// The signer's chain heads on a log: its events no other of its events
+    /// names as `prev`.
+    fn heads(envs: &[SessionEventEnvelope], signer: Uuid) -> usize {
+        let mine: Vec<_> = envs.iter().filter(|e| e.signer_device_id == Some(signer)).collect();
+        let named: BTreeSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+        mine.iter().filter(|e| !named.contains(&e.event_id)).count()
+    }
+
+    /// One head, and a watermark of the signer covers every one of its events.
+    fn assert_one_chain(envs: &[SessionEventEnvelope], log: Uuid, signer: Uuid) {
+        assert_eq!(heads(envs, signer), 1, "the signer's chain forked");
+        let wm = ligus_core::watermark::heads_of(envs, log, &std::iter::once(signer).collect());
+        let refs: Vec<&SessionEventEnvelope> = envs.iter().collect();
+        let covered = ligus_core::watermark::Chains::of(&refs).ancestors(signer, &wm[0].heads, &wm[0].gaps).len();
+        let mine = envs.iter().filter(|e| e.signer_device_id == Some(signer)).count();
+        assert_eq!(covered, mine, "a watermark covers every event of the signer");
+    }
+
+    /// Nine stale drafts, each raced by a post of the same key through the
+    /// other connection: none is stored as drafted, the chain stays one.
+    #[test]
+    fn a_stale_draft_of_this_devices_key_is_refused_never_forks() {
+        let device = Device::new();
+        let (mut a, mut b) = (device.service(), device.service());
+        let wid = Uuid::new_v4();
+        let chat = a.create_chat("c", wid, "anthropic").unwrap();
+        a.post_user_message(chat.id, wid, "first").unwrap();
+        for i in 0..9 {
+            let stale = a.draft_signed(chat.id, wid, message(format!("a {i}"))).unwrap();
+            b.post_user_message(chat.id, wid, format!("b {i}")).unwrap();
+            assert!(matches!(a.store_authored(&stale), Err(ChatError::Store(EventStoreError::StaleDraft))), "round {i}");
+        }
+        let envs = a.store().list(chat.id).unwrap();
+        assert_one_chain(&envs, chat.id, a.device_id());
+    }
+
+    /// The same race through the append path: the stale draft is drafted
+    /// again at the new head and stored, its message kept, the chain one.
+    #[test]
+    fn a_draft_raced_by_this_devices_key_is_drafted_again() {
+        let device = Device::new();
+        let (mut a, mut b) = (device.service(), device.service());
+        let wid = Uuid::new_v4();
+        let chat = a.create_chat("c", wid, "anthropic").unwrap();
+        a.post_user_message(chat.id, wid, "first").unwrap();
+        for i in 0..9 {
+            let stale = a.draft_signed(chat.id, wid, message(format!("a {i}"))).unwrap();
+            b.post_user_message(chat.id, wid, format!("b {i}")).unwrap();
+            let stored = a.store_authored_or_redraft(stale.clone(), false).unwrap();
+            assert_ne!(stored.event_id, stale.event_id, "drafted again");
+            assert_eq!(stored.payload, stale.payload);
+        }
+        let envs = a.store().list(chat.id).unwrap();
+        assert_one_chain(&envs, chat.id, a.device_id());
+        let bodies: Vec<String> = a.load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+        for i in 0..9 {
+            for who in ["a", "b"] {
+                assert_eq!(bodies.iter().filter(|b| **b == format!("{who} {i}")).count(), 1, "{who} {i} stored once");
+            }
+        }
+    }
+
+    /// A workflow run's initiator is its first record in the fold's order
+    /// (lamport, then event id): never the author-chosen sequence, never
+    /// the order rows happen to be listed in.
+    #[test]
+    fn a_runs_initiator_breaks_a_lamport_tie_on_the_event_id() {
+        let def = ligus_core::WorkflowDefinition {
+            id: Uuid::new_v4(),
+            name: "w".into(),
+            description: String::new(),
+            input_label: None,
+            nodes: Vec::new(),
+            created_at: Timestamp::epoch(),
+            disabled: false,
+        };
+        let run = ligus_core::workflow::new_run(&def, "in", "x");
+        let record = |id: u128, sequence: i64, who: &str| {
+            let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), sequence, SessionEvent::WorkflowRunUpserted { run: Box::new(run.clone()) });
+            e.event_id = Uuid::from_u128(id);
+            e.lamport = 5;
+            e.actor_stamp = Some(ActorStamp {
+                actor: ActorIdentity::new(who, who, ligus_core::ActorKind::Human),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
+            e
+        };
+        // "low" has the lower event id but the higher (author-chosen) sequence.
+        let (low, high) = (record(1, 9, "low"), record(2, 1, "high"));
+        assert_eq!(run_initiator(&[low.clone(), high.clone()], run.id).as_deref(), Some("low"));
+        assert_eq!(run_initiator(&[high, low], run.id).as_deref(), Some("low"));
+    }
+
+    #[derive(Debug, Clone)]
+    enum Step {
+        /// Author `n` drafts its next message (kept until it stores it).
+        Draft(usize),
+        /// Author `n` stores its draft (drafted again if it went stale).
+        Store(usize),
+        /// A peer's event arrives on the log (another connection).
+        Ingest,
+    }
+
+    fn step() -> impl Strategy<Value = Step> {
+        prop_oneof![(0..3usize).prop_map(Step::Draft), (0..3usize).prop_map(Step::Store), Just(Step::Ingest)]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Any interleaving of three services of one device drafting and
+        /// storing on one log while a peer's events arrive: every message is
+        /// stored once and the device's chain has one head.
+        #[test]
+        fn same_key_authors_and_an_ingester_never_fork_the_chain(steps in prop::collection::vec(step(), 1..40)) {
+            let device = Device::new();
+            let mut authors: Vec<ChatService> = (0..3).map(|_| device.service()).collect();
+            let mut ingester = EventStore::open(&device.path).unwrap();
+            let wid = Uuid::new_v4();
+            let chat = authors[0].create_chat("c", wid, "anthropic").unwrap();
+            let mut pending: Vec<Option<SessionEventEnvelope>> = vec![None, None, None];
+            let mut want = Vec::new();
+            let mut peer = 0;
+            let peer_key = SigningKeypair::generate().unwrap();
+            let peer_device = Uuid::new_v4();
+            for (n, s) in steps.iter().enumerate() {
+                match *s {
+                    Step::Draft(i) if pending[i].is_none() => {
+                        let body = format!("m {n}");
+                        pending[i] = Some(authors[i].draft_signed(chat.id, wid, message(body.clone())).unwrap());
+                        want.push(body);
+                    }
+                    Step::Store(i) => {
+                        if let Some(env) = pending[i].take() {
+                            authors[i].store_authored_or_redraft(env, false).unwrap();
+                        }
+                    }
+                    Step::Ingest => {
+                        peer += 1;
+                        let mut env = SessionEventEnvelope::new(chat.id, wid, peer, message(format!("peer {peer}")));
+                        sign_envelope(&mut env, peer_device, &peer_key);
+                        prop_assert!(ingester.ingest(&env).unwrap());
+                    }
+                    _ => {}
+                }
+            }
+            for i in 0..3 {
+                if let Some(env) = pending[i].take() {
+                    authors[i].store_authored_or_redraft(env, false).unwrap();
+                }
+            }
+            let envs = ingester.list(chat.id).unwrap();
+            prop_assert_eq!(heads(&envs, authors[0].device_id()), 1);
+            let bodies: Vec<String> = authors[0].load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+            for w in &want {
+                prop_assert_eq!(bodies.iter().filter(|b| *b == w).count(), 1, "{} stored once", w);
+            }
+        }
     }
 }
