@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProposalDto } from "@/bindings/ProposalDto";
-import { groupProposals, isSettled, isVotable, sortProposals } from "./proposals";
+import { groupProposals, implementRefusal, isSettled, isVotable, sortProposals } from "./proposals";
 
 function proposal(over: Partial<ProposalDto> & { id: string }): ProposalDto {
   return {
@@ -155,5 +155,25 @@ describe("groupProposals", () => {
   it("empties cleanly", () => {
     const groups = groupProposals([]);
     expect(groups).toEqual({ active: [], settled: [], dismissed: [] });
+  });
+});
+
+describe("implementRefusal", () => {
+  // The defect: Implement showed on a rejected proposal that still had quorum
+  // (a rejection at or above the floor rejects it), and the backend refused.
+  it("refuses a rejected proposal that still has quorum, and says why", () => {
+    const p = proposal({ id: "r", status: "rejected", quorumMet: true, qualifyingApprovals: 2 });
+    expect(implementRefusal(p)).toMatch(/Rejected/);
+  });
+
+  it("refuses a superseded proposal", () => {
+    const p = proposal({ id: "s", status: "approved", quorumMet: true, supersededBy: "s2" });
+    expect(implementRefusal(p)).toMatch(/newer revision/);
+  });
+
+  it("allows an approved proposal, and has nothing to say before quorum or after applying", () => {
+    expect(implementRefusal(proposal({ id: "a", status: "approved", quorumMet: true }))).toBeNull();
+    expect(implementRefusal(proposal({ id: "o", status: "open" }))).toBeNull();
+    expect(implementRefusal(proposal({ id: "x", status: "applied", quorumMet: true }))).toBeNull();
   });
 });

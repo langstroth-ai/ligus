@@ -67,7 +67,7 @@ import {
 } from "@/lib/ipc";
 import { docsUrl, PANE_DOCS } from "@/lib/docs";
 import { confirmDialog } from "@/components/Dialog";
-import { groupProposals, isSettled, isVotable, myVote } from "@/lib/proposals";
+import { groupProposals, implementRefusal, isSettled, isVotable, myVote } from "@/lib/proposals";
 import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
 import { LogsView } from "@/components/LogsView";
@@ -1469,6 +1469,7 @@ function ProposalCard({
   });
 
   const superseded = Boolean(proposal.supersededBy);
+  const cantImplement = implementRefusal(proposal);
   const hasChangeRequests = proposal.refinements.some((r) => r.requestChanges);
 
   // Any in-flight action disables the others so a card can't be double-driven.
@@ -1672,7 +1673,7 @@ function ProposalCard({
         )}
         {/* Agreement gate: an approved proposal only runs when a human explicitly
             implements it; the agent then carries it out. */}
-        {proposal.quorumMet && proposal.status !== "applied" && (
+        {proposal.quorumMet && proposal.status !== "applied" && !cantImplement && (
           <Button
             variant="primary"
             size="md"
@@ -1694,7 +1695,8 @@ function ProposalCard({
       </div>
       {proposal.quorumMet && proposal.status !== "applied" && !openRequest && (
         <div data-testid="next-step" className="mt-1.5 text-xs text-ink-soft">
-          Quorum met. Next: implement it{proposal.canRequestApply && applyHosts.length > 0 ? ", or ask a host to apply it" : ""}.
+          {cantImplement ??
+            `Quorum met. Next: implement it${proposal.canRequestApply && applyHosts.length > 0 ? ", or ask a host to apply it" : ""}.`}
         </div>
       )}
 

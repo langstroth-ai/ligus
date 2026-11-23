@@ -33,6 +33,18 @@ export function myVote(p: ProposalDto, selfActorId: string | undefined | null): 
   return mine ? mine.approved : null;
 }
 
+/// Why Implement can't run on a proposal whose quorum is met, or null when it
+/// can (or when Implement doesn't apply: no quorum yet, or already applied).
+/// The same refusals the desktop's implement command makes: a rejection at or
+/// above the approval floor rejects the proposal whatever the approvals, and a
+/// superseded proposal gives way to its newer revision.
+export function implementRefusal(p: ProposalDto): string | null {
+  if (!p.quorumMet || p.status === "applied") return null;
+  if (p.status === "rejected") return "Rejected, so it can't be implemented: a rejection outweighs the approvals.";
+  if (p.supersededBy) return "A newer revision replaced this one, so it can't be implemented.";
+  return null;
+}
+
 /// Sort rank: quorum met and waiting on Implement, then open, then settled.
 /// Within a rank the caller sorts newest-first.
 function rank(p: ProposalDto): number {
