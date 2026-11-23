@@ -18,7 +18,9 @@ vertical icon strip you click to switch contents. Nine sections:
 
 <!-- Screenshot pending (Right rail with the Tools pane active): images/right-rail.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 Switching panes preserves the visible width. Click the `×` in the
-pane header to close the rail entirely.
+pane header to close the rail entirely. Each pane's header has a small `?`
+beside its title: hover it for what the pane is for, click it to open the
+pane's page in these docs.
 
 ## When to use each
 
@@ -58,8 +60,10 @@ pane header to close the rail entirely.
   request as *open*, *applied* (with the commit), *failed* (with the
   host's reason) or *withdrawn*. While a request is open, nobody else
   applies the proposal (Implement says so) and no second request is taken;
-  its requester or an Admin can **Withdraw** it. Approving never applies
-  anything on its own. See
+  its requester or an Admin can **Withdraw** it. Approving applies
+  nothing on its own, with one exception: when your vote on the desktop is
+  the one that approves a workflow proposal, it adds the workflow to the
+  **Workflows** pane then and there (it doesn't run it). See
   [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
   **Questions from agents** (`ligus_ask_human`, and ACP permission requests
   that need a person) appear at the top of the pane with their options; the

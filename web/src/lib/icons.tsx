@@ -149,6 +149,17 @@ export const IconChevronRight = ({ size }: P) => (
     <path d="m9 18 6-6-6-6" />
   </Icon>
 );
+export const IconChevronLeft = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="m15 18-6-6 6-6" />
+  </Icon>
+);
+export const IconRefresh = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8" />
+    <path d="M21 3v5h-5" />
+  </Icon>
+);
 export const IconChevronDown = ({ size }: P) => (
   <Icon size={size}>
     <path d="m6 9 6 6 6-6" />
@@ -257,5 +268,44 @@ export const IconClock = ({ size }: P) => (
 export const IconShield = ({ size }: P) => (
   <Icon size={size}>
     <path d="M12 3l7 3v5.5c0 4.2-2.9 7.9-7 9.5-4.1-1.6-7-5.3-7-9.5V6z" />
+  </Icon>
+);
+
+// --- session states --------------------------------------------------------
+// One glyph per state, so a state reads without its colour (see
+// lib/sessionState). Static: a running chat is not animated in the list.
+export const IconStateWorking = ({ size }: P) => (
+  <Icon size={size}>
+    <circle cx="12" cy="12" r="8.5" strokeDasharray="2.6 3" />
+    <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+  </Icon>
+);
+export const IconStateNeedsYou = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M12 3.5 20.5 12 12 20.5 3.5 12z" fill="currentColor" />
+  </Icon>
+);
+export const IconStateQueued = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M6.5 3.5h11M6.5 20.5h11" />
+    <path d="M7.5 3.5c0 4.5 4.5 5.5 4.5 8.5s-4.5 4-4.5 8.5M16.5 3.5c0 4.5-4.5 5.5-4.5 8.5s4.5 4 4.5 8.5" />
+  </Icon>
+);
+export const IconStateDone = ({ size }: P) => (
+  <Icon size={size}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="m8.5 12.2 2.4 2.4 4.8-5" />
+  </Icon>
+);
+export const IconStateFailed = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M8.3 3.5h7.4l4.8 4.8v7.4l-4.8 4.8H8.3l-4.8-4.8V8.3z" />
+    <path d="m9.5 9.5 5 5M14.5 9.5l-5 5" />
+  </Icon>
+);
+export const IconStatePaused = ({ size }: P) => (
+  <Icon size={size}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M10 9v6M14 9v6" />
   </Icon>
 );

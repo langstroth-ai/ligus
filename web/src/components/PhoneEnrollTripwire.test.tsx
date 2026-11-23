@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PhoneEnrollTripwire } from "./PhoneEnrollTripwire";
 import * as ipc from "@/lib/ipc";
 import type { PhoneEnrollTripwireDto } from "@/lib/ipc";
+import { phoneAlerts } from "@/state/phoneAlerts";
 
 let emit: (e: PhoneEnrollTripwireDto) => void = () => {};
 
@@ -36,7 +37,10 @@ function mount() {
 }
 
 describe("the add-a-phone tripwire", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    phoneAlerts._reset();
+  });
 
   it("shows nothing until another phone answers a code", async () => {
     mount();

@@ -4,7 +4,25 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## 0.1.1 (unreleased)
+## Unreleased
+
+### Desktop
+
+- **Pick the model while you chat.** The route pill under the composer
+  opens a second step for each runtime: **Default**, the models its harness
+  offers (Claude Code, Codex, Copilot CLI, Antigravity, Ollama and
+  OpenAI-compatible servers), and **Other…**. The choice is kept per chat
+  on this computer and shows in the line under the chat title, and each
+  reply is labelled with the model it ran with. A model your account can't
+  use is reported in one line with **Pick another model** instead of a
+  failed reply. Settings offers the same lists. See
+  [Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model).
+
+## 0.1.1
+
+A patch release: add your phone by scanning the desktop's code, Face ID
+before every phone action that counts, a faster desktop launch, clearer
+buttons and proposals, and security and membership fixes.
 
 ### Phone
 
@@ -36,6 +54,31 @@ Full release notes are on the
   itself instead of "Device" and the start of its id. The name is kept only
   on that desktop; your other desktops still show "Device xxxxxxxx". See
   [Add your phone](../features/phone-app.md#add-this-phone).
+- **One My devices row per phone.** Re-adding a phone you already hold
+  updates its name instead of leaving an old row next to the new one, and
+  each phone says which box it's paired with and when it was last seen
+  ("Paired with home-server · seen 2 min ago"). Revoking a phone names it in
+  the prompt and says that it can't come back with its current key: on the
+  phone, **Reset this phone's key**, then **Add to my devices**. See
+  [Revoking a phone](../features/phone-app.md#revoked-phone).
+- **The phone shows the workspace's name**, not the box's label. An Owner's
+  or Admin's desktop writes the name to the workspace once, when it opens
+  the workspace. See
+  [The workspace's name](../features/phone-app.md#workspace-name).
+- **Face ID before every phone action that counts.** Votes, answers to an
+  agent's questions, apply requests and withdrawals, lockdown clears and box
+  admissions ask for Face ID (or Touch ID, or your passcode) every time,
+  and the prompt names what you are approving. Cancel, and nothing is
+  signed. Chat messages, from the composer or a notification reply, don't
+  ask. See [Phone-signed actions](../features/phone-app.md#phone-signed-actions).
+- **Vote on an offered file from the phone.** A proposal that offers a file
+  now carries the file's reference, so the phone shows its name, type, size
+  and hash and ties your vote to them instead of refusing to vote. See the
+  [serve API reference](../../operate/reference/serve-api.md).
+- **Resetting the phone's key ends its pairings.** **Reset this phone's
+  key** also replaces the keys the phone paired with, so pair it again with
+  a new `ligus pair` link. See
+  [Revoking a phone](../features/phone-app.md#revoked-phone).
 
 ### Security
 
@@ -50,8 +93,43 @@ Full release notes are on the
   for your passkey. A relay entry the desktop can't match to a workspace
   member says so instead of reporting success. See
   [Remove a box](../../operate/security/runbooks.md#remove-box).
+- **Relay refusals stop membership changes.** Removing a member, changing a
+  role or revoking an invite used to carry on (editing the roster and
+  rotating the key) when the relay refused, for example because you aren't
+  an Admin or would remove the last Owner. Now the desktop stops and shows
+  the relay's reason. New boxes get a relay identity (`ligus-box:<id>`) that
+  can't be mistaken for a person's account.
+- **Only an Admin names the workspace.** A Contributor or a Viewer can't set
+  or take over the name the phone shows.
+- **My devices believes only your own boxes.** A phone's name and "paired
+  with" line come only from boxes signed by your own devices. Those reports
+  are dated, tied to the workspace and limited in size, and a box reports
+  only your phones, not a teammate's.
+- **Adding a phone by QR code: tighter checks.** The box takes a desktop's
+  answer only for requests made to that desktop; every phone that answers a
+  code is visible at once, so the 5-second hold catches a second phone; and
+  the desktop looks once more right before it approves, refusing with
+  "Two phones answered this code" if another phone is there. See
+  ["Another phone answered this code"](../features/phone-app.md#another-phone).
+
 ### Desktop
 
+- **Faster launch.** The desktop no longer walks your whole workspace folder
+  before its window opens; a folder of about 500,000 files had held the
+  launch for about 12 seconds. Switching workspaces is quicker for the same
+  reason, and the agent sandbox check runs in the background.
+  `LIGUS_LOG=startup=debug` logs how long each startup step takes.
+- **Buttons look and feel like buttons.** Buttons, links, menu items and
+  tabs show a pointer and a gentle hover and press, with a clear focus
+  ring; disabled ones show that they are.
+- **Markdown in proposals.** Proposal bodies, workflow proposal
+  descriptions, refinement notes, alternatives, rationales and agents'
+  questions render Markdown, with the same link and image safety as chat.
+- **Your own vote shows.** Once you've voted, the proposal card says
+  "You approved" or "You rejected" with a link to change it. When the
+  quorum is met, Implement is the main action.
+- **Copying a code block leaves off the final newline**, so pasting a
+  command into a terminal no longer runs it at once.
 - **Settings sections fail on their own.** A Settings section that hits an
   error shows a small card with **Try again** instead of replacing the whole
   app.

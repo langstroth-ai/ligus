@@ -11,14 +11,9 @@ import {
   renameChat,
   getAppSettings,
   getGitStatus,
-  listAgents,
   listChannels,
   listChats,
-  listMembers,
   listMentionStates,
-  listProposals,
-  listSkills,
-  listVaults,
   renameChannel,
   type ChannelDto,
   type ChatSummaryDto,
@@ -31,8 +26,9 @@ import { Avatar } from "@/components/Avatar";
 import { confirmDialog, promptDialog } from "@/components/Dialog";
 import { useContextMenu } from "@/components/ContextMenu";
 import { confirmThen } from "@/lib/confirm";
-import { groupProposals } from "@/lib/proposals";
 import { relTime } from "@/lib/time";
+import { useChatAttention, useSessionStates } from "@/state/useSessionStates";
+import { reviewBadge } from "@/lib/needsYou";
 import {
   NavRow,
   ChatRow,
@@ -113,34 +109,10 @@ export function Sidebar({
   const channels = useQuery({ queryKey: ["channels", activeWorkspaceId], queryFn: listChannels });
   const mentionStates = useQuery({ queryKey: ["mention-states"], queryFn: listMentionStates });
   const settings = useQuery({ queryKey: ["settings"], queryFn: getAppSettings });
-  const members = useQuery({
-    queryKey: ["members", sessionId],
-    queryFn: () => listMembers(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const agents = useQuery({
-    queryKey: ["agents", sessionId],
-    queryFn: () => listAgents(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const vaults = useQuery({
-    queryKey: ["vaults", sessionId],
-    queryFn: () => listVaults(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const skills = useQuery({
-    queryKey: ["skills", sessionId],
-    queryFn: () => listSkills(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  const proposals = useQuery({
-    queryKey: ["proposals", sessionId],
-    queryFn: () => listProposals(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  });
-  // Proposals + gates awaiting a human decision — the Review pane is the only
-  // time-sensitive pane, so it gets a badge like the others.
-  const reviewCount = groupProposals(proposals.data ?? []).active.length;
+  // The Review pane's badge counts only what waits on you in this chat: a
+  // proposal you can still vote on, or one approved and ready to apply.
+  const attention = useChatAttention(activeWorkspaceId);
+  const reviewCount = reviewBadge(attention.data, sessionId);
 
   // Git branch for the workspace header line 2 (F14) — otherwise it just
   // repeats the folder name. Keyed on the path so switching workspaces refetches;
@@ -180,6 +152,10 @@ export function Sidebar({
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
 
   const all: ChatSummaryDto[] = chats.data ?? [];
+  // Working / needs you / queued / done / failed / paused, per chat (idle
+  // chats are absent and show their time as before).
+  const chatIds = useMemo(() => all.map((c) => c.id), [all]);
+  const states = useSessionStates(chatIds, activeWorkspaceId);
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     let out = all.filter((c) => c.archived === showArchived);
@@ -276,16 +252,11 @@ export function Sidebar({
     ? openChannels.find((c) => c.id === channelMenuFor) ?? null
     : null;
   const canRemoveCurrentWorkspace = workspacePath.trim().length > 0;
-  const memberCount = (members.data ?? []).filter((m) => !m.isSelf).length;
-  // Live counts per pane, keyed by the shared PANES id. Panes without a count
-  // (Review/Context/Workflows/Activity) simply omit the badge.
+  // Badges count only what needs you (never totals, news or activity): the
+  // Review pane's proposals waiting on your decision. Other panes show their
+  // contents when opened.
   const paneCounts: Partial<Record<UtilityPane, number>> = {
-    people: memberCount,
-    // +1 for the always-present default agent (@ligus) so it never reads 0.
-    tools: (agents.data ?? []).length + 1,
-    review: reviewCount || undefined,
-    skills: (skills.data ?? []).length,
-    vaults: (vaults.data ?? []).length,
+    review: reviewCount,
   };
   const deviceName = settings.data?.deviceName ?? "";
 
@@ -439,6 +410,14 @@ export function Sidebar({
     "--ligus-ink": "var(--ligus-sidebar-ink)",
     "--ligus-ink-soft": "var(--ligus-sidebar-ink-muted)",
     "--ligus-overlay": "color-mix(in srgb, var(--ligus-sidebar-ink) 10%, transparent)",
+    // Session-state chips on the dark sidebar: light inks, one hue per state
+    // (the glyph is what carries the meaning).
+    "--ligus-state-working": "oklch(0.9 0.07 230)",
+    "--ligus-state-needs-you": "oklch(from var(--ligus-accent-warm) 0.9 calc(c * 0.8) h)",
+    "--ligus-state-queued": "oklch(from var(--ligus-warn) 0.9 calc(c * 0.7) h)",
+    "--ligus-state-done": "oklch(from var(--ligus-success) 0.9 calc(c * 0.7) h)",
+    "--ligus-state-failed": "oklch(from var(--ligus-danger) 0.88 calc(c * 0.6) h)",
+    "--ligus-state-paused": "var(--ligus-sidebar-ink-muted)",
   };
 
   return (
@@ -611,6 +590,7 @@ export function Sidebar({
                   chatId={c.id}
                   title={c.title || "Untitled"}
                   when={relTime(c.lastActivityAt)}
+                  state={states.get(c.id)}
                   unread={unreadSessions.has(c.id) ? 1 : 0}
                   active={c.id === selectedId && view === "workspace"}
                   onClick={() => onSelect(c.id)}
@@ -757,6 +737,7 @@ export function Sidebar({
                             chatId={c.id}
                             title={c.title || "Untitled"}
                             when={relTime(c.lastActivityAt)}
+                            state={states.get(c.id)}
                             unread={unreadSessions.has(c.id) ? 1 : 0}
                             active={c.id === selectedId && view === "workspace"}
                             onClick={() => onSelect(c.id)}
@@ -792,6 +773,7 @@ export function Sidebar({
                       chatId={c.id}
                       title={c.title || "Untitled"}
                       when={relTime(c.lastActivityAt)}
+                      state={states.get(c.id)}
                       unread={unreadSessions.has(c.id) ? 1 : 0}
                       active={c.id === selectedId && view === "workspace"}
                       onClick={() => onSelect(c.id)}

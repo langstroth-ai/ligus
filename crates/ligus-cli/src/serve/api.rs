@@ -498,10 +498,13 @@ fn collab_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
     }
 }
 
-/// [`proposal_dto`] plus what this box's identity — the one the phone acts as
-/// — can do: its current vote and whether its role may vote or comment at all
-/// (the same content floor `authorize` applies to `ProposalVoteCast` /
-/// `ProposalRefined`, so a viewer sees disabled controls instead of a 403).
+/// [`proposal_dto`] plus what `me` can do: their current vote and whether
+/// their role may vote or comment at all (the same content floor `authorize`
+/// applies to `ProposalVoteCast` / `ProposalRefined`, so a viewer sees
+/// disabled controls instead of a 403). `me` is the person asking
+/// ([`viewer`]): the one holding the calling phone, not this box. An empty
+/// `me` (a phone this box can't place) claims nothing: no role, no vote, and
+/// no vote to cast.
 pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
     let mut v = proposal_dto(s, p);
     // What a vote or an apply request binds (the phone recomputes it from
@@ -541,6 +544,16 @@ pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
         .collect();
     v["applyRequests"] = json!(requests);
     v["canRequestApply"] = json!(p.ready_to_apply() && s.open_apply_request(p.id).is_none());
+    viewer_fields(&mut v, s, p, me);
+    v
+}
+
+/// The fields of a proposal's view that depend on who is asking: `myRole`,
+/// `myVote`, `canVote` and `isMine`, for `me` (see [`proposal_dto_as`]).
+pub fn viewer_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal, me: &str) {
+    if me.is_empty() {
+        return unplaced(v);
+    }
     let role = s.role_of(me);
     v["myRole"] = json!(role_name(role));
     v["myVote"] = match p.approvals.iter().find(|a| a.actor_id == me) {
@@ -558,7 +571,57 @@ pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
     });
     v["canVote"] = json!(role.rank() >= floor.rank());
     v["isMine"] = json!(!p.author_actor_id.is_empty() && p.author_actor_id == me);
-    v
+}
+
+/// A view for a phone this box can't place: no role, no vote, nothing to
+/// cast, not theirs.
+fn unplaced(v: &mut Value) {
+    v["myRole"] = Value::Null;
+    v["myVote"] = Value::Null;
+    v["canVote"] = json!(false);
+    v["isMine"] = json!(false);
+}
+
+/// Who is asking, for the fields of a view that say "you" (a proposal's
+/// `myRole`, `myVote`, `canVote`, `isMine`; a set alternative's): through the
+/// tunnel, the member who holds the calling phone (its pairing's own
+/// workspace device, and the one person that device is certified for), never
+/// this box's own identity. Empty when this box can't place that phone (a
+/// pairing from before phone keys, a revoked phone, a person who isn't a
+/// member): the view then claims nothing for it. The operator and the
+/// direct-path bearer (one token every direct-path phone shares, tied to no
+/// phone) see this box's identity, as before.
+pub(super) fn viewer(s: &Shared) -> String {
+    match caller() {
+        Caller::Tunnel(pid) => tunnel_viewer(s, &pid),
+        _ => s.my_actor_id(),
+    }
+}
+
+/// The member who holds the phone paired as `pid` (see [`viewer`]).
+pub(super) fn tunnel_viewer(s: &Shared, pid: &str) -> String {
+    let Some(device) = s.tunnel.as_ref().and_then(|t| t.registry.get(pid)).and_then(|r| r.device_id) else {
+        return String::new();
+    };
+    s.lock().phone_person(s.ws, device).map(|a| a.id).unwrap_or_default()
+}
+
+/// A proposal event from the hub (built for this box's identity) as `viewer`
+/// sees it: its "you" fields recomputed from the chat it belongs to.
+fn as_viewer(s: &Shared, mut ev: super::hub::SseEvent, viewer: &str) -> super::hub::SseEvent {
+    if !matches!(ev.name, "proposal.created" | "proposal.updated") {
+        return ev;
+    }
+    let ids = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
+    let Some(dto) = ev.data.get_mut("proposal") else { return ev };
+    let (Some(chat_id), Some(pid)) = (ids(dto, "chatId"), ids(dto, "id")) else { return ev };
+    let chat = s.lock().load(chat_id).ok().flatten().filter(|c| c.workspace_id == s.ws);
+    match chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == pid).map(|p| (c, p))) {
+        Some((c, p)) => viewer_fields(dto, c, p, viewer),
+        // Gone since: claim nothing rather than the box's standing.
+        None => unplaced(dto),
+    }
+    ev
 }
 
 // ── Router + auth ──────────────────────────────────────────────────────────
@@ -1297,7 +1360,7 @@ async fn list_proposals(State(s): S, Query(f): Query<ProposalFilter>) -> ApiResu
         Some("all") => true,
         Some(other) => return Err(ApiError::bad_request(format!("status must be open or all (got '{other}')"))),
     };
-    let me = s.my_actor_id();
+    let me = viewer(&s);
     let mut out: Vec<(Timestamp, Value)> = Vec::new();
     for chat in s.workspace_chats()? {
         for p in &chat.proposals {
@@ -1336,7 +1399,7 @@ async fn reject_proposal(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
 
 async fn get_proposal(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let (chat, p) = find_proposal(&s, &id)?;
-    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &p, &s.my_actor_id()) })))
+    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &p, &viewer(&s)) })))
 }
 
 async fn list_comments(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -1374,7 +1437,7 @@ async fn post_comment(State(s): S, Path(id): Path<String>, Json(req): Json<NewCo
     let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
     let updated = chat.proposals.iter().find(|q| q.id == updated.id).cloned().unwrap_or(updated);
     let comment = updated.refinements.last().map(|r| comment_dto(&chat, r)).unwrap_or(Value::Null);
-    Ok(Json(json!({ "comment": comment, "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
+    Ok(Json(json!({ "comment": comment, "proposal": proposal_dto_as(&chat, &updated, &viewer(&s)) })))
 }
 
 async fn implement_plan(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -1444,15 +1507,19 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
                 "this proposal came from the chat's primary runtime — send it back from the desktop".into(),
             )
         })?;
-    let mut current = p.clone();
     if let Some(note) = req.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
-        current = add_note(&s, &chat, p.id, &note, true)?;
+        add_note(&s, &chat, p.id, &note, true)?;
     }
+    let folded = load_chat(&s, &chat.id.to_string()).unwrap_or_else(|_| chat.clone());
+    let current = folded.proposals.iter().find(|q| q.id == p.id).cloned().unwrap_or_else(|| p.clone());
     // Prefer explicit change requests; fall back to all notes so a plain
-    // comment thread can still drive a revision (as the desktop does).
-    let mut notes: Vec<&ProposalRefinement> = current.refinements.iter().filter(|r| r.request_changes).collect();
+    // comment thread can still drive a revision (as the desktop does). Only
+    // comments whose author is verified (signed by the member they name)
+    // reach the agent.
+    let verified: Vec<&ProposalRefinement> = folded.verified_refinements(&current).collect();
+    let mut notes: Vec<&ProposalRefinement> = verified.iter().copied().filter(|r| r.request_changes).collect();
     if notes.is_empty() {
-        notes = current.refinements.iter().collect();
+        notes = verified;
     }
     if notes.is_empty() {
         return Err(ApiError::bad_request("add a refinement note before sending it back to the agent"));
@@ -1477,7 +1544,7 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
     let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
     let updated = chat.proposals.iter().find(|q| q.id == p.id).cloned().unwrap_or(current);
     Ok(Json(json!({
-        "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()),
+        "proposal": proposal_dto_as(&chat, &updated, &viewer(&s)),
         "message": message_dto(chat.id, &message, Viewer::of(&s.lock())),
     })))
 }
@@ -1654,12 +1721,22 @@ fn event_stream(
         rx.mark_unchanged();
         rx
     });
+    // Proposal events are built for this box's identity; a phone through the
+    // tunnel gets them as its own person sees them (see `viewer`).
+    let viewer = peer.as_ref().map(|Extension(p)| tunnel_viewer(&s, &p.pid)).filter(|v| *v != s.my_actor_id());
+    let personal = {
+        let s = s.clone();
+        move |ev: super::hub::SseEvent| match viewer.as_deref() {
+            Some(v) => as_viewer(&s, ev, v),
+            None => ev,
+        }
+    };
     let foreground = peer.and_then(|Extension(p)| s.tunnel.as_ref().map(|t| t.foreground(&p.pid)));
     // Open with a comment so the client sees body bytes at once: URLSession
     // (the phone) doesn't hand back the response until the first body byte, so
     // without this a quiet stream looked "connecting" until the 15 s heartbeat.
     let hello = stream::once(async { Ok(Event::default().comment("connected")) });
-    let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(e)))));
+    let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(personal(e)))).collect::<Vec<_>>()));
     let live = stream::unfold((rx, (foreground, slot), token_gen), |(mut rx, foreground, mut token_gen)| async move {
         loop {
             let next = match token_gen.as_mut() {
@@ -1670,7 +1747,7 @@ fn event_stream(
                 None => rx.recv().await,
             };
             match next {
-                Ok(ev) => return Some((Ok(to_event(ev)), (rx, foreground, token_gen))),
+                Ok(ev) => return Some((Ok(ev), (rx, foreground, token_gen))),
                 // A slow client skipped some events; it keeps the stream and
                 // can refetch (best effort, like Last-Event-ID).
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -1678,6 +1755,7 @@ fn event_stream(
             }
         }
     });
+    let live = live.map(move |ev: Result<super::hub::SseEvent, Infallible>| ev.map(|e| to_event(personal(e))));
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
 }
 

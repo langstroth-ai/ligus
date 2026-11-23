@@ -135,7 +135,7 @@ use 0 to 4 (an unreachable cluster is 3); `langstroth-relay` uses 0 to 2.
   and labelling an existing namespace Pod Security `restricted`.
 - Approving any exit-4 decision, and revoking or rotating keys.
 - **Cutting a release** (`cut-release.yml`, repository admins only) and
-  promoting it to Latest.
+  deciding to promote it to Latest (`promote-release.yml`).
 
 ## Cutting a release
 
@@ -148,9 +148,22 @@ gh workflow run cut-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z   # 
 
 It tags `vX.Y.Z` only if `ci-ok` passed on that exact commit and every version
 matches, then builds the release as a draft and publishes it as a prerelease
-once every build has passed. Agents may prepare the version bump and watch the
-run, but never push a `v*` tag, never publish a draft by hand, and never
-promote a release to Latest. The full flow and the recovery steps are in
+once every build has passed. With the notes committed as
+`docs/release-notes/vX.Y.Z.md`, a repository admin then promotes it to Latest:
+
+```bash
+gh workflow run promote-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z   # -f dry-run=true checks only
+```
+
+It checks the release, its assets, the Homebrew tap and the notes, makes the
+release Latest, and opens the PR that moves `docs-site/docs/version.json`
+forward.
+
+Agents may prepare the version bump and the release notes and watch the runs,
+but never push a `v*` tag, never publish a draft by hand, and never edit a
+release by hand. Run `promote-release.yml` only when the owner asks for it in
+so many words; never promote a release on your own initiative. The full flow
+and the recovery steps are in
 [docs/packaging.md](docs/packaging.md#how-to-cut-a-release).
 
 ## When something fails

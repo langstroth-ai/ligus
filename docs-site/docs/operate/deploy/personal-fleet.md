@@ -88,7 +88,7 @@ encrypted.
 ```sh
 brew install langstroth-ai/ligus/ligus      # macOS or Linux with Homebrew
 ligus --version
-# ligus 0.1.0
+# ligus 0.1.1
 ```
 
 Or build the container image (`deploy/container/Dockerfile`) and run

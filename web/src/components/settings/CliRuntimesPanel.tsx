@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { addRuntime, detectCliRuntimes, listRuntimes, type DetectedCliDto } from "@/lib/ipc";
 import { Button, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
+import { ModelFieldHelp } from "@/components/ModelPicker";
 
 const LOGIN_TEXT: Record<DetectedCliDto["login"], string> = {
   loggedIn: "signed in",
@@ -121,16 +122,12 @@ export function CliRuntimesPanel() {
                   value={models[c.id] ?? ""}
                   onChange={(e) => setModels((m) => ({ ...m, [c.id]: e.target.value }))}
                   placeholder="Model (blank = the CLI's default)"
-                  list={c.models.length ? `cli-models-${c.id}` : undefined}
+                  list={`cli-models-${c.id}`}
                   className="mt-1.5 w-full rounded-lg border px-2 py-1 font-mono text-xs"
                   style={fieldStyle}
                 />
-                {c.models.length > 0 && (
-                  <datalist id={`cli-models-${c.id}`}>
-                    {c.models.map((m) => (
-                      <option key={m} value={m} />
-                    ))}
-                  </datalist>
+                {c.provider && (
+                  <ModelFieldHelp listId={`cli-models-${c.id}`} provider={c.provider} model={models[c.id] ?? ""} />
                 )}
               </>
             )}
