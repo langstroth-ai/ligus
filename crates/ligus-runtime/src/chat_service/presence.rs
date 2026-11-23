@@ -296,7 +296,8 @@ impl ChatService {
         // confirmation covers the lamport, not the link. A write of its own
         // at the draft's lamport or later can't be linked past without a new
         // confirmation: the store refuses that one (`StaleDraft`) rather than
-        // fork this device's chain.
+        // fork this device's chain, and the caller prepares it again at the
+        // head and asks the person again (serve answers 409).
         let prev = self.store.last_signed_by(env.session_id, self.device_id, env.lamport)?;
         if let Some(stamp) = env.actor_stamp.as_mut() {
             stamp.prev = prev;
@@ -325,19 +326,30 @@ impl ChatService {
         // The founder's first passkey can be the workspace's first act (the
         // desktop's create flow): found the config log first.
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let mut env = self.draft_signed(config_id, workspace_id, SessionEvent::PasskeyRegistered { credential })?;
-        let request = self.presence_request(&env)?;
-        let proof = prove(&request).map_err(|e| ChatError::Unauthorized(format!("passkey: {e}")))?;
-        if let Some(stamp) = env.actor_stamp.as_mut() {
-            stamp.presence = Some(proof);
+        // Asked once more, at the new head, if a write of this device landed
+        // on the config log while the person confirmed (storing it would
+        // fork this device's chain: `StaleDraft`); a second race goes back to
+        // the caller.
+        let mut asked = 0;
+        loop {
+            asked += 1;
+            let mut env = self.draft_signed(config_id, workspace_id, SessionEvent::PasskeyRegistered { credential: credential.clone() })?;
+            let request = self.presence_request(&env)?;
+            let proof = prove(&request).map_err(|e| ChatError::Unauthorized(format!("passkey: {e}")))?;
+            if let Some(stamp) = env.actor_stamp.as_mut() {
+                stamp.presence = Some(proof);
+            }
+            env.clear_raw();
+            sign_envelope(&mut env, self.device_id, &self.keypair);
+            let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+            match self.store_authored(&env) {
+                Err(ChatError::Store(crate::event_store::EventStoreError::StaleDraft)) if asked < 2 => continue,
+                r => r?,
+            }
+            self.changes.local(&env);
+            return Ok(env);
         }
-        env.clear_raw();
-        sign_envelope(&mut env, self.device_id, &self.keypair);
-        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
-        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store_authored(&env)?;
-        self.changes.local(&env);
-        Ok(env)
     }
 
     /// Remove one of `account_id`'s passkeys on `workspace_id` (the account

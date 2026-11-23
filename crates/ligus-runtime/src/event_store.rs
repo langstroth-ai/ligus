@@ -33,8 +33,9 @@ pub enum EventStoreError {
     /// An authored draft whose signer stored another event naming the same
     /// chain link (`ActorStamp::prev`) since it was drafted (another
     /// connection of this device wrote first). Storing it would fork the
-    /// signer's chain, so it is refused; draft it again.
-    #[error("this draft is out of date: its signer wrote something else here first; draft it again")]
+    /// signer's chain, so it is refused; draft it again (one confirmed with
+    /// a passkey: confirm it again, the confirmation names the draft).
+    #[error("this draft is out of date: its signer wrote something else here first; draft it again (confirm it again if it needed a passkey)")]
     StaleDraft,
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
@@ -535,8 +536,8 @@ impl EventStore {
     /// the log reads.
     fn log_with_witnesses(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         let mut envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            "SELECT envelope_json, sealed_epoch FROM (SELECT 0 AS t, sequence AS o, envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
             [session_id.to_string()],
         )?;
         envelopes.extend(self.witnesses_of(session_id)?);
@@ -688,16 +689,6 @@ impl EventStore {
         let (Some(signer), Some(stamp), Some(_)) = (env.signer_device_id, env.actor_stamp.as_ref(), env.signature.as_ref()) else {
             return Ok(false);
         };
-        // A passkey-confirmed event is stored even if it forks: its
-        // confirmation names its lamport, so it can't be drafted again
-        // without asking the person again, and refusing it would make any
-        // write of this device on the log during the confirmation (an agent
-        // reply in the chat a vote is cast in) cost them the confirmation,
-        // over and over in a busy chat. Each such fork needs a person's
-        // confirmation, so they come at a human rate and stay few.
-        if stamp.presence.is_some() {
-            return Ok(false);
-        }
         Ok(self
             .conn
             .prepare_cached(
@@ -921,7 +912,7 @@ impl EventStore {
     /// for answering what a sync pull brought in.
     pub fn sessions_with_messages_after(&self, after: i64) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT session_id FROM events WHERE row_id > ?1 AND kind = 'messageAppended'",
+            "SELECT DISTINCT session_id FROM events WHERE row_id > ?1 AND kind = 'messageAppended' ORDER BY session_id",
         )?;
         let rows = stmt.query_map([after], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
@@ -957,7 +948,7 @@ impl EventStore {
     /// (and re-publishes once when the account id changes, e.g. GitHub sign-in).
     /// Workspaces where some device published its key-agreement key (B1).
     pub fn workspaces_with_ka_publications(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished'")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished' ORDER BY workspace_id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -971,7 +962,7 @@ impl EventStore {
     /// Whether `session_id` itself carries a certificate for (device, account).
     pub fn has_device_certificate_in(&self, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded'",
+            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded' ORDER BY row_id",
             [session_id.to_string()],
         )?;
         Ok(envs.iter().any(|e| {
@@ -987,7 +978,7 @@ impl EventStore {
         account_id: Uuid,
     ) -> Result<bool> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND kind = 'deviceCertificateAdded'",
+            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND kind = 'deviceCertificateAdded' ORDER BY row_id",
             [workspace_id.to_string()],
         )?;
         Ok(envs.iter().any(|e| {
@@ -1385,7 +1376,7 @@ impl EventStore {
     pub fn pushed_ids(&self, workspace: &str) -> Result<Vec<Uuid>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT event_id FROM pushed WHERE workspace = ?1")?;
+            .prepare("SELECT event_id FROM pushed WHERE workspace = ?1 ORDER BY event_id")?;
         let rows = stmt.query_map([workspace], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -1609,7 +1600,7 @@ impl EventStore {
 
     /// The session ids of one workspace.
     pub fn sessions_of_workspace(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1 ORDER BY session_id")?;
         let rows = stmt.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -1696,7 +1687,7 @@ impl EventStore {
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
              'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
-             UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2",
+             UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2 ORDER BY 1, 2",
         )?;
         let rows = stmt.query_map([after_event, after_equivocation], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         let mut out: Vec<Uuid> = Vec::new();
@@ -2033,8 +2024,8 @@ impl EventStore {
     pub fn config_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         let config_id = ligus_core::workspace_config_session_id(workspace_id);
         self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            "SELECT envelope_json, sealed_epoch FROM (SELECT 0 AS t, sequence AS o, envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
             [config_id.to_string()],
         )
     }
@@ -2050,11 +2041,12 @@ impl EventStore {
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
 
-    /// The workspace a stored session belongs to, if any of its rows exist.
+    /// The workspace a stored session belongs to (its first event's, in log
+    /// order), if any of its rows exist.
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
         let ws: Option<String> = self
             .conn
-            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 LIMIT 1", [session_id.to_string()], |r| {
+            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 ORDER BY sequence LIMIT 1", [session_id.to_string()], |r| {
                 r.get(0)
             })
             .optional()?;
@@ -2219,7 +2211,7 @@ impl EventStore {
             return Ok(doomed);
         }
         let rooms: Vec<String> = {
-            let mut stmt = self.conn.prepare("SELECT workspace FROM sync_cursor UNION SELECT DISTINCT workspace FROM pushed")?;
+            let mut stmt = self.conn.prepare("SELECT workspace FROM sync_cursor UNION SELECT DISTINCT workspace FROM pushed ORDER BY 1")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
@@ -2272,7 +2264,7 @@ impl EventStore {
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT envelope_json FROM events WHERE kind = 'messageCompleted'")?;
+                .prepare("SELECT envelope_json FROM events WHERE kind = 'messageCompleted' ORDER BY row_id")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             for j in rows {
                 if let Some(id) = message_id_of(&j?) {
@@ -2288,7 +2280,7 @@ impl EventStore {
         let mut witnesses: Vec<SessionEventEnvelope> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
-                "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived'",
+                "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
             )?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
@@ -2305,7 +2297,7 @@ impl EventStore {
         // Every other copy held under a pruned id goes with it (left alone,
         // one would fold in the pruned chunk's place), a witness like it.
         for event_id in &doomed {
-            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1", [event_id])? {
+            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1 ORDER BY row_id", [event_id])? {
                 witnesses.push(env);
             }
         }

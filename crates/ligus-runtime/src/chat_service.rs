@@ -765,26 +765,41 @@ impl ChatService {
     /// connection to the store: another service of this device), storing it
     /// would fork the device's chain ([`EventStoreError::StaleDraft`]): it
     /// is drafted again at the new head, judged again, and stored, all under
-    /// the store's write lock so it can't go stale twice. A draft confirmed
-    /// with a passkey isn't redrafted (the confirmation names its lamport; a
-    /// new one needs the person again): its StaleDraft error goes back to the
-    /// caller, nothing stored, to try again.
+    /// the store's write lock so it can't go stale twice.
+    ///
+    /// A draft confirmed with a passkey can't be redrafted silently (the
+    /// confirmation names its lamport): it is drafted again at the head and
+    /// the person is asked to confirm once more (not under the lock: that
+    /// takes a person). If that one is raced too, the StaleDraft error goes
+    /// back to the caller, nothing stored, to try again.
     fn store_authored_or_redraft(&mut self, env: SessionEventEnvelope, is_local: bool) -> Result<SessionEventEnvelope> {
+        let confirmed = env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some());
         match self.store_authored(&env) {
-            Err(ChatError::Store(EventStoreError::StaleDraft)) if env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_none()) => {
-                self.under_write_lock(|svc| {
-                    let env = svc.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
-                    if !is_local {
-                        let (config, timeline) =
-                            svc.store.load_config(env.workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
-                        svc.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-                    }
-                    svc.store_authored(&env)?;
-                    Ok(env)
-                })
+            Err(ChatError::Store(EventStoreError::StaleDraft)) if !confirmed => self.under_write_lock(|svc| {
+                let env = svc.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
+                svc.judge_redraft(&env, is_local)?;
+                svc.store_authored(&env)?;
+                Ok(env)
+            }),
+            Err(ChatError::Store(EventStoreError::StaleDraft)) => {
+                let mut again = self.draft_signed(env.session_id, env.workspace_id, env.payload.clone())?;
+                self.with_presence(&mut again)?;
+                self.judge_redraft(&again, is_local)?;
+                self.store_authored(&again)?;
+                Ok(again)
             }
             r => r.map(|()| env),
         }
+    }
+
+    /// Judge a redrafted envelope as every fold will (not in the
+    /// device-local workspace, which never syncs).
+    fn judge_redraft(&self, env: &SessionEventEnvelope, is_local: bool) -> Result<()> {
+        if is_local {
+            return Ok(());
+        }
+        let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        self.authorize_as_fold(env, config.as_ref(), &timeline)
     }
 
     /// Run `f` holding the store's write lock ([`EventStore::begin_write`]);
@@ -5269,7 +5284,35 @@ mod tests {
     /// instead of being judged on that workspace's roster.
     #[test]
     fn an_event_stamped_with_another_workspace_fails_closed() {
+        stamped_with_another_workspace(false);
+    }
+
+    /// The same, many times, over an index layout that changes the order
+    /// SQLite returns a log's rows in when a query doesn't name one (a
+    /// covering index by event id): what a fold reads is in log order
+    /// whatever the indexes, so the verdict never depends on them.
+    #[test]
+    fn an_event_stamped_with_another_workspace_fails_closed_whatever_the_indexes() {
+        for _ in 0..40 {
+            stamped_with_another_workspace(true);
+        }
+    }
+
+    fn stamped_with_another_workspace(reorder_indexes: bool) {
         let (_dir, path, _wid, chat, host) = chain_fixture();
+        if reorder_indexes {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE INDEX test_reorder_events ON events (session_id, event_id, envelope_json, sealed_epoch, sequence, kind, workspace_id);
+                 CREATE INDEX test_reorder_copies ON equivocations (session_id, event_id, envelope_json, sealed_epoch);",
+            )
+            .unwrap();
+            // A query with no order of its own now walks the log by event id.
+            let plan: String = conn
+                .query_row("EXPLAIN QUERY PLAN SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1", ["x"], |r| r.get(3))
+                .unwrap();
+            assert!(plan.contains("test_reorder_events"), "{plan}");
+        }
         let mut con = svc_on(&path, "con", "Con");
         let w2 = Uuid::new_v4();
         con.ensure_workspace_config(w2).unwrap();
@@ -6580,6 +6623,45 @@ mod same_key_tests {
         let r: Result<()> = a.under_write_lock(|_| Err(ChatError::NotFound("mine".into())));
         assert!(matches!(r, Err(ChatError::NotFound(m)) if m == "mine"));
         assert!(a.store().in_autocommit());
+    }
+
+    /// Counts the confirmations asked for (any assertion will do here: the
+    /// test stores in the device-local workspace, which judges nothing).
+    struct Counting(std::sync::atomic::AtomicUsize);
+    impl super::presence::PresenceProvider for Counting {
+        fn assert(&self, _req: &crate::chat_service::PresenceRequest) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ligus_core::presence::PresenceAssertion {
+                credential_id: "c".into(),
+                authenticator_data: String::new(),
+                client_data_json: String::new(),
+                signature: "s".into(),
+            })
+        }
+    }
+
+    /// A draft confirmed on this device (the desktop's passkey sheet) that
+    /// another service of the device wrote past while the person confirmed:
+    /// drafted again at the head and confirmed once more, then stored with
+    /// one chain head; never stored forked.
+    #[test]
+    fn a_confirmed_draft_raced_by_this_devices_key_asks_again_once() {
+        let device = Device::new();
+        let (mut a, mut b) = (device.service(), device.service());
+        let wid = Uuid::new_v4();
+        let chat = a.create_chat("c", wid, "anthropic").unwrap();
+        let asked = std::sync::Arc::new(Counting(Default::default()));
+        a.set_presence_provider(Some(asked.clone()));
+        let mut draft = a.draft_signed(chat.id, wid, message("confirmed".into())).unwrap();
+        a.with_presence(&mut draft).unwrap();
+        b.post_user_message(chat.id, wid, "meanwhile").unwrap();
+        let stored = a.store_authored_or_redraft(draft.clone(), true).unwrap();
+        assert_eq!(asked.0.load(std::sync::atomic::Ordering::SeqCst), 2, "asked once more");
+        assert_ne!(stored.event_id, draft.event_id);
+        assert!(stored.actor_stamp.as_ref().unwrap().presence.is_some());
+        let envs = a.store().list(chat.id).unwrap();
+        assert_eq!(heads(&envs, a.device_id()), 1);
+        assert!(!envs.iter().any(|e| e.event_id == draft.event_id), "the stale draft isn't stored");
     }
 
     #[derive(Debug, Clone)]

@@ -285,7 +285,7 @@ impl EventStore {
 
     /// Every workspace with held events.
     pub fn held_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM held_events")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM held_events ORDER BY workspace_id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
