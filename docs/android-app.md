@@ -869,15 +869,17 @@ Flow, per [`serve-api.md`](../docs-site/docs/operate/reference/serve-api.md#phon
   log while the person confirmed. Nothing was stored and the `prepareId` is
   used up. Prepare again and ask once more on its own, **at most once per
   tap**: the passkey again (Credential Manager), or the biometric prompt
-  again for the redrafted signature (a `post` re-signs without asking), with
-  "Something changed while you were confirming. Confirm again." on the
-  sheet. Only when the redraft shows exactly what the person confirmed (the
-  signer, the log and the parsed action; not the digest or ids the box mints
-  per draft); otherwise show the new draft and wait for a tap. A second 409
-  in a row shows a calm "Not recorded" with Try again on the sheet, not an
-  error and not a snackbar. A post's automatic re-sign means one tap can
-  give a box two signed copies of the same text: at most a duplicate of a
-  message the person wrote.
+  again for the redrafted signature, with "Something changed while you were
+  confirming. Confirm again." on the sheet. Only when the redraft shows
+  exactly what the person confirmed (the signer, the log and the parsed
+  action; not the digest or ids the box mints per draft); otherwise show the
+  new draft and wait for a tap. A second 409 in a row shows a calm "Not
+  recorded" with Try again on the sheet, not an error and not a snackbar.
+- **A stale `post` waits for a tap.** Its redraft is never signed on its
+  own: show the post's sheet again and wait for the person's tap. The box
+  already holds the phone's signature over the stale draft, so an automatic
+  re-sign would let one tap give it two signed posts (same text, different
+  message ids) it could both publish.
 
 ### 3.2 Signed-lamport ledger, failing closed
 

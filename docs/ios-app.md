@@ -797,11 +797,13 @@ phone signed something else on that log), and a passkey confirmation's
 `POST /v1/presence/commit` answers `409 {"error":"stale_draft","message":…,"hint":…}`
 (the box's own device wrote to the same log). The phone prepares again and
 asks once more on its own, at most once per tap: the passkey prompt again,
-or Face ID again for the redrafted signature (a chat post re-signs without
-asking), with the note "Something changed while you were confirming.
-Confirm again." It does that only when the redraft shows exactly what the
-person confirmed (the digest and per-draft ids aside); otherwise the sheet
-shows the new draft and waits for a tap. A second 409 in a row ends on the
+or Face ID again for the redrafted signature, with the note "Something
+changed while you were confirming. Confirm again." It does that only when
+the redraft shows exactly what the person confirmed (the digest and
+per-draft ids aside); otherwise the sheet shows the new draft and waits for
+a tap. A chat post's redraft always waits for the person's tap: the box
+already holds a signature over the stale draft, so signing again on its own
+would let one tap give it two signed posts it could both publish. A second 409 in a row ends on the
 sheet as a calm "Not recorded" with Try again, never an error toast. Details:
 `docs/DESIGN.md` 8.1c in the iOS repository.
 
