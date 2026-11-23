@@ -66,6 +66,44 @@ describe("token parity", () => {
       expect(s.icon && s.sfSymbol && s.lt && s.ascii && s.word).toBeTruthy();
     }
   });
+
+  it("the phone's colours are opaque unless the token is translucent", () => {
+    // Xcode reads a component with no decimal point as 0-255, so alpha "1"
+    // would be 1/255. Alpha must be a 0-1 float that matches the token.
+    const sets = Object.entries(render(tokens) as Record<string, string>).filter(([p]) => p.endsWith(".colorset/Contents.json"));
+    const source = (rel: string): [string, string] => {
+      const [dir, key] = rel.split("/");
+      const L = tokens.schemes.light as Record<string, unknown>;
+      const D = tokens.schemes.dark as Record<string, unknown>;
+      if (dir === "presence") {
+        const i = Number(key.replace("presence", "")) - 1;
+        return [(L.presence as string[])[i], (D.presence as string[])[i]];
+      }
+      if (dir === "status" || dir === "diff") {
+        return [(L[dir] as Record<string, string>)[key], (D[dir] as Record<string, string>)[key]];
+      }
+      const fam = tokens.themes[dir as keyof typeof tokens.themes] as unknown as Record<"light" | "dark", Record<string, string>>;
+      return [fam.light[key], fam.dark[key]];
+    };
+    expect(sets.length).toBeGreaterThan(50);
+    let opaque = 0;
+    for (const [path, body] of sets) {
+      const rel = path.split("LigusTokens.xcassets/")[1].replace(".colorset/Contents.json", "");
+      const [light, dark] = source(rel);
+      const set = JSON.parse(body);
+      for (const entry of set.colors) {
+        const alpha: string = entry.color.components.alpha;
+        expect(alpha, `${rel} alpha`).toMatch(/^[01]\.\d{3}$/);
+        const want = parse(entry.appearances ? dark : light).a;
+        expect(Number(alpha), `${rel} alpha`).toBeCloseTo(want, 3);
+        if (want === 1) {
+          expect(alpha, `${rel} alpha`).toBe("1.000");
+          opaque++;
+        }
+      }
+    }
+    expect(opaque).toBeGreaterThan(100);
+  });
 });
 
 describe("token validator", () => {
