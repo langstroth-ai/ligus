@@ -308,7 +308,6 @@
 
 /* Composer footer hint line ("Live — type @ or / …") with keycaps. */
 .hint { font-size: 12px; color: var(--ligus-ink-soft); padding: 7px 6px 0; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-.kbd { font-family: var(--ligus-mono); font-size: 11px; background: var(--ligus-mist); border: 1px solid var(--ligus-line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; line-height: 1.5; }
 
 /* Route pill (composer): the resolved recipient / default @route. */
 .rp-wrap { position: relative; }

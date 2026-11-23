@@ -422,7 +422,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
           <div className="space-y-3">
             <div className="text-sm font-medium">Who are you?</div>
             <div className="flex items-center gap-3">
-              <label className="relative cursor-pointer" title="Add a picture (optional)">
+              <label className="relative cursor-pointer" data-tip="Add a picture (optional)">
                 <Avatar name={name || "You"} url={picture} kind="human" size={48} />
                 <input
                   type="file"

@@ -69,6 +69,7 @@ import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { CANVAS_TAB_HINT, TOUR_CANVAS_TABS, TOUR_DIFF } from "@/lib/tour";
+import { tip } from "@/components/Tooltip";
 import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour } from "@/lib/firstRun";
 import { ADMIT_BOX_EVENT, OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, requestAddPhone, type OpenChatDetail } from "@/lib/nav";
 import {
@@ -1470,7 +1471,7 @@ function CanvasModeTabs({
         <button
           key={t.id}
           role="tab"
-          title={CANVAS_TAB_HINT[t.id]}
+          data-tip={CANVAS_TAB_HINT[t.id]}
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
           className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
@@ -1496,7 +1497,7 @@ function FocusControls({ needsYou, onExit, onOpenInbox }: { needsYou: number; on
         <button
           type="button"
           onClick={onOpenInbox}
-          title="Open the Inbox"
+          data-tip="Open the Inbox"
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
         >
           <span aria-hidden style={{ color: "var(--ligus-state-needs-you, var(--ligus-warm-ink))" }}>
@@ -1508,7 +1509,7 @@ function FocusControls({ needsYou, onExit, onOpenInbox }: { needsYou: number; on
       <button
         type="button"
         onClick={onExit}
-        title={`Leave focus mode (${keyLabel(shortcutKey("focusMode")!)})`}
+        {...tip("Leave focus mode", keyLabel(shortcutKey("focusMode")!))}
         className="rounded-full px-2 py-0.5 hover:bg-[color:var(--ligus-hover)]"
       >
         Leave focus
@@ -1569,7 +1570,7 @@ function ChatHeaderBar({
         <h1 className="ligus-title truncate">{title}</h1>
         <button
           className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--ligus-hover)] hover:text-ink"
-          title="Rename chat"
+          data-tip="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
         >
@@ -1584,7 +1585,7 @@ function ChatHeaderBar({
       {contextPct !== null && (
         <button
           onClick={onOpenContext}
-          title={`${contextPct}% of the model's context window in use — open the Context pane`}
+          data-tip={`${contextPct}% of the model's context window in use — open the Context pane`}
           aria-label="Context usage"
           className="flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:border-[color:var(--ligus-accent-cool)]"
           style={{

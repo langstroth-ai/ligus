@@ -53,7 +53,7 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
 /// Small key/value tile used across flow sections.
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
-    <div className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }} title={hint}>
+    <div className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }} data-tip={hint}>
       <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{label}</div>
       <div className="mt-0.5 text-[15px] font-semibold tabular-nums">{value}</div>
     </div>

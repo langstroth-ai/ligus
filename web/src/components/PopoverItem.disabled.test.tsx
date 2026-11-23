@@ -8,7 +8,7 @@ describe("a disabled popover row (an @mention you can't use)", () => {
     render(<PopoverItem label="@private" kind="Not available" disabled title="Only its owner can use this agent" onSelect={onSelect} />);
     const row = screen.getByRole("menuitem");
     expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).toHaveAttribute("title", "Only its owner can use this agent");
+    expect(row).toHaveAttribute("data-tip", "Only its owner can use this agent");
     fireEvent.mouseDown(row);
     expect(onSelect).not.toHaveBeenCalled();
   });

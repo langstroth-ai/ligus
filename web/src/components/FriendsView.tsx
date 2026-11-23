@@ -302,7 +302,7 @@ export function FriendsView({
           <IconUsers size={18} /> People
         </h1>
         {profile.data?.safetyCode && (
-          <span className="text-right text-[11px] text-ink-soft" title="Your safety code: people compare it with the one they see for you">
+          <span className="text-right text-[11px] text-ink-soft" data-tip="Your safety code: people compare it with the one they see for you">
             Your code <code className="font-mono">{profile.data.safetyCode}</code>
           </span>
         )}
@@ -368,7 +368,7 @@ export function FriendsView({
                     {d.name}
                   </span>
                   {d.archived.length > 0 && (
-                    <span className="text-[11px] text-ink-soft" title="You both opened a DM at the same time; the older one was kept">
+                    <span className="text-[11px] text-ink-soft" data-tip="You both opened a DM at the same time; the older one was kept">
                       +{d.archived.length} archived
                     </span>
                   )}
@@ -420,7 +420,7 @@ export function FriendsView({
                     <span
                       className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
                       style={{ color: "var(--ligus-danger-ink)", border: "1px solid var(--ligus-danger-ink)" }}
-                      title="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
+                      data-tip="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
                     >
                       Look-alike name
                     </span>
@@ -436,7 +436,7 @@ export function FriendsView({
                 </button>
               </div>
               <PersonLinks p={p} />
-              <div className="font-mono text-[11px] text-ink-soft" title="Their safety code">
+              <div className="font-mono text-[11px] text-ink-soft" data-tip="Their safety code">
                 {p.keyConflict
                   ? "Your shared workspaces disagree about this person's key: nothing is sent to them."
                   : (p.safetyCode ?? "no safety code yet")}

@@ -48,14 +48,14 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
         <IconSparkle size={11} />
       </span>
       <span className="shrink-0 font-medium text-ink">{next.title}.</span>
-      <span className="min-w-0 flex-1 truncate" title={next.reason}>
+      <span className="min-w-0 flex-1 truncate" data-tip={next.reason}>
         {next.reason}
       </span>
       <LinkButton onClick={() => onOpen(next.kind)}>Set up</LinkButton>
       <button
         type="button"
         aria-label="Dismiss suggestion"
-        title="Dismiss"
+        data-tip="Dismiss"
         className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--ligus-hover)] hover:text-ink"
         onClick={dismiss}
       >

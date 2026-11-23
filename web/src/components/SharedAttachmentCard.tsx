@@ -104,7 +104,7 @@ export function SharedAttachmentCard({ sessionId, view }: { sessionId: string; v
         <span aria-hidden className="text-ink-soft">
           <IconFile size={13} />
         </span>
-        <span className="min-w-0 flex-1 truncate font-medium" title={view.name}>
+        <span className="min-w-0 flex-1 truncate font-medium" data-tip={view.name}>
           {view.name}
         </span>
         <span className="text-ink-soft">{formatBytes(view.size)}</span>

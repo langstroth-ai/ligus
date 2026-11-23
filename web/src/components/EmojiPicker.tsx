@@ -170,7 +170,7 @@ function Grid({ items, onPick }: { items: { emoji: string; name: string }[]; onP
       {items.map((it, i) => (
         <button
           key={it.emoji + i}
-          title={it.name}
+          data-tip={it.name}
           aria-label={it.name}
           onClick={() => onPick(it.emoji)}
           className="flex h-8 w-8 items-center justify-center rounded-md text-xl leading-none transition-transform hover:scale-110"

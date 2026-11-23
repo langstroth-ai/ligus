@@ -72,7 +72,7 @@ export function PendingInviteRows() {
               <>
                 <span style={{ color: bad ? "var(--ligus-danger-ink)" : undefined }}>{trustNote(inv.trust, inv.founderName)}</span>
                 {inv.safetyCode && (
-                  <code className="mt-0.5 block font-mono text-[11px]" title="The founder's safety code">
+                  <code className="mt-0.5 block font-mono text-[11px]" data-tip="The founder's safety code">
                     {inv.safetyCode}
                   </code>
                 )}

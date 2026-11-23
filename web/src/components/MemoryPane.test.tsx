@@ -78,7 +78,7 @@ describe("memory pane", () => {
   it("marks a note written under restricted egress", () => {
     setup(view({ entries: [{ ...entry, conflicts: [], egress: { mode: "closed" } }] }));
     const badge = screen.getByText("Restricted");
-    expect(badge.getAttribute("title")).toMatch(/only agent turns with egress closed/);
+    expect(badge.getAttribute("data-tip")).toMatch(/only agent turns with egress closed/);
   });
 
   it("shows an edit that sorted after a removal instead of losing it", () => {

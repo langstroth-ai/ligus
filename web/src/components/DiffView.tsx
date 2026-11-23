@@ -199,7 +199,7 @@ export function DiffView({
               active?.path === f.path ? "text-ink" : "text-ink-soft"
             }`}
             style={{ background: active?.path === f.path ? "var(--ligus-mist)" : "transparent" }}
-            title={f.path}
+            data-tip={f.path}
           >
             <span className="truncate font-mono text-xs">{f.path}</span>
             <span className="shrink-0 text-xs">

@@ -38,7 +38,7 @@ export function EditorTabs() {
             key={t.path}
             role="tab"
             aria-selected={active}
-            title={t.path}
+            data-tip={t.path}
             onMouseDown={(e) => onAuxClick(e, t.path)}
             onClick={() => editorStore.setActive(t.path)}
             className="group flex min-w-0 cursor-pointer select-none items-center gap-1.5 border-r px-3 py-1.5 text-xs transition-colors"

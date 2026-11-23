@@ -22,7 +22,7 @@ describe("RailFrame help", () => {
     expect(screen.queryByText("Reference material mounted into this workspace.")).toBeNull();
     const help = screen.getByRole("link", { name: /About Vaults: Reference material mounted into this workspace\./ });
     expect(help).toHaveTextContent("?");
-    expect(help).toHaveAttribute("title", "Reference material mounted into this workspace. Opens the docs.");
+    expect(help).toHaveAttribute("data-tip", "Reference material mounted into this workspace. Opens the docs.");
     await userEvent.click(help);
     expect(ipc.openExternal).toHaveBeenCalledWith("https://docs.langstroth.ai/ligus/concepts/vaults/");
   });

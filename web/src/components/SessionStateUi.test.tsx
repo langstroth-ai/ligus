@@ -29,7 +29,7 @@ describe("SessionStateChip", () => {
       expect(chip).not.toBeNull();
       expect(chip.querySelector("svg")).not.toBeNull();
       expect(chip.textContent).toBe(meta.word);
-      expect(chip.getAttribute("title")).toBe(meta.describe);
+      expect(chip.getAttribute("data-tip")).toBe(meta.describe);
       unmount();
     }
   });

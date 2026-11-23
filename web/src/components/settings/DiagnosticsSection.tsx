@@ -39,7 +39,7 @@ export function DiagnosticsSection() {
           <button
             className="text-xs underline underline-offset-2 hover:opacity-80"
             onClick={copyPath}
-            title={dir.data}
+            data-tip={dir.data}
           >
             Copy log-folder path
           </button>

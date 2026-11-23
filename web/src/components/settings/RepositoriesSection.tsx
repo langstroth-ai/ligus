@@ -50,7 +50,7 @@ function HostChip({ h }: { h: RepoHostCoverage }) {
     <span
       className="rounded-full border px-2 py-0.5 text-xs"
       style={{ borderColor: "var(--ligus-line)", opacity: h.online ? 1 : 0.6 }}
-      title={h.online ? "online" : "offline"}
+      data-tip={h.online ? "online" : "offline"}
     >
       {ok ? "✓ " : ""}
       {h.label}: {coverageLabel(h.state, h.viaFork)}

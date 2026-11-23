@@ -78,7 +78,7 @@ export function RunLeaseLine({
   const extras = (
     <>
       {!lease.verified && !lease.isMe && (
-        <span className="text-ink-soft" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
+        <span className="text-ink-soft" data-tip="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
           unverified
         </span>
       )}
@@ -86,7 +86,7 @@ export function RunLeaseLine({
         <span
           className="rounded px-1.5 py-0.5"
           style={{ color: "var(--ligus-danger-ink)", background: "var(--ligus-danger-tint)" }}
-          title="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
+          data-tip="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
         >
           {lease.fencedClaims} competing claim{lease.fencedClaims === 1 ? "" : "s"} fenced
         </span>
