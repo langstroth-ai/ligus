@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RepositoriesSection, RepoSuggestionBanner, coverageLabel } from "./RepositoriesSection";
+import { RepositoriesSection, RepoSuggestionNotice, coverageLabel } from "./RepositoriesSection";
 import { ChatRepoChip, PinnedHostWarning, pinnedWarning, repoWarning } from "@/components/ChatRepoChip";
 import * as ipc from "@/lib/ipc";
 
@@ -111,7 +111,7 @@ describe("RepositoriesSection", () => {
     vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(
       data({ repos: [], suggestion: { canonical: "github.com/zazulam/wefit", name: "WeFit", viaFork: false, path: "/Users/me/apps/WeFit" } }),
     );
-    wrap(<RepoSuggestionBanner />);
+    wrap(<RepoSuggestionNotice />);
     expect(await screen.findByText(/Add WeFit to the workspace/)).toBeTruthy();
     await userEvent.click(screen.getByText("Add"));
     expect(ipc.addWorkspaceRepo).toHaveBeenCalledWith("github.com/zazulam/wefit", { name: "WeFit", path: "/Users/me/apps/WeFit" });

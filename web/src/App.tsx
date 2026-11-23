@@ -53,10 +53,6 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
 import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
-import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
-import { WorkspaceTrustBanner } from "@/components/WorkspaceTrustBanner";
-import { RepoSuggestionBanner } from "@/components/settings/RepositoriesSection";
-import { SandboxGrantsBanner } from "@/components/SandboxGrantsBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
 import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
 import { StatusDot } from "@/components/ui";
@@ -64,7 +60,9 @@ import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsSheet } from "@/components/ShortcutsSheet";
 import { ErrorLogSheet } from "@/components/ErrorLogSheet";
+import { Inbox } from "@/components/Inbox";
 import { useDockBadge, useNeedsYou } from "@/state/useNeedsYou";
+import { needsYouCount } from "@/lib/needsYou";
 import { matchShortcut } from "@/lib/shortcuts";
 import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
@@ -87,7 +85,7 @@ import {
   type ThemeName,
 } from "@/lib/theme";
 
-type View = "workspace" | "friends";
+type View = "workspace" | "friends" | "inbox";
 type CanvasMode = "chat" | "diff" | "code";
 type UtilityPane =
   | "tools"
@@ -988,10 +986,6 @@ export function App() {
       <PresenceSheet />
       <PhoneEnrollTripwire />
       <UpdateBanner />
-      <PendingInvitesBanner />
-      <WorkspaceTrustBanner />
-      <RepoSuggestionBanner />
-      <SandboxGrantsBanner />
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
       {errorsOpen && <ErrorLogSheet onClose={() => setErrorsOpen(false)} />}
       <CommandPalette
@@ -1059,6 +1053,7 @@ export function App() {
           addPhone: () => requestAddPhone(),
           showShortcuts: () => setShortcutsOpen(true),
           showErrors: () => setErrorsOpen(true),
+          openInbox: () => setView("inbox"),
           // After the palette closes, so its focus-return doesn't steal it back.
           focusComposer: () =>
             window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
@@ -1117,6 +1112,8 @@ export function App() {
           setView("workspace");
           openUtilityPane(pane);
         }}
+        inboxCount={needsYouCount(needsYou)}
+        onOpenInbox={() => setView((v) => (v === "inbox" ? "workspace" : "inbox"))}
       />
       )}
 
@@ -1126,7 +1123,29 @@ export function App() {
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DearthBanner onManage={() => openSettings("guards")} />
-        {view === "friends" ? (
+        {view === "inbox" ? (
+          <PaneErrorBoundary label="Inbox">
+            <Inbox
+              items={needsYou}
+              actions={{
+                openChat: (id) => {
+                  rememberChat(id);
+                  setSelectedId(id);
+                  setView("workspace");
+                  setMode("chat");
+                },
+                openProposal: (sessionId) => {
+                  rememberChat(sessionId);
+                  setSelectedId(sessionId);
+                  setView("workspace");
+                  setMode("chat");
+                  openUtilityPane("review");
+                },
+                openSettingsTab: (tab) => openSettings(tab),
+              }}
+            />
+          </PaneErrorBoundary>
+        ) : view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
               onOpenSettings={(tab) => openSettings(tab)}

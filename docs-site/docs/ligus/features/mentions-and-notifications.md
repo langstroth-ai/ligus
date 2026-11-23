@@ -102,12 +102,14 @@ A badge on the desktop is a number of things waiting on **you**, never a
 total, news or activity:
 
 - **The dock icon** (macOS) and **the tray icon's tooltip** ("Ligus · 2 need
-  you") count everything waiting on you in the workspace on screen: each
+  you") count what the [Inbox](inbox.md) lists, which is everything waiting
+  on you in the workspace on screen: each
   question an agent asked you, each proposal waiting on your vote or ready
   to apply, a run that failed here, changed sandbox grants, repository
   commands waiting to be enabled, a box that says it's your device,
   invites, and a phone code that a second phone answered. The badge clears
   at zero. Windows has no dock badge; the tray tooltip says it.
+- **Inbox** at the top of the sidebar shows the same number.
 - **The Review pane** in the sidebar shows how many of the open chat's
   proposals wait on your vote or are ready to apply. Proposals you wrote or
   already voted on aren't counted.

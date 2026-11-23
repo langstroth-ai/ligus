@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button, Modal } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { revokeMyDevice } from "@/lib/ipc";
-import { listenPhoneAlerts, phoneAlerts, usePhoneAlerts } from "@/state/phoneAlerts";
+import { listenPhoneAlerts, phoneAlerts, usePhoneAlertOpen, usePhoneAlerts } from "@/state/phoneAlerts";
 import { spellFingerprint } from "@/components/settings/AddPhonePanel";
 
 /// The add-a-phone tripwire (design §8.3), wherever the person is in the
@@ -14,11 +14,12 @@ import { spellFingerprint } from "@/components/settings/AddPhonePanel";
 /// revocation is).
 export function PhoneEnrollTripwire() {
   const alerts = usePhoneAlerts();
+  const open = usePhoneAlertOpen();
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
   useEffect(() => listenPhoneAlerts(), []);
   const a = alerts[0];
-  if (!a) return null;
+  if (!a || !open) return null;
   const dismiss = () => phoneAlerts.resolve(a.rid, a.other.deviceId);
   const added = a.added.label || "the phone";
 
@@ -37,7 +38,7 @@ export function PhoneEnrollTripwire() {
   }
 
   return (
-    <Modal onClose={dismiss} panelClassName="w-[440px] max-w-full rounded-2xl border p-5 space-y-3">
+    <Modal onClose={() => phoneAlerts.close()} panelClassName="w-[440px] max-w-full rounded-2xl border p-5 space-y-3">
       <div role="alertdialog" aria-label="Another phone answered this code" className="space-y-3" data-testid="phone-tripwire">
         <h2 className="text-base font-semibold">Another phone answered this code</h2>
         <p className="text-sm">

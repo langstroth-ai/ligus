@@ -44,6 +44,8 @@ export interface PaletteActions {
   showShortcuts?: () => void;
   /// Errors this session, including ones whose toast already faded.
   showErrors?: () => void;
+  /// Everything that needs you.
+  openInbox?: () => void;
 }
 
 interface Cmd {
@@ -184,6 +186,9 @@ export function CommandPalette({
         keywords: "keys hotkeys keybindings",
         run: run(actions.showShortcuts),
       });
+    }
+    if (actions.openInbox) {
+      items.push({ id: "inbox", label: "Open Inbox", hint: "Go", keywords: "needs you asks votes invites", run: run(actions.openInbox) });
     }
     if (actions.showErrors) {
       items.push({
