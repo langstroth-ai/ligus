@@ -24,6 +24,7 @@
 # so nothing that parses it breaks.
 
 AC_JSON=0
+AC_QUIET=0
 AC_COLOR=auto
 AC_CHECKS=""
 AC_NEXT=""
@@ -75,6 +76,8 @@ ac_check() {
     # Red for a failure, yellow for a warning; the word stays for no colour.
     if [ "$status" = fail ]; then tag=$(printf '\033[1;31m[%s]\033[0m' "$mark"); else tag=$(printf '\033[33m[%s]\033[0m' "$mark"); fi
   fi
+  # -q: only the checks that need attention.
+  if [ "$AC_QUIET" = 1 ] && [ "$status" != fail ] && [ "$status" != warn ]; then return 0; fi
   ac_log "$tag $id: $detail"
   if [ -n "$fix" ] && [ "$status" != pass ]; then ac_log "       -> $fix"; fi
   return 0
@@ -135,6 +138,15 @@ ac_exit_codes() {
   These scripts use 0 to 4 (an unreachable cluster is 3: check the context and credentials).
   ligus and langstroth-relay share the table (ligus help exit-codes, langstroth-relay help exit-codes).
 EOF
+}
+
+# -o json|text (a script's flag): json is --json.
+ac_set_output() {
+  case $1 in
+    json) AC_JSON=1 ;;
+    text) AC_JSON=0 ;;
+    *) ac_usage_error "-o must be json or text" ;;
+  esac
 }
 
 # --json (or -o json) anywhere on the command line, before the flags are
