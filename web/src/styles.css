@@ -1,30 +1,14 @@
 @import "tailwindcss";
+/* Base colours, status, diff and presence tokens, generated from
+   assets/branding/ligus-brand-tokens.json (OKLCH, with rgb() fallbacks). */
+@import "./tokens.generated.css";
 
-/* Default Ligus design tokens (pollen palette — the launch default).
-   `applyTheme()` overrides these on :root at runtime; these defaults cover
-   first paint before the theme JS runs. Full palette set lives in
-   src/lib/theme.ts. */
+/* Ligus design tokens. The base palette (Pollen first paint), status, diff,
+   presence, scheme numbers and motion durations come from
+   tokens.generated.css; `applyTheme()` (lib/theme.ts) overrides them on :root
+   at runtime. Everything here derives from those. */
 :root {
   font-size: 14px;
-  --ligus-canvas: rgb(249, 243, 228);
-  --ligus-ink: rgb(38, 29, 16);
-  --ligus-panel: rgb(255, 252, 244);
-  --ligus-mist: rgb(243, 233, 212);
-  --ligus-line: rgba(120, 84, 24, 0.12);
-  --ligus-accent-warm: rgb(214, 130, 56);
-  --ligus-accent-cool: rgb(216, 150, 32);
-  --ligus-sidebar-top: rgb(74, 46, 18);
-  --ligus-sidebar-bottom: rgb(134, 88, 28);
-  --ligus-sidebar-ink: rgb(252, 242, 216);
-  --ligus-sidebar-ink-muted: rgb(248, 234, 206);
-  /* Status + overlay tokens (light defaults; applyTheme overrides per scheme).
-     Replace hardcoded #34c759 / #ff5a5f / rgba(0,0,0,…) literals with these so
-     every palette (esp. light variants) stays legible. */
-  --ligus-success: rgb(34, 140, 80);
-  --ligus-danger: rgb(198, 55, 55);
-  --ligus-warn: rgb(164, 76, 29); /* amber-orange, apart from honey: see STATUS_COLORS in lib/theme.ts */
-  --ligus-overlay: rgba(0, 0, 0, 0.05);
-
   /* Derived chat-layer tokens (redesign). Built from the base --ligus-* tokens
      with color-mix / relative-color, so they follow every palette automatically
      when applyTheme() overrides the base vars — no per-theme wiring needed. */
@@ -44,17 +28,6 @@
   /* Neutral "muted" accent — the shared-workspace / system identity (requested
      muted token). Derived from ink so it tracks every palette. */
   --ligus-accent-muted: color-mix(in srgb, var(--ligus-ink) 34%, var(--ligus-panel));
-
-  /* Scheme-derived numbers — light first-paint defaults; applyTheme() overrides
-     these per light/dark scheme (they depend on scheme, never on the accent
-     family). Drive the turn fill/rail/name lightness + filled-control lightness
-     so a single rule set stays legible in every palette. */
-  --ligus-turn-mix: 91%;
-  --ligus-turn-rail-l: 54%;
-  --ligus-turn-name-l: 40%;
-  --ligus-accent-ink-l: 42%;
-  --ligus-fill-l: 45%;
-  --ligus-on-accent: rgb(255, 255, 255);
 
   /* Text-weight + fill-weight variants of the semantic accents: same hue and
      chroma, lightness replaced via relative-colour so they follow every palette
@@ -82,9 +55,14 @@
   --ligus-danger-line: color-mix(in srgb, var(--ligus-danger) 34%, transparent);
   --ligus-warn-tint: color-mix(in srgb, var(--ligus-warn) 13%, transparent);
   --ligus-warn-line: color-mix(in srgb, var(--ligus-warn) 38%, transparent);
-  --ligus-info-ink: var(--ligus-accent-ink);
-  --ligus-info-tint: var(--tint-cool);
-  --ligus-info-line: var(--tint-cool-line);
+  /* Info / running: its own blue-teal, apart from the brand accent. */
+  --ligus-info-ink: oklch(from var(--ligus-info) var(--ligus-accent-ink-l) c h);
+  --ligus-info-tint: color-mix(in srgb, var(--ligus-info) 11%, transparent);
+  --ligus-info-line: color-mix(in srgb, var(--ligus-info) 34%, transparent);
+  --ligus-running: var(--ligus-info);
+  --ligus-neutral-ink: var(--ligus-ink-soft);
+  /* Selected rows and text: a light accent wash. */
+  --ligus-selection: color-mix(in srgb, var(--ligus-accent-cool) 22%, transparent);
   /* Names used by 0.1 code before they existed — alias, don't break. */
   --ligus-warning: var(--ligus-warn);
   --ligus-surface: var(--ligus-panel);
@@ -120,7 +98,6 @@
   --ligus-shadow-1: 0 1px 2px color-mix(in srgb, var(--ligus-ink) 10%, transparent);
   --ligus-shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--ligus-ink) 22%, transparent);
   --ligus-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--ligus-line);
-  --ligus-dur: 140ms;
   --ligus-ease: cubic-bezier(0.2, 0, 0, 1);
   /* Press feedback: a faint wash laid over any control's own fill (an inset
      shadow, so it works whatever background the control sets inline). */
