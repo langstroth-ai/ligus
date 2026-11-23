@@ -139,7 +139,19 @@ impl Report {
 
     /// One check in the text form.
     pub fn check_text(c: &Check) -> String {
-        let mut s = format!("{:<5} {:<15} {}\n", c.status.as_str(), c.title, c.detail);
+        Self::check_text_styled(c, false)
+    }
+
+    /// One check in the text form; with `color`, a failure's status in red
+    /// and a warning's in yellow (the word stays, for no colour).
+    pub fn check_text_styled(c: &Check, color: bool) -> String {
+        let word = format!("{:<5}", c.status.as_str());
+        let word = match (color, c.status) {
+            (true, Status::Fail) => format!("\x1b[1;31m{word}\x1b[0m"),
+            (true, Status::Warn) => format!("\x1b[33m{word}\x1b[0m"),
+            _ => word,
+        };
+        let mut s = format!("{word} {:<15} {}\n", c.title, c.detail);
         for n in &c.notes {
             let _ = writeln!(s, "      {n}");
         }
@@ -215,5 +227,8 @@ mod tests {
         let t = Report::check_text(&r.checks[2]);
         assert_eq!(t, "fail  relay           connection refused\n      fix: langstroth-relay check --url https://r.example\n");
         assert!(!Report::check_text(&Check::ok("x", "x", "fine").fix("never shown")).contains("fix:"));
+        let red = Report::check_text_styled(&r.checks[2], true);
+        assert!(red.starts_with("\x1b[1;31mfail \x1b[0m relay"), "{red:?}");
+        assert!(!Report::check_text_styled(&r.checks[0], true).contains('\x1b'), "ok is never coloured");
     }
 }

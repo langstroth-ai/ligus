@@ -52,6 +52,8 @@ help_common_flags() {
                            goes to stderr
   --color WHEN             auto, always or never: colour [FAIL] and [WARN] on stderr (default
                            auto: only on a terminal, and never when NO_COLOR is set)
+  -o, --output FORMAT      json (the same as --json) or text (the default)
+  -q, --quiet              print only the checks that need attention (warn, FAIL) on stderr
   -h, --help               print this command's help and exit 0
   A flag's value is the next argument or follows an equals sign (--release r or --release=r).
 EOF
@@ -424,6 +426,8 @@ while [ $# -gt 0 ]; do
     --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;  # --flag=value is --flag value
     --json) AC_JSON=1 ;;
     --color) need "$@"; ac_set_color "$2"; shift ;;
+    -o|--output) need "$@"; ac_set_output "$2"; shift ;;
+    -q|--quiet) AC_QUIET=1 ;;
     --context) need "$@"; CTX=$2; shift ;;
     --namespace|-n) need "$@"; NS=$2; shift ;;
     --release) need "$@"; REL=$2; shift ;;
