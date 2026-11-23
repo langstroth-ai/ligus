@@ -43,11 +43,13 @@ use uuid::Uuid;
 mod admit;
 mod app_cmd;
 mod auth;
+mod checks;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
 mod help;
 mod mcp_config;
+mod problem;
 mod memory_cmd;
 mod selftest;
 mod reply;
@@ -727,7 +729,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
 
 fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usize> {
     let Some(s) = svc.load(chat_id)? else {
-        bail!("unknown chat {chat_id}");
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
         println!("{:>9}  {}", m.author, m.body);
@@ -756,7 +758,7 @@ fn cmd_tail(cfg: &Config, chat_id: Uuid, watch: bool) -> Result<()> {
 async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let Some(session) = svc.load(chat_id)? else {
-        bail!("unknown chat {chat_id}");
+        return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     svc.post_user_message(chat_id, session.workspace_id, body)?;
     println!("posted.");
@@ -1695,20 +1697,12 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// `ligus doctor`: the agent sandbox tier this device uses, why, and what
-/// it leaves open (the same text as the Settings banner and the logs).
-///
-/// As a preflight (a Kubernetes init container, a CI step) it returns a
-/// non-zero exit code: `--require-confined` exits 3 without an agent
-/// sandbox, `--expect-tier <tier>` exits 4 on any other tier, and
-/// `--turn-test` (exit 5 on failure) runs one real headless agent turn
-/// against an in-process stub model whose `run_command` probes the sandbox
-/// (see selftest.rs).
 /// `ligus doctor --sandbox [--runtime <name>] [--agent <id>]`: what an agent
 /// turn may reach on this host (Phase C: the home is default-deny), each path
 /// with why, the shell rule, and the signed grants in force for this
 /// workspace. The same lines as Settings, Sandbox on the desktop.
-fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>) -> Result<()> {
+fn sandbox_policy_lines(cfg: &Config, runtime: Option<&str>, agent: Option<&str>) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
     use ligus_core::ModelProviderKind as K;
     // The signed grants, and whether this host applies them.
     let setting = ligus_runtime::sandbox::grants_setting_from_env();
@@ -1733,37 +1727,40 @@ fn print_sandbox_policy(cfg: &Config, runtime: Option<&str>, agent: Option<&str>
     let shell = agent_id.is_some_and(|id| grants.shell_granted(id));
     for k in kinds {
         let p = ligus_runtime::executor::effective_policy(k, &paths, shell);
-        println!("\n{} (tier {}):", p.runtime, p.tier);
+        out.push(String::new());
+        out.push(format!("{} (tier {}):", p.runtime, p.tier));
         for e in &p.entries {
-            println!("  {:<10} {}  ({})", e.access, e.path, e.why);
+            out.push(format!("  {:<10} {}  ({})", e.access, e.path, e.why));
         }
-        println!("  shell      {}", p.shell);
+        out.push(format!("  shell      {}", p.shell));
     }
-    println!("\nworkspace sandbox grants on this host: {}", here.why);
-    println!("  ({}=apply or {}=ignore sets it)", ligus_runtime::sandbox::GRANTS_ENV, ligus_runtime::sandbox::GRANTS_ENV);
-    println!("\nsigned grants for this workspace{}:", if here.apply { " (in force here)" } else { " (not applied here)" });
+    out.push(String::new());
+        out.push(format!("workspace sandbox grants on this host: {}", here.why));
+    out.push(format!("  ({}=apply or {}=ignore sets it)", ligus_runtime::sandbox::GRANTS_ENV, ligus_runtime::sandbox::GRANTS_ENV));
+    out.push(String::new());
+        out.push(format!("signed grants for this workspace{}:", if here.apply { " (in force here)" } else { " (not applied here)" }));
     let grants = signed;
     if grants.is_empty() {
-        println!("  none (Settings, Sandbox on a desktop: Admin with a passkey; the shell grant is the Owner's)");
+        out.push("  none (Settings, Sandbox on a desktop: Admin with a passkey; the shell grant is the Owner's)".into());
     }
     for p in &grants.workspace.read_only {
-        println!("  every agent  read        {p}");
+        out.push(format!("  every agent  read        {p}"));
     }
     for p in &grants.workspace.read_write {
-        println!("  every agent  read-write  {p}");
+        out.push(format!("  every agent  read-write  {p}"));
     }
     for (id, a) in &grants.agents {
         for p in &a.read_only {
-            println!("  agent {id}  read        {p}");
+            out.push(format!("  agent {id}  read        {p}"));
         }
         for p in &a.read_write {
-            println!("  agent {id}  read-write  {p}");
+            out.push(format!("  agent {id}  read-write  {p}"));
         }
         if a.shell {
-            println!("  agent {id}  shell for every member's turns (an Owner's grant)");
+            out.push(format!("  agent {id}  shell for every member's turns (an Owner's grant)"));
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 /// This host's workspace's signed sandbox grants and whether it applies
@@ -1781,74 +1778,277 @@ fn signed_grants_here(cfg: &Config, setting: Option<bool>) -> (ligus_core::sandb
     }
 }
 
-fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bool, cfg: &Config) -> Result<i32> {
-    let s = ligus_runtime::executor::sandbox_status();
-    println!("agent sandbox: {}", s.tier());
-    println!("  {}", s.summary);
-    for n in &s.notes {
-        println!("  - {n}");
+/// What `ligus doctor` was asked to do.
+#[derive(Default)]
+struct DoctorOpts {
+    require_confined: bool,
+    expect_tier: Option<String>,
+    turn_test: bool,
+    /// `--sandbox`: the sandbox checks only, plus the per-runtime policy.
+    sandbox: bool,
+    /// `--gateways`: the model gateway checks only.
+    gateways: bool,
+    gateway: Option<String>,
+    model: Option<String>,
+    runtime: Option<String>,
+    agent: Option<String>,
+    json: bool,
+    /// `--legacy-exit-codes`: the preflight failures exit 3, 4 and 5 as
+    /// before 0.2 (for one release), instead of 1.
+    legacy_exit_codes: bool,
+}
+
+impl DoctorOpts {
+    /// A preflight flag narrows a bare doctor to the sandbox, as before
+    /// (init containers and `helm test` run it that way).
+    fn preflight(&self) -> bool {
+        self.require_confined || self.expect_tier.is_some() || self.turn_test
     }
-    let unconfined = s.kind == ligus_runtime::executor::ExecutorKind::Unconfined;
-    if unconfined {
-        println!("  CLI agent turns (any tier), run_command, stdio MCP servers and pre-flight tests are refused here;");
-        println!("  chat with an HTTP model (no local tools) still runs");
-        #[cfg(windows)]
-        println!("  Windows has no agent sandbox: run CLI agents on a macOS or Linux host (ligus worker / ligus serve)");
-        #[cfg(target_os = "linux")]
-        println!("  to fix: install bubblewrap (bwrap) with unprivileged user namespaces, or run Linux 6.7+ for Landlock");
+    fn sandbox_scope(&self) -> bool {
+        self.sandbox || self.preflight() || !self.gateways
     }
-    if let Some(d) = hardening::dumpable() {
-        println!("process dumpable: {}", if d { "yes" } else { "no" });
+    fn everything(&self) -> bool {
+        !self.sandbox && !self.gateways && !self.preflight()
     }
-    {
+    fn gateway_scope(&self) -> bool {
+        self.gateways || self.everything()
+    }
+}
+
+/// The fix for a host without an agent sandbox.
+fn unconfined_fix() -> &'static str {
+    if cfg!(windows) {
+        "Windows has no agent sandbox: run CLI agents on a macOS or Linux host (ligus worker / ligus serve)"
+    } else if cfg!(target_os = "linux") {
+        "install bubblewrap (bwrap) with unprivileged user namespaces, or run Linux 6.7+ for Landlock (ligus help troubleshooting)"
+    } else {
+        "ligus help troubleshooting"
+    }
+}
+
+/// `ligus doctor`: every check this host can make, as a `ligus.checks.v1`
+/// report (checks.rs). Returns the exit code.
+fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
+    use checks::{Check, Report, Status};
+    let mut r = Report::new("doctor");
+    // A failed check exits 1; --legacy-exit-codes keeps the preflights' old
+    // codes (3 no sandbox, 4 another tier, 5 the turn test) for one release.
+    let mut code = 0;
+    let legacy = |old: i32| if o.legacy_exit_codes { old } else { help::EXIT_ERROR };
+    if o.sandbox_scope() {
+        let s = ligus_runtime::executor::sandbox_status();
+        let unconfined = s.kind == ligus_runtime::executor::ExecutorKind::Unconfined;
+        let mut notes = s.notes.clone();
+        let c = if unconfined {
+            notes.push("CLI agent turns (any tier), run_command, stdio MCP servers and pre-flight tests are refused here; chat with an HTTP model (no local tools) still runs".into());
+            let c = if o.require_confined || o.turn_test { Check::fail("sandbox.tier", "agent sandbox", s.tier()) } else { Check::warn("sandbox.tier", "agent sandbox", s.tier()) };
+            c.fix(unconfined_fix())
+        } else {
+            Check::ok("sandbox.tier", "agent sandbox", s.tier())
+        };
+        let mut c = c.notes(notes);
+        c.detail = format!("{}: {}", s.tier(), s.summary);
+        r.add(c);
+        if (o.require_confined || o.turn_test) && unconfined {
+            eprintln!("ligus: no agent sandbox on this host: every agent turn that runs local programs would be refused");
+            code = legacy(hardening::EXIT_UNCONFINED);
+        }
+        if let Some(want) = o.expect_tier.as_deref().map(|t| t.trim().to_ascii_lowercase()) {
+            if want == s.tier() {
+                r.add(Check::ok("sandbox.expected-tier", "expected tier", format!("{want}, as expected")));
+            } else {
+                r.add(
+                    Check::fail("sandbox.expected-tier", "expected tier", format!("expected {want}, this host uses {}", s.tier()))
+                        .fix("run on a node that has that tier, or change the expected tier (agentSandbox.tier on Kubernetes)"),
+                );
+                eprintln!("ligus: expected agent sandbox tier {want}, this host uses {}", s.tier());
+                if code == 0 {
+                    code = legacy(4);
+                }
+            }
+        }
+        if let Some(d) = hardening::dumpable() {
+            r.add(if d {
+                Check::warn("process.dumpable", "process", "dumpable: other processes of this user can read its memory").fix("run on Linux with prctl allowed (ligus help security)")
+            } else {
+                Check::ok("process.dumpable", "process", "not dumpable")
+            });
+        }
         let (signed, here) = signed_grants_here(cfg, ligus_runtime::sandbox::grants_setting_from_env());
         let n = signed.workspace.read_only.len() + signed.workspace.read_write.len() + signed.agents.len();
-        println!("workspace sandbox grants: {} ({n} signed; ligus doctor --sandbox lists them)", here.why);
+        r.add(Check::ok("sandbox.grants", "sandbox grants", format!("{} ({n} signed; ligus doctor --sandbox lists them)", here.why)));
+        if o.turn_test && code == 0 {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            match rt.block_on(selftest::turn_test(&cfg.data_dir)) {
+                Ok(t) if t.passed() => {
+                    let mut lines = t.lines.clone();
+                    lines.push(format!("passed (tier {})", t.tier));
+                    r.add(Check::ok("sandbox.turn-test", "turn test", format!("passed (tier {})", t.tier)).notes(lines));
+                }
+                Ok(t) => {
+                    eprintln!("ligus: turn test failed");
+                    r.add(Check::fail("sandbox.turn-test", "turn test", "failed: the sandbox let something through or the command didn't run").fix("read the findings above; ligus help troubleshooting").notes(t.lines));
+                    code = legacy(5);
+                }
+                Err(e) => {
+                    eprintln!("ligus: turn test could not run: {e:#}");
+                    r.add(Check::fail("sandbox.turn-test", "turn test", format!("could not run: {e:#}")).fix("ligus help troubleshooting"));
+                    code = legacy(5);
+                }
+            }
+        }
+        if o.sandbox && code == 0 {
+            let lines = sandbox_policy_lines(cfg, o.runtime.as_deref(), o.agent.as_deref())?;
+            r.add(Check::ok("sandbox.policy", "sandbox policy", "what an agent turn may read and write here").notes(lines));
+        }
     }
+    if o.everything() {
+        doctor_workspace_checks(cfg, &mut r);
+    }
+    if o.gateway_scope() {
+        let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
+        let model = o.model.clone().unwrap_or_else(|| "ligus-gateway-check".into());
+        let rt = rt_current()?;
+        for c in rt.block_on(gateway_check::checks(ws, o.gateway.clone(), model, false)) {
+            if c.status == Status::Fail {
+                r.next("ligus gateway-check");
+            }
+            r.add(c);
+        }
+    }
+    if code == 0 && !r.ok() {
+        code = help::EXIT_ERROR;
+    }
+    if o.json {
+        println!("{}", r.to_json(code));
+    } else {
+        print!("{}", doctor_text(&r));
+    }
+    Ok(code)
+}
+
+/// The text form. The sandbox tier comes first as `agent sandbox: <tier>`
+/// with its summary on the next line, and the turn test's findings as
+/// `turn test: …` lines, as before: deploy scripts and CI read those lines.
+fn doctor_text(r: &checks::Report) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    for c in &r.checks {
+        match c.id.as_str() {
+            "sandbox.tier" => {
+                let (tier, summary) = c.detail.split_once(": ").unwrap_or((c.detail.as_str(), ""));
+                let _ = writeln!(s, "agent sandbox: {tier}\n  {summary}");
+                for n in &c.notes {
+                    let _ = writeln!(s, "  - {n}");
+                }
+                if let (Some(f), false) = (&c.fix, c.status == checks::Status::Ok) {
+                    let _ = writeln!(s, "  fix: {f}");
+                }
+            }
+            "sandbox.turn-test" => {
+                for n in &c.notes {
+                    let _ = writeln!(s, "turn test: {n}");
+                }
+                if c.status != checks::Status::Ok {
+                    s.push_str(&checks::Report::check_text(&checks::Check { notes: Vec::new(), ..c.clone() }));
+                }
+            }
+            "sandbox.policy" => {
+                for n in &c.notes {
+                    let _ = writeln!(s, "{n}");
+                }
+            }
+            _ => s.push_str(&checks::Report::check_text(c)),
+        }
+    }
+    let _ = writeln!(s, "{}", r.summary());
+    s
+}
+
+/// `ligus doctor`'s workspace checks: the secret store, the connection, the
+/// relay (one request), and the events held aside.
+fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
+    use checks::Check;
+    let backend = ligus_runtime::secret_store::for_data_dir(&cfg.data_dir).backend();
+    let chosen = env_opt("LIGUS_SECRET_BACKEND").is_some();
+    r.add(if backend == ligus_runtime::secret_store::Backend::Unavailable {
+        Check::fail("secrets.backend", "secret store", "no usable secret store on this machine")
+            .fix("unlock or install the OS secret store, or choose plain owner-only files with LIGUS_SECRET_BACKEND=file (ligus help security)")
+    } else if backend.is_plain_file() && !chosen {
+        Check::warn("secrets.backend", "secret store", "owner-only files under the data dir (the OS secret store wasn't usable)")
+            .fix("ligus help security (LIGUS_SECRET_BACKEND)")
+    } else {
+        Check::ok("secrets.backend", "secret store", backend.as_str())
+    });
+
+    let st = status_report(cfg);
+    let w = &st["workspace"];
+    let next = st["next"].as_str().unwrap_or("").to_string();
+    let joined = w["relayProblem"].is_null() && w["workspaceKey"].as_bool() == Some(true);
+    let c = if !joined {
+        Check::warn("workspace.joined", "workspace", w["relayProblem"].as_str().unwrap_or("no workspace key on this device")).fix(next.clone())
+    } else if w["deviceStanding"].as_str() == Some("revoked") {
+        Check::fail("workspace.joined", "workspace", format!("{}: this device was revoked", cfg.room))
+            .fix("an Admin re-admits it from a desktop; or join again from a fresh data dir")
+    } else if next != "ready" {
+        Check::warn("workspace.joined", "workspace", format!("{}: not synced or not a member yet", cfg.room)).fix(next.clone())
+    } else {
+        Check::ok("workspace.joined", "workspace", format!("{}: a member, local copy present", cfg.room))
+    };
+    // Only a plain command is a next step (the fix says the rest).
+    if c.status != checks::Status::Ok && next.starts_with("ligus ") && !next.contains([':', ';', '(']) {
+        r.next(next);
+    }
+    r.add(c);
+
+    match cfg.relay_url.as_deref().filter(|u| usable_relay_url(u)) {
+        None => r.add(Check::skip("relay.reachable", "relay", "no relay URL on this device")),
+        Some(url) => {
+            use ligus_runtime::relay_client::RelayProbe as P;
+            let probe = match (rt_current(), relay_client(cfg)) {
+                (Ok(rt), Ok(c)) => rt.block_on(c.with_request_timeout(Duration::from_secs(10)).probe(&cfg.room)),
+                (Err(e), _) | (_, Err(e)) => P::Unreachable(format!("{e:#}")),
+            };
+            let relay_check = format!("langstroth-relay check --url {url}");
+            let c = match probe {
+                P::Ok => Check::ok("relay.reachable", "relay", format!("{url}: reachable, access accepted")),
+                P::Unauthorized => Check::fail("relay.reachable", "relay", format!("{url} rejected this device's access token"))
+                    .fix("sign in again (ligus auth login) or set a valid LIGUS_RELAY_ACCESS_TOKEN (ligus help env)"),
+                P::HttpStatus(c) => {
+                    Check::fail("relay.reachable", "relay", format!("{url} answered HTTP {c}")).fix(format!("on the relay host: {relay_check}"))
+                }
+                P::Unreachable(e) => {
+                    Check::fail("relay.reachable", "relay", format!("{url}: {e}")).fix(format!("check the URL and this network; on the relay host: {relay_check}"))
+                }
+            };
+            if c.status != checks::Status::Ok {
+                r.next(relay_check);
+            }
+            r.add(c);
+        }
+    }
+
     // Events held aside until this device can judge them (a certificate or
     // admission not here yet, a disputed account key): they never stop sync.
     if let Ok(svc) = open_service(cfg) {
         if let Ok(h) = svc.store().held_stats(uuid_of_room(&cfg.room)) {
-            println!(
-                "held events: {} from {} device(s), {} dropped by a cap ({} to fetch again from the relay), {} given up, {} expired (they apply on their own once what they wait for arrives)",
+            let detail = format!(
+                "{} from {} device(s), {} dropped by a cap ({} to fetch again from the relay), {} given up, {} expired (they apply on their own once what they wait for arrives)",
                 h.held, h.signers, h.dropped, h.refetch, h.lost, h.expired
             );
-            for (reason, n) in &h.reasons {
-                println!("  - {n}: {reason}");
-            }
+            let notes = h.reasons.iter().map(|(reason, n)| format!("- {n}: {reason}"));
+            r.add(if h.lost > 0 {
+                Check::warn("sync.held", "held events", detail).fix("ligus help troubleshooting (held events)").notes(notes)
+            } else {
+                Check::ok("sync.held", "held events", detail).notes(notes)
+            });
         }
     }
-    if (require_confined || turn_test) && unconfined {
-        eprintln!("ligus: no agent sandbox on this host: every agent turn that runs local programs would be refused");
-        return Ok(hardening::EXIT_UNCONFINED);
-    }
-    if let Some(want) = expect_tier.map(|t| t.trim().to_ascii_lowercase()) {
-        if want != s.tier() {
-            eprintln!("ligus: expected agent sandbox tier {want}, this host uses {}", s.tier());
-            return Ok(4);
-        }
-    }
-    if turn_test {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        let report = rt.block_on(selftest::turn_test(&cfg.data_dir));
-        match report {
-            Ok(r) => {
-                for line in &r.lines {
-                    println!("turn test: {line}");
-                }
-                if !r.passed() {
-                    eprintln!("ligus: turn test failed");
-                    return Ok(5);
-                }
-                println!("turn test: passed (tier {})", r.tier);
-            }
-            Err(e) => {
-                eprintln!("ligus: turn test could not run: {e:#}");
-                return Ok(5);
-            }
-        }
-    }
-    Ok(0)
+}
+
+/// A current-thread runtime (the CLI only ever `block_on`s).
+fn rt_current() -> Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_current_thread().enable_all().build()?)
 }
 
 /// Whether the command line asks for help (`-h` / `--help` / `help` anywhere
@@ -1863,15 +2063,23 @@ fn main() {
     // crypto provider (ring).
     ligus_forge::install_tls_provider();
     if let Err(e) = run() {
-        eprintln!("ligus: {e:#}");
-        if help::is_usage(&e) {
-            let args = split_flag_values(std::env::args().skip(1).collect());
-            // Continues the error above it, indented under it.
-            eprintln!("  {}", help::hint(&args.iter().map(String::as_str).collect::<Vec<_>>()));
-            std::process::exit(help::EXIT_USAGE);
+        let args = split_flag_values(std::env::args().skip(1).collect());
+        let words: Vec<&str> = args.iter().take_while(|a| *a != "--").map(String::as_str).collect();
+        let command = words.iter().find(|a| !a.starts_with('-')).copied().unwrap_or("");
+        let r = problem::render(&e, command, &help::hint(&words));
+        // Errors go to stderr; with --json the same error is also the one
+        // JSON document on stdout.
+        eprint!("{}", r.text);
+        if wants_json(&words) {
+            println!("{}", r.json);
         }
-        std::process::exit(help::EXIT_ERROR);
+        std::process::exit(r.exit);
     }
+}
+
+/// `--json` or `-o json` on the command line.
+fn wants_json(words: &[&str]) -> bool {
+    words.iter().any(|a| *a == "--json") || words.windows(2).any(|w| matches!(w, ["-o" | "--output", "json"]))
 }
 
 fn run() -> Result<()> {
@@ -1966,10 +2174,20 @@ fn run() -> Result<()> {
         "whoami" => cmd_whoami(&cfg, has("--json")),
         "status" => cmd_status(&cfg, has("--json")),
         "doctor" => {
-            let code = cmd_doctor(has("--require-confined"), flag_val("--expect-tier"), has("--turn-test"), &cfg)?;
-            if code == 0 && has("--sandbox") {
-                print_sandbox_policy(&cfg, flag_val("--runtime").as_deref(), flag_val("--agent").as_deref())?;
-            }
+            let o = DoctorOpts {
+                require_confined: has("--require-confined"),
+                expect_tier: flag_val("--expect-tier"),
+                turn_test: has("--turn-test"),
+                sandbox: has("--sandbox"),
+                gateways: has("--gateways") || flag_val("--gateway").is_some(),
+                gateway: flag_val("--gateway"),
+                model: flag_val("--model"),
+                runtime: flag_val("--runtime"),
+                agent: flag_val("--agent"),
+                json: has("--json"),
+                legacy_exit_codes: has("--legacy-exit-codes"),
+            };
+            let code = cmd_doctor(&cfg, &o)?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1978,7 +2196,7 @@ fn run() -> Result<()> {
         "gateway-check" => {
             let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
             let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());
-            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model))?;
+            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model, has("--legacy-exit-codes")))?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1990,13 +2208,13 @@ fn run() -> Result<()> {
             let id = positional
                 .first()
                 .ok_or_else(|| anyhow!("usage: ligus tail <chat-id> [--watch]"))?;
-            cmd_tail(&cfg, Uuid::parse_str(id)?, has("--watch"))
+            cmd_tail(&cfg, chat_id_arg(id)?, has("--watch"))
         }
         "send" => {
             let id = positional
                 .first()
                 .ok_or_else(|| anyhow!("usage: ligus send <chat-id> <message…> [--push]"))?;
-            let chat_id = Uuid::parse_str(id)?;
+            let chat_id = chat_id_arg(id)?;
             let body = positional[1..]
                 .iter()
                 .map(|s| s.as_str())
@@ -2247,6 +2465,11 @@ fn run() -> Result<()> {
 /// The invite `ligus enroll` uses: piped (`-`), from `--file PATH`, or (with a
 /// warning, since it carries the workspace key) on the command line. The bool
 /// is whether it came from the command line.
+/// A chat id from the command line: a malformed one is a usage error.
+fn chat_id_arg(s: &str) -> Result<Uuid> {
+    Uuid::parse_str(s.trim()).map_err(|_| help::usage_error(format!("not a chat id: {s:?} (ligus chats lists the ids)")))
+}
+
 fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut() -> std::io::Result<String>) -> Result<(String, bool)> {
     match (arg, file) {
         (Some("-"), None) => Ok((stdin()?.trim().to_string(), false)),
@@ -2615,5 +2838,71 @@ mod cli_tests {
         assert_eq!(provider_kind("agy").unwrap(), ModelProviderKind::Antigravity);
         assert_eq!(provider_kind("copilot").unwrap(), ModelProviderKind::Copilot);
         assert!(provider_kind("nope").is_err());
+    }
+
+    /// Scripts read `agent sandbox: <tier>` and the summary on the next line
+    /// (deploy/local/ligus-local preflight), and `turn test: …` lines
+    /// (the Kubernetes probe, CI): the checks' text form keeps them.
+    #[test]
+    fn doctor_text_keeps_the_lines_scripts_read() {
+        use checks::{Check, Report};
+        let mut r = Report::new("doctor");
+        let mut c = Check::ok("sandbox.tier", "agent sandbox", "x").notes(["a caveat".to_string()]);
+        c.detail = "landlock: Landlock (ABI 6): confined".into();
+        r.add(c);
+        r.add(Check::ok("sandbox.turn-test", "turn test", "passed (tier landlock)").notes([
+            "agent sandbox: landlock".to_string(),
+            "DENIED_ENVIRON_1".to_string(),
+            "passed (tier landlock)".to_string(),
+        ]));
+        r.add(Check::warn("workspace.joined", "workspace", "not joined").fix("ligus help quickstart"));
+        let t = doctor_text(&r);
+        let lines: Vec<&str> = t.lines().collect();
+        assert_eq!(lines[0], "agent sandbox: landlock");
+        assert_eq!(lines[1], "  Landlock (ABI 6): confined");
+        assert_eq!(lines[2], "  - a caveat");
+        assert!(lines.contains(&"turn test: passed (tier landlock)"), "{t}");
+        assert!(lines.contains(&"turn test: DENIED_ENVIRON_1"), "{t}");
+        assert!(lines.contains(&"warn  workspace       not joined"), "{t}");
+        assert!(lines.contains(&"      fix: ligus help quickstart"), "{t}");
+        assert_eq!(*lines.last().unwrap(), "1 warning · next: nothing to do");
+    }
+
+    /// A bare doctor runs everything; --sandbox, --gateways and the
+    /// preflight flags narrow it.
+    #[test]
+    fn doctor_scopes() {
+        let all = DoctorOpts::default();
+        assert!(all.everything() && all.sandbox_scope() && all.gateway_scope());
+        let sb = DoctorOpts { sandbox: true, ..Default::default() };
+        assert!(!sb.everything() && sb.sandbox_scope() && !sb.gateway_scope());
+        let gw = DoctorOpts { gateways: true, ..Default::default() };
+        assert!(!gw.everything() && !gw.sandbox_scope() && gw.gateway_scope());
+        let pre = DoctorOpts { require_confined: true, ..Default::default() };
+        assert!(!pre.everything() && pre.sandbox_scope() && !pre.gateway_scope(), "an init container's doctor checks only the sandbox");
+        let both = DoctorOpts { sandbox: true, gateways: true, ..Default::default() };
+        assert!(!both.everything() && both.sandbox_scope() && both.gateway_scope());
+    }
+
+    /// `ligus doctor --json` on a fresh device: one ligus.checks.v1 document,
+    /// a warning for the missing workspace, no relay request.
+    #[test]
+    fn doctor_report_on_a_fresh_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        std::fs::create_dir_all(&cfg.data_dir).unwrap();
+        let mut r = checks::Report::new("doctor");
+        doctor_workspace_checks(&cfg, &mut r);
+        let ids: Vec<&str> = r.checks.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"workspace.joined") && ids.contains(&"relay.reachable") && ids.contains(&"secrets.backend"), "{ids:?}");
+        let relay = r.checks.iter().find(|c| c.id == "relay.reachable").unwrap();
+        assert_eq!(relay.status, checks::Status::Skip);
+        let ws = r.checks.iter().find(|c| c.id == "workspace.joined").unwrap();
+        assert_eq!(ws.status, checks::Status::Warn);
+        assert!(ws.fix.is_some());
+        assert!(r.ok());
+        assert!(r.next.iter().all(|n| n.starts_with("ligus ")), "{:?}", r.next);
+        let d = r.to_json(0);
+        assert_eq!(d["schema"], "ligus.checks.v1");
     }
 }

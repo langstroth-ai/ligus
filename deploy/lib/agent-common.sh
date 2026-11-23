@@ -2,7 +2,8 @@
 # Shared helpers for deploy/kubernetes/ligus-k8s and deploy/local/ligus-local.
 # Sourced, never run. Bash 3.2 compatible (macOS /bin/bash).
 #
-# Conventions every command follows (AGENTS.md, "Exit codes"):
+# Conventions every command follows (AGENTS.md, "Exit codes"; the table is
+# the one every Ligus tool shares, `ligus help exit-codes`):
 #   0  done (warnings allowed)
 #   1  a check or an operation failed; the JSON says which and what to do
 #   2  usage error (unknown flag, missing argument)
@@ -10,8 +11,17 @@
 #      (a tool, the relay chart, a Secret the tool can create)
 #   4  a human must decide or act (a real workspace secret, exposure,
 #      weakening a default); stop and ask
+#   5-7 (not found, refused by workspace rules, offline) are not used by
+#      these scripts: an unreachable cluster is 3 (check the context).
 # Progress goes to stderr. With --json, stdout carries exactly one JSON
 # object. No command ever prints a secret value.
+#
+# The JSON is schema ligus.agent-deploy.v1, a conforming profile of
+# ligus.checks.v1 (docs-site/docs/operate/reference/cli-conventions.md,
+# `ligus help checks`): the same fields (tool, command, ok, exitCode,
+# checks[] of {id, status, detail, fix}, next[]), with a passed check
+# spelled "pass" and "info" for a neutral finding. The schema string stays
+# so nothing that parses it breaks.
 
 AC_JSON=0
 AC_COLOR=auto
@@ -91,14 +101,51 @@ ac_finish() {
   exit "$AC_WORST"
 }
 
+# A usage error, in the shape every Ligus tool prints: "<tool>: <what>" and
+# an indented fix line on stderr; with --json the report has one failed
+# "usage" check (and "error", the message, as before).
 ac_usage_error() {
-  ac_log "error: $1"
-  ac_log "run with --help for usage"
+  local tool=${AC_TOOL:-ligus} fix
+  fix="see $tool ${CMD:+$CMD }--help"
+  case ${CMD:-} in ""|-*|help) fix="see $tool --help" ;; esac
+  case $1 in "unknown command"*|"no help for unknown command"*) fix="see $tool --help" ;; esac
+  ac_log "$tool: $1"
+  ac_log "  fix: $fix"
   if [ "$AC_JSON" = 1 ]; then
-    printf '{"schema":"ligus.agent-deploy.v1","tool":%s,"command":"usage","ok":false,"exitCode":2,"checks":[],"next":[],"error":%s}\n' \
-      "$(ac_jstr "${AC_TOOL:-ligus}")" "$(ac_jstr "$1")"
+    printf '{"schema":"ligus.agent-deploy.v1","tool":%s,"command":"usage","ok":false,"exitCode":2,"checks":[{"id":"usage","status":"fail","detail":%s,"fix":%s}],"next":[],"error":%s}\n' \
+      "$(ac_jstr "$tool")" "$(ac_jstr "$1")" "$(ac_jstr "$fix")" "$(ac_jstr "$1")"
   fi
   exit 2
+}
+
+# The exit-code table every Ligus tool shares, for `<tool> help exit-codes`
+# and the top-level help.
+ac_exit_codes() {
+  cat <<'EOF'
+  0  done (warnings allowed)                                      continue
+  1  a check or an operation failed; checks[].fix says why        fix and rerun
+  2  usage error (unknown command or flag, missing or bad value)  fix the command line
+  3  a precondition you can fix is missing (a tool, a file, the cluster, the relay chart)
+                                                                  fix and rerun
+  4  a person must decide or act (a real secret, exposure, weakening a default, deleting
+     data)                                                        stop and ask; quote fix and next
+  5  not found                                                    check the name or id
+  6  refused by workspace rules (a role, lockdown, agent access)  ask an Admin; don't retry
+  7  offline, unreachable, or timed out                           retry with backoff
+  These scripts use 0 to 4 (an unreachable cluster is 3: check the context and credentials).
+  ligus and langstroth-relay share the table (ligus help exit-codes, langstroth-relay help exit-codes).
+EOF
+}
+
+# --json (or -o json) anywhere on the command line, before the flags are
+# parsed: a usage error found earlier in the line still prints its JSON.
+ac_prescan_json() {
+  local prev=""
+  for a in "$@"; do
+    case $a in --) return 0 ;; --json|--output=json|-o=json) AC_JSON=1 ;; json) case $prev in -o|--output) AC_JSON=1 ;; esac ;; esac
+    prev=$a
+  done
+  return 0
 }
 
 ac_have() { command -v "$1" >/dev/null 2>&1; }

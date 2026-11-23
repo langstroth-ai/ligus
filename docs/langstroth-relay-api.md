@@ -5,7 +5,7 @@ This document defines the client-side relay contract used by `RelayTransport`.
 The relay is intentionally a dumb, ciphertext-only coordination service:
 - it stores opaque encrypted envelopes
 - it stores per-version sealed workspace-key snapshots
-- it stores ephemeral presence
+- it stores ephemeral presence slots whose contents it can't read
 - it never needs plaintext session payloads
 
 ## Base URL
@@ -21,9 +21,9 @@ endpoint = "wss://relay.ligus.example/v1"
 account_token_env = "LIGUS_RELAY_TOKEN"
 ```
 
-`RelayTransport` talks to the relay over **REST** at `https://.../v1`. The
-relay has no streaming/WebSocket surface; clients discover new envelopes by
-polling `GET .../envelopes?after=`.
+`RelayTransport` talks to the relay over **REST** at `https://.../v1`.
+Clients discover new envelopes with `GET .../envelopes?after=`, and can hold
+`GET .../events` (server-sent events) open to be woken when one is appended.
 
 ## Auth
 
@@ -187,38 +187,64 @@ Response:
 
 ## Presence APIs
 
+Presence is a set of small, overwritten-in-place slots per workspace, never
+part of the event log. The relay stores each slot's `data` as an opaque blob:
+every current Ligus client seals it (ChaCha20-Poly1305 under the workspace
+key, the same `SealedEnvelope` as an event body), so the relay never sees who
+is online, which chat they are in, whether they are typing or which device
+holds a lease.
+
 ### POST `/v1/workspaces/{workspaceID}/presence`
 
-Upserts the caller's current presence.
+Upserts one slot.
 
 Request body:
-- one `WorkspacePresence`
+
+```json
+{ "device_id": "human:DEVICE_UUID", "data": { "human": { "...": "SealedEnvelope" } } }
+```
+
+- `device_id` is the slot name (at most 256 bytes). Ligus uses three kinds:
+  `human:<device id>` (a person online, and typing in a chat),
+  `host:<host id>` (a host's liveness beat) and `lease:<scope>:<scope id>`
+  (a coordinator lease's renewal beat). The slot name is visible to the
+  relay; the ids in it are ones the relay already sees in other requests.
+- `data` is any JSON value; the relay doesn't parse it. Ligus sends one of
+  `{"human": SealedEnvelope}`, `{"hostBeat": SealedEnvelope}` or
+  `{"leaseBeat": SealedEnvelope}`. Readers ignore a plaintext blob (an older
+  client), so a relay can't inject a typing indicator or a beat.
+- A write replaces the slot. A workspace holds at most
+  `LANGSTROTH_RELAY_MAX_DEVICE_BLOBS_PER_WS` slots (default 1,000): a write
+  for a new slot past the cap evicts another. Writes count against the
+  store's byte budget and the write rate limit.
+- In a workspace with a member roster, any member (Viewer included) may
+  write, as for envelopes; only key rotations need Contributor.
+- There is no TTL on the relay: a slot stays until it is overwritten or the
+  workspace is deleted. Readers judge staleness from the sealed timestamp
+  (a person's beat counts for 8 seconds, a host is online for 90).
+- Writing presence doesn't wake `GET .../events` streams; only a new
+  envelope does.
+
+Response: `200 OK` with `{"ok": true}`.
 
 ### GET `/v1/workspaces/{workspaceID}/presence`
 
-Returns the current presence set.
-
-Response body:
+Returns every slot as an object, slot name to blob:
 
 ```json
 {
-  "presence": [
-    {
-      "actor": { "id": "alice", "displayName": "Alice", "kind": "human" },
-      "client": { "id": "mac-client", "platform": "macOS", "deviceName": "Alice Mac" },
-      "workspaceRole": "owner",
-      "activeSessionID": "UUID",
-      "activeRunID": "UUID",
-      "reviewingProposalID": "UUID",
-      "activePane": "Review",
-      "state": "active",
-      "lastSeenAt": "2026-05-27T23:00:00Z"
-    }
-  ]
+  "human:DEVICE_UUID": { "human": { "...": "SealedEnvelope" } },
+  "host:HOST_UUID": { "hostBeat": { "...": "SealedEnvelope" } }
 }
 ```
 
-Servers may also return a bare array of presence entries; the current client accepts both forms.
+The response is bounded by `LANGSTROTH_RELAY_MAX_LIST_BYTES` (default
+16 MiB of stored blob bytes; at least one slot is always returned). Readers
+open each blob with the workspace key at the authorized head and drop blobs
+under an older key, blobs whose slot doesn't match the device or host they
+name, and blobs stamped too far ahead or too long ago. A person's beat is
+unsigned (a member could fake another member's typing indicator, which grants
+nothing); a lease beat is also signed by the holder's device key.
 
 ## Invariants
 
