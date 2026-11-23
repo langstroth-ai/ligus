@@ -16120,6 +16120,7 @@ pub fn run() {
             flow::flow_queue_report,
             agent_iface::list_asks,
             attention::list_chat_attention,
+            notices::set_needs_you_count,
             get_implement_plan,
             agent_iface::answer_ask,
             flow::flow_marks,

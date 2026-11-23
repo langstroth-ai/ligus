@@ -154,6 +154,29 @@ pub(crate) fn post(app: &AppHandle, notice: Notice) {
     });
 }
 
+/// The tray tooltip for a needs-you count.
+pub(crate) fn tray_tooltip(count: u32) -> String {
+    match count {
+        0 => "Ligus".into(),
+        1 => "Ligus · 1 needs you".into(),
+        n => format!("Ligus · {n} need you"),
+    }
+}
+
+/// How many things need this person (the window's inbox count): the dock
+/// badge on macOS and the tray tooltip. Zero clears the badge. Nothing else
+/// (unread chats, activity, suggestions) is ever counted here.
+#[tauri::command]
+pub(crate) fn set_needs_you_count(app: AppHandle, count: u32) {
+    if let Some(w) = app.get_webview_window("main") {
+        // Not every platform has a badge (Windows); the tooltip still says it.
+        let _ = w.set_badge_count((count > 0).then_some(i64::from(count)));
+    }
+    if let Some(tray) = app.tray_by_id("ligus-tray") {
+        let _ = tray.set_tooltip(Some(tray_tooltip(count)));
+    }
+}
+
 /// "in “Title”", or nothing for an untitled chat.
 fn in_chat(s: &ChatSession) -> String {
     let t = shown(&s.title);
@@ -299,6 +322,13 @@ mod tests {
         assert_eq!((n.kind, n.line.as_str()), (NoticeKind::Failed, "builder's run failed"));
         let human = ChatMessage::new(MessageRole::User, "Ana", "thanks");
         assert_eq!(reply_notice_with(&s, &human, false, |_| true), None);
+    }
+
+    #[test]
+    fn the_tray_says_how_many_need_you() {
+        assert_eq!(tray_tooltip(0), "Ligus");
+        assert_eq!(tray_tooltip(1), "Ligus · 1 needs you");
+        assert_eq!(tray_tooltip(4), "Ligus · 4 need you");
     }
 
     #[test]

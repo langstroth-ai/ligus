@@ -96,6 +96,27 @@ rest wait their turn ("2 more"), and repeats of the same message show once.
 Errors stay available after they fade: open the command palette (⌘K) and
 choose **Recent errors**.
 
+## Badges count only what needs you
+
+A badge on the desktop is a number of things waiting on **you**, never a
+total, news or activity:
+
+- **The dock icon** (macOS) and **the tray icon's tooltip** ("Ligus · 2 need
+  you") count everything waiting on you in the workspace on screen: each
+  question an agent asked you, each proposal waiting on your vote or ready
+  to apply, a run that failed here, changed sandbox grants, repository
+  commands waiting to be enabled, a box that says it's your device,
+  invites, and a phone code that a second phone answered. The badge clears
+  at zero. Windows has no dock badge; the tray tooltip says it.
+- **The Review pane** in the sidebar shows how many of the open chat's
+  proposals wait on your vote or are ready to apply. Proposals you wrote or
+  already voted on aren't counted.
+- The other panes (People, Agents & tools, Skills, Vaults) show no number:
+  open them to see what's there.
+
+Unread mentions keep their own dot (below), and a chat row shows its state
+(Needs you, Failed, Done) instead of a count.
+
 ## On your phone
 
 With a `ligus serve` host set up for the phone app, a mention of you (and a
