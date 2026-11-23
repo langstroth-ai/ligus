@@ -70,6 +70,7 @@ SEE ALSO
   ligus help troubleshooting     pods stuck in Init, sandbox and NetworkPolicy failures
   ligus help security            the sandbox, keys and what never leaves the namespace
   ligus help env                 every environment variable ligus reads
+  deploy/completions/ (zsh and fish completions for ligus-k8s and ligus-local)
   AGENTS.md (repository root), .claude/skills/ligus-deploy-k8s/SKILL.md,
   deploy/kubernetes/README.md, deploy/helm/ligus/README.md
 EOF
@@ -77,9 +78,10 @@ EOF
 
 hc_preflight() {
   cat <<'EOF'
-ligus-k8s preflight - check the cluster can host Ligus; changes nothing
+NAME
+  ligus-k8s preflight - check the cluster can host Ligus; changes nothing
 
-SYNOPSIS
+USAGE
   ligus-k8s preflight --context CTX [-n NS] [--release NAME] [--probe [--image REPO:TAG]
                       [--probe-image REF]] [--storage-class NAME] [--json]
 
@@ -106,6 +108,9 @@ EXAMPLES
   ligus-k8s preflight --context kind-ligus -n ligus-trial --json
   ligus-k8s preflight --context orbstack -n ligus-ws-acme --release acme --probe --image ligus:dev --json
 
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
+
 EXIT CODES
   0 ready (warnings allowed)   1 a check failed (kernel, CNI, storage, Kubernetes version)
   2 usage error (no --context)   3 a tool missing, helm too old, or the API server unreachable
@@ -114,9 +119,10 @@ EOF
 
 hc_secrets() {
   cat <<'EOF'
-ligus-k8s secrets - create the workspace Secret (or another Secret) without printing a value
+NAME
+  ligus-k8s secrets - create the workspace Secret (or another Secret) without printing a value
 
-SYNOPSIS
+USAGE
   ligus-k8s secrets workspace --context CTX -n NS [--release NAME] (--throwaway | --from-dir DIR)
                               [--name NAME | --workspace-secret NAME] [--replace] [--json]
   ligus-k8s secrets generic   --context CTX -n NS [--release NAME] --name NAME --from-dir DIR
@@ -144,6 +150,9 @@ EXAMPLES
   ligus-k8s secrets workspace --from-dir ~/ligus-ws-secret --context prod -n ligus-ws-acme --release acme --json
   ligus-k8s secrets generic --name model-keys --from-dir ~/model-keys --context prod -n ligus-ws-acme --json
 
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
+
 EXIT CODES
   0 created or already there   2 usage error (no kind, --name or --from-dir for generic)
   3 a tool missing, the cluster unreachable, or DIR missing, readable by others or with an extra file
@@ -154,9 +163,10 @@ EOF
 
 hc_install() {
   cat <<'EOF'
-ligus-k8s install - render, check, dry-run, then helm upgrade --install --wait
+NAME
+  ligus-k8s install - render, check, dry-run, then helm upgrade --install --wait
 
-SYNOPSIS
+USAGE
   ligus-k8s install --scenario trial|team-in-cluster-relay|team-external-relay
                     --context CTX -n NS [--release NAME] [image flags] [relay flags]
                     [--workspace-secret NAME] [--relay-access-token] [--workers a,b] [--no-serve]
@@ -206,6 +216,9 @@ EXAMPLES
   ligus-k8s install --scenario team-external-relay --relay-url https://relay.example.com \
     --context prod -n ligus-ws-acme --release acme --image-repository R --image-digest sha256:... --json
 
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
+
 EXIT CODES
   0 installed (or the dry run passed)   1 render, server dry run or helm failed
   2 usage error (no or unknown --scenario, bad value, --values file not found)
@@ -217,9 +230,10 @@ EOF
 
 hc_verify() {
   cat <<'EOF'
-ligus-k8s verify - check a release: status, pods, sandbox, health, NetworkPolicies, helm test
+NAME
+  ligus-k8s verify - check a release: status, pods, sandbox, health, NetworkPolicies, helm test
 
-SYNOPSIS
+USAGE
   ligus-k8s verify --context CTX -n NS [--release NAME] [--skip-helm-test] [--json]
 
   Each serve and worker pod must be Ready with a passed sandbox preflight
@@ -237,6 +251,9 @@ EXAMPLES
   ligus-k8s verify --context kind-ligus -n ligus-trial --json
   ligus-k8s verify --context prod -n ligus-ws-acme --release acme --skip-helm-test --json
 
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
+
 EXIT CODES
   0 healthy   1 a check failed (read checks[].fix)   2 usage error (no --context or -n)
   3 a tool missing or the API server unreachable
@@ -245,9 +262,10 @@ EOF
 
 hc_teardown() {
   cat <<'EOF'
-ligus-k8s teardown (alias: uninstall) - helm uninstall; optionally delete data, Secrets, namespace
+NAME
+  ligus-k8s teardown (alias: uninstall) - helm uninstall; optionally delete data, Secrets, namespace
 
-SYNOPSIS
+USAGE
   ligus-k8s teardown --context CTX -n NS [--release NAME] [--delete-data] [--delete-secrets]
                      [--delete-namespace] [--json]
 
@@ -267,6 +285,9 @@ EXAMPLES
   ligus-k8s teardown --context kind-ligus -n ligus-trial --json
   ligus-k8s teardown --context kind-ligus -n ligus-trial --delete-data --delete-secrets --delete-namespace --json
 
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
+
 EXIT CODES
   0 removed   1 helm uninstall failed or the namespace did not finish deleting   2 usage error
   3 a tool missing or the API server unreachable
@@ -276,9 +297,10 @@ EOF
 
 hc_check_rendered() {
   cat <<'EOF'
-ligus-k8s check-rendered - check a rendered manifest keeps the fail-closed defaults (offline)
+NAME
+  ligus-k8s check-rendered - check a rendered manifest keeps the fail-closed defaults (offline)
 
-SYNOPSIS
+USAGE
   ligus-k8s check-rendered FILE [--json]
 
   The same check install runs on its rendered manifest (helm template
@@ -292,6 +314,9 @@ FLAGS
 EXAMPLES
   helm template t deploy/helm/ligus -f deploy/kubernetes/scenarios/trial.yaml > /tmp/t.yaml
   ligus-k8s check-rendered /tmp/t.yaml --json
+
+ENVIRONMENT
+  ligus-k8s --help lists the variables every command reads
 
 EXIT CODES
   0 every default kept   2 FILE missing   4 a default is off: a human decides
@@ -324,14 +349,15 @@ help_cmd() {
 
 usage() {
   cat <<'EOF'
-ligus-k8s - deploy one Ligus workspace (ligus serve, workers) on Kubernetes
+NAME
+  ligus-k8s - deploy one Ligus workspace (ligus serve, workers) on Kubernetes
 
-Ligus is short for ligustica. This tool installs the deploy/helm/ligus
-chart non-interactively, for a person or a coding agent. Every command is
-idempotent, never prompts, never prints a secret, and is pinned to the
-kube context you name.
+  Ligus is short for ligustica. This tool installs the deploy/helm/ligus
+  chart non-interactively, for a person or a coding agent. Every command is
+  idempotent, never prompts, never prints a secret, and is pinned to the
+  kube context you name.
 
-SYNOPSIS
+USAGE
   ligus-k8s <command> [flags]
   ligus-k8s help [<command> | exit-codes]          ligus-k8s <command> --help
 
@@ -344,7 +370,7 @@ COMMANDS
   teardown         helm uninstall, optionally data, Secrets, namespace (alias: uninstall)
   check-rendered   check a rendered manifest's fail-closed defaults, offline
 
-COMMON FLAGS
+FLAGS (every command)
 EOF
   help_common_flags
   cat <<'EOF'

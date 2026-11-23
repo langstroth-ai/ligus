@@ -1,0 +1,66 @@
+#compdef ligus-k8s
+# zsh completion for deploy/kubernetes/ligus-k8s. Install: put this file in a
+# directory on $fpath (for example ~/.zsh/completions) and run compinit; or
+# source it after compinit. deploy/tests/agent-deploy-test.sh keeps it in
+# step with the script's commands and flags.
+
+_ligus_k8s_contexts() {
+  local -a ctx
+  ctx=(${(f)"$(kubectl config get-contexts -o name 2>/dev/null)"})
+  _describe -t contexts 'kube context' ctx
+}
+
+_ligus-k8s() {
+  local -a cmds common
+  cmds=(
+    'preflight:check the cluster; changes nothing'
+    'secrets:create the workspace Secret (or another) from files'
+    'install:render, check, server dry-run, then helm upgrade --install'
+    'render:install --dry-run'
+    'verify:helm status, pods, sandbox, health, NetworkPolicies, helm test'
+    'teardown:helm uninstall; optionally data, Secrets, namespace'
+    'uninstall:the same as teardown'
+    'check-rendered:check a rendered manifest offline'
+    'help:help for a command, or exit-codes'
+  )
+  common=(
+    '--context[the kube context (required)]:context:_ligus_k8s_contexts'
+    '(-n --namespace)'{-n,--namespace}'[one namespace per workspace]:namespace:'
+    '--release[the Helm release]:release:'
+    '--json[one JSON object on stdout]'
+    '(-o --output)'{-o,--output}'[output format]:format:(json text)'
+    '(-q --quiet)'{-q,--quiet}'[only warnings and failures on stderr]'
+    '--color[colour FAIL and WARN on stderr]:when:(auto always never)'
+    '(-h --help)'{-h,--help}'[this command'"'"'s help]'
+  )
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'ligus-k8s command' cmds
+    return
+  fi
+  local -a image=('--image[the Ligus image]:repo\:tag:' '--image-repository[image repository]:repo:'
+    '--image-tag[image tag]:tag:' '--image-digest[image digest]:sha256:')
+  case $words[2] in
+    preflight) _arguments $common $image '--probe[measure in a temporary namespace]' \
+      '--probe-image[image for the probe pods]:image:' '--storage-class[StorageClass to check]:class:' ;;
+    secrets) _arguments $common '2:kind:(workspace generic)' '--throwaway[a random throwaway workspace]' \
+      '--from-dir[files, one per key]:dir:_files -/' '--name[the Secret name]:name:' \
+      '--workspace-secret[the workspace Secret name]:name:' '--replace[update an existing Secret]' ;;
+    install|render) _arguments $common $image \
+      '--scenario[the scenario]:scenario:(trial team-in-cluster-relay team-external-relay)' \
+      '--dry-run[render and server dry-run only]' '--relay-chart[a relay chart directory]:dir:_files -/' \
+      '--fetch-relay-chart[fetch the pinned relay chart]' '--relay-image-repository[relay image]:repo:' \
+      '--relay-image-tag[relay image tag]:tag:' '--relay-url[an https relay outside the cluster]:url:' \
+      '--relay-namespace[the in-cluster relay namespace]:namespace:' '--workspace-secret[the workspace Secret]:name:' \
+      '--relay-access-token[use the Secret'"'"'s relay-access-token]' '--workers[worker hosts]:workers:' \
+      '--no-serve[no serve]' '--access-mode[PVC access mode]:mode:(ReadWriteOncePod ReadWriteOnce)' \
+      '--storage-class[StorageClass]:class:' '--values[extra values file]:file:_files' \
+      '--timeout[wait for readiness]:duration:' ;;
+    verify) _arguments $common '--skip-helm-test[skip helm test]' ;;
+    teardown|uninstall) _arguments $common '--delete-data[also delete the PVCs]' \
+      '--delete-secrets[also delete the Secrets]' '--delete-namespace[also delete the namespace]' ;;
+    check-rendered) _arguments $common '2:manifest:_files' ;;
+    help) _arguments '2:command:(preflight secrets install verify teardown check-rendered exit-codes)' ;;
+  esac
+}
+
+_ligus-k8s "$@"

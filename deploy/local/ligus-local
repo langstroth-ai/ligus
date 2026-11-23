@@ -66,6 +66,7 @@ SEE ALSO
   ligus help security            the sandbox, keys and what never leaves the device
   ligus help env                 every environment variable ligus reads
   ligus help kubernetes          the same on a cluster: deploy/kubernetes/ligus-k8s
+  deploy/completions/ (zsh and fish completions for ligus-k8s and ligus-local)
   AGENTS.md (repository root), .claude/skills/ligus-deploy-local/SKILL.md,
   deploy/ligus-serve/README.md
 EOF
@@ -73,9 +74,10 @@ EOF
 
 hc_preflight() {
   cat <<'EOF'
-ligus-local preflight - check this machine; changes nothing
+NAME
+  ligus-local preflight - check this machine; changes nothing
 
-SYNOPSIS
+USAGE
   ligus-local preflight [--role serve|worker --data-dir DIR] [--env-file FILE] [--listen ADDR] [--json]
 
   Without --role: the ligus CLI (0.1.0 or later), curl and the agent sandbox
@@ -94,6 +96,9 @@ EXAMPLES
   ligus-local preflight --json
   ligus-local preflight --role serve --data-dir ~/.ligus-serve --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 ready (warnings allowed)   1 a check failed (no sandbox, port taken)   2 usage error
   3 ligus CLI or curl missing   4 listen address on every interface, or the desktop app's data dir
@@ -102,9 +107,10 @@ EOF
 
 hc_install_cli() {
   cat <<'EOF'
-ligus-local install-cli - install the ligus CLI
+NAME
+  ligus-local install-cli - install the ligus CLI
 
-SYNOPSIS
+USAGE
   ligus-local install-cli [--version vX.Y.Z] [--bin-dir DIR] [--from-source] [--json]
 
   Downloads a release with the repository's install.sh, or builds it with
@@ -122,6 +128,9 @@ EXAMPLES
   ligus-local install-cli --version v0.1.0 --json
   ligus-local install-cli --from-source --bin-dir ~/.local/bin --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 installed (a warn says an unpinned download has no checksum to check)
   1 download or build failed   2 usage error   3 cargo missing (--from-source)
@@ -130,9 +139,10 @@ EOF
 
 hc_configure() {
   cat <<'EOF'
-ligus-local configure - write the env file and the data dir (no secret values)
+NAME
+  ligus-local configure - write the env file and the data dir (no secret values)
 
-SYNOPSIS
+USAGE
   ligus-local configure --role serve|worker --data-dir DIR [--env-file FILE] [--listen ADDR]
                         [--label NAME] [--relay-url URL] [--secret-backend file|keychain|secret-service]
                         [--throwaway-workspace] [--force] [--json]
@@ -165,6 +175,9 @@ EXAMPLES
   ligus-local configure --role serve --data-dir /tmp/ligus-trial --throwaway-workspace \
     --relay-url http://127.0.0.1:8443 --secret-backend file --force --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 configured and a workspace connection exists   2 usage error   3 ligus CLI missing
   4 stop for the human: no workspace connection yet (admission), 0.0.0.0, or the desktop app's data dir
@@ -173,9 +186,10 @@ EOF
 
 hc_start() {
   cat <<'EOF'
-ligus-local start - start ligus serve or ligus worker
+NAME
+  ligus-local start - start ligus serve or ligus worker
 
-SYNOPSIS
+USAGE
   ligus-local start --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
 
   Default: a background process (pid and log, ligus-local-ROLE.log, in the
@@ -196,6 +210,9 @@ EXAMPLES
   ligus-local start --role serve --data-dir ~/.ligus-serve --systemd --json
   ligus-local start --role worker --data-dir ~/.ligus-worker --launchd --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 running   1 it exited at once, or another box holds the launchd label (read the log named)
   2 usage error, or a path with a line break   3 ligus CLI or env file missing, --systemd off
@@ -205,9 +222,10 @@ EOF
 
 hc_unit() {
   cat <<'EOF'
-ligus-local unit - print the systemd unit (or LaunchAgent plist) start would install
+NAME
+  ligus-local unit - print the systemd unit (or LaunchAgent plist) start would install
 
-SYNOPSIS
+USAGE
   ligus-local unit --role serve|worker --data-dir DIR [--env-file FILE] [--launchd]
 
   Writes nothing. Prints the unit text on stdout (never JSON; --json is
@@ -225,6 +243,9 @@ EXAMPLES
   ligus-local unit --role serve --data-dir ~/.ligus-serve
   ligus-local unit --role worker --data-dir ~/.ligus-worker --launchd
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 printed   2 usage error, or a path or label with a line break   3 ligus CLI missing
   4 the desktop app's data dir
@@ -233,9 +254,10 @@ EOF
 
 hc_verify() {
   cat <<'EOF'
-ligus-local verify (alias: status) - check the running process, its health and the sandbox
+NAME
+  ligus-local verify (alias: status) - check the running process, its health and the sandbox
 
-SYNOPSIS
+USAGE
   ligus-local verify --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
 
   Checks the process (or the systemd unit / LaunchAgent start installed for
@@ -255,6 +277,9 @@ EXAMPLES
   ligus-local verify --role serve --data-dir ~/.ligus-serve --json
   ligus-local status --role worker --data-dir ~/.ligus-worker --launchd --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 healthy   1 not running, health not 200, or the sandbox not required (read checks[].fix)
   2 usage error   3 --launchd off macOS   4 the desktop app's data dir
@@ -263,9 +288,10 @@ EOF
 
 hc_stop() {
   cat <<'EOF'
-ligus-local stop - stop the process
+NAME
+  ligus-local stop - stop the process
 
-SYNOPSIS
+USAGE
   ligus-local stop --role serve|worker --data-dir DIR [--env-file FILE] [--systemd | --launchd] [--json]
 
   Sends SIGTERM and waits up to 25 s. A box running under launchd needs
@@ -283,6 +309,9 @@ EXAMPLES
   ligus-local stop --role serve --data-dir ~/.ligus-serve --json
   ligus-local stop --role serve --data-dir ~/.ligus-serve --launchd --json
 
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
+
 EXIT CODES
   0 stopped or not running   1 still running after 25 s, or it runs under launchd (use --launchd)
   2 usage error   3 --launchd off macOS   4 the desktop app's data dir
@@ -291,9 +320,10 @@ EOF
 
 hc_uninstall() {
   cat <<'EOF'
-ligus-local uninstall - stop, remove the unit or LaunchAgent, optionally delete the data
+NAME
+  ligus-local uninstall - stop, remove the unit or LaunchAgent, optionally delete the data
 
-SYNOPSIS
+USAGE
   ligus-local uninstall --role serve|worker --data-dir DIR [--env-file FILE] [--delete-data] [--json]
 
   Removes only a systemd unit or LaunchAgent ligus-local wrote for this data
@@ -310,6 +340,9 @@ EOF
 EXAMPLES
   ligus-local uninstall --role serve --data-dir ~/.ligus-serve --json
   ligus-local uninstall --role worker --data-dir ~/.ligus-worker --delete-data --json
+
+ENVIRONMENT
+  ligus-local --help lists the variables every command reads
 
 EXIT CODES
   0 removed   1 the LaunchAgent did not stop within 25 s   2 usage error
@@ -345,15 +378,16 @@ help_cmd() {
 
 usage() {
   cat <<'EOF'
-ligus-local - run Ligus's headless processes (ligus serve, ligus worker) on this machine
+NAME
+  ligus-local - run Ligus's headless processes (ligus serve, ligus worker) on this machine
 
-Ligus is short for ligustica. This tool sets up a laptop, home server or CI
-box non-interactively, for a person or a coding agent. Every command is
-idempotent, never prompts and never prints a secret. The desktop app is
-installed and first opened by the human (brew install --cask
-langstroth-ai/ligus/ligus-app).
+  Ligus is short for ligustica. This tool sets up a laptop, home server or CI
+  box non-interactively, for a person or a coding agent. Every command is
+  idempotent, never prompts and never prints a secret. The desktop app is
+  installed and first opened by the human (brew install --cask
+  langstroth-ai/ligus/ligus-app).
 
-SYNOPSIS
+USAGE
   ligus-local <command> [flags]
   ligus-local help [<command> | exit-codes]        ligus-local <command> --help
 
@@ -367,7 +401,7 @@ COMMANDS
   stop           stop it (--systemd / --launchd: also no start at login)
   uninstall      stop and remove it (--delete-data: also this device's identity)
 
-COMMON FLAGS
+FLAGS (every command)
 EOF
   help_common_flags
   cat <<'EOF'
