@@ -13123,6 +13123,24 @@ async fn sync_pull_once(
 /// remote ones into a dedicated SQLite connection (WAL — the live UI connection
 /// sees the ingested rows). Emits `workspace://synced` when remote events land
 /// so the frontend refetches. This is the relay-forwarding multiuser path.
+/// Open the store off the async workers; while it stays locked past the
+/// busy timeout, try again with a growing pause (at most 30 s apart).
+async fn open_store_patiently(db_path: &std::path::Path, what: &str) -> Result<EventStore, String> {
+    let mut pause = std::time::Duration::from_secs(1);
+    loop {
+        let path = db_path.to_path_buf();
+        match tokio::task::spawn_blocking(move || EventStore::open(path)).await.map_err(|e| e.to_string())? {
+            Ok(s) => return Ok(s),
+            Err(e) if e.is_busy() => {
+                tracing::warn!(target: "sync", "{what}: the store is busy ({e}); trying again in {}s", pause.as_secs());
+                tokio::time::sleep(pause).await;
+                pause = (pause * 2).min(std::time::Duration::from_secs(30));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_path: PathBuf) {
     // Safety-net poll while an SSE stream is live: a full re-entry (re-fetch the
     // keyring, pull, reopen the stream) that catches any nudge SSE dropped. This
@@ -13143,9 +13161,10 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
     // for the 20s heartbeat. A max(row_id) read; no network unless it grew.
     const LOCAL_WRITES: std::time::Duration = std::time::Duration::from_millis(250);
 
-    // Off the async workers: opening can wait for another connection's lock.
-    let open_path = db_path.clone();
-    let mut store = match tokio::task::spawn_blocking(move || EventStore::open(open_path)).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
+    // Off the async workers: opening can wait for another connection's lock,
+    // and one still locked past the busy timeout (the first open after an
+    // upgrade builds an index) is tried again with a growing pause.
+    let mut store = match open_store_patiently(&db_path, "sync").await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(target: "sync", "failed to open store: {e}");
@@ -15532,9 +15551,10 @@ async fn run_peer_sync_session(app: AppHandle, data_dir: PathBuf, db_path: PathB
     };
     eprintln!("p2p: listening as {}", node.local_id().0);
 
-    // Off the async workers: opening can wait for another connection's lock.
-    let open_path = db_path.clone();
-    let mut store = match tokio::task::spawn_blocking(move || EventStore::open(open_path)).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
+    // Off the async workers: opening can wait for another connection's lock,
+    // and one still locked past the busy timeout (the first open after an
+    // upgrade builds an index) is tried again with a growing pause.
+    let mut store = match open_store_patiently(&db_path, "p2p").await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(target: "p2p", "failed to open store: {e}");
@@ -15963,11 +15983,7 @@ pub fn run() {
                         // an older client pushed into a shared room. Backed up first.
                         let mut keep = state.known_room_ids();
                         keep.insert(state.local_workspace_id);
-                        let stamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
-                        let backup = state.data_dir.join(format!("ligus.db.bak-foreign-purge-{stamp}"));
+                        let backup = ligus_runtime::event_store::purge_backup_path(&state.data_dir);
                         if let Ok(mut svc) = state.service.lock() {
                             match svc.purge_foreign_workspaces(&keep, &backup) {
                                 Ok(dropped) if !dropped.is_empty() => {

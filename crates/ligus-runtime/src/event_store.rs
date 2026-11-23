@@ -37,11 +37,23 @@ pub enum EventStoreError {
     /// a passkey: confirm it again, the confirmation names the draft).
     #[error("this draft is out of date: its signer wrote something else here first; draft it again (confirm it again if it needed a passkey)")]
     StaleDraft,
+    /// The cleanup's backup path already holds a file; it is never
+    /// overwritten or removed.
+    #[error("the backup file {0} already exists; the cleanup didn't run")]
+    BackupExists(std::path::PathBuf),
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
 }
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
+
+impl EventStoreError {
+    /// SQLite's "database is locked": another connection held the file past
+    /// the busy timeout. Worth trying again later; nothing was written.
+    pub fn is_busy(&self) -> bool {
+        matches!(self, EventStoreError::Sqlite(rusqlite::Error::SqliteFailure(f, _)) if f.code == rusqlite::ErrorCode::DatabaseBusy)
+    }
+}
 
 /// The largest envelope (its JSON) this device writes to a synced workspace:
 /// sealed for the relay (its ciphertext a JSON array of byte values, at most
@@ -140,6 +152,14 @@ const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND ev
 /// `EventStore::last_signed_by`), through `idx_events_by_signer`.
 const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
      AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1";
+
+/// A fresh name for the foreign-workspace cleanup's backup next to the
+/// database in `data_dir`: unique per call (time to the nanosecond and the
+/// process id), so two runs never pick the same file.
+pub fn purge_backup_path(data_dir: &Path) -> std::path::PathBuf {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    data_dir.join(format!("ligus.db.bak-foreign-purge-{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()))
+}
 
 /// How long a connection waits for another connection's lock on the file
 /// before it reports "database is locked".
@@ -640,7 +660,7 @@ impl EventStore {
     /// head ([`EventStoreError::StaleDraft`]): drafted and stored under the
     /// lock, it can't go stale again. Writes made meanwhile through this
     /// store commit with `end_write(true)` and roll back otherwise.
-    pub fn begin_write(&self) -> Result<()> {
+    pub(crate) fn begin_write(&self) -> Result<()> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         Ok(())
     }
@@ -650,7 +670,7 @@ impl EventStore {
     /// released): a commit that fails is rolled back, and a rollback after
     /// SQLite already rolled back on its own (some errors do) is a no-op.
     /// Whatever didn't commit is dropped from the caches too.
-    pub fn end_write(&self, commit: bool) -> Result<()> {
+    pub(crate) fn end_write(&self, commit: bool) -> Result<()> {
         if commit {
             if let Err(e) = self.conn.execute_batch("COMMIT") {
                 self.abandon_write();
@@ -2041,16 +2061,38 @@ impl EventStore {
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
 
-    /// The workspace a stored session belongs to (its first event's, in log
-    /// order), if any of its rows exist.
+    /// The workspace a stored session belongs to, if any of its rows exist.
+    ///
+    /// The same on every device holding the same events, whatever order they
+    /// arrived in: a member of another workspace this device shares who
+    /// learns a chat's id can sign an event under it stamped with their own
+    /// workspace, and a first-arrived row must not re-home the chat (its
+    /// genuine events would then fold against the wrong roster and vanish
+    /// on that device only). So:
+    /// - a workspace's config log belongs to that workspace (its id is
+    ///   derived from it: nobody else's events can claim it);
+    /// - a log every row of which names one workspace belongs to it;
+    /// - a log more than one workspace claims belongs to the workspace of its
+    ///   creation seed as a fold picks it ([`ligus_core::events::creation_seed`]),
+    ///   else of its earliest event in fold order (lamport, then event id).
+    ///   Events of other workspaces in it then fold as foreign (fail closed).
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
-        let ws: Option<String> = self
-            .conn
-            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 ORDER BY sequence LIMIT 1", [session_id.to_string()], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        Ok(ws.and_then(|w| Uuid::parse_str(&w).ok()))
+        let claimed: Vec<Uuid> = {
+            let mut stmt = self.conn.prepare_cached("SELECT DISTINCT workspace_id FROM events WHERE session_id = ?1 ORDER BY workspace_id")?;
+            let rows = stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok().and_then(|w| Uuid::parse_str(&w).ok())).collect()
+        };
+        if let Some(ws) = claimed.iter().find(|ws| ligus_core::workspace_config_session_id(**ws) == session_id) {
+            return Ok(Some(*ws));
+        }
+        if claimed.len() <= 1 {
+            return Ok(claimed.first().copied());
+        }
+        let log = self.log_with_witnesses(session_id)?;
+        if let Some(seed) = ligus_core::events::creation_seed(&log) {
+            return Ok(Some(seed.workspace_id));
+        }
+        Ok(log.iter().filter(|e| !ligus_core::lamport::is_witness(e)).min_by_key(|e| e.canonical_key()).map(|e| e.workspace_id))
     }
 
     /// Row id of the latest `sessionSnapshot` for a session, if any.
@@ -2162,8 +2204,18 @@ impl EventStore {
             for (ws, _) in &doomed {
                 before.insert(*ws, self.workspace_rows(*ws)?);
             }
+            // Only a file this call made is ever removed: a path that already
+            // holds something (an earlier run's backup, the only copy of what
+            // that run deleted) is left alone and the cleanup doesn't run.
+            if path.exists() {
+                return Err(EventStoreError::BackupExists(path.to_path_buf()));
+            }
             if let Err(e) = self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]) {
-                let _ = std::fs::remove_file(path);
+                // (VACUUM INTO refuses a path that exists; one that appeared
+                // meanwhile isn't this call's to remove.)
+                if !e.to_string().contains("already exists") {
+                    let _ = std::fs::remove_file(path);
+                }
                 return Err(e.into());
             }
             after_backup();
@@ -3126,6 +3178,22 @@ mod tests {
 
     fn count_in(store: &EventStore, ws: Uuid) -> i64 {
         store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap()
+    }
+
+    /// A backup path that already holds a file (an earlier run's backup, the
+    /// only copy of what it deleted) is never removed or overwritten: the
+    /// cleanup doesn't run. Fresh names never collide.
+    #[test]
+    fn purge_never_removes_a_file_already_at_its_backup_path() {
+        let (dir, _path, mut store, me, foreign, mine) = purge_fixture();
+        let bak = dir.path().join("ligus.db.bak-foreign-purge-1700000000");
+        std::fs::write(&bak, b"the only copy of what an earlier run deleted").unwrap();
+        let r = store.purge_foreign_workspaces(&HashSet::from([mine]), me, Some(&bak));
+        assert!(matches!(r, Err(EventStoreError::BackupExists(_))), "{r:?}");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"the only copy of what an earlier run deleted");
+        assert_eq!(count_in(&store, foreign), 1, "nothing deleted");
+        let names: HashSet<std::path::PathBuf> = (0..100).map(|_| purge_backup_path(dir.path())).collect();
+        assert_eq!(names.len(), 100);
     }
 
     /// This device's own event, stored in a foreign-looking workspace through

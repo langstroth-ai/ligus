@@ -1320,7 +1320,7 @@ const STREAM_STABLE_AFTER: Duration = Duration::from_secs(30);
 /// was stored since the last one.
 async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let opened = match crate::sync_engine(&shared.cfg) {
-        Ok(e) => crate::open_store(shared.cfg.data_dir.join("ligus.db")).await.map(|s| (e, s)),
+        Ok(e) => crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "sync", || !shared.stopping()).await.map(|s| (e, s)),
         Err(e) => Err(e),
     };
     let (mut engine, mut store) = match opened {

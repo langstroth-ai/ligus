@@ -6664,6 +6664,45 @@ mod same_key_tests {
         assert!(!envs.iter().any(|e| e.event_id == draft.event_id), "the stale draft isn't stored");
     }
 
+    /// A member of another workspace this device shares, who knows a chat's
+    /// id, signs an event under it stamped with their own workspace. Whether
+    /// that reaches a device before or after the chat's own events, the chat
+    /// keeps its workspace and folds the same: the genuine messages stay,
+    /// the forged one never folds.
+    #[test]
+    fn a_foreign_workspace_event_never_rehomes_a_chat_whatever_order_it_arrives_in() {
+        let owner = Device::new();
+        let mut a = owner.service();
+        let wid = Uuid::new_v4();
+        let chat = a.create_chat("c", wid, "anthropic").unwrap();
+        a.post_user_message(chat.id, wid, "genuine").unwrap();
+        let (_, genuine) = a.store().envelopes_after_row(0).unwrap();
+        let other_ws = Uuid::new_v4();
+        let kp = SigningKeypair::generate().unwrap();
+        let mut forged = SessionEventEnvelope::new(chat.id, other_ws, 1, message("forged".into()));
+        ligus_core::sign_envelope(&mut forged, Uuid::new_v4(), &kp);
+        let run = |forged_first: bool| {
+            let d = Device::new();
+            let mut x = d.service();
+            if forged_first {
+                x.store.ingest(&forged).unwrap();
+            }
+            for e in &genuine {
+                x.store.ingest(e).unwrap();
+            }
+            if !forged_first {
+                x.store.ingest(&forged).unwrap();
+            }
+            let ws = x.store().workspace_of(chat.id).unwrap();
+            let bodies: Option<Vec<String>> = x.load(chat.id).ok().flatten().map(|c| c.messages.into_iter().map(|m| m.body).collect());
+            (ws, bodies)
+        };
+        let (late, early) = (run(false), run(true));
+        assert_eq!(late, early, "the chat folds the same in either order");
+        assert_eq!(late.0, Some(wid), "it stays in its own workspace");
+        assert_eq!(late.1, Some(vec!["genuine".to_string()]), "the genuine message stays, the forged one never folds");
+    }
+
     #[derive(Debug, Clone)]
     enum Step {
         /// Author `n` drafts its next message (kept until it stores it).

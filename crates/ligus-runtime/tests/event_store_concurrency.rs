@@ -349,14 +349,12 @@ fn big_chain(path: &Path, n: usize) -> (Uuid, Uuid, Uuid, SigningKeypair, Option
     let (sid, ws, dev) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let kp = SigningKeypair::generate().unwrap();
     let mut store = EventStore::open(path).unwrap();
-    store.begin_write().unwrap();
     let mut prev = None;
     for i in 0..n {
         let env = chained(sid, ws, dev, &kp, i as i64 + 1, prev, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400) });
         prev = Some(env.event_id);
         store.ingest(&env).unwrap();
     }
-    store.end_write(true).unwrap();
     (sid, ws, dev, kp, prev)
 }
 
@@ -408,13 +406,11 @@ fn a_write_during_prune_waits_and_lands() {
     let (sid, ws) = (Uuid::new_v4(), Uuid::new_v4());
     {
         let mut s = EventStore::open(&path).unwrap();
-        s.begin_write().unwrap();
         for i in 0..5_000 {
             let mid = Uuid::new_v4();
             s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 1, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "c".into() })).unwrap();
             s.ingest(&SessionEventEnvelope::new(sid, ws, 2 * i + 2, SessionEvent::MessageCompleted { message_id: mid, body: "x".repeat(200) })).unwrap();
         }
-        s.end_write(true).unwrap();
     }
     let mut a = EventStore::open(&path).unwrap();
     let b = EventStore::open(&path).unwrap();
@@ -425,4 +421,31 @@ fn a_write_during_prune_waits_and_lands() {
     h.join().unwrap().unwrap();
     assert_eq!(removed, 5_000);
     assert!(a.has_event(late_id).unwrap(), "the other connection's write landed");
+}
+
+/// The first open of an existing store by this build creates the signer
+/// index under the write lock; another connection opening meanwhile waits
+/// for it and gets through.
+#[test]
+fn opening_during_the_index_build_after_an_upgrade_gets_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ligus.db");
+    let (sid, ws) = (Uuid::new_v4(), Uuid::new_v4());
+    {
+        let mut s = EventStore::open(&path).unwrap();
+        for i in 0..20_000 {
+            let mut e = SessionEventEnvelope::new(sid, ws, i + 1, SessionEvent::MessageCompleted { message_id: Uuid::new_v4(), body: "x".repeat(400) });
+            e.signer_device_id = Some(Uuid::new_v4());
+            s.ingest(&e).unwrap();
+        }
+    }
+    // A store the previous build wrote: no signer index yet.
+    rusqlite::Connection::open(&path).unwrap().execute_batch("DROP INDEX idx_events_by_signer").unwrap();
+    let p2 = path.clone();
+    let other = thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(5));
+        EventStore::open(&p2).map(|_| ()).map_err(|e| e.to_string())
+    });
+    EventStore::open(&path).unwrap();
+    other.join().unwrap().unwrap();
 }

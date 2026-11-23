@@ -365,7 +365,7 @@ const DM_SYNC_EVERY: Duration = Duration::from_secs(4);
 /// seconds. One engine per room, kept for the life of the loop.
 pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut engines: HashMap<String, SyncEngine> = HashMap::new();
-    let mut store = match crate::open_store(shared.cfg.data_dir.join("ligus.db")).await {
+    let mut store = match crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "dm sync", || !shared.stopping()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("dm sync: cannot open the store: {e}");
