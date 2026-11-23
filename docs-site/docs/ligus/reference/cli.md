@@ -18,7 +18,8 @@ every command without this site:
 | Command | What it prints |
 |---|---|
 | `ligus help` (or `ligus --help`, `-h`) | every command, by section, and the topics |
-| `ligus help <command> [<subcommand>]`, or `ligus <command> [<subcommand>] --help` | that command's purpose, synopsis, every flag with its default, the environment variables it reads, examples, exit codes and related commands |
+| `ligus help <command> [<subcommand>]`, or `ligus <command> [<subcommand>] --help` | that command's reference in the section order every Ligus tool uses: NAME (with what it does), USAGE, COMMANDS (its subcommands), FLAGS (each with its default), EXAMPLES, ENVIRONMENT (the variables it reads), EXIT CODES and SEE ALSO (related commands, the desktop menu path or the deploy script that does the same) |
+| `ligus help --json` | every command (usage, flags, environment, examples, exit codes, see also) and topic as one `ligus.help.v1` document, for agents and completion scripts |
 | `ligus help <topic>` | a task guide: the exact commands in order, each step with a command that checks it |
 
 Topics:
