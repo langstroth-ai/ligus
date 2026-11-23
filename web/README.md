@@ -46,5 +46,18 @@ avatar stack, inbox item, status bar shell, countdown, virtual list) have a
 gallery page in mock mode at `/dev/gallery/` (`?theme=harbor&mode=dark`,
 `&sheet=1` to open the sheet).
 
+### Design QA
+
+`bun run design-qa` (with `bun run dev:mock` running) renders the mock app in
+headless Chrome across seven themes and six views and checks each capture:
+text contrast (WCAG AA), no text below 11px, at most one banner (elements
+marked `data-calm="banner"`), at most three count badges and at most four
+accent-filled regions. What already breaks a rule is recorded in
+`tools/design-qa-baseline.json` and tolerated; anything new fails. After a
+change that fixes some of it, shrink the baseline with
+`node tools/scan.mjs --update-baseline` (it never grows). `--out DIR` keeps
+the screenshots and a `report.json`; `--only chat,review` limits the views.
+CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
+
 The full app runs via `cargo tauri dev` from the repo root, which serves this
 frontend and the Rust backend together.
