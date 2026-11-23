@@ -3,13 +3,16 @@
 // the appearance mode (auto/light/dark) picks the variant. `pollen` (Ligus's
 // warm honey-gold identity) is the launch default.
 //
-//  pollen — honey / gold (brand)
-//  studio — neutral graphite (achromatic, professional)
-//  harbor — cool ocean blue
-//  meadow — botanical green
+//  pollen   — honey / gold (brand)
+//  studio   — neutral graphite (achromatic, professional)
+//  harbor   — cool ocean blue
+//  slate    — cool blue-grey
+//  meadow   — botanical green
+//  obsidian — true dark, monochrome
 
 import { useSyncExternalStore } from "react";
 import { setTitlebarColor } from "@/lib/ipc";
+import { PALETTES, SCHEME_TOKENS } from "@/lib/tokens.generated";
 
 export type ThemeName = "pollen" | "studio" | "harbor" | "meadow" | "slate" | "obsidian";
 export type AppearanceMode = "auto" | "light" | "dark";
@@ -34,210 +37,15 @@ interface ThemeVariants {
   dark: Palette;
 }
 
-export const THEMES: Record<ThemeName, ThemeVariants> = {
-  // Honey / gold — warm cream in light, honey on near-black in dark.
-  pollen: {
-    light: {
-      canvas: "rgb(249,243,228)",
-      ink: "rgb(38,29,16)",
-      panel: "rgb(255,252,244)",
-      mist: "rgb(243,233,212)",
-      line: "rgba(120,84,24,0.12)",
-      accentWarm: "rgb(214,130,56)",
-      accentCool: "rgb(216,150,32)",
-      sidebarTop: "rgb(74,46,18)",
-      sidebarBottom: "rgb(134,88,28)",
-      sidebarInk: "rgb(252,242,216)",
-      sidebarInkMuted: "rgb(248,234,206)",
-      scheme: "light",
-    },
-    dark: {
-      canvas: "rgb(20,15,8)",
-      ink: "rgb(247,236,208)",
-      panel: "rgb(32,24,13)",
-      mist: "rgb(44,33,18)",
-      line: "rgba(240,200,120,0.10)",
-      accentWarm: "rgb(224,150,80)",
-      accentCool: "rgb(240,194,90)",
-      sidebarTop: "rgb(10,7,3)",
-      sidebarBottom: "rgb(40,28,12)",
-      sidebarInk: "rgb(251,241,216)",
-      sidebarInkMuted: "rgb(201,171,120)",
-      scheme: "dark",
-    },
-  },
-
-  // Neutral graphite — achromatic; a restrained slate accent, no color cast.
-  studio: {
-    light: {
-      canvas: "rgb(245,245,246)",
-      ink: "rgb(38,40,43)",
-      panel: "rgb(255,255,255)",
-      mist: "rgb(232,233,236)",
-      line: "rgba(20,22,26,0.10)",
-      accentWarm: "rgb(150,140,128)",
-      accentCool: "rgb(82,90,102)",
-      sidebarTop: "rgb(38,41,46)",
-      sidebarBottom: "rgb(58,62,69)",
-      sidebarInk: "rgb(244,245,247)",
-      sidebarInkMuted: "rgb(180,184,192)",
-      scheme: "light",
-    },
-    dark: {
-      canvas: "rgb(24,26,29)",
-      ink: "rgb(232,234,238)",
-      panel: "rgb(33,36,40)",
-      mist: "rgb(42,45,50)",
-      line: "rgba(255,255,255,0.08)",
-      accentWarm: "rgb(168,158,146)",
-      accentCool: "rgb(140,150,164)",
-      sidebarTop: "rgb(16,18,20)",
-      sidebarBottom: "rgb(30,33,37)",
-      sidebarInk: "rgb(240,242,245)",
-      sidebarInkMuted: "rgb(160,165,173)",
-      scheme: "dark",
-    },
-  },
-
-  // Cool ocean blue — distinctly blue in both variants.
-  harbor: {
-    light: {
-      canvas: "rgb(236,243,248)",
-      ink: "rgb(23,42,58)",
-      panel: "rgb(248,252,255)",
-      mist: "rgb(218,232,242)",
-      line: "rgba(20,60,90,0.12)",
-      accentWarm: "rgb(224,150,90)",
-      accentCool: "rgb(20,120,180)",
-      sidebarTop: "rgb(16,52,78)",
-      sidebarBottom: "rgb(28,86,120)",
-      sidebarInk: "rgb(232,244,251)",
-      sidebarInkMuted: "rgb(192,216,232)",
-      scheme: "light",
-    },
-    dark: {
-      canvas: "rgb(14,22,32)",
-      ink: "rgb(220,233,243)",
-      panel: "rgb(22,33,46)",
-      mist: "rgb(28,42,58)",
-      line: "rgba(120,180,230,0.10)",
-      accentWarm: "rgb(230,160,100)",
-      accentCool: "rgb(64,168,224)",
-      sidebarTop: "rgb(8,16,26)",
-      sidebarBottom: "rgb(20,40,60)",
-      sidebarInk: "rgb(228,242,251)",
-      sidebarInkMuted: "rgb(150,180,205)",
-      scheme: "dark",
-    },
-  },
-
-  // Midnight — neutral blue-grey dark (the chat-redesign base). A genuinely
-  // Slate — cool, low-chroma blue-grey; a blue agent accent, with a clean
-  // cool-white light variant for daytime.
-  slate: {
-    light: {
-      canvas: "rgb(243,246,249)",
-      ink: "rgb(29,39,49)",
-      panel: "rgb(255,255,255)",
-      mist: "rgb(233,239,245)",
-      line: "rgba(20,32,48,0.11)",
-      accentWarm: "rgb(181,103,58)",
-      accentCool: "rgb(47,111,196)",
-      sidebarTop: "rgb(24,28,35)",
-      sidebarBottom: "rgb(16,18,22)",
-      sidebarInk: "rgb(233,238,244)",
-      sidebarInkMuted: "rgb(150,160,172)",
-      scheme: "light",
-    },
-    dark: {
-      canvas: "rgb(21,23,28)",
-      ink: "rgb(231,234,239)",
-      panel: "rgb(35,40,48)",
-      mist: "rgb(25,28,34)",
-      line: "rgba(255,255,255,0.10)",
-      accentWarm: "rgb(210,133,79)",
-      accentCool: "rgb(90,155,234)",
-      sidebarTop: "rgb(27,31,38)",
-      sidebarBottom: "rgb(19,21,25)",
-      sidebarInk: "rgb(231,234,239)",
-      sidebarInkMuted: "rgb(139,148,162)",
-      scheme: "dark",
-    },
-  },
-
-  // Botanical green.
-  meadow: {
-    light: {
-      canvas: "rgb(240,244,233)",
-      ink: "rgb(30,43,28)",
-      panel: "rgb(250,252,245)",
-      mist: "rgb(224,234,214)",
-      line: "rgba(40,70,30,0.12)",
-      accentWarm: "rgb(206,140,80)",
-      accentCool: "rgb(74,140,72)",
-      sidebarTop: "rgb(30,56,32)",
-      sidebarBottom: "rgb(54,92,54)",
-      sidebarInk: "rgb(238,246,230)",
-      sidebarInkMuted: "rgb(204,222,194)",
-      scheme: "light",
-    },
-    dark: {
-      canvas: "rgb(16,24,16)",
-      ink: "rgb(224,236,216)",
-      panel: "rgb(24,34,24)",
-      mist: "rgb(32,46,32)",
-      line: "rgba(150,200,140,0.10)",
-      accentWarm: "rgb(214,150,86)",
-      accentCool: "rgb(104,180,100)",
-      sidebarTop: "rgb(10,18,10)",
-      sidebarBottom: "rgb(26,44,26)",
-      sidebarInk: "rgb(232,244,224)",
-      sidebarInkMuted: "rgb(160,190,150)",
-      scheme: "dark",
-    },
-  },
-
-  // Obsidian — the "Refined / Midnight" redesign direction. Light is a clean,
-  // near-white warm neutral with restrained amber accents; dark is a deep,
-  // warm charcoal (darker than the other darks) with an amber pop — pairs the
-  // sleek flat-turn treatment in light and a dense developer-dark at night.
-  obsidian: {
-    // A TRUE dark, MONOCHROME theme (not a light/dark pair): both variants are the
-    // same neutral, faintly cool near-black — like volcanic glass — with achromatic
-    // silver-grey accents (a bright silver drives the UI accent; a dimmer grey marks
-    // human turns, so the two still read apart by lightness). No hue anywhere.
-    // Obsidian stays dark whatever the Appearance toggle is set to; `scheme: "dark"`
-    // in both drives the dark status/chat tokens either way.
-    light: {
-      canvas: "rgb(18,19,22)",
-      ink: "rgb(228,230,235)",
-      panel: "rgb(24,26,30)",
-      mist: "rgb(30,33,38)",
-      line: "rgba(230,234,242,0.09)",
-      accentWarm: "rgb(148,150,156)",
-      accentCool: "rgb(212,214,219)",
-      sidebarTop: "rgb(12,13,16)",
-      sidebarBottom: "rgb(18,19,23)",
-      sidebarInk: "rgb(228,230,235)",
-      sidebarInkMuted: "rgb(140,145,156)",
-      scheme: "dark",
-    },
-    dark: {
-      canvas: "rgb(18,19,22)",
-      ink: "rgb(228,230,235)",
-      panel: "rgb(24,26,30)",
-      mist: "rgb(30,33,38)",
-      line: "rgba(230,234,242,0.09)",
-      accentWarm: "rgb(148,150,156)",
-      accentCool: "rgb(212,214,219)",
-      sidebarTop: "rgb(12,13,16)",
-      sidebarBottom: "rgb(18,19,23)",
-      sidebarInk: "rgb(228,230,235)",
-      sidebarInkMuted: "rgb(140,145,156)",
-      scheme: "dark",
-    },
-  },
-};
+// The palettes are authored in OKLCH in assets/branding/ligus-brand-tokens.json
+// (one source for the desktop, the phone and lt); tokens.generated.ts holds
+// them as the rgb() values applied here. Edit the JSON, then run
+// `node assets/branding/tokens/generate.mjs`.
+//
+// Obsidian is a true dark, monochrome theme: both variants are the same
+// neutral near-black with silver-grey accents, and `scheme: "dark"` in both
+// keeps the dark status and chat tokens whatever the Appearance toggle says.
+export const THEMES: Record<ThemeName, ThemeVariants> = PALETTES;
 
 const STORAGE_KEY = "ligus.theme";
 const MODE_KEY = "ligus.appearance";
@@ -293,25 +101,19 @@ export function resolvePalette(name: ThemeName, mode: AppearanceMode): Palette {
 
 /// Status + overlay tokens per scheme (identical across accent families): one
 /// legible green/red/amber per light/dark rather than eight hand-tuned variants.
-/// Warn is an amber-orange (OKLCH hue 45 in light, 50 in dark) kept clearly
-/// apart from the honey brand accent (hue 75-85) so a warning never reads as
-/// decoration, and short of danger's red (hue 22-25). Light warn is
-/// oklch(0.52 0.13 45), dark warn oklch(0.80 0.12 50); both stay at least
-/// 4.5:1 as text on canvas, panel and mist in every palette (theme.test.ts).
-export const STATUS_COLORS: Record<"light" | "dark", { success: string; danger: string; warn: string; overlay: string }> = {
-  dark: {
-    success: "rgb(92,205,134)",
-    danger: "rgb(240,112,112)",
-    warn: "rgb(252,166,118)",
-    overlay: "rgba(255,255,255,0.06)",
-  },
-  light: {
-    success: "rgb(34,140,80)",
-    danger: "rgb(198,55,55)",
-    warn: "rgb(164,76,29)",
-    overlay: "rgba(0,0,0,0.05)",
-  },
+/// Warn is an amber-orange (OKLCH hue 45 in light, 47 in dark) kept clearly
+/// apart from the honey brand accent (hue 75-85), from danger's red and from
+/// every palette's accent-warm; tokens/validate.mjs checks the distances,
+/// including under simulated colour-vision deficiencies, and contrast.
+export const STATUS_COLORS: Record<"light" | "dark", { success: string; danger: string; warn: string; info: string; neutral: string; overlay: string }> = {
+  light: pickStatus("light"),
+  dark: pickStatus("dark"),
 };
+
+function pickStatus(scheme: "light" | "dark") {
+  const t = SCHEME_TOKENS[scheme];
+  return { success: t.success, danger: t.danger, warn: t.warn, info: t.info, neutral: t.neutral, overlay: t.overlay };
+}
 
 export function applyTheme(p: Palette) {
   const root = document.documentElement;
@@ -319,40 +121,30 @@ export function applyTheme(p: Palette) {
   // families) — one legible green/red/amber per light/dark rather than eight
   // hand-tuned variants. Components must use these instead of hardcoded
   // #34c759-style literals so light palettes stay readable.
-  const status = STATUS_COLORS[p.scheme];
-  root.style.setProperty("--ligus-success", status.success);
-  root.style.setProperty("--ligus-danger", status.danger);
-  root.style.setProperty("--ligus-warn", status.warn);
-  root.style.setProperty("--ligus-overlay", status.overlay);
+  const t = SCHEME_TOKENS[p.scheme];
+  root.style.setProperty("--ligus-success", t.success);
+  root.style.setProperty("--ligus-danger", t.danger);
+  root.style.setProperty("--ligus-warn", t.warn);
+  root.style.setProperty("--ligus-info", t.info);
+  root.style.setProperty("--ligus-neutral", t.neutral);
+  root.style.setProperty("--ligus-overlay", t.overlay);
+  root.style.setProperty("--ligus-diff-add-bg", t.diffAddBg);
+  root.style.setProperty("--ligus-diff-add-ink", t.diffAddInk);
+  root.style.setProperty("--ligus-diff-del-bg", t.diffDelBg);
+  root.style.setProperty("--ligus-diff-del-ink", t.diffDelInk);
+  root.style.setProperty("--ligus-diff-comment", t.diffComment);
+  t.presence.forEach((c, i) => root.style.setProperty(`--ligus-presence-${i + 1}`, c));
   // Chat-layer scheme-derived numbers (redesign). Like the status tokens they
   // depend on light/dark, never on the accent family — so keying them to a
   // theme name would be wrong. They set the target lightness for turn fills,
   // rails, tinted author names, and filled controls, plus the on-accent text
   // colour, so one CSS rule set stays legible in every palette + scheme.
-  const chat =
-    p.scheme === "dark"
-      ? {
-          turnMix: "87%",
-          turnRailL: "70%",
-          turnNameL: "82%",
-          accentInkL: "84%",
-          fillL: "82%",
-          onAccent: "rgb(18,20,24)",
-        }
-      : {
-          turnMix: "91%",
-          turnRailL: "54%",
-          turnNameL: "40%",
-          accentInkL: "42%",
-          fillL: "45%",
-          onAccent: "rgb(255,255,255)",
-        };
-  root.style.setProperty("--ligus-turn-mix", chat.turnMix);
-  root.style.setProperty("--ligus-turn-rail-l", chat.turnRailL);
-  root.style.setProperty("--ligus-turn-name-l", chat.turnNameL);
-  root.style.setProperty("--ligus-accent-ink-l", chat.accentInkL);
-  root.style.setProperty("--ligus-fill-l", chat.fillL);
-  root.style.setProperty("--ligus-on-accent", chat.onAccent);
+  root.style.setProperty("--ligus-turn-mix", t.turnMix);
+  root.style.setProperty("--ligus-turn-rail-l", t.turnRailL);
+  root.style.setProperty("--ligus-turn-name-l", t.turnNameL);
+  root.style.setProperty("--ligus-accent-ink-l", t.accentInkL);
+  root.style.setProperty("--ligus-fill-l", t.fillL);
+  root.style.setProperty("--ligus-on-accent", t.onAccent);
   root.style.setProperty("--ligus-canvas", p.canvas);
   root.style.setProperty("--ligus-ink", p.ink);
   root.style.setProperty("--ligus-panel", p.panel);

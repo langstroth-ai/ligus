@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Modal } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
-import { onPhoneEnrollTripwire, revokeMyDevice, type PhoneEnrollTripwireDto } from "@/lib/ipc";
+import { revokeMyDevice } from "@/lib/ipc";
+import { listenPhoneAlerts, phoneAlerts, usePhoneAlertOpen, usePhoneAlerts } from "@/state/phoneAlerts";
 import { spellFingerprint } from "@/components/settings/AddPhonePanel";
 
 /// The add-a-phone tripwire (design §8.3), wherever the person is in the
@@ -12,22 +13,14 @@ import { spellFingerprint } from "@/components/settings/AddPhonePanel";
 /// person's hand, they revoke it here (confirmed with the passkey, as every
 /// revocation is).
 export function PhoneEnrollTripwire() {
-  const [alerts, setAlerts] = useState<PhoneEnrollTripwireDto[]>([]);
+  const alerts = usePhoneAlerts();
+  const open = usePhoneAlertOpen();
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
-  useEffect(() => {
-    const sub = onPhoneEnrollTripwire((a) =>
-      setAlerts((xs) =>
-        xs.some((x) => x.rid === a.rid && x.other.deviceId === a.other.deviceId) ? xs : [...xs, a],
-      ),
-    );
-    return () => {
-      void sub.then((un) => un()).catch(() => {});
-    };
-  }, []);
+  useEffect(() => listenPhoneAlerts(), []);
   const a = alerts[0];
-  if (!a) return null;
-  const dismiss = () => setAlerts((xs) => xs.slice(1));
+  if (!a || !open) return null;
+  const dismiss = () => phoneAlerts.resolve(a.rid, a.other.deviceId);
   const added = a.added.label || "the phone";
 
   async function revoke() {
@@ -36,7 +29,7 @@ export function PhoneEnrollTripwire() {
       await revokeMyDevice(a.added.deviceId);
       toast.success(`${added} was revoked. Add your phone again with a new code.`);
       qc.invalidateQueries({ queryKey: ["my-devices"] });
-      setAlerts((xs) => xs.filter((x) => x.added.deviceId !== a.added.deviceId));
+      phoneAlerts.resolveAdded(a.added.deviceId);
     } catch (e) {
       toast.error(`Couldn't revoke: ${errMsg(e)}`);
     } finally {
@@ -45,7 +38,7 @@ export function PhoneEnrollTripwire() {
   }
 
   return (
-    <Modal onClose={dismiss} panelClassName="w-[440px] max-w-full rounded-2xl border p-5 space-y-3">
+    <Modal onClose={() => phoneAlerts.close()} panelClassName="w-[440px] max-w-full rounded-2xl border p-5 space-y-3">
       <div role="alertdialog" aria-label="Another phone answered this code" className="space-y-3" data-testid="phone-tripwire">
         <h2 className="text-base font-semibold">Another phone answered this code</h2>
         <p className="text-sm">

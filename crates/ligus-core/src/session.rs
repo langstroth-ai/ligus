@@ -177,6 +177,20 @@ impl ChatSession {
         n
     }
 
+    /// The comments on `proposal` whose author is verified: folded from their
+    /// own signed `ProposalRefined`, signed by the member they name
+    /// (`AuthzState::refinement_authors`). Only these may be forwarded to an
+    /// agent as review feedback.
+    pub fn verified_refinements<'a>(
+        &'a self,
+        proposal: &'a ActionProposal,
+    ) -> impl Iterator<Item = &'a crate::proposals::ProposalRefinement> + 'a {
+        proposal
+            .refinements
+            .iter()
+            .filter(move |r| self.authz.refinement_authors.get(&r.id).is_some_and(|a| *a == r.actor_id))
+    }
+
     /// The workspace role `actor_id` holds in this session's projected roster,
     /// or the safe floor (`Viewer`) if they're not a member. Mirrors the
     /// authoring-side floor (`ChatService::actor_role`) so ingest/projection

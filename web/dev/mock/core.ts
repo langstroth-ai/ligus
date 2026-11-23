@@ -5,6 +5,11 @@
 // Scenario knobs (URL query): ?scenario=onboarding|empty|default
 //   &dearth=1 (dearth mode on)  &lockdown=1 (open chat locked down)
 //   &loading=1 (every call hangs) &error=1 (every list call fails)
+//   &inbox=1 (an agent question, an invite, a box request, repo commands
+//   to enable and changed sandbox grants, for the Inbox)
+//   &runtime=rt-copilot (the open chat's runtime) &chatmodel=gpt-5.3-codex
+//   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
+//   model failed as unavailable: the composer's one-line note)
 import * as fx from "./fixtures";
 
 const params = new URLSearchParams(window.location.search);
@@ -14,10 +19,19 @@ const flags = {
   lockdown: params.get("lockdown") === "1",
   loading: params.get("loading") === "1",
   error: params.get("error") === "1",
+  inbox: params.get("inbox") === "1",
+  modelProblem: params.get("modelproblem") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
 };
 
 type Args = Record<string, unknown> | undefined;
+
+// The chat model picker's state (per runtime, like the device's settings).
+const chatModels: Record<string, string> = params.get("chatmodel") ? { "rt-copilot": params.get("chatmodel")! } : {};
+const chatRuntimes: Record<string, string> = {};
+function chatRuntime(sid: string): string {
+  return chatRuntimes[sid] ?? params.get("runtime") ?? "rt-claude";
+}
 
 function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
@@ -35,7 +49,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_channels":
       return flags.empty ? [] : fx.channels;
     case "get_chat":
-      return flags.empty ? null : fx.chatSession(sid);
+      return flags.empty ? null : { ...fx.chatSession(sid), runtimeId: chatRuntime(sid) };
     case "get_context_telemetry":
       return flags.empty ? null : fx.telemetry(sid);
     case "sync_status":
@@ -88,6 +102,8 @@ function handle(cmd: string, args: Args): unknown {
       return fx.workflowRuns;
     case "list_queued_work":
       return fx.queuedWork;
+    case "list_chat_attention":
+      return flags.empty ? [] : fx.chatAttention;
     case "list_workspace_hosts":
       return fx.hosts;
     case "list_mention_states":
@@ -228,6 +244,25 @@ function handle(cmd: string, args: Args): unknown {
       return { contacts: "on", invites: [] };
     case "list_schedules":
       return fx.schedules;
+    case "list_runtime_models": {
+      const rid = String(args?.runtimeId ?? "");
+      const l = fx.runtimeModels[rid] ?? { models: [], source: "none", complete: false, note: "This harness has no model list; type a model name." };
+      return { ...l, unavailable: flags.modelProblem && rid === "rt-copilot" ? ["claude-opus-4.8"] : [] };
+    }
+    case "get_chat_model":
+      return { runtimeId: chatRuntime(sid), model: chatModels[chatRuntime(sid)] ?? null, runtimeModel: "", choices: { ...chatModels }, appliesHere: true };
+    case "set_chat_model": {
+      const rid = String(args?.runtimeId ?? "");
+      const m = (args?.model as string | null)?.trim();
+      if (m) chatModels[rid] = m;
+      else delete chatModels[rid];
+      return null;
+    }
+    case "set_chat_runtime":
+      chatRuntimes[sid] = String(args?.runtimeId ?? "");
+      return null;
+    case "chat_model_problem":
+      return flags.modelProblem ? { runtimeId: "rt-copilot", model: "claude-opus-4.8", reason: "unavailable" } : null;
     case "list_claude_code_models":
       return [{ value: "default", label: "Default", description: "Recommended" }, { value: "opus", label: "Opus", description: null }];
     case "get_claude_code_model":
@@ -291,9 +326,47 @@ function handle(cmd: string, args: Args): unknown {
       return "mock-apply-request";
     case "withdraw_apply_request":
       return null;
+    case "phone_enroll_precheck":
+      // ?phone=nobox shows the add-a-phone check with nothing to go through.
+      return params.get("phone") === "nobox"
+        ? {
+            ready: false,
+            missing: ["No box in this workspace. The phone reaches you through an always-on box (ligus serve)."],
+            reasons: [
+              { code: "noBox", text: "No box in this workspace. The phone reaches you through an always-on box (ligus serve).", blocking: true },
+              { code: "noPasskey", text: "No passkey or recovery key for your account here. Adding a phone is approved with one.", blocking: true },
+            ],
+          }
+        : {
+            ready: true,
+            missing: [],
+            reasons: [
+              { code: "noBoxOnline", text: "No box reachable right now: serve box was last seen 2 min ago. The phone's request goes through it, so start it first.", blocking: false },
+            ],
+          };
     default:
       if (cmd.startsWith("list_")) return [];
       return null;
+  }
+}
+
+/// Extra things that need you, for previewing the Inbox (`&inbox=1`).
+function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
+  switch (cmd) {
+    case "list_asks":
+      return args?.sessionId === "chat-3"
+        ? [{ askId: "ask-1", agentName: "scout", question: "Retry cap: **30 s** or **60 s**?", options: ["30 s", "60 s"], expiresAtMs: Date.now() + 600_000, open: true }]
+        : base;
+    case "list_pending_invites":
+      return { contacts: "on", invites: [{ relay: "wss://relay.example", seq: 7, isDm: false, workspaceName: "Hive scale data", founderName: "Maya", trust: "known", safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92" }] };
+    case "list_device_requests":
+      return [{ hostId: "h-box", label: "serve box" }];
+    case "get_workspace_trust":
+      return { root: "/mock/repo", items: [{ kind: "mcpServer", id: "hive-sensors", commandLine: "npx hive-sensors-mcp", source: "ligus.config.toml", digest: "d1", enabled: false }] };
+    case "get_sandbox_policy":
+      return { ...(base as object), changed: true, appliesHere: true, grants: { workspace: { readWrite: ["~/scratch"] } } };
+    default:
+      return base;
   }
 }
 
@@ -305,7 +378,8 @@ export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
     throw new Error(`${cmd}: relay unreachable (mock)`);
   }
   await new Promise((r) => setTimeout(r, 15));
-  return structuredClone(handle(cmd, args)) as T;
+  const out = handle(cmd, args);
+  return structuredClone(flags.inbox ? inboxExtras(cmd, args, out) : out) as T;
 }
 
 export function convertFileSrc(path: string): string {

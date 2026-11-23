@@ -1511,8 +1511,9 @@ scheme, and keep the rest as extended colours in a `CompositionLocal`:
 | `danger` | `error` | |
 | `ok`, `info`/`running`, `warn`, `neutral` | extended colours | each with an ink and an 8% tint |
 
-- **Warning has its own hue, away from honey:** light `oklch(0.62 0.15 50)`,
-  dark `oklch(0.78 0.14 55)`, always with a `!` glyph.
+- **Warning has its own hue, away from honey:** light
+  `oklch(0.5211 0.1301 45.31)`, dark `oklch(0.85 0.08 47)` (the values in
+  `ligus-brand-tokens.json`), always with a `!` glyph.
 - **Glyph and colour together, always.** Status is never colour alone, so it
   survives colour-blindness and the system's colour correction:
 
@@ -1572,6 +1573,76 @@ scheme, and keep the rest as extended colours in a `CompositionLocal`:
   non-text contrast.
 - **Keyboard and switch access:** visible focus, a logical focus order, and
   Enter to send in the composer with a hardware keyboard.
+
+### 7.11 What the iPhone app now does (mirror these)
+
+The iPhone app has built sections 7.1, 7.2, 7.4, 7.9 and 7.10. Where it had
+to make a concrete choice, Android should make the same one, so the two
+phones agree:
+
+- **One state per chat and per agent,** from data the phone already has:
+  live turns, agents' questions this person may answer, proposals in the
+  chat waiting on their vote, a lockdown, and what finished or failed while
+  the chat wasn't open. Precedence, highest first: needs you, failed,
+  paused, working, queued, done (the desktop's order). "Done" and "failed"
+  clear when the chat is opened (a failure also clears when the same agent
+  later finishes a turn there). On a refresh the phone asks the twelve most
+  recent chats active in the last day for their open questions, so a
+  question asked while it was away shows without opening each chat. Agent
+  rows show working, queued, needs you or failed across all their chats.
+- **The Inbox counts** votes the person can still cast (a workflow or
+  human-gate proposal is labelled "Approval gate"), questions and permission
+  requests they may answer, this phone needing to be added to their devices
+  again, a box admission waiting on them, invites, and failures of runs they
+  started. "A run you started" means their message is the last one a person
+  wrote in that chat, or they posted there from this phone this session.
+  Signing and passkey sheets aren't listed (they are already on screen).
+  Order: deadline (soonest first), then age. Done today is one row per chat.
+  The launcher badge is this count; the demo never sets it.
+- **Settings has no destination of its own.** It opens from the avatar and
+  returns to where the person was. The dashboard is Agents → Health; an old
+  link or launch argument to the dashboard opens Health. Workspace is a
+  Review filter, not a button.
+- **Deep links:** on the iPhone a notification or Inbox row switches to the
+  item's own tab (Back returns to that tab's list). Section 7.2's "Inbox
+  beneath it" is still the target for Android; the iPhone may follow.
+- **First pairing:** one primary action ("Scan the code") under the one
+  command to run on the box, `ligus serve --pair`, with a Copy button.
+  Everything else (paste, an address and token, adding this phone first,
+  resetting its key) sits under "Other ways to connect". Both confirm sheets
+  say what pairing grants: this phone reads chats and proposals through the
+  box; it posts, votes and answers as the person, each signed by its own key
+  once it is one of their devices; it never holds the workspace keys.
+- **Chat chrome:** the notes above the composer (why sending is held, signed
+  actions not yet published, the demo's note) show one in full at normal
+  sizes and fold into one line ("Demo replies · 1 more") when there are
+  several or the text is at an accessibility size. The reply target is a
+  small menu beside the message field at every size. The full demo card
+  shows once, on the Inbox; other destinations say "Demo workspace · sample
+  data" in one line.
+- **Announcements:** "@coder finished" and "@coder failed" only for the chat
+  on screen (other chats say it on their row), "@coder asks a question" for
+  a new question the person may answer, "Vote recorded". The same words
+  within three seconds are said once. A streaming reply reads as "writing a
+  reply" until it ends.
+- **Notifications:** the switches are "Votes, questions and approvals for
+  you", "Mentions and direct messages" and "Runs you started", all on. They
+  go to the host as `kinds` on `PUT /v1/tunnel/push`: `proposal.created`,
+  `workflow.approval`, `review.recruit`, `ask.pending`, `mention`,
+  `message.done`. The host doesn't filter by them yet. A finished run is
+  passive and grouped with other finished runs; a failure (a `message.done`
+  whose title ends "hit an error") is active in its chat. Needs-you pushes
+  break through Do Not Disturb (iOS: time-sensitive) only with a deadline
+  within the hour, read from an optional `deadlineMs` in the push that hosts
+  don't send yet; on Android that means posting to the Needs you channel at
+  default importance unless the deadline is that close. Previews are "When
+  unlocked" or "Never". The iPhone's Focus filter (which hosts may notify in
+  a Focus) has no direct Android counterpart; Modes and per-conversation
+  priority cover part of it.
+- **Tokens:** the iPhone copies the generated Swift literals and keeps a
+  parity test. Increase Contrast strengthens secondary ink and lines without
+  moving the palette or status colours, the counterpart of section 7.9's
+  contrast variants.
 
 ---
 

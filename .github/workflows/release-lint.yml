@@ -5,7 +5,8 @@ name: release-lint
 # release's notes, installers and latest.json must land on the tag's one
 # draft release, nothing is published until every build succeeded, the tap
 # bumps follow publish and survive a concurrent tap push, ci.yml builds every CLI release target, the Tauri CLI
-# is pinned, and the latest.json and asset verifiers work.
+# is pinned, the latest.json and asset verifiers work, and promote-release.yml
+# checks everything before it makes a release Latest.
 on:
   push:
     branches: [main, "release/**"]
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/release-lint.yml"
       - ".github/workflows/update-cask.yml"
       - ".github/workflows/cut-release.yml"
+      - ".github/workflows/promote-release.yml"
       - ".github/workflows/ci.yml"
       - ".github/actions/build-cli/**"
       - "scripts/ensure-release.sh"
@@ -22,6 +24,9 @@ on:
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
       - "scripts/check-release-assets.py"
+      - "scripts/release-version-json.py"
+      - "docs/release-notes/**"
+      - "docs-site/docs/version.json"
       - "scripts/test-release-workflow.rb"
       - "scripts/tap-push.sh"
       - "scripts/test-tap-push.sh"
@@ -35,6 +40,7 @@ on:
       - ".github/workflows/release-lint.yml"
       - ".github/workflows/update-cask.yml"
       - ".github/workflows/cut-release.yml"
+      - ".github/workflows/promote-release.yml"
       - ".github/workflows/ci.yml"
       - ".github/actions/build-cli/**"
       - "scripts/ensure-release.sh"
@@ -42,6 +48,9 @@ on:
       - "scripts/check-macos-signing.sh"
       - "scripts/verify-latest-json.py"
       - "scripts/check-release-assets.py"
+      - "scripts/release-version-json.py"
+      - "docs/release-notes/**"
+      - "docs-site/docs/version.json"
       - "scripts/test-release-workflow.rb"
       - "scripts/tap-push.sh"
       - "scripts/test-tap-push.sh"

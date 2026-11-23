@@ -75,7 +75,7 @@ fn dial_of(set: &ProposalSet) -> &'static str {
         .map_or("custom", |(_, n)| n)
 }
 
-/// One set as the phone shows it. `me` is this box's actor id.
+/// One set as the phone shows it. `me` is who is asking ([`api::viewer`]).
 pub fn set_dto(set: &ProposalSet, chat: &ChatSession, me: &str) -> Value {
     let alternatives: Vec<Value> = set
         .alternatives
@@ -217,7 +217,7 @@ fn newest_first(mut v: Vec<(Timestamp, Value)>) -> Vec<Value> {
 /// newest first (open ones by default).
 pub async fn list_sets(State(s): S, Query(f): Query<SetFilter>) -> ApiResult<Json<Value>> {
     let all = wants_all(&f)?;
-    let me = s.my_actor_id();
+    let me = api::viewer(&s);
     let mut out = Vec::new();
     for chat in s.workspace_chats()? {
         out.extend(sets_of(&chat, all, &me));
@@ -230,14 +230,14 @@ pub async fn list_sets(State(s): S, Query(f): Query<SetFilter>) -> ApiResult<Jso
 pub async fn chat_sets(State(s): S, Path(id): Path<String>, Query(f): Query<SetFilter>) -> ApiResult<Json<Value>> {
     let all = f.status.is_none() || wants_all(&f)?;
     let chat = load_chat(&s, &id)?;
-    let me = s.my_actor_id();
+    let me = api::viewer(&s);
     Ok(Json(json!({ "sets": newest_first(sets_of(&chat, all, &me)) })))
 }
 
 /// `GET /v1/proposal-sets/:id`: one set.
 pub async fn get_set(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let set_id = Uuid::parse_str(id.trim()).map_err(|_| ApiError::not_found("proposal set"))?;
-    let me = s.my_actor_id();
+    let me = api::viewer(&s);
     for chat in s.workspace_chats()? {
         if let Some(set) = chat.proposal_sets.iter().find(|x| x.id == set_id) {
             return Ok(Json(json!({ "set": set_dto(set, &chat, &me) })));

@@ -113,7 +113,7 @@ co-members can deliver to it.
   checks it is theirs (signed by their account key, not older than one seen
   before, from a device that wasn't revoked). Otherwise you get the link to
   send yourself.
-- New invites show as a banner with the founder's safety code. It says the
+- New invites show in the [Inbox](inbox.md) with the founder's safety code. It says the
   invite is **from** someone only when their device signed it and the code
   matches what you know; otherwise it only **says it's from** them.
   **Accept** joins; **Dismiss** deletes it from the relay.

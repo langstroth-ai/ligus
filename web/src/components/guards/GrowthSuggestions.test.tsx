@@ -16,6 +16,15 @@ const wrap = (ui: React.ReactNode) =>
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>);
 
 describe("GrowthSuggestions", () => {
+  it("is a quiet tip, not a banner", async () => {
+    wrap(<GrowthSuggestions onOpen={vi.fn()} />);
+    const tip = await screen.findByRole("note", { name: "Tip" });
+    expect(tip).toHaveTextContent("Add an always-on host.");
+    // Banners announce themselves as status/alert; a tip doesn't compete.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows one suggestion at a time and remembers dismissals", async () => {
     const onOpen = vi.fn();
     const { unmount } = wrap(<GrowthSuggestions onOpen={onOpen} />);

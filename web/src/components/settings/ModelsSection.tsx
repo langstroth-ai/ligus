@@ -54,6 +54,7 @@ import { confirmThen } from "@/lib/confirm";
 import { loadTemplates, addTemplate, removeTemplate, type PromptTemplate } from "@/lib/templates";
 import { quickTaskOptions } from "@/lib/utilityRuntime";
 import { CliRuntimesPanel } from "@/components/settings/CliRuntimesPanel";
+import { ModelFieldHelp } from "@/components/ModelPicker";
 
 /// Models & runtimes: providers + their credentials, the runtimes (models)
 /// built on them, reusable agent personas, prompt templates, and the context
@@ -1015,10 +1016,19 @@ function RuntimesSection() {
           value={runtimeModel}
           onChange={(e) => setRuntimeModel(e.target.value)}
           placeholder={runtimeProvider === "pi" ? "Model — e.g. qwen2.5-coder" : "Preferred model"}
-          list={runtimeProvider === "ollama" ? "ollama-form-models" : undefined}
+          list={runtimeProvider === "ollama" ? "ollama-form-models" : runtimeProvider ? "runtime-form-models" : undefined}
           className="w-full rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
         />
+        {runtimeProvider !== "ollama" && runtimeProvider !== "" && (
+          <ModelFieldHelp
+            listId="runtime-form-models"
+            runtimeId={editingId}
+            provider={runtimeProvider}
+            endpoint={formEndpoint}
+            model={runtimeModel}
+          />
+        )}
         {profile && (
           <p className="text-xs text-ink-soft" data-testid="model-profile-hint">
             <span className="font-semibold">
@@ -1038,6 +1048,15 @@ function RuntimesSection() {
                 </option>
               ))}
             </datalist>
+            {formModels.data &&
+              formModels.data.models.length > 0 &&
+              runtimeModel.trim() !== "" &&
+              !formModels.data.models.some((m) => m.name.replace(/:latest$/, "") === runtimeModel.trim().replace(/:latest$/, "")) && (
+                <p className="text-xs" role="alert" style={{ color: "var(--ligus-danger-ink)" }}>
+                  {runtimeModel.trim()} isn't installed on {formModels.data.host}, so it won't run. Pull it from the
+                  runtime's Models panel first.
+                </p>
+              )}
             <p className="text-xs text-ink-soft">
               {formModels.data
                 ? formModels.data.models.length

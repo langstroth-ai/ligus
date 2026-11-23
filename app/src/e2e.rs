@@ -999,6 +999,37 @@ listen on, and who is the release manager?",
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// A chat's model choice on this device reaches the untagged turn this
+/// device builds (and the reply it records), never an @agent's turn, and
+/// is kept per runtime. Returns failures.
+fn chat_model_choice(handle: &tauri::AppHandle, sid: &str) -> usize {
+    let state = handle.state::<AppState>();
+    let id = Uuid::parse_str(sid).unwrap();
+    let mut failed = 0;
+    let mut check = |ok: bool, what: &str| {
+        if ok {
+            eprintln!("PASS {what}");
+        } else {
+            eprintln!("FAIL {what}");
+            failed += 1;
+        }
+    };
+    let session = state.service.lock().unwrap().load(id).unwrap().unwrap();
+    let rid = session.runtime_id.clone();
+    let before = crate::responder_for(&state, &session, None).runtime.effective_model();
+    crate::chat_models::set_chat_model_sync(&state, id, &rid, Some("picked-model")).unwrap();
+    let primary = crate::responder_for(&state, &session, None);
+    check(primary.runtime.effective_model() == "picked-model", "the chat's choice runs the untagged turn");
+    check(primary.model_override.as_deref() == Some("picked-model"), "the choice rides the responder into the turn");
+    let agent = ligus_core::WorkspaceAgent::new("coder", &rid);
+    let theirs = crate::responder_for(&state, &session, Some(&agent));
+    check(theirs.runtime.effective_model() == before, "an @agent keeps its own model");
+    check(crate::chat_models::override_for(&state, id, "some-other-runtime").is_none(), "the choice is for one runtime only");
+    crate::chat_models::set_chat_model_sync(&state, id, &rid, None).unwrap();
+    check(crate::responder_for(&state, &session, None).runtime.effective_model() == before, "Default goes back to the runtime's model");
+    failed
+}
+
 /// The app's own config and context, minus its window; the app is built
 /// (managers, plugins, event system) but its event loop never runs. A real
 /// [`AppState`] over `data_dir` is managed on it, with `repo` as the
@@ -1054,6 +1085,7 @@ fn run_offline() -> usize {
         }
     }
     failed += reads_while_the_service_is_held(&handle, &sid);
+    failed += chat_model_choice(&handle, &sid);
     failed += tauri::async_runtime::block_on(repos_checks(&handle, &root));
     drop(app);
     let _ = std::fs::remove_dir_all(&root);

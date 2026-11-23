@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { addPhoneRequested, clearAddPhoneRequest } from "@/lib/nav";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getAppSettings,
@@ -260,7 +261,19 @@ export function DevicesSection() {
   const revocations = useQuery({ queryKey: ["device-revocations"], queryFn: listDeviceRevocations, refetchInterval: 15_000 });
   const pairings = useQuery({ queryKey: ["device-pairings"], queryFn: listDevicePairings, refetchInterval: 30_000 });
   const [adding, setAdding] = useState(false);
-  const [addingPhone, setAddingPhone] = useState(false);
+  // Opened straight from the palette's "Add a phone".
+  const [addingPhone, setAddingPhone] = useState(addPhoneRequested);
+  const phoneRef = useRef<HTMLDivElement>(null);
+  const phoneRequested = useRef(addingPhone);
+  // Asked for from the palette: bring the panel into view (it sits below the
+  // profile fields), then use the request up.
+  useEffect(() => {
+    if (!phoneRequested.current) return;
+    clearAddPhoneRequest();
+    // After the sheet and the sections above have laid out.
+    const t = window.setTimeout(() => phoneRef.current?.scrollIntoView?.({ block: "start" }), 200);
+    return () => window.clearTimeout(t);
+  }, []);
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<DeviceCodeDto | null>(null);
   const [retire, setRetire] = useState(true);
@@ -353,13 +366,15 @@ export function DevicesSection() {
         </div>
       ))}
       {addingPhone && (
-        <AddPhonePanel
-          onDone={() => {
-            setAddingPhone(false);
-            refresh();
-          }}
-          onCancel={() => setAddingPhone(false)}
-        />
+        <div ref={phoneRef}>
+          <AddPhonePanel
+            onDone={() => {
+              setAddingPhone(false);
+              refresh();
+            }}
+            onCancel={() => setAddingPhone(false)}
+          />
+        </div>
       )}
       {adding && (
         <div className="space-y-2 rounded-xl border px-3 py-3" style={fieldStyle}>

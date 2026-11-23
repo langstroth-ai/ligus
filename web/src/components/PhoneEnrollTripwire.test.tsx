@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PhoneEnrollTripwire } from "./PhoneEnrollTripwire";
 import * as ipc from "@/lib/ipc";
 import type { PhoneEnrollTripwireDto } from "@/lib/ipc";
+import { phoneAlerts } from "@/state/phoneAlerts";
 
 let emit: (e: PhoneEnrollTripwireDto) => void = () => {};
 
@@ -36,7 +37,10 @@ function mount() {
 }
 
 describe("the add-a-phone tripwire", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    phoneAlerts._reset();
+  });
 
   it("shows nothing until another phone answers a code", async () => {
     mount();
@@ -68,5 +72,17 @@ describe("the add-a-phone tripwire", () => {
     await userEvent.click(screen.getByRole("button", { name: "It's mine" }));
     expect(screen.queryByTestId("phone-tripwire")).toBeNull();
     expect(ipc.revokeMyDevice).not.toHaveBeenCalled();
+  });
+
+  it("closing it puts it aside in the Inbox instead of dismissing it", async () => {
+    mount();
+    await waitFor(() => expect(ipc.onPhoneEnrollTripwire).toHaveBeenCalled());
+    act(() => emit(alert));
+    await screen.findByTestId("phone-tripwire");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("phone-tripwire")).toBeNull());
+    expect(phoneAlerts.snapshot().alerts).toHaveLength(1);
+    act(() => phoneAlerts.show());
+    expect(await screen.findByTestId("phone-tripwire")).toBeInTheDocument();
   });
 });
