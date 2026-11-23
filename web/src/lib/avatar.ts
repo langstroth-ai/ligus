@@ -12,6 +12,14 @@ export function avColor(seed: string): string {
   return AV_COLORS[h % AV_COLORS.length];
 }
 
+/// A synced accent color, only when it is a plain hex color. The roster comes
+/// from other members' clients and this value lands in CSS, where something
+/// like url(https://host/p.gif) would load a remote image on render and tell
+/// that host who is reading, and when. Anything else is dropped (null).
+export function safeColorHex(c: string | null | undefined): string | null {
+  return c && /^#[0-9a-f]{3,8}$/i.test(c) ? c : null;
+}
+
 /// Up to two letters, `@` stripped, hyphen/underscore = word break
 /// ("@alice-claude" → "AC", "Ligus" → "HI").
 export function initials(name: string): string {

@@ -44,17 +44,31 @@ describe("needsYouItems", () => {
     });
     expect(items.map((i) => [i.kind, i.title, i.chatTitle])).toEqual([
       ["phone", "Another phone answered the code you showed for Ana's iPhone", undefined],
+      ["sandbox", "This workspace's sandbox grants changed", undefined],
+      ["trust", "This workspace wants to run 2 commands", undefined],
       ["ask", "Agents asked you 2 questions", "Relay backoff"],
       ["vote", "Your vote: Retry cap", "Relay backoff"],
       ["apply", "Ready to apply: Cold-day floor", "Relay backoff"],
       ["failed", "The last run failed", "Untitled chat"],
-      ["sandbox", "This workspace's sandbox grants changed", undefined],
-      ["trust", "This workspace wants to run 2 commands", undefined],
       ["device", "serve box says it's your device", undefined],
       ["invite", "Invite to join Bees", undefined],
     ]);
     // Each question counts, everything else once.
     expect(needsYouCount(items)).toBe(10);
+  });
+
+  it("keeps security alerts above any number of asks and votes", () => {
+    // Another member can open many proposals and questions; a changed sandbox
+    // grant or a trust request must still sit right under phone alerts.
+    const proposals = Array.from({ length: 30 }, (_, i) => ({ id: `p${i}`, title: `P${i}`, status: "open", needsMe: true }));
+    const items = needsYouItems({
+      attention: [{ sessionId: "c1", openAsks: 9, paused: false, proposals }],
+      chatTitles: titles,
+      trustWaiting: 1,
+      sandboxChanged: true,
+      phoneAlerts: [{ rid: "r1", otherDeviceId: "d9", addedLabel: "" }],
+    });
+    expect(items.slice(0, 3).map((i) => i.kind)).toEqual(["phone", "sandbox", "trust"]);
   });
 
   it("names a direct-message invite by its sender", () => {

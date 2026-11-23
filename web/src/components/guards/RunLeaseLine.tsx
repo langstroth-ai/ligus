@@ -55,6 +55,15 @@ export function leaseNotice(lease: RunLeaseDto): { title: string; detail: string
   }
 }
 
+/// How the hand-over picker names a device. Labels are set by each device's
+/// owner and can repeat (another member can call theirs "Studio Mac" too), so
+/// the name carries whose it is and a short id. Exported for tests.
+export function hostOptionLabel(h: WorkspaceHostDto): string {
+  const label = h.label || "device";
+  const whose = h.mine ? "yours" : h.ownerName?.trim() || "unknown owner";
+  return `${label} (${whose}, ${h.id.slice(0, 8)})`;
+}
+
 /// Devices that could drive the run instead: online desktops of the
 /// workspace other than the current holder (workers don't drive workflows).
 export function handOverCandidates(lease: RunLeaseDto, hosts: WorkspaceHostDto[]): WorkspaceHostDto[] {
@@ -167,7 +176,7 @@ function HandOverPicker({
           <option value="">Any online device</option>
           {candidates.map((h) => (
             <option key={h.id} value={h.id}>
-              {h.label || `device ${h.id.slice(0, 8)}`}
+              {hostOptionLabel(h)}
             </option>
           ))}
         </select>
