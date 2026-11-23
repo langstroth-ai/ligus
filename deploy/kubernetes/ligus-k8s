@@ -47,8 +47,9 @@ help_common_flags() {
                            current context)
   -n, --namespace NS       one namespace per workspace (default: $LIGUS_NAMESPACE)
   --release NAME           the Helm release (default: $LIGUS_RELEASE, else ligus)
-  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1);
-                           progress always goes to stderr
+  --json                   print exactly one JSON object on stdout (schema ligus.agent-deploy.v1,
+                           a profile of ligus.checks.v1: ligus help checks); progress always
+                           goes to stderr
   --color WHEN             auto, always or never: colour [FAIL] and [WARN] on stderr (default
                            auto: only on a terminal, and never when NO_COLOR is set)
   -h, --help               print this command's help and exit 0
@@ -304,6 +305,7 @@ help_cmd_body() {
     verify) hc_verify ;;
     teardown|uninstall) hc_teardown ;;
     check-rendered) hc_check_rendered ;;
+    exit-codes) printf 'EXIT CODES (one table for every Ligus tool)\n'; ac_exit_codes ;;
     *) ac_usage_error "no help for unknown command: $1 (ligus-k8s --help lists them)" ;;
   esac
 }
@@ -311,7 +313,10 @@ help_cmd_body() {
 help_cmd() {
   local body
   body=$(help_cmd_body "$1") || exit $?
-  printf '%s\n\n' "$body"
+  printf '%s\n' "$body"
+  # Each command's EXIT CODES block ends its section; the shared table follows.
+  [ "$1" = exit-codes ] || printf '  The full table, shared by every Ligus tool: ligus-k8s help exit-codes\n'
+  printf '\n'
   help_see_also
 }
 
@@ -326,7 +331,7 @@ kube context you name.
 
 SYNOPSIS
   ligus-k8s <command> [flags]
-  ligus-k8s help [<command>]          ligus-k8s <command> --help
+  ligus-k8s help [<command> | exit-codes]          ligus-k8s <command> --help
 
 COMMANDS
   preflight        check the cluster; changes nothing (--probe: a temporary namespace)
@@ -376,11 +381,9 @@ ENVIRONMENT
   CLICOLOR_FORCE           set (not 0): colour on stderr even when it isn't a terminal
 
 EXIT CODES
-  0  done (warnings allowed)
-  1  a check or an operation failed; checks[].fix says what to do
-  2  usage error (unknown command or flag, missing or invalid value, no --context)
-  3  a precondition is missing that you can fix and rerun (a tool, the cluster, the relay chart)
-  4  a human must decide or act (a real workspace secret, exposure, weakening a default); stop and ask
+EOF
+  ac_exit_codes
+  cat <<'EOF'
   With --json, stdout is one object: {schema, tool, command, ok, exitCode, checks[{id, status,
   detail, fix}], next[], context, namespace, release, ...}; a usage error adds "error".
 

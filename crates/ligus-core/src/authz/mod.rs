@@ -168,6 +168,13 @@ pub struct AuthzState {
     /// pickup posts whatever title someone else filed) is not the person.
     /// Kept in the device-local workspace too.
     pub person_messages: BTreeMap<Uuid, String>,
+    /// The signed author of each proposal comment folded from its own
+    /// `ProposalRefined`, by comment id (the first copy's). A comment counts
+    /// as its author's only when this names them: what is forwarded to an
+    /// agent ("Send to agent to revise") is only these. A comment that came
+    /// some other way (a compaction seed) is shown but never forwarded. Kept
+    /// in the device-local workspace too.
+    pub refinement_authors: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -318,6 +325,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     }
     if ctx.trusted {
         return Decision::Allow;
+    }
+    // A proposal's comment thread is append-only and every comment is its
+    // signer's own.
+    if let Some(why) = thread_refusal(env, author, fold) {
+        return Decision::deny(why);
     }
 
     // Every author must be a workspace member at the event's position: on the
@@ -1485,6 +1497,41 @@ pub(crate) fn is_trust_publication(e: &SessionEvent) -> bool {
             | SessionEvent::AccountKeyRotated { .. }
             | SessionEvent::DeviceCertificateAdded { .. }
     )
+}
+
+/// Why a comment or a proposal edit would misstate the comment thread, if it
+/// does. A person's comment (`ProposalRefined`) names its signer as its
+/// author, as a vote names its voter (an agent's is held to the same by the
+/// Agent tier). An edit (`ProposalUpserted`) never brings comments under
+/// another name onto a new proposal, and never changes a comment the thread
+/// already holds. The fold keeps the thread it has whatever an edit carries
+/// (`ChatSession::apply`), so the comments an edit leaves out (an older
+/// client's stale copy) stay, and what else it carries is ignored: only a
+/// forgery is refused.
+fn thread_refusal(env: &SessionEventEnvelope, author: &str, fold: &ChatSession) -> Option<&'static str> {
+    let agent = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent);
+    match &env.payload {
+        SessionEvent::ProposalRefined { refinement, .. } if !agent && refinement.actor_id != author => {
+            Some("a comment is by the member who signs it")
+        }
+        SessionEvent::ProposalUpserted { proposal } => match fold.proposals.iter().find(|p| p.id == proposal.id) {
+            None => proposal
+                .refinements
+                .iter()
+                .any(|r| r.actor_id != author)
+                .then_some("a new proposal carries no one else's comments"),
+            Some(old) => proposal
+                .refinements
+                .iter()
+                .any(|r| {
+                    old.refinements.iter().any(|o| {
+                        o.id == r.id && (o.actor_id != r.actor_id || o.text != r.text || o.request_changes != r.request_changes)
+                    })
+                })
+                .then_some("an edit never changes a comment on the proposal"),
+        },
+        _ => None,
+    }
 }
 
 /// The role a counted vote carries: the signer's workspace role at its

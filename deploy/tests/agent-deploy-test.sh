@@ -61,6 +61,17 @@ for s in "$K8S" "$LOCAL"; do
   if [ "$RC" = 0 ] && grep -q preflight "$TMP/h"; then pass "$(basename "$s") --help"; else fail "$(basename "$s") --help"; fi
 done
 
+# The JSON is a conforming profile of ligus.checks.v1, and the help says so.
+for s in "$K8S" "$LOCAL"; do
+  run "$TMP/h" "$s" --help
+  if grep -q 'ligus.checks.v1' "$TMP/h"; then pass "$(basename "$s") --help names ligus.checks.v1"; else fail "$(basename "$s") --help names ligus.checks.v1"; fi
+done
+if grep -q 'ligus.checks.v1' "$ROOT/AGENTS.md" && grep -q 'ligus.agent-deploy.v1' "$ROOT/docs-site/docs/operate/reference/cli-conventions.md"; then
+  pass "AGENTS.md and the CLI conventions page declare the profile"
+else
+  fail "AGENTS.md and the CLI conventions page declare the profile"
+fi
+
 # Help is complete and cannot drift: the command list comes from each
 # script's dispatcher (the last `case $CMD in`) and the flag list from its
 # argument loop's case arms, so a new command or flag without help fails.
@@ -74,6 +85,22 @@ parser_flags() { # script -> one flag per line
   sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$1" | sed -n 's/^    \(-[-a-z|]*\)).*/\1/p' | tr '|' '\n'
 }
 has_word() { grep -qE -- "(^|[^A-Za-z0-9-])$1([^A-Za-z0-9-]|\$)" "$2"; }
+# One exit-code table for every Ligus tool: help exit-codes prints 0 to 7,
+# and every command's help points to it.
+for s in "$K8S" "$LOCAL"; do
+  n=$(basename "$s")
+  run "$TMP/x" "$s" help exit-codes
+  ok=1
+  for c in 0 1 2 3 4 5 6 7; do grep -qE "^  $c  " "$TMP/x" || ok=0; done
+  if [ "$RC" = 0 ] && [ $ok = 1 ]; then pass "$n help exit-codes lists 0 to 7"; else fail "$n help exit-codes lists 0 to 7"; fi
+  missing=""
+  for c in $(dispatch_cmds "$s"); do
+    run "$TMP/x" "$s" help "$c"
+    grep -q "$n help exit-codes" "$TMP/x" || missing="$missing $c"
+  done
+  if [ -z "$missing" ]; then pass "$n: every command's help names the shared table"; else fail "$n: no shared table in help for:$missing"; fi
+done
+
 for s in "$K8S" "$LOCAL"; do
   n=$(basename "$s")
   cmds=$(dispatch_cmds "$s"); flags=$(parser_flags "$s")
