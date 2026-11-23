@@ -320,6 +320,70 @@ export const probeProvider = (kind: string, model?: string, key?: string, baseUr
 export const setChatRuntime = (sessionId: string, runtimeId: string) =>
   invoke<void>("set_chat_runtime", { sessionId, runtimeId });
 
+/// One model a runtime's harness offers.
+export interface ModelOptionDto {
+  id: string;
+  label?: string | null;
+}
+/// A runtime's models (read-only listing, no quota; cached five minutes).
+/// `complete`: a model not on the list won't run (agy, Ollama, a local
+/// OpenAI-compatible server); only complete lists are checked before sending.
+export interface RuntimeModelsDto {
+  models: ModelOptionDto[];
+  source: "live" | "catalog" | "aliases" | "none";
+  complete: boolean;
+  note?: string | null;
+  error?: string | null;
+  /// Models that failed as unavailable on this device this session.
+  unavailable: string[];
+}
+/// List a runtime's models: by `runtimeId`, or (the add-runtime form) by
+/// `provider` + `endpoint`. `refresh` skips the cache.
+export const listRuntimeModels = (q: { runtimeId?: string; provider?: string; endpoint?: string; refresh?: boolean }) =>
+  invoke<RuntimeModelsDto>("list_runtime_models", {
+    runtimeId: q.runtimeId ?? null,
+    provider: q.provider ?? null,
+    endpoint: q.endpoint ?? null,
+    refresh: q.refresh ?? null,
+  });
+
+/// A chat's model choice on this device, for the chat's runtime.
+export interface ChatModelDto {
+  runtimeId: string;
+  /// null = the runtime's own model.
+  model: string | null;
+  /// The runtime's own model ("" = the harness default).
+  runtimeModel: string;
+  /// Every runtime's choice for this chat on this device (runtime id → model).
+  choices: Record<string, string>;
+  /// This device answers the chat's untagged messages (else another
+  /// member's device does, with its own model).
+  appliesHere: boolean;
+}
+export const getChatModel = (sessionId: string) => invoke<ChatModelDto>("get_chat_model", { sessionId });
+/// Pick the model for one of the chat's runtimes on this device; null = Default.
+export const setChatModel = (sessionId: string, runtimeId: string, model: string | null) =>
+  invoke<void>("set_chat_model", { sessionId, runtimeId, model });
+
+/// Why the chat's next untagged turn here would fail on its model.
+export interface ModelProblemDto {
+  runtimeId: string;
+  model: string;
+  reason: "unavailable" | "notListed";
+}
+export const chatModelProblem = (sessionId: string) =>
+  invoke<ModelProblemDto | null>("chat_model_problem", { sessionId });
+
+/// A turn on this device failed because its model isn't available.
+export interface ModelUnavailableEvent {
+  sessionId: string;
+  runtimeId: string;
+  model: string;
+  message: string;
+}
+export const onModelUnavailable = (cb: (e: ModelUnavailableEvent) => void): Promise<UnlistenFn> =>
+  listen<ModelUnavailableEvent>("chat://model-unavailable", (evt) => cb(evt.payload));
+
 /// Add the local user to a chat's roster on open (so People shows who's here).
 export const ensureSelfMember = (sessionId: string) =>
   invoke<void>("ensure_self_member", { sessionId });
@@ -1114,6 +1178,13 @@ export type { WorkspaceHostDto } from "@/bindings/WorkspaceHostDto";
 /// agent's host status ("online" | "offline" | "device" | "unknown").
 export const listQueuedWork = () => invoke<QueuedWorkDto[]>("list_queued_work");
 
+/// What each chat of the active workspace is waiting on (open agent
+/// questions, proposals awaiting a decision, a lockdown). Chats waiting on
+/// nothing are left out. Feeds the sidebar's state chips and the palette.
+export type { ChatAttention } from "@/lib/sessionState";
+export const listChatAttention = () =>
+  invoke<import("@/lib/sessionState").ChatAttention[]>("list_chat_attention");
+
 /// The active workspace's registered hosts (devices + workers) with live state.
 export const listWorkspaceHosts = () =>
   invoke<WorkspaceHostDto[]>("list_workspace_hosts");
@@ -1334,9 +1405,19 @@ export interface PhoneEnrollApprovedDto {
   /// The desktop keeps watching for other phones until then (Unix seconds).
   watchingUntil: number;
 }
+/// One precheck finding: a stable `code` the panel turns into a link to the
+/// fix, the words, and whether it stops Show code.
+export interface PhoneEnrollPrecheckReasonDto {
+  code: "localWorkspace" | "noRelay" | "notYourDevice" | "noAccount" | "noPasskey" | "noBox" | "noBoxOnline" | (string & {});
+  text: string;
+  blocking: boolean;
+}
 export interface PhoneEnrollPrecheckDto {
   ready: boolean;
+  /// The blocking reasons' texts.
   missing: string[];
+  /// Every finding, blocking or not (absent from older builds).
+  reasons?: PhoneEnrollPrecheckReasonDto[];
 }
 export interface TripwirePhoneDto {
   deviceId: string;

@@ -88,11 +88,81 @@ Cut releases from GitHub with **`cut-release.yml`**, never by tagging on a lapto
    and the tag doesn't exist yet. Then it pushes the annotated tag `vX.Y.Z` on that
    commit and calls `release.yml` with the tag.
 3. Watch the run. When it finishes, the release is a published **prerelease** and the
-   tap has been bumped. Write the notes and promote it by hand:
+   tap has been bumped. Commit the release notes as `docs/release-notes/vX.Y.Z.md`
+   (through the queue, like any change; see [Release notes](#release-notes)).
+4. A repository admin promotes it to Latest with **`promote-release.yml`**:
 
    ```bash
-   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md --prerelease=false --latest
+   gh workflow run promote-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z -f dry-run=true   # checks only
+   gh workflow run promote-release.yml --repo langstroth-ai/ligus -f version=X.Y.Z
+   # another notes file under docs/release-notes/: -f notes=docs/release-notes/<file>.md
    ```
+
+   Run it from `main` (the default). Like `cut-release.yml`, it refuses to run unless
+   whoever started it (or re-ran it) is a repo admin. Before it changes anything, it
+   checks that:
+
+   - the tag `vX.Y.Z` exists and its release is published (not a draft), and is still a
+     prerelease or already Latest. A version older than the current Latest, or with a
+     `-suffix`, is refused;
+   - the release holds every asset: `scripts/check-release-assets.py` (each CLI binary
+     with a matching `.sha256`, the DMG, finished uploads) and
+     `scripts/verify-latest-json.py` (`latest.json` covers macOS, Windows and Linux with
+     signed bundles on this release);
+   - the Homebrew tap serves the version: the `ligus-app` cask names it with the
+     release DMG's sha256, and the `ligus` formula points at the tag for all four CLI
+     targets;
+   - the notes file exists, mentions `X.Y.Z` and has a summary.
+
+   Then it sets the title `Ligus vX.Y.Z` and the notes, and marks the release a full
+   release and Latest (`gh release edit ... --prerelease=false --latest`). With
+   `dry-run=true` it runs every check, prints what it would change, and changes
+   nothing.
+5. The same run moves `docs-site/docs/version.json` (what shipped desktops read from
+   the docs site to show "update available") to the tag, once GitHub reports the
+   release as Latest, and never backwards (`scripts/release-version-json.py update`).
+   `main` takes changes only through the merge queue, so the job pushes the branch
+   `release-bot/version-json-vX.Y.Z`, opens a PR and enables auto-merge. Netlify
+   publishes the docs site when it merges.
+
+   A PR opened with `GITHUB_TOKEN` starts no workflows, so its `ci-ok` would never
+   report. The job therefore dispatches `ci.yml` on the branch (`workflow_dispatch` is
+   the one event `GITHUB_TOKEN` may start), which reports `ci-ok` on the PR's head
+   commit. Two things may still need the owner:
+
+   - Opening the PR needs **Settings → Actions → General → Allow GitHub Actions to
+     create and approve pull requests**. With it off, the job fails after pushing the
+     branch and prints the compare link: open the PR from it and run
+     `gh pr merge <number> --repo langstroth-ai/ligus --auto`.
+   - If the queue never starts CI for the entry (the run list shows no `merge_group`
+     run of `ci` for it), dequeue it and enqueue it again from your own account:
+     `gh pr merge <number> --repo langstroth-ai/ligus --disable-auto`, then `--auto`.
+
+Re-running `promote-release.yml` is safe. A release that is already Latest keeps its
+state (only a changed title or notes file is written again), `version.json` never
+moves backwards, and an existing `release-bot/` branch or open PR is reused. If the
+`version-json` job failed, "Re-run failed jobs" reruns only it (it checks the admin
+again).
+
+Agents may prepare the notes and run `promote-release.yml` only when the owner asks
+them to; they never promote a release on their own initiative.
+
+### Release notes
+
+The notes for `vX.Y.Z` live in `docs/release-notes/vX.Y.Z.md` and become the GitHub
+release's body as they are. Write them for users: what changed and how to install or
+update, no internal tracking ids, no pricing or business language. The first
+paragraph is the summary that shipped desktops show (the `notes` field of
+`version.json`, with " See" and the What's new link added): one paragraph that ends
+with a full stop, at most 400 characters, with Markdown reduced to plain text. To
+use another sentence, make the file's first line
+
+```markdown
+<!-- summary: One sentence about the release. -->
+```
+
+which GitHub doesn't render. `ruby scripts/test-release-workflow.rb` checks every
+committed notes file.
 
 **Only one pipeline run per tag.** `cut-release.yml` pushes the tag with
 `GITHUB_TOKEN`, and GitHub doesn't start workflows for events that `GITHUB_TOKEN`
@@ -152,6 +222,7 @@ Nothing is published: the release is still a draft, and the tap is untouched.
   a tag that still exists.
 - **A run that published, then a tap job failed**: rerun the failed job, or bump the
   cask by hand with `update-cask.yml` (it refuses a tag that is still a draft).
+  `promote-release.yml` refuses to promote until the tap serves the version.
 
 A manual run (`workflow_dispatch` with a tag) works on the tag's existing draft. With
 a `platforms` subset it fills in those platforms, and publishes only if the draft is

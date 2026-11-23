@@ -27,7 +27,45 @@ export const runtimes = [
   { id: "rt-claude", name: "claude-code", label: "Claude Code", provider: "claude-code", location: "local", model: "opus", endpoint: "", supportsTools: true, supportsEmbeddings: false, isDefault: true, isManaged: false, modelBaseUrl: null, modelProviderId: null, contextWindow: null },
   { id: "rt-ollama", name: "ollama", label: "Ollama · qwen3-coder", provider: "ollama", location: "local", model: "qwen3-coder:30b", endpoint: "http://localhost:11434", supportsTools: true, supportsEmbeddings: true, isDefault: false, isManaged: false, modelBaseUrl: null, modelProviderId: null, contextWindow: 32768 },
   { id: "rt-codex", name: "codex", label: "Codex", provider: "codex", location: "local", model: "gpt-5-codex", endpoint: "", supportsTools: true, supportsEmbeddings: false, isDefault: false, isManaged: false, modelBaseUrl: null, modelProviderId: null, contextWindow: null },
+  { id: "rt-copilot", name: "copilot", label: "GitHub Copilot CLI", provider: "copilot", location: "local", model: "claude-opus-4.8", endpoint: "", supportsTools: true, supportsEmbeddings: false, isDefault: false, isManaged: true, modelBaseUrl: null, modelProviderId: null, contextWindow: null },
+  { id: "rt-agy", name: "antigravity", label: "Google Antigravity CLI", provider: "antigravity", location: "local", model: "", endpoint: "", supportsTools: true, supportsEmbeddings: false, isDefault: false, isManaged: true, modelBaseUrl: null, modelProviderId: null, contextWindow: null },
 ];
+
+/// What each runtime's harness lists (`list_runtime_models`), per runtime id.
+export const runtimeModels: Record<string, { models: { id: string; label?: string }[]; source: string; complete: boolean; note?: string }> = {
+  "rt-claude": {
+    models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }, { id: "haiku", label: "Haiku" }, { id: "claude-fable-5[1m]", label: "Fable 5 (1M context)" }],
+    source: "aliases",
+    complete: false,
+    note: "Claude Code's aliases and the models it lists for your account.",
+  },
+  "rt-ollama": {
+    models: [{ id: "qwen3-coder:30b" }, { id: "gpt-oss:20b" }, { id: "gemma4:12b" }, { id: "llama3.2:latest" }],
+    source: "live",
+    complete: true,
+  },
+  "rt-codex": {
+    models: [{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }, { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" }, { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" }],
+    source: "catalog",
+    complete: false,
+  },
+  "rt-copilot": {
+    models: ["claude-sonnet-5.5", "claude-opus-5.5", "claude-opus-4.8", "claude-haiku-4.5", "gpt-6-sol", "gpt-5.6-terra", "gpt-5.3-codex", "gemini-4-argon", "gemini-3.8-flash", "grok-4.7"].map((id) => ({ id })),
+    source: "catalog",
+    complete: false,
+    note: "Copilot lists every model it knows; your plan may not include all of them.",
+  },
+  "rt-agy": {
+    models: [
+      { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
+      { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
+      { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+      { id: "claude-sonnet-5-5-medium", label: "Claude Sonnet 5.5 (Medium)" },
+    ],
+    source: "live",
+    complete: true,
+  },
+};
 
 export const channels = [
   { id: "ch-general", name: "general", purpose: "Anything goes", position: 0, archived: false, defaultChatId: "chat-general" },
@@ -74,7 +112,7 @@ const messages = [
     role: "agent",
     author: "scout",
     runtimeId: "rt-claude",
-    runtimeLabel: "claude-code / opus",
+    runtimeLabel: "opus",
     mins: 36,
     body:
       "Here's a first pass. The scheduler picks the **next dry day** inside each colony's window:\n\n" +
@@ -102,7 +140,7 @@ const messages = [
     role: "agent",
     author: "builder",
     runtimeId: "rt-codex",
-    runtimeLabel: "codex / gpt-5-codex",
+    runtimeLabel: "gpt-5-codex",
     mins: 12,
     body: "Added a temperature floor and filed the change for review. Handing the test pass to @scout.",
     toolCalls: [{ id: "tc3", name: "apply_patch", inputJson: '{"files":["src/scheduler.rs"]}', serverId: null }],
@@ -114,7 +152,7 @@ const messages = [
     author: "ligus",
     responderName: "Zaz",
     runtimeId: "rt-ollama",
-    runtimeLabel: "ollama / qwen3-coder",
+    runtimeLabel: "qwen3-coder:30b",
     mins: 2,
     body: "Re-applied against the latest `main`; the patch is in the Review pane as **Cold-day floor for inspections**.",
   }),
@@ -353,14 +391,26 @@ export const workflowRuns = [
       { nodeId: "n2", name: "Review", kind: "agent", status: "running", messageId: null, proposalId: null, outputExcerpt: "", attempts: 1, error: "" },
       { nodeId: "n3", name: "Human sign-off", kind: "gate", status: "pending", messageId: null, proposalId: null, outputExcerpt: "", attempts: 0, error: "" },
     ],
-    lease: { holder: "h-mac", holderLabel: "MacBook Pro", isMe: true, epoch: 3, leaseMs: 30000, health: "healthy", lastBeatAgeMs: 4000, verified: true, handoverTo: null, fencedClaims: 0 },
+    lease: { holder: "h-mac", holderLabel: "MacBook Pro", isMe: true, epoch: 3, leaseMs: 30000, health: "degraded", lastBeatAgeMs: 21000, verified: true, handoverTo: null, fencedClaims: 0 },
   },
 ];
 
+// What each chat waits on (list_chat_attention): the open chat has a proposal
+// for you, the varroa chat's agent asked a question.
+export const chatAttention = [
+  {
+    sessionId: "chat-1",
+    openAsks: 0,
+    paused: false,
+    proposals: [{ id: "p1", title: "Cold-day floor for inspections", status: "open", needsMe: true }],
+  },
+  { sessionId: "chat-3", openAsks: 1, paused: false, proposals: [] },
+];
 export const queuedWork = [{ sessionId: "chat-2", chatTitle: "Relay reconnect backoff", agentId: "ag-builder", agentName: "builder", hostId: "h-box", hostLabel: "serve box", hostStatus: "offline" }];
 export const hosts = [
   { id: "h-mac", kind: "desktop", label: "MacBook Pro", online: true, lastSeen: iso(0) },
   { id: "h-box", kind: "worker", label: "serve box", online: false, lastSeen: iso(95) },
+  { id: "h-mara", kind: "device", label: "Mara's laptop", online: true, lastSeen: iso(0) },
 ];
 
 export const dearth = (enabled: boolean) => ({

@@ -2,12 +2,16 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   chatWorkspaceRepo,
+  getAppSettings,
+  getGitStatus,
   listWorkspaceRepos,
   repinChatBase,
   setChatWorkspaceRepo,
   type ChatWorkspaceRepoDto,
   type PinnedElsewhere,
+  type RuntimeSummaryDto,
 } from "@/lib/ipc";
+import { runtimeLabelWithModel, useChatModel } from "@/components/ModelPicker";
 import { toast, errMsg } from "@/components/Toast";
 import { REPOS_KEY } from "@/components/settings/RepositoriesSection";
 
@@ -175,6 +179,78 @@ export function PinnedHostWarning({
           desktop doesn&rsquo;t ask other hosts to clone.
         </div>
       )}
+    </div>
+  );
+}
+
+/// A chat worktree branch ("ligus/chat/<uuid>") shortened to "chat/7f3a1c2e";
+/// any other branch name is kept as is.
+export function shortBranch(branch: string): string {
+  const m = branch.match(/(?:^|\/)chat\/([0-9a-f]{8})[0-9a-f-]{28}$/i);
+  return m ? `chat/${m[1]}` : branch;
+}
+
+/// The pieces of the "runs on" line, in reading order: host, runtime, branch.
+/// Missing pieces are left out rather than guessed.
+export function runsOnParts(p: { host: string; runtime: string | null; branch: string | null }): string[] {
+  const parts = [`Runs on ${p.host.trim() || "this device"}`];
+  if (p.runtime?.trim()) parts.push(p.runtime.trim());
+  if (p.branch?.trim()) parts.push(shortBranch(p.branch.trim()));
+  return parts;
+}
+
+/// One quiet line under the chat title: where this chat's turns run (this
+/// device), with which runtime, on which branch (the chat's own worktree
+/// branch when it has one).
+export function ChatRunsOn({
+  sessionId,
+  runtime: runtimeText,
+  runtimeDto,
+}: {
+  sessionId: string;
+  runtime: string | null;
+  /// The chat's runtime: its label then shows this device's model choice.
+  runtimeDto?: RuntimeSummaryDto | null;
+}) {
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getAppSettings });
+  const chatModel = useChatModel(sessionId);
+  const runtime = runtimeDto ? runtimeLabelWithModel(runtimeDto, chatModel.data?.choices?.[runtimeDto.id]) : runtimeText;
+  // The backend points git at the open chat's worktree; keying on that root
+  // refetches once the switch lands instead of showing the last chat's branch.
+  const root = settings.data?.workspaceRoot ?? "";
+  const git = useQuery({
+    queryKey: ["git-status", "chat", sessionId, root],
+    queryFn: getGitStatus,
+    enabled: root.trim().length > 0,
+    staleTime: 15_000,
+  });
+  const branch = git.data?.branch ?? null;
+  const parts = runsOnParts({ host: settings.data?.deviceName ?? "", runtime, branch });
+  return (
+    <div
+      data-testid="chat-runs-on"
+      className="flex min-w-0 items-center gap-1.5 truncate text-[11px] leading-4"
+      style={{ color: "var(--ligus-ink-soft)" }}
+      title={branch && branch !== shortBranch(branch) ? `Branch ${branch}` : undefined}
+    >
+      {parts.map((p, i) => (
+        <span key={i} className={i === 0 ? "shrink-0" : "min-w-0 truncate"}>
+          {i > 0 && (
+            <span aria-hidden className="mr-1.5 opacity-50">
+              ·
+            </span>
+          )}
+          {i === parts.length - 1 && branch && parts.length > 1 ? (
+            <>
+              <span aria-hidden className="mr-0.5">⎇</span>
+              <span className="sr-only">branch </span>
+              {p}
+            </>
+          ) : (
+            p
+          )}
+        </span>
+      ))}
     </div>
   );
 }
