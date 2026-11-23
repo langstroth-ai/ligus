@@ -2061,38 +2061,22 @@ impl EventStore {
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
 
-    /// The workspace a stored session belongs to, if any of its rows exist.
+    /// The workspace a stored session belongs to (its first event's, in log
+    /// order), if any of its rows exist.
     ///
-    /// The same on every device holding the same events, whatever order they
-    /// arrived in: a member of another workspace this device shares who
-    /// learns a chat's id can sign an event under it stamped with their own
-    /// workspace, and a first-arrived row must not re-home the chat (its
-    /// genuine events would then fold against the wrong roster and vanish
-    /// on that device only). So:
-    /// - a workspace's config log belongs to that workspace (its id is
-    ///   derived from it: nobody else's events can claim it);
-    /// - a log every row of which names one workspace belongs to it;
-    /// - a log more than one workspace claims belongs to the workspace of its
-    ///   creation seed as a fold picks it ([`ligus_core::events::creation_seed`]),
-    ///   else of its earliest event in fold order (lamport, then event id).
-    ///   Events of other workspaces in it then fold as foreign (fail closed).
+    /// Known residual: log order is this device's arrival order, so an event
+    /// signed under a chat's id by a member of another workspace this device
+    /// shares, stamped with that workspace, that arrives before the chat's
+    /// own events re-homes the chat on this device. Logs keyed by workspace
+    /// and session (readers taking the workspace from context) are the fix.
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
-        let claimed: Vec<Uuid> = {
-            let mut stmt = self.conn.prepare_cached("SELECT DISTINCT workspace_id FROM events WHERE session_id = ?1 ORDER BY workspace_id")?;
-            let rows = stmt.query_map([session_id.to_string()], |r| r.get::<_, String>(0))?;
-            rows.filter_map(|r| r.ok().and_then(|w| Uuid::parse_str(&w).ok())).collect()
-        };
-        if let Some(ws) = claimed.iter().find(|ws| ligus_core::workspace_config_session_id(**ws) == session_id) {
-            return Ok(Some(*ws));
-        }
-        if claimed.len() <= 1 {
-            return Ok(claimed.first().copied());
-        }
-        let log = self.log_with_witnesses(session_id)?;
-        if let Some(seed) = ligus_core::events::creation_seed(&log) {
-            return Ok(Some(seed.workspace_id));
-        }
-        Ok(log.iter().filter(|e| !ligus_core::lamport::is_witness(e)).min_by_key(|e| e.canonical_key()).map(|e| e.workspace_id))
+        let ws: Option<String> = self
+            .conn
+            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 ORDER BY sequence LIMIT 1", [session_id.to_string()], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(ws.and_then(|w| Uuid::parse_str(&w).ok()))
     }
 
     /// Row id of the latest `sessionSnapshot` for a session, if any.

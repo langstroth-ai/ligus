@@ -2359,25 +2359,6 @@ fn fold_pass(
 /// (author ≠ creator, multi-owner roster) — which is why it is never chosen over
 /// the real seed on a full-history device, and only used as base via the fallback
 /// when it is all a joiner holds.
-/// The creation seed a fold without a founder pin starts a log from (see
-/// [`project`]): the earliest plausible self-consistent creation seed, else
-/// the earliest plausible snapshot, else none. A function of the event set
-/// alone, so every device holding the same events picks the same one,
-/// whatever order they arrived in. What a store takes a log's workspace
-/// from when more than one workspace claims it.
-pub fn creation_seed(envelopes: &[SessionEventEnvelope]) -> Option<&SessionEventEnvelope> {
-    use crate::lamport::Plausibility;
-    let bounds = crate::lamport::Bounds::of(envelopes);
-    let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().filter(|e| !crate::lamport::is_witness(e)).collect();
-    ordered.sort_by_key(|e| e.canonical_key());
-    let plausible = |e: &&SessionEventEnvelope| bounds.of_env(e) == Plausibility::Plausible;
-    ordered
-        .iter()
-        .find(|e| plausible(e) && is_self_consistent_seed(e))
-        .or_else(|| ordered.iter().find(|e| plausible(e) && matches!(e.payload, SessionEvent::SessionSnapshot { .. })))
-        .copied()
-}
-
 fn is_self_consistent_seed(env: &SessionEventEnvelope) -> bool {
     let SessionEvent::SessionSnapshot { session } = &env.payload else {
         return false;
