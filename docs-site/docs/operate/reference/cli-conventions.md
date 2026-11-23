@@ -148,6 +148,21 @@ never coloured. None of the tools ask for a confirmation, so there is no
 flag can take. Commands name things by id (a chat id, a host id), never by
 their position in a list.
 
+## Help {#help}
+
+Every tool's help has the same sections in the same order: **NAME** (with
+what it does), **USAGE**, **COMMANDS** or **FLAGS**, **EXAMPLES**,
+**ENVIRONMENT**, **EXIT CODES** and **SEE ALSO**. SEE ALSO names the same
+thing in the other tools: `ligus doctor` points to `langstroth-relay check`
+and the deploy scripts' preflights, `ligus admit request` to the desktop's
+**workspace menu > Admit a box**, the scripts to `ligus help <topic>`.
+
+| | One command | Everything | Machine-readable |
+|---|---|---|---|
+| `ligus` | `ligus <command> --help`, `ligus help <command>` | `ligus help` | `ligus help --json` (`ligus.help.v1`) |
+| `langstroth-relay` | `langstroth-relay <command> --help` | `langstroth-relay help` | `langstroth-relay help --json` (`ligus.help.v1`) |
+| `ligus-local`, `ligus-k8s` | `<tool> help <command>`, `<tool> <command> --help` | `<tool> --help` | |
+
 ## Profiles {#profiles}
 
 A profile is an older report with the same fields that keeps its schema

@@ -161,7 +161,7 @@ pub const COMMANDS: &[Cmd] = &[
         flags: &[JSON],
         conn: true,
         examples: &["ligus status", "LIGUS_DATA_DIR=~/.ligus-serve ligus status --json"],
-        see_also: &["ligus whoami", "ligus remote status", "ligus doctor", "ligus help troubleshooting"],
+        see_also: &["ligus whoami", "ligus remote status", "ligus doctor", "ligus help troubleshooting", "deploy/local/ligus-local verify (a box this machine runs)"],
         ..D
     },
     Cmd {
@@ -774,7 +774,7 @@ pub const COMMANDS: &[Cmd] = &[
         env: &["LIGUS_SERVE_LABEL"],
         conn: true,
         examples: &["ligus admit request --label home-box"],
-        see_also: &["ligus admit redeem", "ligus help box"],
+        see_also: &["ligus admit redeem", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D
     },
     Cmd {
@@ -1622,7 +1622,15 @@ pub const COMMANDS: &[Cmd] = &[
             (4, "only with --legacy-exit-codes: --expect-tier found another tier"),
             (5, "only with --legacy-exit-codes: --turn-test failed or could not run"),
         ],
-        see_also: &["ligus help checks", "ligus help security", "ligus help troubleshooting", "ligus gateway-check", "langstroth-relay check"],
+        see_also: &[
+            "ligus help checks",
+            "ligus help security",
+            "ligus help troubleshooting",
+            "ligus gateway-check",
+            "langstroth-relay check --url <relay> (on the relay host)",
+            "deploy/local/ligus-local preflight, deploy/kubernetes/ligus-k8s preflight --probe (the same sandbox check)",
+            "desktop: Settings → Sandbox (the same policy and grants)",
+        ],
         ..D
     },
     Cmd {
@@ -2316,18 +2324,18 @@ fn find_topic(name: &str) -> Option<&'static Topic> {
     TOPICS.iter().find(|t| t.name == name || t.aliases.iter().any(|a| a.eq_ignore_ascii_case(name)))
 }
 
-/// `ligus help` with no argument.
+/// `ligus help` with no argument, in the shared section order.
 pub fn overview() -> String {
     let mut s = format!(
-        "ligus {}: the headless Ligus client (Ligus is short for ligustica)\n\n\
+        "NAME\n  ligus {} - the headless Ligus client (Ligus is short for ligustica)\n\n\
          USAGE\n  ligus <command> [<subcommand>] [flags]\n  ligus help <command> [<subcommand>] | <topic>\n  \
-         ligus <command> --help\n",
+         ligus help --json\n  ligus <command> --help\n\nCOMMANDS\n",
         env!("CARGO_PKG_VERSION")
     );
-    for g in GROUPS {
-        let _ = write!(s, "\n{}\n", g.to_uppercase());
+    for (i, g) in GROUPS.iter().enumerate() {
+        let _ = write!(s, "{}  {}\n", if i == 0 { "" } else { "\n" }, g);
         for c in COMMANDS.iter().filter(|c| c.group == *g && !c.name.contains(' ')) {
-            let _ = writeln!(s, "  {:<16} {}", c.name, c.summary);
+            let _ = writeln!(s, "    {:<16} {}", c.name, c.summary);
         }
     }
     s.push_str("\nTOPICS (ligus help <topic>)\n");
@@ -2335,16 +2343,20 @@ pub fn overview() -> String {
         let _ = writeln!(s, "  {:<16} {}", t.name, t.summary);
     }
     s.push_str(
-        "\nCOMMON\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
-         connection `ligus enroll` or `ligus admit redeem` saved (ligus help env). Flags go anywhere after the command; a value is the\n  \
-         next argument or follows an equals sign (--label box, or --label=box).\n  \
-         Every command also takes -o json|text (-o json is --json; jsonl for streams), -q (only what needs\n  \
-         attention) and --color auto|always|never (colour only on a terminal; NO_COLOR and CLICOLOR_FORCE\n  \
-         count; JSON is never coloured). ligus never asks for confirmation, so there is no --yes; a passkey\n  \
-         step is always a person's.\n\nEXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
+        "\nFLAGS\n  Flags go anywhere after the command; a value is the next argument or follows an equals sign\n  \
+         (--label box, or --label=box). Every command also takes -o json|text (-o json is --json; jsonl for\n  \
+         streams), -q (only what needs attention) and --color auto|always|never (colour only on a terminal;\n  \
+         NO_COLOR and CLICOLOR_FORCE count; JSON is never coloured). ligus never asks for confirmation, so\n  \
+         there is no --yes; a passkey step is always a person's.\n\n\
+         EXAMPLES\n  ligus status\n  ligus doctor --json\n  ligus help agents-guide\n\n\
+         ENVIRONMENT\n  Every command works on one data dir: LIGUS_DATA_DIR (default ~/.ligus). Env vars override the\n  \
+         connection `ligus enroll` or `ligus admit redeem` saved. ligus help env lists every variable.\n\n\
+         EXIT CODES (one table for every Ligus tool: ligus help exit-codes)\n  \
          0 done   1 failed (\"ligus: …\" on stderr)   2 usage error   3 a precondition you can fix   \
          4 a person must decide\n  5 not found   6 refused by workspace rules   7 offline or timed out\n\n\
-         An agent setting Ligus up: ligus help agents-guide\n",
+         SEE ALSO\n  ligus help agents-guide (an agent setting Ligus up), AGENTS.md in the repository\n  \
+         deploy/local/ligus-local --help and deploy/kubernetes/ligus-k8s --help (deploying serve and workers)\n  \
+         langstroth-relay help (the relay), the desktop app (ligus app)\n",
     );
     s
 }
@@ -2370,13 +2382,14 @@ fn env_of(c: &Cmd) -> Vec<&'static str> {
     v
 }
 
-/// One command's reference.
+/// One command's reference, in the section order every Ligus tool uses:
+/// NAME, USAGE, COMMANDS, FLAGS, EXAMPLES, ENVIRONMENT, EXIT CODES, SEE ALSO.
 pub fn command_help(c: &Cmd) -> String {
-    let mut s = format!("ligus {}: {}\n\nPURPOSE\n", c.name, c.summary);
+    let mut s = format!("NAME\n  ligus {} - {}\n\n", c.name, c.summary);
     for line in wrap(c.purpose, 86) {
         let _ = writeln!(s, "  {line}");
     }
-    s.push_str("\nSYNOPSIS\n");
+    s.push_str("\nUSAGE\n");
     for l in c.synopsis {
         let _ = writeln!(s, "  {l}");
     }
@@ -2385,7 +2398,7 @@ pub fn command_help(c: &Cmd) -> String {
         .filter(|x| x.name.strip_prefix(c.name).is_some_and(|r| r.starts_with(' ') && !r[1..].contains(' ')))
         .collect();
     if !subs.is_empty() {
-        s.push_str("\nSUBCOMMANDS\n");
+        s.push_str("\nCOMMANDS\n");
         for x in subs {
             let _ = writeln!(s, "  {:<16} {}", &x.name[c.name.len() + 1..], x.summary);
         }
@@ -2395,6 +2408,10 @@ pub fn command_help(c: &Cmd) -> String {
     for fl in c.flags.iter().chain(common.iter()) {
         let def = if fl.default.is_empty() { String::new() } else { format!(" (default: {})", fl.default) };
         let _ = writeln!(s, "  {:<28} {}{def}", fl.flag, fl.about);
+    }
+    s.push_str("\nEXAMPLES\n");
+    for x in c.examples {
+        let _ = writeln!(s, "  {x}");
     }
     s.push_str("\nENVIRONMENT\n");
     let env = env_of(c);
@@ -2412,10 +2429,6 @@ pub fn command_help(c: &Cmd) -> String {
         });
         let _ = writeln!(s, "  {n:<width$} {about}");
     }
-    s.push_str("\nEXAMPLES\n");
-    for x in c.examples {
-        let _ = writeln!(s, "  {x}");
-    }
     s.push_str("\nEXIT CODES\n  0  success\n  1  error (the message is on stderr)\n  2  usage error: missing or bad argument, unknown subcommand\n");
     for (code, why) in c.exit {
         if *code > EXIT_USAGE {
@@ -2429,6 +2442,31 @@ pub fn command_help(c: &Cmd) -> String {
     s.push_str("\nSEE ALSO\n");
     let _ = writeln!(s, "  {}", c.see_also.join(", "));
     s
+}
+
+/// `ligus help --json`: every command and topic as one `ligus.help.v1`
+/// document, for agents and completion scripts.
+pub fn help_json() -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "schema": "ligus.help.v1",
+        "tool": "ligus",
+        "version": env!("CARGO_PKG_VERSION"),
+        "commands": COMMANDS.iter().map(|c| json!({
+            "name": c.name,
+            "group": c.group,
+            "summary": c.summary,
+            "description": c.purpose.split_whitespace().collect::<Vec<_>>().join(" "),
+            "usage": c.synopsis,
+            "flags": c.flags.iter().map(|fl| json!({ "flag": fl.flag, "default": fl.default, "about": fl.about })).collect::<Vec<_>>(),
+            "environment": env_of(c),
+            "examples": c.examples,
+            "exitCodes": c.exit.iter().map(|(code, why)| json!({ "code": code, "meaning": why })).collect::<Vec<_>>(),
+            "seeAlso": c.see_also,
+        })).collect::<Vec<_>>(),
+        "topics": TOPICS.iter().map(|t| json!({ "name": t.name, "aliases": t.aliases, "summary": t.summary })).collect::<Vec<_>>(),
+        "exitCodes": crate::problem::TABLE.iter().map(|(code, meaning, todo)| json!({ "code": code, "meaning": meaning, "do": todo })).collect::<Vec<_>>(),
+    })
 }
 
 /// `ligus help env`.
@@ -2519,6 +2557,10 @@ fn topic_text(t: &Topic) -> String {
 /// `ligus help …` (`topics`) / `ligus … --help`: print and exit 0, or name
 /// the unknown one and exit 2.
 pub fn print_and_exit(args: &[&str], topics: bool) -> ! {
+    if topics && args == ["--json"] {
+        println!("{}", help_json());
+        std::process::exit(EXIT_OK);
+    }
     match if topics { lookup(args) } else { lookup_flag(args) } {
         Some(text) => {
             print!("{text}");
@@ -2587,8 +2629,13 @@ mod tests {
     fn sections_ok(name: &str) {
         let c = find_cmd(name).unwrap_or_else(|| panic!("no help entry for `ligus {name}`"));
         let h = command_help(c);
-        for sec in ["PURPOSE", "SYNOPSIS", "FLAGS", "ENVIRONMENT", "EXAMPLES", "EXIT CODES", "SEE ALSO"] {
-            assert!(h.contains(&format!("\n{sec}\n")), "`ligus {name} --help` lacks {sec}:\n{h}");
+        // One section order for every Ligus tool.
+        let mut at = 0;
+        for sec in ["NAME", "USAGE", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
+            let i = if sec == "NAME" { h.find("NAME\n") } else { h.find(&format!("\n{sec}\n")) };
+            let i = i.unwrap_or_else(|| panic!("`ligus {name} --help` lacks {sec}:\n{h}"));
+            assert!(i >= at, "`ligus {name} --help`: {sec} is out of order:\n{h}");
+            at = i;
         }
         assert!(!c.purpose.is_empty() && !c.synopsis.is_empty(), "{name}: empty purpose or synopsis");
         assert!((1..=3).contains(&c.examples.len()), "{name}: 1-3 examples, has {}", c.examples.len());
@@ -2785,7 +2832,7 @@ mod tests {
             assert!(!t.text.contains("\"error: "), "topic {} names the old error prefix", t.name);
         }
         // `ligus remote enable --relay x --help`: the subcommand's help.
-        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("ligus remote enable"));
+        assert!(lookup_flag(&["remote", "enable", "--relay", "https://r.example", "--help"]).unwrap().starts_with("NAME\n  ligus remote enable"));
         // `ligus agents --help` is the command only; `ligus box --help` is no command.
         assert!(!lookup_flag(&["agents", "--help"]).unwrap().contains("Access controls"));
         assert_eq!(lookup_flag(&["box", "--help"]), None);
@@ -2848,5 +2895,27 @@ mod tests {
         }
         assert!(overview().contains("ligus help exit-codes"));
         assert_eq!((EXIT_OK, EXIT_ERROR, EXIT_USAGE), (crate::problem::EXIT_OK, crate::problem::EXIT_ERROR, crate::problem::EXIT_USAGE));
+    }
+
+    /// `ligus help --json` serialises the registry, and the overview keeps
+    /// the shared section order.
+    #[test]
+    fn help_json_and_overview_order() {
+        let d = help_json();
+        assert_eq!(d["schema"], "ligus.help.v1");
+        assert_eq!(d["commands"].as_array().unwrap().len(), COMMANDS.len());
+        assert_eq!(d["topics"].as_array().unwrap().len(), TOPICS.len());
+        assert_eq!(d["exitCodes"].as_array().unwrap().len(), 8);
+        let doctor = d["commands"].as_array().unwrap().iter().find(|c| c["name"] == "doctor").unwrap();
+        assert!(doctor["flags"].as_array().unwrap().iter().any(|f| f["flag"] == "--json"));
+        let o = overview();
+        let mut at = 0;
+        for sec in ["NAME", "USAGE", "COMMANDS", "TOPICS", "FLAGS", "EXAMPLES", "ENVIRONMENT", "EXIT CODES", "SEE ALSO"] {
+            let i = if sec == "NAME" { o.find("NAME\n") } else { o.find(&format!("\n{sec}")) };
+            let i = i.unwrap_or_else(|| panic!("overview lacks {sec}"));
+            assert!(i >= at, "overview: {sec} out of order");
+            at = i;
+        }
+        assert!(o.contains("langstroth-relay help") && o.contains("ligus-k8s"), "cross-references to the other tools");
     }
 }
