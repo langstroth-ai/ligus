@@ -85,6 +85,37 @@ parser_flags() { # script -> one flag per line
   sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$1" | sed -n 's/^    \(-[-a-z|]*\)).*/\1/p' | tr '|' '\n'
 }
 has_word() { grep -qE -- "(^|[^A-Za-z0-9-])$1([^A-Za-z0-9-]|\$)" "$2"; }
+# Hand-written zsh and fish completions name every command and flag the
+# scripts take, and parse.
+COMP="$ROOT/deploy/completions"
+for s in "$K8S" "$LOCAL"; do
+  n=$(basename "$s"); z="$COMP/_$n"; fi_="$COMP/$n.fish"
+  missing=""
+  for c in $(dispatch_cmds "$s"); do
+    grep -qF "'$c:" "$z" || missing="$missing zsh:$c"
+    grep -qE -- "-a '?$c( |')" "$fi_" || grep -qE -- "-a $c " "$fi_" || missing="$missing fish:$c"
+  done
+  for f in $(parser_flags "$s"); do
+    case $f in -h|--help) continue ;; esac
+    grep -qF -- "$f" "$z" || missing="$missing zsh:$f"
+    case $f in
+      --*) grep -qE -- "-l ${f#--}( |\$)" "$fi_" || missing="$missing fish:$f" ;;
+      -?) grep -qE -- "-s ${f#-}( |\$)" "$fi_" || missing="$missing fish:$f" ;;
+    esac
+  done
+  if [ -z "$missing" ]; then pass "$n completions name every command and flag"; else fail "$n completions lack:$missing"; fi
+  if command -v zsh >/dev/null 2>&1; then
+    if zsh -n "$z" 2>"$TMP/zerr"; then pass "$n zsh completion parses"; else fail "$n zsh completion: $(cat "$TMP/zerr")"; fi
+  else
+    printf 'skip %s zsh completion parse (zsh not installed)\n' "$n"
+  fi
+  if command -v fish >/dev/null 2>&1; then
+    if fish -n "$fi_" 2>"$TMP/ferr"; then pass "$n fish completion parses"; else fail "$n fish completion: $(cat "$TMP/ferr")"; fi
+  else
+    printf 'skip %s fish completion parse (fish not installed)\n' "$n"
+  fi
+done
+
 # One exit-code table for every Ligus tool: help exit-codes prints 0 to 7,
 # and every command's help points to it.
 for s in "$K8S" "$LOCAL"; do

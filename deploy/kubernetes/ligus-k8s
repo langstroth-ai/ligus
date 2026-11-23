@@ -70,6 +70,7 @@ SEE ALSO
   ligus help troubleshooting     pods stuck in Init, sandbox and NetworkPolicy failures
   ligus help security            the sandbox, keys and what never leaves the namespace
   ligus help env                 every environment variable ligus reads
+  deploy/completions/ (zsh and fish completions for ligus-k8s and ligus-local)
   AGENTS.md (repository root), .claude/skills/ligus-deploy-k8s/SKILL.md,
   deploy/kubernetes/README.md, deploy/helm/ligus/README.md
 EOF
