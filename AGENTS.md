@@ -38,8 +38,11 @@ summarises a data dir.
 Every command is non-interactive and idempotent, takes flags or environment
 variables (never prompts), prints progress on stderr and, with `--json`,
 exactly one JSON object on stdout (schema `ligus.agent-deploy.v1`: `ok`,
-`exitCode`, `checks[]` of `{id, status, detail, fix}`, `next[]`). No command
-prints a secret.
+`exitCode`, `checks[]` of `{id, status, detail, fix}`, `next[]`). That schema
+is a conforming profile of `ligus.checks.v1`, the shape `ligus doctor --json`
+and `langstroth-relay check --json` print too (`ligus help checks`;
+docs-site/docs/operate/reference/cli-conventions.md). No command prints a
+secret.
 
 Kubernetes (`--context` is required, never the current context; one namespace per workspace):
 
@@ -79,6 +82,13 @@ $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 | 2 | usage error | fix the command line |
 | 3 | a precondition is missing that you can fix (a tool, the relay chart, the namespace) | do what `fix` says, rerun |
 | 4 | **a human must decide or act** | stop and ask; quote `fix` and `next` |
+| 5 | not found (a workspace, chat, proposal, run) | check the id |
+| 6 | refused by workspace rules (a role, lockdown, agent access) | ask an Admin; don't retry |
+| 7 | offline, the relay unreachable, or timed out | retry with backoff |
+
+One table for every Ligus tool: `ligus`, `langstroth-relay` and these
+scripts (`ligus help exit-codes`, `ligus-k8s help exit-codes`). The scripts
+use 0 to 4 (an unreachable cluster is 3); `langstroth-relay` uses 0 to 2.
 
 ## Hard rules
 
