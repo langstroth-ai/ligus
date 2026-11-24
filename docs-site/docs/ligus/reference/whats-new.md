@@ -6,6 +6,15 @@ Full release notes are on the
 
 ## Unreleased
 
+### New
+
+- **Custom themes.** Settings → Appearance → **Import a theme…** reads a
+  theme file (TOML or JSON) that sets colours for light, dark or both, on
+  top of one of the six palettes; **Export current theme** saves the theme
+  in use as a starting file. The same file works in lt. Colours only, each
+  checked strictly; hard-to-read pairs are flagged, not refused. Imported
+  themes stay on this device. See [Themes](../features/themes.md).
+
 ### Fixes
 
 - **The keychain stops asking (macOS).** A release of Ligus that finds its

@@ -13,6 +13,7 @@
 import { useSyncExternalStore } from "react";
 import { setTitlebarColor } from "@/lib/ipc";
 import { PALETTES, SCHEME_TOKENS } from "@/lib/tokens.generated";
+import { applySchemeOverrides, resolveCustom, type CustomTheme } from "@/lib/customThemes";
 
 export type ThemeName = "pollen" | "studio" | "harbor" | "meadow" | "slate" | "obsidian";
 export type AppearanceMode = "auto" | "light" | "dark";
@@ -99,6 +100,18 @@ export function resolvePalette(name: ThemeName, mode: AppearanceMode): Palette {
   return wantsDark ? family.dark : family.light;
 }
 
+/// Apply what Settings chose: a custom theme (imported on this device) when
+/// one is in use, else the built-in palette. Both follow the mode the same way.
+export function applyActiveTheme(name: ThemeName, mode: AppearanceMode, custom: CustomTheme | null) {
+  if (!custom) {
+    applyTheme(resolvePalette(name, mode));
+    return;
+  }
+  const wantsDark = mode === "dark" || (mode === "auto" && systemPrefersDark());
+  const { palette, scheme } = resolveCustom(custom, wantsDark ? "dark" : "light");
+  applyTheme(palette, scheme);
+}
+
 /// Status + overlay tokens per scheme (identical across accent families): one
 /// legible green/red/amber per light/dark rather than eight hand-tuned variants.
 /// Warn is an amber-orange (OKLCH hue 45 in light, 47 in dark) kept clearly
@@ -115,7 +128,7 @@ function pickStatus(scheme: "light" | "dark") {
   return { success: t.success, danger: t.danger, warn: t.warn, info: t.info, neutral: t.neutral, overlay: t.overlay };
 }
 
-export function applyTheme(p: Palette) {
+export function applyTheme(p: Palette, schemeOverrides?: Record<string, string>) {
   const root = document.documentElement;
   // Status + overlay tokens are scheme-derived (identical across accent
   // families) — one legible green/red/amber per light/dark rather than eight
@@ -157,6 +170,9 @@ export function applyTheme(p: Palette) {
   root.style.setProperty("--ligus-sidebar-ink", p.sidebarInk);
   root.style.setProperty("--ligus-sidebar-ink-muted", p.sidebarInkMuted);
   root.style.colorScheme = p.scheme;
+  // A custom theme's own status, diff and on-accent colours (validated,
+  // canonical values for fixed --ligus-* properties: lib/customThemes.ts).
+  if (schemeOverrides) applySchemeOverrides(schemeOverrides);
   // Let scheme-aware embeds (Monaco diff, xterm logs) react to theme flips.
   window.dispatchEvent(new Event("ligus:theme"));
   syncNativeTitlebar(p);
