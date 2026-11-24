@@ -1,6 +1,6 @@
 {
-  "tag": "v0.1.1",
-  "name": "Ligus 0.1.1",
+  "tag": "v0.2.0",
+  "name": "Ligus 0.2.0",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "A patch release of Ligus (short for ligustica): adding a phone by scanning the desktop's code, a faster desktop launch, clearer buttons and proposals, and security and membership fixes. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "Ligus (short for ligustica) 0.2.0 brings a calmer desktop with an Inbox for what needs you, a model picker in every chat, the system passkey sheet on macOS, one set of CLI conventions, a more reliable event store, and security fixes; upgrade every member of a workspace. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }
