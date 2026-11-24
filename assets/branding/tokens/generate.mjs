@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { nearestXterm, over, parse, rgbOf, toRgbCss } from "./color.mjs";
+import { atLightness, clip, contrast, deltaE, inGamut, nearestXterm, oklchToRgb, over, parse, rgbOf, rgbToOklch, toRgbCss } from "./color.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(here, "..", "..", "..");
@@ -211,45 +211,141 @@ ${states}
 // bold and reverse instead.
 const ANSI = { ok: 2, danger: 1, warn: 3, info: 6, neutral: 8, diffAdd: 2, diffDel: 1, comment: 5 };
 
-function renderRust(t) {
-  const scheme = (variant) => {
-    const p = t.themes.pollen[variant];
-    const s = t.schemes[p.scheme];
-    const bg = parse(p.canvas);
-    const inkL = Number(s.numbers.accentInkL.replace("%", "")) / 100;
-    const solid = (css) => rgbOf(parse(css)).map(Math.round);
-    const atL = (css) => {
-      // The status ink: the role's chroma and hue at the scheme's text lightness.
-      const m = css.match(/oklch\(([\d.]+) ([\d.]+) ([\d.]+)/);
-      return rgbOf(parse(`oklch(${inkL} ${m[2]} ${m[3]})`));
+// lt draws on the terminal's own background, never a painted canvas, and
+// every colour is text or a one-cell glyph. So the inks are text-weight
+// (the accents and the status colours at the scheme's accent-ink
+// lightness), the border is the ink mixed just far enough over the canvas
+// to keep 3:1, and the selection is a stronger accent tint than the
+// desktop's (no other cue but bold marks it).
+const LT_BORDER_CONTRAST = 3.1;
+const LT_SELECTION_MIX = 0.3;
+/** The selection stands apart from every background by at least this (OKLab ΔE). */
+const LT_SELECTION_DELTA_E = 0.06;
+/**
+ * Common terminal backgrounds lt's colours are checked against, beside the
+ * palette's own canvas: white (macOS Terminal Basic, GitHub Light),
+ * Solarized Light; black, a VS Code / iTerm grey, Solarized Dark, GitHub Dark.
+ */
+export const LT_TERMINAL_BACKGROUNDS = {
+  light: { white: [255, 255, 255], solarizedLight: [253, 246, 227] },
+  dark: { black: [0, 0, 0], grey: [30, 30, 30], solarizedDark: [0, 43, 54], githubDark: [13, 17, 23] },
+};
+const LT_DIM_MIX = 0.72;
+
+/** Minimum contrast for lt's accent inks on every background (WCAG AA text, with a margin). */
+const LT_TEXT_CONTRAST = 4.6;
+
+/**
+ * A palette colour as lt text: the colour itself when it already reads at
+ * LT_TEXT_CONTRAST on every background, else the nearest OKLCH lightness
+ * that does (darker on light, lighter on dark), its chroma reduced only as
+ * far as sRGB needs, so the hue stays the palette's.
+ */
+function inkOn(css, backgrounds, variant) {
+  const rgb = rgbOf(parse(css));
+  const ok = (c) => backgrounds.every((b) => contrast(c, b) >= LT_TEXT_CONTRAST);
+  if (ok(rgb)) return rgb;
+  const [L0, C0, H] = rgbToOklch(rgb);
+  const step = variant === "light" ? -0.005 : 0.005;
+  for (let L = L0; L > 0 && L < 1; L += step) {
+    let C = C0;
+    while (C > 0 && !inGamut([L, C, H])) C -= 0.002;
+    const c = clip(oklchToRgb([L, Math.max(C, 0), H]));
+    if (ok(c)) return c;
+  }
+  return variant === "light" ? [0, 0, 0] : [255, 255, 255];
+}
+
+/** lt's tokens for one palette on one terminal background (`variant`). */
+export function ltScheme(t, name, variant) {
+  const fam = t.themes[name];
+  let p = fam[variant];
+  const s = t.schemes[variant];
+  if (p.scheme !== variant) {
+    // A dark-only palette (Obsidian) on a light terminal: its own hues,
+    // re-lit for a light background (Pollen light's canvas and ink
+    // lightness), so the theme still reads as itself.
+    const ref = t.themes.pollen[variant];
+    const relit = (css, refCss) => {
+      const [, C, H] = rgbToOklch(rgbOf(parse(css)));
+      const [L] = rgbToOklch(rgbOf(parse(refCss)));
+      return `oklch(${L} ${C} ${H})`;
     };
-    const mixed = (css, alpha) => over({ ...parse(css), a: alpha }, bg).map(Math.round);
-    const tc = (rgb, ansi) => `TokenColor { rgb: (${rgb.join(", ")}), xterm256: ${nearestXterm(rgb)}, ansi16: ${ansi === undefined ? "None" : `Some(${ansi})`} }`;
-    const rows = [
-      ["text", tc(solid(p.ink))],
-      ["dim", tc(mixed(p.ink, 0.7), 8)],
-      ["accent", tc(solid(p.accentCool))],
-      ["border", tc(over(parse(p.line), bg).map(Math.round), 8)],
-      ["selection", tc(mixed(p.accentCool, 0.22))],
-      ["mention", tc(solid(p.accentWarm))],
-      ...STATUS_KEYS.map((k) => [k, tc(atL(s.status[k]), ANSI[k])]),
-      ["diff_add", tc(solid(s.diff.addInk), ANSI.diffAdd)],
-      ["diff_del", tc(solid(s.diff.delInk), ANSI.diffDel)],
-      ["diff_comment", tc(solid(s.diff.comment), ANSI.comment)],
-    ];
-    const presence = s.presence.map((c) => `        ${tc(solid(c))},`).join("\n");
-    return `SchemeTokens {\n${rows.map(([k, v]) => `    ${k}: ${v},`).join("\n")}\n    presence: [\n${presence}\n    ],\n}`;
+    p = { ...p, canvas: relit(p.canvas, ref.canvas), ink: relit(p.ink, ref.ink), scheme: variant };
+  }
+  const bg = parse(p.canvas);
+  const bgRgb = rgbOf(bg);
+  const inkL = Number(s.numbers.accentInkL.replace("%", "")) / 100;
+  const solid = (css) => rgbOf(parse(css)).map(Math.round);
+  const atL = (css) => atLightness(rgbOf(parse(css)), inkL);
+  const mixed = (css, alpha) => over({ ...parse(css), a: alpha }, bg).map(Math.round);
+  const backgrounds = [bgRgb, ...Object.values(LT_TERMINAL_BACKGROUNDS[variant])];
+  // The least ink over the canvas that still reaches the border contrast
+  // on every background.
+  let border = mixed(p.ink, 1);
+  for (let a = 0.2; a <= 1.0001; a += 0.01) {
+    const c = mixed(p.ink, a);
+    if (backgrounds.every((b) => contrast(c, b) >= LT_BORDER_CONTRAST)) {
+      border = c;
+      break;
+    }
+  }
+  // A tint of the accent, strong enough to see on every background.
+  let selection = mixed(p.accentCool, LT_SELECTION_MIX);
+  for (let a = LT_SELECTION_MIX; a <= 0.6; a += 0.02) {
+    selection = mixed(p.accentCool, a);
+    if (backgrounds.every((b) => deltaE(selection, b) >= LT_SELECTION_DELTA_E)) break;
+  }
+  return {
+    canvas: solid(p.canvas),
+    text: solid(p.ink),
+    dim: mixed(p.ink, LT_DIM_MIX),
+    accent: inkOn(p.accentCool, backgrounds, variant),
+    border,
+    selection,
+    mention: inkOn(p.accentWarm, backgrounds, variant),
+    ok: atL(s.status.ok),
+    info: atL(s.status.info),
+    warn: atL(s.status.warn),
+    danger: atL(s.status.danger),
+    neutral: atL(s.status.neutral),
+    diff_add: solid(s.diff.addInk),
+    diff_del: solid(s.diff.delInk),
+    diff_comment: solid(s.diff.comment),
+    agent: inkOn(s.presence[3], backgrounds, variant),
+    presence: s.presence.map(solid),
   };
+}
+
+const LT_ANSI = { dim: 8, border: 8, ok: ANSI.ok, info: ANSI.info, warn: ANSI.warn, danger: ANSI.danger, neutral: ANSI.neutral, diff_add: ANSI.diffAdd, diff_del: ANSI.diffDel, diff_comment: ANSI.comment, agent: 5 };
+const LT_ROWS = ["canvas", "text", "dim", "accent", "border", "selection", "mention", "ok", "info", "warn", "danger", "neutral", "diff_add", "diff_del", "diff_comment", "agent"];
+
+function renderRust(t) {
+  const tc = (rgb, ansi) => `TokenColor { rgb: (${rgb.join(", ")}), xterm256: ${nearestXterm(rgb)}, ansi16: ${ansi === undefined ? "None" : `Some(${ansi})`} }`;
+  const scheme = (name, variant, indent) => {
+    const k = ltScheme(t, name, variant);
+    const pad = " ".repeat(indent);
+    const rows = LT_ROWS.map((r) => `${pad}    ${r}: ${tc(k[r], LT_ANSI[r])},`).join("\n");
+    const presence = k.presence.map((c) => `${pad}        ${tc(c)},`).join("\n");
+    return `SchemeTokens {\n${pad}    light: ${variant === "light"},\n${rows}\n${pad}    presence: [\n${presence}\n${pad}    ],\n${pad}}`;
+  };
+  const names = Object.keys(t.themes);
+  const palettes = names
+    .map((n) => `    Palette {\n        name: "${n}",\n        light: ${scheme(n, "light", 8)},\n        dark: ${scheme(n, "dark", 8)},\n    },`)
+    .join("\n");
   const glyphs = Object.entries(t.states)
     .map(([k, v]) => `    StateGlyph { state: "${k}", role: "${v.role}", word: "${v.word}", glyph: "${v.lt}", ascii: "${v.ascii}" },`)
     .join("\n");
   return `//! ${HEADER}
 //!
-//! lt's colours from the shared Ligus tokens (the Pollen palette). Each colour
-//! comes at three depths: truecolor RGB, the nearest xterm-256 index (16..255,
-//! never the user-configurable 0..15) and a 16-colour ANSI slot. \`ansi16: None\`
-//! means "no hue at 16 colours": use bold or reverse (the accent, since yellow
-//! is reserved for warnings). Status colours are the text-weight inks.
+//! lt's colours from the shared Ligus tokens: every palette, for a light and
+//! a dark terminal background. Each colour comes at three depths: truecolor
+//! RGB, the nearest xterm-256 index (16..255, never the user-configurable
+//! 0..15) and a 16-colour ANSI slot. \`ansi16: None\` means "no hue at 16
+//! colours": use bold or reverse (the accent, since yellow is reserved for
+//! warnings). Every colour is text-weight: lt draws on the terminal's own
+//! background. \`canvas\` is the background the palette expects, for
+//! contrast checks; lt never paints it.
 
 /// One colour at three terminal depths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,6 +358,8 @@ pub struct TokenColor {
 /// Every colour lt draws with, for one background.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchemeTokens {
+    pub light: bool,
+    pub canvas: TokenColor,
     pub text: TokenColor,
     pub dim: TokenColor,
     pub accent: TokenColor,
@@ -276,7 +374,17 @@ pub struct SchemeTokens {
     pub diff_add: TokenColor,
     pub diff_del: TokenColor,
     pub diff_comment: TokenColor,
+    pub agent: TokenColor,
     pub presence: [TokenColor; 8],
+}
+
+/// A palette family: its name (the desktop's and the phone's) and its two
+/// schemes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette {
+    pub name: &'static str,
+    pub light: SchemeTokens,
+    pub dark: SchemeTokens,
 }
 
 /// A state's glyph, with its \`--ascii\` form; the glyph is the invariant.
@@ -289,9 +397,16 @@ pub struct StateGlyph {
     pub ascii: &'static str,
 }
 
-pub const DARK: SchemeTokens = ${scheme("dark")};
+/// Every palette, Pollen (the default) first.
+pub const PALETTES: [Palette; ${names.length}] = [
+${palettes}
+];
 
-pub const LIGHT: SchemeTokens = ${scheme("light")};
+/// Pollen on a dark background.
+pub const DARK: SchemeTokens = PALETTES[0].dark;
+
+/// Pollen on a light background.
+pub const LIGHT: SchemeTokens = PALETTES[0].light;
 
 pub const STATE_GLYPHS: [StateGlyph; ${Object.keys(t.states).length}] = [
 ${glyphs}
