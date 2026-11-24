@@ -38,6 +38,37 @@ pub fn token_secret_id(server: &str) -> ligus_runtime::secret_store::SecretId {
     ligus_runtime::secret_store::SecretId::new(TOKEN_SCOPE, format!("mcp-token:{server}"))
 }
 
+/// Where a saved token may be sent: the origin it was saved for, kept in
+/// the secret store beside it (so editing the managed file's URL can't
+/// redirect it).
+pub fn token_origin_id(server: &str) -> ligus_runtime::secret_store::SecretId {
+    ligus_runtime::secret_store::SecretId::new(TOKEN_SCOPE, format!("mcp-token-origin:{server}"))
+}
+
+/// Save `server`'s bearer token, bound to `url`'s origin.
+pub fn save_token(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str, url: &str, token: &str) -> Result<()> {
+    let origin = ligus_runtime::setup::validate::origin(url);
+    store.put(&token_origin_id(server), origin.as_bytes()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    store.put(&token_secret_id(server), token.as_bytes()).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// Forget `server`'s token and its origin.
+pub fn delete_token(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str) -> Result<()> {
+    store.delete(&token_secret_id(server)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    store.delete(&token_origin_id(server)).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// `server`'s saved token, only when `url` has the origin it was saved for.
+pub fn token_for(store: &dyn ligus_runtime::secret_store::SecretStore, server: &str, url: &str) -> Option<String> {
+    let saved = store.get_string(&token_origin_id(server)).ok().flatten()?;
+    if saved.as_str() != ligus_runtime::setup::validate::origin(url) {
+        return None;
+    }
+    store.get_string(&token_secret_id(server)).ok().flatten().map(|z| z.as_str().to_string())
+}
+
 /// This process's data dir and workspace (set once at start-up), for the
 /// managed file, saved tokens and reach.
 static CONTEXT: std::sync::OnceLock<(std::path::PathBuf, uuid::Uuid)> = std::sync::OnceLock::new();
@@ -124,7 +155,11 @@ pub fn load_managed(data_dir: &std::path::Path) -> Result<Vec<McpServerSpec>> {
         .mcp_servers
         .into_iter()
         .map(|m| {
-            let saved = m.token_secret.then(|| store.get_string(&token_secret_id(&m.id)).ok().flatten().map(|z| z.as_str().to_string())).flatten();
+            // Only to the origin the token was saved for.
+            let saved = match (&m.url, m.token_secret) {
+                (Some(url), true) => token_for(store.as_ref(), &m.id, url),
+                _ => None,
+            };
             let mut spec = spec_from_raw(m);
             if saved.is_some() {
                 spec.auth = saved;
@@ -213,6 +248,20 @@ fn spec_from_raw(m: RawMcpServer) -> McpServerSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A saved token goes only to the origin it was saved for: editing the
+    /// managed file's URL, or a new server reusing the id, gets nothing.
+    #[test]
+    fn a_token_is_bound_to_its_origin() {
+        let d = tempfile::tempdir().unwrap();
+        let store = ligus_runtime::secret_store::File0600::new(d.path());
+        save_token(&store, "gh", "https://mcp.example.com/v1", "tok-canary").unwrap();
+        assert_eq!(token_for(&store, "gh", "https://mcp.example.com/other").as_deref(), Some("tok-canary"));
+        assert_eq!(token_for(&store, "gh", "https://evil.example.com/v1"), None);
+        assert_eq!(token_for(&store, "gh", "http://mcp.example.com/v1"), None, "scheme is part of the origin");
+        delete_token(&store, "gh").unwrap();
+        assert_eq!(token_for(&store, "gh", "https://mcp.example.com/v1"), None);
+    }
 
     #[test]
     fn empty_or_missing_config_yields_no_servers() {

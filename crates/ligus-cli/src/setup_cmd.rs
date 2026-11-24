@@ -106,7 +106,11 @@ fn run_flow(cfg: &Config, flow: FlowId, rest: &[String]) -> Result<()> {
                     seen_flow = true;
                     continue;
                 }
-                return Err(help::usage_error(format!("unexpected argument for `ligus setup {}`: {}", flow.as_str(), shown_arg(a))));
+                // Not echoed: it may be a code pasted where a flag was meant.
+                return Err(help::usage_error(format!(
+                    "unexpected argument for `ligus setup {}` (not shown); secrets go in --code or --token as - or @FILE",
+                    flow.as_str()
+                )));
             }
             _ => {
                 let name = &a[2..];
@@ -150,11 +154,6 @@ fn read_secret(flag: &str, v: Option<String>, stdin: &mut dyn FnMut() -> std::io
         ))),
         None => Err(help::usage_error(format!("{flag} needs - (stdin) or @FILE"))),
     }
-}
-
-fn shown_arg(a: &str) -> String {
-    let s: String = a.chars().take(40).collect();
-    ligus_runtime::display::shown(&s).to_string()
 }
 
 fn print_outcome(o: &Outcome, json: bool, dry_run: bool) {
@@ -328,22 +327,30 @@ impl SetupOps for CliOps {
     fn mcp_handshake(&mut self, spec: &McpServerSpec, token: Option<&Zeroizing<String>>) -> OpsResult<Vec<String>> {
         service::mcp_handshake(spec, token)
     }
-    fn put_mcp_secret(&mut self, id: &str, _url: &str, secret: &Zeroizing<String>) -> OpsResult<()> {
-        // The token is read back only for this server's own entry, whose URL
-        // is fixed in the managed file.
+    fn put_mcp_secret(&mut self, id: &str, url: &str, secret: &Zeroizing<String>) -> OpsResult<()> {
+        // Bound to the URL's origin, in the store (not the editable file).
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
-        store.put(&mcp_config::token_secret_id(id), secret.as_bytes()).map_err(|e| OpsError::Failed(e.to_string()))
+        mcp_config::save_token(store.as_ref(), id, url, secret).map_err(|e| OpsError::Failed(format!("{e:#}")))
     }
     fn delete_mcp_secret(&mut self, id: &str, _url: &str) -> OpsResult<()> {
         let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
-        store.delete(&mcp_config::token_secret_id(id)).map_err(|e| OpsError::Failed(e.to_string()))
+        mcp_config::delete_token(store.as_ref(), id).map_err(|e| OpsError::Failed(format!("{e:#}")))
     }
     fn add_mcp_server(&mut self, spec: &McpServerSpec, reach: &[Uuid]) -> OpsResult<()> {
         let mut entries = mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
         if entries.iter().any(|e| e.id == spec.id) {
             return Err(OpsError::Failed(format!("'{}' is already in {}", spec.id, mcp_config::MANAGED_FILE)));
         }
-        let has_token = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir).get(&mcp_config::token_secret_id(&spec.id)).ok().flatten().is_some();
+        // A token counts only when it was saved for this URL's origin; one
+        // left from an earlier server of the same id is dropped.
+        let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
+        let has_token = match &spec.transport {
+            McpTransport::Http { url } => mcp_config::token_for(store.as_ref(), &spec.id, url).is_some(),
+            McpTransport::Stdio { .. } => false,
+        };
+        if !has_token {
+            mcp_config::delete_token(store.as_ref(), &spec.id).map_err(|e| OpsError::Failed(format!("{e:#}")))?;
+        }
         let entry = match &spec.transport {
             McpTransport::Stdio { command, args } => mcp_config::ManagedEntry {
                 id: spec.id.clone(),
@@ -375,7 +382,9 @@ impl SetupOps for CliOps {
     fn remove_mcp_server(&mut self, id: &str) -> OpsResult<()> {
         let mut entries = mcp_config::managed_entries(&self.cfg.data_dir).map_err(OpsError::from)?;
         entries.retain(|e| e.id != id);
-        mcp_config::save_managed(&self.cfg.data_dir, entries).map_err(OpsError::from)
+        mcp_config::save_managed(&self.cfg.data_dir, entries).map_err(OpsError::from)?;
+        let store = ligus_runtime::secret_store::for_data_dir(&self.cfg.data_dir);
+        mcp_config::delete_token(store.as_ref(), id).map_err(|e| OpsError::Failed(format!("{e:#}")))
     }
 
     // folder
@@ -464,7 +473,9 @@ impl SetupOps for CliOps {
 
     // relay
     fn probe_relay(&self, url: &str, token: Option<&Zeroizing<String>>) -> ProbeFact {
-        let token = token.cloned().or_else(|| self.cfg.token.clone().map(Zeroizing::new));
+        // The saved access token goes only to the relay it was saved for.
+        let same = self.cfg.relay_url.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
+        let token = token.cloned().or_else(|| same.then(|| self.cfg.token.clone().map(Zeroizing::new)).flatten());
         service::probe_relay(url, token.as_ref(), &self.cfg.room)
     }
     fn switch_relay(&mut self, url: &str, token: Option<&Zeroizing<String>>) -> OpsResult<()> {
@@ -472,16 +483,22 @@ impl SetupOps for CliOps {
             return Err(OpsError::Failed("LIGUS_RELAY_URL is set and wins over config.toml: change it there".into()));
         }
         let mut f = crate::load_file_config(&self.cfg.data_dir);
+        let moved = !self.cfg.relay_url.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
         f.relay_url = Some(url.to_string());
-        if let Some(t) = token {
-            f.token = Some(t.to_string());
+        match token {
+            Some(t) => f.token = Some(t.to_string()),
+            // The old relay's token never follows the workspace to another.
+            None if moved => f.token = None,
+            None => {}
         }
         // Secrets go to the store; config.toml is written to a temp file
         // and renamed.
         f.save(&self.cfg.data_dir).map_err(OpsError::from)?;
         self.cfg.relay_url = Some(url.to_string());
-        if let Some(t) = token {
-            self.cfg.token = Some(t.to_string());
+        match token {
+            Some(t) => self.cfg.token = Some(t.to_string()),
+            None if moved => self.cfg.token = None,
+            None => {}
         }
         Ok(())
     }

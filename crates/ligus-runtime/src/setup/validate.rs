@@ -68,6 +68,14 @@ pub fn origin(raw: &str) -> String {
     url::Url::parse(raw.trim()).map(|u| u.origin().ascii_serialization()).unwrap_or_else(|_| "that URL".into())
 }
 
+/// Whether two URLs have the same origin (scheme, host, port).
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (url::Url::parse(a.trim()), url::Url::parse(b.trim())) {
+        (Ok(x), Ok(y)) => x.origin() == y.origin() && x.origin().is_tuple(),
+        _ => false,
+    }
+}
+
 fn looks_like_secret_key(k: &str) -> bool {
     let k = k.to_ascii_lowercase();
     ["token", "key", "secret", "password", "passwd", "auth", "sig", "credential"].iter().any(|w| k.contains(w))
@@ -279,6 +287,15 @@ mod tests {
         ] {
             assert!(url_problem(bad).is_some(), "{bad}");
         }
+    }
+
+    #[test]
+    fn same_origin_is_scheme_host_and_port() {
+        assert!(same_origin("https://r.example.com", "https://r.example.com:443/v1"));
+        assert!(!same_origin("https://r.example.com", "https://r.example.org"));
+        assert!(!same_origin("https://r.example.com", "http://r.example.com"));
+        assert!(!same_origin("https://r.example.com", "https://r.example.com:8443"));
+        assert!(!same_origin("nonsense", "nonsense"));
     }
 
     #[test]

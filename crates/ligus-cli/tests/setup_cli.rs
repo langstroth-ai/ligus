@@ -132,3 +132,49 @@ fn dry_run_writes_no_server() {
     assert_eq!(d["dryRun"], true);
     assert!(!b.data.join("mcp-servers.toml").exists());
 }
+
+/// The saved relay access token is never sent to a relay it wasn't saved
+/// for (here: no relay saved at all, a token in the environment, and a
+/// "try my relay" URL), dry run or not.
+#[test]
+fn the_access_token_never_goes_to_another_relay() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::thread::spawn(move || {
+        let mut all = String::new();
+        listener.set_nonblocking(false).unwrap();
+        if let Ok((mut s, _)) = listener.accept() {
+            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut buf = [0u8; 8192];
+            let n = s.read(&mut buf).unwrap_or(0);
+            all.push_str(&String::from_utf8_lossy(&buf[..n]));
+            let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+        all
+    });
+    let b = fresh();
+    let url = format!("http://127.0.0.1:{port}");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_ligus"));
+    c.args(["setup", "relay", "--kind", "own", "--url", &url, "--dry-run", "--json"])
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", &b.home)
+        .env("LIGUS_DATA_DIR", &b.data)
+        .env("LIGUS_SECRET_BACKEND", "file")
+        .env("LIGUS_RELAY_ACCESS_TOKEN", "hrt1CANARYOLDRELAY")
+        .stdin(std::process::Stdio::null());
+    let o = c.output().unwrap();
+    let request = seen.join().unwrap();
+    assert!(request.starts_with("GET "), "the relay was probed: {request:?} / {}", String::from_utf8_lossy(&o.stdout));
+    assert!(!request.contains("hrt1CANARYOLDRELAY"), "the token went to another relay: {request}");
+}
+
+#[test]
+fn a_stray_argument_is_never_echoed() {
+    let b = fresh();
+    let o = ligus(&b, &["setup", "box", "ligusadmit1:CANARYSECRET456"], None);
+    assert_eq!(code(&o), 2);
+    let all = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(!all.contains("CANARYSECRET456"), "{all}");
+}
