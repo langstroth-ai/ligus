@@ -45,6 +45,7 @@ mod app_cmd;
 mod auth;
 mod checks;
 mod cli_flags;
+mod devices_cmd;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
@@ -335,6 +336,13 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     let account_kp = identity.account_keypair(stored.account.id)?;
     let store = EventStore::open(cfg.data_dir.join("ligus.db"))?;
     let mut svc = ChatService::new(store, device_kp, account_kp, stored.actor());
+    // A computer linked as a person's device ("Add a computer") acts as them
+    // in the workspaces it was linked into, without their account key.
+    let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir)
+        .map_err(|e| anyhow!("{} is unreadable ({e}): fix or remove it", ligus_runtime::computer_link::LinkState::path(&cfg.data_dir).display()))?;
+    if let Some(person) = link.linked_in(uuid_of_room(&cfg.room)) {
+        svc.act_as_owner_device(person.clone());
+    }
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
     svc.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&cfg.data_dir)));
@@ -2439,6 +2447,7 @@ fn run() -> Result<()> {
             cmd_rm_runtime(&cfg, id, has("--dry-run"))
         }
         "enroll" => {
+            devices_cmd::refuse_if_linked(&cfg, "accept invites")?;
             let mut stdin = secret_arg::stdin_once();
             let (invite, on_argv) = enroll_invite(positional.first().map(|s| s.as_str()), flag_val("--file"), &mut stdin)?;
             if on_argv {
@@ -2451,6 +2460,7 @@ fn run() -> Result<()> {
             cmd_enroll(&cfg, &invite, token)
         }
         "join" => {
+            devices_cmd::refuse_if_linked(&cfg, "accept invites")?;
             let code = positional
                 .first()
                 .ok_or_else(|| anyhow!("usage: ligus join <invite-code>"))?;
@@ -2496,7 +2506,43 @@ fn run() -> Result<()> {
         "serve" if positional.first().map(|s| s.as_str()) == Some("enroll") => {
             bail!("`ligus serve enroll` was removed: {}", admit::OWNER_MODE_REMOVED)
         }
-        "admit" => admit::cmd_admit(&cfg, &positional, |f| flag_val(f)),
+        "admit" => {
+            if matches!(positional.first().map(|s| s.as_str()), Some("request" | "redeem")) {
+                devices_cmd::refuse_if_linked(&cfg, "become a box")?;
+            }
+            admit::cmd_admit(&cfg, &positional, |f| flag_val(f))
+        }
+        "devices" => {
+            let json = has("--json");
+            let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+            let mut ask = devices_cmd::confirm_on_tty;
+            match positional.first().map(|s| s.as_str()) {
+                Some("list") | None => devices_cmd::cmd_list(&cfg, json),
+                Some("request") => devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json),
+                Some("approve") => rt()?.block_on(devices_cmd::cmd_approve(
+                    &cfg,
+                    positional.get(1).map(|s| s.as_str()),
+                    flag_val("--code-file"),
+                    flag_val("--fingerprint"),
+                    flag_val("--recovery-words-file"),
+                    flag_val("--out"),
+                    json,
+                    interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
+                )),
+                Some("redeem") => {
+                    let mut cfg = cfg.clone();
+                    rt()?.block_on(devices_cmd::cmd_redeem(
+                        &mut cfg,
+                        positional.get(1).map(|s| s.as_str()),
+                        flag_val("--code-file"),
+                        flag_val("--approver-fingerprint"),
+                        json,
+                        interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
+                    ))
+                }
+                Some(other) => bail!("unknown `ligus devices {other}`: use list|request|approve|redeem"),
+            }
+        }
         "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),
         "serve" => {
             hardening::require_sandbox_or_exit("this serve host");
@@ -2676,6 +2722,7 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 /// flag read with `flag_val` must be listed here, or its value is taken as a
 /// positional argument (a test checks this against the source).
 const VALUE_FLAGS: &[&str] = &[
+    "--approver-fingerprint",
     "--timeout",
     "--gateway",
     "--model",

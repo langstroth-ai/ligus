@@ -183,7 +183,7 @@ from memory once used.
 
 ## Joining a workspace
 
-`ligus enroll` is for a person's own CLI device. A serve or worker box never
+`ligus enroll` is for a person's own CLI device, joining as a new member (already in the workspace on your desktop? [link this computer](#devices) instead). A serve or worker box never
 enrolls with an invite: it joins only through a box admission
 (`ligus admit request`, an Admin approves it, `ligus admit redeem`; see
 [The home host for the phone](#the-home-host-for-the-phone) and
@@ -210,6 +210,35 @@ Next: `ligus sync`. (A serve or worker box doesn't enroll: it joins with `ligus 
     secret store (`LIGUS_SECRET_BACKEND`, see `ligus help security`). A
     `config.toml` that still holds secrets in the clear has them removed;
     run `ligus enroll` again.
+
+## Linking this computer to your devices {#devices}
+
+An invite always makes a **new member**. If you are already in the workspace
+on your desktop, link this computer as one of your devices instead: it then
+acts as you, not as a second person with your name. See
+[Add a computer](../features/linked-devices.md).
+
+| Command | What it does |
+|---|---|
+| `ligus devices request [--label NAME] [--new-device]` | prints this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remembers it as pending (15 minutes, single use). A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
+| `ligus devices redeem <ligusgrant1:code> \| - \| --code-file PATH [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer), asks you to confirm who approved it (the person, the workspace and the approving desktop's fingerprint; `--approver-fingerprint`, or a yes at a terminal, else exit 4), saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
+| `ligus devices approve <liguslink1:request> \| --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]` | a person's own headless approval (prefer the desktop's My devices > Add a computer): certifies the computer as yours with your recovery key, syncs, and prints the grant (or writes it owner-only to `--out`) |
+| `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and pending requests |
+
+```console
+$ ligus devices request --label work-laptop
+Ask your desktop to add this computer: Settings > Profile > My devices > Add a computer.
+…
+Fingerprint: 7F3A-91C0-77DE-0B14-5E62  (label "work-laptop")
+$ ligus devices redeem --code-file ./grant --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73
+This computer is now one of Alex's devices in workspace 'acme' (approved by desktop 2C41-88E0-1B9D-04AF-6E73).
+```
+
+A linked computer acts as you without your account key: a vote asks for your
+passkey, and account changes (devices, phones, passkeys, keys, invites as
+founder) stay on the desktop. It doesn't accept invites or become a box. A
+gated relay asks it to sign in as you (`ligus auth login`); the relay token is
+never in the codes.
 
 ## Signing in to an organization's relay
 

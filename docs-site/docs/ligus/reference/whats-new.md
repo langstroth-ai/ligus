@@ -6,7 +6,23 @@ Full release notes are on the
 
 ## Unreleased
 
+### New
+
+- **Add a computer to your devices.** Use Ligus on a second computer (`lt`,
+  or the `ligus` CLI) as yourself, not as a second member with your name:
+  **Settings → Profile → My devices → Add a computer** on the desktop, one
+  passkey confirmation, and a grant sealed to that computer. `lt` has **Add
+  to my devices** on first run and **Link this computer to my devices** in
+  the palette; the CLI has `ligus devices request`, `redeem`, `approve` and
+  `list` (`ligus help devices`). Already invited yourself? Linking offers to
+  remove the duplicate member; their messages keep their name. See
+  [Add a computer](../features/linked-devices.md).
+
 ### Fixes
+
+- **My devices no longer points at `ligus serve enroll`.** That command was
+  removed in 0.1; a box that still names you as its owner now shows how to
+  admit it (`ligus admit request`, then workspace menu → Admit a box).
 
 - **The keychain stops asking (macOS).** A release of Ligus that finds its
   keychain items saved by a different Ligus build (a test or development
