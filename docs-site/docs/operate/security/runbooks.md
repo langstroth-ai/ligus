@@ -266,16 +266,74 @@ enrollment on your desktop (also with your passkey).
 
 - Ligus's secrets live in `secrets/ligus.keychain-db` in the data dir; its
   unlock password is a login-keychain item named `ai.ligus.secrets.unlock`
-  whose access list trusts only the Ligus binary.
+  whose access list trusts only the Ligus binary. The items inside the
+  Ligus keychain (service `ai.ligus.secrets`) trust the same binary.
 - **A development build** (or the CLI) is trusted by its code hash: after
   each rebuild or upgrade macOS asks once for your login keychain password
   to let it read the unlock item. Choose **Always Allow**. A release app is
   trusted by its signature (bundle id and team), so updates don't ask.
-- **If the keychain can't be used**, Ligus won't save secrets and says why in
-  **Settings → Passkeys & keys**. Fix the keychain (unlock it, or remove a
-  stale `ai.ligus.secrets.unlock` item together with the keychain file to
-  start over), or start Ligus with `LIGUS_SECRET_BACKEND=file` to keep its
-  secrets in owner-only files instead.
+- Ligus reads the unlock password once per launch and keeps it while it
+  runs, so a prompt you answer with **Allow** doesn't come back on every
+  use. If the Ligus keychain locks again (sleep, `security lock-keychain`),
+  Ligus unlocks it with the password it already holds.
+
+### macOS keeps asking about `ai.ligus.secrets.unlock` {#keychain-prompt}
+
+This happens when the keychain items were saved by a **different Ligus
+build** than the one you're running (a test build, or a development build),
+for example after you switch to the Homebrew release. macOS shows *Ligus
+wants to use your confidential information stored in
+"ai.ligus.secrets.unlock" in your keychain*.
+
+1. Enter your **login** password and choose **Always Allow** (Allow also
+   works, once).
+2. A signed release of the Ligus app then repairs the items by itself: it
+   checks the password against the Ligus keychain, re-creates the unlock
+   item with the same password under an access list that trusts this
+   release (and only it: other apps you allowed are dropped), writing the
+   new item before it removes the old one, and does the same for the items
+   inside the Ligus keychain. That needs no prompt: Ligus authorises it
+   with the Ligus keychain's own password, which it holds. From then on
+   nothing asks. The `ligus` CLI and development builds don't repair
+   items; run the build that saved them.
+3. **If macOS asks for the "ligus" keychain password**, choose **Cancel**.
+   That password is random, only Ligus knows it, and you never need to
+   type it; quit and reopen the signed release instead, and it repairs the
+   item.
+
+A development, ad-hoc or unsigned build never rewrites an item's access
+list: it would pin the items to an unverified binary. Only a build that
+satisfies Ligus's designated requirement (Apple-anchored, Ligus's bundle id
+and team id) repairs them.
+
+If you choose **Deny** or **Cancel**, the desktop says *macOS didn't let
+Ligus read its keychain unlock password* and offers **Try again**; nothing
+is changed and your keys stay in the keychain. Over SSH or from a
+background service macOS can't ask at all, and the error says so: run the
+same build once in the Mac's desktop session (the app, or the same `ligus`
+command with the same data dir in a desktop terminal) and choose **Always
+Allow**.
+
+`ligus doctor` checks this without prompting (it opens the keychain, and
+reads every item, with keychain prompts off) and reports
+`secrets.keychain-access`:
+
+| Result | Meaning |
+|---|---|
+| ok | this build reads the Ligus keychain without a prompt |
+| warn: the unlock password exists, but this build isn't trusted | macOS asks; run this build in the desktop session, enter your login password, choose Always Allow |
+| warn: N items were saved by a different Ligus build | reopen a signed release of the app; it repairs them without asking |
+| fail: the unlock password is missing | the item really isn't in the login keychain (a data dir copied from another Mac or user) |
+| skip | no Ligus keychain in this data dir yet |
+
+### If the keychain can't be used
+
+Ligus won't save secrets and says why in **Settings → Passkeys & keys**.
+Unlock the login keychain, or allow Ligus as above. Don't delete
+`secrets/ligus.keychain-db` or the `ai.ligus.secrets.unlock` item: this
+device's keys are in that keychain, and removing either loses them (the
+device would have to be enrolled again). To keep secrets in owner-only
+files instead, start Ligus with `LIGUS_SECRET_BACKEND=file`.
 
 ## Recovery key {#recovery-key}
 

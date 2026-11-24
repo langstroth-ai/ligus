@@ -12389,6 +12389,10 @@ enum InitFailure {
     /// The OS keychain (or Secret Service) refused or was cancelled: the
     /// user can allow it and try again.
     Keychain(String),
+    /// The keychain is there, but macOS didn't let this build read it (its
+    /// unlock password, or an item in it, was saved by a different Ligus
+    /// build): the person allows it (Always Allow) and tries again.
+    KeychainAccess(String),
     /// The database needs a one-time upgrade and the disk is too full for
     /// it (nothing was changed): free some space and try again.
     DiskSpace(String),
@@ -12399,6 +12403,9 @@ enum InitFailure {
 impl InitFailure {
     fn of(e: &str) -> Self {
         let l = e.to_ascii_lowercase();
+        if l.contains("didn't let ligus read its keychain unlock password") || l.contains("in its own keychain") {
+            return Self::KeychainAccess(e.to_string());
+        }
         if ["keychain", "key vault", "secret service", "secret store", "user canceled", "user cancelled", "interaction is not allowed"].iter().any(|k| l.contains(k)) {
             return Self::Keychain(e.to_string());
         }
@@ -12420,6 +12427,17 @@ impl InitFailure {
                 ),
                 true,
             ),
+            Self::KeychainAccess(e) => (
+                "Ligus needs your permission to use its keychain",
+                format!(
+                    "{}\n\nChoose Try again. When macOS asks whether Ligus may use \"ai.ligus.secrets.unlock\", enter your login \
+                     password and choose Always Allow; Ligus then fixes the item so it doesn't ask again. If macOS asks for the \
+                     \"ligus\" keychain password instead, choose Cancel: that one is random and only Ligus knows it. \
+                     Your keys are still in the keychain.",
+                    keychain_access_detail(e)
+                ),
+                true,
+            ),
             Self::DiskSpace(e) => (
                 "Ligus needs more disk space",
                 format!("Ligus has to upgrade its database once, and there isn't room: {e}.\n\nFree up space on this disk, then choose Try again."),
@@ -12432,6 +12450,16 @@ impl InitFailure {
             ),
         }
     }
+}
+
+/// The sentence of a keychain-access error that says what happened (the
+/// wrapper around it names the opt-in to plain files, which isn't the fix
+/// here).
+fn keychain_access_detail(e: &str) -> String {
+    let start = e.find("macOS didn't let Ligus").unwrap_or(0);
+    let rest = &e[start..];
+    let end = rest.find(". ").map_or(rest.len(), |i| i + 1);
+    rest[..end].trim_end_matches(')').to_string()
 }
 
 /// What the person chose in the startup recovery dialog.
@@ -19140,6 +19168,31 @@ mod init_recovery_tests {
         assert_eq!(asked, vec![InitFailure::Keychain(errs[0].clone())]);
         let (title, text, retry) = asked[0].explain();
         assert!(retry && title.contains("keychain") && text.contains("Try again"));
+    }
+
+    /// A keychain that macOS won't let this build read gets its own
+    /// dialog: what happened, Always Allow, Try again, and no raw error.
+    #[test]
+    fn a_refused_keychain_read_explains_always_allow() {
+        let e = "keychain: the Ligus keychain isn't available (keychain: macOS didn't let Ligus read its keychain unlock password \
+                 (it was saved by a different Ligus build, or the prompt was denied). Run Ligus again, enter your login password when macOS asks about \
+                 ai.ligus.secrets.unlock and choose Always Allow). Ligus doesn't move its secrets into plain files on its own: \
+                 fix the keychain, or set LIGUS_SECRET_BACKEND=file to keep them in owner-only files under the data dir";
+        let f = InitFailure::of(e);
+        assert!(matches!(f, InitFailure::KeychainAccess(_)), "{f:?}");
+        let (title, text, retry) = f.explain();
+        assert!(retry && title.contains("keychain"), "{title}");
+        assert!(
+            text.starts_with("macOS didn't let Ligus read its keychain unlock password (it was saved by a different Ligus build, or the prompt was denied)."),
+            "{text}"
+        );
+        assert!(text.contains("Always Allow") && text.contains("Try again") && text.contains("choose Cancel"), "{text}");
+        assert!(!text.contains("LIGUS_SECRET_BACKEND") && !text.to_ascii_lowercase().contains("delete"), "{text}");
+        let inner = "keychain: macOS didn't let Ligus use seed:device in its own keychain (ai.ligus.secrets): the item was saved by a different Ligus build.";
+        assert!(matches!(InitFailure::of(inner), InitFailure::KeychainAccess(_)));
+        // The genuinely missing password keeps the general keychain dialog.
+        let missing = "keychain: the Ligus keychain's unlock password is missing from the login keychain";
+        assert!(matches!(InitFailure::of(missing), InitFailure::Keychain(_)));
     }
 
     #[test]

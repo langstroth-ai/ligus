@@ -29,9 +29,17 @@
 //! it satisfies that requirement). Even an agent that talked a user into
 //! allowing it would get a password for a file it can't open. A development
 //! build is pinned by its code hash, so every rebuild asks once for the login
-//! keychain password. On Linux the Secret Service is a D-Bus session
-//! service the bubblewrap profile never binds, and `DBUS_SESSION_BUS_ADDRESS`
-//! is outside the child env allow-list.
+//! keychain password.
+//!
+//! The unlock password is read once per process, and a signed release
+//! repairs items another Ligus build saved (a test or development build):
+//! after one Allow it re-creates them under its own access list, the new
+//! item before the old one goes, so macOS stops asking. Development builds
+//! never rewrite an access list. See `MacKeychain` (macOS only).
+//!
+//! On Linux the Secret Service is a D-Bus session service the bubblewrap
+//! profile never binds, and `DBUS_SESSION_BUS_ADDRESS` is outside the child
+//! env allow-list.
 //!
 //! Backend selection is device-local (`LIGUS_SECRET_BACKEND`, or the OS
 //! default); it never affects what a fold decides.
@@ -468,29 +476,186 @@ impl SecretStore for SystemdCreds {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-pub use mac::MacKeychain;
+pub use mac::{KeychainAccess, MacKeychain};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use security_framework::os::macos::keychain::{CreateOptions, KeychainSettings, SecKeychain};
     use security_framework::os::macos::passwords::find_generic_password;
+
+    /// `errSecItemNotFound`.
+    pub(crate) const NOT_FOUND: i32 = -25300;
+
+    /// Why a keychain read failed, from its OSStatus.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Denial {
+        /// The item isn't there (`errSecItemNotFound`).
+        NotFound,
+        /// macOS asked and access wasn't given: Deny or Cancel on the
+        /// prompt, a wrong password, or the item's access list refused it
+        /// (`errSecUserCanceled`, `errSecAuthFailed`, `errSecNoAccessForItem`,
+        /// `errAuthorizationDenied`, `errAuthorizationCanceled`).
+        Refused,
+        /// macOS would have to ask and can't here: no desktop session (SSH,
+        /// a launchd service), or prompts were turned off for the call
+        /// (`errSecInteractionNotAllowed`, `errSecInteractionRequired`).
+        NoUi,
+        /// Anything else.
+        Other,
+    }
+
+    pub(crate) fn classify(code: i32) -> Denial {
+        match code {
+            NOT_FOUND => Denial::NotFound,
+            -128 | -25293 | -25243 | -60005 | -60006 => Denial::Refused,
+            -25308 | -25315 => Denial::NoUi,
+            _ => Denial::Other,
+        }
+    }
+
+    /// The error for a failed read of the unlock password (`service` is the
+    /// unlock item's service, `ai.ligus.secrets.unlock`). What happened,
+    /// why, and what to do; never "delete the keychain" (the device's keys
+    /// are in it).
+    pub(crate) fn unlock_error(code: i32, service: &str) -> SecretError {
+        let message = match classify(code) {
+            Denial::NotFound => "the Ligus keychain's unlock password is missing from the login keychain".to_string(),
+            Denial::Refused => format!(
+                "macOS didn't let Ligus read its keychain unlock password (it was saved by a different Ligus build, or the prompt was denied). \
+                 Run Ligus again (the app, or the same ligus command with the same data dir), enter your login password when macOS asks \
+                 about {service} and choose Always Allow"
+            ),
+            Denial::NoUi => format!(
+                "macOS didn't let Ligus read its keychain unlock password: it has to ask you first and can't here \
+                 (no desktop session, for example over SSH or as a background service, or the login keychain is locked). \
+                 Run it once in this Mac's desktop session (the app, or the same ligus command and data dir in a desktop terminal), \
+                 enter your login password when macOS asks about {service} and choose Always Allow"
+            ),
+            Denial::Other => format!("couldn't read the Ligus keychain's unlock password from the login keychain (OSStatus {code})"),
+        };
+        backend_err("keychain", message)
+    }
+
+    /// The error for a refused read or write of an item inside the Ligus
+    /// keychain (`service` is `ai.ligus.secrets`).
+    pub(crate) fn item_error(code: i32, service: &str, account: &str) -> SecretError {
+        let message = match classify(code) {
+            Denial::Refused | Denial::NoUi => format!(
+                "macOS didn't let Ligus use {account} in its own keychain ({service}): it was saved by a different Ligus build, or the \
+                 prompt was denied. If macOS asks for the \"ligus\" keychain password, choose Cancel: that password is a random one only \
+                 Ligus knows. A signed release of the Ligus app repairs its items by itself, without asking; the ligus CLI and development \
+                 builds don't, so use the build that saved the item (ligus doctor lists the affected items)"
+            ),
+            _ => format!("the Ligus keychain refused {account} (OSStatus {code})"),
+        };
+        backend_err("keychain", message)
+    }
+
+    /// Run `f` with keychain prompts turned off for this process (a refused
+    /// read then fails with `errSecInteractionNotAllowed` or
+    /// `errSecAuthFailed` instead of asking). Leaves the setting as it found
+    /// it. The setting is process-wide, so a keychain call on another thread
+    /// that needs a prompt fails during `f` instead of asking; callers keep
+    /// `f` to a few lookups.
+    pub(crate) fn silently<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = match SecKeychain::user_interaction_allowed() {
+            Ok(true) => SecKeychain::disable_user_interaction().ok(),
+            _ => None,
+        };
+        f()
+    }
+
+    /// Whether this build may rewrite the access lists of Ligus's keychain
+    /// items: only a genuine release, one that has a designated requirement
+    /// (`requirement`: Apple anchor, Ligus's identifier, Ligus's team id) and
+    /// whose running code satisfies it (`check`). Then the new access list
+    /// names this binary, which the keychain records by that same
+    /// requirement, so a repair can only ever trust Ligus's own signed
+    /// builds. A development, ad-hoc or unsigned build has no requirement
+    /// and never rewrites an access list (it would pin trust to an
+    /// unverified binary's code hash).
+    pub(crate) fn repair_binary(
+        requirement: Option<String>,
+        check: impl FnOnce(&str) -> Result<(), SecretError>,
+        binary: PathBuf,
+    ) -> Option<Trust> {
+        use sha2::{Digest, Sha256};
+        let req = requirement?;
+        check(&req).ok()?;
+        let mark = format!("ligus-trust:{}", ligus_core::keys::hex(&Sha256::digest(req.as_bytes())[..8]));
+        Some(Trust { binary, mark })
+    }
+
+    /// The release a repair trusts: its binary, and the mark (the item
+    /// comment) that says an item was saved under this release's access list
+    /// (the same mark for every build signed the same way). A mark only
+    /// decides whether to repair: a forged one can stop a repair, never
+    /// widen an access list.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Trust {
+        pub(crate) binary: PathBuf,
+        pub(crate) mark: String,
+    }
+
+    /// Who decides whether this process repairs access lists.
+    #[derive(Clone)]
+    enum Repair {
+        /// [`repair_binary`] for the running binary.
+        Detect,
+        /// Tests: act as a release whose binary is this one (or as a
+        /// development build, `None`).
+        #[cfg(test)]
+        As(Option<PathBuf>),
+    }
+
+    /// The unlocked keychain and its password, kept after the first unlock
+    /// so later reads and writes don't go back to the login keychain (each
+    /// of those could be a system prompt).
+    #[derive(Default)]
+    struct Unlocked {
+        kc: Option<SecKeychain>,
+        password: Option<Zeroizing<String>>,
+    }
 
     /// A dedicated keychain file (`<data dir>/secrets/ligus.keychain-db`),
     /// unlocked with a random password that is itself a login-keychain item
     /// (`<service>.unlock`). That item's access list trusts only the Ligus
     /// binary ([`acl`]), not whatever process happened to create it. See the
     /// module docs for why Ligus's items aren't in the login keychain.
+    ///
+    /// The unlock password is read from the login keychain once per process
+    /// and kept (zeroized on drop) with the open keychain; a keychain that
+    /// got locked again is unlocked with it, and only if that fails is the
+    /// login keychain asked again.
+    ///
+    /// A genuine signed release also repairs access lists left by another
+    /// Ligus build (a test build pinned by code hash, a development build):
+    /// the unlock item is re-created with the same password under an access
+    /// list that trusts this release ([`replace_item`], never leaving
+    /// a moment without one), and items inside the Ligus keychain get the
+    /// same access list through the keychain password Ligus already holds
+    /// (`SecKeychainItemSetAccessWithPassword`), so nothing asks for the
+    /// random "ligus" keychain password nobody knows.
     pub struct MacKeychain {
         path: PathBuf,
         service: String,
         /// The keychain holding the unlock password: the login keychain
         /// (`None`), or a throwaway keychain in tests.
         unlock_in: Option<PathBuf>,
-        lock: Mutex<()>,
+        state: Mutex<Unlocked>,
+        repair: Repair,
+        /// How many times the unlock password was looked up (tests).
+        lookups: AtomicUsize,
     }
 
     impl MacKeychain {
+        fn handle(path: PathBuf, service: &str, unlock_in: Option<PathBuf>, repair: Repair) -> Self {
+            Self { path, service: service.to_string(), unlock_in, state: Mutex::new(Unlocked::default()), repair, lookups: AtomicUsize::new(0) }
+        }
+
         /// The keychain for `data_dir` (created on first use).
         pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, SecretError> {
             Self::open_with(data_dir.as_ref().join("secrets").join("ligus.keychain-db"), SERVICE)
@@ -498,7 +663,7 @@ mod mac {
 
         /// A keychain at `path` with its own service name.
         pub fn open_with(path: PathBuf, service: &str) -> Result<Self, SecretError> {
-            let me = Self { path, service: service.to_string(), unlock_in: None, lock: Mutex::new(()) };
+            let me = Self::handle(path, service, None, Repair::Detect);
             me.keychain()?;
             Ok(me)
         }
@@ -508,7 +673,14 @@ mod mac {
         /// throwaway pair, so no test ever writes to the login keychain).
         #[cfg(test)]
         pub(crate) fn open_with_unlock_in(path: PathBuf, service: &str, unlock_in: PathBuf) -> Result<Self, SecretError> {
-            let me = Self { path, service: service.to_string(), unlock_in: Some(unlock_in), lock: Mutex::new(()) };
+            Self::open_as(path, service, unlock_in, None)
+        }
+
+        /// [`Self::open_with_unlock_in`], acting as a release whose binary
+        /// is `release` (`Some`) or as a development build (`None`).
+        #[cfg(test)]
+        pub(crate) fn open_as(path: PathBuf, service: &str, unlock_in: PathBuf, release: Option<PathBuf>) -> Result<Self, SecretError> {
+            let me = Self::handle(path, service, Some(unlock_in), Repair::As(release));
             me.keychain()?;
             Ok(me)
         }
@@ -519,37 +691,127 @@ mod mac {
             format!("keychain:{}", ligus_core::keys::hex(&d[..8]))
         }
 
+        /// Where a repair keeps its copy of the unlock password while it
+        /// replaces the item (read when the main item is missing, so an
+        /// interrupted repair loses nothing).
+        fn spare_account(&self) -> String {
+            format!("{}.spare", self.unlock_account())
+        }
+
         fn unlock_service(&self) -> String {
             format!("{}.unlock", self.service)
         }
 
-        /// The keychains to look the unlock password up in (`None`: the
-        /// user's search list, where the login keychain is).
-        fn unlock_search(&self) -> Result<Option<Vec<SecKeychain>>, SecretError> {
-            match &self.unlock_in {
-                None => Ok(None),
-                Some(p) => Ok(Some(vec![SecKeychain::open(p).map_err(|e| backend_err("keychain", e.to_string()))?])),
+        /// The binary to trust when repairing access lists, if this build
+        /// may repair them ([`repair_binary`]).
+        fn repair_as(&self) -> Option<Trust> {
+            match &self.repair {
+                Repair::Detect => {
+                    let binary = acl::ligus_binary().ok()?;
+                    repair_binary(acl::requirement_for(&binary), acl::check_self_against, binary)
+                }
+                #[cfg(test)]
+                Repair::As(b) => b.clone().map(|binary| Trust { binary, mark: "ligus-trust:test".into() }),
             }
         }
 
-        fn find_unlock(&self) -> Option<(Vec<u8>, security_framework::os::macos::keychain_item::SecKeychainItem)> {
-            let search = self.unlock_search().ok()?;
-            find_generic_password(search.as_deref(), &self.unlock_service(), &self.unlock_account())
-                .ok()
-                .map(|(pw, item)| (pw.to_vec(), item))
+        /// How many times the unlock password was looked up (tests).
+        #[cfg(test)]
+        pub(crate) fn unlock_lookups(&self) -> usize {
+            self.lookups.load(Ordering::Relaxed)
+        }
+
+        /// The unlock password, from the main item or (after an interrupted
+        /// repair) the spare: the password and whether it came from the
+        /// spare. `Err` is the main item's OSStatus.
+        fn lookup(&self) -> Result<(Zeroizing<String>, bool), i32> {
+            self.lookups.fetch_add(1, Ordering::Relaxed);
+            let service = self.unlock_service();
+            let read = |account: &str| {
+                acl::find(self.unlock_in.as_deref(), &service, account, true)
+                    .map(|(pw, _)| Zeroizing::new(String::from_utf8_lossy(&pw.unwrap_or_default()).into_owned()))
+            };
+            match read(&self.unlock_account()) {
+                Ok(pw) => Ok((pw, false)),
+                // A spare that exists but can't be read isn't "missing".
+                Err(NOT_FOUND) => read(&self.spare_account()).map(|pw| (pw, true)),
+                Err(code) => Err(code),
+            }
+        }
+
+        /// Read the unlock password: the password, and whether its item
+        /// should be re-created under this release's access list.
+        fn read_unlock(&self, release: bool) -> Result<(Zeroizing<String>, bool), SecretError> {
+            let fail = |code| unlock_error(code, &self.unlock_service());
+            if !release {
+                return self.lookup().map(|(pw, _)| (pw, false)).map_err(fail);
+            }
+            // A release asks without a prompt first: if that works the item
+            // already trusts it.
+            match silently(|| self.lookup()) {
+                Ok((pw, spare)) => return Ok((pw, spare)),
+                Err(NOT_FOUND) => return Err(fail(NOT_FOUND)),
+                Err(_) => {}
+            }
+            // macOS asks once (Allow is enough). If the item still can't be
+            // read without a prompt afterwards (saved by another build, not
+            // Always Allowed), the repair makes sure it never asks again; a
+            // login keychain that was only locked needs no repair.
+            let (pw, spare) = self.lookup().map_err(fail)?;
+            Ok((pw, spare || silently(|| self.lookup()).is_err()))
         }
 
         /// Open (or create) and unlock the keychain.
         fn keychain(&self) -> Result<SecKeychain, SecretError> {
             let err = |e: security_framework::base::Error| backend_err("keychain", e.to_string());
-            let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            let password = self.find_unlock().map(|(pw, _)| Zeroizing::new(String::from_utf8_lossy(&pw).into_owned()));
-            if self.path.exists() {
-                let Some(pw) = password else {
-                    return Err(backend_err("keychain", "the Ligus keychain's unlock password is missing from the login keychain"));
-                };
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if let (Some(kc), Some(pw)) = (state.kc.as_ref(), state.password.as_ref()) {
+                let mut kc = kc.clone();
+                // Unlocking an unlocked keychain is a no-op; a locked one
+                // (sleep, `security lock-keychain`) opens again with the
+                // password already held.
+                if kc.unlock(Some(pw)).is_ok() {
+                    return Ok(kc);
+                }
+                *state = Unlocked::default();
+            }
+            let release = self.repair_as();
+            // Only a keychain file that is certainly absent is created anew
+            // (which removes stale unlock items); one that can't be checked
+            // (no permission) is an error, never a reason to start over.
+            if self.path.try_exists()? {
+                let (pw, replace) = self.read_unlock(release.is_some())?;
                 let mut kc = SecKeychain::open(&self.path).map_err(err)?;
                 kc.unlock(Some(&pw)).map_err(err)?;
+                if let Some(trust) = &release {
+                    // One repair at a time across processes (the desktop and
+                    // its git credential helper share the keychain).
+                    let _lock = RepairLock::take(&self.path);
+                    // An unlock of an unlocked keychain doesn't check the
+                    // password, so it is checked on an item before it is
+                    // ever written back.
+                    let verified = !replace || acl::password_opens(&self.path, pw.as_bytes());
+                    if replace && !verified {
+                        tracing::warn!(target: "secrets", "kept the keychain unlock item as it was: its password couldn't be checked against the Ligus keychain");
+                    }
+                    if replace && verified {
+                        let items = LoginItems { me: self, binary: &trust.binary };
+                        match replace_item(&items, &self.unlock_account(), &self.spare_account(), pw.as_bytes()) {
+                            Ok(()) => {
+                                tracing::info!(target: "secrets", "the keychain unlock item now trusts this Ligus release")
+                            }
+                            Err(e) => {
+                                tracing::warn!(target: "secrets", "kept the keychain unlock item as it was ({e}); macOS may ask again next launch")
+                            }
+                        }
+                    }
+                    let fixed = repair_items(&kc, &self.path, &self.service, &pw, trust);
+                    if fixed > 0 {
+                        tracing::info!(target: "secrets", "{fixed} item(s) in the Ligus keychain now trust this Ligus release");
+                    }
+                }
+                state.kc = Some(kc.clone());
+                state.password = Some(pw);
                 return Ok(kc);
             }
             if let Some(dir) = self.path.parent() {
@@ -568,8 +830,12 @@ mod mac {
             // requirement: Apple-anchored, Ligus's bundle id and team id).
             let binary = acl::ligus_binary()?;
             acl::check_self(&binary)?;
-            if let Some((_, stale)) = self.find_unlock() {
-                stale.delete(); // a password for a keychain file that is gone
+            let trusted = release.map(|t| t.binary).unwrap_or(binary);
+            // (only reached when the keychain file is certainly absent)
+            for account in [self.unlock_account(), self.spare_account()] {
+                if let Ok((_, stale)) = acl::find(self.unlock_in.as_deref(), &self.unlock_service(), &account, false) {
+                    let _ = stale.delete(); // a password for a keychain file that is gone
+                }
             }
             acl::add_generic_password(
                 self.unlock_in.as_deref(),
@@ -577,7 +843,7 @@ mod mac {
                 &self.unlock_account(),
                 "Ligus keychain unlock",
                 pw.as_bytes(),
-                &binary,
+                &trusted,
             )
             .map_err(|e| backend_err("keychain", e))?;
             let mut kc = CreateOptions::new().password(&pw).prompt_user(false).create(&self.path).map_err(err)?;
@@ -587,14 +853,18 @@ mod mac {
             settings.set_lock_on_sleep(false);
             settings.set_lock_interval(None);
             let _ = kc.set_settings(&settings);
+            state.kc = Some(kc.clone());
+            state.password = Some(pw);
             Ok(kc)
         }
 
         /// Remove the keychain file and its unlock password (tests, and
         /// `ligus doctor` resets).
         pub fn destroy(self) -> Result<(), SecretError> {
-            if let Some((_, item)) = self.find_unlock() {
-                item.delete();
+            for account in [self.unlock_account(), self.spare_account()] {
+                if let Ok((_, item)) = acl::find(self.unlock_in.as_deref(), &self.unlock_service(), &account, false) {
+                    let _ = item.delete();
+                }
             }
             match std::fs::remove_file(&self.path) {
                 Ok(()) => Ok(()),
@@ -610,12 +880,287 @@ mod mac {
         /// A handle that doesn't open anything (tests probing cleanup).
         #[cfg(test)]
         pub(crate) fn unopened(path: PathBuf, service: &str, unlock_in: Option<PathBuf>) -> Self {
-            Self { path, service: service.to_string(), unlock_in, lock: Mutex::new(()) }
+            Self::handle(path, service, unlock_in, Repair::Detect)
         }
 
-        /// Whether the unlock password item exists in the login keychain.
+        /// Whether the unlock password item exists in the login keychain
+        /// (looked up without reading it: never a prompt).
         pub fn unlock_item_exists(&self) -> bool {
-            self.find_unlock().is_some()
+            [self.unlock_account(), self.spare_account()]
+                .iter()
+                .any(|a| acl::find(self.unlock_in.as_deref(), &self.unlock_service(), a, false).is_ok())
+        }
+
+        /// Whether this build can use the Ligus keychain for `data_dir`
+        /// without macOS asking (`ligus doctor`). Never prompts: every read
+        /// runs with keychain prompts turned off, and nothing is written.
+        pub fn access(data_dir: &Path) -> KeychainAccess {
+            Self::handle(data_dir.join("secrets").join("ligus.keychain-db"), SERVICE, None, Repair::Detect).probe()
+        }
+
+        /// [`Self::access`] for this handle.
+        pub(crate) fn probe(&self) -> KeychainAccess {
+            if !self.path.exists() {
+                return KeychainAccess::NoKeychain;
+            }
+            silently(|| {
+                let pw = match self.lookup() {
+                    Ok((pw, _)) => pw,
+                    Err(code) => {
+                        return match classify(code) {
+                            Denial::NotFound => KeychainAccess::UnlockMissing,
+                            Denial::Refused | Denial::NoUi => KeychainAccess::UnlockNotTrusted,
+                            Denial::Other => KeychainAccess::Other(format!("OSStatus {code}")),
+                        }
+                    }
+                };
+                let mut kc = match SecKeychain::open(&self.path) {
+                    Ok(kc) => kc,
+                    Err(e) => return KeychainAccess::Other(e.to_string()),
+                };
+                if let Err(e) = kc.unlock(Some(&pw)) {
+                    return KeychainAccess::Other(e.to_string());
+                }
+                let untrusted = item_accounts(&kc, &self.service)
+                    .into_iter()
+                    .map(|(a, _)| a)
+                    .filter(|a| {
+                        acl::find(Some(&self.path), &self.service, a, true).is_err_and(|c| matches!(classify(c), Denial::Refused | Denial::NoUi))
+                    })
+                    .collect();
+                KeychainAccess::Trusted { untrusted }
+            })
+        }
+    }
+
+    /// What `ligus doctor` found about this build's access to the keychain.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum KeychainAccess {
+        /// No Ligus keychain in this data dir yet.
+        NoKeychain,
+        /// The unlock password is missing from the login keychain.
+        UnlockMissing,
+        /// The unlock item exists, but its access list doesn't trust this
+        /// build (macOS would ask).
+        UnlockNotTrusted,
+        /// The unlock item trusts this build; `untrusted` names the items in
+        /// the Ligus keychain that don't (saved by another build).
+        Trusted { untrusted: Vec<String> },
+        /// Something else went wrong.
+        Other(String),
+    }
+
+    /// The accounts of `service`'s items in `kc`, with their comments
+    /// (attributes only: never decrypts, so never a prompt).
+    fn item_accounts(kc: &SecKeychain, service: &str) -> Vec<(String, Option<String>)> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit, SearchResult};
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .keychains(std::slice::from_ref(kc))
+            .service(service)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search()
+            .unwrap_or_default();
+        let mut accounts: Vec<_> = found
+            .iter()
+            .filter_map(|r| match r {
+                SearchResult::Dict(_) => r.simplify_dict().and_then(|d| Some((d.get("acct")?.clone(), d.get("icmt").cloned()))),
+                _ => None,
+            })
+            .collect();
+        accounts.sort();
+        accounts
+    }
+
+    /// An exclusive lock on the keychain's repairs, across processes (an
+    /// `flock` on a file next to the keychain), released on drop. Taking it
+    /// can fail (then the repair runs unlocked, as before).
+    struct RepairLock(Option<std::fs::File>);
+
+    impl RepairLock {
+        fn take(keychain: &Path) -> Self {
+            use std::os::unix::io::AsRawFd;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(keychain.with_file_name("ligus.keychain-repair.lock"))
+                .ok()
+                .filter(|f| unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0);
+            Self(file)
+        }
+    }
+
+    impl Drop for RepairLock {
+        fn drop(&mut self) {
+            use std::os::unix::io::AsRawFd;
+            if let Some(f) = &self.0 {
+                unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+            }
+        }
+    }
+
+    /// Where a repair keeps an item's copy while it replaces the item (its
+    /// account unchanged, under this service).
+    fn spare_service(service: &str) -> String {
+        format!("{service}.spare")
+    }
+
+    /// Re-create every item of `service` in the Ligus keychain that wasn't
+    /// saved under this release's access list (no `trust.mark`), with the
+    /// same value, so macOS never asks for the random "ligus" keychain
+    /// password. The old item is made readable first with the keychain's own
+    /// password, which Ligus holds (`SecKeychainItemSetAccessWithPassword`:
+    /// no prompt), then replaced by [`replace_item`] (the new copy is written
+    /// before the old one goes). Also finishes a repair that was interrupted
+    /// (a spare copy left behind). Returns how many items were repaired;
+    /// failures are logged and keep the item as it was.
+    fn repair_items(kc: &SecKeychain, path: &Path, service: &str, password: &str, trust: &Trust) -> usize {
+        let mut fixed = 0;
+        let spares = spare_service(service);
+        let mains = item_accounts(kc, service);
+        for (account, _) in item_accounts(kc, &spares) {
+            if mains.iter().any(|(a, _)| *a == account) {
+                continue; // repaired below, or already marked: its spare goes then
+            }
+            let items = InnerItems { path, service, account: &account, trust };
+            match items.read("spare") {
+                Some(value) => match replace_item(&items, "main", "spare", &value) {
+                    Ok(()) => fixed += 1,
+                    Err(e) => {
+                        tracing::warn!(target: "secrets", "couldn't finish repairing {account} in the Ligus keychain: {e}")
+                    }
+                },
+                None => {
+                    tracing::warn!(target: "secrets", "a spare copy of {account} in the Ligus keychain can't be read")
+                }
+            }
+        }
+        for (account, mark) in mains {
+            let items = InnerItems { path, service, account: &account, trust };
+            if mark.as_deref() == Some(trust.mark.as_str()) {
+                if items.exists("spare") {
+                    let _ = items.delete("spare");
+                }
+                continue;
+            }
+            let repaired = acl::find(Some(path), service, &account, false)
+                .map_err(|c| format!("OSStatus {c}"))
+                .and_then(|(_, item)| item.trust_also(&trust.binary, password.as_bytes()))
+                .and_then(|()| items.read("main").ok_or_else(|| "still unreadable".to_string()))
+                .and_then(|value| replace_item(&items, "main", "spare", &value));
+            match repaired {
+                Ok(()) => fixed += 1,
+                Err(e) => {
+                    tracing::warn!(target: "secrets", "couldn't repair the access of {account} in the Ligus keychain: {e}")
+                }
+            }
+        }
+        fixed
+    }
+
+    /// One item in the Ligus keychain (`main`) and its spare copy
+    /// (`spare`), as [`replace_item`] uses them.
+    struct InnerItems<'a> {
+        path: &'a Path,
+        service: &'a str,
+        account: &'a str,
+        trust: &'a Trust,
+    }
+
+    impl InnerItems<'_> {
+        fn service_of(&self, which: &str) -> String {
+            if which == "spare" {
+                spare_service(self.service)
+            } else {
+                self.service.to_string()
+            }
+        }
+    }
+
+    impl ItemCopies for InnerItems<'_> {
+        fn exists(&self, which: &str) -> bool {
+            acl::find(Some(self.path), &self.service_of(which), self.account, false).is_ok()
+        }
+        fn read(&self, which: &str) -> Option<Zeroizing<Vec<u8>>> {
+            silently(|| acl::find(Some(self.path), &self.service_of(which), self.account, true)).ok().and_then(|(v, _)| v)
+        }
+        fn create(&self, which: &str, secret: &[u8]) -> Result<(), String> {
+            let service = self.service_of(which);
+            acl::add_generic_password_marked(Some(self.path), &service, self.account, &service, secret, &self.trust.binary, Some(&self.trust.mark))
+        }
+        fn delete(&self, which: &str) -> Result<(), String> {
+            let (_, item) = acl::find(Some(self.path), &self.service_of(which), self.account, false).map_err(|c| format!("OSStatus {c}"))?;
+            item.delete().map_err(|c| format!("OSStatus {c}"))
+        }
+    }
+
+    /// An item and its spare copy, as [`replace_item`] uses them (`account`
+    /// names which).
+    pub(crate) trait ItemCopies {
+        /// Whether `account` exists (without reading it).
+        fn exists(&self, account: &str) -> bool;
+        /// `account`'s password, read without a prompt.
+        fn read(&self, account: &str) -> Option<Zeroizing<Vec<u8>>>;
+        /// Add `account` with `secret` under this release's access list.
+        fn create(&self, account: &str, secret: &[u8]) -> Result<(), String>;
+        fn delete(&self, account: &str) -> Result<(), String>;
+    }
+
+    /// Re-create the item `main` (the unlock item, or an item in the Ligus
+    /// keychain) with the same `password` (its value) under this release's
+    /// access list, never leaving a moment in which no item holds it: the new copy is written (to `spare`) and read back
+    /// before the old item is deleted, and the spare goes only once the new
+    /// main item reads back. A step that fails stops the repair with every
+    /// copy written so far kept (a start that finds only the spare reads
+    /// it, and repairs again).
+    pub(crate) fn replace_item(items: &dyn ItemCopies, main: &str, spare: &str, password: &[u8]) -> Result<(), String> {
+        let holds = |account: &str| items.read(account).is_some_and(|v| v.as_slice() == password);
+        if items.exists(main) {
+            if !holds(spare) {
+                if items.exists(spare) {
+                    items.delete(spare)?;
+                }
+                items.create(spare, password)?;
+                if !holds(spare) {
+                    let _ = items.delete(spare);
+                    return Err("the new copy of the unlock password didn't read back".into());
+                }
+            }
+            // The spare stays if the old item can't be removed: another
+            // process may be mid-repair, and the next start reuses it.
+            items.delete(main).map_err(|e| format!("couldn't remove the old item: {e}"))?;
+        } else if !holds(spare) {
+            return Err("no copy of the unlock password to repair from".into());
+        }
+        items.create(main, password)?;
+        if !holds(main) {
+            return Err("the new unlock item didn't read back".into());
+        }
+        items.delete(spare).map_err(|e| format!("the repair worked, but its spare copy stayed: {e}"))
+    }
+
+    /// The real unlock items, in the login keychain (or the test stand-in).
+    struct LoginItems<'a> {
+        me: &'a MacKeychain,
+        binary: &'a Path,
+    }
+
+    impl ItemCopies for LoginItems<'_> {
+        fn exists(&self, account: &str) -> bool {
+            acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, false).is_ok()
+        }
+        fn read(&self, account: &str) -> Option<Zeroizing<Vec<u8>>> {
+            silently(|| acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, true)).ok().and_then(|(pw, _)| pw)
+        }
+        fn create(&self, account: &str, secret: &[u8]) -> Result<(), String> {
+            acl::add_generic_password(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, "Ligus keychain unlock", secret, self.binary)
+        }
+        fn delete(&self, account: &str) -> Result<(), String> {
+            let (_, item) =
+                acl::find(self.me.unlock_in.as_deref(), &self.me.unlock_service(), account, false).map_err(|c| format!("OSStatus {c}"))?;
+            item.delete().map_err(|c| format!("OSStatus {c}"))
         }
     }
 
@@ -625,20 +1170,41 @@ mod mac {
         }
         fn get(&self, id: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
             let kc = self.keychain()?;
-            match find_generic_password(Some(&[kc]), &self.service, &id.account()) {
+            match find_generic_password(Some(std::slice::from_ref(&kc)), &self.service, &id.account()) {
                 Ok((pw, _)) => Ok(Some(Zeroizing::new(pw.to_vec()))),
-                Err(e) if e.code() == -25300 => Ok(None), // errSecItemNotFound
-                Err(e) => Err(backend_err("keychain", e.to_string())),
+                // A repair that was interrupted left the value in its spare.
+                Err(e) if e.code() == NOT_FOUND => match find_generic_password(Some(&[kc]), &spare_service(&self.service), &id.account()) {
+                    Ok((pw, _)) => Ok(Some(Zeroizing::new(pw.to_vec()))),
+                    Err(_) => Ok(None),
+                },
+                Err(e) => Err(item_error(e.code(), &self.service, &id.account())),
             }
         }
         fn put(&self, id: &SecretId, value: &[u8]) -> Result<(), SecretError> {
             let kc = self.keychain()?;
-            kc.set_generic_password(&self.service, &id.account(), value).map_err(|e| backend_err("keychain", e.to_string()))
+            let account = id.account();
+            match acl::find(Some(&self.path), &self.service, &account, false) {
+                // A new item trusts the Ligus binary explicitly, like the
+                // unlock item (a release by its designated requirement).
+                // (marked, for a release, so it is never repaired).
+                Err(NOT_FOUND) => {
+                    let (binary, mark) = match self.repair_as() {
+                        Some(t) => (t.binary, Some(t.mark)),
+                        None => (acl::ligus_binary()?, None),
+                    };
+                    acl::add_generic_password_marked(Some(&self.path), &self.service, &account, &self.service, value, &binary, mark.as_deref())
+                        .map_err(|e| backend_err("keychain", e))
+                }
+                _ => kc.set_generic_password(&self.service, &account, value).map_err(|e| item_error(e.code(), &self.service, &account)),
+            }
         }
         fn delete(&self, id: &SecretId) -> Result<(), SecretError> {
-            let kc = self.keychain()?;
-            if let Ok((_, item)) = find_generic_password(Some(&[kc]), &self.service, &id.account()) {
-                item.delete();
+            let _kc = self.keychain()?;
+            // The spare first, so a deleted secret can't come back from it.
+            for service in [spare_service(&self.service), self.service.clone()] {
+                if let Ok((_, item)) = acl::find(Some(&self.path), &service, &id.account(), false) {
+                    item.delete().map_err(|c| item_error(c, &self.service, &id.account()))?;
+                }
             }
             Ok(())
         }
@@ -662,6 +1228,7 @@ mod mac {
         use std::path::{Path, PathBuf};
 
         use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement};
+        use zeroize::Zeroizing;
 
         use super::super::{backend_err, SecretError};
 
@@ -688,6 +1255,7 @@ mod mac {
         const SERVICE: u32 = u32::from_be_bytes(*b"svce");
         const ACCOUNT: u32 = u32::from_be_bytes(*b"acct");
         const LABEL: u32 = u32::from_be_bytes(*b"labl");
+        const COMMENT: u32 = u32::from_be_bytes(*b"icmt");
         const UTF8: u32 = 0x0800_0100;
 
         #[link(name = "CoreFoundation", kind = "framework")]
@@ -696,6 +1264,13 @@ mod mac {
             fn CFArrayCreate(alloc: CFTypeRef, values: *const CFTypeRef, count: isize, callbacks: *const c_void) -> CFTypeRef;
             fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFTypeRef;
             fn CFRelease(cf: CFTypeRef);
+            fn CFArrayGetCount(array: CFTypeRef) -> isize;
+            fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
+            fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
+            #[cfg(test)]
+            fn CFStringGetLength(s: CFTypeRef) -> isize;
+            #[cfg(test)]
+            fn CFStringGetCString(s: CFTypeRef, buf: *mut c_char, len: isize, encoding: u32) -> u8;
         }
 
         #[link(name = "Security", kind = "framework")]
@@ -713,6 +1288,27 @@ mod mac {
                 access: CFTypeRef,
                 item: *mut CFTypeRef,
             ) -> OSStatus;
+            fn SecKeychainFindGenericPassword(
+                keychains: CFTypeRef,
+                service_len: u32,
+                service: *const c_char,
+                account_len: u32,
+                account: *const c_char,
+                password_len: *mut u32,
+                password: *mut *mut c_void,
+                item: *mut CFTypeRef,
+            ) -> OSStatus;
+            fn SecKeychainItemFreeContent(attrs: *mut AttributeList, data: *mut c_void) -> OSStatus;
+            fn SecKeychainItemDelete(item: CFTypeRef) -> OSStatus;
+            fn SecKeychainItemSetAccessWithPassword(item: CFTypeRef, access: CFTypeRef, password_len: u32, password: *const c_void) -> OSStatus;
+            fn SecKeychainItemCopyAccess(item: CFTypeRef, access: *mut CFTypeRef) -> OSStatus;
+            fn SecKeychainChangePassword(keychain: CFTypeRef, old_len: u32, old: *const c_void, new_len: u32, new: *const c_void) -> OSStatus;
+            fn SecAccessCopyMatchingACLList(access: CFTypeRef, authorization: CFTypeRef) -> CFTypeRef;
+            fn SecACLCopyContents(acl: CFTypeRef, apps: *mut CFTypeRef, description: *mut CFTypeRef, prompt: *mut u16) -> OSStatus;
+            fn SecACLSetContents(acl: CFTypeRef, apps: CFTypeRef, description: CFTypeRef, prompt: u16) -> OSStatus;
+            static kSecACLAuthorizationDecrypt: CFTypeRef;
+            #[cfg(test)]
+            static kSecACLAuthorizationPartitionID: CFTypeRef;
         }
 
         /// Releases a Core Foundation object when dropped.
@@ -735,6 +1331,207 @@ mod mac {
 
         fn c_path(p: &Path) -> Result<CString, String> {
             CString::new(p.as_os_str().as_bytes()).map_err(|_| "a path with a NUL byte".to_string())
+        }
+
+        /// The keychain at `path`, else the default (login) keychain.
+        fn keychain_ref(keychain: Option<&Path>) -> Result<Owned, String> {
+            let mut kc: CFTypeRef = std::ptr::null();
+            unsafe {
+                match keychain {
+                    Some(p) => status("SecKeychainOpen", SecKeychainOpen(c_path(p)?.as_ptr(), &mut kc))?,
+                    None => status("SecKeychainCopyDefault", SecKeychainCopyDefault(&mut kc))?,
+                }
+            }
+            Ok(Owned(kc))
+        }
+
+        /// An access list whose only trusted application is `trusted`.
+        fn access_for(trusted: &Path, label: &str) -> Result<Owned, String> {
+            unsafe {
+                let mut app: CFTypeRef = std::ptr::null();
+                status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
+                let app = Owned(app);
+                let apps = [app.0];
+                let list = Owned(CFArrayCreate(std::ptr::null(), apps.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
+                let desc = Owned(CFStringCreateWithBytes(std::ptr::null(), label.as_ptr(), label.len() as isize, UTF8, 0));
+                if list.0.is_null() || desc.0.is_null() {
+                    return Err("out of memory".into());
+                }
+                let mut access: CFTypeRef = std::ptr::null();
+                status("SecAccessCreate", SecAccessCreate(desc.0, list.0, &mut access))?;
+                Ok(Owned(access))
+            }
+        }
+
+        /// What [`find`] returns: the item's data (when asked for) and the item.
+        pub type Found = (Option<Zeroizing<Vec<u8>>>, Item);
+
+        /// A keychain item found by [`find`].
+        pub struct Item(Owned);
+
+        impl Item {
+            /// Delete the item; `Err` is the OSStatus.
+            pub fn delete(&self) -> Result<(), OSStatus> {
+                match unsafe { SecKeychainItemDelete(self.0 .0) } {
+                    0 => Ok(()),
+                    st => Err(st),
+                }
+            }
+
+            /// Add `trusted` to the applications the item's decrypt entries
+            /// trust (keeping the rest of its access list), authorised with
+            /// the password of the keychain the item is in, so nothing
+            /// prompts. Only for items in the Ligus keychain, whose password
+            /// Ligus holds, and only so that the item can be read once and
+            /// re-created under a clean access list. Items in a keychain file
+            /// of its own carry no partition list (the test
+            /// `the_keychain_password_is_checked_and_partition_lists_are_absent`
+            /// checks), so the access list is all that decides.
+            pub fn trust_also(&self, trusted: &Path, keychain_password: &[u8]) -> Result<(), String> {
+                unsafe {
+                    let access = self.access()?;
+                    let mut app: CFTypeRef = std::ptr::null();
+                    status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
+                    let app = Owned(app);
+                    let acls = Owned(SecAccessCopyMatchingACLList(access.0, kSecACLAuthorizationDecrypt));
+                    if acls.0.is_null() || CFArrayGetCount(acls.0) == 0 {
+                        return Err("the item has no decrypt entry".into());
+                    }
+                    for i in 0..CFArrayGetCount(acls.0) {
+                        let acl = CFArrayGetValueAtIndex(acls.0, i);
+                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) = (std::ptr::null(), std::ptr::null(), 0);
+                        status("SecACLCopyContents", SecACLCopyContents(acl, &mut apps, &mut desc, &mut prompt))?;
+                        let (apps, desc) = (Owned(apps), Owned(desc));
+                        if apps.0.is_null() {
+                            continue; // already open to any application
+                        }
+                        let mut list: Vec<CFTypeRef> = (0..CFArrayGetCount(apps.0)).map(|k| CFArrayGetValueAtIndex(apps.0, k)).collect();
+                        if list.iter().any(|a| CFEqual(*a, app.0) != 0) {
+                            continue;
+                        }
+                        list.push(app.0);
+                        let new = Owned(CFArrayCreate(std::ptr::null(), list.as_ptr(), list.len() as isize, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
+                        if new.0.is_null() {
+                            return Err("out of memory".into());
+                        }
+                        status("SecACLSetContents", SecACLSetContents(acl, new.0, desc.0, prompt))?;
+                    }
+                    self.set_access_with(&access, keychain_password)
+                }
+            }
+
+            /// The item's partition lists, decoded (tests).
+            #[cfg(test)]
+            pub fn partitions(&self) -> Result<Vec<String>, String> {
+                unsafe {
+                    let access = self.access()?;
+                    let parts = Owned(SecAccessCopyMatchingACLList(access.0, kSecACLAuthorizationPartitionID));
+                    let mut out = Vec::new();
+                    for i in 0..if parts.0.is_null() { 0 } else { CFArrayGetCount(parts.0) } {
+                        let (mut apps, mut desc, mut prompt): (CFTypeRef, CFTypeRef, u16) = (std::ptr::null(), std::ptr::null(), 0);
+                        status("SecACLCopyContents", SecACLCopyContents(CFArrayGetValueAtIndex(parts.0, i), &mut apps, &mut desc, &mut prompt))?;
+                        let (_apps, desc) = (Owned(apps), Owned(desc));
+                        if let Some(xml) = cf_string(desc.0).and_then(|h| unhex(&h)) {
+                            out.push(xml);
+                        }
+                    }
+                    Ok(out)
+                }
+            }
+
+            fn access(&self) -> Result<Owned, String> {
+                let mut access: CFTypeRef = std::ptr::null();
+                status("SecKeychainItemCopyAccess", unsafe { SecKeychainItemCopyAccess(self.0 .0, &mut access) })?;
+                Ok(Owned(access))
+            }
+
+            fn set_access_with(&self, access: &Owned, keychain_password: &[u8]) -> Result<(), String> {
+                let st = unsafe {
+                    SecKeychainItemSetAccessWithPassword(self.0 .0, access.0, keychain_password.len() as u32, keychain_password.as_ptr() as *const c_void)
+                };
+                status("SecKeychainItemSetAccessWithPassword", st)
+            }
+        }
+
+        /// Whether `password` is the password of the keychain file at
+        /// `keychain`, checked whether or not it is unlocked (an unlock of an
+        /// unlocked keychain checks nothing): a password change to the same
+        /// password, which macOS authorises only with the right one. The
+        /// password stays what it was.
+        pub fn password_opens(keychain: &Path, password: &[u8]) -> bool {
+            let Ok(kc) = keychain_ref(Some(keychain)) else { return false };
+            let len = password.len() as u32;
+            let p = password.as_ptr() as *const c_void;
+            unsafe { SecKeychainChangePassword(kc.0, len, p, len, p) == 0 }
+        }
+
+        /// A Core Foundation string's text.
+        #[cfg(test)]
+        fn cf_string(s: CFTypeRef) -> Option<String> {
+            if s.is_null() {
+                return None;
+            }
+            unsafe {
+                let len = CFStringGetLength(s);
+                let mut buf = vec![0u8; (len as usize) * 4 + 1];
+                (CFStringGetCString(s, buf.as_mut_ptr() as *mut c_char, buf.len() as isize, UTF8) != 0).then(|| {
+                    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+                    String::from_utf8_lossy(&buf[..end]).into_owned()
+                })
+            }
+        }
+
+        #[cfg(test)]
+        fn unhex(h: &str) -> Option<String> {
+            let b = h.as_bytes();
+            if !b.len().is_multiple_of(2) {
+                return None;
+            }
+            let v: Option<Vec<u8>> = b.chunks(2).map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            String::from_utf8(v?).ok()
+        }
+
+        /// The generic password `service`/`account` in `keychain` (the
+        /// user's search list when `None`), with its data when `data` (a
+        /// read the item's access list governs, so possibly a prompt) or
+        /// without (never a prompt). `Err` is the OSStatus.
+        pub fn find(keychain: Option<&Path>, service: &str, account: &str, data: bool) -> Result<Found, OSStatus> {
+            let search = match keychain {
+                None => None,
+                Some(p) => {
+                    let kc = keychain_ref(Some(p)).map_err(|_| -25294)?; // errSecNoSuchKeychain
+                    let kcs = [kc.0];
+                    let list = Owned(unsafe { CFArrayCreate(std::ptr::null(), kcs.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void) });
+                    Some((kc, list))
+                }
+            };
+            let search_ref = search.as_ref().map_or(std::ptr::null(), |(_, l)| l.0);
+            let mut len = 0u32;
+            let mut bytes: *mut c_void = std::ptr::null_mut();
+            let mut item: CFTypeRef = std::ptr::null();
+            let st = unsafe {
+                SecKeychainFindGenericPassword(
+                    search_ref,
+                    service.len() as u32,
+                    service.as_ptr() as *const c_char,
+                    account.len() as u32,
+                    account.as_ptr() as *const c_char,
+                    if data { &mut len } else { std::ptr::null_mut() },
+                    if data { &mut bytes } else { std::ptr::null_mut() },
+                    &mut item,
+                )
+            };
+            let item = Item(Owned(item));
+            if st != 0 {
+                return Err(st);
+            }
+            let secret = (data && !bytes.is_null()).then(|| unsafe {
+                let v = Zeroizing::new(std::slice::from_raw_parts(bytes as *const u8, len as usize).to_vec());
+                std::ptr::write_bytes(bytes as *mut u8, 0, len as usize);
+                SecKeychainItemFreeContent(std::ptr::null_mut(), bytes);
+                v
+            });
+            Ok((secret, item))
         }
 
         /// The Ligus binary to trust: the `.app` bundle the running
@@ -805,33 +1602,33 @@ mod mac {
             secret: &[u8],
             trusted: &Path,
         ) -> Result<(), String> {
-            unsafe {
-                let mut kc: CFTypeRef = std::ptr::null();
-                match keychain {
-                    Some(p) => status("SecKeychainOpen", SecKeychainOpen(c_path(p)?.as_ptr(), &mut kc))?,
-                    None => status("SecKeychainCopyDefault", SecKeychainCopyDefault(&mut kc))?,
-                }
-                let kc = Owned(kc);
-                let mut app: CFTypeRef = std::ptr::null();
-                status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
-                let app = Owned(app);
-                let apps = [app.0];
-                let list = Owned(CFArrayCreate(std::ptr::null(), apps.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
-                let desc = Owned(CFStringCreateWithBytes(std::ptr::null(), label.as_ptr(), label.len() as isize, UTF8, 0));
-                if list.0.is_null() || desc.0.is_null() {
-                    return Err("out of memory".into());
-                }
-                let mut access: CFTypeRef = std::ptr::null();
-                status("SecAccessCreate", SecAccessCreate(desc.0, list.0, &mut access))?;
-                let access = Owned(access);
-                let mut attrs = [
-                    Attribute { tag: SERVICE, length: service.len() as u32, data: service.as_ptr() as *mut c_void },
-                    Attribute { tag: ACCOUNT, length: account.len() as u32, data: account.as_ptr() as *mut c_void },
-                    Attribute { tag: LABEL, length: label.len() as u32, data: label.as_ptr() as *mut c_void },
-                ];
-                let mut attr_list = AttributeList { count: attrs.len() as u32, attr: attrs.as_mut_ptr() };
-                let mut item: CFTypeRef = std::ptr::null();
-                let st = SecKeychainItemCreateFromContent(
+            add_generic_password_marked(keychain, service, account, label, secret, trusted, None)
+        }
+
+        /// [`add_generic_password`], with `comment` as the item's comment.
+        pub fn add_generic_password_marked(
+            keychain: Option<&Path>,
+            service: &str,
+            account: &str,
+            label: &str,
+            secret: &[u8],
+            trusted: &Path,
+            comment: Option<&str>,
+        ) -> Result<(), String> {
+            let kc = keychain_ref(keychain)?;
+            let access = access_for(trusted, label)?;
+            let mut attrs = vec![
+                Attribute { tag: SERVICE, length: service.len() as u32, data: service.as_ptr() as *mut c_void },
+                Attribute { tag: ACCOUNT, length: account.len() as u32, data: account.as_ptr() as *mut c_void },
+                Attribute { tag: LABEL, length: label.len() as u32, data: label.as_ptr() as *mut c_void },
+            ];
+            if let Some(c) = comment {
+                attrs.push(Attribute { tag: COMMENT, length: c.len() as u32, data: c.as_ptr() as *mut c_void });
+            }
+            let mut attr_list = AttributeList { count: attrs.len() as u32, attr: attrs.as_mut_ptr() };
+            let mut item: CFTypeRef = std::ptr::null();
+            let st = unsafe {
+                SecKeychainItemCreateFromContent(
                     GENERIC_PASSWORD,
                     &mut attr_list,
                     secret.len() as u32,
@@ -839,10 +1636,10 @@ mod mac {
                     kc.0,
                     access.0,
                     &mut item,
-                );
-                drop(Owned(item));
-                status("SecKeychainItemCreateFromContent", st)
-            }
+                )
+            };
+            drop(Owned(item));
+            status("SecKeychainItemCreateFromContent", st)
         }
     }
 }
@@ -1010,6 +1807,20 @@ pub fn init_for_data_dir(data_dir: &Path, choice: Option<&str>) -> Arc<dyn Secre
     }
     set_for_data_dir(data_dir, store.clone());
     store
+}
+
+/// Run `f` with OS secret store prompts turned off for this process (macOS:
+/// a keychain read that would ask fails instead). `ligus doctor` opens the
+/// store this way so checking never prompts.
+pub fn without_prompts<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "macos")]
+    {
+        mac::silently(f)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
+    }
 }
 
 /// The store for a data dir: the one [`init_for_data_dir`] opened, else
@@ -1574,6 +2385,378 @@ esac"#,
         assert!(mac::acl::requirement_as(None, bin, Some("ai.ligus.term")).is_none());
         assert_eq!(mac::acl::requirement_as(Some("T"), bin, Some(" ")), None);
         assert_eq!(mac::acl::requirement_as(Some("T"), Path::new("/A/Ligus.app"), None), mac::acl::requirement(Some("T"), Path::new("/A/Ligus.app")));
+    }
+
+    /// Keychain read failures are told apart by their OSStatus: only a real
+    /// `errSecItemNotFound` says the unlock password is missing; a refused or
+    /// cancelled prompt, or one that can't be shown, says what to allow
+    /// instead, and nothing ever says to delete the keychain. No keychain is
+    /// touched.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_errors_say_what_happened_and_what_to_do() {
+        use mac::{classify, item_error, unlock_error, Denial};
+        assert_eq!(classify(-25300), Denial::NotFound);
+        for refused in [-128, -25293, -25243, -60005, -60006] {
+            assert_eq!(classify(refused), Denial::Refused, "{refused}");
+        }
+        for no_ui in [-25308, -25315] {
+            assert_eq!(classify(no_ui), Denial::NoUi, "{no_ui}");
+        }
+        assert_eq!(classify(-34018), Denial::Other);
+        let svc = "ai.ligus.secrets.unlock";
+        let missing = unlock_error(-25300, svc).to_string();
+        assert!(missing.contains("missing from the login keychain"), "{missing}");
+        for code in [-128, -25293, -25308] {
+            let e = unlock_error(code, svc).to_string();
+            assert!(!e.contains("missing"), "{code}: {e}");
+            assert!(e.contains("didn't let Ligus read its keychain unlock password") && e.contains(svc) && e.contains("Always Allow"), "{code}: {e}");
+        }
+        assert!(unlock_error(-128, svc).to_string().contains("saved by a different Ligus build, or the prompt was denied"));
+        assert!(unlock_error(-128, svc).to_string().contains("same data dir"));
+        assert!(unlock_error(-25308, svc).to_string().contains("SSH"));
+        assert!(unlock_error(-1, svc).to_string().contains("OSStatus -1"));
+        let inner = item_error(-25308, "ai.ligus.secrets", "seed:device").to_string();
+        assert!(inner.contains("seed:device") && inner.contains("choose Cancel") && inner.contains("repairs") && inner.contains("CLI"), "{inner}");
+        for e in [missing, inner, unlock_error(-128, svc).to_string(), unlock_error(-25308, svc).to_string()] {
+            assert!(!e.to_ascii_lowercase().contains("delete"), "{e}");
+        }
+    }
+
+    /// Only a build that has Ligus's designated requirement and satisfies it
+    /// rewrites access lists; a development build (no requirement) or a
+    /// binary that fails the check (copied, re-signed) never does.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn only_a_genuine_release_repairs_access_lists() {
+        use mac::repair_binary;
+        let bin = PathBuf::from("/Applications/Ligus.app");
+        let req = Some("anchor apple generic".to_string());
+        let trust = repair_binary(req.clone(), |_| Ok(()), bin.clone()).unwrap();
+        assert_eq!(trust.binary, bin);
+        assert!(trust.mark.starts_with("ligus-trust:") && trust.mark.len() == "ligus-trust:".len() + 16, "{}", trust.mark);
+        let other = repair_binary(Some("anchor apple generic and identifier x".into()), |_| Ok(()), bin.clone()).unwrap();
+        assert_ne!(trust.mark, other.mark, "the mark follows the requirement");
+        assert_eq!(repair_binary(req, |_| Err(backend_err("keychain", "isn't signed as Ligus")), bin.clone()), None);
+        let mut checked = false;
+        assert_eq!(
+            repair_binary(
+                None,
+                |_| {
+                    checked = true;
+                    Ok(())
+                },
+                bin.clone()
+            ),
+            None
+        );
+        assert!(!checked, "a development build has nothing to check against");
+        // The real check: this test binary isn't signed as Ligus.
+        let req = mac::acl::requirement(Some("ABCDE12345"), &bin);
+        assert_eq!(repair_binary(req, mac::acl::check_self_against, bin), None);
+    }
+
+    /// In-memory unlock items that check, after every step, that some item
+    /// still holds the password, and fail the step named in `fail`.
+    #[cfg(target_os = "macos")]
+    struct FakeItems {
+        items: Mutex<BTreeMap<String, Vec<u8>>>,
+        password: Vec<u8>,
+        fail: Option<(&'static str, &'static str)>,
+        log: Mutex<Vec<String>>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl FakeItems {
+        fn new(items: &[(&str, &[u8])], password: &[u8], fail: Option<(&'static str, &'static str)>) -> Self {
+            Self {
+                items: Mutex::new(items.iter().map(|(a, v)| (a.to_string(), v.to_vec())).collect()),
+                password: password.to_vec(),
+                fail,
+                log: Mutex::default(),
+            }
+        }
+        fn step(&self, op: &'static str, account: &str) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("{op} {account}"));
+            if self.fail == Some((op, if account.ends_with(".spare") { "spare" } else { "main" })) {
+                return Err(format!("injected {op} failure"));
+            }
+            Ok(())
+        }
+        fn holds(&self) -> bool {
+            self.items.lock().unwrap().values().any(|v| *v == self.password)
+        }
+        fn get(&self, account: &str) -> Option<Vec<u8>> {
+            self.items.lock().unwrap().get(account).cloned()
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl mac::ItemCopies for FakeItems {
+        fn exists(&self, account: &str) -> bool {
+            self.items.lock().unwrap().contains_key(account)
+        }
+        fn read(&self, account: &str) -> Option<Zeroizing<Vec<u8>>> {
+            self.get(account).map(Zeroizing::new)
+        }
+        fn create(&self, account: &str, secret: &[u8]) -> Result<(), String> {
+            self.step("create", account)?;
+            let mut items = self.items.lock().unwrap();
+            if items.contains_key(account) {
+                return Err("duplicate item".into());
+            }
+            items.insert(account.to_string(), secret.to_vec());
+            Ok(())
+        }
+        fn delete(&self, account: &str) -> Result<(), String> {
+            self.step("delete", account)?;
+            self.items.lock().unwrap().remove(account);
+            assert!(self.holds(), "no item held the unlock password after deleting {account}");
+            Ok(())
+        }
+    }
+
+    /// Re-creating the unlock item writes the new copy before deleting the
+    /// old one, so no step (or failure at any step) leaves the password
+    /// without an item; an interrupted repair is finished from the spare.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn replacing_the_unlock_item_never_leaves_it_missing() {
+        use mac::replace_item;
+        let (main, spare, pw) = ("keychain:ab", "keychain:ab.spare", b"pw".as_slice());
+        // The whole repair: new copy, old gone, spare gone.
+        let f = FakeItems::new(&[(main, pw)], pw, None);
+        replace_item(&f, main, spare, pw).unwrap();
+        assert_eq!(f.get(main).as_deref(), Some(pw));
+        assert_eq!(f.get(spare), None);
+        let log = f.log.lock().unwrap().clone();
+        assert_eq!(log, ["create keychain:ab.spare", "delete keychain:ab", "create keychain:ab", "delete keychain:ab.spare"]);
+        // Every failure keeps a copy, and the old item stays when the old
+        // one can't be removed.
+        for fail in [("create", "spare"), ("delete", "main"), ("create", "main"), ("delete", "spare")] {
+            let f = FakeItems::new(&[(main, pw)], pw, Some(fail));
+            let r = replace_item(&f, main, spare, pw);
+            assert!(r.is_err(), "{fail:?}");
+            assert!(f.holds(), "{fail:?}: the password has no item");
+            if fail == ("delete", "main") || fail == ("create", "spare") {
+                assert_eq!(f.get(main).as_deref(), Some(pw), "{fail:?}: the old item went");
+            }
+            if fail == ("delete", "main") {
+                assert_eq!(f.get(spare).as_deref(), Some(pw), "the spare stays for a repair in progress elsewhere");
+            }
+        }
+        // A stale spare with another value is replaced, not trusted.
+        let f = FakeItems::new(&[(main, pw), (spare, b"other")], pw, None);
+        replace_item(&f, main, spare, pw).unwrap();
+        assert_eq!(f.get(main).as_deref(), Some(pw));
+        // Interrupted after the old item went: finished from the spare.
+        let f = FakeItems::new(&[(spare, pw)], pw, None);
+        replace_item(&f, main, spare, pw).unwrap();
+        assert_eq!(f.get(main).as_deref(), Some(pw));
+        assert_eq!(f.get(spare), None);
+        // Nothing to repair from: nothing is touched.
+        let f = FakeItems::new(&[], pw, None);
+        assert!(replace_item(&f, main, spare, pw).is_err());
+        assert!(f.log.lock().unwrap().is_empty());
+    }
+
+    /// The unlock password is read from the login keychain once per
+    /// process, however many reads and writes follow, and a keychain that
+    /// got locked again is unlocked with the password already held.
+    /// Throwaway keychains only, with `LIGUS_TEST_KEYCHAIN=1`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_unlock_password_is_read_once_per_process() {
+        if !keychain_opt_in() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let path = dir.path().join("secrets/ligus-test.keychain-db");
+        drop(MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap());
+        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        assert_eq!(store.unlock_lookups(), 1);
+        for i in 0..20 {
+            let id = SecretId::new("settings", format!("k{i}"));
+            store.put(&id, format!("v{i}").as_bytes()).unwrap();
+            assert_eq!(store.get(&id).unwrap().unwrap().as_slice(), format!("v{i}").as_bytes());
+            store.put(&id, b"again").unwrap();
+            if i % 2 == 0 {
+                store.delete(&id).unwrap();
+            }
+        }
+        let st = std::process::Command::new("/usr/bin/security").arg("lock-keychain").arg(&path).status().unwrap();
+        assert!(st.success());
+        assert_eq!(store.get(&SecretId::new("settings", "k1")).unwrap().unwrap().as_slice(), b"again");
+        assert_eq!(store.unlock_lookups(), 1, "went back to the login keychain");
+        store.destroy().unwrap();
+    }
+
+    /// A genuine release repairs items in the Ligus keychain that another
+    /// build saved (here: items trusting only `/usr/bin/true`), with the
+    /// keychain password it holds, so no prompt is ever needed; a
+    /// development build leaves them alone, and the probe `ligus doctor`
+    /// uses reports them without prompting. Every read here runs with
+    /// prompts off. Throwaway keychains only, with `LIGUS_TEST_KEYCHAIN=1`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_release_repairs_items_another_build_saved_without_a_prompt() {
+        if !keychain_opt_in() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let path = dir.path().join("secrets/ligus-test.keychain-db");
+        let me = mac::acl::ligus_binary().unwrap();
+        let first = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        first.put(&SecretId::new("settings", "mine"), b"mine").unwrap();
+        for name in ["a", "b"] {
+            mac::acl::add_generic_password(Some(&path), &service, &format!("seed:{name}"), "other build", b"theirs", Path::new("/usr/bin/true"))
+                .unwrap();
+        }
+        let silent_read = |account: &str| mac::silently(|| mac::acl::find(Some(&path), &service, account, true)).map(|(v, _)| v.unwrap().to_vec());
+        let refused = silent_read("seed:a").unwrap_err();
+        assert!(matches!(mac::classify(refused), mac::Denial::Refused | mac::Denial::NoUi), "this build shouldn't be trusted yet: {refused}");
+        assert_eq!(first.probe(), mac::KeychainAccess::Trusted { untrusted: vec!["seed:a".into(), "seed:b".into()] });
+        drop(first);
+        // A development build doesn't touch them.
+        drop(MacKeychain::open_as(path.clone(), &service, unlock.clone(), None).unwrap());
+        assert!(silent_read("seed:a").is_err());
+        // A release repairs them, keeping their values.
+        let release = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        assert_eq!(silent_read("seed:a").unwrap(), b"theirs");
+        assert_eq!(silent_read("seed:b").unwrap(), b"theirs");
+        assert_eq!(silent_read("settings:mine").unwrap(), b"mine");
+        assert_eq!(release.probe(), mac::KeychainAccess::Trusted { untrusted: vec![] });
+        // The other build's entries are gone (checked before any read that
+        // could prompt), and no spare copy is left.
+        let dump = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg("-a").arg(&path).output().unwrap();
+        let dump = String::from_utf8_lossy(&dump.stdout);
+        assert!(!dump.contains("/usr/bin/true") && !dump.contains("other build"), "{dump}");
+        assert!(!dump.contains(".spare"), "{dump}");
+        assert!(dump.contains("ligus-trust:test"), "{dump}");
+        assert_eq!(release.get(&SecretId::new("seed", "a")).unwrap().unwrap().as_slice(), b"theirs");
+        drop(release);
+        // Marked now: the next start repairs nothing.
+        let again = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        let dump2 = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg(&path).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&dump2.stdout).matches("\"acct\"").count(), 3);
+        let release = again;
+        release.destroy().unwrap();
+    }
+
+    /// The unlock item's account and password in a throwaway unlock keychain.
+    #[cfg(target_os = "macos")]
+    fn throwaway_unlock_item(unlock: &Path, unlock_service: &str) -> (String, Vec<u8>) {
+        let out = std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", unlock_service]).arg(unlock).output().unwrap();
+        let account = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\"").map(|a| a.trim_end_matches('"').to_string()))
+            .unwrap();
+        let (pw, _) = mac::acl::find(Some(unlock), unlock_service, &account, true).unwrap();
+        (account, pw.unwrap().to_vec())
+    }
+
+    /// The keychain password is checked whether or not the keychain is
+    /// unlocked (an unlock of an unlocked keychain checks nothing), and an
+    /// item in the Ligus keychain carries no partition list, so its access
+    /// list is all a repair has to fix. Throwaway keychains only, with
+    /// `LIGUS_TEST_KEYCHAIN=1`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_keychain_password_is_checked_and_partition_lists_are_absent() {
+        if !keychain_opt_in() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let path = dir.path().join("secrets/ligus-test.keychain-db");
+        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        store.put(&SecretId::new("settings", "a"), b"kept").unwrap();
+        let (_, pw) = throwaway_unlock_item(&unlock, &format!("{service}.unlock"));
+        assert!(mac::acl::password_opens(&path, &pw));
+        assert!(!mac::acl::password_opens(&path, b"not-the-password"), "an unlocked keychain accepted a wrong password");
+        assert!(mac::acl::password_opens(&path, &pw), "the password stayed what it was");
+        assert_eq!(store.get(&SecretId::new("settings", "a")).unwrap().unwrap().as_slice(), b"kept");
+        let (_, item) = mac::acl::find(Some(&path), &service, "settings:a", false).unwrap();
+        drop(store);
+        // Another build's partition list (as `security` sets one).
+        let st = std::process::Command::new("/usr/bin/security")
+            .args(["set-generic-password-partition-list", "-S", "teamid:ABCDE12345", "-s", &service, "-k"])
+            .arg(String::from_utf8(pw.clone()).unwrap())
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "{}", String::from_utf8_lossy(&st.stderr));
+        // A keychain file of its own keeps no partition list, even when
+        // `security` is asked to set one: only the access list decides.
+        assert_eq!(item.partitions().unwrap(), Vec::<String>::new());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An unlock item another build saved is reported by the probe without a
+    /// prompt, and a release finishes an interrupted repair from the spare
+    /// copy (a development build reads the spare but rewrites nothing).
+    /// Throwaway keychains only, with `LIGUS_TEST_KEYCHAIN=1`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_unlock_item_is_probed_and_repaired_without_a_prompt() {
+        if !keychain_opt_in() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let unlock_service = format!("{service}.unlock");
+        let path = dir.path().join("secrets/ligus-test.keychain-db");
+        let me = mac::acl::ligus_binary().unwrap();
+        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        store.put(&SecretId::new("settings", "probe"), b"kept").unwrap();
+        let account = String::from_utf8(
+            std::process::Command::new("/usr/bin/security")
+                .args(["find-generic-password", "-s", &unlock_service])
+                .arg(&unlock)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\"").map(|a| a.trim_end_matches('"').to_string()))
+        .unwrap();
+        let spare = format!("{account}.spare");
+        let (pw, main) = mac::acl::find(Some(&unlock), &unlock_service, &account, true).unwrap();
+        let pw = pw.unwrap();
+        drop(store);
+        // Interrupted repair: only the spare is left.
+        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &spare, "Ligus keychain unlock", &pw, &me).unwrap();
+        main.delete().unwrap();
+        let dev = MacKeychain::open_as(path.clone(), &service, unlock.clone(), None).unwrap();
+        assert_eq!(dev.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"kept");
+        assert!(mac::acl::find(Some(&unlock), &unlock_service, &account, false).is_err(), "a development build rewrote the unlock item");
+        drop(dev);
+        let release = MacKeychain::open_as(path.clone(), &service, unlock.clone(), Some(me.clone())).unwrap();
+        assert_eq!(release.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"kept");
+        let (again, _) = mac::silently(|| mac::acl::find(Some(&unlock), &unlock_service, &account, true)).unwrap();
+        assert_eq!(again.unwrap().as_slice(), pw.as_slice(), "the same password");
+        assert!(mac::acl::find(Some(&unlock), &unlock_service, &spare, false).is_err(), "the spare stayed");
+        drop(release);
+        // Saved by another build: the probe says so without asking.
+        let (_, item) = mac::acl::find(Some(&unlock), &unlock_service, &account, false).unwrap();
+        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &spare, "x", &pw, &me).unwrap();
+        item.delete().unwrap();
+        mac::acl::add_generic_password(Some(&unlock), &unlock_service, &account, "Ligus keychain unlock", &pw, Path::new("/usr/bin/true")).unwrap();
+        let (_, s) = mac::acl::find(Some(&unlock), &unlock_service, &spare, false).unwrap();
+        s.delete().unwrap();
+        let probe = MacKeychain::unopened(path.clone(), &service, Some(unlock.clone()));
+        assert_eq!(probe.probe(), mac::KeychainAccess::UnlockNotTrusted);
+        let (_, item) = mac::acl::find(Some(&unlock), &unlock_service, &account, false).unwrap();
+        item.delete().unwrap();
+        assert_eq!(probe.probe(), mac::KeychainAccess::UnlockMissing);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
