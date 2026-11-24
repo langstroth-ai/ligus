@@ -280,6 +280,26 @@ function handle(cmd: string, args: Args): unknown {
         { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
         { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
       ];
+    case "inspect_computer_request":
+      return {
+        deviceId: "c1",
+        label: "lt on studio-mini",
+        fingerprint: "7F3A-91C0-77DE-0B14-5E62",
+        alreadyMine: false,
+        revoked: false,
+        someoneElses: null,
+        previousMember: { memberId: "m-lt", displayName: "Ana (lt)" },
+        thisDesktop: "2C41-88E0-1B9D-04AF-6E73",
+      };
+    case "add_computer":
+      return {
+        grant: "ligusgrant1:eyJlcGhlbWVyYWxQdWJsaWMiOiJ…sealed-to-the-computer…",
+        expiresInMinutes: 30,
+        thisDesktop: "2C41-88E0-1B9D-04AF-6E73",
+        previousMember: { memberId: "m-lt", displayName: "Ana (lt)" },
+      };
+    case "remove_duplicate_member":
+      return null;
     case "list_device_pairings":
       return [{ deviceId: "p1", hostId: "h1", hostLabel: "home-server", name: "Ana's iPhone", lastSeen: Math.floor(Date.now() / 1000) - 120, reportedAt: Math.floor(Date.now() / 1000) }];
     case "list_device_requests":

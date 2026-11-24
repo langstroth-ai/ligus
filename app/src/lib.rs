@@ -5256,6 +5256,24 @@ pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerp
     })
 }
 
+/// Remove the separate member a just-added computer proved it was (Add a
+/// computer's last step), from the active workspace. The ordinary member
+/// removal: its own passkey confirmation; their past messages keep their
+/// name.
+#[tauri::command]
+async fn remove_duplicate_member(ligus_app: tauri::AppHandle, member_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_duplicate_member_sync(tauri::Manager::state::<AppState>(ligus_app), member_id)).await
+}
+
+pub(crate) fn remove_duplicate_member_sync(state: State<AppState>, member_id: String) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let mut svc = state.service.lock().unwrap();
+    if member_id == svc.author().id {
+        return Err("That is you.".into());
+    }
+    svc.remove_member(ligus_core::workspace_config_session_id(ws), ws, member_id).map_err(map_err)
+}
+
 #[tauri::command]
 async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>, String> {
     crate::off_main(ligus_app, move |ligus_app| list_my_devices_sync(tauri::Manager::state::<AppState>(ligus_app))).await
@@ -16440,6 +16458,7 @@ pub fn run() {
             inspect_device_code,
             inspect_computer_request,
             add_computer,
+            remove_duplicate_member,
             approve_device,
             list_my_devices,
             list_device_pairings,

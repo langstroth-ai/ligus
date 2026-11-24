@@ -44,8 +44,11 @@ describe("My devices", () => {
     expect(text).toContain("can't be added back with its current key");
   });
 
-  it("keeps the box wording for a box", () => {
-    expect(revokeConfirmText(phone({ phone: false, label: "home-server" }), [], NOW)).toContain("ligus serve enroll --new-device");
+  it("says how to add a computer back, and that reading needs a key rotation", () => {
+    const text = revokeConfirmText(phone({ phone: false, label: "laptop" }), [], NOW);
+    expect(text).toContain("ligus devices request --new-device");
+    expect(text).toContain("rotates the workspace key");
+    expect(text).not.toContain("serve enroll");
   });
 
   it("uses a box's name for a phone this desktop has no name for", () => {
