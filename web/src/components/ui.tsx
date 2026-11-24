@@ -18,6 +18,7 @@ import {
 } from "@/lib/icons";
 import { SESSION_STATE_META, type SessionState } from "@/lib/sessionState";
 import { dismissHint, isHintDismissed } from "@/lib/hints";
+import { useRowMenu, type RowAction } from "@/components/RowMenu";
 
 type Variant = "primary" | "ghost" | "danger" | "success" | "quiet";
 type Size = "sm" | "md";
@@ -721,6 +722,92 @@ export function MetaTag({ children, action }: { children: ReactNode; action?: Re
       </span>
       {action}
     </span>
+  );
+}
+
+/// A list of one-line rows separated by hairlines, on the pane background
+/// (no boxed tiles). Use it for any list in a panel; keep Card for a single
+/// object that needs attention. Row height follows the density setting.
+export function RowList({ children, label, className = "" }: { children: ReactNode; label?: string; className?: string }) {
+  return (
+    <ul role="list" aria-label={label} className={`ligus-rowlist ${className}`}>
+      {children}
+    </ul>
+  );
+}
+
+/// One row: optional leading glyph/avatar, a title, a muted meta on the same
+/// line, trailing controls. Anything longer goes in `tip` (hover/focus) or in
+/// `children`, which the caller shows only when the row is expanded.
+export function ListRow({
+  leading,
+  title,
+  meta,
+  trailing,
+  tip,
+  onClick,
+  selected = false,
+  children,
+  testId,
+  actions,
+  actionsLabel,
+}: {
+  /// Secondary actions: right-click, the hover "⋯" or Shift+F10 (RowMenu).
+  actions?: RowAction[];
+  /// The menu's accessible name ("Actions for fs"); defaults from the title.
+  actionsLabel?: string;
+  leading?: ReactNode;
+  title: ReactNode;
+  meta?: ReactNode;
+  trailing?: ReactNode;
+  tip?: string;
+  onClick?: () => void;
+  selected?: boolean;
+  children?: ReactNode;
+  testId?: string;
+}) {
+  const line = (
+    <>
+      {leading && <span className="flex shrink-0 items-center">{leading}</span>}
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="min-w-0 shrink truncate text-[13px] font-medium">{title}</span>
+        {meta && (
+          <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
+            {meta}
+          </span>
+        )}
+      </span>
+    </>
+  );
+  const rm = useRowMenu(
+    actionsLabel ?? `Actions for ${typeof title === "string" ? title : "this row"}`,
+    actions ?? [],
+  );
+  return (
+    <li data-testid={testId} className="px-1" {...rm.rowProps}>
+      <div className="ligus-listrow flex items-center gap-2" data-tip={tip}>
+        {onClick ? (
+          <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={selected}
+            className="-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+          >
+            {line}
+          </button>
+        ) : (
+          line
+        )}
+        {(trailing || rm.button) && (
+          <span className="flex shrink-0 items-center gap-2">
+            {trailing}
+            {rm.button}
+          </span>
+        )}
+      </div>
+      {children && <div className="pb-2">{children}</div>}
+      {rm.menu}
+    </li>
   );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorkspaceAgentDto } from "@/lib/ipc";
@@ -13,7 +13,7 @@ vi.mock("@/lib/ipc", () => ({
 }));
 vi.mock("@/components/Toast", () => ({ toast: { success: vi.fn(), error: vi.fn() }, errMsg: (e: unknown) => String(e) }));
 
-import { AgentAccessPanel, accessLabel, parseUsdCents } from "./AgentAccessPanel";
+import { AgentAccessPanel, accessLabel, accessSummary, parseUsdCents } from "./AgentAccessPanel";
 
 const base: WorkspaceAgentDto = {
   id: "ag-1",
@@ -34,7 +34,15 @@ const base: WorkspaceAgentDto = {
   canManageAccess: true,
 };
 
-function renderPanel(agent: WorkspaceAgentDto) {
+/// Renders the panel and opens its folded "Access" editor (when it has one).
+function renderPanel(agent: WorkspaceAgentDto, opened = true) {
+  const r = renderClosed(agent);
+  const toggle = screen.queryByRole("button", { name: /^Access/ });
+  if (opened && toggle) fireEvent.click(toggle);
+  return r;
+}
+
+function renderClosed(agent: WorkspaceAgentDto) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -86,6 +94,16 @@ describe("AgentAccessPanel", () => {
     await user.selectOptions(screen.getByLabelText("Who can use this agent"), "owner");
     await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(setAccess).toHaveBeenCalledWith("ag-1", "owner", null, null, false));
+  });
+
+  it("folds the editor under a one-line summary", () => {
+    renderPanel(base, false);
+    const toggle = screen.getByRole("button", { name: /^Access/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent(accessSummary(base));
+    expect(screen.queryByLabelText("Who can use this agent")).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText("Who can use this agent")).toBeInTheDocument();
   });
 
   it("a shared agent's restricted option is Admins only", () => {

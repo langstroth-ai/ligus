@@ -33,7 +33,7 @@ export function InboxItem({
   actions?: ReactNode;
 }) {
   return (
-    <div role="listitem" data-unread={unread || undefined} className="ligus-row group/inbox flex items-start gap-2 rounded-xl px-3 py-2.5">
+    <div role="listitem" data-unread={unread || undefined} className="ligus-row group/inbox flex items-start gap-2 px-3 py-2">
       <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
         <span className="flex items-center gap-2">
           <span

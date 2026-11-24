@@ -156,7 +156,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
         </h1>
         <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you."}</p>
         {items.length > 0 && (
-          <div role="list" aria-label="Needs you" className="mt-4 flex flex-col gap-0.5">
+          <div role="list" aria-label="Needs you" className="mt-4 flex flex-col divide-y divide-[color:var(--ligus-line)]">
             {items.flatMap((i) => row(i) ?? [])}
           </div>
         )}

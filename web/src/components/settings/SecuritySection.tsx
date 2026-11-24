@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import {
   deviceConfirm,
@@ -90,24 +90,21 @@ export function SecuritySection() {
           </p>
         )}
         {status.isPending && <p className="text-xs text-ink-soft">Loading…</p>}
-        <ul className="space-y-1 text-sm" data-testid="passkey-list">
+        <ul className="ligus-rowlist text-sm" data-testid="passkey-list">
           {(st?.passkeys ?? []).map((p) => (
-            <li key={p.credentialId} className="flex items-center justify-between gap-2">
-              <code className="truncate">
-                {p.recovery ? "Recovery key " : ""}
-                {p.credentialId.slice(0, 16)}…
-              </code>
-              <button
-                className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--ligus-danger-ink)" }}
-                disabled={remove.isPending}
-                onClick={() => remove.mutate(p.credentialId)}
-              >
-                Remove
-              </button>
-            </li>
+            <ListRow
+              key={p.credentialId}
+              title={
+                <code>
+                  {p.recovery ? "Recovery key " : ""}
+                  {p.credentialId.slice(0, 16)}…
+                </code>
+              }
+              actionsLabel={`Actions for ${p.recovery ? "recovery key" : "passkey"} ${p.credentialId.slice(0, 16)}`}
+              actions={[{ label: "Remove", danger: true, disabled: remove.isPending, onSelect: () => remove.mutate(p.credentialId) }]}
+            />
           ))}
-          {st && passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}
+          {st && passkeys.length === 0 && <li className="ligus-listrow px-1 text-xs text-ink-soft">No passkeys yet.</li>}
         </ul>
         {passkeys.length === 1 && (
           <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>

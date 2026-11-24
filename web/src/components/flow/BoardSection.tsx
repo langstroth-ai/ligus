@@ -47,17 +47,32 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
       {rows.length === 0 ? (
         <EmptyHint text="Nothing waiting." />
       ) : (
-        <ul className="space-y-2 text-xs">
+        <ul className="ligus-rowlist text-xs" aria-label="Task board">
           {rows.map((r) => (
-            <li key={r.id} className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}>
-              <div className="flex flex-wrap items-center gap-1.5">
+            <li key={r.id} className="ligus-listrow px-1">
+              {/* Title and its pickup on one line; kind, age and where it is
+                  on a muted line under it. No boxed tile. */}
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium" data-tip={r.title}>
+                  {r.title}
+                </span>
+                {r.claimedBy ? (
+                  <Badge tone="success">{r.claimedBy} has it</Badge>
+                ) : r.suggested ? (
+                  <Button size="sm" variant="ghost" onClick={() => onPickup(r)}>
+                    Hand to {r.suggestedName}
+                  </Button>
+                ) : (
+                  <span className="shrink-0 text-ink-soft">
+                    {r.nearestThreshold != null ? `needs ${r.nearestThreshold.toFixed(1)}` : "no free agent"}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 flex min-w-0 items-center gap-x-2 text-ink-soft">
                 <Badge tone={r.kind === "failingTests" || r.kind === "failedStage" ? "danger" : "neutral"}>
                   {BOARD_KIND_LABEL[r.kind]}
                 </Badge>
-                <span className="text-ink-soft">waiting {duration(Math.max(0, now - r.sinceMs))}</span>
-              </div>
-              <div className="mt-1 break-words text-[12.5px] font-semibold leading-snug">{r.title}</div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-ink-soft">
+                <span className="shrink-0">waiting {duration(Math.max(0, now - r.sinceMs))}</span>
                 {r.chatTitle && (
                   <button
                     type="button"
@@ -78,20 +93,9 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
                     {r.files[0]}
                   </button>
                 )}
-                <span data-tip="How strongly this item calls for an agent">stimulus {r.stimulus.toFixed(1)}</span>
-              </div>
-              <div className="mt-2 flex items-center justify-end gap-2">
-                {r.claimedBy ? (
-                  <Badge tone="success">{r.claimedBy} has it</Badge>
-                ) : r.suggested ? (
-                  <Button size="sm" onClick={() => onPickup(r)}>
-                    Hand to {r.suggestedName}
-                  </Button>
-                ) : (
-                  <span className="text-ink-soft">
-                    {r.nearestThreshold != null ? `needs ${r.nearestThreshold.toFixed(1)}` : "no free agent"}
-                  </span>
-                )}
+                <span className="shrink-0" data-tip="How strongly this item calls for an agent">
+                  stimulus {r.stimulus.toFixed(1)}
+                </span>
               </div>
             </li>
           ))}

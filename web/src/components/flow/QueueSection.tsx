@@ -74,9 +74,9 @@ export function QueueView({ report: r }: { report: QueueReport }) {
         {r.recruits.length === 0 ? (
           <EmptyHint text="No backpressure responses this week." />
         ) : (
-          <ul className="space-y-1 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {r.recruits.map((x) => (
-              <li key={x.id}>
+              <li key={x.id} className="ligus-listrow px-1">
                 {new Date(x.atMs).toLocaleString()} · {RECRUIT_LABEL[x.action] ?? x.action}
                 {x.queueLen > 0 && ` (${x.queueLen} waiting)`}
               </li>

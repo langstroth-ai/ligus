@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { useRowMenu } from "@/components/RowMenu";
 import { ErrorState, EmptyHint, InfoTip, Section, LoadingState } from "@/components/ui";
 import { REASON_LABEL, clearRouteStop, minutesLeft, pct, routingReport, type RoutingReport } from "@/lib/flow";
-import { Button } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { Muted, Stat } from "@/components/flow/FlowPane";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -57,18 +57,9 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
           title="In cool-down"
           info="A severe failure (rate limit, exhausted plan window, provider outage, unreachable server) takes a route out of rotation at once."
         >
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {r.stops.map((st) => (
-              <li key={st.route} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
-                <span>
-                  <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
-                </span>
-                {onClearStop && (
-                  <Button size="sm" onClick={() => onClearStop(st.route)}>
-                    Clear
-                  </Button>
-                )}
-              </li>
+              <StopItem key={st.route} st={st} onClearStop={onClearStop} />
             ))}
           </ul>
         </Section>
@@ -153,9 +144,9 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         {r.recent.length === 0 ? (
           <EmptyHint text="No un-addressed messages routed yet." />
         ) : (
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {r.recent.slice(0, 20).map((d) => (
-              <li key={`${d.sessionId}:${d.atMs}`} className="rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={`${d.sessionId}:${d.atMs}`} className="ligus-listrow px-1">
                 <span className="font-medium">{d.taskClass}</span> · {d.mode === "live" ? "sent to" : "would send to"}{" "}
                 <span className="font-medium">{d.wouldPick}</span>
                 {d.wouldPick !== d.preferred && <> (top score: {d.preferred})</>}
@@ -166,5 +157,24 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         )}
       </Section>
     </div>
+  );
+}
+
+function StopItem({
+  st,
+  onClearStop,
+}: {
+  st: { route: string; name: string; reason: string; untilMs: number };
+  onClearStop?: (route: string) => void;
+}) {
+  const menu = useRowMenu(`Actions for stopped route ${st.name}`, onClearStop ? [{ label: "Clear", onSelect: () => onClearStop(st.route) }] : []);
+  return (
+    <li className="ligus-listrow flex items-center justify-between gap-2 px-1" {...menu.rowProps}>
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
+      </span>
+      {menu.button}
+      {menu.menu}
+    </li>
   );
 }

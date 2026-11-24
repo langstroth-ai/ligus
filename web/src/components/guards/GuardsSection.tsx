@@ -173,9 +173,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
 
       {d.pending.length > 0 && (
         <Section title="Waiting for a second approval">
-          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }}>
+          <ul className="ligus-rowlist">
             {d.pending.map((p) => (
-              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={p.subject} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
                 <span className="min-w-0">
                   <span className="font-medium">{p.name}</span>{" "}
                   <span className="text-xs text-ink-soft">
@@ -196,9 +196,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
       )}
 
       <Section title="Entrances">
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="entrances">
+        <ul className="ligus-rowlist" data-testid="entrances">
           {d.entrances.map((e) => (
-            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+            <li key={`${e.kind}:${e.name}`} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
               <span>
                 {e.name} <span className="text-xs text-ink-soft">{e.kind}</span>
               </span>
@@ -284,11 +284,11 @@ function ThrottlePanel() {
           <EmptyHint text="No plan windows reported yet" />
         </div>
       ) : (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="windows">
+        <ul className="ligus-rowlist" data-testid="windows">
           {t.windows.map((w) => {
             const tone = TONE[windowTone(w.effectivePct, t)];
             return (
-              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={w.runtime} className="ligus-listrow px-1 text-[13px]">
                 <div className="flex items-center justify-between gap-2">
                   <span>
                     <span className="font-medium">{w.runtime}</span>

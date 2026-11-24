@@ -25,11 +25,11 @@ import {
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmDialog } from "@/components/Dialog";
-import { Badge, Button, Section, ErrorState, LinkButton } from "@/components/ui";
-import { MoreMenu } from "@/components/MoreMenu";
+import { Badge, Button, Section, ErrorState, LinkButton, RowList } from "@/components/ui";
+import { useRowMenu } from "@/components/RowMenu";
 import { PANE_DOCS } from "@/lib/docs";
 import { IconChevronRight, IconLock } from "@/lib/icons";
-import { RailFrame, Stack, EmptyHint, panelStyle, fieldStyle } from "@/components/RightRail";
+import { RailFrame, EmptyHint, fieldStyle } from "@/components/RightRail";
 import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 
 /// Visual tone for a node/run status chip. Exported for tests.
@@ -189,12 +189,12 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
         title="Definitions"
         info="Ask an agent in this chat to set one up, e.g. “build a workflow that drafts, reviews, and waits for my approval”. It arrives in the Review pane; approve it and it shows up here."
       >
-        <Stack>
+        <RowList label="Workflow definitions">
           {(workflows.data ?? []).map((wf) =>
             deletes.pending.has(wf.id) ? (
               <DeletedRow key={wf.id} name={wf.name} onUndo={() => deletes.undo(wf.id)} />
             ) : (
-              <DefinitionCard
+              <DefinitionRow
                 key={wf.id}
                 sessionId={sessionId}
                 wf={wf}
@@ -203,27 +203,25 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
               />
             ),
           )}
-          {workflows.isError ? (
-            <ErrorState text="Couldn't load workflows." onRetry={() => void workflows.refetch()} />
-          ) : (
-            (workflows.data ?? []).length === 0 && (
-              <EmptyHint text="No workflows yet." />
-            )
-          )}
-        </Stack>
+        </RowList>
+        {workflows.isError ? (
+          <ErrorState text="Couldn't load workflows." onRetry={() => void workflows.refetch()} />
+        ) : (
+          (workflows.data ?? []).length === 0 && <EmptyHint text="No workflows yet." />
+        )}
       </Section>
 
       <Section title="Runs">
-        <Stack>
+        <RowList label="Workflow runs">
           {(runs.data ?? []).map((run) => (
-            <RunCard key={run.id} sessionId={sessionId} run={run} hosts={hosts.data ?? []} />
+            <RunRow key={run.id} sessionId={sessionId} run={run} hosts={hosts.data ?? []} />
           ))}
-          {runs.isError ? (
-            <ErrorState text="Couldn't load runs." onRetry={() => void runs.refetch()} />
-          ) : (
-            (runs.data ?? []).length === 0 && <EmptyHint text="No runs yet." />
-          )}
-        </Stack>
+        </RowList>
+        {runs.isError ? (
+          <ErrorState text="Couldn't load runs." onRetry={() => void runs.refetch()} />
+        ) : (
+          (runs.data ?? []).length === 0 && <EmptyHint text="No runs yet." />
+        )}
       </Section>
     </RailFrame>
   );
@@ -301,21 +299,20 @@ export function workflowDeleteConsequences(wf: WorkflowDefinitionDto): string {
 /// Stands in for a deleted workflow while it can still be brought back.
 function DeletedRow({ name, onUndo }: { name: string; onUndo: () => void }) {
   return (
-    <div
+    <li
       role="status"
-      className="ligus-enter flex items-center gap-2 rounded-xl border border-dashed px-3 py-2 text-xs text-ink-soft"
-      style={{ borderColor: "var(--ligus-line)" }}
+      className="ligus-enter ligus-listrow flex items-center gap-2 px-1 text-xs text-ink-soft"
       data-testid="workflow-deleted"
     >
       <span className="min-w-0 flex-1 truncate">Deleted “{name}”.</span>
       <LinkButton onClick={onUndo}>Undo</LinkButton>
-    </div>
+    </li>
   );
 }
 
 type Open = "none" | "run" | "change";
 
-function DefinitionCard({
+function DefinitionRow({
   sessionId,
   wf,
   agentName,
@@ -371,64 +368,64 @@ function DefinitionCard({
     }
   }
 
+  const stageCount = `${wf.nodes.length} stage${wf.nodes.length === 1 ? "" : "s"}`;
+  const rowMenu = useRowMenu(`More actions for workflow ${wf.name}`, [
+    {
+      label: wf.disabled ? "Resume" : "Pause",
+      disabled: busy,
+      onSelect: () => void act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled)),
+    },
+    { label: "Ask an agent to change this", disabled: busy, onSelect: () => toggle("change") },
+    {
+      label: "Delete workflow…",
+      danger: true,
+      disabled: busy,
+      onSelect: () =>
+        void confirmDialog(workflowDeleteConsequences(wf), {
+          title: `Delete “${wf.name}”?`,
+          confirmLabel: "Delete workflow",
+          danger: true,
+        }).then((ok) => ok && onDelete()),
+    },
+  ]);
   return (
-    <div className="rounded-xl border px-3 py-2.5" style={panelStyle}>
-      <button
-        type="button"
-        className="flex w-full min-w-0 items-start gap-1.5 rounded-md text-left"
-        onClick={() => setShowStages((v) => !v)}
-        aria-expanded={showStages}
-      >
-        <span
-          aria-hidden
-          className="mt-0.5 inline-flex shrink-0 text-ink-faint transition-transform"
-          style={{ transform: showStages ? "rotate(90deg)" : undefined }}
+    <li className="px-1" {...rowMenu.rowProps}>
+      {/* One line: name · stages, then Run and ⋯. Description, stages,
+          Pause and "ask an agent" live behind the row's disclosure. */}
+      <div className="ligus-listrow flex items-center gap-2">
+        <button
+          type="button"
+          className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+          onClick={() => setShowStages((v) => !v)}
+          aria-expanded={showStages}
+          aria-label={`${wf.name}, ${stageCount}`}
+          data-tip={wf.description || undefined}
         >
-          <IconChevronRight size={13} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[13.5px] font-semibold leading-snug">{wf.name}</span>
-            {wf.disabled && <Badge tone="warn">paused</Badge>}
+          <span
+            aria-hidden
+            className="inline-flex shrink-0 text-ink-faint transition-transform"
+            style={{ transform: showStages ? "rotate(90deg)" : undefined }}
+          >
+            <IconChevronRight size={13} />
           </span>
-          <span className="block text-xs text-ink-soft">
-            {wf.nodes.length} stage{wf.nodes.length === 1 ? "" : "s"} · {showStages ? "hide" : "show"} stages
-          </span>
-        </span>
-      </button>
-      {wf.description && <p className="mt-1 text-xs leading-[1.5] text-ink-soft">{wf.description}</p>}
-      {showStages && <WorkflowStages nodes={wf.nodes} agentName={agentName} />}
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        <Button variant="primary" disabled={busy || wf.disabled} onClick={() => toggle("run")}>
+          <span className="min-w-0 shrink truncate text-[13px] font-medium">{wf.name}</span>
+          <span className="shrink-0 text-[11.5px] text-ink-soft">{stageCount}</span>
+          {wf.disabled && <Badge tone="warn">paused</Badge>}
+        </button>
+        <Button size="sm" variant="ghost" disabled={busy || wf.disabled} onClick={() => toggle("run")}>
           Run
         </Button>
-        <Button
-          disabled={busy}
-          aria-label={`${wf.disabled ? "Resume" : "Pause"} workflow ${wf.name}`}
-          onClick={() => act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled))}
-        >
-          {wf.disabled ? "Resume" : "Pause"}
-        </Button>
-        <span className="flex-1" />
-        <MoreMenu
-          label={`More actions for workflow ${wf.name}`}
-          disabled={busy}
-          items={[
-            {
-              label: "Delete workflow…",
-              danger: true,
-              onSelect: () =>
-                void confirmDialog(workflowDeleteConsequences(wf), {
-                  title: `Delete “${wf.name}”?`,
-                  confirmLabel: "Delete workflow",
-                  danger: true,
-                }).then((ok) => ok && onDelete()),
-            },
-          ]}
-        />
+        {rowMenu.button}
+        {rowMenu.menu}
       </div>
+      {showStages && (
+        <div className="pb-2 pl-5">
+          {wf.description && <p className="text-xs leading-[1.5] text-ink-soft">{wf.description}</p>}
+          <WorkflowStages nodes={wf.nodes} agentName={agentName} />
+        </div>
+      )}
       {open !== "none" && (
-        <div className="mt-2 flex gap-2">
+        <div className="flex gap-2 pb-2">
           <input
             autoFocus
             value={text}
@@ -446,22 +443,11 @@ function DefinitionCard({
           </Button>
         </div>
       )}
-      {open !== "change" && (
-        <button
-          type="button"
-          className="mt-2 text-xs font-medium hover:underline"
-          style={{ color: "var(--ligus-accent-ink)" }}
-          onClick={() => toggle("change")}
-          disabled={busy}
-        >
-          Ask an agent to change this
-        </button>
-      )}
-    </div>
+    </li>
   );
 }
 
-function RunCard({ sessionId, run, hosts }: { sessionId: string; run: WorkflowRunDto; hosts: WorkspaceHostDto[] }) {
+function RunRow({ sessionId, run, hosts }: { sessionId: string; run: WorkflowRunDto; hosts: WorkspaceHostDto[] }) {
   const qc = useQueryClient();
   const live = run.status === "running" || run.status === "awaitingGate";
   // A resumable run in an interruptible state whose in-process driver is gone
@@ -480,22 +466,35 @@ function RunCard({ sessionId, run, hosts }: { sessionId: string; run: WorkflowRu
     }
   }
 
+  const rowMenu = useRowMenu(
+    `More actions for run of ${run.definitionName}`,
+    live
+      ? [
+          ...(resumable ? [{ label: "Resume", onSelect: () => void act(() => resumeWorkflowRun(sessionId, run.id)) }] : []),
+          { label: "Cancel run", danger: true, onSelect: () => void act(() => cancelWorkflowRun(sessionId, run.id)) },
+        ]
+      : [],
+  );
   return (
-    <div className="rounded-xl border px-4 py-3" style={panelStyle}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate font-semibold">{run.definitionName}</div>
-          <div className="truncate text-xs text-ink-soft">{run.input}</div>
-        </div>
+    <li className="px-1 pb-2" {...rowMenu.rowProps}>
+      {/* Name · input on one line with the status; stage chips under it.
+          Decisions, lease warnings and errors stay visible. */}
+      <div className="ligus-listrow flex items-center gap-2" data-tip={run.input || undefined}>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="min-w-0 shrink truncate text-[13px] font-medium">{run.definitionName}</span>
+          {run.input && <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-soft">{run.input}</span>}
+        </span>
         <span
           className="shrink-0 rounded-lg px-2 py-0.5 text-[11px] font-medium"
           style={tone}
         >
           {statusLabel(run.status)}
         </span>
+        {rowMenu.button}
+        {rowMenu.menu}
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         {run.nodes.map((n) => (
           <NodeChip key={n.nodeId} node={n} />
         ))}
@@ -542,15 +541,7 @@ function RunCard({ sessionId, run, hosts }: { sessionId: string; run: WorkflowRu
         </div>
       )}
 
-      {live && (
-        <div className="mt-2 flex gap-2 text-xs">
-          <Button onClick={() => act(() => cancelWorkflowRun(sessionId, run.id))}>Cancel</Button>
-          {resumable && (
-            <Button onClick={() => act(() => resumeWorkflowRun(sessionId, run.id))}>Resume</Button>
-          )}
-        </div>
-      )}
-    </div>
+    </li>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import {
   attachmentRules,
@@ -149,19 +149,17 @@ export function AttachmentsSection() {
         title="Blocked files"
         info="Files with these SHA-256 hashes are refused when shared and when downloaded, wherever they were shared."
       >
-        <ul className="mb-2 flex flex-col gap-1 font-mono text-xs">
-          {r.blocked.length === 0 && <li className="text-ink-soft">None</li>}
+        {r.blocked.length === 0 && <p className="mb-2 px-1 text-xs text-ink-soft">None</p>}
+        <RowList label="Blocked files" className="mb-2">
           {r.blocked.map((h) => (
-            <li key={h} className="flex items-center gap-2">
-              <span className="truncate">{h}</span>
-              {edit && (
-                <Button size="sm" onClick={() => unblock.mutate(h)}>
-                  Unblock
-                </Button>
-              )}
-            </li>
+            <ListRow
+              key={h}
+              title={<span className="font-mono text-xs font-normal">{h}</span>}
+              actionsLabel={`Actions for ${h.slice(0, 12)}`}
+              actions={edit ? [{ label: "Unblock", onSelect: () => unblock.mutate(h) }] : []}
+            />
           ))}
-        </ul>
+        </RowList>
         {edit && (
           <div className="flex gap-2">
             <input

@@ -100,6 +100,15 @@ describe("RepositoriesSection", () => {
     expect(ipc.addWorkspaceRepo).toHaveBeenCalledWith("git@github.com:a/b.git");
   });
 
+  it("keeps an admin's rename and remove in the repository's row menu", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
+    wrap(<RepositoriesSection />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for WeFit" }));
+    expect(screen.getByRole("menuitem", { name: "Aliases…" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeTruthy();
+  });
+
   it("hides admin actions from members", async () => {
     vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ canAdmin: false }));
     wrap(<RepositoriesSection />);

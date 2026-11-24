@@ -83,6 +83,21 @@ with the primitives in `src/components/ui.tsx`:
 - **Short labels.** Section titles are a few words; a card caption is one
   line; don't repeat a word the row already shows ("default runtime ·
   default").
+- **Lists are rows, not tiles.** A list in a panel is a `RowList` of
+  `ListRow`s: one line (name, muted meta on the same line, a small trailing
+  state), rows on the pane background with hairline separators, height from
+  the density setting. Details (descriptions, long captions, editors) open on
+  the row or sit in its tooltip. A `Card` is for a single object that needs
+  attention (a decision, a warning, a form being filled), not for list items.
+- **Row actions live in the row menu.** A row's secondary actions (Edit,
+  Remove, Revoke, Copy, Rename, Set default, Delete, …) are not buttons around
+  the row: they open from a right-click on the row, from the row's `⋯`
+  (shown on hover and keyboard focus, always on touch), or with Shift+F10 /
+  the Menu key (`ListRow actions`, or `useRowMenu` in `RowMenu.tsx`). The
+  row click keeps the row's one primary action (open, select, expand).
+  Destructive items go last after a separator and keep their confirm and
+  consequence text. A row that needs attention may keep one visible button
+  (Approve a pending device, a warning's fix).
 - **Never hide what protects someone.** Warnings, blocking states and
   security information stay on screen: sandbox off, lockdown, unverified
   identity, offline hosts, and the consequences shown before an irreversible

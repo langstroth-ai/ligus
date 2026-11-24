@@ -25,7 +25,7 @@ import {
   IconChevronDown,
   IconChevronRight,
 } from "@/lib/icons";
-import { Button, Section, fieldStyle, InfoTip } from "@/components/ui";
+import { Button, FormDisclosure, ListRow, RowList, Section, fieldStyle, InfoTip } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
@@ -390,6 +390,7 @@ function PeersSection() {
   const myCode = useQuery({ queryKey: ["p2p-code"], queryFn: p2pMyCode, retry: false });
   const contacts = useQuery({ queryKey: ["p2p-contacts"], queryFn: p2pListContacts });
   const [code, setCode] = useState("");
+  const [showAddPeer, setShowAddPeer] = useState(false);
   const [label, setLabel] = useState("");
   const [shortCode, setShortCode] = useState<{ code: string; expiresIn: number } | null>(null);
   const [redeemInput, setRedeemInput] = useState("");
@@ -504,25 +505,25 @@ function PeersSection() {
         </Button>
       </div>
 
-      <div className="space-y-2">
+      {(contacts.data ?? []).length === 0 && <p className="px-1 text-sm text-ink-soft">No peers yet.</p>}
+      <RowList label="Peers">
         {(contacts.data ?? []).map((c) => (
-          <div key={c.peerId} className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={fieldStyle}>
-            <div className="min-w-0">
-              <div className="font-medium">{c.label || "Unnamed peer"}</div>
-              <div className="truncate font-mono text-xs text-ink-soft">{c.peerId}</div>
-            </div>
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId))}
-            >
-              Remove
-            </button>
-          </div>
+          <ListRow
+            key={c.peerId}
+            title={c.label || "Unnamed peer"}
+            meta={<span className="font-mono">{c.peerId}</span>}
+            actions={[
+              {
+                label: "Remove",
+                danger: true,
+                onSelect: () => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId)),
+              },
+            ]}
+          />
         ))}
-        {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers yet.</p>}
-      </div>
+      </RowList>
 
+      <FormDisclosure label="Add a peer" open={showAddPeer} onToggle={() => setShowAddPeer((v) => !v)}>
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={code}
@@ -542,6 +543,7 @@ function PeersSection() {
           Add peer
         </Button>
       </div>
+      </FormDisclosure>
     </Section>
   );
 }

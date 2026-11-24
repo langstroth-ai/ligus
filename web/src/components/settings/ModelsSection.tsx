@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
 import { GatewayPicker } from "./GatewayPicker";
@@ -47,8 +47,9 @@ import {
   type OllamaPullEvent,
 } from "@/lib/ipc";
 import { IconChevronDown, IconChevronRight } from "@/lib/icons";
-import { Button, Section, Switch, fieldStyle, InfoTip } from "@/components/ui";
+import { Button, FormDisclosure, ListRow, RowList, Section, Switch, fieldStyle, InfoTip } from "@/components/ui";
 import { SELECT_CLASS } from "@/components/settings/shared";
+import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { loadTemplates, addTemplate, removeTemplate, type PromptTemplate } from "@/lib/templates";
@@ -182,7 +183,7 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
 
   const addable = (found ?? []).filter((p) => p.addable);
   return (
-    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
+    <div className="mb-3 border-b pb-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <div className="text-sm font-medium">Detect my setup</div>
@@ -258,12 +259,8 @@ function ProvidersSection() {
     >
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
-      <div className="space-y-2">
-        {visible.length === 0 && (
-          <p className="rounded-xl border px-3 py-4 text-xs text-ink-soft" style={fieldStyle}>
-            No providers yet.
-          </p>
-        )}
+      {visible.length === 0 && <p className="px-1 py-2 text-xs text-ink-soft">No providers yet.</p>}
+      <RowList label="Providers">
         {visible.map((p) => (
           <ProviderRow
             key={p.kind}
@@ -278,7 +275,7 @@ function ProvidersSection() {
             }}
           />
         ))}
-      </div>
+      </RowList>
       {available.length > 0 && (
         <div className="mt-3 flex items-center gap-2">
           <select
@@ -409,11 +406,12 @@ function ProviderRow({
 
   const localOnly = !provider.needsKey && !provider.supportsBaseUrl;
   return (
-    <div className="rounded-xl border" style={fieldStyle}>
+    <li className="px-1">
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+        aria-expanded={open}
+        className="ligus-listrow flex w-full items-center justify-between gap-2 rounded-lg text-left text-[13px] hover:bg-[color:var(--ligus-overlay)]"
       >
         <span className="flex items-center gap-2">
           <span className="text-ink-soft">{open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}</span>
@@ -432,7 +430,7 @@ function ProviderRow({
         </span>
       </button>
       {open && (
-        <div className="border-t px-3 py-3" style={{ borderColor: "var(--ligus-line)" }}>
+        <div className="pb-3 pl-5 pr-1">
           <div className="text-xs text-ink-soft">{provider.note}</div>
           {provider.needsKey && (
             <div className="mt-2 flex items-center gap-2">
@@ -533,7 +531,7 @@ function ProviderRow({
           </div>
         </div>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -818,96 +816,84 @@ function RuntimesSection() {
           configured. Once you have runtimes, the default is chosen per-row
           below, so this picker would point at a runtime that isn't listed. */}
       {(runtimes.data ?? []).some((r) => r.name === "Primary Runtime") && <DefaultModelPicker />}
-      <div className="space-y-2">
-        {(runtimes.data ?? []).map((runtime) => (
-          <div key={runtime.id} className="rounded-2xl border px-3 py-3" style={fieldStyle}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-medium">{runtime.label}</div>
-                <div className="text-xs text-ink-soft">
+      <RowList label="Models">
+        {(runtimes.data ?? []).map((runtime) => {
+          const result = tests[runtime.id]?.result;
+          const ccModel = runtime.provider === "claude-code" && !runtime.isManaged;
+          const ollamaOpen = runtime.provider === "ollama" && !!openModels[runtime.id];
+          const actions: RowAction[] = [
+            {
+              label: tests[runtime.id]?.pending ? "Testing…" : "Test",
+              onSelect: () => runTest(runtime.id),
+              disabled: tests[runtime.id]?.pending,
+              title: "Send a trivial prompt and verify this runtime answers",
+            },
+            ...(runtime.provider === "ollama"
+              ? [
+                  {
+                    label: openModels[runtime.id] ? "Hide models" : "Models",
+                    onSelect: () => setOpenModels((o) => ({ ...o, [runtime.id]: !o[runtime.id] })),
+                    title: "See, pull, update, or remove models on this Ollama server",
+                  },
+                ]
+              : []),
+            ...(runtime.isManaged ? [{ label: "Edit", onSelect: () => startEdit(runtime) }] : []),
+            ...(!runtime.isDefault
+              ? [{ label: "Set default", onSelect: () => setDefaultMutation.mutate(runtime.id), disabled: setDefaultMutation.isPending }]
+              : []),
+            ...(runtime.isManaged
+              ? [
+                  {
+                    label: "Remove",
+                    danger: true,
+                    onSelect: () =>
+                      confirmThen(`Remove runtime "${runtime.label}"?`, () => removeRuntimeMutation.mutate(runtime.id)),
+                  },
+                ]
+              : []),
+          ];
+          return (
+            <ListRow
+              key={runtime.id}
+              title={runtime.label}
+              actions={actions}
+              meta={
+                <>
                   {runtime.location} · {runtime.provider}
                   {runtime.gateway ? ` · via gateway ${runtime.gateway}` : runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
+                </>
+              }
+              trailing={runtime.isDefault ? <span className="text-xs text-ink-soft">default</span> : undefined}
+            >
+              {(ccModel || result || ollamaOpen) && (
+                <div className="space-y-2 px-1">
+                  {ccModel && <ClaudeCodeRowModel />}
+                  {result && (
+                    <div className="text-xs">
+                      {result.ok ? (
+                        <span style={{ color: "var(--ligus-success-ink)" }}>
+                          ✓ Responded in {result.latency_ms} ms
+                          {result.reply ? ` — "${result.reply.slice(0, 60)}"` : ""}
+                          {result.capabilities ? ` · model: ${result.capabilities}` : ""}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--ligus-danger-ink)" }}>✕ {result.error ?? "No response"}</span>
+                      )}
+                    </div>
+                  )}
+                  {ollamaOpen && (
+                    <OllamaModelsPanel
+                      runtime={runtime}
+                      switching={useModelMutation.isPending}
+                      onUse={(model) => useModelMutation.mutate({ runtime, model })}
+                    />
+                  )}
                 </div>
-                {runtime.provider === "claude-code" && !runtime.isManaged && <ClaudeCodeRowModel />}
-              </div>
-              <div className="flex items-center gap-2">
-                {runtime.provider === "ollama" && (
-                  <button
-                    onClick={() => setOpenModels((o) => ({ ...o, [runtime.id]: !o[runtime.id] }))}
-                    className="text-xs hover:opacity-80"
-                    title="See, pull, update, or remove models on this Ollama server"
-                    aria-expanded={!!openModels[runtime.id]}
-                  >
-                    {openModels[runtime.id] ? "Hide models" : "Models"}
-                  </button>
-                )}
-                <button
-                  onClick={() => runTest(runtime.id)}
-                  disabled={tests[runtime.id]?.pending}
-                  className="text-xs hover:opacity-80 disabled:opacity-50"
-                  title="Send a trivial prompt and verify this runtime answers"
-                >
-                  {tests[runtime.id]?.pending ? "Testing…" : "Test"}
-                </button>
-                {runtime.isManaged && (
-                  <button onClick={() => startEdit(runtime)} className="text-xs hover:opacity-80">
-                    Edit
-                  </button>
-                )}
-                {runtime.isManaged && (
-                  <button
-                    onClick={() => confirmThen(`Remove runtime "${runtime.label}"?`, () => removeRuntimeMutation.mutate(runtime.id))}
-                    className="text-xs hover:opacity-80"
-                    style={{ color: "var(--ligus-danger-ink)" }}
-                  >
-                    Remove
-                  </button>
-                )}
-                {runtime.isDefault ? (
-                  <span className="rounded-full px-2 py-1 text-xs" style={{ background: "var(--ligus-mist)" }}>
-                    default
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => setDefaultMutation.mutate(runtime.id)}
-                    disabled={setDefaultMutation.isPending}
-                    className="rounded-full border px-2 py-1 text-xs hover:opacity-80 disabled:opacity-50"
-                    style={{ borderColor: "var(--ligus-line)" }}
-                  >
-                    Set default
-                  </button>
-                )}
-              </div>
-            </div>
-            {tests[runtime.id]?.result && (
-              <div className="mt-2 rounded-xl px-3 py-2 text-xs" style={fieldStyle}>
-                {tests[runtime.id]!.result!.ok ? (
-                  <span style={{ color: "var(--ligus-success-ink)" }}>
-                    ✓ Responded in {tests[runtime.id]!.result!.latency_ms} ms
-                    {tests[runtime.id]!.result!.reply
-                      ? ` — "${tests[runtime.id]!.result!.reply.slice(0, 60)}"`
-                      : ""}
-                    {tests[runtime.id]!.result!.capabilities
-                      ? ` · model: ${tests[runtime.id]!.result!.capabilities}`
-                      : ""}
-                  </span>
-                ) : (
-                  <span style={{ color: "var(--ligus-danger-ink)" }}>
-                    ✕ {tests[runtime.id]!.result!.error ?? "No response"}
-                  </span>
-                )}
-              </div>
-            )}
-            {runtime.provider === "ollama" && openModels[runtime.id] && (
-              <OllamaModelsPanel
-                runtime={runtime}
-                switching={useModelMutation.isPending}
-                onUse={(model) => useModelMutation.mutate({ runtime, model })}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+              )}
+            </ListRow>
+          );
+        })}
+      </RowList>
       <div
         ref={formRef}
         className="space-y-2 rounded-2xl border p-4"
@@ -1383,69 +1369,41 @@ function OllamaModelsPanel({
           const pull = pulls[m.name];
           const meta = [m.parameterSize, m.quantization, m.sizeBytes ? fmtBytes(m.sizeBytes) : ""].filter(Boolean).join(" · ");
           return (
-            <div key={m.name} className="rounded-lg px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-mono text-sm">{m.name}</span>
-                    {current && (
-                      <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}>
-                        current
-                      </span>
-                    )}
-                    {m.loaded && (
-                      <span
-                        className="rounded-full border px-2 py-0.5 text-[10px]"
-                        style={{ borderColor: "var(--ligus-success)", color: "var(--ligus-success-ink)" }}
-                        title={m.expiresAt ? `Loaded in memory; unloads at ${new Date(m.expiresAt).toLocaleTimeString()}` : "Loaded in memory"}
-                      >
-                        loaded{m.loadedContextLength ? ` · ${fmtCtx(m.loadedContextLength)}` : ""}
-                      </span>
-                    )}
-                  </div>
-                  {meta && <div className="text-xs text-ink-soft">{meta}</div>}
-                </div>
-                {!pull && (
-                  <div className="flex shrink-0 items-center gap-2">
-                    {!current && (
-                      <button
-                        onClick={() => onUse(m.name)}
-                        disabled={switching}
-                        className="text-xs hover:opacity-80 disabled:opacity-50"
-                        title="Point this runtime at this model"
-                      >
-                        Use
-                      </button>
-                    )}
-                    <button
-                      onClick={() => void startPull(m.name)}
-                      className="text-xs hover:opacity-80"
-                      title="Re-pull this tag: fetches only what changed upstream"
-                    >
-                      Update
-                    </button>
-                    <button
-                      onClick={() =>
-                        confirmThen(
-                          `Remove ${m.name} from ${list.data?.host ?? "the server"}? Runtimes using it will fail until it's pulled again.`,
-                          () => remove.mutate(m.name),
-                        )
-                      }
-                      disabled={remove.isPending}
-                      className="text-xs hover:opacity-80 disabled:opacity-50"
-                      style={{ color: "var(--ligus-danger-ink)" }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
+            <OllamaModelLine
+              key={m.name}
+              name={m.name}
+              current={current}
+              loaded={m.loaded}
+              loadedTip={m.expiresAt ? `Loaded in memory; unloads at ${new Date(m.expiresAt).toLocaleTimeString()}` : "Loaded in memory"}
+              loadedLabel={`loaded${m.loadedContextLength ? ` · ${fmtCtx(m.loadedContextLength)}` : ""}`}
+              meta={meta}
+              actions={
+                pull
+                  ? []
+                  : [
+                      ...(!current
+                        ? [{ label: "Use", onSelect: () => onUse(m.name), disabled: switching, title: "Point this runtime at this model" }]
+                        : []),
+                      { label: "Update", onSelect: () => void startPull(m.name), title: "Re-pull this tag: fetches only what changed upstream" },
+                      {
+                        label: "Remove",
+                        danger: true,
+                        disabled: remove.isPending,
+                        onSelect: () =>
+                          confirmThen(
+                            `Remove ${m.name} from ${list.data?.host ?? "the server"}? Runtimes using it will fail until it's pulled again.`,
+                            () => remove.mutate(m.name),
+                          ),
+                      },
+                    ]
+              }
+            >
               {pull && renderPull(pull)}
-            </div>
+            </OllamaModelLine>
           );
         })}
         {newPulls.map((p) => (
-          <div key={p.model} className="rounded-lg px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
+          <div key={p.model} className="border-t px-1 py-1.5 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }}>
             <span className="font-mono text-sm">{p.model}</span>
             {renderPull(p)}
           </div>
@@ -1552,6 +1510,7 @@ function AgentsSection() {
   const [runtimeId, setRuntimeId] = useState("");
   const [role, setRole] = useState("contributor");
   const [instructions, setInstructions] = useState("");
+  const [showForm, setShowForm] = useState(false);
   const rts = runtimes.data ?? [];
   const refresh = () => qc.invalidateQueries({ queryKey: ["agent-templates"] });
 
@@ -1575,33 +1534,25 @@ function AgentsSection() {
       title="Agents"
       info="A reusable persona: name, model (runtime), role and instructions. Define once here, then attach it to any chat from that chat's Tools pane."
     >
-      <div className="space-y-2">
+      {(templates.data ?? []).length === 0 && <p className="px-1 text-sm text-ink-soft">No saved agents yet.</p>}
+      <RowList label="Saved agents">
         {(templates.data ?? []).map((t) => {
           const rt = rts.find((r) => r.id === t.runtimeId);
           return (
-            <div key={t.id} className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2" style={fieldStyle}>
-              <div className="min-w-0">
-                <div className="font-medium">
-                  {t.name} <span className="text-xs text-ink-soft">· {t.role}</span>
-                </div>
-                <div className="truncate text-xs text-ink-soft">
-                  {rt?.label ?? t.runtimeId ?? "no model"}
-                  {t.instructions ? ` · ${t.instructions.slice(0, 48)}` : ""}
-                </div>
-              </div>
-              <button
-                className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--ligus-danger-ink)" }}
-                onClick={() => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id))}
-              >
-                Remove
-              </button>
-            </div>
+            <ListRow
+              key={t.id}
+              title={t.name}
+              meta={`${t.role} · ${rt?.label ?? t.runtimeId ?? "no model"}`}
+              tip={t.instructions || undefined}
+              actions={[
+                { label: "Remove", danger: true, onSelect: () => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id)) },
+              ]}
+            />
           );
         })}
-        {(templates.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No saved agents yet.</p>}
-      </div>
+      </RowList>
 
+      <FormDisclosure label="Add an agent" open={showForm} onToggle={() => setShowForm((v) => !v)}>
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={name}
@@ -1647,12 +1598,14 @@ function AgentsSection() {
           Save agent
         </Button>
       </div>
+      </FormDisclosure>
     </Section>
   );
 }
 
 function TemplatesSection() {
   const [items, setItems] = useState<PromptTemplate[]>(() => loadTemplates());
+  const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
 
@@ -1668,28 +1621,25 @@ function TemplatesSection() {
       title="Prompt templates"
       info="Reusable prompts you can drop into the composer with /."
     >
-      <div className="space-y-2">
+      {items.length === 0 && <p className="px-1 text-sm text-ink-soft">No templates yet.</p>}
+      <RowList label="Prompt templates">
         {items.map((t) => (
-          <div
+          <ListRow
             key={t.id}
-            className="flex items-start justify-between gap-3 rounded-xl border px-3 py-2"
-            style={fieldStyle}
-          >
-            <div className="min-w-0">
-              <div className="font-medium">{t.name}</div>
-              <div className="mt-0.5 truncate text-xs text-ink-soft">{t.body}</div>
-            </div>
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => confirmThen(`Delete template "${t.name}"?`, () => setItems(removeTemplate(t.id)))}
-            >
-              Delete
-            </button>
-          </div>
+            title={t.name}
+            meta={t.body}
+            tip={t.body}
+            actions={[
+              {
+                label: "Delete",
+                danger: true,
+                onSelect: () => confirmThen(`Delete template "${t.name}"?`, () => setItems(removeTemplate(t.id))),
+              },
+            ]}
+          />
         ))}
-        {items.length === 0 && <p className="text-sm text-ink-soft">No templates yet.</p>}
-      </div>
+      </RowList>
+      <FormDisclosure label="Add a template" open={showForm} onToggle={() => setShowForm((v) => !v)}>
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
         <input
           value={name}
@@ -1710,6 +1660,7 @@ function TemplatesSection() {
           Add template
         </Button>
       </div>
+      </FormDisclosure>
     </Section>
   );
 }
@@ -1930,5 +1881,56 @@ function VaultRetrievalSection() {
         </span>
       </div>
     </Section>
+  );
+}
+
+/// One installed Ollama model: name, current/loaded tags and size on one line;
+/// Use, Update and Remove live in the row menu.
+function OllamaModelLine({
+  name,
+  current,
+  loaded,
+  loadedTip,
+  loadedLabel,
+  meta,
+  actions,
+  children,
+}: {
+  name: string;
+  current: boolean;
+  loaded: boolean;
+  loadedTip: string;
+  loadedLabel: string;
+  meta: string;
+  actions: RowAction[];
+  children?: ReactNode;
+}) {
+  const rm = useRowMenu(`Actions for ${name}`, actions);
+  return (
+    <div className="border-t px-1 py-1.5 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }} {...rm.rowProps}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate font-mono text-sm">{name}</span>
+          {current && (
+            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}>
+              current
+            </span>
+          )}
+          {loaded && (
+            <span
+              className="rounded-full border px-2 py-0.5 text-[10px]"
+              style={{ borderColor: "var(--ligus-success)", color: "var(--ligus-success-ink)" }}
+              title={loadedTip}
+            >
+              {loadedLabel}
+            </span>
+          )}
+          {meta && <span className="truncate text-xs text-ink-soft">{meta}</span>}
+        </div>
+        {rm.button}
+      </div>
+      {children}
+      {rm.menu}
+    </div>
   );
 }

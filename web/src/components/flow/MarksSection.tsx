@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRowMenu } from "@/components/RowMenu";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
@@ -56,25 +57,9 @@ export function MarksView({
         {marks.length === 0 ? (
           <EmptyHint text="No marks in this workspace." />
         ) : (
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {marks.map((m) => (
-              <li key={m.id} className="flex items-start justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
-                <div className="min-w-0">
-                  <div>
-                    <span className="font-semibold">{MARK_LABEL[m.kind]}</span> · <code className="break-all">{m.path || m.taskId}</code>
-                    {m.lines && ` :${m.lines[0]}-${m.lines[1]}`}
-                  </div>
-                  <div style={{ color: "var(--ligus-ink-soft)" }}>
-                    by {m.by}
-                    {m.chatTitle && ` in “${m.chatTitle}”`}
-                    {m.expiresMs != null && ` · ${minutesLeft(m.expiresMs)} min left`}
-                    {m.note && ` — ${m.note}`}
-                  </div>
-                </div>
-                <Button size="sm" onClick={() => onClear(m.id)}>
-                  Clear
-                </Button>
-              </li>
+              <MarkItem key={m.id} m={m} onClear={onClear} />
             ))}
           </ul>
         )}
@@ -114,5 +99,29 @@ export function MarksView({
         </Button>
       </Section>
     </div>
+  );
+}
+
+/// One mark: what and where on one line, who and how long on a muted line;
+/// Clear is in the row's action menu.
+function MarkItem({ m, onClear }: { m: MarkRow; onClear: (id: string) => void }) {
+  const menu = useRowMenu(`Actions for mark ${m.path || m.taskId}`, [{ label: "Clear", onSelect: () => onClear(m.id) }]);
+  return (
+    <li className="ligus-listrow flex items-start justify-between gap-2 px-1" {...menu.rowProps}>
+      <div className="min-w-0">
+        <div className="truncate">
+          <span className="font-semibold">{MARK_LABEL[m.kind]}</span> · <code>{m.path || m.taskId}</code>
+          {m.lines && ` :${m.lines[0]}-${m.lines[1]}`}
+        </div>
+        <div className="truncate" style={{ color: "var(--ligus-ink-soft)" }} data-tip={m.note || undefined}>
+          by {m.by}
+          {m.chatTitle && ` in “${m.chatTitle}”`}
+          {m.expiresMs != null && ` · ${minutesLeft(m.expiresMs)} min left`}
+          {m.note && ` — ${m.note}`}
+        </div>
+      </div>
+      {menu.button}
+      {menu.menu}
+    </li>
   );
 }

@@ -8,7 +8,7 @@ import {
   setScheduleEnabled,
   type ScheduleTrigger,
 } from "@/lib/ipc";
-import { Button, Section, Switch, fieldStyle } from "@/components/ui";
+import { Button, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 
@@ -69,33 +69,30 @@ export function SchedulesSection() {
     >
       <p className="text-xs text-ink-soft">Times are UTC.</p>
 
-      {(schedules.data ?? []).map((s) => (
-        <div
-          key={s.id}
-          className="flex items-start justify-between gap-3 rounded-lg border p-3"
-          style={{ borderColor: "var(--ligus-line)" }}
-        >
-          <div className="min-w-0">
-            <div className="font-medium">{s.label || "Scheduled run"}</div>
-            <div className="text-xs text-ink-soft">{triggerSummary(s.trigger)}</div>
-            <div className="mt-1 truncate text-sm text-ink-soft">{s.prompt}</div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <Switch
-              on={s.enabled}
-              onChange={(v) => toggle.mutate({ id: s.id, enabled: v })}
-              label={`Enable schedule "${s.label || "Scheduled run"}"`}
-            />
-            <button
-              className="text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => confirmThen(`Remove schedule "${s.label || "Scheduled run"}"?`, () => remove.mutate(s.id))}
-            >
-              Remove
-            </button>
-          </div>
-        </div>
-      ))}
+      <RowList label="Schedules">
+        {(schedules.data ?? []).map((s) => (
+          <ListRow
+            key={s.id}
+            title={s.label || "Scheduled run"}
+            meta={`${triggerSummary(s.trigger)} · ${s.prompt}`}
+            tip={s.prompt}
+            trailing={
+              <Switch
+                on={s.enabled}
+                onChange={(v) => toggle.mutate({ id: s.id, enabled: v })}
+                label={`Enable schedule "${s.label || "Scheduled run"}"`}
+              />
+            }
+            actions={[
+              {
+                label: "Remove",
+                danger: true,
+                onSelect: () => confirmThen(`Remove schedule "${s.label || "Scheduled run"}"?`, () => remove.mutate(s.id)),
+              },
+            ]}
+          />
+        ))}
+      </RowList>
       {(schedules.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No schedules yet.</p>}
 
       {/* Add form */}

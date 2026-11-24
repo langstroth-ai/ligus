@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { addRuntime, detectCliRuntimes, listRuntimes, type DetectedCliDto } from "@/lib/ipc";
-import { Button, fieldStyle, InfoTip } from "@/components/ui";
+import { Button, fieldStyle, InfoTip, ListRow, RowList } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { ModelFieldHelp } from "@/components/ModelPicker";
 
@@ -46,7 +46,7 @@ export function CliRuntimesPanel() {
   const added = (provider: string | null) => !!provider && (runtimes.data ?? []).some((r) => r.provider === provider);
 
   return (
-    <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
+    <div className="mb-3 border-b pb-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <div className="text-sm font-medium">Subscription CLIs</div>
@@ -74,75 +74,90 @@ export function CliRuntimesPanel() {
       </div>
       <p className="mt-0.5 text-xs text-ink-soft">The login stays in the CLI; Ligus never sees it.</p>
       {clis.isError && <p className="mt-2 text-xs text-ink-soft">{errMsg(clis.error)}</p>}
-      <div className="mt-2 space-y-2">
-        {list.map((c) => (
-          <div key={c.id} data-testid={`cli-${c.id}`} className="rounded-xl border px-3 py-2 text-sm" style={fieldStyle}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span>
-                <span className="font-medium">{c.label}</span>{" "}
-                <span className="font-mono text-xs text-ink-soft">
-                  {c.binary}
-                  {c.version ? ` ${c.version}` : ""}
-                </span>
-              </span>
-              {!c.installed ? (
-                <span className="text-xs text-ink-soft">not installed</span>
-              ) : !c.supported ? (
-                <span className="text-xs text-ink-soft">not usable for subscriptions</span>
-              ) : added(c.provider) ? (
-                <span className="text-xs text-ink-soft">runtime added</span>
-              ) : (
-                <Button size="sm" variant="primary" disabled={busy === c.id} onClick={() => void add(c)}>
-                  Add runtime
-                </Button>
+      <RowList label="Subscription CLIs" className="mt-1">
+        {list.map((c) => {
+          const usable = c.installed && c.supported;
+          const details =
+            (usable && c.login !== "loggedIn") || (usable && !added(c.provider)) || !c.installed || !!c.note;
+          return (
+            <ListRow
+              key={c.id}
+              testId={`cli-${c.id}`}
+              title={c.label}
+              meta={
+                <>
+                  <span className="font-mono">
+                    {c.binary}
+                    {c.version ? ` ${c.version}` : ""}
+                  </span>
+                  {usable && (
+                    <>
+                      {" · "}
+                      <span
+                        style={{
+                          color:
+                            c.login === "loggedIn"
+                              ? "var(--ligus-success-ink)"
+                              : c.login === "notLoggedIn"
+                                ? "var(--ligus-danger-ink)"
+                                : undefined,
+                        }}
+                      >
+                        {LOGIN_TEXT[c.login]}
+                      </span>
+                      {c.loginDetail && <span> · {c.loginDetail}</span>}
+                    </>
+                  )}
+                </>
+              }
+              trailing={
+                !c.installed ? (
+                  <span className="text-xs text-ink-soft">not installed</span>
+                ) : !c.supported ? (
+                  <span className="text-xs text-ink-soft">not usable for subscriptions</span>
+                ) : added(c.provider) ? (
+                  <span className="text-xs text-ink-soft">runtime added</span>
+                ) : (
+                  <Button size="sm" variant="primary" disabled={busy === c.id} onClick={() => void add(c)}>
+                    Add runtime
+                  </Button>
+                )
+              }
+            >
+              {details && (
+                <div className="space-y-1 px-1 text-xs text-ink-soft">
+                  {usable && c.login !== "loggedIn" && (
+                    <div>
+                      To sign in, run <code>{c.loginCommand}</code> in a terminal on this machine.
+                    </div>
+                  )}
+                  {usable && !added(c.provider) && (
+                    <>
+                      <input
+                        value={models[c.id] ?? ""}
+                        onChange={(e) => setModels((m) => ({ ...m, [c.id]: e.target.value }))}
+                        placeholder="Model (blank = the CLI's default)"
+                        list={`cli-models-${c.id}`}
+                        className="w-full rounded-lg border px-2 py-1 font-mono text-xs"
+                        style={fieldStyle}
+                      />
+                      {c.provider && (
+                        <ModelFieldHelp listId={`cli-models-${c.id}`} provider={c.provider} model={models[c.id] ?? ""} />
+                      )}
+                    </>
+                  )}
+                  {!c.installed && (
+                    <div>
+                      Install: <code>{c.installCommand}</code>
+                    </div>
+                  )}
+                  {c.note && <div>{c.note}</div>}
+                </div>
               )}
-            </div>
-            {c.installed && c.supported && (
-              <div className="mt-1 text-xs">
-                <span
-                  style={{
-                    color:
-                      c.login === "loggedIn"
-                        ? "var(--ligus-success-ink)"
-                        : c.login === "notLoggedIn"
-                          ? "var(--ligus-danger-ink)"
-                          : undefined,
-                  }}
-                >
-                  {LOGIN_TEXT[c.login]}
-                </span>
-                {c.loginDetail && <span className="text-ink-soft"> · {c.loginDetail}</span>}
-                {c.login !== "loggedIn" && (
-                  <div className="mt-0.5 text-ink-soft">
-                    To sign in, run <code>{c.loginCommand}</code> in a terminal on this machine.
-                  </div>
-                )}
-              </div>
-            )}
-            {c.installed && c.supported && !added(c.provider) && (
-              <>
-                <input
-                  value={models[c.id] ?? ""}
-                  onChange={(e) => setModels((m) => ({ ...m, [c.id]: e.target.value }))}
-                  placeholder="Model (blank = the CLI's default)"
-                  list={`cli-models-${c.id}`}
-                  className="mt-1.5 w-full rounded-lg border px-2 py-1 font-mono text-xs"
-                  style={fieldStyle}
-                />
-                {c.provider && (
-                  <ModelFieldHelp listId={`cli-models-${c.id}`} provider={c.provider} model={models[c.id] ?? ""} />
-                )}
-              </>
-            )}
-            {!c.installed && (
-              <div className="mt-1 text-xs text-ink-soft">
-                Install: <code>{c.installCommand}</code>
-              </div>
-            )}
-            {c.note && <div className="mt-1 text-xs text-ink-soft">{c.note}</div>}
-          </div>
-        ))}
-      </div>
+            </ListRow>
+          );
+        })}
+      </RowList>
     </div>
   );
 }

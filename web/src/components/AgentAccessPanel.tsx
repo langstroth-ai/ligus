@@ -46,7 +46,40 @@ export function AgentAccessPanel({ sessionId, agent }: { sessionId: string; agen
       </span>
     );
   }
-  return <AccessEditor sessionId={sessionId} agent={agent} />;
+  return <AccessDisclosure sessionId={sessionId} agent={agent} />;
+}
+
+/// One line for an agent's access, e.g. "Only me · 50 turns/day · $5.00 cap".
+export function accessSummary(agent: WorkspaceAgentDto): string {
+  const shared = !agent.ownerActorId;
+  const who = agent.access === "everyone" ? "Everyone" : shared ? "Admins only" : "Only me";
+  const t = agent.memberTurnsPerDay;
+  const turns =
+    t === 0 ? "unlimited turns" : t != null ? `${t} turns/day` : shared ? "no turn limit" : `${agent.effectiveMemberTurnsPerDay ?? 50} turns/day`;
+  const cap = agent.usdCentsPerDay != null ? ` · $${usd(agent.usdCentsPerDay)} cap` : "";
+  return `${who} · ${turns}${cap}`;
+}
+
+/// The editor stays folded under a one-line summary so it doesn't dominate
+/// the roster row; "Access" opens it.
+function AccessDisclosure({ sessionId, agent }: { sessionId: string; agent: WorkspaceAgentDto }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1 text-xs">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-w-0 items-baseline gap-1.5 rounded text-left hover:underline"
+      >
+        <span className="shrink-0 font-medium" style={{ color: "var(--ligus-accent-ink)" }}>
+          Access
+        </span>
+        <span className="min-w-0 truncate text-ink-soft">{accessSummary(agent)}</span>
+      </button>
+      {open && <AccessEditor sessionId={sessionId} agent={agent} />}
+    </div>
+  );
 }
 
 function AccessEditor({ sessionId, agent }: { sessionId: string; agent: WorkspaceAgentDto }) {
@@ -89,7 +122,7 @@ function AccessEditor({ sessionId, agent }: { sessionId: string; agent: Workspac
 
   const defaultTurns = shared ? "no limit" : `${agent.effectiveMemberTurnsPerDay ?? 50}`;
   return (
-    <div className="mt-3 space-y-2 border-t pt-3 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="mt-2 space-y-2 text-xs">
       <div>
         <span className="mb-1 flex items-center gap-1.5 font-medium">
           Who can use this agent

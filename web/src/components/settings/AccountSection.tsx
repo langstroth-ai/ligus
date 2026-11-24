@@ -26,7 +26,7 @@ import {
 } from "@/lib/ipc";
 import { deviceName, pairingLine, revokeConfirmText } from "@/lib/myDevices";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, Hint, InfoTip, Section, Switch, fieldStyle } from "@/components/ui";
+import { Button, Hint, InfoTip, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
 import { Row } from "@/components/settings/FlowSection";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
@@ -440,38 +440,38 @@ export function DevicesSection() {
           </div>
         </div>
       )}
-      {list.map((d) => (
-        <div
-          key={d.deviceId}
-          className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2"
-          style={{ ...fieldStyle, opacity: d.revoked ? 0.55 : 1 }}
-        >
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {deviceName(d, pairings.data ?? [])}
-              {d.thisDevice && <span className="text-ink-soft"> · this device</span>}
-              {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
-            </div>
-            <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
-            {!d.revoked && pairingLine(d, pairings.data ?? []) && (
-              <div className="truncate text-[11px] text-ink-soft">{pairingLine(d, pairings.data ?? [])}</div>
-            )}
-            {d.revoked &&
-              (revocations.data ?? [])
-                .filter((r) => r.deviceId === d.deviceId)
-                .map((r) => <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />)}
-          </div>
-          {!d.thisDevice && !d.revoked && (
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => void revoke(d)}
+      <RowList label="My devices">
+        {list.map((d) => {
+          const pl = !d.revoked ? pairingLine(d, pairings.data ?? []) : "";
+          const revs = d.revoked ? (revocations.data ?? []).filter((r) => r.deviceId === d.deviceId) : [];
+          return (
+            <ListRow
+              key={d.deviceId}
+              title={
+                <span style={{ opacity: d.revoked ? 0.55 : 1 }}>
+                  {deviceName(d, pairings.data ?? [])}
+                  {d.thisDevice && <span className="font-normal text-ink-soft"> · this device</span>}
+                  {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
+                </span>
+              }
+              meta={<span className="font-mono">{d.fingerprint}</span>}
+              actionsLabel={`Actions for ${deviceName(d, pairings.data ?? [])}`}
+              actions={
+                !d.thisDevice && !d.revoked ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []
+              }
             >
-              Revoke
-            </button>
-          )}
-        </div>
-      ))}
+              {(pl || revs.length > 0) && (
+                <div className="px-1">
+                  {pl && <div className="truncate text-[11px] text-ink-soft">{pl}</div>}
+                  {revs.map((r) => (
+                    <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />
+                  ))}
+                </div>
+              )}
+            </ListRow>
+          );
+        })}
+      </RowList>
     </Section>
   );
 }

@@ -20,7 +20,8 @@ import {
   type WorkspaceReposDto,
 } from "@/lib/ipc";
 import { confirmDialog, promptDialog } from "@/components/Dialog";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { useRowMenu } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
 
 export const REPOS_KEY = ["workspace-repos"];
@@ -135,8 +136,49 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
       toast.error(`${what}: ${errMsg(e)}`);
     }
   };
+  const admin = data.canAdmin && !r.removed;
+  const rm = useRowMenu(`Actions for ${r.name}`, [
+    ...(!r.removed && r.here.path
+      ? [{ label: "Unbind", onSelect: () => void run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!)) }]
+      : []),
+    ...(admin
+      ? [
+          {
+            label: "Aliases…",
+            onSelect: async () => {
+              const list = await promptDialog(
+                "Other names of this repository (comma separated): an old owner, or a different case on a case-sensitive server. Names only; each device uses one after someone there accepts it.",
+                { defaultValue: (r.aliases ?? []).map((a) => a.alias).join(", ") },
+              );
+              if (list === null) return;
+              const aliases = list.split(",").map((a) => a.trim()).filter(Boolean);
+              await run("Couldn't set the aliases", () => setRepoAliases(r.id, aliases));
+            },
+          },
+          {
+            label: "Rename",
+            onSelect: async () => {
+              const name = await promptDialog("Repository name", { defaultValue: r.name });
+              if (name && name.trim() && name !== r.name) await run("Couldn't rename it", () => renameWorkspaceRepo(r.id, name.trim()));
+            },
+          },
+          {
+            label: "Remove",
+            danger: true,
+            onSelect: async () => {
+              const ok = await confirmDialog("Chats that use it keep naming it. Checkouts on devices stay where they are.", {
+                title: `Remove ${r.name}?`,
+                confirmLabel: "Remove",
+                danger: true,
+              });
+              if (ok) await run("Couldn't remove it", () => removeWorkspaceRepo(r.id));
+            },
+          },
+        ]
+      : []),
+  ]);
   return (
-    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--ligus-line)" }} {...rm.rowProps}>
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium">
@@ -152,49 +194,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
             </div>
           )}
         </div>
-        {data.canAdmin && !r.removed && (
-          <div className="flex shrink-0 gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const list = await promptDialog(
-                  "Other names of this repository (comma separated): an old owner, or a different case on a case-sensitive server. Names only; each device uses one after someone there accepts it.",
-                  { defaultValue: (r.aliases ?? []).map((a) => a.alias).join(", ") },
-                );
-                if (list === null) return;
-                const aliases = list.split(",").map((a) => a.trim()).filter(Boolean);
-                await run("Couldn't set the aliases", () => setRepoAliases(r.id, aliases));
-              }}
-            >
-              Aliases…
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const name = await promptDialog("Repository name", { defaultValue: r.name });
-                if (name && name.trim() && name !== r.name) await run("Couldn't rename it", () => renameWorkspaceRepo(r.id, name.trim()));
-              }}
-            >
-              Rename
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const ok = await confirmDialog("Chats that use it keep naming it. Checkouts on devices stay where they are.", {
-                  title: `Remove ${r.name}?`,
-                  confirmLabel: "Remove",
-                  danger: true,
-                });
-                if (ok) await run("Couldn't remove it", () => removeWorkspaceRepo(r.id));
-              }}
-            >
-              Remove
-            </Button>
-          </div>
-        )}
+        {rm.button}
       </div>
       {!r.removed && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -207,9 +207,6 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
                 {r.here.viaAlias ? " (via alias)" : ""}
               </span>
               {r.here.state === "error" && <span className="text-xs">now points elsewhere; it no longer counts as {r.name}</span>}
-              <Button size="sm" variant="ghost" onClick={() => run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!))}>
-                Unbind
-              </Button>
             </>
           ) : (
             <>
@@ -281,6 +278,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
           ))}
         </div>
       )}
+      {rm.menu}
     </div>
   );
 }
@@ -409,17 +407,27 @@ export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto;
       title="Host aliases"
       info="Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this workspace recognizes checkouts, never where git connects, and each device uses it only after someone there accepts it."
     >
-      {list.map((h) => (
-        <div key={h.alias} className="flex flex-wrap items-center gap-2 py-1 text-sm">
-          <code>{h.alias}</code> → <code>{h.host}</code>
-          <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
-          {data.canAdmin && (
-            <Button size="sm" variant="ghost" onClick={() => void run("Couldn't remove it", () => setHostAlias(h.alias, ""))}>
-              Remove
-            </Button>
-          )}
-        </div>
-      ))}
+      <RowList label="Host aliases">
+        {list.map((h) => (
+          <ListRow
+            key={h.alias}
+            title={
+              <span className="font-normal">
+                <code>{h.alias}</code> → <code>{h.host}</code>
+              </span>
+            }
+            actionsLabel={`Actions for ${h.alias}`}
+            trailing={
+              <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
+            }
+            actions={
+              data.canAdmin
+                ? [{ label: "Remove", danger: true, onSelect: () => void run("Couldn't remove it", () => setHostAlias(h.alias, "")) }]
+                : []
+            }
+          />
+        ))}
+      </RowList>
       {data.canAdmin && (
         <form
           className="mt-2 flex gap-2"
