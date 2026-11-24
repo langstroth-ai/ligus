@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { InfoTip, Section, SelectField, Switch } from "@/components/ui";
+import { useState } from "react";
+import { FormDisclosure, InfoTip, Section, SelectField, Switch } from "@/components/ui";
 import { InfoField } from "@/components/settings/shared";
 import { toast, errMsg } from "@/components/Toast";
 import { getFlowSettings, setFlowSettings, type FlowSettings, type RouteMode, type StopUpstream } from "@/lib/flow";
@@ -15,6 +16,9 @@ export function FlowSection() {
     onSuccess: (s) => qc.setQueryData(["flow-settings"], s),
     onError: (e) => toast.error(`Couldn't save flow settings: ${errMsg(e)}`),
   });
+  // Tuning knobs stay folded under "More options" until asked for.
+  const [moreRouting, setMoreRouting] = useState(false);
+  const [moreQueue, setMoreQueue] = useState(false);
   const s = q.data;
   if (!s) return null;
   const set = (patch: Partial<FlowSettings>) => save.mutate({ ...s, ...patch });
@@ -31,6 +35,8 @@ export function FlowSection() {
             <option value="live">Live</option>
           </SelectField>
         </InfoField>
+        <FormDisclosure label="More options" open={moreRouting} onToggle={() => setMoreRouting((v) => !v)}>
+        <div className="flex flex-col gap-3">
         <InfoField label="Outcome half-life (days)" info="How fast old outcomes stop counting in an agent's score.">
           <NumberInput value={s.halfLifeDays} min={1} max={180} onChange={(v) => set({ halfLifeDays: v })} label="Outcome half-life" />
         </InfoField>
@@ -50,8 +56,21 @@ export function FlowSection() {
             <NumberInput value={Math.round(s.epsilonMax * 100)} min={0} max={50} onChange={(v) => set({ epsilonMax: v / 100, epsilonMin: Math.min(s.epsilonMin, v / 100) })} label="Maximum exploration %" />
           </div>
         </InfoField>
+        </div>
+        </FormDisclosure>
       </Section>
       <Section title="Review queue">
+        <Row label="Ask more reviewers" hint="When the queue backs up, notify members who could approve and haven't voted (at most hourly).">
+          <Switch on={s.recruitApprovers} onChange={(v) => set({ recruitApprovers: v })} label="Ask more reviewers" />
+        </Row>
+        <Row
+          label="Take queued stages when idle"
+          hint="A workflow stage waiting over a minute for a busy or offline host runs on this device instead, if it is idle and has the agent's runtime."
+        >
+          <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
+        </Row>
+        <FormDisclosure label="More options" open={moreQueue} onToggle={() => setMoreQueue((v) => !v)}>
+        <div className="flex flex-col gap-3">
         <InfoField label="Queue limit" info="Open proposals waiting for review above which the gate counts as full.">
           <NumberInput value={s.queueLimit} min={1} max={100} onChange={(v) => set({ queueLimit: v })} label="Queue limit" />
         </InfoField>
@@ -68,38 +87,25 @@ export function FlowSection() {
             <option value="off">Off</option>
           </SelectField>
         </InfoField>
-        <Row label="Ask more reviewers" hint="When the queue backs up, notify members who could approve and haven't voted (at most hourly).">
-          <Switch on={s.recruitApprovers} onChange={(v) => set({ recruitApprovers: v })} label="Ask more reviewers" />
-        </Row>
-        <Row
-          label="Take queued stages when idle"
-          hint="A workflow stage waiting over a minute for a busy or offline host runs on this device instead, if it is idle and has the agent's runtime."
-        >
-          <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
-        </Row>
+        </div>
+        </FormDisclosure>
       </Section>
-      <Section title="Task board">
+      <Section title="Agents">
         <Row
           label="Agents pick up work on their own"
           hint="When an open item's stimulus crosses an agent's threshold, hand it over without asking (one at a time, only for agents that run on this device). Off: the board suggests and you hand items over."
         >
           <Switch on={s.boardAutoPickup} onChange={(v) => set({ boardAutoPickup: v })} label="Task board auto pickup" />
         </Row>
-      </Section>
-      <Section title="Workspace marks">
         <Row label="Marks in agent context" hint="Show active claims, locks and review markers to every agent turn, and teach agents to leave their own.">
           <Switch on={s.marksInContext} onChange={(v) => set({ marksInContext: v })} label="Marks in agent context" />
         </Row>
-      </Section>
-      <Section title="Worktrees">
         <Row
           label="Reuse turn worktrees"
           hint="Keep a finished turn's isolated worktree, with its build output and dependency caches, for the chat's next turn (up to two per chat). Tracked changes and stray files are cleared first."
         >
           <Switch on={s.reuseWorktrees} onChange={(v) => set({ reuseWorktrees: v })} label="Reuse turn worktrees" />
         </Row>
-      </Section>
-      <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
           <Switch on={s.handoffCards} onChange={(v) => set({ handoffCards: v })} label="Hand-off cards" />
         </Row>
@@ -123,9 +129,9 @@ export function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
+    <div className="ligus-listrow flex items-center justify-between gap-3 border-t px-1 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }}>
       <div>
-        <div className="flex items-center gap-1.5 text-sm">
+        <div className="flex items-center gap-1.5 text-[13px]">
           <span>{label}</span>
           {hint && <InfoTip label={label} text={hint} />}
         </div>

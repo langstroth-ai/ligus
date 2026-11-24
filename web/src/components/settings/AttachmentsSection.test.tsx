@@ -58,6 +58,7 @@ describe("AttachmentsSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Use the recommended policy" }));
     await userEvent.click(screen.getByRole("button", { name: "Save policy" }));
     await waitFor(() => expect(ipc.setAttachmentPolicy).toHaveBeenCalledWith(recommended));
+    await userEvent.click(screen.getByRole("button", { name: "Block a file" }));
     const block = screen.getByRole("button", { name: "Block" });
     expect(block).toBeDisabled();
     await userEvent.type(screen.getByLabelText("SHA-256 to block"), "ab".repeat(32));

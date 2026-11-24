@@ -33,6 +33,8 @@ import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { LinkedAccountsSection } from "@/components/settings/LinkedAccountsSection";
 import { AddPhonePanel } from "@/components/settings/AddPhonePanel";
+import { Sheet } from "@/components/kit/Sheet";
+import { MoreMenu } from "@/components/MoreMenu";
 
 /// Profile page: your name, picture, safety code and commit email, and the
 /// devices that act as you. Your account is a key made on this device; no
@@ -346,16 +348,12 @@ export function DevicesSection() {
       title="My devices"
       info="Devices that act as you in this workspace. Add your phone's home host (ligus serve) here so what you do from your phone is yours, not a separate member's."
       action={
-        !adding && !addingPhone ? (
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => setAddingPhone(true)}>
-              Add a phone
-            </Button>
-            <Button size="sm" onClick={() => setAdding(true)}>
-              Add a device
-            </Button>
-          </div>
-        ) : undefined
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" onClick={() => setAdding(true)}>
+            Add a device
+          </Button>
+          <MoreMenu label="More device actions" items={[{ label: "Add a phone…", onSelect: () => setAddingPhone(true) }]} />
+        </div>
       }
     >
       {pending.map((r) => (
@@ -369,18 +367,30 @@ export function DevicesSection() {
         </div>
       ))}
       {addingPhone && (
-        <div ref={phoneRef}>
-          <AddPhonePanel
-            onDone={() => {
-              setAddingPhone(false);
-              refresh();
-            }}
-            onCancel={() => setAddingPhone(false)}
-          />
-        </div>
+        <Sheet title="Add a phone" side="center" width={520} onClose={() => setAddingPhone(false)}>
+          <div ref={phoneRef}>
+            <AddPhonePanel
+              onDone={() => {
+                setAddingPhone(false);
+                refresh();
+              }}
+              onCancel={() => setAddingPhone(false)}
+            />
+          </div>
+        </Sheet>
       )}
       {adding && (
-        <div className="space-y-2 rounded-xl border px-3 py-3" style={fieldStyle}>
+        <Sheet
+          title="Add a device"
+          side="center"
+          width={500}
+          onClose={() => {
+            setAdding(false);
+            setCode("");
+            setPreview(null);
+          }}
+        >
+        <div className="space-y-2">
           <textarea
             value={code}
             onChange={(e) => void check(e.target.value)}
@@ -439,6 +449,7 @@ export function DevicesSection() {
             </Button>
           </div>
         </div>
+        </Sheet>
       )}
       <RowList label="My devices">
         {list.map((d) => {

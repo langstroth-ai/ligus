@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { readRecentLogs, logDirPath } from "@/lib/ipc";
 import { Section, Button, fieldStyle } from "@/components/ui";
+import { MoreMenu } from "@/components/MoreMenu";
 import { toast } from "@/components/Toast";
 
 /// Diagnostics — the tail of the app log (internal errors/warnings/panics that
@@ -28,21 +29,17 @@ export function DiagnosticsSection() {
     <Section
       title="Diagnostics"
       info="Recent internal log output: background errors from sync, agents, scheduling and workflows, plus panics. Set LIGUS_LOG=debug for more detail. Newest lines are at the bottom."
+      action={
+        <span className="flex items-center gap-1.5">
+          {dir.data && (
+            <MoreMenu label="More diagnostics actions" items={[{ label: "Copy log-folder path", onSelect: () => void copyPath(), title: dir.data }]} />
+          )}
+          <Button size="sm" onClick={() => logs.refetch()}>
+            Refresh
+          </Button>
+        </span>
+      }
     >
-      <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => logs.refetch()}>
-          Refresh
-        </Button>
-        {dir.data && (
-          <button
-            className="text-xs underline underline-offset-2 hover:opacity-80"
-            onClick={copyPath}
-            data-tip={dir.data}
-          >
-            Copy log-folder path
-          </button>
-        )}
-      </div>
       <pre
         className="mt-1 max-h-[52vh] overflow-auto rounded-xl border p-3 text-[11.5px] leading-relaxed"
         style={{ ...fieldStyle, fontFamily: "var(--ligus-mono, ui-monospace, monospace)", whiteSpace: "pre-wrap" }}

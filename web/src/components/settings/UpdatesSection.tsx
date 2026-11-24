@@ -58,19 +58,15 @@ export function UpdatesSection() {
     <Section
       title="Updates"
       info="A shared workspace for you, your teammates and your coding agents. Ligus is short for ligustica (Apis mellifera ligustica, the Italian honeybee). Open source under the MIT license."
-    >
-      <div className="text-sm">
-        You're on <b>Ligus v{info.data?.coreVersion ?? "…"}</b>
-        {info.data?.buildProfile === "debug" && <span className="text-ink-soft"> · debug build</span>}
-      </div>
-      <div>
-        <Button
-          onClick={() => check.mutate()}
-          disabled={check.isPending || installing}
-          className="shrink-0"
-        >
+      action={
+        <Button size="sm" onClick={() => check.mutate()} disabled={check.isPending || installing} className="shrink-0">
           {check.isPending ? "Checking…" : "Check for updates"}
         </Button>
+      }
+    >
+      <div className="px-1 text-[13px]">
+        Ligus v{info.data?.coreVersion ?? "…"}
+        {info.data?.buildProfile === "debug" && <span className="text-ink-soft"> · debug build</span>}
       </div>
       {available && (
         <div

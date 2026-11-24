@@ -17,7 +17,8 @@ import {
   type ForgeDeviceStart,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Button, EmptyHint, FormDisclosure, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
 import { useRowMenu } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
 
@@ -50,11 +51,17 @@ export function CodeHostsSection() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["forges"], queryFn: () => forgesList(false) });
   const refresh = () => qc.invalidateQueries({ queryKey: ["forges"] });
+  const [adding, setAdding] = useState(false);
 
   return (
     <div>
       <Section
         title="Connections"
+        action={
+          <Button size="sm" onClick={() => setAdding(true)}>
+            Connect a code host
+          </Button>
+        }
         info="Code hosts are for repository work on this device: listing, cloning and opening pull or merge requests. Ligus doesn't use them to sign you in. Tokens stay on this device, in its secret store. They are never synced and never sent to your relay."
       >
         <p className="text-xs text-ink-soft">Tokens stay on this device and are never synced.</p>
@@ -64,9 +71,17 @@ export function CodeHostsSection() {
             <ConnectionRow key={c.id} c={c} onChange={refresh} />
           ))}
         </RowList>
-        {list.data && list.data.length === 0 && <p className="text-sm text-ink-soft">No code hosts yet.</p>}
+        {list.data && list.data.length === 0 && <EmptyHint text="No code hosts yet" />}
       </Section>
-      <AddConnection onAdded={refresh} />
+      {adding && (
+        <AddConnection
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
+      )}
       {(list.data ?? []).length > 0 && <RepoPicker connections={list.data ?? []} />}
     </div>
   );
@@ -209,7 +224,8 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
   );
 }
 
-function AddConnection({ onAdded }: { onAdded: () => void }) {
+function AddConnection({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
+  const [more, setMore] = useState(false);
   const [kind, setKind] = useState("gitlab");
   const [base, setBase] = useState("https://gitlab.com");
   const [clientId, setClientId] = useState("");
@@ -225,50 +241,66 @@ function AddConnection({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <Section title="Add a code host">
-      <div className="flex gap-2">
-        <select
-          aria-label="Code host kind"
-          value={kind}
-          onChange={(e) => {
-            setKind(e.target.value);
-            setBase(FORGE_KINDS.find((k) => k.kind === e.target.value)?.base ?? "https://");
-          }}
-          className="rounded-xl border px-2 py-1 text-sm"
-          style={fieldStyle}
-        >
-          {FORGE_KINDS.map((k) => (
-            <option key={k.kind} value={k.kind}>
-              {k.label}
-            </option>
-          ))}
-        </select>
-        <input
-          aria-label="Code host address"
-          value={base}
-          onChange={(e) => setBase(e.target.value)}
-          className="w-full rounded-xl border px-3 py-1 font-mono text-sm"
-          style={fieldStyle}
-        />
-        <Button size="sm" variant="primary" onClick={() => void add()}>
-          Add
-        </Button>
+    <Sheet
+      title="Connect a code host"
+      side="center"
+      width={480}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={() => void add()}>
+            Add
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <select
+            aria-label="Code host kind"
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value);
+              setBase(FORGE_KINDS.find((k) => k.kind === e.target.value)?.base ?? "https://");
+            }}
+            className="rounded-xl border px-2 py-1 text-sm"
+            style={fieldStyle}
+          >
+            {FORGE_KINDS.map((k) => (
+              <option key={k.kind} value={k.kind}>
+                {k.label}
+              </option>
+            ))}
+          </select>
+          <input
+            aria-label="Code host address"
+            value={base}
+            onChange={(e) => setBase(e.target.value)}
+            className="w-full rounded-xl border px-3 py-1 font-mono text-sm"
+            style={fieldStyle}
+          />
+        </div>
+        <FormDisclosure label="More options" open={more} onToggle={() => setMore((v) => !v)}>
+          <div className="space-y-2">
+            {(kind === "gitlab" || kind === "github") && (
+              <input
+                aria-label="OAuth application id (self-managed only)"
+                placeholder="Application id for device sign-in (self-managed servers only; optional)"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="w-full rounded-xl border px-3 py-1 font-mono text-sm"
+                style={fieldStyle}
+              />
+            )}
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
+              Internal server on this device's network (allows a local or private address; this device only)
+            </label>
+          </div>
+        </FormDisclosure>
       </div>
-      {(kind === "gitlab" || kind === "github") && (
-        <input
-          aria-label="OAuth application id (self-managed only)"
-          placeholder="Application id for device sign-in (self-managed servers only; optional)"
-          value={clientId}
-          onChange={(e) => setClientId(e.target.value)}
-          className="w-full rounded-xl border px-3 py-1 font-mono text-sm"
-          style={fieldStyle}
-        />
-      )}
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
-        Internal server on this device's network (allows a local or private address; this device only)
-      </label>
-    </Section>
+    </Sheet>
   );
 }
 

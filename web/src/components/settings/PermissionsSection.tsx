@@ -11,7 +11,7 @@ import {
   type AgentToolSettings,
   type ClaudePermissionMode,
 } from "@/lib/ipc";
-import { InfoTip, Button, Section, SelectField, Switch } from "@/components/ui";
+import { InfoTip, Button, ListRow, RowList, Section, SelectField, Switch } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 
@@ -137,10 +137,7 @@ export function PermissionsSection() {
         </div>
       )}
       {health.data?.macos && (
-        <div
-          className="space-y-2 rounded-2xl border p-3"
-          style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-        >
+        <div className="space-y-2 border-b pb-3" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="flex items-center gap-1.5">
             <div className="text-sm font-medium">macOS file access</div>
             <InfoTip
@@ -207,36 +204,47 @@ export function PermissionsSection() {
             text="Local or self-hosted model runtimes (Ollama, or a Custom / Ligus daemon endpoint such as a llama.cpp server; never hosted APIs like OpenAI or OpenRouter) with Supports tools on get Ligus's built-in tools: read_file, list_dir and search, plus edit_file and write_file when the turn runs in the chat's isolated git worktree. Their changes come back as a proposal in the Review pane, never straight into your folder."
           />
         </div>
-        <div className="flex items-center gap-2 text-sm text-ink-soft">
-          <Switch
-            on={tools.enabled}
-            onChange={(v) => setTools({ enabled: v })}
-            label="Built-in file tools"
-            disabled={!agentTools.data}
+        <RowList label="Local model file tools">
+          <ListRow
+            title="Offer built-in file tools to local models"
+            trailing={
+              <Switch
+                on={tools.enabled}
+                onChange={(v) => setTools({ enabled: v })}
+                label="Built-in file tools"
+                disabled={!agentTools.data}
+              />
+            }
           />
-          <span>Offer built-in file tools to local models</span>
-        </div>
-        <div className="flex items-center gap-2 text-sm text-ink-soft">
-          <Switch
-            on={tools.writeInPlace}
-            onChange={(v) => setTools({ writeInPlace: v })}
-            label="Edit files in place"
-            disabled={!agentTools.data || !tools.enabled}
+          <ListRow
+            title="Edit outside an isolated worktree"
+            tip="Folders that aren't git repositories"
+            trailing={
+              <Switch
+                on={tools.writeInPlace}
+                onChange={(v) => setTools({ writeInPlace: v })}
+                label="Edit files in place"
+                disabled={!agentTools.data || !tools.enabled}
+              />
+            }
           />
-          <span>Allow edits outside an isolated worktree (folders that aren't git repositories)</span>
-        </div>
-        <div className="flex items-center gap-2 text-sm text-ink-soft">
-          <Switch
-            on={tools.runCommand}
-            onChange={(v) => setTools({ runCommand: v })}
-            label="Run commands"
-            disabled={!agentTools.data || !tools.enabled}
+          <ListRow
+            title={
+              <>
+                Allow <code>run_command</code>
+              </>
+            }
+            meta="builds and tests, only where edits are allowed"
+            trailing={
+              <Switch
+                on={tools.runCommand}
+                onChange={(v) => setTools({ runCommand: v })}
+                label="Run commands"
+                disabled={!agentTools.data || !tools.enabled}
+              />
+            }
           />
-          <span>
-            Allow <code>run_command</code> — shell commands for builds and tests (only where edits are
-            allowed)
-          </span>
-        </div>
+        </RowList>
         {tools.enabled && tools.runCommand && (
           <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
             Local models can run any shell command in the turn's folder without asking. A command is

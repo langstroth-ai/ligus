@@ -17,6 +17,7 @@ import type { McpServerDto } from "@/lib/ipc";
 import { IconPlus } from "@/lib/icons";
 import { toast, errMsg } from "@/components/Toast";
 import { promptDialog } from "@/components/Dialog";
+import { Sheet } from "@/components/kit/Sheet";
 
 /// Tools & MCP: install and configure MCP servers. Settings owns installing +
 /// configuring; the chat Tools pane links here and only attaches/selects.
@@ -29,6 +30,8 @@ export function ToolsSection() {
     onError: (e) => toast.error(`Couldn't list the server's tools: ${errMsg(e)}`),
   });
   const [source, setSource] = useState("");
+  // Adding a server (manifest, hosted preset or HTTP) happens in one sheet.
+  const [sheetOpen, setSheetOpen] = useState(false);
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => setMcpEnabled(id, enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["mcp"] }),
@@ -37,6 +40,7 @@ export function ToolsSection() {
     mutationFn: () => installMcpServer(source.trim()),
     onSuccess: () => {
       setSource("");
+      setSheetOpen(false);
       qc.invalidateQueries({ queryKey: ["mcp"] });
     },
   });
@@ -47,6 +51,7 @@ export function ToolsSection() {
   const addLinear = useMutation({
     mutationFn: () => addRemoteMcpServer("linear", "https://mcp.linear.app/sse"),
     onSuccess: () => {
+      setSheetOpen(false);
       qc.invalidateQueries({ queryKey: ["mcp"] });
       toast.success("Linear added — enable it, then Connect to authorize.");
     },
@@ -90,6 +95,7 @@ export function ToolsSection() {
       setHttpUrl("");
       setHttpToken("");
       setAddOpen(false);
+      setSheetOpen(false);
       qc.invalidateQueries({ queryKey: ["mcp"] });
       toast.success(`${id} added — enable it to use its tools.`);
     },
@@ -117,7 +123,21 @@ export function ToolsSection() {
     <Section
       title="MCP servers"
       info="Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize it, or install a workspace-scoped entry from a manifest URL or GitHub reference."
+      action={
+        <Button size="sm" onClick={() => setSheetOpen(true)}>
+          Add a server
+        </Button>
+      }
     >
+      {sheetOpen && (
+      <Sheet
+        title="Add an MCP server"
+        description="Servers stay inert until you enable them."
+        side="center"
+        width={480}
+        onClose={() => setSheetOpen(false)}
+      >
+      <div className="flex flex-col gap-3">
       {!hasLinear && (
         <Button onClick={() => addLinear.mutate()} disabled={addLinear.isPending} className="self-start">
           <IconPlus size={15} /> Add Linear (issues)
@@ -187,7 +207,10 @@ export function ToolsSection() {
           </Button>
         </form>
       </FormDisclosure>
-      {servers.data?.length === 0 && <p className="text-sm text-ink-soft">None configured.</p>}
+      </div>
+      </Sheet>
+      )}
+      {servers.data?.length === 0 && <p className="px-1 text-[13px] text-ink-soft">No MCP servers yet</p>}
       {(servers.data ?? []).length > 0 && (
         <RowList label="MCP servers">
           {(servers.data ?? []).map((s) => (

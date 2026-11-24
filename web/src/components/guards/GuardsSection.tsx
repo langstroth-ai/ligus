@@ -12,7 +12,7 @@ import {
   type ThrottleStateDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
-import { Badge, Button, EmptyHint, ErrorState, Field, LoadingState, Section, type Tone } from "@/components/ui";
+import { Badge, Button, EmptyHint, ErrorState, Field, FormDisclosure, LoadingState, Section, type Tone } from "@/components/ui";
 import { IconLock } from "@/lib/icons";
 import { EgressPresetsPanel } from "./EgressPresetsPanel";
 import { CliUserConfigPanel } from "./CliUserConfigPanel";
@@ -54,6 +54,7 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const [reason, setReason] = useState(d.reason);
   const [brood, setBrood] = useState(d.broodPaths.join("\n"));
   const [allowed, setAllowed] = useState(d.allowedMcpServers.join("\n"));
+  const [showSettings, setShowSettings] = useState(false);
   useEffect(() => {
     setReason(d.reason);
     setBrood(d.broodPaths.join("\n"));
@@ -124,7 +125,7 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
           </div>
           <ul className="mt-2.5 space-y-1 pl-11 text-xs leading-[1.5]">
             <li>New members and devices need approvals from two different Admins.</li>
-            <li>Agents reach only the MCP servers listed below: no web or shell tools; runtimes Ligus can&apos;t confine are refused.</li>
+            <li>Agents reach only the allowed MCP servers (under More options): no web or shell tools; runtimes Ligus can&apos;t confine are refused.</li>
             <li>Changes to protected paths need a human member&apos;s approval before they apply.</li>
             <li>Everyone sees a banner.</li>
           </ul>
@@ -140,6 +141,8 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             placeholder="e.g. invite link leaked"
           />
         </Field>
+        <FormDisclosure label="More options: allowed servers and protected paths" open={showSettings} onToggle={() => setShowSettings((v) => !v)}>
+        <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Allowed MCP servers" hint="One per line.">
             <textarea
@@ -169,6 +172,8 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             </Button>
           </div>
         )}
+        </div>
+        </FormDisclosure>
       </Section>
 
       {d.pending.length > 0 && (

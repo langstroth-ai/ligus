@@ -124,6 +124,7 @@ describe("ToolsSection bearer tokens", () => {
     const user = userEvent.setup();
     renderSection();
     await screen.findByText("docs");
+    await user.click(screen.getByRole("button", { name: "Add a server" }));
     await user.click(screen.getByRole("button", { name: /Add HTTP server/ }));
     const token = screen.getByLabelText(/Bearer token \(optional\)/) as HTMLInputElement;
     expect(token.type).toBe("password");
@@ -140,6 +141,7 @@ describe("ToolsSection bearer tokens", () => {
     const user = userEvent.setup();
     renderSection();
     await screen.findByText("docs");
+    await user.click(screen.getByRole("button", { name: "Add a server" }));
     await user.click(screen.getByRole("button", { name: /Add HTTP server/ }));
     await user.type(screen.getByLabelText("Name"), "open");
     await user.type(screen.getByLabelText("URL"), "http://h/mcp");
