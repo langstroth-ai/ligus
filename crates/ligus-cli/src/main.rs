@@ -383,11 +383,7 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
     if store.foreign_workspaces(&keep, own_device)?.is_empty() {
         return Ok(());
     }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let backup = cfg.data_dir.join(format!("ligus.db.bak-foreign-purge-{stamp}"));
+    let backup = ligus_runtime::event_store::purge_backup_path(&cfg.data_dir);
     let dropped = store.purge_foreign_workspaces(&keep, own_device, Some(&backup))?;
     let events: usize = dropped.iter().map(|(_, n)| n).sum();
     println!(
@@ -401,9 +397,39 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
 /// One sync round against the relay: push everything unpushed, then fetch +
 /// ingest. Uses its own EventStore connection (shares the WAL file), as the app
 /// does. Returns (pushed, pulled) counts.
+/// Open the store from async code: opening can wait (up to the busy
+/// timeout) for another connection's lock on the file, which must not hold
+/// up a runtime worker thread.
+async fn open_store(path: std::path::PathBuf) -> Result<EventStore> {
+    Ok(tokio::task::spawn_blocking(move || EventStore::open(path)).await??)
+}
+
+/// [`open_store`] for a long-lived loop: while the file stays locked past
+/// the busy timeout (the first open after an upgrade builds an index under
+/// the write lock, a large store's takes a while), try again with a growing
+/// pause instead of giving up, as long as `keep_trying` says so.
+async fn open_store_patiently(path: std::path::PathBuf, what: &str, keep_trying: impl Fn() -> bool) -> Result<EventStore> {
+    let mut pause = std::time::Duration::from_secs(1);
+    loop {
+        match open_store(path.clone()).await {
+            Err(e) if store_busy(&e) && keep_trying() => {
+                eprintln!("{what}: the store is busy ({e}); trying again in {}s", pause.as_secs());
+                tokio::time::sleep(pause).await;
+                pause = (pause * 2).min(std::time::Duration::from_secs(30));
+            }
+            r => return r,
+        }
+    }
+}
+
+/// Whether `e` is SQLite's "database is locked" (busy past the timeout).
+fn store_busy(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ligus_runtime::EventStoreError>().is_some_and(ligus_runtime::EventStoreError::is_busy)
+}
+
 async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
     let mut engine = sync_engine(cfg)?;
-    let mut store = EventStore::open(cfg.data_dir.join("ligus.db"))?;
+    let mut store = open_store(cfg.data_dir.join("ligus.db")).await?;
     let (pushed, mut pulled) = sync_round(&mut engine, &mut store).await?;
     // A one-shot sync (a daemon's first sync, `ligus sync`, a worker tick) needs
     // the whole room before it acts: keep paging until caught up. Each round is

@@ -30,11 +30,30 @@ pub enum EventStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    /// An authored draft whose signer stored another event naming the same
+    /// chain link (`ActorStamp::prev`) since it was drafted (another
+    /// connection of this device wrote first). Storing it would fork the
+    /// signer's chain, so it is refused; draft it again (one confirmed with
+    /// a passkey: confirm it again, the confirmation names the draft).
+    #[error("this draft is out of date: its signer wrote something else here first; draft it again (confirm it again if it needed a passkey)")]
+    StaleDraft,
+    /// The cleanup's backup path already holds a file; it is never
+    /// overwritten or removed.
+    #[error("the backup file {0} already exists; the cleanup didn't run")]
+    BackupExists(std::path::PathBuf),
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
 }
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
+
+impl EventStoreError {
+    /// SQLite's "database is locked": another connection held the file past
+    /// the busy timeout. Worth trying again later; nothing was written.
+    pub fn is_busy(&self) -> bool {
+        matches!(self, EventStoreError::Sqlite(rusqlite::Error::SqliteFailure(f, _)) if f.code == rusqlite::ErrorCode::DatabaseBusy)
+    }
+}
 
 /// The largest envelope (its JSON) this device writes to a synced workspace:
 /// sealed for the relay (its ciphertext a JSON array of byte values, at most
@@ -121,6 +140,101 @@ pub const FACTS_KEEP: i64 = 50_000;
 /// Cached projections kept at most; past this the cache starts over.
 const PROJECTION_CACHE_MAX: usize = 256;
 
+/// Another stored event of a signer on a log naming a given link (see
+/// `EventStore::forks_chain`). The expressions match
+/// `idx_events_by_signer` exactly, so it is an index lookup.
+const FORKS_CHAIN_SQL: &str = "SELECT 1 FROM events WHERE session_id = ?1 AND event_id != ?2 \
+     AND json_extract(envelope_json, '$.signerDeviceId') = ?3 \
+     AND json_extract(envelope_json, '$.actorStamp') IS NOT NULL \
+     AND json_extract(envelope_json, '$.actorStamp.prev') IS ?4 LIMIT 1";
+
+/// A signer's newest event on a log below a lamport (see
+/// `EventStore::last_signed_by`), through `idx_events_by_signer`.
+const LAST_SIGNED_BY_SQL: &str = "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
+     AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1";
+
+/// A fresh name for the foreign-workspace cleanup's backup next to the
+/// database in `data_dir`: unique per call (time to the nanosecond and the
+/// process id), so two runs never pick the same file.
+pub fn purge_backup_path(data_dir: &Path) -> std::path::PathBuf {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    data_dir.join(format!("ligus.db.bak-foreign-purge-{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()))
+}
+
+/// How long a connection waits for another connection's lock on the file
+/// before it reports "database is locked".
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Put the file in WAL mode (a no-op once it is). SQLite never calls the busy
+/// handler for this pragma: switching a new file needs every other
+/// connection out of it for a moment, and one that meets another opening
+/// the same new file at once (a first start: the service and the sync loop)
+/// gets "database is locked" straight away. The switch changes nothing
+/// else and is idempotent, so it is tried again, briefly, up to the busy
+/// timeout.
+fn enable_wal(conn: &Connection) -> Result<()> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    let mut pause = std::time::Duration::from_millis(1);
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::DatabaseBusy && std::time::Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// A write transaction: `BEGIN IMMEDIATE`, so it takes the file's write lock
+/// up front, waiting for it (the busy timeout) while another connection
+/// writes. Every transaction here that writes uses it. A deferred one that
+/// reads first takes only a read snapshot, and its first write then fails at
+/// once with "database is locked" if another connection committed since
+/// (SQLite can't wait that out: the snapshot is stale).
+///
+/// Inside a write this connection already holds ([`EventStore::begin_write`])
+/// it is a savepoint: the lock is held already, and its writes still commit
+/// or roll back together. Dropped without [`WriteTx::commit`], it rolls back.
+pub(crate) fn write_tx(conn: &Connection) -> rusqlite::Result<WriteTx<'_>> {
+    let nested = !conn.is_autocommit();
+    conn.execute_batch(if nested { "SAVEPOINT ligus_write" } else { "BEGIN IMMEDIATE" })?;
+    Ok(WriteTx { conn, nested, done: false })
+}
+
+pub(crate) struct WriteTx<'a> {
+    conn: &'a Connection,
+    nested: bool,
+    done: bool,
+}
+
+impl WriteTx<'_> {
+    /// Commit (release, nested). One that fails is rolled back on drop, so
+    /// the connection never stays inside the transaction.
+    pub(crate) fn commit(mut self) -> rusqlite::Result<()> {
+        self.conn.execute_batch(if self.nested { "RELEASE ligus_write" } else { "COMMIT" })?;
+        self.done = true;
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for WriteTx<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.conn
+    }
+}
+
+impl Drop for WriteTx<'_> {
+    fn drop(&mut self) {
+        // (Nothing to undo when SQLite already rolled the transaction back.)
+        if !self.done && !self.conn.is_autocommit() {
+            let _ = self.conn.execute_batch(if self.nested { "ROLLBACK TO ligus_write; RELEASE ligus_write" } else { "ROLLBACK" });
+        }
+    }
+}
+
 impl EventStore {
     /// Open (creating if needed) the event store at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -135,15 +249,27 @@ impl EventStore {
     }
 
     fn init(conn: Connection) -> Result<Self> {
+        // First, before anything touches the file: a connection that meets
+        // another one's lock waits for it (up to the timeout) instead of
+        // failing at once with "database is locked". The pragmas below and
+        // the schema check already take locks.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         // WAL for concurrent readers (the live UI connection + the background
-        // sync connection share the same file); busy_timeout absorbs brief
-        // write contention between them.
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // sync connection share the same file).
+        enable_wal(&conn)?;
         // NORMAL is safe under WAL (no corruption; at worst the last commit is
         // lost on an OS crash/power loss) and avoids an fsync per commit — a big
         // win for chat workloads. (#2)
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // The schema is checked and migrated under the write lock, so two
+        // connections opening one file at once never both add a column.
+        let tx = write_tx(&conn)?;
+        Self::init_schema(&tx)?;
+        tx.commit()?;
+        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS events (
@@ -162,6 +288,14 @@ impl EventStore {
                 ON events (session_id, sequence);
             CREATE INDEX IF NOT EXISTS idx_events_workspace
                 ON events (workspace_id, row_id);
+            -- Each signer's chain on a log (its events and the link each
+            -- names): what an authored append checks under the write lock
+            -- (`forks_chain`) and what a new event's link is read from
+            -- (`last_signed_by`), without a scan of the whole log. The
+            -- signer leads, so a query by session alone never picks this
+            -- index (and its order) over idx_events_session_seq.
+            CREATE INDEX IF NOT EXISTS idx_events_by_signer
+                ON events (json_extract(envelope_json, '$.signerDeviceId'), session_id, json_extract(envelope_json, '$.actorStamp.prev'));
 
             -- Durable sync state (#2), keyed by relay workspace/room. Without
             -- this the sync engine kept its cursor + pushed-set in memory only,
@@ -345,9 +479,9 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS idx_lamport_witnesses_session ON lamport_witnesses (session_id);
             "#,
         )?;
-        repo_tables::init(&conn)?;
-        held::init(&conn)?;
-        agent_usage::init(&conn)?;
+        repo_tables::init(conn)?;
+        held::init(conn)?;
+        agent_usage::init(conn)?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
         // unsigned; NULL for events authored here or received unsealed).
         let has_epoch: bool = conn
@@ -364,7 +498,7 @@ impl EventStore {
         if !has_priority {
             conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
         }
-        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
+        Ok(())
     }
 
     /// A cached identity-link check (device-local).
@@ -422,8 +556,8 @@ impl EventStore {
     /// the log reads.
     fn log_with_witnesses(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         let mut envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            "SELECT envelope_json, sealed_epoch FROM (SELECT 0 AS t, sequence AS o, envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
             [session_id.to_string()],
         )?;
         envelopes.extend(self.witnesses_of(session_id)?);
@@ -520,18 +654,108 @@ impl EventStore {
         Ok(head)
     }
 
-    /// Append a pre-built envelope verbatim. Fails if its
-    /// `(session_id, sequence)` already exists (the append-only invariant).
+    /// Take the file's write lock and hold it until [`EventStore::end_write`]:
+    /// no other connection writes meanwhile, so what this one reads stays
+    /// current until it writes. For a draft that has to be made again at the
+    /// head ([`EventStoreError::StaleDraft`]): drafted and stored under the
+    /// lock, it can't go stale again. Writes made meanwhile through this
+    /// store commit with `end_write(true)` and roll back otherwise.
+    pub(crate) fn begin_write(&self) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    /// End [`EventStore::begin_write`]: commit, or roll back. Always leaves
+    /// the connection out of its transaction (and the file's write lock
+    /// released): a commit that fails is rolled back, and a rollback after
+    /// SQLite already rolled back on its own (some errors do) is a no-op.
+    /// Whatever didn't commit is dropped from the caches too.
+    pub(crate) fn end_write(&self, commit: bool) -> Result<()> {
+        if commit {
+            if let Err(e) = self.conn.execute_batch("COMMIT") {
+                self.abandon_write();
+                return Err(e.into());
+            }
+            return Ok(());
+        }
+        self.abandon_write();
+        Ok(())
+    }
+
+    /// Roll back whatever transaction this connection holds (none: nothing
+    /// to do), and forget what the caches learned inside it.
+    fn abandon_write(&self) {
+        if !self.conn.is_autocommit() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.configs.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.heads.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    }
+
+    /// Whether this connection is outside any transaction (tests).
+    #[cfg(test)]
+    pub(crate) fn in_autocommit(&self) -> bool {
+        self.conn.is_autocommit()
+    }
+
+    /// Whether storing `env`, authored here, would fork its signer's chain:
+    /// another stored event of the same signer on the log already names the
+    /// same link (`ActorStamp::prev`, none for a first event). Only an
+    /// authored draft can be stale this way (it was drafted before a write
+    /// of the same signer through another connection); a peer's event is
+    /// never judged here, its fork is for the fold to see.
+    fn forks_chain(&self, env: &SessionEventEnvelope) -> Result<bool> {
+        let (Some(signer), Some(stamp), Some(_)) = (env.signer_device_id, env.actor_stamp.as_ref(), env.signature.as_ref()) else {
+            return Ok(false);
+        };
+        Ok(self
+            .conn
+            .prepare_cached(
+                FORKS_CHAIN_SQL,
+            )?
+            .exists(rusqlite::params![
+                env.session_id.to_string(),
+                env.event_id.to_string(),
+                signer.to_string(),
+                stamp.prev.map(|p| p.to_string())
+            ])?)
+    }
+
+    /// Append an envelope this device authored, verbatim (its JSON, and so
+    /// its signed `sequence`, are stored as given). Fails if its event id is
+    /// already stored.
+    ///
+    /// Its place in this device's log (the `sequence` column, what
+    /// [`EventStore::list`] orders by) is its own sequence, or the next free
+    /// one when the log moved on since that was read: another connection to
+    /// this file (the sync loop ingesting a peer's event, another service)
+    /// may append between [`EventStore::max_sequence`] and here. Taken
+    /// under the write lock, so two appends never get one place and none is
+    /// refused for it. Ingested events are placed the same way
+    /// ([`EventStore::ingest`]); a stored row is never moved or replaced.
+    ///
+    /// A draft its own signer has since written past (a write of the same
+    /// device through another connection names the same chain link) is
+    /// refused with [`EventStoreError::StaleDraft`]: stored, it would fork
+    /// the signer's chain. The caller drafts it again.
     pub fn append_envelope(&self, env: &SessionEventEnvelope) -> Result<()> {
-        // The cached head, if it is current: an event that names it moves it.
-        let before = self.rows_sig(env.session_id)?;
-        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&env.session_id).copied();
         let json = serde_json::to_string(env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
             .as_str()
             .unwrap_or_default()
             .to_string();
-        self.conn.execute(
+        let tx = write_tx(&self.conn)?;
+        if self.forks_chain(env)? {
+            return Err(EventStoreError::StaleDraft);
+        }
+        // The cached head, if it is current: an event that names it moves it.
+        // Read under the write lock, so no other connection's event lands
+        // between this and the insert.
+        let before = self.rows_sig(env.session_id)?;
+        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&env.session_id).copied();
+        let next = self.max_sequence(env.session_id)?.unwrap_or(0) + 1;
+        tx.execute(
             r#"
             INSERT INTO events
                 (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json)
@@ -541,20 +765,22 @@ impl EventStore {
                 env.event_id.to_string(),
                 env.session_id.to_string(),
                 env.workspace_id.to_string(),
-                env.sequence,
+                env.sequence.max(next),
                 env.payload.kind_str(),
                 serde_json::to_value(env.scope)?.as_str().unwrap_or_default(),
                 timestamp,
                 json,
             ],
         )?;
+        let after = self.rows_sig(env.session_id)?;
+        tx.commit()?;
         if let Some((sig, head)) = cached {
             let names_head = env.actor_stamp.as_ref().map(|s| s.log_head) == Some(head)
                 && env.lamport == ligus_core::lamport::next(head);
             let mut cache = self.heads.lock().unwrap_or_else(|e| e.into_inner());
             if sig == before && names_head {
                 let key = ligus_core::CfgFrontier { lamport: env.lamport, event_id: env.event_id };
-                cache.insert(env.session_id, (self.rows_sig(env.session_id)?, Some(key)));
+                cache.insert(env.session_id, (after, Some(key)));
             } else {
                 cache.remove(&env.session_id);
             }
@@ -575,7 +801,7 @@ impl EventStore {
         // An authorless stamp naming the log's head, so the lamport is one the
         // fold accounts for (`ligus_core::lamport`).
         let log_head = self.lamport_head(session_id)?;
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&self.conn)?;
         let next_seq = tx
             .query_row(
                 "SELECT MAX(sequence) FROM events WHERE session_id = ?1",
@@ -706,7 +932,7 @@ impl EventStore {
     /// for answering what a sync pull brought in.
     pub fn sessions_with_messages_after(&self, after: i64) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT session_id FROM events WHERE row_id > ?1 AND kind = 'messageAppended'",
+            "SELECT DISTINCT session_id FROM events WHERE row_id > ?1 AND kind = 'messageAppended' ORDER BY session_id",
         )?;
         let rows = stmt.query_map([after], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
@@ -742,7 +968,7 @@ impl EventStore {
     /// (and re-publishes once when the account id changes, e.g. GitHub sign-in).
     /// Workspaces where some device published its key-agreement key (B1).
     pub fn workspaces_with_ka_publications(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished'")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished' ORDER BY workspace_id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -756,7 +982,7 @@ impl EventStore {
     /// Whether `session_id` itself carries a certificate for (device, account).
     pub fn has_device_certificate_in(&self, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded'",
+            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded' ORDER BY row_id",
             [session_id.to_string()],
         )?;
         Ok(envs.iter().any(|e| {
@@ -772,7 +998,7 @@ impl EventStore {
         account_id: Uuid,
     ) -> Result<bool> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND kind = 'deviceCertificateAdded'",
+            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND kind = 'deviceCertificateAdded' ORDER BY row_id",
             [workspace_id.to_string()],
         )?;
         Ok(envs.iter().any(|e| {
@@ -789,7 +1015,7 @@ impl EventStore {
     /// P-A2c). An unsigned copy of a signed event can never count, so it is
     /// refused here and kept only as a lamport witness (ingest refuses
     /// unsigned envelopes anyway; this covers every other path in).
-    fn note_equivocation(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
+    fn note_equivocation(&self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
         let stored: Option<String> = self
             .conn
             .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
@@ -882,15 +1108,33 @@ impl EventStore {
     /// `equivocations` table), whichever arrived first: the fold decides
     /// which copies count (`ligus_core::copies`), so arrival order never does.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
+        self.ingest_inner(env, sealed_epoch, false)
+    }
+
+    /// [`EventStore::ingest`] for an event authored for this device to store
+    /// that this device didn't sign (a phone's signature over a draft made
+    /// here): refused with [`EventStoreError::StaleDraft`] if its signer's
+    /// chain moved past the draft's link meanwhile (see
+    /// [`EventStore::append_envelope`]).
+    pub fn ingest_authored(&mut self, env: &SessionEventEnvelope) -> Result<bool> {
+        self.ingest_inner(env, env.sealed_epoch(), true)
+    }
+
+    fn ingest_inner(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>, authored: bool) -> Result<bool> {
+        // Under the write lock from the start (see [`write_tx`]): whether the
+        // id is stored and the next sequence are read and the row written
+        // with no other connection's write in between, so two connections
+        // ingesting one event (the serve sync loop and a one-shot sync, say)
+        // store it once, and the second sees it stored instead of failing.
+        let tx = write_tx(&self.conn)?;
         if self.has_event(env.event_id)? {
             self.note_equivocation(env, sealed_epoch)?;
+            tx.commit()?;
             return Ok(false);
         }
-        // IMMEDIATE: take the write lock up front (waiting out the busy
-        // timeout), so the read of the next sequence never has to upgrade a
-        // stale snapshot while another connection writes (an instant
-        // "database is locked" under WAL).
-        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if authored && self.forks_chain(env)? {
+            return Err(EventStoreError::StaleDraft);
+        }
         let next_seq = tx
             .query_row(
                 "SELECT MAX(sequence) FROM events WHERE session_id = ?1",
@@ -1016,7 +1260,7 @@ impl EventStore {
         if bodies.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = write_tx(&self.conn)?;
         for (seq, body, priority) in bodies {
             tx.execute(
                 "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body, priority) VALUES (?1, ?2, ?3, ?4)",
@@ -1041,7 +1285,7 @@ impl EventStore {
     /// Re-rank parked bodies (the keyring changed: a rotation they wait for
     /// may now be authorized, or one they claim may have turned out junk).
     pub fn set_parked_priorities(&self, workspace: &str, priorities: &[(u64, u8)]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = write_tx(&self.conn)?;
         for (seq, priority) in priorities {
             tx.execute(
                 "UPDATE parked_bodies SET priority = ?3 WHERE workspace = ?1 AND seq = ?2",
@@ -1152,7 +1396,7 @@ impl EventStore {
     pub fn pushed_ids(&self, workspace: &str) -> Result<Vec<Uuid>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT event_id FROM pushed WHERE workspace = ?1")?;
+            .prepare("SELECT event_id FROM pushed WHERE workspace = ?1 ORDER BY event_id")?;
         let rows = stmt.query_map([workspace], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -1366,8 +1610,7 @@ impl EventStore {
         let id: Option<String> = self
             .conn
             .query_row(
-                "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
-                 AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1",
+                LAST_SIGNED_BY_SQL,
                 rusqlite::params![session_id.to_string(), signer.to_string(), below.min(i64::MAX as u64) as i64],
                 |r| r.get(0),
             )
@@ -1377,7 +1620,7 @@ impl EventStore {
 
     /// The session ids of one workspace.
     pub fn sessions_of_workspace(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1 ORDER BY session_id")?;
         let rows = stmt.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?;
         let mut out = Vec::new();
         for s in rows {
@@ -1464,7 +1707,7 @@ impl EventStore {
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
              'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
-             UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2",
+             UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2 ORDER BY 1, 2",
         )?;
         let rows = stmt.query_map([after_event, after_equivocation], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         let mut out: Vec<Uuid> = Vec::new();
@@ -1801,8 +2044,8 @@ impl EventStore {
     pub fn config_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         let config_id = ligus_core::workspace_config_session_id(workspace_id);
         self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            "SELECT envelope_json, sealed_epoch FROM (SELECT 0 AS t, sequence AS o, envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
             [config_id.to_string()],
         )
     }
@@ -1818,11 +2061,18 @@ impl EventStore {
         Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
     }
 
-    /// The workspace a stored session belongs to, if any of its rows exist.
+    /// The workspace a stored session belongs to (its first event's, in log
+    /// order), if any of its rows exist.
+    ///
+    /// Known residual: log order is this device's arrival order, so an event
+    /// signed under a chat's id by a member of another workspace this device
+    /// shares, stamped with that workspace, that arrives before the chat's
+    /// own events re-homes the chat on this device. Logs keyed by workspace
+    /// and session (readers taking the workspace from context) are the fix.
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
         let ws: Option<String> = self
             .conn
-            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 LIMIT 1", [session_id.to_string()], |r| {
+            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 ORDER BY sequence LIMIT 1", [session_id.to_string()], |r| {
                 r.get(0)
             })
             .optional()?;
@@ -1907,19 +2157,100 @@ impl EventStore {
         own_device: Uuid,
         backup: Option<&Path>,
     ) -> Result<Vec<(Uuid, usize)>> {
-        let doomed = self.foreign_workspaces(keep, own_device)?;
+        self.purge_foreign_workspaces_with(keep, own_device, backup, &mut || {})
+    }
+
+    /// [`EventStore::purge_foreign_workspaces`], running `after_backup` once
+    /// the backup is taken (tests: another connection's write there).
+    fn purge_foreign_workspaces_with(
+        &mut self,
+        keep: &HashSet<Uuid>,
+        own_device: Uuid,
+        backup: Option<&Path>,
+        after_backup: &mut dyn FnMut(),
+    ) -> Result<Vec<(Uuid, usize)>> {
+        // The backup comes first (it can't be taken inside a transaction),
+        // with each doomed workspace's rows as they stood just before it.
+        // Under the write lock the decision is made again, and a workspace
+        // is dropped only if its rows are still exactly those: one that
+        // gained a row since (a late event of another member, or this
+        // device's own first one there) may hold a row the backup lacks, and
+        // stays for the next run. Writes elsewhere in the file never stop
+        // the cleanup. A backup that ends up covering nothing deleted (or a
+        // failure after it was taken) is removed again: no stray full copies
+        // of the database pile up.
+        let mut before: HashMap<Uuid, (i64, i64, i64, i64)> = HashMap::new();
+        if let Some(path) = backup {
+            let doomed = self.foreign_workspaces(keep, own_device)?;
+            if doomed.is_empty() {
+                return Ok(doomed);
+            }
+            for (ws, _) in &doomed {
+                before.insert(*ws, self.workspace_rows(*ws)?);
+            }
+            // Only a file this call made is ever removed: a path that already
+            // holds something (an earlier run's backup, the only copy of what
+            // that run deleted) is left alone and the cleanup doesn't run.
+            if path.exists() {
+                return Err(EventStoreError::BackupExists(path.to_path_buf()));
+            }
+            if let Err(e) = self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]) {
+                // (VACUUM INTO refuses a path that exists; one that appeared
+                // meanwhile isn't this call's to remove.)
+                if !e.to_string().contains("already exists") {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(e.into());
+            }
+            after_backup();
+        }
+        let dropped = self.purge_locked(keep, own_device, backup.map(|_| &before));
+        if let Some(path) = backup {
+            if !matches!(&dropped, Ok(d) if !d.is_empty()) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        dropped
+    }
+
+    /// (row count, highest row) of one workspace's events and of the copies
+    /// beside them.
+    fn workspace_rows(&self, ws: Uuid) -> Result<(i64, i64, i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM events WHERE workspace_id = ?1), (SELECT COALESCE(MAX(row_id), 0) FROM events WHERE workspace_id = ?1), \
+             (SELECT COUNT(*) FROM equivocations WHERE workspace_id = ?1), (SELECT COALESCE(MAX(row_id), 0) FROM equivocations WHERE workspace_id = ?1)",
+            [ws.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?)
+    }
+
+    /// The purge's deletes, decided under the write lock. With `backed_up`,
+    /// only workspaces whose rows are unchanged since the backup go.
+    fn purge_locked(
+        &mut self,
+        keep: &HashSet<Uuid>,
+        own_device: Uuid,
+        backed_up: Option<&HashMap<Uuid, (i64, i64, i64, i64)>>,
+    ) -> Result<Vec<(Uuid, usize)>> {
+        let tx = write_tx(&self.conn)?;
+        let mut doomed = self.foreign_workspaces(keep, own_device)?;
+        if let Some(before) = backed_up {
+            let mut unchanged = Vec::new();
+            for (ws, n) in doomed {
+                if before.get(&ws) == Some(&self.workspace_rows(ws)?) {
+                    unchanged.push((ws, n));
+                }
+            }
+            doomed = unchanged;
+        }
         if doomed.is_empty() {
             return Ok(doomed);
         }
-        if let Some(path) = backup {
-            self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
-        }
         let rooms: Vec<String> = {
-            let mut stmt = self.conn.prepare("SELECT workspace FROM sync_cursor UNION SELECT DISTINCT workspace FROM pushed")?;
+            let mut stmt = self.conn.prepare("SELECT workspace FROM sync_cursor UNION SELECT DISTINCT workspace FROM pushed ORDER BY 1")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<std::result::Result<_, _>>()?
         };
-        let tx = self.conn.transaction()?;
         for (ws, _) in &doomed {
             let ws_s = ws.to_string();
             tx.execute(
@@ -1961,11 +2292,15 @@ impl EventStore {
                 .map(str::to_owned)
         }
 
+        // Decided and done under the write lock: an event or another copy
+        // stored meanwhile through another connection is either seen here
+        // (and kept as a witness if pruned) or comes after.
+        let tx = write_tx(&self.conn)?;
         let mut completed: std::collections::HashSet<String> = std::collections::HashSet::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT envelope_json FROM events WHERE kind = 'messageCompleted'")?;
+                .prepare("SELECT envelope_json FROM events WHERE kind = 'messageCompleted' ORDER BY row_id")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             for j in rows {
                 if let Some(id) = message_id_of(&j?) {
@@ -1981,7 +2316,7 @@ impl EventStore {
         let mut witnesses: Vec<SessionEventEnvelope> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
-                "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived'",
+                "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
             )?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
@@ -1998,14 +2333,13 @@ impl EventStore {
         // Every other copy held under a pruned id goes with it (left alone,
         // one would fold in the pruned chunk's place), a witness like it.
         for event_id in &doomed {
-            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1", [event_id])? {
+            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1 ORDER BY row_id", [event_id])? {
                 witnesses.push(env);
             }
         }
         for env in &witnesses {
             self.note_lamport_witness(env)?;
         }
-        let tx = self.conn.transaction()?;
         let mut removed = 0;
         for event_id in &doomed {
             removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
@@ -2415,19 +2749,32 @@ mod tests {
         assert_eq!(after_2[0].sequence, 3);
     }
 
+    /// An envelope authored against a sequence another connection took in
+    /// the meantime is stored at the next place, as written (its signed
+    /// sequence unchanged); the row already there is untouched. The same
+    /// event id twice is refused.
     #[test]
-    fn duplicate_sequence_is_rejected() {
+    fn a_stale_sequence_takes_the_next_place_and_never_replaces_a_row() {
         let (store, sid, wid) = seeded_store();
+        let first = store.list(sid).unwrap();
         // snapshot already occupies sequence 1
-        let dup = SessionEventEnvelope::new(
+        let late = SessionEventEnvelope::new(
             sid,
             wid,
             1,
             SessionEvent::MessageAppended {
-                message: ChatMessage::new(MessageRole::User, "u", "dup"),
+                message: ChatMessage::new(MessageRole::User, "u", "late"),
             },
         );
-        assert!(store.append_envelope(&dup).is_err());
+        store.append_envelope(&late).unwrap();
+        let stored = store.list(sid).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].event_id, first[0].event_id, "the row at 1 stays");
+        assert_eq!(stored[1].event_id, late.event_id);
+        assert_eq!(stored[1].sequence, 1, "stored as written");
+        assert_eq!(store.max_sequence(sid).unwrap(), Some(2), "at the next place");
+        assert!(store.append_envelope(&late).is_err(), "an event id is stored once");
+        assert_eq!(store.list(sid).unwrap().len(), 2);
     }
 
     /// A newer build's envelope (an unknown top-level key, an unknown kind with
@@ -2774,5 +3121,111 @@ mod tests {
         assert_eq!(all, 6);
         assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again"))).unwrap().is_empty());
         assert!(!dir.path().join("again").exists());
+    }
+
+    /// The chain check on every authored append, and the link a new event
+    /// names, are index lookups, not scans of the log.
+    #[test]
+    fn chain_checks_use_the_signer_chain_index() {
+        let store = EventStore::open_in_memory().unwrap();
+        let plan = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Vec<String> {
+            let mut stmt = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            stmt.query_map(params, |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        let forks = plan(FORKS_CHAIN_SQL, &[&"s", &"e", &"d", &"p"]);
+        assert!(forks.iter().any(|p| p.contains("idx_events_by_signer")), "{forks:?}");
+        let last = plan(LAST_SIGNED_BY_SQL, &[&"s", &"d", &5i64]);
+        assert!(last.iter().any(|p| p.contains("idx_events_by_signer")), "{last:?}");
+    }
+
+    /// A foreign-looking workspace and an unrelated one, for the purge races.
+    fn purge_fixture() -> (tempfile::TempDir, std::path::PathBuf, EventStore, Uuid, Uuid, Uuid) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let mut store = EventStore::open(&path).unwrap();
+        let (me, foreign, mine) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        store.ingest(&purge_msg(foreign, Uuid::new_v4())).unwrap();
+        store.ingest(&purge_msg(mine, me)).unwrap();
+        (dir, path, store, me, foreign, mine)
+    }
+
+    fn purge_msg(ws: Uuid, signer: Uuid) -> SessionEventEnvelope {
+        let mut e = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            ws,
+            1,
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", "hi") },
+        );
+        e.signer_device_id = Some(signer);
+        e
+    }
+
+    fn count_in(store: &EventStore, ws: Uuid) -> i64 {
+        store.conn.query_row("SELECT COUNT(*) FROM events WHERE workspace_id = ?1", [ws.to_string()], |r| r.get(0)).unwrap()
+    }
+
+    /// A backup path that already holds a file (an earlier run's backup, the
+    /// only copy of what it deleted) is never removed or overwritten: the
+    /// cleanup doesn't run. Fresh names never collide.
+    #[test]
+    fn purge_never_removes_a_file_already_at_its_backup_path() {
+        let (dir, _path, mut store, me, foreign, mine) = purge_fixture();
+        let bak = dir.path().join("ligus.db.bak-foreign-purge-1700000000");
+        std::fs::write(&bak, b"the only copy of what an earlier run deleted").unwrap();
+        let r = store.purge_foreign_workspaces(&HashSet::from([mine]), me, Some(&bak));
+        assert!(matches!(r, Err(EventStoreError::BackupExists(_))), "{r:?}");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"the only copy of what an earlier run deleted");
+        assert_eq!(count_in(&store, foreign), 1, "nothing deleted");
+        let names: HashSet<std::path::PathBuf> = (0..100).map(|_| purge_backup_path(dir.path())).collect();
+        assert_eq!(names.len(), 100);
+    }
+
+    /// This device's own event, stored in a foreign-looking workspace through
+    /// another connection after the cleanup's backup (the sync loop, the
+    /// service): that workspace isn't deleted (the backup lacks the row), and
+    /// a backup that covers nothing deleted is removed again.
+    #[test]
+    fn purge_keeps_a_workspace_that_gains_an_own_event_after_its_backup() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let own = purge_msg(foreign, me);
+        let other = EventStore::open(&path).unwrap();
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || other.append_envelope(&own).unwrap()).unwrap();
+        assert!(dropped.is_empty());
+        assert_eq!(count_in(&store, foreign), 2, "nothing deleted");
+        assert!(!bak.exists(), "no backup left behind");
+        assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("bak2"))).unwrap().is_empty(), "now this device's");
+    }
+
+    /// Another member's late event in the doomed workspace, after the
+    /// backup: it isn't in the backup, so the workspace stays this time.
+    #[test]
+    fn purge_keeps_a_workspace_that_gains_any_event_after_its_backup() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let late = purge_msg(foreign, Uuid::new_v4());
+        let mut other = EventStore::open(&path).unwrap();
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&late).unwrap())).unwrap();
+        assert!(dropped.is_empty());
+        assert_eq!(count_in(&store, foreign), 2);
+        assert!(!bak.exists());
+    }
+
+    /// Sync writing to an unrelated workspace during the backup doesn't stop
+    /// the cleanup: the foreign workspace goes, and the backup stays.
+    #[test]
+    fn purge_goes_ahead_when_only_other_workspaces_change() {
+        let (dir, path, mut store, me, foreign, mine) = purge_fixture();
+        let keep = HashSet::from([mine]);
+        let elsewhere = purge_msg(mine, Uuid::new_v4());
+        let mut other = EventStore::open(&path).unwrap();
+        let bak = dir.path().join("bak");
+        let dropped = store.purge_foreign_workspaces_with(&keep, me, Some(&bak), &mut || assert!(other.ingest(&elsewhere).unwrap())).unwrap();
+        assert_eq!(dropped, vec![(foreign, 1)]);
+        assert_eq!(count_in(&store, foreign), 0);
+        assert_eq!(count_in(&store, mine), 2);
+        assert!(bak.exists(), "the backup of what was deleted stays");
     }
 }

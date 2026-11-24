@@ -14,7 +14,7 @@ use ligus_core::{
 use proptest::prelude::*;
 use uuid::Uuid;
 
-use crate::chat_service::{ChatService, PresenceProvider, PresenceRequest};
+use crate::chat_service::{ChatError, ChatService, PresenceProvider, PresenceRequest};
 use crate::EventStore;
 
 struct Soft(Arc<SoftAuthenticator>);
@@ -828,6 +828,9 @@ fn switching_to_any_later_rules_version_needs_presence() {
     forged.sequence += 100;
     forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown, presence: None };
     forged.actor_stamp.as_mut().unwrap().presence = None;
+    // A link of its own (a dangling one), so it shares none with the real
+    // switch below: this device's chain stays unforked.
+    forged.actor_stamp.as_mut().unwrap().prev = Some(Uuid::new_v4());
     forged.signature = None;
     svc.sign_for_test(&mut forged);
     let mut log = config_log(&svc, wid);
@@ -893,4 +896,40 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     assert!(laptop.confirm_device(wid).unwrap());
     assert!(laptop.device_confirmed(wid).unwrap());
     assert!(laptop.publish_key_agreement(wid, ka.public_key_bytes()).unwrap());
+}
+
+/// While the person confirms a passkey-gated action, this device writes
+/// something else on that log (here a host record; in practice an agent
+/// reply in the chat a vote is cast in). Committing the confirmation would
+/// fork this device's chain, so it is refused (`StaleDraft`, nothing
+/// stored; serve answers 409): the action is prepared again at the head and
+/// the person confirms once more, and that one commits with one chain head.
+#[test]
+fn an_own_write_during_a_passkey_confirmation_asks_again() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    let cfg = workspace_config_session_id(wid);
+    let host = |n: &str| ligus_core::WorkspaceHost::new(n.to_string(), ligus_core::HostKind::Worker, n.to_string());
+    for i in 0..3 {
+        let name = format!("m{i}");
+        svc.capture_presence(true);
+        assert!(svc.add_member(cfg, wid, member(&name, WorkspaceRole::Viewer)).is_err());
+        let draft = svc.take_presence_draft().expect("captured");
+        let a = key.get(&draft.request.challenge);
+        assert!(svc.ensure_host(wid, host(&format!("h{i}"))).unwrap(), "an own write on the log meanwhile");
+        let refused = svc.commit_presence(draft, a);
+        assert!(matches!(refused, Err(ChatError::Store(crate::event_store::EventStoreError::StaleDraft))), "{refused:?}");
+        assert!(!svc.load(cfg).unwrap().unwrap().members.iter().any(|m| m.id == name), "nothing stored");
+        // Prepared again at the head, confirmed again.
+        svc.capture_presence(true);
+        assert!(svc.add_member(cfg, wid, member(&name, WorkspaceRole::Viewer)).is_err());
+        let draft = svc.take_presence_draft().expect("captured again");
+        let a = key.get(&draft.request.challenge);
+        svc.commit_presence(draft, a).unwrap();
+        assert!(svc.load(cfg).unwrap().unwrap().members.iter().any(|m| m.id == name));
+    }
+    let log = config_log(&svc, wid);
+    let me = svc.device_id();
+    let mine: Vec<&SessionEventEnvelope> = log.iter().filter(|e| e.signer_device_id == Some(me)).collect();
+    let named: std::collections::BTreeSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+    assert_eq!(mine.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "one chain head");
 }

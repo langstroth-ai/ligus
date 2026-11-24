@@ -270,7 +270,7 @@ impl EventStore {
     /// This device's SSH host aliases (`github-work` → `github.com`):
     /// identity only, never where git connects. Device-local (review F5d).
     pub fn ssh_host_aliases(&self) -> Result<std::collections::BTreeMap<String, String>> {
-        let mut st = self.conn.prepare("SELECT alias, host FROM ssh_host_aliases")?;
+        let mut st = self.conn.prepare("SELECT alias, host FROM ssh_host_aliases ORDER BY alias")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }

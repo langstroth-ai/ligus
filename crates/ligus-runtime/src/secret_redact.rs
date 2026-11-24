@@ -16,7 +16,8 @@
 //! their way into the log ([`crate::guard_scan::redact_secrets`] calls it
 //! first), as do facts.
 
-use std::sync::{OnceLock, RwLock};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use aho_corasick::AhoCorasick;
 use regex::Regex;
@@ -27,15 +28,64 @@ pub const MARK: &str = "[ligus-secret]";
 /// Shortest value registered: anything shorter would mask ordinary text.
 const MIN_LEN: usize = 16;
 
+/// The registered values, and the automaton over them as of some
+/// generation. Registering only adds a value (the write lock is held for a
+/// moment); the automaton is rebuilt by the next redaction that finds it
+/// behind, outside this lock ([`automaton`]). Rebuilding it inside the lock
+/// on every registration made registration cost grow with the registry and
+/// starved every reader (a turn's reply, a streamed chunk, a log line) while
+/// registrations kept coming, each holding the lock for the whole rebuild.
 #[derive(Default)]
 struct Registry {
     values: Vec<String>,
-    automaton: Option<AhoCorasick>,
+    seen: HashSet<String>,
+    /// Bumped by every value added.
+    generation: u64,
+    /// The automaton over `values` as of `built`.
+    automaton: Option<Arc<AhoCorasick>>,
+    built: u64,
 }
 
 fn registry() -> &'static RwLock<Registry> {
     static R: OnceLock<RwLock<Registry>> = OnceLock::new();
     R.get_or_init(Default::default)
+}
+
+/// One rebuild at a time: a redaction that finds the automaton behind waits
+/// here for the rebuild in progress instead of starting its own.
+fn rebuilding() -> &'static Mutex<()> {
+    static B: OnceLock<Mutex<()>> = OnceLock::new();
+    B.get_or_init(Default::default)
+}
+
+/// The automaton over every value registered before this call. Rebuilt
+/// here when registrations came since the last build: the values are
+/// copied under the read lock and the automaton is built with no lock on
+/// the registry, so registering and redacting never wait for a build.
+fn automaton() -> Option<Arc<AhoCorasick>> {
+    {
+        let r = registry().read().unwrap_or_else(|e| e.into_inner());
+        if r.built == r.generation {
+            return r.automaton.clone();
+        }
+    }
+    let _one = rebuilding().lock().unwrap_or_else(|e| e.into_inner());
+    let (mut vals, generation) = {
+        let r = registry().read().unwrap_or_else(|e| e.into_inner());
+        if r.built == r.generation {
+            return r.automaton.clone();
+        }
+        (r.values.clone(), r.generation)
+    };
+    // Longest first, so a value that contains another is masked whole.
+    vals.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    let built = AhoCorasick::builder().match_kind(aho_corasick::MatchKind::LeftmostLongest).build(&vals).ok().map(Arc::new);
+    let mut r = registry().write().unwrap_or_else(|e| e.into_inner());
+    if r.built < generation {
+        r.automaton = built.clone();
+        r.built = generation;
+    }
+    built
 }
 
 fn patterns() -> &'static [Regex] {
@@ -61,17 +111,11 @@ pub fn register(value: &str) {
         return;
     }
     let mut r = registry().write().unwrap_or_else(|e| e.into_inner());
-    if r.values.iter().any(|x| x == v) {
+    if !r.seen.insert(v.to_string()) {
         return;
     }
     r.values.push(v.to_string());
-    // Longest first, so a value that contains another is masked whole.
-    let mut vals = r.values.clone();
-    vals.sort_by_key(|v| std::cmp::Reverse(v.len()));
-    r.automaton = AhoCorasick::builder()
-        .match_kind(aho_corasick::MatchKind::LeftmostLongest)
-        .build(&vals)
-        .ok();
+    r.generation += 1;
 }
 
 /// Register raw secret bytes (a key seed) in every text form it could leak
@@ -130,21 +174,18 @@ pub fn register_json_secrets(v: &serde_json::Value) {
 /// how many were masked.
 pub fn redact_ligus_secrets(text: &str) -> (String, u32) {
     let mut count = 0u32;
-    let mut out = {
-        let r = registry().read().unwrap_or_else(|e| e.into_inner());
-        match &r.automaton {
-            Some(ac) => {
-                let n = ac.find_iter(text).count() as u32;
-                if n == 0 {
-                    text.to_string()
-                } else {
-                    count += n;
-                    let marks = vec![MARK; r.values.len()];
-                    ac.replace_all(text, &marks)
-                }
+    let mut out = match automaton() {
+        Some(ac) => {
+            let n = ac.find_iter(text).count() as u32;
+            if n == 0 {
+                text.to_string()
+            } else {
+                count += n;
+                let marks = vec![MARK; ac.patterns_len()];
+                ac.replace_all(text, &marks)
             }
-            None => text.to_string(),
         }
+        None => text.to_string(),
     };
     for re in patterns() {
         let n = re.find_iter(&out).count() as u32;
@@ -212,5 +253,47 @@ mod tests {
         assert_eq!(redacted("dark-mode-default-theme"), "dark-mode-default-theme");
         // Ordinary text is untouched.
         assert_eq!(redact_ligus_secrets("nothing to see"), ("nothing to see".to_string(), 0));
+    }
+
+    /// Many secrets registered (a test process starts hundreds of devices;
+    /// a long-running host keeps adding keys) while other threads redact:
+    /// registering stays cheap, a redaction never waits long behind it, and
+    /// each value is masked as soon as its registration returns. Building
+    /// the automaton inside the registry's write lock on every registration
+    /// made this quadratic and kept readers (a turn's reply, the serve
+    /// worker) waiting while registrations kept coming.
+    #[test]
+    fn registering_many_secrets_never_starves_redaction() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        let n = 3000;
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let done = done.clone();
+                std::thread::spawn(move || {
+                    let mut worst = Duration::ZERO;
+                    while !done.load(Ordering::SeqCst) {
+                        let t = Instant::now();
+                        let _ = redacted("a reply with nothing secret in it");
+                        worst = worst.max(t.elapsed());
+                    }
+                    worst
+                })
+            })
+            .collect();
+        let t = Instant::now();
+        for i in 0..n {
+            let v = format!("starve-test-secret-{i:08}-padding");
+            register(&v);
+            if i % 500 == 0 {
+                assert_eq!(redacted(&format!("x {v} y")), format!("x {MARK} y"), "masked as soon as registered");
+            }
+        }
+        let registering = t.elapsed();
+        done.store(true, Ordering::SeqCst);
+        let worst = readers.into_iter().map(|h| h.join().unwrap()).max().unwrap();
+        assert!(registering < Duration::from_secs(10), "registering {n} secrets took {registering:?}");
+        assert!(worst < Duration::from_secs(5), "a redaction waited {worst:?}");
     }
 }

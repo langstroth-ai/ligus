@@ -318,7 +318,12 @@ impl ChatService {
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
         device.verifying_key(&env).ok_or_else(|| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store.ingest(&env)?;
+        // Under the store's write lock: refused if this phone's chain moved
+        // past the draft's link since the check above (another connection).
+        match self.store.ingest_authored(&env) {
+            Err(crate::event_store::EventStoreError::StaleDraft) => return Err(ChatError::Unauthorized(STALE_DRAFT.into())),
+            r => r?,
+        };
         self.changes.local(&env);
         Ok(env)
     }

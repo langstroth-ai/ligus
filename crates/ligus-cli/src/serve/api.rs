@@ -66,6 +66,9 @@ impl From<ligus_runtime::chat_service::ChatError> for ApiError {
             }
             ChatError::Unauthorized(m) => Self(StatusCode::FORBIDDEN, format!("unauthorized: {m}")),
             ChatError::NotFound(m) => Self(StatusCode::NOT_FOUND, m),
+            // Another write of the same signer landed first: nothing was
+            // stored, and the same request made again goes through.
+            ChatError::Store(ligus_runtime::EventStoreError::StaleDraft) => Self(StatusCode::CONFLICT, STALE_DRAFT.into()),
             other => Self(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
         }
     }
@@ -94,6 +97,10 @@ impl IntoResponse for ApiError {
             }
             return (self.0, Json(v)).into_response();
         }
+        if self.0 == StatusCode::CONFLICT && self.1 == STALE_DRAFT {
+            let message = format!("{}", ligus_runtime::EventStoreError::StaleDraft);
+            return (self.0, Json(json!({ "error": STALE_DRAFT, "message": message, "hint": STALE_DRAFT_HINT }))).into_response();
+        }
         if self.0 == StatusCode::GONE {
             return (self.0, Json(json!({ "error": "gone", "message": self.1, "use": "POST /v1/phone-actions/prepare" }))).into_response();
         }
@@ -110,6 +117,13 @@ impl IntoResponse for ApiError {
 pub(super) fn gone_to_phone_action(kind: &str) -> ApiError {
     ApiError(StatusCode::GONE, format!("a person does this from the phone with its own key: phone action \"{kind}\""))
 }
+
+/// The 409 a write gets when another write of the same signer landed on the
+/// log since it was drafted (for a passkey confirmation: while the person
+/// confirmed). Nothing was stored; the client prepares again and, for a
+/// confirmation, asks for the passkey again (once; a second 409 is shown).
+pub(super) const STALE_DRAFT: &str = "stale_draft";
+const STALE_DRAFT_HINT: &str = "something else was written here first: prepare it again and confirm it again (POST /v1/presence/prepare, then /v1/presence/commit)";
 
 /// P0.6: the 403 a human-only action gets from a host that can't tell a
 /// human approved it.
@@ -1864,5 +1878,27 @@ mod responder_device_tests {
         assert_eq!(v["attachment"], serde_json::to_value(&offer).unwrap());
         assert_eq!(v["diffDigest"], json!(ligus_core::authz::votes::diff_digest(&p)));
         assert_ne!(v["diffDigest"], plain["diffDigest"]);
+    }
+}
+
+#[cfg(test)]
+mod stale_draft_tests {
+    use super::ApiError;
+    use axum::http::StatusCode;
+
+    /// A draft its own signer wrote past (a confirmation raced by another
+    /// write of this box on the log) is a 409 the client answers by
+    /// preparing again and asking for the passkey again, never a 500.
+    #[tokio::test]
+    async fn a_stale_draft_is_a_conflict_to_prepare_again() {
+        use axum::response::IntoResponse;
+        let e = ApiError::from(ligus_runtime::chat_service::ChatError::Store(ligus_runtime::EventStoreError::StaleDraft));
+        assert_eq!((e.0, e.1.as_str()), (StatusCode::CONFLICT, super::STALE_DRAFT));
+        let r = e.into_response();
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "stale_draft");
+        assert!(v["hint"].as_str().unwrap().contains("confirm it again"), "{v}");
     }
 }

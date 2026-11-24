@@ -894,6 +894,124 @@ async fn auth_is_required_except_for_bare_health() {
     assert_eq!(host["rows"][2]["text"], "ntfy");
 }
 
+/// Secrets keep being registered in this process (a test process starts
+/// hundreds of devices; a host adds keys as it goes) while the box answers
+/// a turn and the phone reads: the reply lands and every request is
+/// answered promptly. Registration used to rebuild the redaction automaton
+/// inside a process-wide write lock each time, so the serve worker
+/// (redacting its reply) and the runtime threads waited behind a queue of
+/// rebuilds that grew with the registry, past the phone's 60 s timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_and_reads_go_through_while_secrets_keep_being_registered() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi there"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let host = this_host(&h).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let registering = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut i = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) && i < 3000 {
+                ligus_runtime::secret_redact::register(&format!("serve-registry-load-{}-{i:08}-padding", std::process::id()));
+                i += 1;
+            }
+        })
+    };
+    let started = std::time::Instant::now();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut replied = false;
+    while started.elapsed() < Duration::from_secs(30) {
+        let t = std::time::Instant::now();
+        let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+        assert!(t.elapsed() < Duration::from_secs(3), "a read waited {:?}", t.elapsed());
+        if msgs["messages"].as_array().unwrap().iter().any(|m| m["body"] == "hi there" && m["streaming"] != json!(true)) {
+            replied = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    registering.join().unwrap();
+    assert!(replied, "the reply never landed ({:?})", started.elapsed());
+    assert!(started.elapsed() < Duration::from_secs(5), "the reply took {:?}", started.elapsed());
+    h.handle.shutdown();
+}
+
+/// The box writes into a chat (the phone posting over HTTP) while its sync
+/// loop, on its own connection to the same database, ingests the desktop's
+/// messages in that same chat: every message lands once, no write is
+/// refused and no sync round fails ("database is locked", or a sequence
+/// taken by the other connection).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_writes_and_relay_sync_into_one_chat_never_collide() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = Arc::new(harness(&endpoint, "m", &[("README.md", "x\n")]).await);
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "start" }))).await;
+    let mut seen = false;
+    for _ in 0..80 {
+        h.handle.shared.sync_kick.notify_one();
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen, "the desktop never saw the chat");
+
+    let n = 30;
+    let phone = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": format!("box {i}") }))).await;
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    let desktop = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                let desktop = h.desktop.clone();
+                tokio::task::spawn_blocking(move || open_service(&desktop).unwrap().post_user_message(chat_id, ws, format!("desk {i}")).unwrap())
+                    .await
+                    .unwrap();
+                sync_once(&h.desktop).await.unwrap();
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    phone.await.unwrap();
+    desktop.await.unwrap();
+
+    let want: Vec<String> = (0..n).flat_map(|i| [format!("box {i}"), format!("desk {i}")]).collect();
+    let mut missing = want.clone();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
+        missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
+        if missing.is_empty() {
+            for w in &want {
+                assert_eq!(bodies.iter().filter(|b| **b == w.as_str()).count(), 1, "{w} stored once");
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(missing.is_empty(), "never arrived on the box: {missing:?}");
+    let failures = h.handle.shared.sync_failures.lock().unwrap().clone();
+    assert!(failures.is_empty(), "sync rounds failed: {failures:?}");
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dashboard_serves_the_hosts_config_with_per_panel_errors() {
     use axum::routing::get;
@@ -4340,6 +4458,98 @@ async fn phone_act(h: &Harness, phone: &ligus_core::testkit::Phone, account: Uui
         .unwrap_or_else(|e| panic!("the phone refused the box's preimage for {}: {e}", action.kind()));
     let sig = ligus_core::crypto::sign_p256(&phone.key, &preimage);
     status_of(h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": id, "signature": ligus_core::presence::b64url(&sig) }))).await
+}
+
+/// The phone posts (drafted here, signed on the phone, stored under a fresh
+/// place) while the box posts over HTTP and the sync loop ingests the
+/// desktop's posts, all in one chat: every post lands once, and the phone's
+/// chain never forks. A draft another write of the phone landed past is
+/// refused as stale (409) and prepared again, never stored as drafted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_signed_posts_race_box_posts_and_sync_without_forking() {
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = Arc::new(harness(&endpoint, "m", &[("README.md", "x\n")]).await);
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let phone = Arc::new(phone);
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    for _ in 0..80 {
+        h.handle.shared.sync_kick.notify_one();
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let n = 12;
+    let phone_task = {
+        let (h, phone) = (h.clone(), phone.clone());
+        tokio::spawn(async move {
+            let mut stale = 0;
+            for i in 0..n {
+                loop {
+                    let (code, v) = phone_act(&h, &phone, account, &PhoneAction::Post { chat_id, text: format!("phone {i}") }).await;
+                    match code {
+                        200 => break,
+                        409 => stale += 1,
+                        _ => panic!("phone post {i}: {code} {v}"),
+                    }
+                }
+            }
+            stale
+        })
+    };
+    let box_task = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": format!("box {i}") }))).await;
+            }
+        })
+    };
+    let desktop_task = {
+        let h = h.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                let desktop = h.desktop.clone();
+                tokio::task::spawn_blocking(move || open_service(&desktop).unwrap().post_user_message(chat_id, ws, format!("desk {i}")).unwrap())
+                    .await
+                    .unwrap();
+                sync_once(&h.desktop).await.unwrap();
+                h.handle.shared.sync_kick.notify_one();
+            }
+        })
+    };
+    let stale = phone_task.await.unwrap();
+    box_task.await.unwrap();
+    desktop_task.await.unwrap();
+
+    let want: Vec<String> = (0..n).flat_map(|i| [format!("phone {i}"), format!("box {i}"), format!("desk {i}")]).collect();
+    let mut missing = want.clone();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
+        missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
+        if missing.is_empty() {
+            for w in &want {
+                assert_eq!(bodies.iter().filter(|b| **b == w.as_str()).count(), 1, "{w} stored once");
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(missing.is_empty(), "never arrived on the box: {missing:?}");
+    let mine: Vec<_> = signed_by(&h._tmp.path().join("serve"), phone.device_id).into_iter().filter(|e| e.session_id == chat_id).collect();
+    assert_eq!(mine.len(), n, "every phone post stored once ({stale} stale drafts prepared again)");
+    let named: std::collections::HashSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+    assert_eq!(mine.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "the phone's chain has one head");
+    let failures = h.handle.shared.sync_failures.lock().unwrap().clone();
+    assert!(failures.is_empty(), "sync rounds failed: {failures:?}");
+    h.handle.shutdown();
 }
 
 /// Every phone action through serve, signed by the phone's own key as its

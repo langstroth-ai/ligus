@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use ligus_core::{workspace_config_session_id, ChatSession, HostKind, MessageRole, Timestamp, WorkspaceHost};
 use ligus_runtime::device_enroll::Standing;
-use ligus_runtime::{ChatService, EventStore};
+use ligus_runtime::ChatService;
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use uuid::Uuid;
@@ -275,6 +275,10 @@ pub struct Shared {
     /// look at a DM before its founder's log arrives.
     #[cfg(test)]
     pub dm_sync_held: AtomicBool,
+    /// Tests only: every failed sync round's error, in order (the health
+    /// keeps only the last, and a later good round clears it).
+    #[cfg(test)]
+    pub sync_failures: Mutex<Vec<String>>,
     /// When this process started (see [`Shared::fresh`]).
     started_at: Timestamp,
     pub http: reqwest::Client,
@@ -443,6 +447,8 @@ impl Shared {
     }
 
     fn sync_failed(&self, e: &str) {
+        #[cfg(test)]
+        self.sync_failures.lock().unwrap_or_else(|e| e.into_inner()).push(e.to_string());
         self.sync_status.lock().unwrap_or_else(|e| e.into_inner()).1 = Some(e.to_string());
     }
 
@@ -1144,6 +1150,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         test_presence: AtomicBool::new(false),
         #[cfg(test)]
         dm_sync_held: AtomicBool::new(false),
+        #[cfg(test)]
+        sync_failures: Default::default(),
         started_at: Timestamp::now(),
         http: ligus_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),
@@ -1311,9 +1319,11 @@ const STREAM_STABLE_AFTER: Duration = Duration::from_secs(30);
 /// The engine and store live as long as the loop, so a round only scans what
 /// was stored since the last one.
 async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let (mut engine, mut store) = match crate::sync_engine(&shared.cfg)
-        .and_then(|e| Ok((e, EventStore::open(shared.cfg.data_dir.join("ligus.db"))?)))
-    {
+    let opened = match crate::sync_engine(&shared.cfg) {
+        Ok(e) => crate::open_store_patiently(shared.cfg.data_dir.join("ligus.db"), "sync", || !shared.stopping()).await.map(|s| (e, s)),
+        Err(e) => Err(e),
+    };
+    let (mut engine, mut store) = match opened {
         Ok(v) => v,
         Err(e) => {
             eprintln!("sync: cannot start: {e}");

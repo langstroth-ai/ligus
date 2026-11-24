@@ -215,7 +215,7 @@ impl EventStore {
             return Ok(0);
         }
         let ws = workspace.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         let mut held = 0;
         let mut dropped = 0i64;
         for item in items {
@@ -285,7 +285,7 @@ impl EventStore {
 
     /// Every workspace with held events.
     pub fn held_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM held_events")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM held_events ORDER BY workspace_id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -322,7 +322,7 @@ impl EventStore {
             return Ok(());
         }
         let ws = workspace.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         for d in digests {
             // Judged now: no longer to be fetched again either.
             tx.execute(
@@ -356,7 +356,7 @@ impl EventStore {
     /// Mark dropped events of `workspace` due for fetching again.
     pub fn mark_refetch_due(&self, workspace: Uuid, seqs: &[u64]) -> Result<()> {
         let ws = workspace.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         for s in seqs {
             tx.execute("UPDATE held_refetch SET due = 1 WHERE workspace_id = ?1 AND seq = ?2", rusqlite::params![ws, *s as i64])?;
         }
@@ -376,7 +376,7 @@ impl EventStore {
     /// not due until the roster changes again.
     pub fn held_refetch_tried(&self, workspace: Uuid, seqs: &[u64]) -> Result<()> {
         let ws = workspace.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         for s in seqs {
             tx.execute(
                 "UPDATE held_refetch SET due = 0, attempts = attempts + 1 WHERE workspace_id = ?1 AND seq = ?2",
@@ -398,7 +398,7 @@ impl EventStore {
     /// aren't held again (counted as lost).
     pub fn prune_held_refetch(&self, workspace: Uuid) -> Result<usize> {
         let ws = workspace.to_string();
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         let n = tx.execute(
             "DELETE FROM held_refetch WHERE workspace_id = ?1 AND attempts >= ?2 AND due = 0 \
              AND NOT EXISTS (SELECT 1 FROM held_events h WHERE h.workspace_id = held_refetch.workspace_id AND h.seq = held_refetch.seq)",
@@ -415,7 +415,7 @@ impl EventStore {
     /// many went.
     pub fn expire_held(&self, now_ms: i64) -> Result<usize> {
         let cutoff = now_ms.saturating_sub(HELD_TTL_MS);
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = super::write_tx(&self.conn)?;
         let per_ws: Vec<(String, i64)> = {
             let mut stmt = tx.prepare("SELECT workspace_id, COUNT(*) FROM held_events WHERE held_ms < ?1 GROUP BY workspace_id")?;
             let rows = stmt.query_map([cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
