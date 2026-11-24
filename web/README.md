@@ -59,6 +59,30 @@ change that fixes some of it, shrink the baseline with
 the screenshots and a `report.json`; `--only chat,review` limits the views.
 CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
 
+### Panes: rows, menus, one primary action
+
+Every pane, sidebar view and Settings tab follows one pattern (the People
+pane is the reference):
+
+- **One-line rows by default**: identity (avatar or name) plus one muted
+  status on the same line. State is a small dot or tag with a tooltip, never
+  a repeated label on every item (no "ROLE", "CONFIGURED" per row).
+- **Per-item actions only in the row menu** (right-click, the row's `⋯`,
+  Shift+F10). The row click is the row's one primary action (open, select,
+  expand).
+- **One primary action per pane, in the header** (`RailFrame primary`:
+  "Invite", "Add an agent", "Add skill"). Secondary and rare pane actions go
+  in the header's `⋯` (`RailFrame more`).
+- **Creation forms open in a sheet** (`kit/Sheet`, centred), not inline in
+  the list. Advanced fields sit under "More options".
+- **No duplicated lists of the same entities**: one list, with marks for the
+  extra facets (a member the relay also enforces is a "relay" mark on its
+  row, not a second list).
+- **Fewer borders and fills**: rows on the pane background, separators
+  between them; cards only for a single object that needs attention.
+- **Tokens and density**: shared type sizes (13px row title, 11.5px meta),
+  `RowList`/`ListRow` spacing from `--row-h`/`--pad-row`.
+
 ### Copy in panels
 
 Panels (the right-rail panes, the sidebar's workspace views, Settings tabs,

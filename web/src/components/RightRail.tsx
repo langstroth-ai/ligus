@@ -79,7 +79,8 @@ import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
 import { useRowMenu, type RowAction } from "@/components/RowMenu";
-import { MoreMenu } from "@/components/MoreMenu";
+import { MoreMenu, type MoreMenuItem } from "@/components/MoreMenu";
+import { Sheet } from "@/components/kit/Sheet";
 import {
   Button,
   IconButton,
@@ -255,6 +256,8 @@ export function RailFrame({
   docs,
   children,
   actions,
+  primary,
+  more,
 }: {
   title: string;
   /// What the pane is for, in a sentence. Not shown on screen: it's the "?"
@@ -265,6 +268,10 @@ export function RailFrame({
   children: ReactNode;
   /// Optional header controls, on the title row left of the close button.
   actions?: ReactNode;
+  /// The pane's one primary action ("Invite", "Add skill"), in the header.
+  primary?: { label: string; onClick: () => void; disabled?: boolean };
+  /// Secondary and rare pane actions, behind the header's "⋯".
+  more?: MoreMenuItem[];
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -303,7 +310,17 @@ export function RailFrame({
         <div className="flex items-center gap-1.5 pr-8">
           <h2 className="ligus-title">{title}</h2>
           <PaneHelpLink title={title} about={about} docs={docs} />
-          {actions && <div className="ml-auto flex items-center gap-1.5">{actions}</div>}
+          {(actions || primary || (more && more.length > 0)) && (
+            <div className="ml-auto flex items-center gap-1.5">
+              {actions}
+              {primary && (
+                <Button size="sm" disabled={primary.disabled} onClick={primary.onClick}>
+                  {primary.label}
+                </Button>
+              )}
+              {more && more.length > 0 && <MoreMenu label={`More ${title} actions`} items={more} />}
+            </div>
+          )}
         </div>
       </div>
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
@@ -2252,20 +2269,11 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       title="People"
       about="Workspace members and governance roles for this chat."
       docs={PANE_DOCS.people}
-      actions={
-        <>
-          <Button size="sm" onClick={() => setInviteOpen(true)}>
-            Invite
-          </Button>
-          <MoreMenu
-            label="More people actions"
-            items={[
-              { label: "Membership history", onSelect: () => setSheet("history") },
-              ...(relayOn ? [{ label: "Add a remote agent…", onSelect: () => setSheet("agent") }] : []),
-            ]}
-          />
-        </>
-      }
+      primary={{ label: "Invite", onClick: () => setInviteOpen(true) }}
+      more={[
+        { label: "Membership history", onSelect: () => setSheet("history") },
+        ...(relayOn ? [{ label: "Add a remote agent…", onSelect: () => setSheet("agent") }] : []),
+      ]}
     >
       <Section
         title="Members"
@@ -2394,20 +2402,21 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       </Section>
 
       {inviteOpen && (
-        <Modal
+        <Sheet
+          title="Invite someone"
+          side="center"
+          width={420}
           onClose={() => setInviteOpen(false)}
-          labelledBy="invite-title"
-          panelClassName="w-[min(420px,calc(100vw-32px))] rounded-2xl border p-4 space-y-3"
-          panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
+          footer={<Button onClick={() => setInviteOpen(false)}>Done</Button>}
         >
+          <div className="space-y-3">
           <div className="flex items-center gap-1.5">
-            <h2 id="invite-title" className="ligus-section">Invite someone</h2>
+            <Hint className="px-0">Single-use. Send it over a channel you trust.</Hint>
             <InfoTip
               label="invite links"
               text="The link carries your safety code so they can check it came from you. To invite someone you already share another workspace with, use People."
             />
           </div>
-          <Hint className="px-0">Single-use. Send it over a channel you trust.</Hint>
           <Button variant="primary" disabled={!activeRoom || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
             {inviteMutation.isPending ? "…" : "Create invite link"}
           </Button>
@@ -2472,21 +2481,18 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               </div>
             </FormDisclosure>
           )}
-          <div className="flex justify-end">
-            <Button onClick={() => setInviteOpen(false)}>Done</Button>
           </div>
-        </Modal>
+        </Sheet>
       )}
 
       {sheet === "history" && (
-        <Modal
+        <Sheet
+          title="Membership history"
+          description="Signed, tamper-evident log"
+          side="center"
+          width={460}
           onClose={() => setSheet(null)}
-          labelledBy="history-title"
-          panelClassName="w-[min(460px,calc(100vw-32px))] rounded-2xl border p-4 space-y-2"
-          panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
-          <h2 id="history-title" className="ligus-section">Membership history</h2>
-          <Hint className="px-0">Signed, tamper-evident log</Hint>
           {(audit.data ?? []).length === 0 ? (
             <EmptyHint text="No changes yet" />
           ) : (
@@ -2506,21 +2512,14 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               ))}
             </RowList>
           )}
-          <div className="flex justify-end">
-            <Button onClick={() => setSheet(null)}>Close</Button>
-          </div>
-        </Modal>
+        </Sheet>
       )}
 
       {sheet === "agent" && (
-        <Modal
-          onClose={() => setSheet(null)}
-          labelledBy="agent-title"
-          panelClassName="w-[min(460px,calc(100vw-32px))] rounded-2xl border p-4 space-y-2"
-          panelStyle={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
-        >
+        <Sheet title="Add a remote agent" side="center" width={460} onClose={() => setSheet(null)}>
+          <div className="space-y-2">
           <div className="flex items-center gap-1.5">
-            <h2 id="agent-title" className="ligus-section">Add a remote agent</h2>
+            <Hint className="px-0">A one-paste command for a headless box.</Hint>
             <InfoTip
               label="remote agents"
               text="Generate makes the one-paste command a developer runs on its box (installs the CLI, connects to this workspace, starts the worker). Your relay issuer key mints the agent's identity token locally; only the token travels to the box."
@@ -2573,10 +2572,8 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               )}
             </>
           )}
-          <div className="flex justify-end">
-            <Button onClick={() => setSheet(null)}>Close</Button>
           </div>
-        </Modal>
+        </Sheet>
       )}
     </RailFrame>
   );
