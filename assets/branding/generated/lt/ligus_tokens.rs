@@ -59,6 +59,9 @@ pub struct StateGlyph {
     pub ascii: &'static str,
 }
 
+/// FNV-1a 64 of the ligus-brand-tokens.json this table was generated from.
+pub const SOURCE_FNV1A64: u64 = 0x37481b1fafef2543;
+
 /// Every palette, Pollen (the default) first.
 pub const PALETTES: [Palette; 6] = [
     Palette {

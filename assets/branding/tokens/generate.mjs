@@ -320,6 +320,16 @@ export function ltScheme(t, name, variant) {
 const LT_ANSI = { dim: 8, border: 8, ok: ANSI.ok, info: ANSI.info, warn: ANSI.warn, danger: ANSI.danger, neutral: ANSI.neutral, diff_add: ANSI.diffAdd, diff_del: ANSI.diffDel, diff_comment: ANSI.comment, agent: 5 };
 const LT_ROWS = ["canvas", "text", "dim", "accent", "border", "selection", "mention", "ok", "info", "warn", "danger", "neutral", "diff_add", "diff_del", "diff_comment", "agent"];
 
+/** FNV-1a 64 of the token file's bytes, so a copy of the table can prove which JSON it came from. */
+export function fnv1a64(bytes) {
+  let h = 0xcbf29ce484222325n;
+  for (const b of bytes) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return "0x" + h.toString(16).padStart(16, "0");
+}
+
 function renderRust(t) {
   const tc = (rgb, ansi) => `TokenColor { rgb: (${rgb.join(", ")}), xterm256: ${nearestXterm(rgb)}, ansi16: ${ansi === undefined ? "None" : `Some(${ansi})`} }`;
   const scheme = (name, variant, indent) => {
@@ -396,6 +406,9 @@ pub struct StateGlyph {
     pub glyph: &'static str,
     pub ascii: &'static str,
 }
+
+/// FNV-1a 64 of the ligus-brand-tokens.json this table was generated from.
+pub const SOURCE_FNV1A64: u64 = ${fnv1a64(readFileSync(TOKENS_PATH))};
 
 /// Every palette, Pollen (the default) first.
 pub const PALETTES: [Palette; ${names.length}] = [
