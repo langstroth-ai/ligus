@@ -216,7 +216,7 @@ pub fn person_role(roster: Option<&ligus_core::authz::RosterState>, links: &Devi
 }
 
 /// The name the primary runtime's replies (and refusal notes) carry.
-pub const PRIMARY_NAME: &str = "Ligus";
+pub const PRIMARY_NAME: &str = ligus_core::agent::PRIMARY_NAME;
 
 /// The message a turn answering `trigger` is judged by: a turn answering a
 /// System row (a note trailing the message, as the "last message" rule

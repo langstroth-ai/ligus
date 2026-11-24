@@ -2533,7 +2533,12 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
     // Resolve the author's avatar. A named agent (in the roster) uses its roster
     // avatar/color. Otherwise — a human, or the primary "ligus" (not a roster
     // entry) — use the stamped actor identity's avatar (the generating user's).
-    let roster_agent = agents.iter().find(|ag| ag.name == m.author);
+    // A roster agent named after the default agent (`ligus`/`primary`) never
+    // takes its replies' face, and a Hive-era default reply (author "Hive")
+    // is the default agent's, even beside a custom roster agent "hive".
+    let legacy_primary = ligus_core::agent::is_legacy_primary_reply(m);
+    let roster_agent =
+        agents.iter().find(|ag| !legacy_primary && !ligus_core::agent::names_primary(&ag.name) && ag.name == m.author);
     let (author_avatar_url, author_color_hex) = match roster_agent {
         Some(ag) => (ag.avatar_url.clone(), ag.avatar_color_hex.clone()),
         None => (m.actor_identity.as_ref().and_then(|a| a.avatar_url.clone()), None),
@@ -2553,7 +2558,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
     ChatMessageDto {
         id: m.id.to_string(),
         role: role_str(m.role).to_string(),
-        author: shown(&m.author),
+        author: shown(ligus_core::agent::display_author(m)),
         body: m.body.clone(),
         is_streaming: m.is_streaming,
         created_at: rfc3339(m.created_at),
@@ -3751,7 +3756,8 @@ fn chat_markdown(session: &ChatSession) -> String {
         let who = if m.author.trim().is_empty() {
             message_role_label(m.role).to_string()
         } else {
-            m.author.clone()
+            // A Hive-era reply of the default agent reads as "Ligus".
+            ligus_core::agent::display_author(m).to_string()
         };
         out.push_str(&format!("**{}** · _{}_\n\n", who, message_role_label(m.role)));
         out.push_str(m.body.trim());
@@ -4406,11 +4412,10 @@ pub(crate) fn add_agent_sync(
     if name.is_empty() {
         return Err("Agent name can't be empty.".to_string());
     }
-    // Reserved mention words would hijack routing (an agent named "primary"
-    // shadows the primary runtime; "you"/"all" shadow broadcast).
-    const RESERVED: &[&str] =
-        &["primary", "ligus", "you", "all", "everyone", "owners", "admins", "contributors", "viewers"];
-    if RESERVED.contains(&name.to_lowercase().as_str()) {
+    // Reserved mention words would hijack routing (an agent named "primary",
+    // "ligus" or the legacy "hive" shadows the default agent; "you"/"all"
+    // shadow broadcast).
+    if ligus_core::agent::is_reserved_agent_name(&name) {
         return Err(format!("\u{201c}{name}\u{201d} is a reserved mention name — pick another."));
     }
     let mut svc = state.service.lock().unwrap();
@@ -8318,7 +8323,7 @@ async fn summarize(
         // Skip system notes ("🧩 X added a workflow…") and empty/streaming
         // placeholders so they don't get summarized as if a participant said them.
         .filter(|m| !(m.role == MessageRole::System || m.is_streaming || m.superseded || m.body.trim().is_empty()))
-        .map(|m| format!("{}: {}\n", m.author, m.body))
+        .map(|m| format!("{}: {}\n", ligus_core::agent::display_author(m), m.body))
         .collect();
     let budget = summary_input_budget(runtime.context_window(), token_estimator::estimate_text(instruction));
     let _ = state;
@@ -19158,6 +19163,38 @@ mod init_recovery_tests {
 #[cfg(test)]
 mod responder_place_tests {
     use super::*;
+
+    /// A Hive-era reply of the default agent (stored author "Hive", no
+    /// responder id) shows as "Ligus" with the responder's name, even beside a
+    /// custom roster agent "hive"; a roster agent named "Ligus" never takes the
+    /// face of the default agent's replies.
+    #[test]
+    fn hive_era_default_reply_shows_as_ligus() {
+        let viewer = Viewer { device: None, account: None };
+        let bob = ligus_core::ActorIdentity::new("bob", "Bob", ligus_core::ActorKind::Human);
+        let mut old = ChatMessage::new(MessageRole::Assistant, "Hive", "71% used.");
+        old.actor_identity = Some(bob.clone());
+        let mut custom = WorkspaceAgent::new("Hive", "ollama");
+        custom.avatar_color_hex = Some("#ff0000".into());
+        let dto = message_dto(&old, std::slice::from_ref(&custom), viewer);
+        assert_eq!(dto.author, "Ligus");
+        assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
+        assert_eq!(dto.author_color_hex, None);
+        // The custom agent's own reply carries its id and keeps its name.
+        let mut theirs = ChatMessage::new(MessageRole::Assistant, "Hive", "hi");
+        theirs.responder_id = Some(custom.id);
+        let dto = message_dto(&theirs, std::slice::from_ref(&custom), viewer);
+        assert_eq!(dto.author, "Hive");
+        assert_eq!(dto.author_color_hex.as_deref(), Some("#ff0000"));
+        // A forged roster agent "Ligus" doesn't take the default agent's face.
+        let mut forged = WorkspaceAgent::new("Ligus", "evil");
+        forged.avatar_color_hex = Some("#00ff00".into());
+        let mut now = ChatMessage::new(MessageRole::Assistant, "Ligus", "ok");
+        now.actor_identity = Some(bob);
+        let dto = message_dto(&now, &[forged], viewer);
+        assert_eq!(dto.author_color_hex, None);
+        assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
+    }
 
     /// A primary `@ligus` turn this device answered is labelled by place
     /// ("this"), never by the viewer's own display name (a fresh desktop is
