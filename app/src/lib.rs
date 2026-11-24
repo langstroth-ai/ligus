@@ -9146,7 +9146,10 @@ async fn run_prepared_turn_inner(
     // The workspace's sandbox envelope for this turn (isolation, egress,
     // redaction, human gate), enforced below for whatever runtime answers.
     let envelope = crate::guards::turn_envelope(session);
-    let enforcement = crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, true);
+    // Claude Code gets its servers on the command line: only those this
+    // device lets the answering agent reach (`ligus_runtime::McpReach`).
+    let agent_mcp = crate::setup_ui::servers_for_agent(&state.data_dir, workspace_id, responder.agent_id, &scope.catalog.mcp);
+    let enforcement = crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &agent_mcp, true);
     if let Some(reason) = &enforcement.refuse {
         crate::guards::record_egress_refusal(state, workspace_id, session_id, responder.runtime.provider);
         return Err(reason.clone());
@@ -9225,7 +9228,7 @@ async fn run_prepared_turn_inner(
         enforcement
     } else {
         ligus_runtime::executor::with_turn(child_policy.clone(), crate::guards::probe_mcp_shells(state, &scope.catalog.mcp, &envelope.egress)).await;
-        crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp, false)
+        crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &agent_mcp, false)
     };
     // The turn runs in the shared engine (`ligus_runtime::turn_engine`), with
     // this device's policy as its input: the gate, the shell rule, the

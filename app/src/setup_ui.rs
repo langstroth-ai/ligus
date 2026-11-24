@@ -60,6 +60,17 @@ pub(crate) fn apply_reach(data_dir: &std::path::Path, ws: Uuid, servers: &mut Ve
     }
 }
 
+/// The servers a turn of `agent` may reach: this device's reach applied,
+/// then only those that name the agent (or every agent). For the paths that
+/// hand servers to a CLI agent directly (Claude Code's `--mcp-config`),
+/// which don't go through `tool_set`.
+pub(crate) fn servers_for_agent(data_dir: &std::path::Path, ws: Uuid, agent: Option<Uuid>, servers: &[McpServerSpec]) -> Vec<McpServerSpec> {
+    let mut v = servers.to_vec();
+    apply_reach(data_dir, ws, &mut v);
+    v.retain(|s| s.reaches(agent));
+    v
+}
+
 impl SetupOps for DesktopOps<'_> {
     fn surface(&self) -> Surface {
         Surface::Desktop
@@ -269,12 +280,15 @@ impl SetupOps for DesktopOps<'_> {
 
     // relay
     fn probe_relay(&self, url: &str, token: Option<&Zeroizing<String>>) -> ProbeFact {
+        // The saved access token goes only to the relay it was saved for.
+        let current = self.relay_url();
         let (saved, room) = {
             let state = self.state();
             let s = state.settings.lock().unwrap();
             (s.relay_access_token.clone().map(Zeroizing::new), s.sync_room.clone())
         };
-        service::probe_relay(url, token.or(saved.as_ref()), &room)
+        let same = current.as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
+        service::probe_relay(url, token.or(saved.as_ref().filter(|_| same)), &room)
     }
     fn switch_relay(&mut self, url: &str, token: Option<&Zeroizing<String>>) -> OpsResult<()> {
         if self.local() {
@@ -282,11 +296,15 @@ impl SetupOps for DesktopOps<'_> {
         }
         // The live settings and the workspace's entry change together, in one
         // save (crate::mirror_relay_into_synced_workspace).
+        let moved = !self.relay_url().as_deref().is_some_and(|r| setup::validate::same_origin(r, url));
         let state = self.state();
         let mut s = state.settings.lock().unwrap();
         s.relay_url = Some(url.to_string());
-        if let Some(t) = token {
-            s.relay_access_token = Some(t.to_string());
+        match token {
+            Some(t) => s.relay_access_token = Some(t.to_string()),
+            // The old relay's token never follows the workspace to another.
+            None if moved => s.relay_access_token = None,
+            None => {}
         }
         let room = s.sync_room.clone();
         if !s.joined_rooms.iter().any(|r| r == &room) {
@@ -386,6 +404,25 @@ mod tests {
         std::fs::write(d.path().join(McpReach::FILE), b"{").unwrap();
         apply_reach(d.path(), ws, &mut servers);
         assert!(servers.is_empty(), "unreadable: nothing, never everything");
+    }
+
+    /// Claude Code gets its servers on the command line, not through
+    /// `tool_set`: the reach must narrow that list too.
+    #[test]
+    fn claude_code_servers_follow_the_reach() {
+        let d = tempfile::tempdir().unwrap();
+        let (ws, a, b) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let servers = vec![
+            McpServerSpec::new("limited", McpTransport::Stdio { command: "x".into(), args: vec![] }),
+            McpServerSpec::new("open", McpTransport::Stdio { command: "y".into(), args: vec![] }),
+        ];
+        let mut r = McpReach::default();
+        r.set(ws, "limited", &[a]);
+        r.save(d.path()).unwrap();
+        let ids = |agent| servers_for_agent(d.path(), ws, agent, &servers).into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(ids(Some(a)), ["limited", "open"]);
+        assert_eq!(ids(Some(b)), ["open"]);
+        assert_eq!(ids(None), ["open"], "the default agent gets only every-agent servers");
     }
 
     #[test]
