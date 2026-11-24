@@ -790,6 +790,23 @@ phone signed something else on that log since the draft), 403 for a
 expired after 5 minutes, or used `prepareId`), 400/422 (unknown `kind` or
 field). Keep one action in flight per chat to avoid stale drafts.
 
+**A draft that goes stale while the person confirms.** Confirming takes a
+few seconds, and the log can move meanwhile. Nothing is stored and the
+`prepareId` is used up: a phone-signed action's commit answers 409 (this
+phone signed something else on that log), and a passkey confirmation's
+`POST /v1/presence/commit` answers `409 {"error":"stale_draft","message":…,"hint":…}`
+(the box's own device wrote to the same log). The phone prepares again and
+asks once more on its own, at most once per tap: the passkey prompt again,
+or Face ID again for the redrafted signature, with the note "Something
+changed while you were confirming. Confirm again." It does that only when
+the redraft shows exactly what the person confirmed (the digest and
+per-draft ids aside); otherwise the sheet shows the new draft and waits for
+a tap. A chat post's redraft always waits for the person's tap: the box
+already holds a signature over the stale draft, so signing again on its own
+would let one tap give it two signed posts it could both publish. A second 409 in a row ends on the
+sheet as a calm "Not recorded" with Try again, never an error toast. Details:
+`docs/DESIGN.md` 8.1c in the iOS repository.
+
 **Actions** (`{"kind": …, camelCase fields}`, no other fields):
 
 | kind | fields | presence |
