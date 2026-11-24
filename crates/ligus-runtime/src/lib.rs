@@ -24,6 +24,7 @@ pub mod author_gate;
 pub mod box_admission;
 pub mod builtin_tools;
 pub mod chat_service;
+pub mod checks;
 pub mod cli_detect;
 pub mod connection_settings;
 pub mod context;
@@ -82,6 +83,7 @@ pub mod retrieval;
 pub mod review;
 pub mod safe_fs;
 pub mod sandbox;
+pub mod setup;
 pub mod spend;
 pub mod secret_redact;
 pub mod secret_store;
@@ -118,7 +120,7 @@ pub use chat_service::{
     ChatService, DispatchCtx, PendingMention, SUMMARY_TURN_HEADER,
 };
 pub use context::{Compactor, CompactionResult, Summarizer};
-pub use mcp::{
+pub use mcp::{McpReach, 
     is_shell_tool, normalize_bearer_token, resolve_bearer, shell_tool_names, McpRegistry, McpServerSpec, McpTool, McpTransport,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};

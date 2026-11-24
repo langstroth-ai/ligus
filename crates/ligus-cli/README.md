@@ -42,7 +42,8 @@ Everything is env-driven so it drops into a container or a secret mount. A
 ligus enroll <hivews1:invite>       # one-shot: decode the invite (relay/room/key) → save config.toml
        [--token <hrt1>]            #   …and set the relay identity token (membership-enforcing relays)
 ligus join <invite-code>            # redeem a relay invite code → self-enroll this box at its role
-ligus setup [--apply]               # detect providers on this box; --apply defines keyless runtimes
+ligus setup [<flow>]                # guided setup: agent, tool, folder, box, phone, invite, relay
+ligus setup runtimes [--apply]      # detect providers on this box; --apply defines keyless runtimes
 ligus config <export|import <file>> # round-trip the workspace runtime set as TOML
 ligus whoami                        # this client's identity (account/device ids); bootstraps keys on first run
 ligus app                           # open the Ligus desktop app, detached from this terminal

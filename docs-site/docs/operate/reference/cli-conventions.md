@@ -90,7 +90,7 @@ exit-codes` print it.
 | 7 | offline, the relay unreachable, or timed out | retry with backoff |
 | 8+ | command-specific, listed in that command's help | |
 
-Which codes each tool uses: `ligus` all of 0 to 7 except 4 (see the
+Which codes each tool uses: `ligus` all of 0 to 7 (4 only from `ligus setup`'s person steps; see the
 [CLI reference](../../ligus/reference/cli.md#exit-codes)); the deploy scripts
 0 to 4 (an unreachable cluster is 3: check the context); `langstroth-relay`
 0 to 2. Every command's `--help` ends its EXIT CODES with a pointer to the
@@ -137,7 +137,7 @@ their profile: a usage error is a report with one failed `usage` check (its
 | `-o json\|text` | every command (`-o json` is `--json`; `-o jsonl` is `--jsonl`) | every command | `check` |
 | `-q`, `--quiet` | `ligus doctor`: only the checks that need attention | only the warn and FAIL checks | |
 | `--color auto\|always\|never` | `ligus doctor`'s text | the `[FAIL]` and `[WARN]` marks on stderr | |
-| `--dry-run` | `add-runtime`, `rm-runtime`, `add-agent`, `set-agent-host` | `ligus-k8s install` | |
+| `--dry-run` | `add-runtime`, `rm-runtime`, `add-agent`, `set-agent-host`, `setup <flow>` | `ligus-k8s install` | |
 | `--wait`, `--timeout` | `ligus send` (wait for an answer; `--timeout` alone also waits, default 5m; no answer in time exits 7) | `ligus-k8s install` (`--timeout`) | |
 | `--force` | | `ligus-local configure` (rewrite the env file) | |
 
@@ -181,6 +181,7 @@ A usage error adds `"error": "<message>"`.
 | Tool | Command | Schema |
 |---|---|---|
 | `ligus` | `ligus doctor --json` | `ligus.checks.v1` |
+| `ligus` | `ligus setup [<flow>] --json` | `ligus.checks.v1` (a flow's report adds `flow`, `done`, `dryRun` and `results`) |
 | `langstroth-relay` | `langstroth-relay check --json` | `ligus.checks.v1` (relay 0.3.2 printed `name` instead of `id`; releases after it print both for one release) |
 | `deploy/local/ligus-local` | every command with `--json` | `ligus.agent-deploy.v1` profile |
 | `deploy/kubernetes/ligus-k8s` | every command with `--json` | `ligus.agent-deploy.v1` profile |

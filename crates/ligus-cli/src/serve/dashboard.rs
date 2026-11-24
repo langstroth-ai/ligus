@@ -2542,8 +2542,8 @@ mod tests {
 
     fn registry(url: &str) -> ligus_runtime::McpRegistry {
         ligus_runtime::McpRegistry::new(vec![
-            ligus_runtime::McpServerSpec { id: "gh".into(), transport: ligus_runtime::McpTransport::Http { url: url.into() }, enabled: true, auth: None },
-            ligus_runtime::McpServerSpec { id: "off".into(), transport: ligus_runtime::McpTransport::Http { url: url.into() }, enabled: false, auth: None },
+            ligus_runtime::McpServerSpec { id: "gh".into(), transport: ligus_runtime::McpTransport::Http { url: url.into() }, enabled: true, auth: None, agents: Vec::new() },
+            ligus_runtime::McpServerSpec { id: "off".into(), transport: ligus_runtime::McpTransport::Http { url: url.into() }, enabled: false, auth: None, agents: Vec::new() },
         ])
     }
 

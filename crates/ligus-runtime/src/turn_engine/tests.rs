@@ -366,7 +366,7 @@ async fn run_command_goes_through_the_given_executor_with_home_denied() {
 async fn mcp_tool_call_through_a_stub_server() {
     let url = spawn_mcp().await;
     let (endpoint, model) = spawn_model(vec![call("c1", "stub__echo", json!({"text": "ping"})), text("It said pong.")]).await;
-    let server = McpServerSpec { id: "stub".into(), transport: McpTransport::Http { url }, enabled: true, auth: None };
+    let server = McpServerSpec { id: "stub".into(), transport: McpTransport::Http { url }, enabled: true, auth: None, agents: Vec::new() };
     let mut w = world(vec![server]);
     w.host.repo = None;
     let out = run(&w.host, input(&w, runtime(&endpoint), false, Arc::new(Recording::default()))).await.expect("the turn runs");
@@ -623,7 +623,7 @@ async fn a_finalize_failure_completes_the_placeholder() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_listing_spawns_stdio_servers_through_the_turns_executor() {
     let (endpoint, _model) = spawn_model(vec![text("No tools needed.")]).await;
-    let server = McpServerSpec { id: "local".into(), transport: McpTransport::Stdio { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }, enabled: true, auth: None };
+    let server = McpServerSpec { id: "local".into(), transport: McpTransport::Stdio { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }, enabled: true, auth: None, agents: Vec::new() };
     let mut w = world(vec![server]);
     w.host.repo = None;
     let exec = Arc::new(Recording::default());

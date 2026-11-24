@@ -2426,6 +2426,7 @@ fn load_config_catalogs(dirs: &[&Path]) -> (Vec<RuntimeTarget>, String, Vec<McpS
                         },
                         enabled: m.enabled,
                         auth: None,
+                        agents: Vec::new(),
                     })
                     .collect();
                 break;
@@ -5802,6 +5803,7 @@ fn parse_mcp_transport(id: String, spec: &Value) -> Result<McpServerSpec, String
             },
             enabled: false,
             auth: None,
+            agents: Vec::new(),
         });
     }
 
@@ -5828,6 +5830,7 @@ fn parse_mcp_transport(id: String, spec: &Value) -> Result<McpServerSpec, String
         },
         enabled: false,
         auth: None,
+        agents: Vec::new(),
     })
 }
 
@@ -6012,6 +6015,7 @@ fn add_remote_mcp_server(
         transport: McpTransport::Http { url },
         enabled: false,
         auth: None,
+        agents: Vec::new(),
     };
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_mcp_server_in_config(&state.data_dir, &root, &server)?;
@@ -18596,6 +18600,7 @@ mod mcp_bearer_tests {
             transport: McpTransport::Http { url: format!("http://127.0.0.1:1/{id}") },
             enabled: true,
             auth: auth.map(str::to_string),
+            agents: Vec::new(),
         }
     }
 
@@ -18657,6 +18662,7 @@ mod mcp_bearer_tests {
                 transport: McpTransport::Stdio { command: "x".into(), args: vec![] },
                 enabled: true,
                 auth: None,
+                agents: Vec::new(),
             },
         ];
         apply_mcp_auth(&mut servers, &s);
@@ -18727,6 +18733,7 @@ mod mcp_bearer_tests {
             transport: McpTransport::Http { url: url.into() },
             enabled: true,
             auth: None,
+            agents: Vec::new(),
         }
     }
 
@@ -18802,6 +18809,7 @@ mod mcp_bearer_tests {
                 transport: McpTransport::Stdio { command: "x".into(), args: vec![] },
                 enabled: true,
                 auth: Some("nope".into()),
+                agents: Vec::new(),
             },
         ];
         assert!(migrate_catalog_mcp_auth(&mut s, &managed));
@@ -18850,6 +18858,7 @@ mod mcp_bearer_tests {
             transport: McpTransport::Http { url },
             enabled: true,
             auth: None,
+            agents: Vec::new(),
         };
         // Without a token the server must refuse — proves the bearer matters.
         let open = McpRegistry::new(vec![spec.clone()]);

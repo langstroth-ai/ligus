@@ -108,8 +108,8 @@ of failing silently. Copilot bills premium models at several requests per turn
 — set a cheaper model on the runtime if that matters.
 
 **On `ligus serve` / `ligus worker` hosts.** Install and sign in to the CLI on
-that host, then `ligus setup` lists it (with sign-in state) and
-`ligus setup --apply` defines `antigravity` / `copilot` runtimes, or
+that host, then `ligus setup runtimes` lists it (with sign-in state) and
+`ligus setup runtimes --apply` defines `antigravity` / `copilot` runtimes, or
 `ligus add-runtime copilot "Copilot" copilot <model>`. The worker's tier is
 `LIGUS_WORKER_PERMISSION_MODE` (`acceptEdits`, `runCommands`,
 `bypassPermissions`; read-only when unset).

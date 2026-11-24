@@ -109,7 +109,7 @@ ligus send --help                  # one command: flags, defaults, env, examples
 **An always-on box.** On a spare machine, after `ligus enroll`:
 
 ```sh
-ligus setup --apply                # detect providers, define keyless runtimes
+ligus setup runtimes --apply       # detect providers, define keyless runtimes
 ligus register-worker --label box
 ligus worker --label box           # answer mentions for the agents bound here
 # or, to drive it from your phone:

@@ -39,6 +39,7 @@ Topics:
 | `troubleshooting` | the common errors and their fixes |
 | `exit-codes` | the exit codes every Ligus tool shares (0 to 7), and `--legacy-exit-codes` ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes)) |
 | `checks` | the `ligus.checks.v1` report `ligus doctor --json`, `langstroth-relay check --json` and the deploy scripts print ([CLI conventions](../../operate/reference/cli-conventions.md)) |
+| `setup` | the guided setup flows (`ligus setup agent`, `tool`, `folder`, `box`, `phone`, `invite`, `relay`): flags, `--json`, exit codes and who may run which |
 | `agents-guide` (also `AGENTS`) | a one-shot playbook for coding agents: set up a box, add an agent, deploy on Kubernetes, check health |
 
 A name that is both a topic and a command (`agents`, `repos`, `remote`,
@@ -57,8 +58,8 @@ scripts ([CLI conventions](../../operate/reference/cli-conventions.md#exit-codes
 | 0 | done (warnings allowed) | success, help included |
 | 1 | failed: the message (or `checks[].fix`) says why | an error (`ligus: …` on stderr); a failed `ligus doctor` or `ligus gateway-check` check |
 | 2 | usage error | an unknown command or subcommand, a missing or bad argument such as a malformed chat id (the message says which help to read); also a model gateways file (`LIGUS_MODEL_GATEWAYS_FILE`) that can't be used |
-| 3 | a precondition you can fix is missing | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1` on a host without an agent sandbox; the relay rejected the access token |
-| 4 | a person must decide or act | (reserved) |
+| 3 | a precondition you can fix is missing | `ligus serve` or `ligus worker` with `LIGUS_REQUIRE_SANDBOX=1` on a host without an agent sandbox; the relay rejected the access token; a `ligus setup` flow found a harness not installed or signed in, or no agent sandbox |
+| 4 | a person must decide or act | `ligus setup box` waiting for an Admin's passkey approval, `ligus setup phone` (run `ligus pair` yourself), `ligus setup invite` (create it on the desktop) |
 | 5 | not found | an unknown chat (`ligus tail`, `ligus send`) |
 | 6 | refused by workspace rules | the workspace refused the action (a role, an agent's access, a relay roster) |
 | 7 | offline, the relay unreachable, or timed out | the relay couldn't be reached, or asked to wait (a rate limit) |
@@ -75,7 +76,7 @@ unknown command exits 2 without creating a data dir.
 ## Output for scripts and agents {#json}
 
 Read and status commands take `--json` and then print one JSON document on
-stdout: `ligus doctor` (a [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report), `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
+stdout: `ligus doctor` and `ligus setup [<flow>]` (a [`ligus.checks.v1`](../../operate/reference/cli-conventions.md) report), `ligus status`, `ligus whoami`, `ligus chats`, `ligus runtimes`,
 `ligus agents`, `ligus hosts`, `ligus repos list`, `ligus remote status`,
 `ligus phones list`, `ligus memory list|search|show|proposals` and
 `ligus task-state`. `ligus facts export --jsonl` prints JSON lines. No
@@ -238,6 +239,30 @@ an invite and an Admin.
 | `ligus proposals` | lists proposals with status and votes |
 | `ligus queue` | unanswered agent mentions and whether each agent's host is online |
 
+## Guided setup {#setup}
+
+The same seven flows as the desktop's **Set up** commands.
+Each checks first, writes only when every check passed, and is safe to run
+again. `ligus help setup` is the guide; `ligus setup <flow> --help` lists a
+flow's flags.
+
+| Command | What it does |
+|---|---|
+| `ligus setup [--json]` | lists the flows and what each has done on this device, as a `ligus.checks.v1` report (`<flow>.status`) |
+| `ligus setup agent --harness H --name NAME [--model M] [--endpoint URL \| --gateway NAME] [--test-turn]` | checks the harness is installed and signed in and the agent sandbox, reuses or defines a keyless workspace runtime (Admin), creates the agent (Contributor), optionally sends one test turn |
+| `ligus setup tool --id ID (--command "PROG ARGS" \| --kind url --url URL [--token - \| @FILE]) [--reach all\|AGENT,...]` | starts the MCP server once under the agent sandbox and lists its tools, then saves it with which agents may reach it (`<data dir>/mcp-servers.toml`, `mcp-reach.json`); a token goes to the secret store |
+| `ligus setup folder --path DIR [--name NAME] [--branch B]` | checks the checkout, matches (or, as an Admin, adds) the workspace repository, binds the folder |
+| `ligus setup box [--label NAME] [--code - \| @FILE]` | on a box: prints its join request and stops (exit 4) until an Admin approves it with a passkey; then keeps the admission and checks `ligus serve` |
+| `ligus setup phone` | checks the box can pair, then hands over to `ligus pair` in your own terminal (exit 4) |
+| `ligus setup invite` | checks you can invite and lists invites and whether they were accepted; invites are created on the desktop (exit 4) |
+| `ligus setup relay [--kind community \| --kind own --url URL] [--token - \| @FILE]` | checks the relay (https only, plain http only on this machine), switches this device to it, checks again |
+| `ligus setup runtimes [--apply]` | the detection `ligus setup` did before the flows |
+
+Every flow takes `--json` (one report: `command` is `setup <flow>`, plus
+`flow`, `done`, `dryRun` and `results`) and `--dry-run` (checks and validates,
+writes nothing). A secret flag takes `-` (stdin) or `@FILE` (owner-only) and is
+refused on the command line.
+
 ## Runtimes and agents
 
 | Command | What it does |
@@ -245,7 +270,7 @@ an invite and an Admin.
 | `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
 | `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret - \| --secret @FILE] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
-| `ligus setup [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes |
+| `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
 | `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
 | `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
 | `ligus agents [--json]` | lists workspace agents. |

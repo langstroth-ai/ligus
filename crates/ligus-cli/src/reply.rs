@@ -156,7 +156,8 @@ async fn try_tool_loop(
     // the shell no tool that runs shell commands is.
     let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
     let shell = ligus_runtime::executor::turn_shell_allowed();
-    let Some((defs, executor)) = mcp::tool_set(specs, shell, None, |_| {}).await else {
+    // No workspace agent here: only servers every agent may reach.
+    let Some((defs, executor)) = mcp::tool_set(specs, None, shell, None, |_| {}).await else {
         return Ok(None);
     };
     let model = mcp::AnthropicMessages {

@@ -6,6 +6,24 @@ Full release notes are on the
 
 ## Unreleased
 
+### New
+
+- **Guided setup on the command line.** `ligus setup` lists seven flows
+  and what each has done on this device: set up an agent, connect a tool
+  (an MCP server), add a code folder, add a box, add a phone, invite a
+  person and set up a relay. `ligus setup <flow>` runs one: it checks first,
+  writes only when every check passed, can be run again safely, and stops
+  with exit 4 at a step only a person can do (approving a box with a
+  passkey, pairing a phone, creating an invite). Every prompt is a flag,
+  `--json` prints one `ligus.checks.v1` report and `--dry-run` writes
+  nothing. Secrets are read only from stdin or an owner-only file. The
+  earlier `ligus setup [--apply]` is now `ligus setup runtimes [--apply]`.
+  See [Guided setup](cli.md#setup) and `ligus help setup`.
+- **Choose which agents may use a tool.** A tool (MCP server) can be
+  limited to some agents. The choice is kept on the device that runs the
+  server, never in a file a commit could change, and a turn of the
+  default agent gets only tools every agent may use.
+
 ### Fixes
 
 - **The keychain stops asking (macOS).** A release of Ligus that finds its

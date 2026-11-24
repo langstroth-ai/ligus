@@ -223,15 +223,185 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "setup",
         group: G_START,
+        summary: "guided setup: list the flows and what is done here",
+        purpose: "List the seven guided setup flows (agent, tool, folder, box, phone, invite, relay) and what each has \
+                  done on this device, from the same engine the desktop's Set up commands use. `ligus setup <flow> \
+                  --help` shows a flow's flags. Every flow checks first, writes only when every check passed, is safe \
+                  to run again, and stops with exit 4 at a step only a person can do. `ligus help setup` is the guide.",
+        synopsis: &["ligus setup [--json]", "ligus setup <flow> [flags] [--json] [--dry-run]"],
+        flags: &[JSON, f("--apply", "off", "the earlier `ligus setup --apply`: now `ligus setup runtimes --apply`")],
+        examples: &["ligus setup", "ligus setup agent --harness claude-code --name builder", "ligus setup --json | jq '.checks[] | {id, status}'"],
+        exit: &[(0, "listed (setup never fails a listing)")],
+        see_also: &["ligus help setup", "ligus doctor", "desktop: ⌘K > Set up an agent (and the other Set up commands)"],
+        ..D
+    },
+    Cmd {
+        name: "setup agent",
+        group: G_START,
+        summary: "set up an agent on a coding CLI or model that is installed and signed in",
+        purpose: "Check the harness is installed and signed in (never reading a token), check the agent sandbox, \
+                  validate the name (one word; not a reserved mention name such as ligus or all; not another agent's or \
+                  member's), pick the model, reuse a keyless workspace runtime with that harness and model or define one \
+                  (Admin), create the agent (Contributor), and optionally send one test turn. A failure after the \
+                  runtime was defined removes it again.",
+        synopsis: &["ligus setup agent --harness H --name NAME [--model M] [--endpoint URL | --gateway NAME] [--test-turn] [--json] [--dry-run]"],
+        flags: &[
+            f("--harness H", "required", "claude-code, codex, copilot, antigravity, aider, pi, local (Ollama or OpenAI-compatible) or gateway"),
+            f("--name NAME", "required", "the agent's @name"),
+            f("--model M", "the harness's default", "the model (required for local)"),
+            f("--endpoint URL", "http://localhost:11434", "local only: the model server (https://, or http:// on this machine)"),
+            f("--gateway NAME", "none", "gateway only: a model gateway a host offers (ligus hosts)"),
+            f("--test-turn", "off", "send one short test message and check the reply"),
+            JSON,
+            DRY_RUN,
+        ],
+        env: &["PATH", "LIGUS_RUNTIME_TEST_TIMEOUT_SECS"],
+        examples: &[
+            "ligus setup agent --harness claude-code --name builder --test-turn",
+            "ligus setup agent --harness local --model llama3.2 --name local --dry-run",
+            "ligus setup agent --harness codex --name reviewer --json",
+        ],
+        exit: &[(2, "a missing or invalid flag (the check names it)"), (3, "the harness isn't installed or signed in, or no agent sandbox"), (6, "your role can't add an agent or a workspace runtime"), (7, "a local model server didn't answer")],
+        see_also: &["ligus setup", "ligus add-agent", "ligus runtimes", "ligus doctor --sandbox"],
+        ..D
+    },
+    Cmd {
+        name: "setup tool",
+        group: G_START,
+        summary: "connect an MCP server and choose which agents may reach it",
+        purpose: "Validate the server (a command, or an https URL; no token in the URL or the arguments), start it once \
+                  under the agent sandbox and list its tools before anything is saved, then save it with its reach in \
+                  one write to <data dir>/mcp-servers.toml (owner-only; ligus worker and serve read it with \
+                  LIGUS_MCP_CONFIG). A bearer token goes to this device's secret store only. Which agents may reach it \
+                  is kept on this device (mcp-reach.json), never in a file a commit could change. Refused during \
+                  workspace lockdown unless the lockdown allows the server.",
+        synopsis: &["ligus setup tool --id ID (--command \"PROG ARGS\" | --kind url --url URL [--token - | @FILE]) [--reach all|AGENT,...] [--json] [--dry-run]"],
+        flags: &[
+            f("--id ID", "required", "the server's id: lowercase letters, digits and -"),
+            f("--kind command|url", "command", "a command on this device or a URL"),
+            f("--command \"PROG ARGS\"", "required for command", "the command line; never put a token in it"),
+            f("--url URL", "required for url", "https://, or http:// on this machine"),
+            f("--token - | @FILE", "none", "the bearer token, from stdin or an owner-only file (never on the command line)"),
+            f("--reach all|AGENT,...", "all", "which agents may use it; the default agent gets only servers every agent may use"),
+            JSON,
+            DRY_RUN,
+        ],
+        env: &["LIGUS_MCP_CONFIG"],
+        examples: &[
+            "ligus setup tool --id notes --command \"npx -y @modelcontextprotocol/server-filesystem ~/notes\" --reach builder",
+            "ligus setup tool --id linear --kind url --url https://mcp.linear.app/mcp --token @./linear-token",
+        ],
+        exit: &[(2, "an invalid flag, a token-looking argument or URL"), (3, "no agent sandbox on this host"), (6, "your role, or the workspace lockdown"), (7, "the server didn't answer")],
+        see_also: &["ligus setup", "ligus help env", "ligus doctor --sandbox"],
+        ..D
+    },
+    Cmd {
+        name: "setup folder",
+        group: G_START,
+        summary: "bind a git checkout on this device to a workspace repository",
+        purpose: "Check the folder is a main git checkout (not a linked worktree), not managed by another host here and \
+                  not bound to another repository, before anything is written; then match the workspace repository by \
+                  its remote (adding it, with its default branch, takes an Admin) and bind the folder (Contributor).",
+        synopsis: &["ligus setup folder --path DIR [--name NAME] [--branch B] [--json] [--dry-run]"],
+        flags: &[
+            f("--path DIR", "required", "the checkout"),
+            f("--name NAME", "the repository's name", "the display name when the repository is added"),
+            f("--branch B", "origin's HEAD, else main or master", "the default branch when the repository is added"),
+            JSON,
+            DRY_RUN,
+        ],
+        examples: &["ligus setup folder --path ~/src/app", "ligus setup folder --path . --dry-run --json"],
+        exit: &[(2, "not a checkout, a linked worktree, managed elsewhere or bound to another repository"), (3, "git isn't installed"), (6, "adding a repository needs an Admin; binding a Contributor")],
+        see_also: &["ligus setup", "ligus repos", "ligus help repos"],
+        ..D
+    },
+    Cmd {
+        name: "setup box",
+        group: G_START,
+        summary: "on a box: print its join request, then keep the admission an Admin approved",
+        purpose: "Run it on the box, with the box's own data dir (never the desktop app's). The first run checks the \
+                  agent sandbox, prints the box's join request and fingerprint (public) and stops with exit 4: an Admin \
+                  approves it with a passkey on the desktop (workspace menu > Admit a box) or the phone. Run it again \
+                  with the sealed code they send back; it keeps the admission (as ligus admit redeem does) and checks \
+                  that ligus serve answers. No flag can approve a box.",
+        synopsis: &["ligus setup box [--label NAME] [--code - | @FILE] [--json] [--dry-run]"],
+        flags: &[
+            f("--label NAME", "LIGUS_HOST_LABEL, else the host name", "how the workspace names this box"),
+            f("--code - | @FILE", "none", "the sealed admission code, from stdin or an owner-only file"),
+            JSON,
+            DRY_RUN,
+        ],
+        env: &["LIGUS_DATA_DIR", "LIGUS_HOST_LABEL", "LIGUS_SERVE_LISTEN"],
+        examples: &["LIGUS_DATA_DIR=~/.ligus-serve ligus setup box --label home", "ligus setup box --code - < ./admission"],
+        exit: &[(3, "the desktop app's data dir, or no agent sandbox"), (4, "waiting for an Admin's passkey approval")],
+        see_also: &["ligus admit request", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
+        ..D
+    },
+    Cmd {
+        name: "setup phone",
+        group: G_START,
+        summary: "check this box can pair a phone, then hand over to ligus pair",
+        purpose: "Check this box is a member and ligus serve answers, then stop with exit 4: pairing prints a secret \
+                  link, so you run `ligus pair` yourself in your own terminal (never in a job or a logged session). \
+                  This command never prints the pairing secret. On the desktop: ⌘K > Add a phone.",
+        synopsis: &["ligus setup phone [--json] [--dry-run]"],
+        flags: &[JSON, DRY_RUN],
+        env: &["LIGUS_SERVE_LISTEN"],
+        examples: &["ligus setup phone", "ligus setup phone && ligus pair"],
+        exit: &[(3, "the box isn't a member, or ligus serve isn't running"), (4, "run ligus pair in your own terminal")],
+        see_also: &["ligus pair", "ligus help phone"],
+        ..D
+    },
+    Cmd {
+        name: "setup invite",
+        group: G_START,
+        summary: "check you can invite, list invites and whether they were accepted",
+        purpose: "Check you are an Admin and the workspace has a relay, say what an invited person may do (they join \
+                  as a Contributor), and list the invites this workspace issued and which were accepted. The CLI never \
+                  creates an invite: the code carries the workspace key, so it is made and shown on the desktop \
+                  (People > Invite someone). Exit 4 says so.",
+        synopsis: &["ligus setup invite [--json]"],
+        flags: &[JSON, DRY_RUN],
+        examples: &["ligus setup invite", "ligus setup invite --json | jq '.checks[] | select(.id == \"invite.track\")'"],
+        exit: &[(3, "no relay yet"), (4, "create the invite on the desktop"), (6, "inviting needs an Admin")],
+        see_also: &["ligus help setup", "desktop: People > Invite someone"],
+        ..D
+    },
+    Cmd {
+        name: "setup relay",
+        group: G_START,
+        summary: "check a relay (community or your own, https only) and switch this device to it",
+        purpose: "Check the relay (one request: reachable, access token accepted, or nothing stored for this workspace \
+                  yet), switch this device's config.toml to it (written to a temp file and renamed; the token goes to \
+                  the secret store), and check again. Plain http is refused except for a relay on this machine \
+                  (localhost, 127.0.0.0/8, ::1). Every member's devices must use the same relay.",
+        synopsis: &["ligus setup relay [--kind community | --kind own --url URL] [--token - | @FILE] [--json] [--dry-run]"],
+        flags: &[
+            f("--kind community|own", "community", "the community relay (relay.langstroth.ai, best-effort) or your own"),
+            f("--url URL", "required for own", "your relay's https URL"),
+            f("--token - | @FILE", "none", "the relay access token (hrt1…), from stdin or an owner-only file"),
+            JSON,
+            DRY_RUN,
+        ],
+        env: &["LIGUS_RELAY_URL"],
+        conn: true,
+        examples: &["ligus setup relay", "ligus setup relay --kind own --url https://relay.example.com --token @./token"],
+        exit: &[(2, "not https, or a URL with a user name or token"), (3, "the relay wants an access token"), (7, "the relay didn't answer")],
+        see_also: &["langstroth-relay check --url URL (on the relay host)", "ligus doctor", "ligus help troubleshooting"],
+        ..D
+    },
+    Cmd {
+        name: "setup runtimes",
+        group: G_START,
         summary: "detect providers on this box; --apply defines keyless runtimes",
         purpose: "Detect what this box can reach: API keys in the environment, Ollama on 127.0.0.1:11434, and the \
                   claude, codex, agy and copilot CLIs (with their sign-in state). Key-backed providers are printed \
                   as `ligus add-runtime … --secret-ref` commands; --apply defines the keyless ones as workspace \
-                  runtimes (share them with `ligus sync`).",
-        synopsis: &["ligus setup [--apply]"],
+                  runtimes (share them with `ligus sync`). This was `ligus setup` before the setup flows.",
+        synopsis: &["ligus setup runtimes [--apply]"],
         flags: &[f("--apply", "off", "define the detected keyless runtimes in the workspace")],
         env: &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PATH"],
-        examples: &["ligus setup", "ligus setup --apply && ligus sync"],
+        examples: &["ligus setup runtimes", "ligus setup runtimes --apply && ligus sync"],
         see_also: &["ligus runtimes", "ligus add-runtime", "ligus help agents"],
         ..D
     },
@@ -443,7 +613,7 @@ pub const COMMANDS: &[Cmd] = &[
         env: &["LIGUS_WS_SECRET_<ref>"],
         conn: true,
         examples: &["ligus runtimes", "ligus runtimes --json"],
-        see_also: &["ligus add-runtime", "ligus setup", "ligus help agents"],
+        see_also: &["ligus add-runtime", "ligus setup runtimes", "ligus help agents"],
         ..D
     },
     Cmd {
@@ -1733,7 +1903,8 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
             e("LIGUS_BUILTIN_RUN_COMMAND", "off", "also offer run_command, inside the turn's worktree"),
             e("LIGUS_ALLOW_REMOTE_FILE_TOOLS", "off", "file tools even when the model endpoint isn't local or private"),
             e("LIGUS_MCP_AFTER_READS", "off", "turns OFF the guard refusing MCP calls after a turn read project files"),
-            e("LIGUS_MCP_CONFIG", "unset", "TOML file of MCP servers for headless turns and dashboard panels"),
+            e("LIGUS_MCP_CONFIG", "unset", "TOML file of MCP servers for headless turns and dashboard panels (read with <data dir>/mcp-servers.toml, which `ligus setup tool` writes)"),
+            e("LIGUS_RUNTIME_TEST_TIMEOUT_SECS", "45", "seconds `ligus setup agent --test-turn` waits for the test reply"),
             e("LIGUS_MCP_MIN_ROLE", "admin (write tier) / contributor (read-only)", "minimum author role for a turn at its configured tier"),
             e("LIGUS_TURN_TIMEOUT_SECS", "3600", "total backstop for one turn"),
             e("LIGUS_TURN_IDLE_TIMEOUT_SECS", "300", "how long a streaming model may stay silent"),
@@ -1826,6 +1997,45 @@ phone (ligus help phone). The desktop app: ligus app.
 ",
     },
     Topic {
+        name: "setup",
+        aliases: &["setup-flows", "wizard"],
+        summary: "the guided setup flows: agent, tool, folder, box, phone, invite, relay",
+        text: "\
+Seven guided flows, the same in the desktop (⌘K > Set up an agent, Connect a tool, …;
+or /setup in the composer), in lt and here. Each one checks first, writes only when
+every check passed, can be run again safely (a finished step is skipped), and says
+what to do when something fails (the `fix:` line under it).
+
+  ligus setup                       what is done here, and what to run next
+  ligus setup agent   --harness claude-code --name builder [--model sonnet] [--test-turn]
+  ligus setup tool    --id notes --command \"npx -y @modelcontextprotocol/server-filesystem ~/notes\" [--reach builder]
+  ligus setup tool    --id linear --kind url --url https://mcp.linear.app/mcp --token @./token
+  ligus setup folder  --path ~/src/app
+  ligus setup box     [--label home]          on the box; then --code - with the Admin's code
+  ligus setup phone                           then: ligus pair, in your own terminal
+  ligus setup invite                          invites are made on the desktop; this tracks them
+  ligus setup relay   [--kind own --url https://relay.example.com] [--token - | @FILE]
+  ligus setup runtimes [--apply]              the earlier `ligus setup`
+
+For scripts and coding agents: every prompt is a flag, nothing asks. --json prints
+one ligus.checks.v1 document (command \"setup <flow>\", plus flow, done, dryRun and
+results). --dry-run checks and validates and writes nothing. Secrets (an MCP token, a
+relay access token, an admission code) are read only from stdin (-) or an owner-only
+file (@FILE), never from the command line, and are never printed.
+
+Exit codes: 0 done; 1 a write or a check failed; 2 a missing or invalid flag; 3 a
+tool, a sign-in or the agent sandbox is missing (the fix says how); 4 a person must
+act (a passkey approval, pairing, creating an invite): stop and ask; 6 your role or
+the workspace lockdown refuses it; 7 the relay or the server didn't answer.
+
+Who may run what: adding an agent needs a Contributor (defining a workspace runtime
+for it, an Admin); connecting a tool and binding a folder a Contributor; adding a
+repository, admitting a box and inviting an Admin. A box is approved only with an
+Admin's passkey, a phone is paired only in your own window or terminal, and no flag
+can do either.
+",
+    },
+    Topic {
         name: "box",
         aliases: &["serve-box", "home-host"],
         summary: "a headless serve box: install, admit, serve, pair (ligus-local, systemd, launchd)",
@@ -1901,7 +2111,7 @@ as its own member, never with a person's invite.
      HUMAN: an Admin approves it (desktop: workspace menu > Admit a box…)
      ligus admit redeem ligusadmit1:…               # or --file PATH
      verify: ligus status                           # admission: kept
-  3. ligus setup                                    # what this box can run (keys, Ollama, CLIs)
+  3. ligus setup runtimes                           # what this box can run (keys, Ollama, CLIs)
      export LIGUS_WS_SECRET_<ref>=…                 # the key of a secretRef runtime, on this box only
   4. ligus worker --label build-box --health-listen 127.0.0.1:8788   # syncs, then joins
      verify: curl -s 127.0.0.1:8788/v1/ready ; ligus status (member: yes) ; ligus runtimes
@@ -2047,8 +2257,8 @@ A runtime is a model or agent CLI (anthropic, openai, openrouter, ollama, custom
 claude-code, codex, antigravity, copilot). An agent is a name on a runtime, answered
 by a host: its owner's device, or a worker or serve box.
 
-  1. ligus setup                          # what this box can reach
-     ligus setup --apply                  # define the keyless ones
+  1. ligus setup runtimes                 # what this box can reach
+     ligus setup runtimes --apply         # define the keyless ones
      ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME]
      verify: ligus runtimes
   2. ligus add-agent coder <runtime-id> --host <host-id> --role \"writes code\"
@@ -2304,8 +2514,12 @@ Set up a box (serve) on this machine:
   $L verify --role serve --data-dir ~/.ligus-serve --json            # verify: ok true
   LIGUS_DATA_DIR=~/.ligus-serve ligus status --json                  # verify: member true
 
+Guided setup (each flow checks first, is safe to rerun, exits 4 at a human-only step):
+  ligus setup --json                                                 # what is done, what to run next
+  ligus setup agent --harness claude-code --name <name> --json       # verify: done true
+
 Add an agent (from a person's CLI device or the desktop, not the box):
-  ligus setup --apply                                                # verify: ligus runtimes --json
+  ligus setup runtimes --apply                                       # verify: ligus runtimes --json
   ligus add-agent <name> <runtime-id> --host <host-id> && ligus sync # verify: ligus agents --json
   ligus send <chat-id> \"@<name> ping\" --push                        # verify: ligus queue (empty), ligus tail <chat-id>
 
@@ -2695,6 +2909,7 @@ mod tests {
             ("memory", src("memory_cmd.rs"), "pub fn run(", "\n}\n", &[]),
             ("repos", src("repos_cmd.rs"), "pub fn cmd(", "\n}\n", &["on", "off", "default"]),
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
+            ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
         ];
         let mut seen_subs = BTreeSet::new();
         for (cmd, text, start, end, not_subs) in groups {

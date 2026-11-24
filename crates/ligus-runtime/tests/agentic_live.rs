@@ -131,6 +131,7 @@ async fn live_mcp() -> Option<(Vec<Value>, McpExec)> {
         transport: McpTransport::Http { url },
         enabled: true,
         auth: token,
+        agents: Vec::new(),
     }]);
     let mut defs = Vec::new();
     let mut names = HashMap::new();

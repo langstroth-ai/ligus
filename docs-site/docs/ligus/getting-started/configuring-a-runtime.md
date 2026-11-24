@@ -196,7 +196,7 @@ you in or out.
 Both CLIs follow Ligus's permission setting for Claude Code (**Settings →
 Permissions**), mapped to each CLI's own flags; the default is read-only.
 The exact flags, and how to set these runtimes up on a `ligus serve` or
-`ligus worker` host (`ligus setup`), are in
+`ligus worker` host (`ligus setup runtimes`, or `ligus setup agent` for the guided flow), are in
 [Bring-your-own agents](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot).
 
 In TOML the providers are `antigravity` (or `agy`) and `copilot` (or

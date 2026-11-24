@@ -204,7 +204,7 @@ rate-limited, or refused by the relay and why). The full checklist is in
 4. **Does the runtime resolve?** A worker uses workspace runtimes only
    (never a personal key). A runtime with a `secretRef` needs
    `LIGUS_WS_SECRET_<ref>` in the worker's environment; a subscription CLI
-   needs to be signed in on that box (`ligus setup` shows which).
+   needs to be signed in on that box (`ligus setup runtimes` shows which).
 5. **Did a turn hard-fail?** A mention whose reply failed isn't retried every
    tick; restart the worker to retry, and check its log for the error.
 6. **No tools, or no edits?** Tools run only for authors at or above
