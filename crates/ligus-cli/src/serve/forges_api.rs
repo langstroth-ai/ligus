@@ -91,7 +91,7 @@ pub fn forge_presence_applies(_delegated: bool, _rules: u32) -> bool {
 fn forge_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
     let (delegated, rules) = {
         let svc = s.lock();
-        let rules = svc.load(ligus_core::workspace_config_session_id(s.ws)).ok().flatten().map(|c| c.authz.rules).unwrap_or(1);
+        let rules = svc.load_in(s.ws, ligus_core::workspace_config_session_id(s.ws)).ok().flatten().map(|c| c.authz.rules).unwrap_or(1);
         (svc.is_delegated(), rules)
     };
     if !forge_presence_applies(delegated, rules) {

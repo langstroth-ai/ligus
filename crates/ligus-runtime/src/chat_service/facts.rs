@@ -27,12 +27,13 @@ impl ChatService {
 
     /// Fold this device's facts for `session` onto its flow state.
     pub(super) fn overlay_facts(&self, session: &mut ligus_core::ChatSession) {
-        self.overlay_facts_on(session.id, &mut session.flow);
+        self.overlay_facts_on(session.workspace_id, session.id, &mut session.flow);
     }
 
-    /// Fold this device's facts for `session_id` onto `flow`.
-    pub(super) fn overlay_facts_on(&self, session_id: Uuid, flow: &mut ligus_core::flow::FlowState) {
-        let Ok(rows) = self.store.session_facts(session_id) else { return };
+    /// Fold this device's facts for the log (`workspace_id`, `session_id`)
+    /// onto `flow`: another workspace's facts under the same id never do.
+    pub(super) fn overlay_facts_on(&self, workspace_id: Uuid, session_id: Uuid, flow: &mut ligus_core::flow::FlowState) {
+        let Ok(rows) = self.store.session_facts(workspace_id, session_id) else { return };
         for (_, _, kind, json) in rows {
             if kind == SUMMARY_MARK {
                 continue;
@@ -81,7 +82,7 @@ impl ChatService {
         for (agent, day) in todo {
             let day_tags: Vec<TurnTag> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(_, t)| t.clone()).collect();
             let chats: std::collections::BTreeSet<Uuid> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(s, _)| *s).collect();
-            let sessions: Vec<ligus_core::ChatSession> = chats.iter().filter_map(|c| self.load(*c).ok().flatten()).collect();
+            let sessions: Vec<ligus_core::ChatSession> = chats.iter().filter_map(|c| self.load_in(workspace_id, *c).ok().flatten()).collect();
             let proposals: Vec<&ligus_core::ActionProposal> = sessions.iter().flat_map(|s| s.proposals.iter()).collect();
             let sum = ligus_core::flow::score::summarize_day(&agent, host_id, day, &day_tags, &proposals);
             if sum.turns == 0 {
@@ -171,15 +172,17 @@ impl ChatService {
             // the config log (membership, revocation, rules, agents) re-judges
             // every chat of the workspace. Observe those chats again so a
             // reader never keeps a state the fold has since withdrawn.
-            let mut changed = self.store.sessions_changed_after(from.events)?;
-            changed.extend(self.store.sessions_equivocated_after(from.equivocations)?);
+            // Each log (workspace, session) on its own: a session id another
+            // workspace also stamped is another log.
+            let mut changed = self.store.logs_changed_after(from.events)?;
+            changed.extend(self.store.logs_equivocated_after(from.equivocations)?);
             for ws in self.store.trust_changed_workspaces_after(from.events, from.equivocations)? {
-                changed.extend(self.store.sessions_of_workspace(ws)?);
+                changed.extend(self.store.sessions_of_workspace(ws)?.into_iter().map(|sid| (ws, sid)));
             }
             let mut seen = std::collections::HashSet::new();
-            changed.retain(|sid| seen.insert(*sid));
-            for sid in changed {
-                let Ok(Some(session)) = self.load(sid) else { continue };
+            changed.retain(|log| seen.insert(*log));
+            for (ws, sid) in changed {
+                let Ok(Some(session)) = self.load_in(ws, sid) else { continue };
                 let config = sid == ligus_core::workspace_config_session_id(session.workspace_id);
                 out.extend(crate::facts::state_lines(next.events, now_ms, &session, config));
             }

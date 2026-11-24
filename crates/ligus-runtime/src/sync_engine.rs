@@ -788,13 +788,21 @@ impl SyncEngine {
         // mark first: a row committed during the scan has a larger id, so the
         // next incremental round finds it (and `seen` dedups any overlap).
         let mark = store.max_row_id()?;
+        // Each log (workspace, session) of this room's workspace: a session
+        // id another workspace also stamped is another log, scanned (or not)
+        // on its own.
+        let mut logs = Vec::new();
         for session_id in store.list_session_ids()? {
-            for env in store.list(session_id)? {
-                // Another workspace's event (the device-local workspace, a
+            for ws in store.workspaces_claiming(session_id)? {
+                // Another workspace's log (the device-local workspace, a
                 // different room) never leaves for this room.
-                if !self.in_scope(env.workspace_id) {
-                    continue;
+                if self.in_scope(ws) {
+                    logs.push((ws, session_id));
                 }
+            }
+        }
+        for (ws, session_id) in logs {
+            for env in store.list_in(ws, session_id)? {
                 // `seen` is seeded from the durable `pushed` table, so this skips
                 // events already on the relay even across a restart. Newly
                 // collected events are marked seen optimistically; a failed push

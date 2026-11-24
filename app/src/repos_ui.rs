@@ -118,7 +118,7 @@ pub(crate) fn turn_repo(state: &AppState, session: &ChatSession) -> Result<Optio
 /// (the workspace's bound folder).
 pub(crate) fn chat_checkout(state: &AppState, session_id: Uuid) -> Option<PathBuf> {
     let svc = state.service.lock().unwrap();
-    let s = svc.load(session_id).ok().flatten()?;
+    let s = svc.load_resolving(session_id).ok().flatten()?;
     let repo = s.repo.as_ref().and_then(|r| r.repo_id)?;
     svc.store().chat_checkout(session_id, repo).ok().flatten().or_else(|| svc.store().primary_checkout(s.workspace_id, repo).ok().flatten().map(|m| m.path))
 }
@@ -204,7 +204,7 @@ pub fn list_workspace_repos_sync(state: State<AppState>) -> Result<Value, String
     let roster = svc.workspace_roster(ws).map_err(map_err)?;
     let me = svc.author().id.clone();
     let can_admin = roster.role_of(&me).is_some_and(|r| r.rank() >= ligus_core::WorkspaceRole::Admin.rank());
-    let hosts = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?.map(|c| c.workspace_hosts).unwrap_or_default();
+    let hosts = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(map_err)?.map(|c| c.workspace_hosts).unwrap_or_default();
     let my_host = svc.device_id().to_string();
     let reports = rr::host_reports(&roster, &hosts, &state.host_presence);
     let entries = rr::workspace_repos(&roster);
@@ -463,7 +463,7 @@ pub async fn chat_workspace_repo(ligus_app: tauri::AppHandle, session_id: String
 pub fn chat_workspace_repo_sync(state: State<AppState>, session_id: String) -> Result<Value, String> {
     let sid = parse(&session_id)?;
     let svc = state.service.lock().unwrap();
-    let Some(s) = svc.load(sid).map_err(map_err)? else { return Ok(Value::Null) };
+    let Some(s) = svc.load_resolving(sid).map_err(map_err)? else { return Ok(Value::Null) };
     let Some(cr) = s.repo.clone().filter(|r| r.repo_id.is_some()) else { return Ok(Value::Null) };
     let roster = svc.workspace_roster(s.workspace_id).map_err(map_err)?;
     let id = cr.repo_id.unwrap_or_default();
@@ -524,7 +524,7 @@ pub fn set_chat_workspace_repo_sync(state: State<AppState>, session_id: String, 
     let sid = parse(&session_id)?;
     let repo = repo_id.as_deref().map(parse).transpose()?;
     let mut svc = state.service.lock().unwrap();
-    let ws = svc.load(sid).map_err(map_err)?.map(|s| s.workspace_id).ok_or("unknown chat")?;
+    let ws = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?;
     svc.set_chat_repo(sid, ws, repo, base_branch.as_deref().unwrap_or("")).map_err(map_err)
 }
 
@@ -543,7 +543,7 @@ pub fn repin_chat_base_sync(state: State<AppState>, session_id: String, commit: 
     let sid = parse(&session_id)?;
     let (s, roster) = {
         let svc = state.service.lock().unwrap();
-        let s = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
+        let s = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown chat")?;
         let roster = svc.workspace_roster(s.workspace_id).map_err(map_err)?;
         (s, roster)
     };

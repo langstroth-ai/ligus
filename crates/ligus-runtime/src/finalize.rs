@@ -109,7 +109,7 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         }
     }
     if !recorded.is_empty() {
-        let session = svc.load(ctx.session_id).ok().flatten();
+        let session = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten();
         let what: Vec<String> = out
             .assessed
             .iter()
@@ -172,7 +172,7 @@ pub fn finalize_reply(svc: &mut ChatService, input: FinalizeInput<'_>) -> Result
         }
     }
     if !parsed.alternatives.is_empty() {
-        let trigger = svc.load(ctx.session_id).ok().flatten().and_then(|s| effects::trigger_of(&s, ctx.message_id));
+        let trigger = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|s| effects::trigger_of(&s, ctx.message_id));
         for alts in parsed.alternatives.iter().filter(|a| !mcp.set_questions.contains(&a.question.trim().to_lowercase())) {
             match effects::open_alternatives(svc, ctx, alts, trigger, input.base_commit.clone()) {
                 Ok(id) => out.opened_sets.push(id),
@@ -234,7 +234,7 @@ pub fn alternative_label(session: &ligus_core::ChatSession, set_id: Uuid, pid: U
 /// Post the chat notes for a settled quorum: the front-runner, the frozen
 /// rivals, and a stop signal naming each rival's scouts.
 pub fn announce_quorum(svc: &mut ChatService, sid: Uuid, wid: Uuid, set_id: Uuid, out: &crate::chat_service::QuorumOutcome) {
-    let Ok(Some(session)) = svc.load(sid) else { return };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
     let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else { return };
     let lead = alternative_label(&session, set_id, out.front_runner);
     let how = if out.tie_break {

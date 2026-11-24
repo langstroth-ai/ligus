@@ -140,11 +140,11 @@ impl ChatService {
     pub fn draft_for_phone_on(&mut self, session_id: Uuid, workspace_id: Uuid, phone: Uuid, payload: SessionEvent) -> Result<PhoneDraft> {
         let actor = self.phone_person(workspace_id, phone)?;
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
-        let mut env = SessionEventEnvelope::new(session_id, workspace_id, self.store.max_sequence(session_id)?.unwrap_or(0) + 1, payload);
+        let mut env = SessionEventEnvelope::new(session_id, workspace_id, self.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1, payload);
         // One past the newest event of the log this box holds, named as the
         // stamp's `log_head` (`ligus_core::lamport`): the phone signs a lamport
         // every fold can account for.
-        let log_head = self.store.lamport_head(session_id)?;
+        let log_head = self.store.lamport_head(workspace_id, session_id)?;
         env.lamport = ligus_core::lamport::next(log_head);
         env.actor_stamp = Some(ActorStamp {
             actor,
@@ -152,7 +152,7 @@ impl ChatService {
             cfg_frontier: timeline.head(),
             presence: None,
             runtime_effect: false,
-            prev: self.store.last_signed_by(session_id, phone, env.lamport)?,
+            prev: self.store.last_signed_by(workspace_id, session_id, phone, env.lamport)?,
             sig_alg: SigAlg::P256,
             log_head,
         });
@@ -171,7 +171,7 @@ impl ChatService {
         }
         let actor = self.phone_person(workspace_id, phone)?;
         let chat = self
-            .load(action.chat_id())?
+            .load_in(workspace_id, action.chat_id())?
             .filter(|c| c.workspace_id == workspace_id)
             .ok_or_else(|| ChatError::Unauthorized("no such chat in this workspace".into()))?;
         let payload = match action {
@@ -301,10 +301,10 @@ impl ChatService {
     pub fn append_phone_signed(&mut self, draft: PhoneDraft, signature: Vec<u8>) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
         let phone = env.actor_stamp.as_ref().and_then(|s| s.actor.device_id).ok_or_else(|| ChatError::Unauthorized("no phone".into()))?;
-        if self.store.has_event(env.event_id)? {
+        if self.store.has_event_in(env.workspace_id, env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
-        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.session_id, phone, u64::MAX)? {
+        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.workspace_id, env.session_id, phone, u64::MAX)? {
             return Err(ChatError::Unauthorized(STALE_DRAFT.into()));
         }
         env.signer_device_id = Some(phone);

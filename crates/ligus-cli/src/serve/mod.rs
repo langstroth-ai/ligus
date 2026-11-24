@@ -339,11 +339,13 @@ const LIGUS_SNAPSHOT_TTL: Duration = Duration::from_secs(3);
 pub fn chats_of(svc: &ChatService, ws: Uuid) -> Result<Vec<ChatSession>> {
     let config = workspace_config_session_id(ws);
     let mut out = Vec::new();
-    for id in svc.store().list_session_ids()? {
+    // Each read as (ws, chat): an event another workspace stamped under one
+    // of these ids is another log and never shows here.
+    for id in svc.store().sessions_of_workspace(ws)? {
         if id == config {
             continue;
         }
-        if let Ok(Some(s)) = svc.load(id) {
+        if let Ok(Some(s)) = svc.load_in(ws, id) {
             if s.workspace_id == ws && !s.archived && id != workspace_config_session_id(s.workspace_id) {
                 out.push(s);
             }
@@ -365,7 +367,7 @@ pub fn ligus_snapshot(
 ) -> Result<dashboard_ligus::LigusSnapshot> {
     let chats = chats_of(svc, ws)?;
     let config_id = workspace_config_session_id(ws);
-    let config = svc.load(config_id)?.unwrap_or_else(|| {
+    let config = svc.load_in(ws, config_id)?.unwrap_or_else(|| {
         let mut empty = ChatSession::new("", ws, "");
         empty.id = config_id;
         empty
@@ -887,7 +889,7 @@ impl Shared {
 
     /// Whether `chat` belongs to one of the box's DMs.
     pub fn is_dm_chat(&self, chat: Uuid) -> bool {
-        let ws = self.lock().store().workspace_of(chat).ok().flatten();
+        let ws = self.lock().workspace_of(chat).ok().flatten();
         ws.is_some_and(|w| w != self.ws && self.dms.get(w).is_some())
     }
 }
@@ -1108,6 +1110,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             }
         }
     }
+    // A chat id several workspaces claim reads as this box's workspace's.
+    svc.set_context_workspace(Some(ws));
     // A turn cut off by the last stop would otherwise stay "streaming" forever
     // and never be answered (its placeholder counts as the reply).
     if standing != Standing::Revoked {
@@ -1622,7 +1626,7 @@ impl WorkspaceLease {
         let now_ms = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
         let (me, lease) = {
             let svc = shared.lock();
-            (svc.device_id(), svc.lease(config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
+            (svc.device_id(), svc.lease(ws, config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
         };
         // The holder's newest verified beat, from the presence channel.
         let last = match relay.list_presence(room).await {

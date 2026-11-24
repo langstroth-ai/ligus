@@ -410,7 +410,7 @@ pub fn security_status_sync(state: State<'_, AppState>) -> Result<SecurityStatus
         .into_iter()
         .map(|(credential_id, recovery)| PasskeyDto { credential_id, recovery })
         .collect();
-    let cfg = svc.load(ligus_core::workspace_config_session_id(ws)).ok().flatten();
+    let cfg = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten();
     let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(ligus_core::authz::RULES_GENESIS);
     let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
     Ok(SecurityStatusDto {

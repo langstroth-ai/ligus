@@ -133,7 +133,7 @@ pub(crate) fn acquire_run_lease(
     let scope_id = run_id.to_string();
     let (lease, initiator_here) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?;
         let initiator = session
             .workflow_runs
             .iter()
@@ -227,13 +227,15 @@ pub(crate) fn forget_run(state: &AppState, run_id: Uuid) {
 pub(crate) fn still_holds(state: &AppState, session_id: Uuid, run_id: Uuid) -> bool {
     let Some(mine) = epoch_for(state, run_id) else { return true };
     let me = device_id(state);
-    let lease = state
-        .service
-        .lock()
-        .unwrap()
-        .lease(session_id, LeaseScope::WorkflowRun, &run_id.to_string())
-        .ok()
-        .flatten();
+    // The run's own workspace (recorded when it was claimed), else the
+    // chat's as this window resolves it.
+    let run_ws = state.guards.held_runs.lock().unwrap().get(&run_id).map(|h| h.workspace_id);
+    let lease = {
+        let svc = state.service.lock().unwrap();
+        run_ws
+            .or_else(|| svc.workspace_of(session_id).ok().flatten())
+            .and_then(|w| svc.lease(w, session_id, LeaseScope::WorkflowRun, &run_id.to_string()).ok().flatten())
+    };
     let holds = lease
         .as_ref()
         .is_some_and(|l| l.current.holder == me && l.current.epoch == mine && !l.released);
@@ -409,7 +411,7 @@ fn elect_successor(state: &AppState, workspace_id: Uuid, session_id: Uuid, run_i
     let svc = state.service.lock().unwrap();
     let hosts = svc.list_hosts(workspace_id).ok()?;
     let initiator = svc
-        .load(session_id)
+        .load_in(workspace_id, session_id)
         .ok()
         .flatten()
         .and_then(|s| s.workflow_runs.iter().find(|r| r.id == run_id).map(|r| r.initiator_actor_id.clone()))
@@ -587,8 +589,17 @@ pub(crate) fn sweep_inputs(
     let mut chats = std::collections::HashMap::new();
     let mut live_turns = std::collections::HashSet::new();
     let mut open_diffs: Vec<OpenDiff> = Vec::new();
-    for id in svc.store().list_session_ids().unwrap_or_default() {
-        let Ok(Some(s)) = svc.load(id) else { continue };
+    // Each log (workspace, chat) on its own: another workspace's chat under
+    // an id (its checkout shares the slug) counts as live here.
+    let logs: Vec<(Uuid, Uuid)> = svc
+        .store()
+        .list_session_ids()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|id| svc.store().workspaces_claiming(id).unwrap_or_default().into_iter().map(move |w| (w, id)))
+        .collect();
+    for (w, id) in logs {
+        let Ok(Some(s)) = svc.load_in(w, id) else { continue };
         if id == ligus_core::workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -599,7 +610,8 @@ pub(crate) fn sweep_inputs(
             chats.insert(hygiene::slug(&id.to_string()), ChatStatus::Live);
             continue;
         }
-        chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
+        let status = if s.archived { ChatStatus::Archived } else { ChatStatus::Live };
+        chats.entry(hygiene::slug(&id.to_string())).or_insert(status);
         if s.archived {
             continue;
         }
@@ -1036,7 +1048,7 @@ pub(crate) fn get_egress_presets_sync(state: State<AppState>, session_id: Option
     let ws = state.active_workspace_id();
     let sid = session_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
     let session = match sid {
-        Some(id) => state.service.lock().unwrap().load(id).map_err(map_err)?,
+        Some(id) => state.service.lock().unwrap().load_in(ws, id).map_err(map_err)?,
         None => None,
     };
     let (workspace, chat) = {
@@ -1267,7 +1279,7 @@ pub(crate) fn get_sandbox_policy_sync(state: State<AppState>, agent_id: Option<S
     let (grants, here, agents_cfg, my_role, local) = {
         let svc = state.service.lock().unwrap();
         let me = svc.author().id.clone();
-        let config = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
+        let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
         let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
         let agents = config.as_ref().map(|c| c.workspace_agents.clone()).unwrap_or_default();
         (svc.sandbox_grants(ws), svc.sandbox_grants_here(ws, setting).1, agents, my_role, svc.is_local_workspace(ws))
@@ -1366,7 +1378,7 @@ pub(crate) fn get_dearth_state_sync(state: State<AppState>) -> Result<ligus_prot
     let runtimes = state.combined_runtimes();
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    let config = svc.load(ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
+    let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).map_err(map_err)?;
     let guards = config.as_ref().map(|c| c.guards.clone()).unwrap_or_default();
     let members = config.as_ref().map(|c| c.members.clone()).unwrap_or_default();
     let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(ligus_core::WorkspaceRole::Owner);
@@ -1515,7 +1527,7 @@ pub(crate) fn get_chat_lockdown_sync(state: State<AppState>, session_id: String)
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     let me = svc.author().id.clone();
-    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown chat")?;
     let view = ligus_runtime::lockdown_view::chat_lockdown(&session, sid, &me);
     let signals = view
         .signals
@@ -1547,7 +1559,7 @@ pub(crate) fn clear_chat_lockdown_sync(app: AppHandle, state: State<AppState>, s
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let raises = raise_ids.iter().map(|r| Uuid::parse_str(r)).collect::<Result<Vec<_>, _>>().map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
+    let ws = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?;
     svc.clear_lockdown(ws, sid, raises).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
@@ -1563,7 +1575,7 @@ pub(crate) async fn lock_chat(ligus_app: tauri::AppHandle, session_id: String) -
 pub(crate) fn lock_chat_sync(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
+    let ws = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?;
     svc.self_medicate(ws, sid, None, &[(ligus_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
@@ -1956,10 +1968,7 @@ fn gather_occupancy(state: &AppState) -> Occupancy {
         if id == config_id {
             continue;
         }
-        let Ok(Some(s)) = svc.load(id) else { continue };
-        if !crate::session_in_workspace(s.workspace_id, &s.creator_actor_id, ws, &me, &known) {
-            continue;
-        }
+        let Ok(Some(s)) = crate::workspace_chat(&svc, id, ws, &me, &known) else { continue };
         o.agents = o.agents.max(s.workspace_agents.len());
         for pm in ligus_runtime::chat_service::pending_mentions(&s) {
             let host = s.workspace_agents.iter().find(|a| a.id == pm.agent_id).map(|a| a.host_id.clone()).unwrap_or_default();

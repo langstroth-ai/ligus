@@ -53,7 +53,7 @@ impl LigusHost for AppHost {
         let root = match crate::repos_ui::chat_checkout(&state, chat_id) {
             Some(p) => p.to_string_lossy().into_owned(),
             None => {
-                let ws = state.service.lock().unwrap_or_else(|e| e.into_inner()).load(chat_id).ok().flatten()?.workspace_id;
+                let ws = state.service.lock().unwrap_or_else(|e| e.into_inner()).workspace_of(chat_id).ok().flatten()?;
                 crate::legacy_folder(&state, ws).ok()?
             }
         };
@@ -116,7 +116,7 @@ pub(crate) async fn list_asks(ligus_app: tauri::AppHandle, session_id: String) -
 pub(crate) fn list_asks_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<AskDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
     let svc = state.service.lock().unwrap();
-    Ok(svc.load(sid).map_err(|e| e.to_string())?.map(|s| ask_dtos(&s)).unwrap_or_default())
+    Ok(svc.load_resolving(sid).map_err(|e| e.to_string())?.map(|s| ask_dtos(&s)).unwrap_or_default())
 }
 
 /// Answer an agent's question as this device's person. Answering grants
@@ -137,7 +137,7 @@ pub(crate) fn answer_ask_sync(
     let sid = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
     let aid = Uuid::parse_str(&ask_id).map_err(|e| e.to_string())?;
     let mut svc = state.service.lock().unwrap();
-    let session = svc.load(sid).map_err(|e| e.to_string())?.ok_or("unknown chat")?;
+    let session = svc.load_resolving(sid).map_err(|e| e.to_string())?.ok_or("unknown chat")?;
     answer_in(&mut svc, &session, aid, answer, option_index)?;
     drop(svc);
     let _ = app.emit("workspace://synced", 1);

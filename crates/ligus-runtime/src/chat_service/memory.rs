@@ -34,7 +34,7 @@ impl ChatService {
     /// The workspace memory, folded from the config log (empty before it
     /// syncs).
     pub fn memory(&self, workspace_id: Uuid) -> Result<MemoryState> {
-        Ok(self.load(workspace_config_session_id(workspace_id))?.map(|s| s.flow.memory).unwrap_or_default())
+        Ok(self.load_in(workspace_id, workspace_config_session_id(workspace_id))?.map(|s| s.flow.memory).unwrap_or_default())
     }
 
     /// The task-state slots of a chat.
@@ -54,7 +54,7 @@ impl ChatService {
     /// No source chat (or one this device doesn't hold) records nothing: the
     /// workspace default, which every turn in the workspace satisfies.
     pub fn stamp_memory_egress(&self, workspace_id: Uuid, source: &mut MemorySource) {
-        let chat = source.chat_id.and_then(|c| self.load(c).ok().flatten()).filter(|c| c.workspace_id == workspace_id);
+        let chat = source.chat_id.and_then(|c| self.load_in(workspace_id, c).ok().flatten()).filter(|c| c.workspace_id == workspace_id);
         let now = chat.map(|c| ligus_core::sandbox::envelope_for_session(&c).egress);
         source.egress = ligus_core::memory::tighten(source.egress.as_ref(), now.as_ref());
     }
@@ -135,7 +135,7 @@ impl ChatService {
         let target = self.ensure_workspace_config(workspace_id)?;
         if let Some(agent_id) = agent {
             let event = SessionEvent::FlowRecorded { record: record.clone() };
-            let fold = self.load(target)?.unwrap_or_else(|| ligus_core::ChatSession::new("", workspace_id, ""));
+            let fold = self.load_in(workspace_id, target)?.unwrap_or_else(|| ligus_core::ChatSession::new("", workspace_id, ""));
             if let Err(why) = ligus_core::authz::agent::tier_allows(&event, agent_id, self.device_id, &fold) {
                 return Err(ChatError::Unauthorized(format!("agent tier: {why}")));
             }

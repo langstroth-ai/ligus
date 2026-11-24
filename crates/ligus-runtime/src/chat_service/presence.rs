@@ -232,13 +232,13 @@ impl ChatService {
             self.test_presence = true;
             r?;
             // Sort after the registration, at the new head.
-            env.sequence = self.store.max_sequence(env.session_id)?.unwrap_or(0) + 1;
-            let log_head = self.store.lamport_head(env.session_id)?;
+            env.sequence = self.store.max_sequence(env.workspace_id, env.session_id)?.unwrap_or(0) + 1;
+            let log_head = self.store.lamport_head(env.workspace_id, env.session_id)?;
             ligus_core::lamport::stamp_next(env, log_head);
             let (_, timeline) = self.store.load_config(wid, self.trusted_founder.as_deref(), self.local_workspace_id)?;
             // The registration is this device's newest event on the log: the
             // chain link moves past it too (else both name the same link).
-            let prev = self.store.last_signed_by(env.session_id, self.device_id, env.lamport)?;
+            let prev = self.store.last_signed_by(env.workspace_id, env.session_id, self.device_id, env.lamport)?;
             if let Some(s) = env.actor_stamp.as_mut() {
                 s.cfg_frontier = timeline.head();
                 s.prev = prev;
@@ -283,14 +283,14 @@ impl ChatService {
     /// its stamp (the digest fields are the ones frozen at prepare time).
     pub fn commit_presence(&mut self, draft: PresenceDraft, assertion: PresenceAssertion) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
-        if self.store.has_event(env.event_id)? {
+        if self.store.has_event_in(env.workspace_id, env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
         if let Some(stamp) = env.actor_stamp.as_mut() {
             stamp.presence = Some(assertion);
         }
         env.clear_raw();
-        env.sequence = self.store.max_sequence(env.session_id)?.unwrap_or(0) + 1;
+        env.sequence = self.store.max_sequence(env.workspace_id, env.session_id)?.unwrap_or(0) + 1;
         // This device may have written on the log since the draft (the
         // confirmation took a while): link past that, as it would have. The
         // confirmation covers the lamport, not the link. A write of its own
@@ -298,7 +298,7 @@ impl ChatService {
         // confirmation: the store refuses that one (`StaleDraft`) rather than
         // fork this device's chain, and the caller prepares it again at the
         // head and asks the person again (serve answers 409).
-        let prev = self.store.last_signed_by(env.session_id, self.device_id, env.lamport)?;
+        let prev = self.store.last_signed_by(env.workspace_id, env.session_id, self.device_id, env.lamport)?;
         if let Some(stamp) = env.actor_stamp.as_mut() {
             stamp.prev = prev;
         }
@@ -368,7 +368,7 @@ impl ChatService {
     pub fn regrant_passkey(&mut self, workspace_id: Uuid, member_id: &str) -> Result<SessionEventEnvelope> {
         let config_id = workspace_config_session_id(workspace_id);
         let role = self
-            .load(config_id)?
+            .load_in(workspace_id, config_id)?
             .and_then(|c| c.members.iter().find(|m| m.id == member_id).map(|m| m.role))
             .ok_or_else(|| ChatError::Unauthorized("no such member".into()))?;
         self.append_signed(

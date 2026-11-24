@@ -12,4 +12,10 @@ channelId: string,
  * True when this chat is its channel's drop-in default — not movable,
  * renamable, or deletable on its own.
  */
-isChannelDefault: boolean, };
+isChannelDefault: boolean, 
+/**
+ * The workspace this chat belongs to. A chat is (workspace, chat):
+ * another workspace can hold a chat under the same id, so the desktop
+ * opens a chat in this workspace.
+ */
+workspaceId: string, };

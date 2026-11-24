@@ -55,12 +55,12 @@ pub(crate) fn view_in(svc: &ChatService, wid: Uuid, query: &str, tags: &[String]
     let mut chat_titles = BTreeMap::new();
     let chats = entries.iter().filter_map(|e| e.current.source.chat_id).chain(proposals.iter().filter_map(|p| p.proposal.source.chat_id));
     for c in chats {
-        if let Ok(Some(s)) = svc.load(c) {
+        if let Ok(Some(s)) = svc.load_in(wid, c) {
             chat_titles.insert(c.to_string(), crate::shown(&s.title));
         }
     }
     let me = svc.author().id.clone();
-    let config = svc.load(ligus_core::workspace_config_session_id(wid)).ok().flatten();
+    let config = svc.load_in(wid, ligus_core::workspace_config_session_id(wid)).ok().flatten();
     let mut agent_names: BTreeMap<String, String> =
         config.iter().flat_map(|c| c.workspace_agents.iter()).map(|a| (a.id.to_string(), crate::shown(&a.name))).collect();
     agent_names.insert(ligus_core::flow::PRIMARY.to_string(), "Ligus".into());
@@ -261,9 +261,9 @@ pub(crate) async fn task_state(ligus_app: tauri::AppHandle, session_id: String) 
 pub(crate) fn task_state_sync(state: tauri::State<'_, AppState>, session_id: String) -> Result<Vec<TaskSlotDto>, String> {
     let sid = id(&session_id)?;
     let svc = state.service.lock().unwrap();
-    let Some(session) = svc.load(sid).map_err(|e| e.to_string())? else { return Ok(vec![]) };
+    let Some(session) = svc.load_resolving(sid).map_err(|e| e.to_string())? else { return Ok(vec![]) };
     let agents = svc
-        .load(ligus_core::workspace_config_session_id(session.workspace_id))
+        .load_in(session.workspace_id, ligus_core::workspace_config_session_id(session.workspace_id))
         .ok()
         .flatten()
         .map(|c| c.workspace_agents)

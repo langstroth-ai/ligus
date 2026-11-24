@@ -183,7 +183,7 @@ impl TurnHost for DesktopHost<'_> {
         }
         let who = {
             let svc = self.state.service.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(s) = svc.load(self.session_id).ok().flatten() else { return };
+            let Some(s) = svc.load_resolving(self.session_id).ok().flatten() else { return };
             // Only on the owner's own device (an agent sent to another
             // member's machine as its host doesn't notify that member).
             let links = svc.device_links(self.workspace_id).unwrap_or_default();

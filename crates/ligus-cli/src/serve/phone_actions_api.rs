@@ -106,7 +106,7 @@ pub struct PrepareReq {
 /// What the confirmation sheet shows (the box's description; the phone shows
 /// what it parsed from the preimage, not this).
 fn preview(s: &Shared, action: &PhoneAction) -> Value {
-    let chat = s.lock().load(action.chat_id()).ok().flatten();
+    let chat = s.lock().load_resolving(action.chat_id()).ok().flatten();
     let title = chat.as_ref().map(|c| shown(&c.title)).unwrap_or_default();
     let mut v = json!({ "chatTitle": title });
     match action {
@@ -263,7 +263,7 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
     match (&action, &env.payload) {
         (PhoneAction::Post { chat_id, .. }, ligus_core::SessionEvent::MessageAppended { message }) => {
             out["messageId"] = json!(message.id);
-            let chat = s.lock().load(*chat_id).ok().flatten();
+            let chat = s.lock().load_resolving(*chat_id).ok().flatten();
             if let Some(c) = chat {
                 s.mark_read(&c, message.id);
             }
@@ -281,7 +281,7 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
         (PhoneAction::ClearLockdown { chat_id, .. }, _) => {
             let who = env.actor_stamp.as_ref().map(|st| st.actor.display_name.clone()).unwrap_or_default();
             let mut svc = s.lock();
-            if svc.load(*chat_id).ok().flatten().is_some() {
+            if svc.load_resolving(*chat_id).ok().flatten().is_some() {
                 let _ = svc.post_system_note(*chat_id, s.ws, format!("{who} cleared this chat's lockdown from their phone."));
             }
         }

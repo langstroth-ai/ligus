@@ -52,7 +52,7 @@ impl Device {
 
     fn chat(&self, w: &SignedWorld, chat: Uuid) -> Option<ChatSession> {
         let (_, t) = self.store.load_config(w.wid, None, None).unwrap();
-        self.store.load_session_authorized(chat, None, None, WorkspaceAuthz::Timeline(&t)).unwrap()
+        self.store.load_session_authorized(w.wid, chat, None, None, WorkspaceAuthz::Timeline(&t)).unwrap()
     }
 
     fn roster(&self, w: &SignedWorld) -> ligus_core::authz::RosterState {

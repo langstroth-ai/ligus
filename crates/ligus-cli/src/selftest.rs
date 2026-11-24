@@ -196,7 +196,7 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
         // through the turn engine, in a throwaway chat.
         let policy = ligus_runtime::executor::TurnPolicy { shell_allowed: true, ..ligus_runtime::executor::TurnPolicy::baseline(ligus_runtime::executor::HostKind::Desktop) };
         let (svc, ws, chat) = probe_chat()?;
-        let session = svc.lock().unwrap_or_else(|e| e.into_inner()).load(chat)?.ok_or_else(|| anyhow!("probe chat missing"))?;
+        let session = svc.lock().unwrap_or_else(|e| e.into_inner()).load_in(ws, chat)?.ok_or_else(|| anyhow!("probe chat missing"))?;
         let host = ProbeHost { svc, repo: repo.clone() };
         let input = ligus_runtime::turn_engine::TurnInput {
             workspace_id: ws,

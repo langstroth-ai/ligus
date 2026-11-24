@@ -71,7 +71,7 @@ pub async fn me(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extension<
         }
     };
     let config_id = ligus_core::workspace_config_session_id(s.ws);
-    let config = svc.load(config_id).ok().flatten();
+    let config = svc.load_resolving(config_id).ok().flatten();
     let role = config.as_ref().map(|c| c.role_of(&person.id));
     let (_, timeline) = match svc.store().load_config(s.ws, None, None) {
         Ok(v) => v,

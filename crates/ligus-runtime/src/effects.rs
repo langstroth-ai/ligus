@@ -135,7 +135,7 @@ pub fn react(svc: &mut ChatService, ctx: &EffectCtx, message_id: Uuid, emoji: &s
 
 /// Validate and file a workflow definition as a proposal.
 pub fn file_workflow(svc: &mut ChatService, ctx: &EffectCtx, json: &str) -> Result<String, String> {
-    let session = svc.load(ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
+    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
     let def = crate::workflow_directive::definition_from_directive(json, &session)?;
     let name = def.name.clone();
     svc.as_agent(ctx.agent_id, |svc| {
@@ -222,7 +222,7 @@ pub fn resolve_alternative(session: &ChatSession, set: Option<Uuid>, target: &st
 /// Record one scout assessment. The scout is the responder, never the
 /// payload. Returns `(set, proposal)` when the fold kept it.
 pub fn assess(svc: &mut ChatService, ctx: &EffectCtx, set: Option<Uuid>, a: &ParsedAssessment) -> Result<(Uuid, Uuid), String> {
-    let session = svc.load(ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
+    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
     let (set_id, pid) = resolve_alternative(&session, set, &a.alternative).ok_or("no such alternative in an open proposal set")?;
     let runtime = match ctx.agent_id {
         Some(id) => session.workspace_agents.iter().find(|x| x.id == id).map(|x| x.runtime_id.clone()),
@@ -303,7 +303,7 @@ pub struct Handoff {
 /// parcel. A hand-off to an agent queues its turn (`pending_turns`); the host
 /// starts it immediately.
 pub fn handoff(svc: &mut ChatService, ctx: &EffectCtx, to: &str, parcel: ContextParcel) -> Result<Handoff, String> {
-    let session = svc.load(ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
+    let session = svc.load_in(ctx.workspace_id, ctx.session_id).map_err(err)?.ok_or("unknown chat")?;
     let name = to.trim().trim_start_matches('@');
     if name.is_empty() {
         return Err("hand off to whom?".into());

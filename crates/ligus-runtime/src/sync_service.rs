@@ -38,8 +38,10 @@ pub async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Resu
 pub struct RoundReport {
     pub pushed: usize,
     pub pulled: usize,
-    /// Sessions that gained events in the pull, as (session, workspace), in
-    /// first-changed order.
+    /// Logs that gained events in the pull, as (session, workspace), in
+    /// first-changed order: each under the workspace its new rows carry, so
+    /// an event another workspace stamped under a chat's id is reported as
+    /// that workspace's log, never as the chat's.
     pub changed: Vec<(Uuid, Uuid)>,
 }
 
@@ -50,8 +52,11 @@ pub async fn sync_round_notify(engine: &mut SyncEngine, store: &mut EventStore, 
     let (pushed, pulled) = sync_round(engine, store).await?;
     let mut changed = Vec::new();
     if pulled > 0 {
-        for sid in store.sessions_changed_after(before)? {
-            let ws = store.workspace_of(sid)?.unwrap_or_default();
+        for (ws, sid) in store.logs_changed_after(before)? {
+            // Only this room's workspace (what the pull could bring in).
+            if !engine.in_scope(ws) {
+                continue;
+            }
             feed.synced(sid, ws);
             changed.push((sid, ws));
         }
@@ -242,6 +247,64 @@ mod tests {
         assert!(rx_b.try_recv().is_err());
         // The plain round is the same push + pull.
         assert_eq!(sync_round(&mut eb, &mut b).await.unwrap(), (0, 0));
+    }
+
+    /// A forged event another workspace's member stamps under a chat's id,
+    /// delivered through that workspace's room, is reported as that
+    /// workspace's log, never as the chat's, in either room order; and the
+    /// chat folds as before.
+    #[tokio::test]
+    async fn a_foreign_event_through_another_room_never_reports_the_chat() {
+        let base = spawn_relay().await;
+        let (room_a, room_b) = ("room-ws-log-a", "room-ws-log-b");
+        let (wa, wb) = (ligus_core::room_workspace_id(room_a), ligus_core::room_workspace_id(room_b));
+        let (ka, kb) = (ligus_core::derive_workspace_key("ws log a"), ligus_core::derive_workspace_key("ws log b"));
+
+        let mut a = EventStore::open_in_memory().unwrap();
+        let sid = seed(&mut a, wa);
+        let mut ea = SyncEngine::new(RelayClient::new(&base), room_a).with_key(ka);
+        sync_round(&mut ea, &mut a).await.unwrap();
+
+        // A member of the other workspace, who knows the chat's id.
+        let mut m = EventStore::open_in_memory().unwrap();
+        let mut forged = ChatSession::new("Forged", wb, "rt");
+        forged.id = sid;
+        m.ingest_next(&SessionEventEnvelope::new(sid, wb, 1, SessionEvent::SessionSnapshot { session: Box::new(forged) })).unwrap();
+        let message = ChatMessage::new(MessageRole::User, "Mallory", "forged");
+        m.ingest_next(&SessionEventEnvelope::new(sid, wb, 2, SessionEvent::MessageAppended { message })).unwrap();
+        let mut em = SyncEngine::new(RelayClient::new(&base), room_b).with_key(kb);
+        sync_round(&mut em, &mut m).await.unwrap();
+
+        for b_first in [true, false] {
+            let mut v = EventStore::open_in_memory().unwrap();
+            let mut va = SyncEngine::new(RelayClient::new(&base), room_a).with_key(ka);
+            let mut vb = SyncEngine::new(RelayClient::new(&base), room_b).with_key(kb);
+            let feed = ChangeFeed::default();
+            let mut rx = feed.subscribe();
+            let mut reports = Vec::new();
+            for room in if b_first { [1, 0] } else { [0, 1] } {
+                let r = if room == 0 {
+                    sync_round_notify(&mut va, &mut v, &feed).await.unwrap()
+                } else {
+                    sync_round_notify(&mut vb, &mut v, &feed).await.unwrap()
+                };
+                reports.push((room, r.changed));
+            }
+            for (room, changed) in &reports {
+                let want = if *room == 0 { vec![(sid, wa)] } else { vec![(sid, wb)] };
+                assert_eq!(changed, &want, "b_first={b_first} room={room}");
+            }
+            let mut seen = Vec::new();
+            while let Ok(c) = rx.try_recv() {
+                seen.push((c.session_id, c.workspace_id));
+            }
+            assert_eq!(seen.iter().filter(|c| **c == (sid, wa)).count(), 1, "the chat is reported once, by its own room");
+            let chat = v.load_session_in(wa, sid).unwrap().unwrap();
+            assert_eq!(chat.workspace_id, wa);
+            assert_eq!(chat.messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["hello"]);
+            let other = v.load_session_in(wb, sid).unwrap().unwrap();
+            assert_eq!(other.messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["forged"]);
+        }
     }
 
     /// The loop runs a round at once, reports it, and stops when told.

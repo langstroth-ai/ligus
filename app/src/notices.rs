@@ -236,7 +236,7 @@ fn reply_notice_with(s: &ChatSession, reply: &ChatMessage, failed: bool, mine: i
 pub(crate) fn turn_ended(app: &AppHandle, state: &AppState, chat: Uuid, message_id: Uuid, failed: bool) {
     let notice = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load(chat).ok().flatten() else { return };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
         let Some(m) = s.messages.iter().find(|m| m.id == message_id) else { return };
         reply_notice(&svc, &s, m, failed)
     };
@@ -253,7 +253,7 @@ pub(crate) fn synced_replies(app: &AppHandle, state: &AppState, chat: Uuid, ids:
     let now = ligus_core::Timestamp::now().0;
     let notices: Vec<(Uuid, Notice)> = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load(chat).ok().flatten() else { return };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
         s.messages
             .iter()
             .filter(|m| ids.contains(&m.id) && !m.is_streaming && (now - m.created_at.0).whole_seconds() < SYNCED_FRESH_SECS)
@@ -272,7 +272,7 @@ pub(crate) fn synced_replies(app: &AppHandle, state: &AppState, chat: Uuid, ids:
 pub(crate) fn ask_posted(app: &AppHandle, state: &AppState, chat: Uuid, turn_message: Uuid, ask_id: Uuid) {
     let notice = {
         let svc = state.service.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(s) = svc.load(chat).ok().flatten() else { return };
+        let Some(s) = svc.load_resolving(chat).ok().flatten() else { return };
         let Some(m) = s.messages.iter().find(|m| m.id == turn_message) else { return };
         if !asked_by_me(&svc, &s, m) {
             return;

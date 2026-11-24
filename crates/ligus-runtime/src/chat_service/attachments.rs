@@ -23,8 +23,8 @@ impl ChatService {
     }
 
     /// The files shared in a chat (tombstones included).
-    pub fn chat_attachments(&self, session_id: Uuid) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
-        Ok(self.load(session_id)?.map(|s| s.attachments).unwrap_or_default())
+    pub fn chat_attachments(&self, workspace_id: Uuid, session_id: Uuid) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
+        Ok(self.load_in(workspace_id, session_id)?.map(|s| s.attachments).unwrap_or_default())
     }
 
     /// Sign a share of an uploaded file in a chat.
@@ -52,7 +52,7 @@ impl ChatService {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(session) = self.load(session_id)? else { continue };
+            let Some(session) = self.load_in(workspace_id, session_id)? else { continue };
             for s in session.attachments.values().filter(|s| s.author == member_id && !s.deleted) {
                 if self.delete_attachment(session_id, workspace_id, s.attachment.id).is_ok() {
                     out.push(s.attachment.clone());
@@ -122,7 +122,7 @@ impl ChatService {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(s) = self.load(session_id)? else { continue };
+            let Some(s) = self.load_in(workspace_id, session_id)? else { continue };
             for p in s.proposals.iter().filter(|p| p.attachment.is_some() && p.produced_on == Some(self.device_id)) {
                 let shared = s.attachments.values().any(|x| x.attachment.proposal_id == Some(p.id));
                 if shared || p.dismissed || p.superseded_by.is_some() || p.status == ligus_core::ProposalStatus::Rejected {
@@ -149,7 +149,7 @@ impl ChatService {
             if session_id == workspace_config_session_id(workspace_id) {
                 continue;
             }
-            let Some(s) = self.load(session_id)? else { continue };
+            let Some(s) = self.load_in(workspace_id, session_id)? else { continue };
             for p in &s.proposals {
                 let Some(a) = p.attachment.as_deref() else { continue };
                 if p.produced_on != Some(self.device_id) || !p.ready_to_apply() {

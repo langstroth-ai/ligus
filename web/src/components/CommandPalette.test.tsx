@@ -6,7 +6,7 @@ import { CommandPalette, type PaletteActions } from "./CommandPalette";
 
 vi.mock("@/lib/ipc", () => ({
   listChats: vi.fn(async () => [
-    { id: "c1", title: "Fix login flow", archived: false, lastActivityAt: "", messageCount: 3 },
+    { id: "c1", title: "Fix login flow", archived: false, lastActivityAt: "", messageCount: 3, workspaceId: "w1" },
     { id: "c2", title: "Archived thing", archived: true, lastActivityAt: "", messageCount: 1 },
   ]),
   listWorkspaces: vi.fn(async () => [
@@ -78,7 +78,7 @@ describe("CommandPalette", () => {
     await screen.findByText("Fix login flow");
     await user.type(screen.getByPlaceholderText(/search/i), "fix login");
     await user.keyboard("{Enter}");
-    expect(acts.selectChat).toHaveBeenCalledWith("c1");
+    expect(acts.selectChat).toHaveBeenCalledWith("c1", "w1");
     expect(onClose).toHaveBeenCalled();
   });
 

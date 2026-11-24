@@ -637,7 +637,7 @@ impl LigusMcp {
                 };
                 let q = alts.question.to_lowercase();
                 let r = self.svc(|svc| {
-                    let trigger = svc.load(ctx.session_id).ok().flatten().and_then(|sess| effects::trigger_of(&sess, ctx.message_id));
+                    let trigger = svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|sess| effects::trigger_of(&sess, ctx.message_id));
                     effects::open_alternatives(svc, &ctx, &alts, trigger, None)
                 });
                 match r {
@@ -671,7 +671,7 @@ impl LigusMcp {
             "ligus_handoff" => {
                 let to = s("to");
                 let parcel = ContextParcel { key_files: strs("keyFiles"), decisions: strs("decisions"), ruled_out: strs("ruledOut"), notes: s("notes") };
-                let deep = self.svc(|svc| svc.load(ctx.session_id).ok().flatten().is_some_and(|sess| sess.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH));
+                let deep = self.svc(|svc| svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().is_some_and(|sess| sess.cascade_depth() >= ligus_core::MAX_CASCADE_DEPTH));
                 if deep {
                     return (denied_or_err("the hand-off chain is too deep; let a person take it from here".into()), None);
                 }
@@ -751,7 +751,7 @@ impl LigusMcp {
                 let since = Uuid::parse_str(&s("sinceMessageId")).ok();
                 let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, 100) as usize;
                 let ws = st.spec.workspace_id;
-                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
                 if !self.cross_read_allowed(st, &session) {
@@ -766,7 +766,7 @@ impl LigusMcp {
             "ligus_read_proposals" => {
                 let chat = Uuid::parse_str(&s("chatId")).unwrap_or(st.spec.chat_id);
                 let ws = st.spec.workspace_id;
-                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
                 if !self.cross_read_allowed(st, &session) {
@@ -800,7 +800,7 @@ impl LigusMcp {
             "ligus_read_board" => {
                 let ws = st.spec.workspace_id;
                 let chat = st.spec.chat_id;
-                let (config, session) = self.svc(|svc| (svc.flow_config(ws).unwrap_or_default(), svc.load(chat).ok().flatten()));
+                let (config, session) = self.svc(|svc| (svc.flow_config(ws).unwrap_or_default(), svc.load_in(ws, chat).ok().flatten()));
                 let marks: Vec<Value> = config
                     .marks
                     .values()
@@ -1030,7 +1030,7 @@ impl LigusMcp {
             }
             "ligus_task_state" => {
                 let chat = uuid("chatId").unwrap_or(st.spec.chat_id);
-                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|c| c.workspace_id == ws) else {
+                let Some(session) = self.svc(|svc| svc.load_in(ws, chat).ok().flatten()).filter(|c| c.workspace_id == ws) else {
                     return (bad("no such chat in this workspace"), None);
                 };
                 if !self.cross_read_allowed(st, &session) {
@@ -1067,10 +1067,10 @@ impl LigusMcp {
         let ws = st.spec.workspace_id;
         let chats: std::collections::BTreeSet<Uuid> = m.live().flat_map(ligus_core::memory::source_chats).collect();
         let (reader, now) = self.svc(|svc| {
-            let reader = svc.load(st.spec.chat_id).ok().flatten().map(|c| envelope_for_session(&c).egress).unwrap_or(EgressPolicy::Open);
+            let reader = svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten().map(|c| envelope_for_session(&c).egress).unwrap_or(EgressPolicy::Open);
             let now: std::collections::BTreeMap<Uuid, EgressPolicy> = chats
                 .iter()
-                .filter_map(|c| svc.load(*c).ok().flatten().filter(|s| s.workspace_id == ws).map(|s| (*c, envelope_for_session(&s).egress)))
+                .filter_map(|c| svc.load_in(ws, *c).ok().flatten().filter(|s| s.workspace_id == ws).map(|s| (*c, envelope_for_session(&s).egress)))
                 .collect();
             (reader, now)
         });
@@ -1089,7 +1089,7 @@ impl LigusMcp {
     /// host's binding for this chat, then the read itself.
     async fn forge_tool(&self, st: &TurnState, tool: &str, args: &Value) -> ToolResult {
         let deny = |m: &str| ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": m}));
-        let egress = self.svc(|svc| svc.load(st.spec.chat_id).ok().flatten()).map(|s| ligus_core::sandbox::envelope_for_session(&s).egress);
+        let egress = self.svc(|svc| svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten()).map(|s| ligus_core::sandbox::envelope_for_session(&s).egress);
         if !egress.as_ref().is_some_and(super::forge_tools::egress_allows) {
             return deny("this chat's sandbox doesn't allow code-host reads (its egress is closed, or its allow-list doesn't name ligus.forge)");
         }
@@ -1115,7 +1115,7 @@ impl LigusMcp {
         if target.id == st.spec.chat_id {
             return true;
         }
-        let Some(reader) = self.svc(|svc| svc.load(st.spec.chat_id).ok().flatten()) else { return false };
+        let Some(reader) = self.svc(|svc| svc.load_in(st.spec.workspace_id, st.spec.chat_id).ok().flatten()) else { return false };
         let mine = ligus_core::sandbox::envelope_for_session(&reader).egress;
         let theirs = ligus_core::sandbox::envelope_for_session(target).egress;
         mine.stricter(&theirs) == mine
@@ -1184,7 +1184,7 @@ fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<V
     let channels = svc.list_channels(ws).unwrap_or_default();
     let mut out: Vec<(i64, Value)> = Vec::new();
     for id in svc.session_ids().unwrap_or_default().into_iter().filter(|id| *id != config_id).take(2000) {
-        let Ok(Some(sess)) = svc.load(id) else { continue };
+        let Ok(Some(sess)) = svc.load_in(ws, id) else { continue };
         if sess.workspace_id != ws {
             continue;
         }
@@ -1438,7 +1438,7 @@ impl HostAsker {
         self.host.with_service(&mut |svc| {
             let Some(author) = svc.flow_answer_author(ctx.session_id, ans) else { return };
             let owner = ctx.agent_id.and_then(|id| {
-                svc.load(ctx.session_id).ok().flatten().and_then(|s| s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.owner_actor_id.clone()))
+                svc.load_in(ctx.workspace_id, ctx.session_id).ok().flatten().and_then(|s| s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.owner_actor_id.clone()))
             });
             ok = !author.is_empty() && (author == svc.author().id || owner.as_deref() == Some(author.as_str()));
         });

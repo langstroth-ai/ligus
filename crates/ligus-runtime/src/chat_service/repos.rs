@@ -200,7 +200,7 @@ impl ChatService {
         if !ligus_core::workspace_repo::is_commit_id(commit) {
             return Err(ChatError::Unauthorized("that isn't a commit id".into()));
         }
-        let session = self.load(chat)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let session = self.load_in(workspace_id, chat)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
         if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
             return Err(ChatError::Unauthorized("this chat doesn't work in that repository".into()));
         }

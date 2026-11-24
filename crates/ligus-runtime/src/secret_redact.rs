@@ -41,8 +41,8 @@ struct Registry {
     seen: HashSet<String>,
     /// Bumped by every value added.
     generation: u64,
-    /// The automaton over `values` as of `built`.
-    automaton: Option<Arc<AhoCorasick>>,
+    /// The matcher over `values` as of `built`.
+    automaton: Option<Arc<Matcher>>,
     built: u64,
 }
 
@@ -62,7 +62,7 @@ fn rebuilding() -> &'static Mutex<()> {
 /// here when registrations came since the last build: the values are
 /// copied under the read lock and the automaton is built with no lock on
 /// the registry, so registering and redacting never wait for a build.
-fn automaton() -> Option<Arc<AhoCorasick>> {
+fn automaton() -> Option<Arc<Matcher>> {
     {
         let r = registry().read().unwrap_or_else(|e| e.into_inner());
         if r.built == r.generation {
@@ -79,13 +79,70 @@ fn automaton() -> Option<Arc<AhoCorasick>> {
     };
     // Longest first, so a value that contains another is masked whole.
     vals.sort_by_key(|v| std::cmp::Reverse(v.len()));
-    let built = AhoCorasick::builder().match_kind(aho_corasick::MatchKind::LeftmostLongest).build(&vals).ok().map(Arc::new);
+    let built = Some(Arc::new(build_matcher(vals, false)));
     let mut r = registry().write().unwrap_or_else(|e| e.into_inner());
     if r.built < generation {
         r.automaton = built.clone();
         r.built = generation;
     }
     built
+}
+
+/// What masks the registered values: one automaton over them all, or, when
+/// that can't be built (too many or too long values for its limits), each
+/// value in turn, longest first. Slower, but a registered secret is never
+/// left unmasked because the fast path failed (fail closed).
+enum Matcher {
+    Automaton(AhoCorasick),
+    Each(Vec<String>),
+}
+
+/// The matcher over `vals` (longest first). `force_fail` (tests) takes the
+/// path a failed automaton build takes.
+fn build_matcher(vals: Vec<String>, force_fail: bool) -> Matcher {
+    let built = if force_fail {
+        None
+    } else {
+        match AhoCorasick::builder().match_kind(aho_corasick::MatchKind::LeftmostLongest).build(&vals) {
+            Ok(ac) => Some(ac),
+            Err(e) => {
+                tracing::error!(target: "secret_redact", values = vals.len(), "building the secret matcher failed, masking value by value: {e}");
+                None
+            }
+        }
+    };
+    match built {
+        Some(ac) => Matcher::Automaton(ac),
+        None => Matcher::Each(vals),
+    }
+}
+
+/// Mask every registered value `m` matches in `text`: the masked text and
+/// how many were masked.
+fn mask_values(m: &Matcher, text: &str) -> (String, u32) {
+    match m {
+        Matcher::Automaton(ac) => {
+            let n = ac.find_iter(text).count() as u32;
+            if n == 0 {
+                (text.to_string(), 0)
+            } else {
+                let marks = vec![MARK; ac.patterns_len()];
+                (ac.replace_all(text, &marks), n)
+            }
+        }
+        Matcher::Each(vals) => {
+            let mut out = text.to_string();
+            let mut n = 0u32;
+            for v in vals {
+                let k = out.matches(v.as_str()).count() as u32;
+                if k > 0 {
+                    n += k;
+                    out = out.replace(v.as_str(), MARK);
+                }
+            }
+            (out, n)
+        }
+    }
 }
 
 fn patterns() -> &'static [Regex] {
@@ -175,15 +232,10 @@ pub fn register_json_secrets(v: &serde_json::Value) {
 pub fn redact_ligus_secrets(text: &str) -> (String, u32) {
     let mut count = 0u32;
     let mut out = match automaton() {
-        Some(ac) => {
-            let n = ac.find_iter(text).count() as u32;
-            if n == 0 {
-                text.to_string()
-            } else {
-                count += n;
-                let marks = vec![MARK; ac.patterns_len()];
-                ac.replace_all(text, &marks)
-            }
+        Some(m) => {
+            let (out, n) = mask_values(&m, text);
+            count += n;
+            out
         }
         None => text.to_string(),
     };
@@ -228,6 +280,24 @@ pub fn redacted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A matcher whose automaton couldn't be built still masks every
+    /// registered value (fails closed), the longest whole.
+    #[test]
+    fn a_failed_automaton_build_still_masks_every_value() {
+        let long = "0123456789abcdef0123456789abcdef-long".to_string();
+        let short = "0123456789abcdef0123456789abcdef".to_string();
+        let other = "ZYXWVUTSRQPONMLKJIHG".to_string();
+        let m = build_matcher(vec![long.clone(), short.clone(), other.clone()], true);
+        assert!(matches!(m, Matcher::Each(_)));
+        let text = format!("a {long} b {short} c {other} d {other}");
+        let (out, n) = mask_values(&m, &text);
+        assert_eq!(out, format!("a {MARK} b {MARK} c {MARK} d {MARK}"));
+        assert_eq!(n, 4);
+        let fast = build_matcher(vec![long, short, other], false);
+        assert!(matches!(fast, Matcher::Automaton(_)));
+        assert_eq!(mask_values(&fast, &text), (out, n), "both paths mask alike");
+    }
 
     #[test]
     fn registered_values_and_shapes_are_masked() {

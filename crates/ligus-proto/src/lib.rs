@@ -376,6 +376,11 @@ pub struct ChatSummaryDto {
     /// renamable, or deletable on its own.
     #[serde(default)]
     pub is_channel_default: bool,
+    /// The workspace this chat belongs to. A chat is (workspace, chat):
+    /// another workspace can hold a chat under the same id, so the desktop
+    /// opens a chat in this workspace.
+    #[serde(default)]
+    pub workspace_id: String,
 }
 
 /// A workspace channel — organization only, no config (spec §11).

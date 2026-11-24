@@ -53,7 +53,7 @@ impl ChatService {
         // no key.
         if !timeline.current().device_trusted(self.device_id) && !self.delegated && self.author.account_id.is_some() {
             let config_id = workspace_config_session_id(workspace_id);
-            let certified = self.store.has_device_certificate_in(config_id, self.device_id, self.author.account_id.unwrap_or_default())?;
+            let certified = self.store.has_device_certificate_in(workspace_id, config_id, self.device_id, self.author.account_id.unwrap_or_default())?;
             if !certified {
                 self.publish_identity(config_id, workspace_id)?;
             }

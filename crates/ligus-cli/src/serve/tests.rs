@@ -381,7 +381,7 @@ async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     while std::time::Instant::now() < deadline {
         h.handle.shared.sync_kick.notify_one();
-        let cfg = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap();
+        let cfg = h.handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap();
         if cfg.is_some_and(|c| agents.iter().all(|id| c.workspace_agents.iter().any(|a| a.id == *id && a.host_id == host))) {
             return;
         }
@@ -508,7 +508,7 @@ async fn a_box_joins_only_through_a_box_admission() {
     let handle = start(cfg, opts()).await.unwrap();
     let me = handle.shared.lock().author().clone();
     assert_eq!(me.kind, ligus_core::ActorKind::Service);
-    let config_log = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let config_log = handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
     let m = config_log.members.iter().find(|m| m.id == me.id).expect("the box is a member");
     assert_eq!((m.actor.kind, m.role), (ligus_core::ActorKind::Service, ligus_core::WorkspaceRole::Contributor));
     assert_ne!(config_log.creator_actor_id, me.id, "the box never founds");
@@ -561,7 +561,7 @@ async fn a_box_starts_from_a_read_only_mounted_secret() {
     assert!(synced);
     let me = svc.author().clone();
     assert_eq!(me.kind, ligus_core::ActorKind::Service);
-    let log = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let log = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
     assert!(log.members.iter().any(|m| m.id == me.id), "the box joined");
     drop(svc);
     // And serve itself comes up on that store (a restart: already a member).
@@ -957,7 +957,7 @@ async fn phone_writes_and_relay_sync_into_one_chat_never_collide() {
     for _ in 0..80 {
         h.handle.shared.sync_kick.notify_one();
         sync_once(&h.desktop).await.unwrap();
-        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+        if open_service(&h.desktop).unwrap().load_in(ws, chat_id).unwrap().is_some() {
             seen = true;
             break;
         }
@@ -995,7 +995,7 @@ async fn phone_writes_and_relay_sync_into_one_chat_never_collide() {
     let mut missing = want.clone();
     for _ in 0..200 {
         h.handle.shared.sync_kick.notify_one();
-        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
         let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
         missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
         if missing.is_empty() {
@@ -1273,7 +1273,7 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     for _ in 0..40 {
         sync_once(&h.desktop).await.unwrap();
         let svc = open_service(&h.desktop).unwrap();
-        if let Some(s) = svc.load(chat_uuid).unwrap() {
+        if let Some(s) = svc.load_resolving(chat_uuid).unwrap() {
             let replied = s.messages.iter().any(|m| m.body == "Done: added hello.txt" && !m.is_streaming);
             let approved = s.proposals.iter().any(|p| p.status == ligus_core::ProposalStatus::Approved);
             if replied && approved {
@@ -1367,7 +1367,7 @@ async fn reject_with_reason_and_last_event_id_replay() {
     assert_gone(&h, &format!("/v1/proposals/{}/approve", Uuid::new_v4()), None, "vote").await;
     {
         let svc = h.handle.shared.lock();
-        let s = svc.load(chat_id).unwrap().unwrap();
+        let s = svc.load_resolving(chat_id).unwrap().unwrap();
         let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
         assert!(p.refinements.is_empty() && p.approvals.is_empty());
     }
@@ -1515,7 +1515,7 @@ async fn comments_and_votes_show_who_and_stream_updates() {
             .list_session_ids()
             .unwrap()
             .into_iter()
-            .filter_map(|id| svc.load(id).ok().flatten())
+            .filter_map(|id| svc.load_resolving(id).ok().flatten())
             .flat_map(|s| s.proposals)
             .find(|p| p.id == pid);
         if found.as_ref().is_some_and(|p| p.refinements.len() == 2 && p.approvals.len() == 1) {
@@ -1557,7 +1557,7 @@ async fn request_changes_asks_the_agent_and_links_the_revision() {
     assert!(res["proposal"]["comments"].as_array().unwrap().iter().all(|c| c["requestChanges"] == true));
     {
         let svc = h.handle.shared.lock();
-        let s = svc.load(chat_id).unwrap().unwrap();
+        let s = svc.load_resolving(chat_id).unwrap().unwrap();
         let pending = ligus_runtime::chat_service::pending_mentions(&s);
         assert!(pending.iter().any(|m| m.agent_id == h.agent_id), "the revision request is queued work for @coder");
     }
@@ -1620,7 +1620,7 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
         sync_once(&h.desktop).await.unwrap();
         let mut svc = open_service(&h.desktop).unwrap();
         let cfg = workspace_config_session_id(ws);
-        let known = svc.load(cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me));
+        let known = svc.load_in(ws, cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me));
         if known {
             svc.set_member_role(cfg, ws, me.clone(), ligus_core::WorkspaceRole::Viewer).unwrap();
             drop(svc);
@@ -1633,7 +1633,7 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     assert!(demoted, "the box never joined the desktop's roster");
     let mut is_viewer = false;
     for _ in 0..50 {
-        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
         if s.role_of(&me) == ligus_core::WorkspaceRole::Viewer {
             is_viewer = true;
             break;
@@ -1655,7 +1655,7 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
         let (code, v) = status_of(&h, reqwest::Method::POST, &path, body).await;
         assert_eq!(code, 403, "{path}: {v}");
     }
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     assert!(p.approvals.is_empty() && p.refinements.is_empty(), "a denied write left a trace");
     assert_eq!(p.status, ligus_core::ProposalStatus::Open);
@@ -1693,7 +1693,7 @@ async fn approving_never_applies_and_never_overrides_a_rejection() {
     // The desktop founder (Owner) rejected it, and that vote synced in.
     for _ in 0..100 {
         sync_once(&h.desktop).await.unwrap();
-        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == rid)) {
+        if open_service(&h.desktop).unwrap().load_in(ws, chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == rid)) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1701,7 +1701,7 @@ async fn approving_never_applies_and_never_overrides_a_rejection() {
     open_service(&h.desktop).unwrap().vote_on_proposal(chat_id, ws, rid, false).unwrap().expect("desktop sees the proposal");
     sync_once(&h.desktop).await.unwrap();
     for _ in 0..200 {
-        let seen = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let seen = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
         if seen.proposals.iter().find(|p| p.id == rid).is_some_and(|p| p.status == ligus_core::ProposalStatus::Rejected) {
             break;
         }
@@ -1714,7 +1714,7 @@ async fn approving_never_applies_and_never_overrides_a_rejection() {
     assert!(!wt.join("rejected.txt").exists(), "a rejected proposal was applied");
     {
         let svc = h.handle.shared.lock();
-        let s = svc.load(chat_id).unwrap().unwrap();
+        let s = svc.load_in(ws, chat_id).unwrap().unwrap();
         let p = s.proposals.iter().find(|p| p.id == rid).unwrap();
         assert_eq!(p.status, ligus_core::ProposalStatus::Rejected);
     }
@@ -1781,7 +1781,7 @@ async fn a_stop_past_its_grace_stops_the_turn_in_flight() {
     let started = std::time::Instant::now();
     assert!(h.handle.stop(Duration::from_millis(300)).await, "the stopped turn lets the worker finish");
     assert!(started.elapsed() < Duration::from_secs(20));
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
     assert!(!s.messages.iter().any(|m| m.is_streaming), "no live placeholder: {:?}", s.messages);
     assert!(s.messages.iter().any(|m| m.body.contains("shutting down")), "the asker is told: {:?}", s.messages);
 }
@@ -1818,7 +1818,7 @@ async fn restart_finishes_a_reply_cut_off_mid_stream() {
     let again = start(serve_cfg, opts).await.unwrap();
     {
         let svc = again.shared.lock();
-        let s = svc.load(chat_id).unwrap().unwrap();
+        let s = svc.load_in(ws, chat_id).unwrap().unwrap();
         let m = s.messages.iter().find(|m| m.id == reply).unwrap();
         assert!(!m.is_streaming, "still streaming after a restart");
         assert!(m.body.starts_with("partial answer"), "{}", m.body);
@@ -1887,7 +1887,7 @@ async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice()
 
     let replies = || {
         let svc = h.handle.shared.lock();
-        svc.load(chat_id)
+        svc.load_in(ws, chat_id)
             .unwrap()
             .map(|s| s.messages.into_iter().filter(|m| m.responder_id.is_some()).collect::<Vec<_>>())
             .unwrap_or_default()
@@ -1975,7 +1975,7 @@ async fn fresh_box_with_unreachable_relay_refuses_to_start() {
     let err = start(cfg.clone(), opts).await.err().expect("must not start");
     assert!(err.to_string().contains("no copy of the workspace"), "{err}");
     let ws = crate::uuid_of_room(&room);
-    assert!(open_service(&cfg).unwrap().load(workspace_config_session_id(ws)).unwrap().is_none(), "no config log seeded");
+    assert!(open_service(&cfg).unwrap().load_in(ws, workspace_config_session_id(ws)).unwrap().is_none(), "no config log seeded");
 }
 
 /// A box enrolled from a relayless invite (relay_url = "") is told it has
@@ -2131,7 +2131,7 @@ async fn sync_once_pages_through_a_large_room() {
     let (_, pulled) = sync_once(&fresh).await.unwrap();
     assert_eq!(pulled, pushed, "the whole room in one sync_once");
     let svc = open_service(&fresh).unwrap();
-    let chat = svc.load(chat_id).unwrap().expect("chat synced");
+    let chat = svc.load_in(ws, chat_id).unwrap().expect("chat synced");
     assert_eq!(chat.messages.len(), 60);
 }
 
@@ -2890,7 +2890,7 @@ async fn demote_box_to_viewer(h: &Harness, chat_id: Uuid) {
         sync_once(&h.desktop).await.unwrap();
         let mut svc = open_service(&h.desktop).unwrap();
         let cfg = workspace_config_session_id(ws);
-        if svc.load(cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me)) {
+        if svc.load_in(ws, cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me)) {
             svc.set_member_role(cfg, ws, me.clone(), ligus_core::WorkspaceRole::Viewer).unwrap();
             drop(svc);
             sync_once(&h.desktop).await.unwrap();
@@ -2901,7 +2901,7 @@ async fn demote_box_to_viewer(h: &Harness, chat_id: Uuid) {
     }
     assert!(demoted, "the box never joined the desktop's roster");
     for _ in 0..50 {
-        let viewer_here = h.handle.shared.lock().load(chat_id).unwrap().unwrap().role_of(&me) == ligus_core::WorkspaceRole::Viewer;
+        let viewer_here = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().role_of(&me) == ligus_core::WorkspaceRole::Viewer;
         let (_, config) = api::hosts_and_agents(&h.handle.shared).ok().unwrap();
         if viewer_here && config.role_of(&me) == ligus_core::WorkspaceRole::Viewer {
             return;
@@ -3037,7 +3037,7 @@ async fn lockdown_clear_needs_a_human_contributor() {
     // The box never clears it as itself: the phone does, with its person's
     // passkey (`clearLockdown`, `the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
     assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
-    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    assert!(h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().guards.lockdown_active());
 
     // As a Viewer: `canClearLockdown` says no. The desktop may demote the
     // box before it has synced this lock; a demotion never lifts a lockdown
@@ -3388,14 +3388,14 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
     for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
         assert_gone(&h, &path, None, "vote").await;
     }
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     assert!(p.approvals.is_empty(), "a refused vote is never written: {:?}", p.approvals);
     assert_eq!(p.status, ligus_core::ProposalStatus::Open, "the human gate is still unmet");
 
     // Nor a lockdown clear, nor their passkey-confirmed forms.
     assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
-    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    assert!(h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().guards.lockdown_active());
     for (action, kind) in [("approve", "vote"), ("reject", "vote"), ("lockdown_clear", "clearLockdown")] {
         let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
         assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{action}: {v}");
@@ -3434,7 +3434,7 @@ async fn phone_vote_attribution() {
     assert!(!h.handle.shared.lock().is_delegated());
     assert_gone(&h, &format!("/v1/proposals/{pid}/approve"), None, "vote").await;
     box_vote(&h, &pid.to_string(), true).await;
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     let me = h.handle.shared.my_actor_id();
     let owner = open_service(&h.desktop).unwrap().author().id.clone();
@@ -3544,7 +3544,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     // A few more drain passes: still exactly one reviewer reply.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let cid = Uuid::parse_str(&chat_id).unwrap();
-    let s = h.handle.shared.lock().load(cid).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, cid).unwrap().unwrap();
     assert_eq!(s.messages.iter().filter(|m| m.body == "Reviewed.").count(), 1, "the hand-off ran its receiver once");
     let coder_reply = s.messages.iter().find(|m| m.responder_id == Some(h.agent_id) && !m.is_streaming).unwrap();
     assert_eq!(coder_reply.body, "Asked and handed off.", "directives stripped on the worker");
@@ -3580,7 +3580,7 @@ async fn a_box_stamped_as_the_owner_never_votes_for_them_even_with_their_passkey
         let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
         assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{v}");
     }
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
     assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
     h.handle.shutdown();
 }
@@ -3891,7 +3891,7 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
     let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello again" }))).await;
     assert!(!(200..300).contains(&code), "a box wrote as the owner without their certificate: {code}");
 
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_resolving(chat_id).unwrap().unwrap();
     let m = |id| s.messages.iter().find(|m| m.id == id).unwrap();
     assert_eq!(m(as_box).author, box_actor.display_name);
     assert_eq!(m(as_box).actor_identity.as_ref().map(|a| a.id.clone()), Some(box_actor.id.clone()));
@@ -4140,7 +4140,7 @@ async fn a_worker_never_writes_a_config_seed_or_founder_event() {
             _ => {}
         }
     }
-    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let c = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
     assert_eq!(c.creator_actor_id, founder, "the founder is the desktop's");
     assert_eq!(c.role_of(&founder), ligus_core::WorkspaceRole::Owner);
     assert!(c.workspace_hosts.iter().any(|h| h.id == host), "its host is registered");
@@ -4174,7 +4174,7 @@ async fn a_service_box_never_acts_as_a_person() {
     assert_eq!(g["canClearLockdown"], false, "{g}");
     let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
     assert!((400..500).contains(&code), "{code}");
-    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    assert!(h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().guards.lockdown_active());
     // It can't invite anyone either (an Admin's act with a passkey).
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
     assert!((400..500).contains(&code), "{code}");
@@ -4269,7 +4269,7 @@ async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let (svc, _) = crate::worker_start(&mut wcfg, "w2", Some(code)).await.unwrap();
-    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let c = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
     let m = c.members.iter().find(|m| m.id == svc.author().id).expect("the second box joined");
     assert_eq!((m.actor.kind, m.role), (ligus_core::ActorKind::Service, ligus_core::WorkspaceRole::Contributor));
     h.handle.shutdown();
@@ -4318,7 +4318,7 @@ async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
     let (wsvc, _) = crate::worker_start(&mut wcfg, "w1", Some(std::fs::read_to_string(&w_out).unwrap())).await.unwrap();
     for _ in 0..50 {
         handle.shared.sync_kick.notify_one();
-        let c = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+        let c = handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
         if c.members.iter().any(|m| m.id == wsvc.author().id) {
             let boxes: Vec<_> = c.members.iter().filter(|m| m.actor.kind == ligus_core::ActorKind::Service).collect();
             assert_eq!(boxes.len(), 2, "serve and the worker are each their own service member");
@@ -4379,7 +4379,7 @@ async fn a_redeemed_admission_is_closed_by_the_admins_device() {
     let mut admin = open_service(&desktop).unwrap();
     assert_eq!(admin.close_settled_admissions(ws).unwrap(), 1);
     assert_eq!(admin.close_settled_admissions(ws).unwrap(), 0, "closed once");
-    let c = admin.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let c = admin.load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
     let ligus_core::SessionEvent::MemberAdded { invite: Some(inv), .. } = &redemption.payload else { unreachable!() };
     assert_eq!(c.guards.closed_admissions.get(inv), Some(&vec![Some(redemption.event_id)]));
     assert!(c.members.iter().any(|m| m.id == me), "the named redemption stands");
@@ -4478,7 +4478,7 @@ async fn phone_signed_posts_race_box_posts_and_sync_without_forking() {
     for _ in 0..80 {
         h.handle.shared.sync_kick.notify_one();
         sync_once(&h.desktop).await.unwrap();
-        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some() {
+        if open_service(&h.desktop).unwrap().load_in(ws, chat_id).unwrap().is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -4531,7 +4531,7 @@ async fn phone_signed_posts_race_box_posts_and_sync_without_forking() {
     let mut missing = want.clone();
     for _ in 0..200 {
         h.handle.shared.sync_kick.notify_one();
-        let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
         let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
         missing = want.iter().filter(|w| !bodies.contains(&w.as_str())).cloned().collect();
         if missing.is_empty() {
@@ -4574,7 +4574,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     let mid = Uuid::parse_str(done["messageId"].as_str().unwrap()).unwrap();
     let env = signed_by(&h._tmp.path().join("serve"), phone.device_id).into_iter().find(|e| e.event_id.to_string() == done["eventId"].as_str().unwrap()).unwrap();
     assert_eq!(env.actor_stamp.as_ref().unwrap().actor.id, person);
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     assert!(s.messages.iter().any(|m| m.id == mid && m.body == "from my phone"));
     drop(s);
 
@@ -4588,7 +4588,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     let digest = prop["proposal"]["diffDigest"].as_str().unwrap().to_string();
     let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Vote { chat_id, proposal_id: pid, diff_digest: digest.clone(), approved: true }).await;
     assert_eq!(code, 200, "{done}");
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, ligus_core::ProposalStatus::Approved);
     assert!(ligus_core::guard::has_human_approval(&s, pid), "the phone's vote counts as its person's");
     drop(s);
@@ -4615,7 +4615,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     }
     assert_eq!(state["state"], json!("applied"), "{state}");
     assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap(), "hi\n");
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, ligus_core::ProposalStatus::Applied);
     drop(s);
     let commits = std::process::Command::new("git").arg("-C").arg(&wt).args(["log", "--format=%B"]).output().unwrap();
@@ -4637,7 +4637,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     let answer = PhoneAction::Answer { chat_id, ask_id, answer: "yes".into(), option_index: Some(0) };
     let (code, done) = phone_act(&h, &phone, account, &answer).await;
     assert_eq!(code, 200, "{done}");
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     assert!(!s.flow.asks[&ask_id].is_open(), "answered");
     drop(s);
     // Answered once: a second answer is refused before the phone signs.
@@ -4666,7 +4666,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     assert!(!left.contains(&raises[0]));
     let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ClearLockdown { chat_id, raises: left }).await;
     assert_eq!(code, 200, "{done}");
-    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    assert!(!h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().guards.lockdown_active());
     // Not locked any more: 409.
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": clear }))).await;
     assert_eq!(code, 409);
@@ -4706,7 +4706,7 @@ async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
     let forged = ligus_core::crypto::sign_p256(&ligus_core::testkit::Phone::new().key, &b64d(prep["preimage"].as_str().unwrap()));
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": ligus_core::presence::b64url(&forged) }))).await;
     assert_eq!(code, 403);
-    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().messages.iter().any(|m| m.body == "forged"));
+    assert!(!h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap().messages.iter().any(|m| m.body == "forged"));
     // Two drafts at once: the second to commit has a stale chain link (409).
     let (_, a) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("a") }))).await;
     let (_, b) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("b") }))).await;

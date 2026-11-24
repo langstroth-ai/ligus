@@ -22,9 +22,9 @@ pub struct QuorumOutcome {
 }
 
 impl ChatService {
-    fn proposal_set(&self, session_id: Uuid, set_id: Uuid) -> Result<(ligus_core::ChatSession, ProposalSet)> {
+    fn proposal_set(&self, workspace_id: Uuid, session_id: Uuid, set_id: Uuid) -> Result<(ligus_core::ChatSession, ProposalSet)> {
         let session = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .ok_or_else(|| ChatError::NotFound(format!("session {session_id}")))?;
         let set = session
             .proposal_sets
@@ -54,7 +54,7 @@ impl ChatService {
         }
         let set_id = set.id;
         self.append_signed(session_id, workspace_id, SessionEvent::ProposalSetOpened { set: Box::new(set) })?;
-        Ok(self.proposal_set(session_id, set_id)?.1)
+        Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
     /// Group proposals that are already filed into a new set.
@@ -66,7 +66,7 @@ impl ChatService {
     ) -> Result<ProposalSet> {
         let set_id = set.id;
         let session = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .ok_or_else(|| ChatError::NotFound(format!("session {session_id}")))?;
         for id in &set.alternatives {
             if let Some(mut p) = session.proposals.iter().find(|p| p.id == *id).cloned() {
@@ -75,7 +75,7 @@ impl ChatService {
             }
         }
         self.append_signed(session_id, workspace_id, SessionEvent::ProposalSetOpened { set: Box::new(set) })?;
-        Ok(self.proposal_set(session_id, set_id)?.1)
+        Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
     /// Add a filed proposal to an open set (a revision of `revises`, or a
@@ -109,13 +109,13 @@ impl ChatService {
         set_id: Uuid,
         assessment: ScoutAssessment,
     ) -> Result<Option<ProposalSet>> {
-        let (session, set) = self.proposal_set(session_id, set_id)?;
+        let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if set.is_frozen(assessment.proposal_id) || !set.is_active(&session.proposals, assessment.proposal_id) {
             return Ok(None);
         }
         let id = assessment.id;
         self.append_signed(session_id, workspace_id, SessionEvent::ScoutAssessmentPosted { set_id, assessment })?;
-        let set = self.proposal_set(session_id, set_id)?.1;
+        let set = self.proposal_set(workspace_id, session_id, set_id)?.1;
         Ok(set.assessments.iter().any(|a| a.id == id).then_some(set))
     }
 
@@ -127,7 +127,7 @@ impl ChatService {
         set_id: Uuid,
         reason: &str,
     ) -> Result<()> {
-        let (_, set) = self.proposal_set(session_id, set_id)?;
+        let (_, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if !set.is_open() {
             return Ok(());
         }
@@ -149,7 +149,7 @@ impl ChatService {
         set_id: Uuid,
         now: Timestamp,
     ) -> Result<Option<QuorumOutcome>> {
-        let (session, set) = self.proposal_set(session_id, set_id)?;
+        let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         let (winner, tie_break) = match set.quorum_candidate(&session.proposals) {
             Some(w) => (w, false),
             None => match set.deadline_leader(&session.proposals, now) {
@@ -162,7 +162,7 @@ impl ChatService {
             workspace_id,
             SessionEvent::ProposalSetQuorumReached { set_id, proposal_id: winner, tie_break, at: now },
         )?;
-        let (session, set) = self.proposal_set(session_id, set_id)?;
+        let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if set.front_runner != Some(winner) {
             return Ok(None); // another device's quorum folded first
         }
@@ -198,7 +198,7 @@ impl ChatService {
         set_id: Uuid,
         proposal_id: Uuid,
     ) -> Result<()> {
-        let (_, set) = self.proposal_set(session_id, set_id)?;
+        let (_, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if set.front_runner == Some(proposal_id) {
             return Err(ChatError::Unauthorized("the front-runner can't be withdrawn; close the set instead".into()));
         }
@@ -233,7 +233,7 @@ impl ChatService {
                 quality_bar: knobs.quality_bar,
             },
         )?;
-        Ok(self.proposal_set(session_id, set_id)?.1)
+        Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
     /// Record a pre-flight report (phase one of the two-phase commit). A failed
@@ -251,7 +251,7 @@ impl ChatService {
             workspace_id,
             SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id, report, at: Timestamp::now() },
         )?;
-        Ok(self.proposal_set(session_id, set_id)?.1)
+        Ok(self.proposal_set(workspace_id, session_id, set_id)?.1)
     }
 
     /// The human's final call. A winner must have human quorum and a passing
@@ -263,7 +263,7 @@ impl ChatService {
         set_id: Uuid,
         winner: Option<Uuid>,
     ) -> Result<ProposalSet> {
-        let (session, set) = self.proposal_set(session_id, set_id)?;
+        let (session, set) = self.proposal_set(workspace_id, session_id, set_id)?;
         if !set.is_open() {
             return Err(ChatError::Unauthorized("this set is already decided".into()));
         }
@@ -279,7 +279,7 @@ impl ChatService {
             workspace_id,
             SessionEvent::ProposalSetDecided { set_id, winner, at: Timestamp::now() },
         )?;
-        let set = self.proposal_set(session_id, set_id)?.1;
+        let set = self.proposal_set(workspace_id, session_id, set_id)?.1;
         if set.phase != SetPhase::Decided {
             return Err(ChatError::Unauthorized("the decision didn't take (the set changed under it)".into()));
         }
@@ -449,7 +449,7 @@ mod tests {
             forged(&eve, 9_003, SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::now() }),
         ] {
             let mut env = env;
-            ligus_core::lamport::stamp_next(&mut env, svc.store().lamport_head(sid).unwrap());
+            ligus_core::lamport::stamp_next(&mut env, svc.store().lamport_head(wid, sid).unwrap());
             svc.store().append_envelope(&env).unwrap();
         }
         // The raw fold (no workspace roster) would take them.

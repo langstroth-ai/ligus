@@ -108,6 +108,8 @@ pub struct ChatService {
     /// workspace bypass the roster-role check (see [`append_signed`]). `None` until
     /// the app sets it via [`set_local_workspace`].
     local_workspace_id: Option<Uuid>,
+    /// The reader's context workspace ([`ChatService::set_context_workspace`]).
+    context_workspace: Option<Uuid>,
     /// Set when this device acts for an account whose key it doesn't hold — a
     /// `ligus serve` box enrolled as its owner's device (`device_enroll`). The
     /// author is then the owner; `account_keypair` is still the box's own, so
@@ -192,6 +194,7 @@ impl ChatService {
             author,
             trusted_founder: None,
             local_workspace_id: None,
+            context_workspace: None,
             delegated: false,
             write_block: None,
             agent_vault: None,
@@ -291,14 +294,14 @@ impl ChatService {
                 .as_ref()
                 .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
                 .unwrap_or_default();
-            let next_seq = svc.store.max_sequence(session_id)?.unwrap_or(0) + 1;
+            let next_seq = svc.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload.clone());
             // Lamport bounds: one past the newest event of the log held here.
-            let log_head = svc.store.lamport_head(session_id)?;
+            let log_head = svc.store.lamport_head(workspace_id, session_id)?;
             env.lamport = ligus_core::lamport::next(log_head);
             let mut actor = ActorIdentity::new(agent_id.to_string(), name, ligus_core::ActorKind::Agent);
             actor.device_id = Some(key_id);
-            env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: svc.store.last_signed_by(session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
+            env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: svc.store.last_signed_by(workspace_id, session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
             sign_envelope(&mut env, key_id, &kp);
             svc.authorize_as_fold(&env, config.as_ref(), &timeline)?;
             svc.store_authored(&env)?;
@@ -338,7 +341,7 @@ impl ChatService {
 
     /// An agent's effect: Agent tier first, then the agent's key or the host.
     fn append_agent_effect(&mut self, session_id: Uuid, workspace_id: Uuid, agent: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
-        let fold = self.load(session_id)?.unwrap_or_else(|| ChatSession::new("", workspace_id, ""));
+        let fold = self.load_in(workspace_id, session_id)?.unwrap_or_else(|| ChatSession::new("", workspace_id, ""));
         if let Err(why) = ligus_core::authz::agent::tier_allows(&payload, agent, self.device_id, &fold) {
             return Err(ChatError::Unauthorized(format!("agent tier: {why}")));
         }
@@ -421,7 +424,7 @@ impl ChatService {
     /// an owner's device, or revoked. See [`crate::device_enroll::standing`].
     pub fn device_standing(&self, workspace_id: Uuid, prefer: Option<&str>) -> Result<crate::device_enroll::Standing> {
         let trust = self.store.trust_envelopes(workspace_id)?;
-        let config = self.load(workspace_config_session_id(workspace_id))?;
+        let config = self.load_in(workspace_id, workspace_config_session_id(workspace_id))?;
         Ok(crate::device_enroll::standing(
             &trust,
             config.as_ref(),
@@ -517,7 +520,7 @@ impl ChatService {
     /// with no pin (created here, or the device-local one).
     pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
         let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
-        let envs = self.store.list_copies(workspace_config_session_id(workspace_id))?;
+        let envs = self.store.list_copies_in(workspace_id, workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
     }
 
@@ -552,6 +555,12 @@ impl ChatService {
     /// The currently-pinned trusted founder, if any.
     pub fn trusted_founder(&self) -> Option<&str> {
         self.trusted_founder.as_deref()
+    }
+
+    /// Tests only: the store, to ingest a peer's (or an attacker's) event.
+    #[cfg(test)]
+    pub(crate) fn store_mut(&mut self) -> &mut EventStore {
+        &mut self.store
     }
 
     pub fn store(&self) -> &EventStore {
@@ -726,7 +735,7 @@ impl ChatService {
             // (config-wins). For a config-log write this loads raw, so it gates on
             // the config roster itself. Closes the self-member staleness gap where
             // a role differed per-chat.
-            if let Some(session) = self.load(session_id)? {
+            if let Some(session) = self.load_in(workspace_id, session_id)? {
                 let decision =
                     authorize(&payload, &self.author.id, self.actor_role(&session), &session);
                 if !decision.allowed {
@@ -840,7 +849,7 @@ impl ChatService {
     /// Build and sign an envelope as this device's author would append it
     /// (not appended, not authorized).
     pub(crate) fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
-        let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
+        let next_seq = self.store.max_sequence(workspace_id, session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
         // Causal Lamport clock: one past the newest event of the log this device
         // holds (locally authored or ingested from a peer), whose lamport is
@@ -848,7 +857,7 @@ impl ChatService {
         // the canonical fold order (lamport, event_id) respects causality — a
         // reply never sorts before the message it answers — and every fold can
         // check the lamport against the head it names.
-        let log_head = self.store.lamport_head(session_id)?;
+        let log_head = self.store.lamport_head(workspace_id, session_id)?;
         env.lamport = ligus_core::lamport::next(log_head);
         // The config frontier this device has folded: chat events that need the
         // workspace roster are judged at it, on every device (Phase 0 A2).
@@ -857,7 +866,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
+            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(workspace_id, session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -888,7 +897,7 @@ impl ChatService {
                 Some(_) => ligus_core::WorkspaceAuthz::Timeline(timeline),
                 None => ligus_core::WorkspaceAuthz::NoConfigLog,
             };
-            self.store.load_session_authorized(env.session_id, self.trusted_founder.as_deref(), self.local_workspace_id, ws)?
+            self.store.load_session_authorized(env.workspace_id, env.session_id, self.trusted_founder.as_deref(), self.local_workspace_id, ws)?
         };
         // A brand-new log (its seed) has nothing to judge against yet.
         let Some(fold) = fold else { return Ok(()) };
@@ -944,7 +953,7 @@ impl ChatService {
         )?;
         // Publish this device's identity so peers can verify events it authors.
         self.publish_identity(id, workspace_id)?;
-        Ok(self.load(id)?.expect("session exists after snapshot"))
+        Ok(self.load_in(workspace_id, id)?.expect("session exists after snapshot"))
     }
 
     /// Publish this device's trust events into a workspace — an
@@ -991,9 +1000,9 @@ impl ChatService {
         // whenever this device holds that log (a certificate only on a chat
         // log is mirrored the next time this runs).
         let config_id = workspace_config_session_id(workspace_id);
-        let session_id = if self.store.max_sequence(config_id)?.is_some() { config_id } else { session_id };
+        let session_id = if self.store.max_sequence(workspace_id, config_id)?.is_some() { config_id } else { session_id };
         let published = if session_id == config_id {
-            self.store.has_device_certificate_in(config_id, self.device_id, account_id)?
+            self.store.has_device_certificate_in(workspace_id, config_id, self.device_id, account_id)?
         } else {
             self.store.has_device_certificate(workspace_id, self.device_id, account_id)?
         };
@@ -1350,10 +1359,10 @@ impl ChatService {
     /// session has accumulated enough events since the last one. Bounds replay
     /// cost on long sessions; the snapshot is signed like any other event.
     pub fn maybe_snapshot(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<()> {
-        if self.store.rows_since_last_snapshot(session_id)? < Self::SNAPSHOT_EVERY {
+        if self.store.rows_since_last_snapshot(workspace_id, session_id)? < Self::SNAPSHOT_EVERY {
             return Ok(());
         }
-        if let Some(session) = self.load(session_id)? {
+        if let Some(session) = self.load_in(workspace_id, session_id)? {
             self.append_signed(
                 session_id,
                 workspace_id,
@@ -1399,7 +1408,7 @@ impl ChatService {
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let mut agents = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.workspace_agents)
             .unwrap_or_default();
         let Some(slot) = agents.iter_mut().find(|a| a.id == agent_id) else {
@@ -1469,7 +1478,7 @@ impl ChatService {
         // config session id directly (from `join_workspace`/`set_active_workspace`).
         // Any other session_id must already exist locally; don't invent phantom
         // membership in a workspace this device has no presence in.
-        if session_id != workspace_config_session_id(workspace_id) && self.load(session_id)?.is_none()
+        if session_id != workspace_config_session_id(workspace_id) && self.load_in(workspace_id, session_id)?.is_none()
         {
             return Ok(false);
         }
@@ -1480,11 +1489,11 @@ impl ChatService {
         // A joiner (holding an invite) waits for the workspace's own config log
         // instead of founding a competing one; this runs again after a sync.
         let config_id = workspace_config_session_id(workspace_id);
-        if self.load(config_id)?.is_none() && self.store.join_invite(workspace_id)?.is_some() {
+        if self.load_in(workspace_id, config_id)?.is_none() && self.store.join_invite(workspace_id)?.is_some() {
             return Ok(false);
         }
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let config = self.load(config_id)?.expect("config log exists after ensure");
+        let config = self.load_in(workspace_id, config_id)?.expect("config log exists after ensure");
         // Already present? Match by actor id, or by the same GitHub account — so
         // signing in (which can change the actor id) doesn't add a second "self".
         let already = config.members.iter().any(|m| {
@@ -1551,7 +1560,7 @@ impl ChatService {
         workspace_id: Uuid,
         trigger_id: Uuid,
     ) -> Result<bool> {
-        if let Some(session) = self.load(session_id)? {
+        if let Some(session) = self.load_in(workspace_id, session_id)? {
             if let Some(winner) = session.turn_claims.get(&trigger_id) {
                 return Ok(*winner == self.device_id);
             }
@@ -1562,7 +1571,7 @@ impl ChatService {
             SessionEvent::TurnClaimed { trigger_id, device_id: self.device_id, epoch: 0, supersedes: None, repo_id: None },
         )?;
         Ok(self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .and_then(|s| s.turn_claims.get(&trigger_id).copied())
             .map(|w| w == self.device_id)
             .unwrap_or(true))
@@ -1603,7 +1612,7 @@ impl ChatService {
     pub fn dispatch_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<Uuid>, ctx: DispatchCtx) -> Result<ligus_core::dispatch::Step> {
         use ligus_core::dispatch::{self as d, Step};
         let key = ligus_core::turn_claim_key(trigger, agent);
-        let Some(session) = self.load(session_id)? else { return Ok(Step::StandDown) };
+        let Some(session) = self.load_in(workspace_id, session_id)? else { return Ok(Step::StandDown) };
         // How long this device has watched the current holder (or, with no
         // holder, the unclaimed turn): the caller's word, or this service's
         // own clock, whichever is longer.
@@ -1651,7 +1660,7 @@ impl ChatService {
                     workspace_id,
                     SessionEvent::TurnClaimed { trigger_id: key, device_id: self.device_id, epoch: c.epoch, supersedes: c.supersedes, repo_id: c.repo_id },
                 )?;
-                let Some(after) = self.load(session_id)? else { return Ok(Step::StandDown) };
+                let Some(after) = self.load_in(workspace_id, session_id)? else { return Ok(Step::StandDown) };
                 Ok(match d::decide(&after, key, repo, &view(&after)) {
                     Step::Claim(_) => Step::Wait(std::time::Duration::from_secs(1)),
                     other => other,
@@ -1700,7 +1709,7 @@ impl ChatService {
             return Ok(false);
         }
         let config_id = workspace_config_session_id(workspace_id);
-        let Some(config) = self.load(config_id)? else { return Ok(false) };
+        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(false) };
         if !config.title.trim().is_empty() {
             return Ok(false);
         }
@@ -1722,7 +1731,7 @@ impl ChatService {
     /// config-log session id.
     pub fn ensure_workspace_config(&mut self, workspace_id: Uuid) -> Result<Uuid> {
         let config_id = workspace_config_session_id(workspace_id);
-        if self.load(config_id)?.is_none() {
+        if self.load_in(workspace_id, config_id)?.is_none() {
             // A device that joins with an invite never founds the workspace:
             // it waits for the founder's config log to sync.
             if self.store.join_invite(workspace_id)?.is_some() {
@@ -1791,7 +1800,7 @@ impl ChatService {
     pub fn list_channels(&self, workspace_id: Uuid) -> Result<Vec<Channel>> {
         let config_id = workspace_config_session_id(workspace_id);
         let mut channels = self
-            .load(config_id)?
+            .load_in(workspace_id, config_id)?
             .map(|s| s.channels)
             .unwrap_or_default();
         channels.sort_by(|a, b| a.position.cmp(&b.position).then(a.id.cmp(&b.id)));
@@ -1815,7 +1824,7 @@ impl ChatService {
         let default_chat = self.create_chat(name.clone(), workspace_id, runtime_id)?;
         self.set_chat_channel(default_chat.id, workspace_id, &channel_id)?;
         let next_pos = self
-            .load(config_id)?
+            .load_in(workspace_id, config_id)?
             .map(|s| s.channels.iter().map(|c| c.position).max().unwrap_or(-1) + 1)
             .unwrap_or(0);
         let mut channel = Channel::new(channel_id, name);
@@ -1892,7 +1901,7 @@ impl ChatService {
     /// The workspace's owned runtimes.
     pub fn list_workspace_runtimes(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceRuntime>> {
         Ok(self
-            .load(workspace_config_session_id(workspace_id))?
+            .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_runtimes)
             .unwrap_or_default())
     }
@@ -1934,7 +1943,7 @@ impl ChatService {
     /// The workspace's registered hosts.
     pub fn list_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
         Ok(self
-            .load(workspace_config_session_id(workspace_id))?
+            .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_hosts)
             .unwrap_or_default())
     }
@@ -1950,7 +1959,7 @@ impl ChatService {
     ///   as an account's only if its certificate verifies against a key that
     ///   account registered in this workspace.
     pub fn device_links(&self, workspace_id: Uuid) -> Result<ligus_core::DeviceLinks> {
-        let Some(config) = self.load(workspace_config_session_id(workspace_id))? else {
+        let Some(config) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else {
             return Ok(ligus_core::DeviceLinks::default());
         };
         let trust = self.store.trust_envelopes(workspace_id)?;
@@ -2011,12 +2020,12 @@ impl ChatService {
     /// profiles, home beacon), folded from the config log.
     pub fn flow_config(&self, workspace_id: Uuid) -> Result<ligus_core::flow::FlowState> {
         let config_id = workspace_config_session_id(workspace_id);
-        Ok(match self.load(config_id)? {
+        Ok(match self.load_in(workspace_id, config_id)? {
             Some(s) => s.flow,
             // No config log yet: this device's facts (route stops) still apply.
             None => {
                 let mut flow = ligus_core::flow::FlowState::default();
-                self.overlay_facts_on(config_id, &mut flow);
+                self.overlay_facts_on(workspace_id, config_id, &mut flow);
                 flow
             }
         })
@@ -2072,7 +2081,7 @@ impl ChatService {
     pub fn touch_host(&mut self, workspace_id: Uuid, host_id: &str, throttle_secs: i64) -> Result<bool> {
         let config_id = workspace_config_session_id(workspace_id);
         let mut hosts = self
-            .load(config_id)?
+            .load_in(workspace_id, config_id)?
             .map(|s| s.workspace_hosts)
             .unwrap_or_default();
         let Some(host) = hosts.iter_mut().find(|h| h.id == host_id) else {
@@ -2097,7 +2106,7 @@ impl ChatService {
     pub fn set_agent_host(&mut self, workspace_id: Uuid, agent_id: Uuid, host_id: &str) -> Result<()> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
         let mut agents = self
-            .load(config_id)?
+            .load_in(workspace_id, config_id)?
             .map(|s| s.workspace_agents)
             .unwrap_or_default();
         let Some(slot) = agents.iter_mut().find(|a| a.id == agent_id) else {
@@ -2143,7 +2152,7 @@ impl ChatService {
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let mut skills = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.loaded_skills)
             .unwrap_or_default();
         if let Some(slot) = skills.iter_mut().find(|s| s.id == skill.id) {
@@ -2166,7 +2175,7 @@ impl ChatService {
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let skills: Vec<SkillProfile> = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.loaded_skills)
             .unwrap_or_default()
             .into_iter()
@@ -2184,7 +2193,7 @@ impl ChatService {
         definition: WorkflowDefinition,
     ) -> Result<()> {
         let mut definitions = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.workflow_definitions)
             .unwrap_or_default();
         if let Some(slot) = definitions.iter_mut().find(|d| d.id == definition.id) {
@@ -2208,7 +2217,7 @@ impl ChatService {
         definition_id: Uuid,
     ) -> Result<()> {
         let definitions: Vec<WorkflowDefinition> = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.workflow_definitions)
             .unwrap_or_default()
             .into_iter()
@@ -2232,7 +2241,7 @@ impl ChatService {
         enabled: bool,
     ) -> Result<()> {
         let mut definitions = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.workflow_definitions)
             .unwrap_or_default();
         let Some(def) = definitions.iter_mut().find(|d| d.id == definition_id) else {
@@ -2262,7 +2271,7 @@ impl ChatService {
         workspace_id: Uuid,
         proposal_id: Uuid,
     ) -> Result<Option<ActionProposal>> {
-        let Some(session) = self.load(session_id)? else {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok(None);
         };
         let Some(proposal) = session.proposals.iter().find(|p| p.id == proposal_id) else {
@@ -2311,7 +2320,7 @@ impl ChatService {
         base_commit: Option<String>,
         applied_tree_hash: Option<String>,
     ) -> Result<Option<ActionProposal>> {
-        let Some(session) = self.load(session_id)? else {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok(None);
         };
         let Some(proposal) = session.proposals.iter().find(|p| p.id == proposal_id) else {
@@ -2337,7 +2346,7 @@ impl ChatService {
                 request_id: None,
             },
         )?;
-        Ok(self.load(session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
+        Ok(self.load_in(workspace_id, session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
     }
 
     /// Ask `host_device_id` to apply an approved proposal (the phone's
@@ -2351,7 +2360,7 @@ impl ChatService {
         host_device_id: Uuid,
         expected_base_commit: Option<String>,
     ) -> Result<Uuid> {
-        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
         let p = session.proposals.iter().find(|p| p.id == proposal_id).ok_or_else(|| ChatError::Unauthorized("unknown proposal".into()))?;
         let request = ligus_core::workspace_repo::ApplyRequest {
             id: Uuid::new_v4(),
@@ -2378,7 +2387,7 @@ impl ChatService {
         base_commit: Option<String>,
         applied_tree_hash: Option<String>,
     ) -> Result<SessionEventEnvelope> {
-        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
         let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
         if req.host_device_id != self.device_id {
             return Err(ChatError::Unauthorized("that apply request is for another host".into()));
@@ -2403,7 +2412,7 @@ impl ChatService {
     /// The host's side of a request it couldn't fulfil: record why, which
     /// closes the request (a person may ask again).
     pub fn fail_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid, reason: &str) -> Result<SessionEventEnvelope> {
-        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
         let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
         if req.host_device_id != self.device_id {
             return Err(ChatError::Unauthorized("that apply request is for another host".into()));
@@ -2414,7 +2423,7 @@ impl ChatService {
 
     /// Withdraw an open apply request (its requester, or an Admin).
     pub fn withdraw_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid) -> Result<SessionEventEnvelope> {
-        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let session = self.load_in(workspace_id, session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
         let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
         self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyWithdrawn { request_id, proposal_id: req.proposal_id })
     }
@@ -2551,7 +2560,7 @@ impl ChatService {
             return Ok(0);
         }
         let config_id = ligus_core::workspace_config_session_id(workspace_id);
-        let Some(config) = self.load(config_id)? else { return Ok(0) };
+        let Some(config) = self.load_in(workspace_id, config_id)? else { return Ok(0) };
         if config.role_of(&self.author.id).rank() < WorkspaceRole::Admin.rank() {
             return Ok(0);
         }
@@ -2628,7 +2637,7 @@ impl ChatService {
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let member_id = member_id.into();
         let old_role = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .and_then(|s| s.members.iter().find(|m| m.id == member_id).map(|m| m.role))
             .unwrap_or(WorkspaceRole::Contributor);
         // A demotion cuts like a removal: the member's later events are
@@ -2656,7 +2665,7 @@ impl ChatService {
         for sid in sessions {
             // Every copy held: the device's own event under an id another
             // signer's copy reached first is still one of its heads.
-            logs.push((sid, self.store.list_copies(sid)?));
+            logs.push((sid, self.store.list_copies_in(workspace_id, sid)?));
         }
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {
@@ -2696,7 +2705,7 @@ impl ChatService {
     /// (non-owner) current self make them. No-op when already correct.
     pub fn reconcile_local_owner(&mut self, workspace_id: Uuid) -> Result<bool> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let Some(config) = self.load(config_id)? else {
+        let Some(config) = self.load_in(workspace_id, config_id)? else {
             return Ok(false);
         };
         let me = self.author.id.clone();
@@ -2752,7 +2761,7 @@ impl ChatService {
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let mut sources = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.vault_sources)
             .unwrap_or_default();
         if let Some(slot) = sources.iter_mut().find(|s| s.raw_url() == vault.raw_url()) {
@@ -2775,7 +2784,7 @@ impl ChatService {
         // workspace-config log, not the calling chat's session.
         let session_id = self.ensure_workspace_config(workspace_id)?;
         let sources: Vec<MountedVault> = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .map(|s| s.vault_sources)
             .unwrap_or_default()
             .into_iter()
@@ -2800,9 +2809,12 @@ impl ChatService {
         Ok(())
     }
 
-    /// Hard delete — removes the session's events entirely.
+    /// Hard delete — removes the chat's events entirely: the chat
+    /// [`Self::workspace_of`] names (nothing when it names none). Another
+    /// workspace's log under the same id is another chat and stays.
     pub fn delete_chat(&mut self, session_id: Uuid) -> Result<()> {
-        self.store.delete_session(session_id)?;
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(()) };
+        self.store.delete_session_in(ws, session_id)?;
         Ok(())
     }
 
@@ -2823,7 +2835,7 @@ impl ChatService {
         // the thread as this device holds it (so an older peer, which takes
         // an edit's thread wholesale, loses nothing), and a new proposal none.
         proposal.refinements = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal.id))
             .map(|p| p.refinements)
             .unwrap_or_default();
@@ -2846,7 +2858,7 @@ impl ChatService {
         proposal_id: Uuid,
         approved: bool,
     ) -> Result<Option<ActionProposal>> {
-        let Some(session) = self.load(session_id)? else {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok(None);
         };
         let role = session.role_of(&self.author.id);
@@ -2896,7 +2908,7 @@ impl ChatService {
         text: impl Into<String>,
         request_changes: bool,
     ) -> Result<Option<ActionProposal>> {
-        let Some(session) = self.load(session_id)? else {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok(None);
         };
         let Some(mut proposal) = session.proposals.into_iter().find(|p| p.id == proposal_id) else {
@@ -2932,7 +2944,7 @@ impl ChatService {
         proposal_ids: &[Uuid],
         dismissed: bool,
     ) -> Result<Vec<Uuid>> {
-        let Some(session) = self.load(session_id)? else {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok(Vec::new());
         };
         let changed: Vec<Uuid> = session
@@ -2963,7 +2975,7 @@ impl ChatService {
     ) -> Result<()> {
         let emoji = emoji.into();
         let existing = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .and_then(|s| s.messages.into_iter().find(|m| m.id == message_id))
             .map(|m| {
                 m.reactions
@@ -3045,7 +3057,14 @@ impl ChatService {
     ///
     /// Anything unresolved fails closed (`None`).
     pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        self.trigger_role(session_id, message_id, false)
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+        self.trigger_author_role_in(ws, session_id, message_id)
+    }
+
+    /// [`Self::trigger_author_role`] on the chat (`workspace_id`,
+    /// `session_id`): the dispatching chat's own workspace.
+    pub fn trigger_author_role_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        Ok(self.trigger_chain(workspace_id, session_id, message_id, false)?.map(|c| c.lowest))
     }
 
     /// The role the shell gate (Phase C, `author_gate::shell_allowed`) reads:
@@ -3055,7 +3074,13 @@ impl ChatService {
     /// role at the message's position is used, so the shell is on only when
     /// every person behind the turn is a workspace Owner.
     pub fn trigger_shell_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        self.trigger_role(session_id, message_id, true)
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+        self.trigger_shell_role_in(ws, session_id, message_id)
+    }
+
+    /// [`Self::trigger_shell_role`] on the chat (`workspace_id`, `session_id`).
+    pub fn trigger_shell_role_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        Ok(self.trigger_chain(workspace_id, session_id, message_id, true)?.map(|c| c.lowest))
     }
 
     /// The signed sandbox grants in force for `workspace_id`
@@ -3067,7 +3092,7 @@ impl ChatService {
     /// This device's user's role in `workspace_id` (its config roster
     /// today); `None` when the workspace has no config yet.
     pub fn my_workspace_role(&self, workspace_id: Uuid) -> Option<WorkspaceRole> {
-        let cfg = self.load(ligus_core::workspace_config_session_id(workspace_id)).ok().flatten()?;
+        let cfg = self.load_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id)).ok().flatten()?;
         Some(self.actor_role(&cfg))
     }
 
@@ -3092,7 +3117,13 @@ impl ChatService {
     /// closed): agent access refuses it unless the agent is open to
     /// everyone.
     pub fn trigger_people(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
-        Ok(self.trigger_chain(session_id, message_id, false)?.map(|c| c.people))
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+        self.trigger_people_in(ws, session_id, message_id)
+    }
+
+    /// [`Self::trigger_people`] on the chat (`workspace_id`, `session_id`).
+    pub fn trigger_people_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
+        Ok(self.trigger_chain(workspace_id, session_id, message_id, false)?.map(|c| c.people))
     }
 
     /// The people behind the tool and directive hand-off cards that wake
@@ -3103,8 +3134,15 @@ impl ChatService {
     /// pointing at someone else's message can't borrow that message's
     /// author. `None` when a signer can't be resolved (fail closed).
     pub fn handoff_card_people(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+        self.handoff_card_people_in(ws, session_id, trigger, agent_id)
+    }
+
+    /// [`Self::handoff_card_people`] on the chat (`workspace_id`,
+    /// `session_id`).
+    pub fn handoff_card_people_in(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
         let to = ligus_core::flow::agent_key(Some(agent_id));
-        let envs = self.store.list_copies(session_id)?;
+        let envs = self.store.list_copies_in(workspace_id, session_id)?;
         let mut cx = RoleCx::default();
         let mut out: Vec<String> = Vec::new();
         for env in &envs {
@@ -3127,18 +3165,14 @@ impl ChatService {
         Ok(Some(out))
     }
 
-    fn trigger_role(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<WorkspaceRole>> {
-        Ok(self.trigger_chain(session_id, message_id, shell)?.map(|c| c.lowest))
-    }
-
-    fn trigger_chain(&self, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<Chain>> {
+    fn trigger_chain(&self, chat_workspace: Uuid, session_id: Uuid, message_id: Uuid, shell: bool) -> Result<Option<Chain>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
         // Every event on the chain is judged against this chat's own
-        // workspace; one stamped with another workspace fails closed.
-        let Some(chat_workspace) = self.store.workspace_of(session_id)? else { return Ok(None) };
+        // workspace (the caller's); one stamped with another workspace is
+        // another log and never read here.
         // Every copy (a forged copy that arrived first doesn't hide a link).
-        let envs = self.store.list_copies(session_id)?;
+        let envs = self.store.list_copies_in(chat_workspace, session_id)?;
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
@@ -3340,7 +3374,7 @@ impl ChatService {
         };
         if self.local_workspace_id == Some(env.workspace_id) {
             if cx.local_session.is_none() {
-                cx.local_session = Some(self.load(session_id)?);
+                cx.local_session = Some(self.load_in(env.workspace_id, session_id)?);
             }
             return Ok(cx.local_session.as_ref().and_then(|s| s.as_ref()).map(|s| s.role_of(&stamp.actor.id)));
         }
@@ -3393,7 +3427,8 @@ impl ChatService {
     /// This is one message's signers only; a turn's gate is
     /// [`Self::trigger_author_role`], which follows the chain.
     pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let envs = self.store.list_copies(session_id)?;
+        let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
+        let envs = self.store.list_copies_in(ws, session_id)?;
         let touching = touching_message(&envs, message_id);
         if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
             return Ok(None);
@@ -3407,7 +3442,74 @@ impl ChatService {
         Ok(lowest)
     }
 
-    pub fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
+    /// The workspace of `session_id`, for a reader that has only the id.
+    /// Session ids are not namespaced by workspace (anyone who knows a chat's
+    /// id can stamp an event with it in another workspace this device also
+    /// syncs), so a log is (workspace, session) and this never reads the
+    /// answer from arrival order or from what another workspace's member
+    /// wrote:
+    ///
+    /// - a workspace's config log is that workspace's;
+    /// - the one workspace with rows under the id;
+    /// - several: the reader's context workspace
+    ///   ([`Self::set_context_workspace`]: the desktop's active workspace,
+    ///   a box's own) when it is one of them; else the one this device is a
+    ///   member of and signed rows in;
+    /// - otherwise none (fail closed, logged).
+    pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
+        if let Some(ws) = self.store.workspace_of(session_id)? {
+            return Ok(Some(ws));
+        }
+        let claims = self.store.workspaces_claiming(session_id)?;
+        if claims.len() < 2 {
+            return Ok(None);
+        }
+        if let Some(ws) = self.context_workspace.filter(|w| claims.contains(w)) {
+            return Ok(Some(ws));
+        }
+        let mut mine = Vec::new();
+        for ws in claims.iter().copied() {
+            let member = self.local_workspace_id == Some(ws)
+                || self.store.has_rows_signed_by(ws, workspace_config_session_id(ws), self.device_id)?;
+            if member && self.store.has_rows_signed_by(ws, session_id, self.device_id)? {
+                mine.push(ws);
+            }
+        }
+        if let [ws] = mine.as_slice() {
+            return Ok(Some(*ws));
+        }
+        tracing::warn!(target: "chat", %session_id, workspaces = claims.len(), "a chat id is claimed by several workspaces and none is this reader's; not loading it without a workspace");
+        Ok(None)
+    }
+
+    /// The reader's context workspace: the one a session id claimed by
+    /// several workspaces resolves to (see [`Self::workspace_of`]). The
+    /// desktop sets its active workspace, a box its own.
+    pub fn set_context_workspace(&mut self, workspace_id: Option<Uuid>) {
+        self.context_workspace = workspace_id;
+    }
+
+    /// [`Self::load_in`] the workspace [`Self::workspace_of`] names (none:
+    /// `None`), for a reader outside this crate that truly has only a chat
+    /// id (a command naming a chat of the window's workspace). A reader that
+    /// knows the workspace calls `load_in`; the name says what this does.
+    pub fn load_resolving(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
+        self.load(session_id)
+    }
+
+    /// [`Self::load_resolving`], inside this crate.
+    pub(crate) fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
+        let Some(workspace_id) = self.workspace_of(session_id)? else {
+            return Ok(None);
+        };
+        self.load_in(workspace_id, session_id)
+    }
+
+    /// The chat (or config log) `session_id` of `workspace_id`, folded. The
+    /// log is (workspace, session): events another workspace stamped under
+    /// the same id are another chat and never fold here, whatever their
+    /// order or content.
+    pub fn load_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
         // Pin the base seed to the out-of-band founder (B2 residual fix). This is
         // load-bearing for the workspace-config log — where the roster/ownership
         // lives — so a forged low-lamport config seed can't displace the founder's.
@@ -3421,9 +3523,6 @@ impl ChatService {
         // stay fully gated). This is what lets the churned local self's own governance
         // events (reconcile / archive channel) fold instead of being dropped.
         let local = self.local_workspace_id;
-        let Some(workspace_id) = self.store.workspace_of(session_id)? else {
-            return Ok(None);
-        };
         let config_id = workspace_config_session_id(workspace_id);
         let (cfg, timeline) = self.store.load_config(workspace_id, founder, local)?;
         if session_id == config_id {
@@ -3441,7 +3540,7 @@ impl ChatService {
             Some(_) => ligus_core::WorkspaceAuthz::Timeline(&timeline),
             None => ligus_core::WorkspaceAuthz::NoConfigLog,
         };
-        let Some(mut session) = self.store.load_session_authorized(session_id, founder, local, ws)? else {
+        let Some(mut session) = self.store.load_session_authorized(workspace_id, session_id, founder, local, ws)? else {
             return Ok(None);
         };
         {
@@ -4350,7 +4449,7 @@ mod tests {
 
         // A peer's event that counts from the newest one here (a lamport
         // within bounds): the next event authored here sorts after it.
-        let head = svc.store.lamport_head(sid).unwrap();
+        let head = svc.store.lamport_head(wid, sid).unwrap();
         let mut peer = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "from peer".into() });
         peer.actor_stamp = Some(ActorStamp { actor: svc.author().clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         ligus_core::lamport::stamp_next(&mut peer, head);
@@ -4592,7 +4691,7 @@ mod tests {
         assert!(!other.has_event(reply.event_id).unwrap(), "the retired key's reply is refused here");
         assert!(other.has_event(after.event_id).unwrap());
         assert_eq!(
-            other.lamport_head(chat.id).unwrap().map(|h| h.event_id),
+            other.lamport_head(wid, chat.id).unwrap().map(|h| h.event_id),
             Some(after.event_id),
             "the event after the refused reply is within bounds here too, not held for good"
         );
@@ -4967,9 +5066,9 @@ mod tests {
             .find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == m))
             .and_then(|e| e.actor_stamp.as_ref().and_then(|s| s.cfg_frontier));
         let inject = |con: &mut ChatService, payload: SessionEvent| {
-            let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
+            let seq = con.store.max_sequence(wid, chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
-            let log_head = con.store.lamport_head(chat_id).unwrap();
+            let log_head = con.store.lamport_head(wid, chat_id).unwrap();
             env.lamport = ligus_core::lamport::next(log_head);
             env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head });
             con.store.ingest(&env).unwrap();
@@ -5338,9 +5437,9 @@ mod tests {
         let (_, timeline) = con.store.load_config(w2, None, None).unwrap();
         let msg = ChatMessage::new(MessageRole::User, "Con", "@coder push to prod");
         let id = msg.id;
-        let seq = con.store.max_sequence(chat).unwrap().unwrap_or(0) + 1;
+        let seq = con.store.max_sequence(w2, chat).unwrap().unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(chat, w2, seq, SessionEvent::MessageAppended { message: msg });
-        let log_head = con.store.lamport_head(chat).unwrap();
+        let log_head = con.store.lamport_head(w2, chat).unwrap();
         env.lamport = ligus_core::lamport::next(log_head);
         env.actor_stamp = Some(ActorStamp {
             actor: con.author.clone(),
@@ -6086,7 +6185,7 @@ mod tests {
             cfg_frontier: Some(ligus_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
             presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None
         });
-        ligus_core::lamport::stamp_next(&mut peer, svc.store().lamport_head(sid).unwrap());
+        ligus_core::lamport::stamp_next(&mut peer, svc.store().lamport_head(wid, sid).unwrap());
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();
         assert!(s.authz.blocks(pid, None));
@@ -6788,6 +6887,319 @@ mod same_key_tests {
             let bodies: Vec<String> = authors[0].load(chat.id).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
             for w in &want {
                 prop_assert_eq!(bodies.iter().filter(|b| *b == w).count(), 1, "{} stored once", w);
+            }
+        }
+    }
+}
+
+/// A log is (workspace, session): session ids are not namespaced by
+/// workspace, so anyone who knows a chat's id can stamp events with it in
+/// another workspace this device also syncs. Those are another chat, never
+/// folded into, re-homing, blanking or heading the real one.
+#[cfg(test)]
+mod workspace_log_tests {
+    use super::*;
+    use ligus_core::{ChatMessage, MessageRole};
+    use proptest::prelude::*;
+
+    fn service() -> ChatService {
+        ChatService::new(
+            EventStore::open_in_memory().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            SigningKeypair::generate().unwrap(),
+            ActorIdentity::new("u", "U", ligus_core::ActorKind::Human),
+        )
+    }
+
+    fn message(body: &str) -> SessionEvent {
+        SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Evil", body) }
+    }
+
+    /// An event a member of `ws` signs under `session` with the id, lamport
+    /// and head it chose.
+    fn forged(session: Uuid, ws: Uuid, payload: SessionEvent, event_id: Uuid, lamport: u64, log_head: Option<ligus_core::CfgFrontier>) -> SessionEventEnvelope {
+        let mut env = SessionEventEnvelope::new(session, ws, 1, payload);
+        env.event_id = event_id;
+        env.lamport = lamport;
+        env.actor_stamp = Some(ActorStamp {
+            actor: ActorIdentity::new("evil", "Evil", ligus_core::ActorKind::Human),
+            recorded_at: Timestamp::now(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head,
+        });
+        ligus_core::sign_envelope(&mut env, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+        env
+    }
+
+    /// A self-consistent creation seed for `chat` in `ws`: lamport 1 and
+    /// the nil event id, so it sorts before any genuine seed.
+    fn forged_seed(chat: Uuid, ws: Uuid) -> SessionEventEnvelope {
+        let evil = ActorIdentity::new("evil", "Evil", ligus_core::ActorKind::Human);
+        let mut session = ChatSession::new("c", ws, "anthropic");
+        session.id = chat;
+        session.creator_actor_id = "evil".into();
+        session.members = vec![WorkspaceMember { id: "evil".into(), actor: evil, role: WorkspaceRole::Owner, title: String::new(), index: 0, joined_at: Timestamp::now() }];
+        forged(chat, ws, SessionEvent::SessionSnapshot { session: Box::new(session) }, Uuid::nil(), 1, None)
+    }
+
+    /// A chat of workspace A with one genuine message: (owner, A, chat, every
+    /// envelope the owner holds).
+    fn genuine_chat() -> (ChatService, Uuid, Uuid, Vec<SessionEventEnvelope>) {
+        let mut owner = service();
+        let a = Uuid::new_v4();
+        let chat = owner.create_chat("c", a, "anthropic").unwrap();
+        owner.post_user_message(chat.id, a, "genuine").unwrap();
+        let (_, envs) = owner.store().envelopes_after_row(0).unwrap();
+        (owner, a, chat.id, envs)
+    }
+
+    fn bodies(s: &Option<ChatSession>) -> Option<Vec<String>> {
+        s.as_ref().map(|c| c.messages.iter().map(|m| m.body.clone()).collect())
+    }
+
+    /// A forged creation seed from another workspace (lamport 1, nil id),
+    /// in either arrival order: (A, S) still folds the genuine chat, the
+    /// forgery is a separate chat (W2, S), and a reader with only the id
+    /// fails closed instead of picking one by arrival.
+    #[test]
+    fn a_forged_seed_from_another_workspace_never_rehomes_or_blanks_a_chat() {
+        let (_, a, chat, genuine) = genuine_chat();
+        let w2 = Uuid::new_v4();
+        let seed = forged_seed(chat, w2);
+        for forged_first in [true, false] {
+            let mut x = service();
+            if forged_first {
+                x.store.ingest(&seed).unwrap();
+            }
+            for e in &genuine {
+                x.store.ingest(e).unwrap();
+            }
+            if !forged_first {
+                x.store.ingest(&seed).unwrap();
+            }
+            let real = x.load_in(a, chat).unwrap();
+            assert_eq!(bodies(&real), Some(vec!["genuine".to_string()]), "forged_first={forged_first}");
+            assert_eq!(real.as_ref().map(|c| c.workspace_id), Some(a));
+            let other = x.load_in(w2, chat).unwrap();
+            assert!(other.as_ref().is_none_or(|c| c.workspace_id == w2 && c.messages.is_empty()), "{other:?}");
+            assert_eq!(x.store().workspace_of(chat).unwrap(), None, "ambiguous: no workspace from the data");
+            assert_eq!(x.load(chat).unwrap().map(|c| c.id), None, "fails closed without a context");
+            x.set_context_workspace(Some(a));
+            assert_eq!(bodies(&x.load(chat).unwrap()), Some(vec!["genuine".to_string()]));
+            x.set_context_workspace(Some(w2));
+            assert!(bodies(&x.load(chat).unwrap()).is_none_or(|b| b.is_empty()));
+            // Deleting the other workspace's chat leaves this one.
+            x.delete_chat(chat).unwrap();
+            assert!(x.store().list_in(w2, chat).unwrap().is_empty());
+            assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));
+        }
+    }
+
+    /// An event of another workspace under a chat's id naming the chat's
+    /// head never becomes the chat's head: the owner's next message names
+    /// the genuine head, and a device of the chat's workspace that never
+    /// syncs the other one shows it. In either arrival order.
+    #[test]
+    fn a_foreign_event_never_becomes_the_chats_log_head() {
+        for forged_first in [true, false] {
+            let (mut owner, a, chat, genuine) = genuine_chat();
+            let head = owner.store().lamport_head(a, chat).unwrap().unwrap();
+            let w2 = Uuid::new_v4();
+            let foreign = forged(chat, w2, message("from another workspace"), Uuid::new_v4(), head.lamport + 1, Some(head));
+            // On the owner's device the chat's events are already stored;
+            // on a fresh device the foreign event comes first.
+            let mut x = service();
+            if forged_first {
+                x.store.ingest(&foreign).unwrap();
+            }
+            for e in &genuine {
+                x.store.ingest(e).unwrap();
+            }
+            x.store.ingest(&foreign).unwrap();
+            assert_eq!(x.store().lamport_head(a, chat).unwrap(), Some(head), "forged_first={forged_first}");
+            // In W2's own log it names a head that log doesn't hold: past the
+            // bounds there, and never A's.
+            assert_ne!(x.store().lamport_head(w2, chat).unwrap(), Some(head));
+
+            owner.store.ingest(&foreign).unwrap();
+            assert_eq!(owner.workspace_of(chat).unwrap(), Some(a), "the owner's own chat");
+            let reply = owner.post_user_message(chat, a, "reply after").unwrap();
+            let reply_env = owner
+                .store()
+                .list_in(a, chat)
+                .unwrap()
+                .into_iter()
+                .find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == reply.id))
+                .unwrap();
+            let named = reply_env.actor_stamp.as_ref().and_then(|s| s.log_head);
+            assert_eq!(named, Some(head), "the reply names the chat's own head");
+            assert_ne!(named.map(|h| h.event_id), Some(foreign.event_id));
+
+            let mut z = service();
+            for e in &genuine {
+                z.store.ingest(e).unwrap();
+            }
+            z.store.ingest(&reply_env).unwrap();
+            assert_eq!(bodies(&z.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string(), "reply after".to_string()]));
+        }
+    }
+
+    /// A copy of every genuine event id that another workspace planted
+    /// first never hides the genuine arrivals: each is stored in its own
+    /// log, reported to the change feed and to dispatch, folded, and the
+    /// device writes on from the genuine head.
+    #[test]
+    fn planted_event_ids_never_hide_the_genuine_arrivals() {
+        let (owner, a, chat, genuine) = genuine_chat();
+        let w2 = Uuid::new_v4();
+        let planted: Vec<SessionEventEnvelope> = genuine
+            .iter()
+            .map(|g| forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, g.actor_stamp.as_ref().and_then(|s| s.log_head)))
+            .collect();
+        let mut x = service();
+        for p in &planted {
+            x.store.ingest(p).unwrap();
+        }
+        let before = x.store().max_row_id().unwrap();
+        for g in &genuine {
+            assert!(x.store.ingest(g).unwrap(), "the genuine copy is new here");
+        }
+        assert!(x.store().logs_changed_after(before).unwrap().contains(&(a, chat)), "reported to the change feed");
+        let genuine_msg = genuine
+            .iter()
+            .find_map(|e| match &e.payload {
+                SessionEvent::MessageAppended { message } if e.session_id == chat => Some(message.id),
+                _ => None,
+            })
+            .unwrap();
+        assert!(x.store().messages_after(before).unwrap().iter().any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)), "handed to dispatch");
+        let in_log = genuine.iter().filter(|e| e.session_id == chat).count();
+        assert_eq!(x.store().list_in(a, chat).unwrap().len(), in_log);
+        assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));
+        assert!(x.load_in(a, workspace_config_session_id(a)).unwrap().is_some(), "A's config log folds too");
+        assert_eq!(x.store().lamport_head(a, chat).unwrap(), owner.store().lamport_head(a, chat).unwrap());
+    }
+
+    /// A device's own chain stays one line after its store is pulled again
+    /// from a relay where another workspace planted copies of its event ids
+    /// first: its next event links to its own newest event.
+    #[test]
+    fn a_devices_own_chain_stays_linear_after_a_re_pull_with_planted_ids() {
+        let (seed, account) = (SigningKeypair::generate().unwrap().seed_bytes(), SigningKeypair::generate().unwrap().seed_bytes());
+        let open = || {
+            ChatService::new(
+                EventStore::open_in_memory().unwrap(),
+                SigningKeypair::from_seed(&seed).unwrap(),
+                SigningKeypair::from_seed(&account).unwrap(),
+                ActorIdentity::new("u", "U", ligus_core::ActorKind::Human),
+            )
+        };
+        let mut first = open();
+        let a = Uuid::new_v4();
+        let chat = first.create_chat("c", a, "anthropic").unwrap().id;
+        first.post_user_message(chat, a, "one").unwrap();
+        first.post_user_message(chat, a, "two").unwrap();
+        let (_, mine) = first.store().envelopes_after_row(0).unwrap();
+        let me = first.device_id();
+        let newest = first.store().last_signed_by(a, chat, me, u64::MAX).unwrap().unwrap();
+        let w2 = Uuid::new_v4();
+        let mut again = open();
+        for g in &mine {
+            again.store.ingest(&forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, None)).unwrap();
+        }
+        for g in &mine {
+            again.store.ingest(g).unwrap();
+        }
+        assert_eq!(again.store().last_signed_by(a, chat, me, u64::MAX).unwrap(), Some(newest));
+        let three = again.post_user_message(chat, a, "three").unwrap();
+        let log = again.store().list_in(a, chat).unwrap();
+        let env = log.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == three.id)).unwrap();
+        assert_eq!(env.actor_stamp.as_ref().and_then(|s| s.prev), Some(newest), "links to its own newest event");
+        let ours: Vec<_> = log.iter().filter(|e| e.signer_device_id == Some(me)).collect();
+        let named: std::collections::BTreeSet<Uuid> = ours.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+        assert_eq!(ours.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "one chain head");
+    }
+
+    /// This device's measurement facts are per log: another workspace's
+    /// facts under the chat's id never overlay the chat.
+    #[test]
+    fn another_workspaces_facts_never_overlay_a_chat() {
+        let (mut owner, a, chat, _) = genuine_chat();
+        let w2 = Uuid::new_v4();
+        let wait = |reference: &str| ligus_core::flow::FlowRecord::EdgeWait(ligus_core::flow::EdgeWait { edge: "gate".into(), reference: reference.into(), wait_ms: 5, host_id: String::new(), at_ms: 1 });
+        owner.record_flow(chat, w2, wait("from-w2")).unwrap();
+        assert!(owner.load_in(a, chat).unwrap().unwrap().flow.waits.is_empty(), "W2's fact stays off A's chat");
+        owner.record_flow(chat, a, wait("from-a")).unwrap();
+        let waits: Vec<String> = owner.load_in(a, chat).unwrap().unwrap().flow.waits.iter().map(|w| w.reference.clone()).collect();
+        assert_eq!(waits, vec!["from-a".to_string()]);
+    }
+
+    /// What a device folds for one workspace's log.
+    fn fold(svc: &ChatService, ws: Uuid, session: Uuid) -> (serde_json::Value, Option<ligus_core::CfgFrontier>) {
+        let s = svc.load_in(ws, session).unwrap();
+        (serde_json::to_value(&s).unwrap(), svc.store().lamport_head(ws, session).unwrap())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 24, ..ProptestConfig::default() })]
+
+        /// Any arrival order of A's events and forged events of another
+        /// workspace under the same ids (seeds with nil or low ids, events
+        /// claiming the head, messages, an event under A's config log id)
+        /// gives the same (A, S) and A's config as A's events alone, and
+        /// (W2, S) holds only W2's events.
+        #[test]
+        fn foreign_events_never_change_a_chat_in_any_order(order in Just((0..9usize).collect::<Vec<_>>()).prop_shuffle(), extra in 0..3usize) {
+            let (owner, a, chat, genuine) = genuine_chat();
+            let config = workspace_config_session_id(a);
+            let head = owner.store().lamport_head(a, chat).unwrap().unwrap();
+            let cfg_head = owner.store().lamport_head(a, config).unwrap();
+            let w2 = Uuid::new_v4();
+            let foreign = vec![
+                forged_seed(chat, w2),
+                forged(chat, w2, message("w2 low id"), Uuid::from_u128(1 + extra as u128), 2, None),
+                forged(chat, w2, message("w2 head claim"), Uuid::from_u128(2), head.lamport + 1, Some(head)),
+                forged(chat, w2, message("w2 far ahead"), Uuid::new_v4(), head.lamport + 5, Some(head)),
+                forged(config, w2, SessionEvent::SessionTitleChanged { title: "w2 config".into() }, Uuid::from_u128(3), cfg_head.map_or(1, |h| h.lamport + 1), cfg_head),
+            ];
+            let forged_ids: Vec<Uuid> = foreign.iter().map(|e| e.event_id).collect();
+
+            let mut base = service();
+            for e in &genuine {
+                base.store.ingest(e).unwrap();
+            }
+            let want_chat = fold(&base, a, chat);
+            let want_config = fold(&base, a, config);
+
+            // The genuine events keep their own relative order (a device
+            // receives a log in order); the forged ones land anywhere.
+            let mut x = service();
+            let mut g = genuine.iter();
+            let mut f = foreign.iter();
+            for i in &order {
+                if *i < 5 {
+                    if let Some(e) = f.next() { x.store.ingest(e).unwrap(); }
+                } else {
+                    for _ in 0..(genuine.len() / 4 + 1) {
+                        if let Some(e) = g.next() { x.store.ingest(e).unwrap(); }
+                    }
+                }
+            }
+            for e in g { x.store.ingest(e).unwrap(); }
+            for e in f { x.store.ingest(e).unwrap(); }
+
+            prop_assert_eq!(fold(&x, a, chat), want_chat);
+            prop_assert_eq!(fold(&x, a, config), want_config);
+            prop_assert!(x.store().list_copies_in(a, chat).unwrap().iter().all(|e| !forged_ids.contains(&e.event_id)));
+            let w2_log = x.store().list_copies_in(w2, chat).unwrap();
+            prop_assert!(w2_log.iter().all(|e| e.workspace_id == w2 && forged_ids.contains(&e.event_id)));
+            if let Some(other) = x.load_in(w2, chat).unwrap() {
+                prop_assert_eq!(other.workspace_id, w2);
+                prop_assert!(other.messages.iter().all(|m| m.body.starts_with("w2")), "{:?}", other.messages);
             }
         }
     }

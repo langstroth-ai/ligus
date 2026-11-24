@@ -342,7 +342,7 @@ fn chat_model(state: &AppState, session_id: Uuid) -> Result<ChatModelDto, String
     let me = state.local_actor_id();
     let (session, links) = {
         let svc = state.service.lock().unwrap();
-        let s = svc.load(session_id).map_err(crate::map_err)?.ok_or("unknown chat")?;
+        let s = svc.load_resolving(session_id).map_err(crate::map_err)?.ok_or("unknown chat")?;
         let links = crate::device_links_of(&svc, s.workspace_id);
         (s, links)
     };

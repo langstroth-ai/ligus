@@ -263,7 +263,8 @@ impl crate::ChatService {
     /// signer's copy under the answer's id that arrived first doesn't hide
     /// it.
     pub fn flow_answer_author(&self, session_id: Uuid, answer: &ligus_core::flow::HumanAnswered) -> Option<String> {
-        let envs = self.store().list_copies(session_id).ok()?;
+        let ws = self.workspace_of(session_id).ok()??;
+        let envs = self.store().list_copies_in(ws, session_id).ok()?;
         envs.iter()
             .find(|e| matches!(&e.payload, ligus_core::SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::HumanAnswered(a) } if a == answer))
             .and_then(|e| e.actor_stamp.as_ref().map(|s| s.actor.id.clone()))
@@ -273,7 +274,8 @@ impl crate::ChatService {
     /// Every copy held is read, and the latest is the latest in the log's
     /// canonical order (not by arrival), so every device badges alike.
     pub fn proposal_signer(&self, session_id: Uuid, proposal_id: Uuid, agent_authored: bool) -> Option<SignedBy> {
-        let envs = self.store().list_copies(session_id).ok()?;
+        let ws = self.workspace_of(session_id).ok()??;
+        let envs = self.store().list_copies_in(ws, session_id).ok()?;
         let env = envs
             .iter()
             .filter(|e| matches!(&e.payload, ligus_core::SessionEvent::ProposalUpserted { proposal } if proposal.id == proposal_id))

@@ -1169,11 +1169,11 @@ async fn an_agent_offers_files_only_as_proposals_and_only_when_allowed() {
     shared.proposal_id = Some(pid);
     svc.share_attachment(w.chat, w.wid, shared.clone()).unwrap();
     assert!(svc.approved_offers(w.wid).unwrap().is_empty());
-    let atts = svc.chat_attachments(w.chat).unwrap();
+    let atts = svc.chat_attachments(w.wid, w.chat).unwrap();
     assert_eq!(atts[&a.id].attachment, shared);
     // The sharer deletes it; a tombstone stays and the id can't come back.
     svc.delete_attachment(w.chat, w.wid, a.id).unwrap();
-    assert!(svc.chat_attachments(w.chat).unwrap()[&a.id].deleted);
+    assert!(svc.chat_attachments(w.wid, w.chat).unwrap()[&a.id].deleted);
     assert!(svc.share_attachment(w.chat, w.wid, shared).is_err());
 }
 
