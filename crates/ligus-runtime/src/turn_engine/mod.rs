@@ -842,7 +842,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                     // Finalize failed: the reply never stays a live placeholder.
                     // It keeps what the model wrote unless finalize completed it.
                     let mut s = locked(host);
-                    let streaming = s.load(chat_id).ok().flatten().is_some_and(|c| c.messages.iter().any(|m| m.id == mid && m.is_streaming));
+                    let streaming = s.load_in(workspace_id, chat_id).ok().flatten().is_some_and(|c| c.messages.iter().any(|m| m.id == mid && m.is_streaming));
                     if streaming {
                         let _ = s.complete_assistant_message(chat_id, workspace_id, mid, full.clone());
                     }

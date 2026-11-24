@@ -1028,8 +1028,18 @@ export function App() {
         actions={{
           newChat: startNewChat,
           openSettings: () => openSettings(),
-          selectChat: (id) => {
-            rememberChat(id);
+          selectChat: async (id, workspaceId) => {
+            // A chat of another workspace opens there: the same id in the
+            // active workspace is another chat.
+            if (workspaceId && activeWorkspaceId && workspaceId !== activeWorkspaceId) {
+              await setActiveWorkspace(workspaceId);
+              await qc.invalidateQueries({ queryKey: ["workspaces"] });
+              await qc.invalidateQueries({ queryKey: ["chats"] });
+              await qc.invalidateQueries({ queryKey: ["settings"] });
+              lastChatByWs.current.set(workspaceId, id);
+            } else {
+              rememberChat(id);
+            }
             setSelectedId(id);
             setView("workspace");
           },

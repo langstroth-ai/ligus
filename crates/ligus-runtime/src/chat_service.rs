@@ -557,6 +557,12 @@ impl ChatService {
         self.trusted_founder.as_deref()
     }
 
+    /// Tests only: the store, to ingest a peer's (or an attacker's) event.
+    #[cfg(test)]
+    pub(crate) fn store_mut(&mut self) -> &mut EventStore {
+        &mut self.store
+    }
+
     pub fn store(&self) -> &EventStore {
         &self.store
     }
@@ -1895,7 +1901,7 @@ impl ChatService {
     /// The workspace's owned runtimes.
     pub fn list_workspace_runtimes(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceRuntime>> {
         Ok(self
-            .load(workspace_config_session_id(workspace_id))?
+            .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_runtimes)
             .unwrap_or_default())
     }
@@ -1937,7 +1943,7 @@ impl ChatService {
     /// The workspace's registered hosts.
     pub fn list_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
         Ok(self
-            .load(workspace_config_session_id(workspace_id))?
+            .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_hosts)
             .unwrap_or_default())
     }
@@ -2019,7 +2025,7 @@ impl ChatService {
             // No config log yet: this device's facts (route stops) still apply.
             None => {
                 let mut flow = ligus_core::flow::FlowState::default();
-                self.overlay_facts_on(config_id, &mut flow);
+                self.overlay_facts_on(workspace_id, config_id, &mut flow);
                 flow
             }
         })
@@ -3112,7 +3118,12 @@ impl ChatService {
     /// everyone.
     pub fn trigger_people(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
         let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
-        Ok(self.trigger_chain(ws, session_id, message_id, false)?.map(|c| c.people))
+        self.trigger_people_in(ws, session_id, message_id)
+    }
+
+    /// [`Self::trigger_people`] on the chat (`workspace_id`, `session_id`).
+    pub fn trigger_people_in(&self, workspace_id: Uuid, session_id: Uuid, message_id: Uuid) -> Result<Option<Vec<String>>> {
+        Ok(self.trigger_chain(workspace_id, session_id, message_id, false)?.map(|c| c.people))
     }
 
     /// The people behind the tool and directive hand-off cards that wake
@@ -3123,9 +3134,15 @@ impl ChatService {
     /// pointing at someone else's message can't borrow that message's
     /// author. `None` when a signer can't be resolved (fail closed).
     pub fn handoff_card_people(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
-        let to = ligus_core::flow::agent_key(Some(agent_id));
         let Some(ws) = self.workspace_of(session_id)? else { return Ok(None) };
-        let envs = self.store.list_copies_in(ws, session_id)?;
+        self.handoff_card_people_in(ws, session_id, trigger, agent_id)
+    }
+
+    /// [`Self::handoff_card_people`] on the chat (`workspace_id`,
+    /// `session_id`).
+    pub fn handoff_card_people_in(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<Option<Vec<String>>> {
+        let to = ligus_core::flow::agent_key(Some(agent_id));
+        let envs = self.store.list_copies_in(workspace_id, session_id)?;
         let mut cx = RoleCx::default();
         let mut out: Vec<String> = Vec::new();
         for env in &envs {
@@ -3473,8 +3490,15 @@ impl ChatService {
     }
 
     /// [`Self::load_in`] the workspace [`Self::workspace_of`] names (none:
-    /// `None`). A reader that knows the workspace calls `load_in`.
-    pub fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
+    /// `None`), for a reader outside this crate that truly has only a chat
+    /// id (a command naming a chat of the window's workspace). A reader that
+    /// knows the workspace calls `load_in`; the name says what this does.
+    pub fn load_resolving(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
+        self.load(session_id)
+    }
+
+    /// [`Self::load_resolving`], inside this crate.
+    pub(crate) fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
         let Some(workspace_id) = self.workspace_of(session_id)? else {
             return Ok(None);
         };
@@ -7022,6 +7046,96 @@ mod workspace_log_tests {
             z.store.ingest(&reply_env).unwrap();
             assert_eq!(bodies(&z.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string(), "reply after".to_string()]));
         }
+    }
+
+    /// A copy of every genuine event id that another workspace planted
+    /// first never hides the genuine arrivals: each is stored in its own
+    /// log, reported to the change feed and to dispatch, folded, and the
+    /// device writes on from the genuine head.
+    #[test]
+    fn planted_event_ids_never_hide_the_genuine_arrivals() {
+        let (owner, a, chat, genuine) = genuine_chat();
+        let w2 = Uuid::new_v4();
+        let planted: Vec<SessionEventEnvelope> = genuine
+            .iter()
+            .map(|g| forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, g.actor_stamp.as_ref().and_then(|s| s.log_head)))
+            .collect();
+        let mut x = service();
+        for p in &planted {
+            x.store.ingest(p).unwrap();
+        }
+        let before = x.store().max_row_id().unwrap();
+        for g in &genuine {
+            assert!(x.store.ingest(g).unwrap(), "the genuine copy is new here");
+        }
+        assert!(x.store().logs_changed_after(before).unwrap().contains(&(a, chat)), "reported to the change feed");
+        let genuine_msg = genuine
+            .iter()
+            .find_map(|e| match &e.payload {
+                SessionEvent::MessageAppended { message } if e.session_id == chat => Some(message.id),
+                _ => None,
+            })
+            .unwrap();
+        assert!(x.store().messages_after(before).unwrap().iter().any(|(w, s, m, _)| (*w, *s, *m) == (a, chat, genuine_msg)), "handed to dispatch");
+        let in_log = genuine.iter().filter(|e| e.session_id == chat).count();
+        assert_eq!(x.store().list_in(a, chat).unwrap().len(), in_log);
+        assert_eq!(bodies(&x.load_in(a, chat).unwrap()), Some(vec!["genuine".to_string()]));
+        assert!(x.load_in(a, workspace_config_session_id(a)).unwrap().is_some(), "A's config log folds too");
+        assert_eq!(x.store().lamport_head(a, chat).unwrap(), owner.store().lamport_head(a, chat).unwrap());
+    }
+
+    /// A device's own chain stays one line after its store is pulled again
+    /// from a relay where another workspace planted copies of its event ids
+    /// first: its next event links to its own newest event.
+    #[test]
+    fn a_devices_own_chain_stays_linear_after_a_re_pull_with_planted_ids() {
+        let (seed, account) = (SigningKeypair::generate().unwrap().seed_bytes(), SigningKeypair::generate().unwrap().seed_bytes());
+        let open = || {
+            ChatService::new(
+                EventStore::open_in_memory().unwrap(),
+                SigningKeypair::from_seed(&seed).unwrap(),
+                SigningKeypair::from_seed(&account).unwrap(),
+                ActorIdentity::new("u", "U", ligus_core::ActorKind::Human),
+            )
+        };
+        let mut first = open();
+        let a = Uuid::new_v4();
+        let chat = first.create_chat("c", a, "anthropic").unwrap().id;
+        first.post_user_message(chat, a, "one").unwrap();
+        first.post_user_message(chat, a, "two").unwrap();
+        let (_, mine) = first.store().envelopes_after_row(0).unwrap();
+        let me = first.device_id();
+        let newest = first.store().last_signed_by(a, chat, me, u64::MAX).unwrap().unwrap();
+        let w2 = Uuid::new_v4();
+        let mut again = open();
+        for g in &mine {
+            again.store.ingest(&forged(g.session_id, w2, message("planted"), g.event_id, g.lamport, None)).unwrap();
+        }
+        for g in &mine {
+            again.store.ingest(g).unwrap();
+        }
+        assert_eq!(again.store().last_signed_by(a, chat, me, u64::MAX).unwrap(), Some(newest));
+        let three = again.post_user_message(chat, a, "three").unwrap();
+        let log = again.store().list_in(a, chat).unwrap();
+        let env = log.iter().find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == three.id)).unwrap();
+        assert_eq!(env.actor_stamp.as_ref().and_then(|s| s.prev), Some(newest), "links to its own newest event");
+        let ours: Vec<_> = log.iter().filter(|e| e.signer_device_id == Some(me)).collect();
+        let named: std::collections::BTreeSet<Uuid> = ours.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
+        assert_eq!(ours.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "one chain head");
+    }
+
+    /// This device's measurement facts are per log: another workspace's
+    /// facts under the chat's id never overlay the chat.
+    #[test]
+    fn another_workspaces_facts_never_overlay_a_chat() {
+        let (mut owner, a, chat, _) = genuine_chat();
+        let w2 = Uuid::new_v4();
+        let wait = |reference: &str| ligus_core::flow::FlowRecord::EdgeWait(ligus_core::flow::EdgeWait { edge: "gate".into(), reference: reference.into(), wait_ms: 5, host_id: String::new(), at_ms: 1 });
+        owner.record_flow(chat, w2, wait("from-w2")).unwrap();
+        assert!(owner.load_in(a, chat).unwrap().unwrap().flow.waits.is_empty(), "W2's fact stays off A's chat");
+        owner.record_flow(chat, a, wait("from-a")).unwrap();
+        let waits: Vec<String> = owner.load_in(a, chat).unwrap().unwrap().flow.waits.iter().map(|w| w.reference.clone()).collect();
+        assert_eq!(waits, vec!["from-a".to_string()]);
     }
 
     /// What a device folds for one workspace's log.

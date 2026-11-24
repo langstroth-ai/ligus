@@ -629,7 +629,7 @@ fn as_viewer(s: &Shared, mut ev: super::hub::SseEvent, viewer: &str) -> super::h
     let ids = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
     let Some(dto) = ev.data.get_mut("proposal") else { return ev };
     let (Some(chat_id), Some(pid)) = (ids(dto, "chatId"), ids(dto, "id")) else { return ev };
-    let chat = s.lock().load(chat_id).ok().flatten().filter(|c| c.workspace_id == s.ws);
+    let chat = s.lock().load_resolving(chat_id).ok().flatten().filter(|c| c.workspace_id == s.ws);
     match chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == pid).map(|p| (c, p))) {
         Some((c, p)) => viewer_fields(dto, c, p, viewer),
         // Gone since: claim nothing rather than the box's standing.
@@ -977,7 +977,7 @@ async fn create_chat(State(s): S, body: Bytes) -> ApiResult<Json<Value>> {
         if let Some(ch) = svc.list_channels(s.ws)?.into_iter().find(|c| !c.archived) {
             svc.set_chat_channel(session.id, s.ws, ch.id)?;
         }
-        svc.load(session.id)?.unwrap_or(session)
+        svc.load_in(s.ws, session.id)?.unwrap_or(session)
     };
     s.after_write();
     Ok(Json(json!({ "chat": chat_dto(&chat, 0) })))
@@ -1092,7 +1092,7 @@ async fn post_message(State(s): S, Path(id): Path<String>, Json(req): Json<NewMe
 impl Shared {
     /// The phone has seen its own message.
     fn mark_read_after_post(&self, chat: Uuid, message: Uuid) {
-        let loaded = self.lock().load(chat);
+        let loaded = self.lock().load_resolving(chat);
         if let Ok(Some(s)) = loaded {
             self.mark_read(&s, message);
         }
@@ -1107,7 +1107,7 @@ pub(super) fn hosts_and_agents(s: &Shared) -> ApiResult<(Vec<ligus_core::Workspa
     let svc = s.lock();
     let hosts = svc.list_hosts(s.ws)?;
     let config_id = ligus_core::workspace_config_session_id(s.ws);
-    let config = svc.load(config_id)?.unwrap_or_else(|| {
+    let config = svc.load_resolving(config_id)?.unwrap_or_else(|| {
         let mut empty = ChatSession::new("", s.ws, "");
         empty.id = config_id;
         empty
@@ -1353,7 +1353,7 @@ async fn set_agent_host(
         let mut svc = s.lock();
         svc.set_agent_host(s.ws, agent_id, &host_id)?;
         let config = svc
-            .load(ligus_core::workspace_config_session_id(s.ws))?
+            .load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))?
             .ok_or_else(|| ApiError::not_found("workspace config"))?;
         drop(svc);
         let agent = config.workspace_agents.iter().find(|a| a.id == agent_id).ok_or_else(|| ApiError::not_found("agent"))?;
@@ -1577,7 +1577,7 @@ impl Shared {
         let mut wrote = false;
         let mut svc = self.lock();
         for (chat_id, new_id) in created {
-            let Ok(Some(chat)) = svc.load(*chat_id) else { continue };
+            let Ok(Some(chat)) = svc.load_resolving(*chat_id) else { continue };
             let Some(child) = chat.proposals.iter().find(|p| p.id == *new_id) else { continue };
             let parent_id = pending
                 .iter()

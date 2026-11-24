@@ -761,7 +761,7 @@ fn account_for(svc: &ChatService, ws: Uuid, workspace_name: String) -> EnrollAcc
     let me = svc.author();
     let mine = ligus_proto::names::clean_display_name(&me.display_name);
     let members = svc
-        .load(ligus_core::workspace_config_session_id(ws))
+        .load_in(ws, ligus_core::workspace_config_session_id(ws))
         .ok()
         .flatten()
         .map(|c| c.members)

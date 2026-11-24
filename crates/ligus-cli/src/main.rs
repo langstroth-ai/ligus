@@ -569,7 +569,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
     let (mut copy, mut member, mut standing, mut admission) = (false, false, None::<String>, false);
     if let (Some(_), true) = (&stored, db.is_file()) {
         if let Ok(svc) = open_service(cfg) {
-            if let Ok(Some(c)) = svc.load(workspace_config_session_id(ws)) {
+            if let Ok(Some(c)) = svc.load_in(ws, workspace_config_session_id(ws)) {
                 copy = true;
                 member = c.members.iter().any(|m| m.id == svc.author().id);
             }
@@ -707,7 +707,7 @@ fn cmd_chats(cfg: &Config, json: bool) -> Result<()> {
         if id == config_id {
             continue;
         }
-        if let Some(s) = svc.load(id)? {
+        if let Some(s) = svc.load_resolving(id)? {
             // Skip config logs of other workspaces too (empty-title, has channels).
             if id == workspace_config_session_id(s.workspace_id) {
                 continue;
@@ -740,7 +740,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
         if id == workspace_config_session_id(ws) {
             continue;
         }
-        let Some(s) = svc.load(id)? else { continue };
+        let Some(s) = svc.load_in(ws, id)? else { continue };
         if s.workspace_id != ws || id == workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -776,7 +776,7 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
 }
 
 fn print_transcript(svc: &ChatService, chat_id: Uuid, from: usize) -> Result<usize> {
-    let Some(s) = svc.load(chat_id)? else {
+    let Some(s) = svc.load_resolving(chat_id)? else {
         return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     for m in s.messages.iter().skip(from).filter(|m| !m.superseded) {
@@ -808,7 +808,7 @@ fn cmd_tail(cfg: &Config, chat_id: Uuid, watch: bool) -> Result<()> {
 /// they posted, and exits 0; after `wait` without an answer it exits 7.
 async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool, wait: Option<Duration>) -> Result<()> {
     let mut svc = open_service(cfg)?;
-    let Some(session) = svc.load(chat_id)? else {
+    let Some(session) = svc.load_resolving(chat_id)? else {
         return Err(problem::not_found(format!("unknown chat {chat_id} (ligus chats lists them)")));
     };
     svc.post_user_message(chat_id, session.workspace_id, body)?;
@@ -821,12 +821,12 @@ async fn cmd_send(cfg: &Config, chat_id: Uuid, body: String, push: bool, wait: O
         return Ok(());
     };
     // Ours is the last message now; an answer is any later one by another author.
-    let posted = svc.load(chat_id)?.map(|s| s.messages.clone()).unwrap_or_default();
+    let posted = svc.load_resolving(chat_id)?.map(|s| s.messages.clone()).unwrap_or_default();
     let (seen, me) = (posted.len(), posted.last().map(|m| m.author.clone()).unwrap_or_default());
     drop(svc);
     let deadline = std::time::Instant::now() + wait;
     loop {
-        if let Some(s) = open_service(cfg)?.load(chat_id)? {
+        if let Some(s) = open_service(cfg)?.load_resolving(chat_id)? {
             let answers: Vec<_> = s.messages.iter().skip(seen).filter(|m| !m.superseded && m.author != me).collect();
             if !answers.is_empty() {
                 for m in answers {
@@ -862,7 +862,7 @@ async fn cmd_sync(cfg: &Config, watch: bool) -> Result<()> {
 fn cmd_new(cfg: &Config, title: String) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
-    let founded = svc.load(ligus_core::workspace_config_session_id(ws))?.is_none();
+    let founded = svc.load_in(ws, ligus_core::workspace_config_session_id(ws))?.is_none();
     let session = svc.create_chat(title, ws, "")?;
     println!("{}", session.id);
     // Phase A: the CLI can found a workspace (rules v2 from its seed) but has
@@ -1255,7 +1255,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     {
         let svc = open_service(cfg)?;
         for id in svc.store().list_session_ids()? {
-            if let Some(s) = svc.load(id)? {
+            if let Some(s) = svc.load_resolving(id)? {
                 seen.extend(s.messages.iter().map(|m| m.id));
             }
         }
@@ -1275,7 +1275,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
         }
         let mut svc = open_service(cfg)?;
         for id in svc.store().list_session_ids()? {
-            let Some(s) = svc.load(id)? else { continue };
+            let Some(s) = svc.load_resolving(id)? else { continue };
             if id == workspace_config_session_id(s.workspace_id) {
                 continue; // the config log isn't a chat
             }
@@ -1303,7 +1303,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // room it answers only the operator unless they opened it
                 // (LIGUS_AGENT_OPEN_TO_MEMBERS=1). Refused: left for others.
                 let open = ligus_core::names::var("LIGUS_AGENT_OPEN_TO_MEMBERS").is_ok_and(|v| v == "1");
-                if !svc.primary_turn_access(s.id, last.id, open).map(|d| d.allowed()).unwrap_or(false) {
+                if !svc.primary_turn_access(s.workspace_id, s.id, last.id, open).map(|d| d.allowed()).unwrap_or(false) {
                     println!("↳ @{name}: not answering {} (another member's message; set LIGUS_AGENT_OPEN_TO_MEMBERS=1 to answer everyone)", last.id);
                     continue;
                 }
@@ -1462,7 +1462,7 @@ fn cmd_add_agent(
 fn cmd_agents(cfg: &Config, json: bool) -> Result<()> {
     let svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
-    let agents = svc.load(workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
+    let agents = svc.load_in(ws, workspace_config_session_id(ws))?.map(|s| s.workspace_agents).unwrap_or_default();
     if json {
         let rows: Vec<serde_json::Value> = agents
             .iter()
@@ -1530,7 +1530,7 @@ pub(crate) fn with_gateways(mut h: WorkspaceHost) -> WorkspaceHost {
 fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
     let mut svc = open_service(cfg)?;
     // Never seed a config log by registering: sync the workspace first.
-    if svc.load(workspace_config_session_id(uuid_of_room(&cfg.room)))?.is_none() {
+    if svc.load_resolving(workspace_config_session_id(uuid_of_room(&cfg.room)))?.is_none() {
         bail!("this box has no copy of workspace '{}' yet: run `ligus sync` first", cfg.room);
     }
     let id = svc.device_id().to_string();
@@ -1543,7 +1543,7 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str, dry_run: bo
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let agents = svc
-        .load(workspace_config_session_id(ws))?
+        .load_in(ws, workspace_config_session_id(ws))?
         .map(|s| s.workspace_agents)
         .unwrap_or_default();
     let agent = agents
@@ -1742,7 +1742,7 @@ fn cmd_queue(cfg: &Config) -> Result<()> {
     let now = Timestamp::now();
     let mut any = false;
     for id in svc.store().list_session_ids()? {
-        let Some(s) = svc.load(id)? else { continue };
+        let Some(s) = svc.load_in(ws, id)? else { continue };
         if id == workspace_config_session_id(s.workspace_id) {
             continue;
         }
@@ -3087,7 +3087,7 @@ mod cli_tests {
         assert!(format!("{e:#}").contains("no runtime 'no-such-runtime'"), "{e:#}");
         let svc = open_service(&cfg).unwrap();
         let ws = uuid_of_room(&cfg.room);
-        let agents = svc.load(workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
+        let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
         assert!(agents.is_empty(), "a dry run created an agent");
     }
 

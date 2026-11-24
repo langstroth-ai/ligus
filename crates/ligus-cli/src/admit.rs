@@ -160,7 +160,7 @@ pub fn admission_from_file(path: Option<String>) -> Result<Option<String>> {
 /// Whether this box is already a member of `ws` in its local copy.
 fn is_member(svc: &ChatService, ws: Uuid) -> Result<bool> {
     let me = svc.author().id.clone();
-    Ok(svc.load(workspace_config_session_id(ws))?.is_some_and(|c| c.members.iter().any(|m| m.id == me)))
+    Ok(svc.load_in(ws, workspace_config_session_id(ws))?.is_some_and(|c| c.members.iter().any(|m| m.id == me)))
 }
 
 /// The start-up shared by `ligus serve` and `ligus worker` (Phase B):
@@ -204,7 +204,7 @@ where
     }
     let synced = sync(cfg.clone()).await;
     let svc = crate::open_service(cfg)?;
-    if svc.load(workspace_config_session_id(ws))?.is_none() {
+    if svc.load_in(ws, workspace_config_session_id(ws))?.is_none() {
         let why = match &synced {
             Err(e) => format!("the first sync failed ({e})"),
             Ok(_) => "the relay has no copy of it".to_string(),

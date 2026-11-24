@@ -129,7 +129,7 @@ fn authoring_and_relay_ingest_of_one_chat_never_collide() {
     for env in &ingested {
         assert!(ids.contains(&env.event_id), "{} lost", env.event_id);
     }
-    let bodies: Vec<String> = svc.load(sid).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
+    let bodies: Vec<String> = svc.load_resolving(sid).unwrap().unwrap().messages.into_iter().map(|m| m.body).collect();
     for w in 0..2 {
         for i in 0..n {
             let body = format!("local {w} {i}");

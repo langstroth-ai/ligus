@@ -74,11 +74,13 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
     let founder = svc.trusted_founder().map(str::to_string);
     let config = workspace_config_session_id(workspace_id);
     let mut out = Vec::new();
-    for id in svc.store().list_session_ids()? {
+    // This workspace's chats, each read as (workspace, chat): another
+    // workspace's log under one of these ids is never judged here.
+    for id in svc.store().sessions_of_workspace(workspace_id)? {
         if id == config {
             continue;
         }
-        let Ok(Some(s)) = svc.load(id) else { continue };
+        let Ok(Some(s)) = svc.load_in(workspace_id, id) else { continue };
         if s.workspace_id != workspace_id {
             continue;
         }
@@ -109,7 +111,9 @@ pub fn pending(svc: &ChatService, workspace_id: Uuid) -> Result<Vec<ApplyJob>> {
 /// or another host's chat branch.
 pub fn checkout_for(svc: &ChatService, job: &ApplyJob, legacy: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
     let Some(repo) = job.proposal.repo_id else { return legacy };
-    let session = svc.load(job.chat_id).ok().flatten()?;
+    // The job's own chat (workspace, chat), never another workspace's log
+    // under its id: this is the gate before code is applied.
+    let session = svc.load_in(job.workspace_id, job.chat_id).ok().flatten()?;
     if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
         return None;
     }
@@ -275,7 +279,7 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
     // A held vote or decision on it: no side effect until it is decided.
     {
         let s = pinned(svc, job);
-        let Some(session) = s.load(job.chat_id)? else { return Ok(Outcome::Waiting) };
+        let Some(session) = s.load_in(job.workspace_id, job.chat_id)? else { return Ok(Outcome::Waiting) };
         if session.authz.blocks(job.proposal.id, job.proposal.set_id) {
             return Ok(Outcome::Waiting);
         }
@@ -461,6 +465,52 @@ mod tests {
         // Another host on this machine took the checkout over.
         crate::repos::marker::take_over(&path, Uuid::new_v4(), "box").unwrap();
         assert_eq!(checkout_for(&lock(&svc), &job, None), None, "managed elsewhere");
+    }
+
+    /// Another workspace's chat under the same id (anyone who knows it can
+    /// stamp one), with this service's context set to that workspace: the
+    /// host still lists, judges and applies the request of the job's own
+    /// chat, and a phone's action in it is drafted against that chat.
+    #[test]
+    fn another_workspaces_chat_under_the_id_never_steers_the_apply_gate() {
+        let (svc, chat, wid, job, tmp) = setup();
+        let w2 = Uuid::new_v4();
+        {
+            let mut s = lock(&svc);
+            let mut forged = ligus_core::ChatSession::new("evil", w2, "anthropic");
+            forged.id = chat;
+            let mut env = ligus_core::SessionEventEnvelope::new(chat, w2, 1, ligus_core::SessionEvent::SessionSnapshot { session: Box::new(forged) });
+            env.event_id = Uuid::nil();
+            env.lamport = 1;
+            env.actor_stamp = Some(ligus_core::ActorStamp {
+                actor: ActorIdentity::new("evil", "Evil", ActorKind::Human),
+                recorded_at: Timestamp::now(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
+            ligus_core::sign_envelope(&mut env, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+            s.store_mut().ingest(&env).unwrap();
+            s.set_context_workspace(Some(w2));
+            assert!(s.load_resolving(chat).unwrap().is_none_or(|c| c.workspace_id == w2), "the context reads W2's chat");
+            let jobs = pending(&s, wid).unwrap();
+            assert_eq!(jobs.len(), 1, "A's request is still listed");
+            assert_eq!(jobs[0].request.id, job.request.id);
+            assert_eq!(checkout_for(&s, &job, Some(tmp.path().join("legacy"))), Some(tmp.path().join("legacy")));
+            // A phone of this person drafts a post in A's chat.
+            let phone = ligus_core::testkit::Phone::new();
+            let phone_id = phone.device_id;
+            s.certify_phone(wid, phone_id, &phone.public_key()).unwrap();
+            let (draft, _) = s.draft_phone_action(wid, phone_id, &ligus_core::phone_action::PhoneAction::Post { chat_id: chat, text: "from the phone".into() }).unwrap();
+            assert_eq!((draft.env.workspace_id, draft.env.session_id), (wid, chat));
+        }
+        let repo = tmp.path().join("repo");
+        let r = fulfil(&svc, &job, Some(&repo)).unwrap();
+        assert!(matches!(r, Outcome::Applied { commit: Some(_) }), "{r:?}");
+        assert_eq!(lock(&svc).load_in(wid, chat).unwrap().unwrap().proposals[0].status, ProposalStatus::Applied);
     }
 
     #[test]

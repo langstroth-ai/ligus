@@ -460,7 +460,7 @@ async fn prepare_stage(
     // classify the stage before deciding how to post its prompt.
     let before = {
         let svc = state.service.lock().unwrap();
-        svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?
+        svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?
     };
     let outputs = collect_outputs(run, &before);
     let rendered = wf::render_template(prompt_template, &run.input, &outputs);
@@ -513,7 +513,7 @@ async fn prepare_stage(
     };
     let session = {
         let svc = state.service.lock().unwrap();
-        svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?
+        svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?
     };
     let agent = resolve_stage_agent(&session, agent_id, &node.name)?;
     let responder = responder_for(state, &session, agent.as_ref());
@@ -607,7 +607,7 @@ async fn await_remote_stage(
         }
         let messages = {
             let svc = state.service.lock().unwrap();
-            svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?.messages
+            svc.load_resolving(session_id).map_err(map_err)?.ok_or("unknown session")?.messages
         };
         if let Some((message_id, body)) =
             match_stage_reply(&messages, prompt_message_id, agent_author)
@@ -624,10 +624,9 @@ async fn await_remote_stage(
                     .service
                     .lock()
                     .unwrap()
-                    .load(session_id)
+                    .workspace_of(session_id)
                     .map_err(map_err)?
-                    .ok_or("unknown session")?
-                    .workspace_id;
+                    .ok_or("unknown session")?;
                 return crate::run_turn_answering(app, state, session_id, workspace_id, &responder, Some(prompt_message_id)).await;
             }
         }
@@ -682,7 +681,7 @@ fn load_run(
     run_id: Uuid,
 ) -> Result<(wf::WorkflowRun, ChatSession), String> {
     let svc = state.service.lock().unwrap();
-    let session = svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?;
+    let session = svc.load_resolving(session_id).map_err(map_err)?.ok_or("unknown session")?;
     let run = session
         .workflow_runs
         .iter()
@@ -789,7 +788,7 @@ fn close_orphaned_gates(
     }
     {
         let mut svc = state.service.lock().unwrap();
-        let session = svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_in(workspace_id, session_id).map_err(map_err)?.ok_or("unknown session")?;
         for pid in &orphans {
             if let Some(p) = session.proposals.iter().find(|p| p.id == *pid) {
                 if p.status == ProposalStatus::Open {
@@ -952,7 +951,7 @@ pub(crate) fn list_workflows_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
     Ok(svc
-        .load(sid)
+        .load_resolving(sid)
         .map_err(map_err)?
         .map(|s| s.workflow_definitions.iter().map(definition_dto).collect())
         .unwrap_or_default())
@@ -1016,7 +1015,7 @@ pub(crate) fn workflow_change_request_sync(
         return Err("say what should change".into());
     }
     let svc = state.service.lock().unwrap();
-    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
     let def = session.workflow_definitions.iter().find(|d| d.id == wfid).ok_or("unknown workflow")?;
     Ok(change_request_message(&session, def, request))
 }
@@ -1045,7 +1044,7 @@ pub(crate) fn list_workflow_runs_sync(
     let live = state.run_wakers.lock().unwrap();
     let svc = state.service.lock().unwrap();
     Ok(svc
-        .load(sid)
+        .load_resolving(sid)
         .map_err(map_err)?
         // Newest first for the runs list.
         .map(|s| {
@@ -1080,7 +1079,7 @@ pub(crate) fn start_workflow_run_sync(
 
     let (def, session) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_in(workspace_id, sid).map_err(map_err)?.ok_or("unknown session")?;
         let def = session
             .workflow_definitions
             .iter()

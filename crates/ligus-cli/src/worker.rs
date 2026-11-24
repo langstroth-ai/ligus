@@ -342,7 +342,7 @@ pub async fn drain_tick(
         // Liveness is published to the relay's presence channel by the caller
         // (`ligus serve`'s presence loop, `ligus worker`'s loop), not the log.
         let hosted: HashSet<Uuid> = svc
-            .load(workspace_config_session_id(ctx.ws))?
+            .load_in(ctx.ws, workspace_config_session_id(ctx.ws))?
             .map(|s| s.workspace_agents)
             .unwrap_or_default()
             .into_iter()
@@ -393,7 +393,7 @@ pub async fn drain_tick(
         let mut work = Vec::new();
         let mut refused = false;
         for pm in candidates {
-            let Some(s) = svc.load(pm.session_id)? else { continue };
+            let Some(s) = svc.load_in(ctx.ws, pm.session_id)? else { continue };
             // Agent access controls: this host runs the agent on its own
             // credentials, so who may use it (and its daily budgets) is
             // decided here, before claiming. A refused turn is answered with
@@ -496,7 +496,7 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
     let me = svc.device_id();
     let mut out = Vec::new();
     for id in svc.store().list_session_ids()? {
-        let s = match svc.load(id) {
+        let s = match svc.load_resolving(id) {
             Ok(Some(s)) => s,
             Ok(None) => continue,
             Err(e) => {

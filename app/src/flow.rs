@@ -159,7 +159,7 @@ pub(crate) fn view_with(svc: &ChatService, workspace_id: Uuid) -> WorkspaceView 
         if id == config_id {
             continue;
         }
-        if let Ok(Some(s)) = svc.load(id) {
+        if let Ok(Some(s)) = svc.load_in(workspace_id, id) {
             if s.workspace_id == workspace_id {
                 sessions.push(s);
             }
@@ -268,7 +268,7 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: 
         if !session.participant_agent_ids.is_empty() && !session.participant_agent_ids.contains(&a.id) {
             continue;
         }
-        if !host_live(&a.host_id) || !svc.agent_usable_for(session.id, trigger, a.id) {
+        if !host_live(&a.host_id) || !svc.agent_usable_for(session.workspace_id, session.id, trigger, a.id) {
             continue;
         }
         // An agent whose host says it has no checkout of this chat's repo
@@ -423,7 +423,7 @@ pub(crate) fn routed_target(
 pub(crate) fn record_route_if_missing(state: &AppState, session_id: Uuid, trigger_id: Uuid) {
     let decision = {
         let svc = state.service.lock().unwrap();
-        let Ok(Some(session)) = svc.load(session_id) else { return };
+        let Ok(Some(session)) = svc.load_resolving(session_id) else { return };
         if session.flow.route_decisions.contains_key(&trigger_id) {
             return;
         }
@@ -1178,7 +1178,7 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
         }
     }
     let Some(message_id) = facts.message_id else { return };
-    let session = match state.service.lock().unwrap().load(session_id) {
+    let session = match state.service.lock().unwrap().load_in(workspace_id, session_id) {
         Ok(Some(s)) => s,
         _ => return,
     };
@@ -1380,7 +1380,7 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
         return None;
     }
     let svc = state.service.lock().unwrap();
-    let session = svc.load(session_id).ok().flatten()?;
+    let session = svc.load_resolving(session_id).ok().flatten()?;
     if session.turn_claims.contains_key(&prompt_id) {
         return None;
     }
@@ -1428,15 +1428,15 @@ pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uu
 pub(crate) fn record_stage_wait(state: &AppState, session_id: Uuid, prompt_id: Uuid, reply_id: Uuid, host_id: &str, run_node: String) {
     let wait = {
         let svc = state.service.lock().unwrap();
-        let Ok(Some(s)) = svc.load(session_id) else { return };
+        let Ok(Some(s)) = svc.load_resolving(session_id) else { return };
         let at = |id: Uuid| s.messages.iter().find(|m| m.id == id).map(|m| flow::ms(&m.created_at));
         match (at(prompt_id), at(reply_id)) {
             (Some(a), Some(b)) => (b - a).max(0),
             _ => return,
         }
     };
-    let wid = match state.service.lock().unwrap().load(session_id) {
-        Ok(Some(s)) => s.workspace_id,
+    let wid = match state.service.lock().unwrap().workspace_of(session_id) {
+        Ok(Some(w)) => w,
         _ => return,
     };
     record(
@@ -1564,7 +1564,7 @@ pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace
         // A change under a workspace guard's human gate (dearth brood paths, a
         // lockdown) keeps the strictest bar: a low-bar zone can't lower it.
         let protected = svc
-            .load(session_id)
+            .load_in(workspace_id, session_id)
             .ok()
             .flatten()
             .is_some_and(|s| ligus_core::guard::guards_protect(&s, &proposal.changed_files));
@@ -1620,7 +1620,7 @@ pub(crate) fn diff_touches(diff: &str) -> Vec<(String, &'static str)> {
 /// and clear the producer's own claims and locks on those files.
 pub(crate) fn after_apply(state: &AppState, session_id: Uuid, workspace_id: Uuid, proposal: &ligus_core::ActionProposal, repo_root: &str) {
     let Some(diff) = proposal.diff.as_deref() else { return };
-    let session = match state.service.lock().unwrap().load(session_id) {
+    let session = match state.service.lock().unwrap().load_in(workspace_id, session_id) {
         Ok(Some(s)) => s,
         _ => return,
     };
@@ -2010,7 +2010,7 @@ pub(crate) async fn flow_handoffs(ligus_app: tauri::AppHandle, session_id: Strin
 pub(crate) fn flow_handoffs_sync(state: State<'_, AppState>, session_id: String) -> Result<Vec<HandoffCardView>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
-    Ok(svc.load(sid).map_err(map_err)?.map(|s| handoff_views(&s.flow)).unwrap_or_default())
+    Ok(svc.load_resolving(sid).map_err(map_err)?.map(|s| handoff_views(&s.flow)).unwrap_or_default())
 }
 
 

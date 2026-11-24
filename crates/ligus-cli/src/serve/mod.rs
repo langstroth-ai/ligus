@@ -367,7 +367,7 @@ pub fn ligus_snapshot(
 ) -> Result<dashboard_ligus::LigusSnapshot> {
     let chats = chats_of(svc, ws)?;
     let config_id = workspace_config_session_id(ws);
-    let config = svc.load(config_id)?.unwrap_or_else(|| {
+    let config = svc.load_in(ws, config_id)?.unwrap_or_else(|| {
         let mut empty = ChatSession::new("", ws, "");
         empty.id = config_id;
         empty
@@ -1626,7 +1626,7 @@ impl WorkspaceLease {
         let now_ms = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
         let (me, lease) = {
             let svc = shared.lock();
-            (svc.device_id(), svc.lease(config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
+            (svc.device_id(), svc.lease(ws, config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
         };
         // The holder's newest verified beat, from the presence channel.
         let last = match relay.list_presence(room).await {

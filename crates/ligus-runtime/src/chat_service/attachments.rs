@@ -23,8 +23,8 @@ impl ChatService {
     }
 
     /// The files shared in a chat (tombstones included).
-    pub fn chat_attachments(&self, session_id: Uuid) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
-        Ok(self.load(session_id)?.map(|s| s.attachments).unwrap_or_default())
+    pub fn chat_attachments(&self, workspace_id: Uuid, session_id: Uuid) -> Result<std::collections::BTreeMap<Uuid, SharedAttachment>> {
+        Ok(self.load_in(workspace_id, session_id)?.map(|s| s.attachments).unwrap_or_default())
     }
 
     /// Sign a share of an uploaded file in a chat.

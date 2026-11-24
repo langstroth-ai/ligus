@@ -192,6 +192,103 @@ fn enable_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// Whether `events` still makes an event id unique across every workspace
+/// (a database made before ids were unique per workspace): a unique index
+/// on `event_id` alone.
+fn needs_event_id_migration(conn: &Connection) -> Result<bool> {
+    Ok(conn
+        .prepare(
+            "SELECT 1 FROM pragma_index_list('events') AS il WHERE il.\"unique\" = 1 \
+             AND (SELECT group_concat(name) FROM pragma_index_info(il.name)) = 'event_id'",
+        )?
+        .exists([])?)
+}
+
+/// A copy of the whole database next to it before a migration rewrites a
+/// table (`<db>.bak-ws-event-ids-<time>-<pid>`); none for an in-memory or
+/// empty store.
+fn migration_backup(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
+    let Some(db) = conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from) else { return Ok(None) };
+    let rows: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
+    if rows == 0 {
+        return Ok(None);
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let mut name = db.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(format!(".bak-ws-event-ids-{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
+    let path = db.with_file_name(name);
+    conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
+    Ok(Some(path))
+}
+
+/// Rebuild `events` with event ids unique per workspace instead of across
+/// workspaces (inside the caller's write transaction). Every row, row id and
+/// place is kept, and the row-id counter never goes back (the push scan
+/// relies on row ids only growing). Then a copy that sits in
+/// `equivocations` only because another workspace's row held its id first
+/// takes its place in its own workspace's log (the first such copy per
+/// workspace and id, at the next place of its session); copies within one
+/// workspace stay where they are.
+fn migrate_event_ids_per_workspace(tx: &Connection) -> Result<()> {
+    let seq: Option<i64> = tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'events'", [], |r| r.get(0)).optional()?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE events_ws_ids (
+            row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id      TEXT NOT NULL,
+            session_id    TEXT NOT NULL,
+            workspace_id  TEXT NOT NULL,
+            sequence      INTEGER NOT NULL,
+            kind          TEXT NOT NULL,
+            scope         TEXT NOT NULL,
+            timestamp     TEXT NOT NULL,
+            envelope_json TEXT NOT NULL,
+            sealed_epoch  INTEGER,
+            UNIQUE (workspace_id, event_id),
+            UNIQUE (session_id, sequence)
+        );
+        INSERT INTO events_ws_ids (row_id, event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json, sealed_epoch)
+            SELECT row_id, event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json, sealed_epoch FROM events ORDER BY row_id;
+        DROP TABLE events;
+        ALTER TABLE events_ws_ids RENAME TO events;
+        "#,
+    )?;
+    let max: i64 = tx.query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |r| r.get(0))?;
+    let keep = seq.unwrap_or(0).max(max);
+    if tx.execute("UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'events'", [keep])? == 0 {
+        tx.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('events', ?1)", [keep])?;
+    }
+    // Copies kept aside only because another workspace held the id.
+    let stranded: Vec<(i64, String, String, String, String, String, Option<i64>)> = {
+        let mut stmt = tx.prepare(
+            "SELECT q.row_id, q.event_id, q.session_id, q.workspace_id, q.kind, q.envelope_json, q.sealed_epoch FROM equivocations q \
+             WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.workspace_id = q.workspace_id AND e.event_id = q.event_id) ORDER BY q.row_id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (row_id, event_id, session_id, workspace_id, kind, json, sealed_epoch) in stranded {
+        let taken: bool = tx
+            .prepare("SELECT 1 FROM events WHERE workspace_id = ?1 AND event_id = ?2")?
+            .exists([&workspace_id, &event_id])?;
+        if taken {
+            continue;
+        }
+        let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) else { continue };
+        let timestamp = serde_json::to_value(env.timestamp)?.as_str().unwrap_or_default().to_string();
+        let scope = serde_json::to_value(env.scope)?.as_str().unwrap_or_default().to_string();
+        let next: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?1", [&session_id], |r| r.get(0))?;
+        tx.execute(
+            "INSERT INTO events (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json, sealed_epoch) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![event_id, session_id, workspace_id, next, kind, scope, timestamp, json, sealed_epoch],
+        )?;
+        tx.execute("DELETE FROM equivocations WHERE row_id = ?1", [row_id])?;
+    }
+    tracing::info!(target: "event_store", "event ids are now unique per workspace");
+    Ok(())
+}
+
 /// A write transaction: `BEGIN IMMEDIATE`, so it takes the file's write lock
 /// up front, waiting for it (the busy timeout) while another connection
 /// writes. Every transaction here that writes uses it. A deferred one that
@@ -266,20 +363,37 @@ impl EventStore {
         // lost on an OS crash/power loss) and avoids an fsync per commit — a big
         // win for chat workloads. (#2)
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // A database made when event ids were unique across workspaces is
+        // copied aside first (`VACUUM INTO`, outside any transaction), then
+        // migrated under the write lock. A backup that turns out unneeded
+        // (another connection migrated first) is removed again.
+        let backup = if needs_event_id_migration(&conn)? { migration_backup(&conn)? } else { None };
         // The schema is checked and migrated under the write lock, so two
         // connections opening one file at once never both add a column.
         let tx = write_tx(&conn)?;
         Self::init_schema(&tx)?;
+        let migrated = needs_event_id_migration(&tx)?;
+        if migrated {
+            migrate_event_ids_per_workspace(&tx)?;
+            Self::init_schema(&tx)?;
+        }
         tx.commit()?;
+        if let Some(path) = backup.filter(|_| !migrated) {
+            let _ = std::fs::remove_file(path);
+        }
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
     }
 
     fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             r#"
+            -- An event id is unique within its workspace: another workspace's
+            -- row under the same id (anyone can stamp one) is another log's
+            -- and never takes the genuine row's place (see
+            -- `migrate_event_ids_per_workspace` for databases made before).
             CREATE TABLE IF NOT EXISTS events (
                 row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id      TEXT NOT NULL UNIQUE,
+                event_id      TEXT NOT NULL,
                 session_id    TEXT NOT NULL,
                 workspace_id  TEXT NOT NULL,
                 sequence      INTEGER NOT NULL,
@@ -287,8 +401,11 @@ impl EventStore {
                 scope         TEXT NOT NULL,
                 timestamp     TEXT NOT NULL,
                 envelope_json TEXT NOT NULL,
+                sealed_epoch  INTEGER,
+                UNIQUE (workspace_id, event_id),
                 UNIQUE (session_id, sequence)
             );
+            CREATE INDEX IF NOT EXISTS idx_events_event_id ON events (event_id);
             CREATE INDEX IF NOT EXISTS idx_events_session_seq
                 ON events (session_id, sequence);
             CREATE INDEX IF NOT EXISTS idx_events_workspace
@@ -964,22 +1081,6 @@ impl EventStore {
         )?)
     }
 
-    /// Sessions that gained a message after row `after` (see [`Self::max_row_id`]),
-    /// for answering what a sync pull brought in.
-    pub fn sessions_with_messages_after(&self, after: i64) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT session_id FROM events WHERE row_id > ?1 AND kind = 'messageAppended' ORDER BY session_id",
-        )?;
-        let rows = stmt.query_map([after], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for id in rows {
-            if let Ok(id) = Uuid::parse_str(&id?) {
-                out.push(id);
-            }
-        }
-        Ok(out)
-    }
-
     /// The messages appended after row `after`, as `(session, message, signing
     /// device)` in arrival order: what one sync pull brought in, message by
     /// message. A pull can carry several user turns for one chat (two posts a
@@ -1058,7 +1159,11 @@ impl EventStore {
     fn note_equivocation(&self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
         let stored: Option<String> = self
             .conn
-            .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
+            .query_row(
+                "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND event_id = ?2",
+                [env.workspace_id.to_string(), env.event_id.to_string()],
+                |r| r.get(0),
+            )
             .optional()?;
         let Some(stored) = stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok()) else { return Ok(()) };
         if !ligus_core::events::equivocates(&stored, env) {
@@ -1109,6 +1214,17 @@ impl EventStore {
         Ok(n == Some(1))
     }
 
+    /// Whether `workspace_id` holds an event under `event_id`. Ids are
+    /// unique per workspace: another workspace's row under the same id is
+    /// another log's.
+    pub fn has_event_in(&self, workspace_id: Uuid, event_id: Uuid) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT 1 FROM events WHERE workspace_id = ?1 AND event_id = ?2")?
+            .exists([workspace_id.to_string(), event_id.to_string()])?)
+    }
+
+    /// Whether any workspace holds an event under `event_id`.
     pub fn has_event(&self, event_id: Uuid) -> Result<bool> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM events WHERE event_id = ?1",
@@ -1167,7 +1283,10 @@ impl EventStore {
         // ingesting one event (the serve sync loop and a one-shot sync, say)
         // store it once, and the second sees it stored instead of failing.
         let tx = write_tx(&self.conn)?;
-        if self.has_event(env.event_id)? {
+        // Another copy under an id its own workspace holds is kept beside it
+        // (the fold decides); another workspace's row under the id is
+        // another log's and changes nothing here.
+        if self.has_event_in(env.workspace_id, env.event_id)? {
             self.note_equivocation(env, sealed_epoch)?;
             tx.commit()?;
             return Ok(false);
@@ -1664,9 +1783,9 @@ impl EventStore {
     }
 
     /// A session's facts, oldest first: (row, at_ms, kind, record_json).
-    pub fn session_facts(&self, session_id: Uuid) -> Result<Vec<(i64, i64, String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT row_id, at_ms, kind, record_json FROM facts WHERE session_id = ?1 ORDER BY row_id ASC")?;
-        let rows = stmt.query_map([session_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    pub fn session_facts(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Vec<(i64, i64, String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT row_id, at_ms, kind, record_json FROM facts WHERE session_id = ?1 AND workspace_id = ?2 ORDER BY row_id ASC")?;
+        let rows = stmt.query_map([session_id.to_string(), workspace_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -2427,15 +2546,18 @@ impl EventStore {
         // stored meanwhile through another connection is either seen here
         // (and kept as a witness if pruned) or comes after.
         let tx = write_tx(&self.conn)?;
-        let mut completed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // A completion counts for its own log's chunks only: another
+        // workspace's completion under the same message id prunes nothing.
+        let mut completed: std::collections::HashSet<(String, String, String)> = std::collections::HashSet::new();
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT envelope_json FROM events WHERE kind = 'messageCompleted' ORDER BY row_id")?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            for j in rows {
-                if let Some(id) = message_id_of(&j?) {
-                    completed.insert(id);
+                .prepare("SELECT workspace_id, session_id, envelope_json FROM events WHERE kind = 'messageCompleted' ORDER BY row_id")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+            for row in rows {
+                let (ws, sid, j) = row?;
+                if let Some(id) = message_id_of(&j) {
+                    completed.insert((ws, sid, id));
                 }
             }
         }
@@ -2443,28 +2565,28 @@ impl EventStore {
             return Ok(0);
         }
 
-        let mut doomed: Vec<String> = Vec::new(); // event_ids
+        let mut doomed: Vec<(String, String)> = Vec::new(); // (workspace, event_id)
         let mut witnesses: Vec<SessionEventEnvelope> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
-                "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
+                "SELECT workspace_id, session_id, event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived' ORDER BY row_id",
             )?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
             for row in rows {
-                let (event_id, json) = row?;
-                if message_id_of(&json).map(|m| completed.contains(&m)).unwrap_or(false) {
+                let (ws, sid, event_id, json) = row?;
+                if message_id_of(&json).is_some_and(|m| completed.contains(&(ws.clone(), sid, m))) {
                     if let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) {
                         witnesses.push(env);
                     }
-                    doomed.push(event_id);
+                    doomed.push((ws, event_id));
                 }
             }
         }
 
         // Every other copy held under a pruned id goes with it (left alone,
         // one would fold in the pruned chunk's place), a witness like it.
-        for event_id in &doomed {
-            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1 ORDER BY row_id", [event_id])? {
+        for (ws, event_id) in &doomed {
+            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2 ORDER BY row_id", [ws, event_id])? {
                 witnesses.push(env);
             }
         }
@@ -2472,9 +2594,9 @@ impl EventStore {
             self.note_lamport_witness(env)?;
         }
         let mut removed = 0;
-        for event_id in &doomed {
-            removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
-            tx.execute("DELETE FROM equivocations WHERE event_id = ?1", [event_id])?;
+        for (ws, event_id) in &doomed {
+            removed += tx.execute("DELETE FROM events WHERE workspace_id = ?1 AND event_id = ?2", [ws, event_id])?;
+            tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1 AND event_id = ?2", [ws, event_id])?;
         }
         tx.commit()?;
         Ok(removed)
@@ -2547,6 +2669,98 @@ mod tests {
         assert!(parked.len() > 1, "some junk still fits");
     }
     use ligus_core::{ChatMessage, MessageRole};
+
+    /// A database made when event ids were unique across workspaces: the
+    /// open migrates it (backup first), keeps every row, row id and the
+    /// row-id counter, and moves a copy kept aside only because another
+    /// workspace held its id into its own workspace's log.
+    #[test]
+    fn an_old_database_gets_event_ids_unique_per_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let (a, w2, sid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut session = ChatSession::new("c", a, "rt");
+        session.id = sid;
+        let seed = fixture_next(&SessionEventEnvelope::new(sid, a, 1, SessionEvent::SessionSnapshot { session: Box::new(session) }), None);
+        let genuine = fixture_next(&SessionEventEnvelope::new(sid, a, 2, SessionEvent::SessionTitleChanged { title: "genuine".into() }), Some(ligus_core::CfgFrontier { lamport: seed.lamport, event_id: seed.event_id }));
+        let mut planted = SessionEventEnvelope::new(sid, w2, 1, SessionEvent::SessionTitleChanged { title: "planted".into() });
+        planted.event_id = genuine.event_id;
+        let planted = fixture_next(&planted, None);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE events (row_id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, \
+                 workspace_id TEXT NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL, scope TEXT NOT NULL, timestamp TEXT NOT NULL, \
+                 envelope_json TEXT NOT NULL, sealed_epoch INTEGER, UNIQUE (session_id, sequence)); \
+                 CREATE TABLE equivocations (row_id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, session_id TEXT NOT NULL, \
+                 workspace_id TEXT NOT NULL, kind TEXT NOT NULL, envelope_json TEXT NOT NULL, sealed_epoch INTEGER, UNIQUE (event_id, envelope_json));",
+            )
+            .unwrap();
+            let put = |row: i64, e: &SessionEventEnvelope, seq: i64| {
+                conn.execute(
+                    "INSERT INTO events (row_id, event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'session', 't', ?7)",
+                    rusqlite::params![row, e.event_id.to_string(), e.session_id.to_string(), e.workspace_id.to_string(), seq, e.payload.kind_str(), serde_json::to_string(e).unwrap()],
+                )
+                .unwrap();
+            };
+            put(1, &seed, 1);
+            // The planted copy reached this device first: the genuine one
+            // was kept aside.
+            put(2, &planted, 2);
+            conn.execute(
+                "INSERT INTO equivocations (event_id, session_id, workspace_id, kind, envelope_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![genuine.event_id.to_string(), sid.to_string(), a.to_string(), genuine.payload.kind_str(), serde_json::to_string(&genuine).unwrap()],
+            )
+            .unwrap();
+            // A pruned row: the counter is past every row left.
+            put(9, &fixture_next(&SessionEventEnvelope::new(Uuid::new_v4(), a, 1, SessionEvent::SessionTitleChanged { title: "gone".into() }), None), 1);
+            conn.execute("DELETE FROM events WHERE row_id = 9", []).unwrap();
+        }
+        let store = EventStore::open(&path).unwrap();
+        assert!(!needs_event_id_migration(&store.conn).unwrap());
+        let backups: Vec<_> = std::fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".bak-ws-event-ids-")).collect();
+        assert_eq!(backups.len(), 1, "a backup before the rewrite");
+        let a_log: Vec<Uuid> = store.list_in(a, sid).unwrap().iter().map(|e| e.event_id).collect();
+        assert_eq!(a_log, vec![seed.event_id, genuine.event_id], "the genuine copy is in its own log now");
+        assert_eq!(store.list_in(w2, sid).unwrap().len(), 1);
+        assert!(store.list_copies_in(a, sid).unwrap().iter().all(|e| e.workspace_id == a));
+        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM equivocations", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+        let rows: Vec<i64> = store.conn.prepare("SELECT row_id FROM events ORDER BY row_id").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(&rows[..2], &[1, 2], "row ids kept");
+        assert!(rows[2] > 9, "the row-id counter never goes back: {rows:?}");
+        // A second open is a no-op (no new backup).
+        drop(store);
+        EventStore::open(&path).unwrap();
+        let n = std::fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".bak-ws-event-ids-")).count();
+        assert_eq!(n, 1);
+    }
+
+    /// Ids are unique per workspace: another workspace's row under an id
+    /// never keeps the genuine one out of its own log, and a second copy
+    /// within one workspace is still kept aside as before.
+    #[test]
+    fn an_event_id_is_unique_per_workspace_only() {
+        let (mut store, sid, wid) = seeded_store();
+        let w2 = Uuid::new_v4();
+        let genuine = fixture_next(&SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "genuine".into() }), store.lamport_head(wid, sid).unwrap());
+        let mut planted = SessionEventEnvelope::new(sid, w2, 1, SessionEvent::SessionTitleChanged { title: "planted".into() });
+        planted.event_id = genuine.event_id;
+        let planted = fixture_next(&planted, None);
+        let before = store.max_row_id().unwrap();
+        assert!(store.ingest(&planted).unwrap());
+        assert!(store.ingest(&genuine).unwrap(), "the genuine copy is new in its own workspace");
+        assert!(store.has_event_in(wid, genuine.event_id).unwrap() && store.has_event_in(w2, genuine.event_id).unwrap());
+        assert!(store.list_in(wid, sid).unwrap().iter().any(|e| e.event_id == genuine.event_id && e.workspace_id == wid));
+        assert!(store.logs_changed_after(before).unwrap().contains(&(wid, sid)));
+        // Same workspace, other content: kept aside, not stored again.
+        let mut twin = genuine.clone();
+        twin.payload = SessionEvent::SessionTitleChanged { title: "twin".into() };
+        let twin = fixture_signed(&twin);
+        assert!(!store.ingest(&twin).unwrap());
+        assert_eq!(store.list_copies_in(wid, sid).unwrap().iter().filter(|e| e.event_id == genuine.event_id).count(), 2);
+        assert_eq!(store.list_in(wid, sid).unwrap().iter().filter(|e| e.event_id == genuine.event_id).count(), 1);
+    }
 
     fn seeded_store() -> (EventStore, Uuid, Uuid) {
         let mut store = EventStore::open_in_memory().unwrap();

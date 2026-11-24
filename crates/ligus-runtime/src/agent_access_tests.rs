@@ -71,17 +71,17 @@ fn a_teammate_is_refused_the_owner_runs_and_opening_it_lets_them_in() {
     let con = post(&fx, "con", "@scout fix the build");
     let adm = post(&fx, "adm", "@scout fix the build");
     let own = fx.host.post_user_message(fx.chat, fx.wid, "@scout fix the build").unwrap().id;
-    assert_eq!(fx.host.agent_turn_access(fx.chat, con, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
-    assert_eq!(fx.host.agent_turn_access(fx.chat, adm, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()), "an Admin too");
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, con, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, adm, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()), "an Admin too");
     assert_eq!(
-        fx.host.agent_turn_access(fx.chat, own, fx.scout.id).unwrap(),
+        fx.host.agent_turn_access(fx.wid, fx.chat, own, fx.scout.id).unwrap(),
         AccessDecision::Allow(AgentUse { requester: "u1".into(), teammate: false, notify: false })
     );
     // The owner opens it to everyone (and asks to be told).
     fx.scout.notify_on_use = true;
     open(&mut fx);
     assert_eq!(
-        fx.host.agent_turn_access(fx.chat, con, fx.scout.id).unwrap(),
+        fx.host.agent_turn_access(fx.wid, fx.chat, con, fx.scout.id).unwrap(),
         AccessDecision::Allow(AgentUse { requester: "con".into(), teammate: true, notify: true })
     );
 }
@@ -98,22 +98,22 @@ fn cascades_and_hand_offs_cant_route_around_it() {
     // Relay's reply, as Con's device signs it, mentions scout (a cascade; a
     // hand-off's trigger is the same handing reply).
     let cascade = agent_reply(&mut con_dev, (fx.chat, fx.wid), &relay, ask, "@scout please do it");
-    assert_eq!(fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, cascade, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
     // Even when the owner's own device signs the relaying reply.
     let via_host = agent_reply(&mut fx.host, (fx.chat, fx.wid), &relay, ask, "@scout please do it");
-    assert_eq!(fx.host.agent_turn_access(fx.chat, via_host, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, via_host, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
     // A reply with no person behind it is refused (scout isn't open).
     let orphan_id = fx.host.begin_assistant_message(fx.chat, fx.wid, "relay", "rt", Some(relay.id), None).unwrap();
     fx.host.complete_assistant_message(fx.chat, fx.wid, orphan_id, "@scout go").unwrap();
-    assert!(!fx.host.agent_turn_access(fx.chat, orphan_id, fx.scout.id).unwrap().allowed());
+    assert!(!fx.host.agent_turn_access(fx.wid, fx.chat, orphan_id, fx.scout.id).unwrap().allowed());
     // The owner's own chain through relay runs.
     let mine = fx.host.post_user_message(fx.chat, fx.wid, "@relay ask scout").unwrap().id;
     let r = agent_reply(&mut fx.host, (fx.chat, fx.wid), &relay, mine, "@scout go");
-    assert!(fx.host.agent_turn_access(fx.chat, r, fx.scout.id).unwrap().allowed());
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, r, fx.scout.id).unwrap().allowed());
     // Opened up, con's cascade runs as con's turn.
     open(&mut fx);
     assert_eq!(
-        fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap(),
+        fx.host.agent_turn_access(fx.wid, fx.chat, cascade, fx.scout.id).unwrap(),
         AccessDecision::Allow(AgentUse { requester: "con".into(), teammate: true, notify: false })
     );
 }
@@ -127,11 +127,11 @@ fn a_workflow_stage_is_judged_by_its_run_initiator() {
     svc_on(&fx.path, "con", "Con").upsert_workflow_run(fx.chat, fx.wid, run.clone()).unwrap();
     // The owner's device drives the run and posts the stage prompt.
     let stage = fx.host.post_workflow_stage_prompt(fx.chat, fx.wid, "stage", run.id).unwrap().id;
-    assert_eq!(fx.host.agent_turn_access(fx.chat, stage, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, stage, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
     let own = workflow::new_run(&def, "task", "u1");
     fx.host.upsert_workflow_run(fx.chat, fx.wid, own.clone()).unwrap();
     let stage = fx.host.post_workflow_stage_prompt(fx.chat, fx.wid, "stage", own.id).unwrap().id;
-    assert!(fx.host.agent_turn_access(fx.chat, stage, fx.scout.id).unwrap().allowed());
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, stage, fx.scout.id).unwrap().allowed());
 }
 
 /// The refusal answers the trigger once, in the agent's name, so neither a
@@ -173,19 +173,19 @@ fn budgets_count_per_member_per_day_and_reset() {
         fx.host.record_agent_turn(fx.wid, fx.scout.id, "con").unwrap();
     }
     let limit = "scout reached today's limit of 2 turns per member (resets at 00:00 UTC).";
-    assert_eq!(fx.host.agent_turn_access(fx.chat, con, fx.scout.id).unwrap(), AccessDecision::Refuse(limit.into()));
-    assert!(fx.host.agent_turn_access(fx.chat, adm, fx.scout.id).unwrap().allowed(), "per member");
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, con, fx.scout.id).unwrap(), AccessDecision::Refuse(limit.into()));
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, adm, fx.scout.id).unwrap().allowed(), "per member");
     // Yesterday's turns don't count today.
     let yesterday = crate::event_store::utc_day(time::OffsetDateTime::now_utc() - time::Duration::days(1));
     for _ in 0..5 {
         fx.host.store().record_agent_turn(fx.wid, fx.scout.id, "adm", &yesterday).unwrap();
     }
-    assert!(fx.host.agent_turn_access(fx.chat, adm, fx.scout.id).unwrap().allowed(), "a new day starts over");
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, adm, fx.scout.id).unwrap().allowed(), "a new day starts over");
     // The day's spend reaches the $1.00 cap: others are refused, the owner runs.
     let day = fx.host.record_agent_turn(fx.wid, fx.scout.id, "u1").unwrap();
     fx.host.record_agent_cost(fx.wid, fx.scout.id, "u1", &day, Some(1.0)).unwrap();
-    assert!(matches!(fx.host.agent_turn_access(fx.chat, adm, fx.scout.id).unwrap(), AccessDecision::Refuse(n) if n.contains("spending cap of $1.00")));
-    assert!(fx.host.agent_turn_access(fx.chat, own, fx.scout.id).unwrap().allowed());
+    assert!(matches!(fx.host.agent_turn_access(fx.wid, fx.chat, adm, fx.scout.id).unwrap(), AccessDecision::Refuse(n) if n.contains("spending cap of $1.00")));
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, own, fx.scout.id).unwrap().allowed());
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn the_local_workspace_is_always_the_owners() {
     a.owner_actor_id = "stale-self".into();
     solo.add_agent(c, local, a.clone()).unwrap();
     let m = solo.post_user_message(c, local, "@scout go").unwrap().id;
-    assert!(solo.agent_turn_access(c, m, a.id).unwrap().allowed());
+    assert!(solo.agent_turn_access(local, c, m, a.id).unwrap().allowed());
 }
 
 #[test]
@@ -254,11 +254,11 @@ fn a_trailing_system_note_doesnt_hide_or_lend_the_asker() {
     let _ = own;
     fx.host.post_system_note(fx.chat, fx.wid, "routed").unwrap();
     let note = fx.host.load(fx.chat).unwrap().unwrap().messages.last().unwrap().id;
-    assert!(fx.host.agent_turn_access(fx.chat, note, fx.scout.id).unwrap().allowed());
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, note, fx.scout.id).unwrap().allowed());
     post(&fx, "con", "@scout go");
     fx.host.post_system_note(fx.chat, fx.wid, "routed").unwrap();
     let note = fx.host.load(fx.chat).unwrap().unwrap().messages.last().unwrap().id;
-    assert_eq!(fx.host.agent_turn_access(fx.chat, note, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, note, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
 }
 
 /// The deferred (offline) fallback: the owner's device stays silent, so the
@@ -319,11 +319,11 @@ fn a_teammates_hand_off_card_cant_borrow_the_owners_message() {
         crate::pending_turns(&s).iter().any(|p| p.message_id == own && p.agent_id == fx.scout.id),
         "precondition: the card queues scout on the owner's message"
     );
-    assert_eq!(fx.host.agent_turn_access(fx.chat, own, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, own, fx.scout.id).unwrap(), AccessDecision::Refuse(ONLY_OWNER.into()));
     // The owner's own card (signed by the owner's device) is fine.
     let mine = fx.host.post_user_message(fx.chat, fx.wid, "hand it on").unwrap().id;
     fx.host.record_flow(fx.chat, fx.wid, ligus_core::flow::FlowRecord::Handoff(handoff_card(fx.scout.id, mine, "go"))).unwrap();
-    assert!(fx.host.agent_turn_access(fx.chat, mine, fx.scout.id).unwrap().allowed());
+    assert!(fx.host.agent_turn_access(fx.wid, fx.chat, mine, fx.scout.id).unwrap().allowed());
 }
 
 /// A member past their daily cap asks through another member's agent: the
@@ -342,11 +342,11 @@ fn a_member_over_the_cap_cant_launder_turns_through_someone_elses_agent() {
     let ask = post(&fx, "con", "@relay ask scout");
     let cascade = agent_reply(&mut adm_dev, (fx.chat, fx.wid), &relay, ask, "@scout do it");
     let limit = "scout reached today's limit of 1 turn per member (resets at 00:00 UTC).";
-    assert_eq!(fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap(), AccessDecision::Refuse(limit.into()));
+    assert_eq!(fx.host.agent_turn_access(fx.wid, fx.chat, cascade, fx.scout.id).unwrap(), AccessDecision::Refuse(limit.into()));
     // Under the cap, the turn is counted against the person who asked.
     fx.scout.limits.member_turns_per_day = Some(5);
     fx.host.add_agent(fx.chat, fx.wid, fx.scout.clone()).unwrap();
-    match fx.host.agent_turn_access(fx.chat, cascade, fx.scout.id).unwrap() {
+    match fx.host.agent_turn_access(fx.wid, fx.chat, cascade, fx.scout.id).unwrap() {
         AccessDecision::Allow(u) => assert_eq!(u.requester, "con"),
         r => panic!("{r:?}"),
     }
@@ -398,11 +398,11 @@ fn a_stale_owner_id_doesnt_lock_out_the_only_person() {
     a.owner_actor_id = "stale-self".into();
     me.add_agent(c, wid, a.clone()).unwrap();
     let m = me.post_user_message(c, wid, "@scout go").unwrap().id;
-    assert!(me.agent_turn_access(c, m, a.id).unwrap().allowed(), "the only person runs it");
+    assert!(me.agent_turn_access(wid, c, m, a.id).unwrap().allowed(), "the only person runs it");
     // With a second person in the room the owner id means someone else.
     me.add_member(c, wid, member("con", "Con", WorkspaceRole::Contributor)).unwrap();
     let theirs = svc_on(&path, "con", "Con").post_user_message(c, wid, "@scout go").unwrap().id;
-    assert!(!me.agent_turn_access(c, theirs, a.id).unwrap().allowed());
+    assert!(!me.agent_turn_access(wid, c, theirs, a.id).unwrap().allowed());
 }
 
 /// `@ligus` (the chat's primary runtime) runs on its device's credentials:
@@ -413,9 +413,9 @@ fn the_primary_is_its_devices_person_unless_opened() {
     let mut fx = fixture();
     let con = post(&fx, "con", "@ligus summarize");
     let own = fx.host.post_user_message(fx.chat, fx.wid, "@ligus summarize").unwrap().id;
-    assert!(!fx.host.primary_turn_access(fx.chat, con, false).unwrap().allowed());
-    assert!(fx.host.primary_turn_access(fx.chat, own, false).unwrap().allowed());
-    assert!(fx.host.primary_turn_access(fx.chat, con, true).unwrap().allowed(), "opened");
+    assert!(!fx.host.primary_turn_access(fx.wid, fx.chat, con, false).unwrap().allowed());
+    assert!(fx.host.primary_turn_access(fx.wid, fx.chat, own, false).unwrap().allowed());
+    assert!(fx.host.primary_turn_access(fx.wid, fx.chat, con, true).unwrap().allowed(), "opened");
     // Refused with a note in Ligus's name, once.
     assert!(fx.host.gate_primary_turn(fx.chat, fx.wid, con, false).unwrap().is_err());
     let s = fx.host.load(fx.chat).unwrap().unwrap();

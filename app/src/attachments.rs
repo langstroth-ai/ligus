@@ -63,7 +63,7 @@ fn transport_for(state: &AppState, workspace_id: Uuid) -> Result<(ligus_runtime:
 
 fn session_of(state: &AppState, session_id: &str) -> Result<ligus_core::ChatSession, String> {
     let id = Uuid::parse_str(session_id).map_err(map_err)?;
-    state.service.lock().unwrap().load(id).map_err(map_err)?.ok_or_else(|| "unknown chat".to_string())
+    state.service.lock().unwrap().load_resolving(id).map_err(map_err)?.ok_or_else(|| "unknown chat".to_string())
 }
 
 fn shared_in(session: &ligus_core::ChatSession, attachment_id: &str) -> Result<SharedAttachment, String> {
@@ -86,7 +86,7 @@ pub(crate) async fn share_attachment(state: State<'_, AppState>, session_id: Str
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let workspace_id = {
         let svc = state.service.lock().unwrap();
-        svc.load(sid).map_err(map_err)?.map(|s| s.workspace_id).ok_or("unknown chat")?
+        svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown chat")?
     };
     if state.is_local_only_ws(workspace_id) {
         return Ok(local);

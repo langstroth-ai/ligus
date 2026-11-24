@@ -27,12 +27,13 @@ impl ChatService {
 
     /// Fold this device's facts for `session` onto its flow state.
     pub(super) fn overlay_facts(&self, session: &mut ligus_core::ChatSession) {
-        self.overlay_facts_on(session.id, &mut session.flow);
+        self.overlay_facts_on(session.workspace_id, session.id, &mut session.flow);
     }
 
-    /// Fold this device's facts for `session_id` onto `flow`.
-    pub(super) fn overlay_facts_on(&self, session_id: Uuid, flow: &mut ligus_core::flow::FlowState) {
-        let Ok(rows) = self.store.session_facts(session_id) else { return };
+    /// Fold this device's facts for the log (`workspace_id`, `session_id`)
+    /// onto `flow`: another workspace's facts under the same id never do.
+    pub(super) fn overlay_facts_on(&self, workspace_id: Uuid, session_id: Uuid, flow: &mut ligus_core::flow::FlowState) {
+        let Ok(rows) = self.store.session_facts(workspace_id, session_id) else { return };
         for (_, _, kind, json) in rows {
             if kind == SUMMARY_MARK {
                 continue;
@@ -81,7 +82,7 @@ impl ChatService {
         for (agent, day) in todo {
             let day_tags: Vec<TurnTag> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(_, t)| t.clone()).collect();
             let chats: std::collections::BTreeSet<Uuid> = tags.iter().filter(|(_, t)| t.agent == agent).map(|(s, _)| *s).collect();
-            let sessions: Vec<ligus_core::ChatSession> = chats.iter().filter_map(|c| self.load(*c).ok().flatten()).collect();
+            let sessions: Vec<ligus_core::ChatSession> = chats.iter().filter_map(|c| self.load_in(workspace_id, *c).ok().flatten()).collect();
             let proposals: Vec<&ligus_core::ActionProposal> = sessions.iter().flat_map(|s| s.proposals.iter()).collect();
             let sum = ligus_core::flow::score::summarize_day(&agent, host_id, day, &day_tags, &proposals);
             if sum.turns == 0 {

@@ -65,6 +65,8 @@ export const SESSION_STATE_META: Record<Exclude<SessionState, "idle">, SessionSt
 /// What one chat is waiting on, as `list_chat_attention` returns it.
 export interface ChatAttention {
   sessionId: string;
+  /// The chat's workspace: a chat is (workspace, chat).
+  workspaceId?: string;
   openAsks: number;
   proposals: { id: string; title: string; status: string; needsMe: boolean }[];
   paused: boolean;

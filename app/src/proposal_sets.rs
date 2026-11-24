@@ -195,7 +195,7 @@ fn title_of(session: &ChatSession, id: Uuid) -> String {
 /// Post the chat notes for a settled quorum: the front-runner, the frozen
 /// rivals, and a stop signal naming each rival's scouts.
 fn announce(svc: &mut ChatService, sid: Uuid, wid: Uuid, set_id: Uuid, out: &QuorumOutcome) {
-    let Ok(Some(session)) = svc.load(sid) else { return };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
     let Some(set) = session.proposal_sets.iter().find(|s| s.id == set_id) else { return };
     let lead = format!("{} \u{201c}{}\u{201d}", label_of(set, out.front_runner), title_of(&session, out.front_runner));
     let how = if out.tie_break {
@@ -244,7 +244,7 @@ pub(crate) fn assessments_arrived(author: &str, recorded: &[(Uuid, Uuid)]) {
 /// when that request asked for options. Joins an existing set for the same
 /// trigger, or opens one once a second producer has proposed.
 pub(crate) fn group_same_trigger(svc: &mut ChatService, sid: Uuid, wid: Uuid, new_id: Uuid) {
-    let Ok(Some(session)) = svc.load(sid) else { return };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
     let Some(new) = session.proposals.iter().find(|p| p.id == new_id) else { return };
     if new.set_id.is_some() || new.workflow.is_some() || new.parent_id.is_some() {
         return;
@@ -414,7 +414,7 @@ pub(crate) async fn send_scouts(
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let (prompts, names) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
         let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
         if set.phase != SetPhase::Scouting {
             return Err("scouts only go out while the set is scouting".into());
@@ -456,7 +456,7 @@ pub(crate) async fn list_proposal_sets(ligus_app: tauri::AppHandle, session_id: 
 pub(crate) fn list_proposal_sets_sync(state: State<AppState>, session_id: String) -> Result<Vec<ProposalSetDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let Some(mut session) = svc.load(sid).map_err(map_err)? else { return Ok(Vec::new()) };
+    let Some(mut session) = svc.load_resolving(sid).map_err(map_err)? else { return Ok(Vec::new()) };
     // A scouting deadline that passed with a leader: settle it now (any
     // device may; the first tie-break in canonical order wins).
     let now = Timestamp::now();
@@ -473,13 +473,13 @@ pub(crate) fn list_proposal_sets_sync(state: State<AppState>, session_id: String
                 announce(&mut svc, sid, wid, set_id, &out);
             }
         }
-        session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        session = svc.load_in(wid, sid).map_err(map_err)?.ok_or("unknown session")?;
     }
     Ok(session.proposal_sets.iter().rev().map(|s| set_dto(s, &session)).collect())
 }
 
 fn one_set(svc: &ChatService, sid: Uuid, set_id: Uuid) -> Result<ProposalSetDto, String> {
-    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
     let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
     Ok(set_dto(set, &session))
 }
@@ -502,7 +502,7 @@ pub(crate) fn tune_proposal_set_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
     let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
     let mut knobs = match dial.as_deref() {
         Some("fast") => QuorumDial::Fast.knobs(),
@@ -540,7 +540,7 @@ pub(crate) fn advance_proposal_set_round_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?.workspace_id;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
     svc.advance_set_round(sid, wid, set_id, "re-evaluate").map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
@@ -548,7 +548,7 @@ pub(crate) fn advance_proposal_set_round_sync(
 /// A person commented on (or asked for changes to) an alternative: that is
 /// new evidence, so the set's round advances.
 pub(crate) fn on_alternative_feedback(svc: &mut ChatService, sid: Uuid, wid: Uuid, proposal_id: Uuid) {
-    let Ok(Some(session)) = svc.load(sid) else { return };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
     if let Some(set) = session.proposal_sets.iter().find(|s| s.is_open() && s.contains(proposal_id)) {
         let _ = svc.advance_set_round(sid, wid, set.id, "comment");
     }
@@ -566,7 +566,7 @@ pub(crate) fn ensure_not_frozen(session: &ChatSession, proposal_id: Uuid) -> Res
 
 /// After a revision turn: put the new version in its parent's set.
 pub(crate) fn link_revision(svc: &mut ChatService, sid: Uuid, wid: Uuid, parent: Uuid, child: Uuid) {
-    let Ok(Some(session)) = svc.load(sid) else { return };
+    let Ok(Some(session)) = svc.load_in(wid, sid) else { return };
     if let Some(set) = session.proposal_sets.iter().find(|s| s.is_open() && s.contains(parent)) {
         let _ = svc.add_set_alternative(sid, wid, set.id, child, Some(parent));
     }
@@ -593,7 +593,7 @@ pub(crate) fn withdraw_set_alternative_sync(
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?.workspace_id;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
     svc.withdraw_set_alternative(sid, wid, set_id, pid).map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
@@ -612,7 +612,7 @@ pub(crate) fn close_proposal_set_sync(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let set_id = Uuid::parse_str(&set_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
-    let wid = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?.workspace_id;
+    let wid = svc.workspace_of(sid).map_err(map_err)?.ok_or("unknown session")?;
     svc.decide_proposal_set(sid, wid, set_id, None).map_err(map_err)?;
     one_set(&svc, sid, set_id)
 }
@@ -641,7 +641,7 @@ pub(crate) async fn preflight_proposal_set(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let (wid, set, proposal, agent_host, session) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
         let set = session.proposal_sets.iter().find(|s| s.id == set_id).cloned().ok_or("unknown proposal set")?;
         let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
         if !set.is_open() || !set.is_active(&session.proposals, pid) {
@@ -744,7 +744,7 @@ pub(crate) async fn apply_proposal_set(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let wid = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
         let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
         if !set.can_decide_for(&session.proposals, pid) {
             return Err("run a passing pre-flight on an approved alternative first".into());
@@ -776,7 +776,7 @@ pub(crate) async fn apply_proposal_set(
     let dto = {
         let mut svc = state.service.lock().unwrap();
         let set = svc.decide_proposal_set(sid, wid, set_id, Some(pid)).map_err(map_err)?;
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_in(wid, sid).map_err(map_err)?.ok_or("unknown session")?;
         let _ = svc.post_system_note(
             sid,
             wid,
@@ -812,7 +812,7 @@ pub(crate) async fn revert_proposal(
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
     let (session, p) = {
         let svc = state.service.lock().unwrap();
-        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let session = svc.load_resolving(sid).map_err(map_err)?.ok_or("unknown session")?;
         let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
         (session, p)
     };
@@ -953,7 +953,7 @@ mod tests {
         }
         let cleaned = finalize(&mut svc, sid, wid, "planner", Some(pl), ALTS);
         assert_eq!(cleaned, "Here are three.");
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         let set = s.proposal_sets[0].clone();
         assert_eq!(set.alternatives.len(), 3);
         assert_eq!(set.task_class.as_deref(), Some("design"));
@@ -968,11 +968,11 @@ mod tests {
         let r1 = format!(r#"It scores 88 from me. [[assess: {{"alternative": "{b}", "score": 88, "rationale": "simple"}}]]"#);
         let shown = finalize(&mut svc, sid, wid, "coder", Some(co), &r1);
         assert!(!shown.contains("88"), "the score never reaches the transcript: {shown}");
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert_eq!(s.proposal_sets[0].phase, SetPhase::Scouting, "one counting scout < k=2");
         // A letter works when one set is open.
         finalize(&mut svc, sid, wid, "reviewer", Some(re), r#"[[assess: {"alternative": "B", "score": 75}]]"#);
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         let set = &s.proposal_sets[0];
         assert_eq!(set.phase, SetPhase::Piping);
         assert_eq!(set.front_runner, Some(b));
@@ -980,7 +980,7 @@ mod tests {
         assert!(s.messages.iter().any(|m| m.body.contains("Quorum on")));
         // Agents can't approve or decide: nothing an agent writes moves it on.
         finalize(&mut svc, sid, wid, "coder", Some(co), "[[propose: {\"title\": \"decide B\"}]] [[vote: 👍]]");
-        assert_eq!(svc.load(sid).unwrap().unwrap().proposal_sets[0].phase, SetPhase::Piping);
+        assert_eq!(svc.load_in(wid, sid).unwrap().unwrap().proposal_sets[0].phase, SetPhase::Piping);
     }
 
     #[test]
@@ -998,14 +998,14 @@ mod tests {
         let id1 = p1.id;
         svc.upsert_proposal(sid, wid, p1).unwrap();
         group_same_trigger(&mut svc, sid, wid, id1);
-        assert!(svc.load(sid).unwrap().unwrap().proposal_sets.is_empty(), "one producer: no set yet");
+        assert!(svc.load_in(wid, sid).unwrap().unwrap().proposal_sets.is_empty(), "one producer: no set yet");
         let mut p2 = ActionProposal::new("Circuit breaker", ProposalKind::Decision, "local");
         p2.producing_agent_id = Some(a2);
         p2.author_actor_id = a2.to_string();
         let id2 = p2.id;
         svc.upsert_proposal(sid, wid, p2).unwrap();
         group_same_trigger(&mut svc, sid, wid, id2);
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert_eq!(s.proposal_sets.len(), 1);
         assert_eq!(s.proposal_sets[0].alternatives, vec![id1, id2]);
 
@@ -1021,7 +1021,7 @@ mod tests {
             svc.upsert_proposal(sid2, wid, p).unwrap();
             group_same_trigger(&mut svc, sid2, wid, id);
         }
-        assert!(svc.load(sid2).unwrap().unwrap().proposal_sets.is_empty());
+        assert!(svc.load_in(wid, sid2).unwrap().unwrap().proposal_sets.is_empty());
     }
 
     /// Runtime review: a revert ignored the proposal's repository and
@@ -1073,7 +1073,7 @@ mod tests {
         let pid = alt.id;
         let other = ActionProposal::new("B", ProposalKind::Decision, "planner");
         svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), vec![alt, other]).unwrap();
-        let mut s = svc.load(sid).unwrap().unwrap();
+        let mut s = svc.load_in(wid, sid).unwrap().unwrap();
         let p = s.proposals.iter().find(|p| p.id == pid).cloned().unwrap();
         assert!(guard_block(&s, &p).is_none(), "no guard on: nothing extra");
         // Dearth mode protecting the crypto paths.
@@ -1122,12 +1122,12 @@ mod tests {
         let (a, b) = (alts[0].id, alts[1].id);
         let set = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap();
         svc.tune_proposal_set(sid, wid, set.id, QuorumDial::Fast.knobs()).unwrap();
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert!(guarded_by_open_set(&s, a));
         assert!(ensure_not_frozen(&s, b).is_ok());
         let cleaned = finalize(&mut svc, sid, wid, "coder", Some(Uuid::new_v4()), &format!(r#"[[assess: {{"alternative": "{a}", "score": 90}}]]"#));
         assert!(cleaned.contains("scout assessment"));
-        let s = svc.load(sid).unwrap().unwrap();
+        let s = svc.load_in(wid, sid).unwrap().unwrap();
         assert_eq!(s.proposal_sets[0].front_runner, Some(a));
         assert!(ensure_not_frozen(&s, b).is_err());
         let dto = set_dto(&s.proposal_sets[0], &s);

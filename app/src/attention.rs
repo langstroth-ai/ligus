@@ -31,6 +31,8 @@ pub(crate) struct AttentionProposalDto {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatAttentionDto {
     pub session_id: String,
+    /// The chat's workspace: a chat is (workspace, chat).
+    pub workspace_id: String,
     /// Agent questions nobody has answered yet that are still waiting.
     pub open_asks: u32,
     pub proposals: Vec<AttentionProposalDto>,
@@ -73,7 +75,7 @@ pub(crate) fn chat_attention(s: &ChatSession, me: &str, now_ms: i64) -> Option<C
     if open_asks == 0 && proposals.is_empty() && !paused {
         return None;
     }
-    Some(ChatAttentionDto { session_id: s.id.to_string(), open_asks, proposals, paused })
+    Some(ChatAttentionDto { session_id: s.id.to_string(), workspace_id: s.workspace_id.to_string(), open_asks, proposals, paused })
 }
 
 #[tauri::command]
@@ -96,8 +98,8 @@ pub(crate) fn list_chat_attention_sync(state: State<AppState>) -> Result<Vec<Cha
         if id == config_id {
             continue;
         }
-        let Some(s) = svc.load(id).map_err(map_err)? else { continue };
-        if s.archived || !crate::session_in_workspace(s.workspace_id, &s.creator_actor_id, active, &me, &known_rooms) {
+        let Some(s) = crate::workspace_chat(&svc, id, active, &me, &known_rooms).map_err(map_err)? else { continue };
+        if s.archived {
             continue;
         }
         out.extend(chat_attention(&s, &me, now_ms));

@@ -14,10 +14,11 @@ use crate::envelope_verifier::{build_roster, DeviceKeyResolver};
 use crate::lease_presence::LeaseBeat;
 
 impl ChatService {
-    /// The folded lease for `scope`/`scope_id` on `session_id`'s log.
-    pub fn lease(&self, session_id: Uuid, scope: LeaseScope, scope_id: &str) -> Result<Option<LeaseState>> {
+    /// The folded lease for `scope`/`scope_id` on the log (`workspace_id`,
+    /// `session_id`).
+    pub fn lease(&self, workspace_id: Uuid, session_id: Uuid, scope: LeaseScope, scope_id: &str) -> Result<Option<LeaseState>> {
         Ok(self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .and_then(|s| s.guards.leases.get(&lease_key(scope, scope_id)).cloned()))
     }
 
@@ -46,7 +47,7 @@ impl ChatService {
             claimed_at: Timestamp::now(),
         };
         self.append_signed(session_id, workspace_id, SessionEvent::CoordinatorLeaseClaimed { lease })?;
-        self.lease(session_id, scope, scope_id)
+        self.lease(workspace_id, session_id, scope, scope_id)
     }
 
     /// Release a lease this device holds at `epoch`, optionally reserving the
@@ -163,7 +164,7 @@ impl ChatService {
     /// joins). Default when the config log doesn't exist yet.
     pub fn workspace_guards(&self, workspace_id: Uuid) -> Result<ligus_core::guard::GuardState> {
         Ok(self
-            .load(ligus_core::workspace_config_session_id(workspace_id))?
+            .load_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id))?
             .map(|s| s.guards)
             .unwrap_or_default())
     }
@@ -178,7 +179,7 @@ impl ChatService {
             // config roster): the verification roster also certifies a
             // keyholder whose self-enrollment the projection refused.
             let members: Vec<Uuid> = self
-                .load(ligus_core::workspace_config_session_id(workspace_id))?
+                .load_in(workspace_id, ligus_core::workspace_config_session_id(workspace_id))?
                 .map(|c| c.members.iter().filter_map(|m| m.actor.account_id).collect())
                 .unwrap_or_default();
             dearth.admitted_devices = roster
@@ -280,7 +281,7 @@ impl ChatService {
             Some(chat_id),
             &GuardSignal::Hygiene { hygiene_kind: ligus_core::signal::HygieneKind::EnvelopeTightened, count: 1 },
         );
-        if self.load(chat_id)?.is_some() {
+        if self.load_in(workspace_id, chat_id)?.is_some() {
             self.post_system_note(
                 chat_id,
                 workspace_id,
@@ -305,7 +306,7 @@ impl ChatService {
         ligus_core::authz::bounds::clear_names_raises(&raises).map_err(|e| ChatError::Unauthorized(e.into()))?;
         let config_id = self.ensure_workspace_config(workspace_id)?;
         self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownCleared { chat_id, raises })?;
-        if self.load(chat_id)?.is_some() {
+        if self.load_in(workspace_id, chat_id)?.is_some() {
             let who = self.author.display_name.clone();
             self.post_system_note(chat_id, workspace_id, format!("{who} cleared this chat's lockdown."))?;
         }
@@ -371,7 +372,7 @@ mod tests {
         assert_eq!(st.fenced.len(), 1);
         let succ = Uuid::new_v4();
         svc.release_lease(chat.id, ws, LeaseScope::WorkflowRun, "run-1", 1, Some(succ)).unwrap();
-        let st = svc.lease(chat.id, LeaseScope::WorkflowRun, "run-1").unwrap().unwrap();
+        let st = svc.lease(ws, chat.id, LeaseScope::WorkflowRun, "run-1").unwrap().unwrap();
         assert!(st.released);
         assert_eq!(st.handover_to, Some(succ));
         // This device is not the reserved successor: its epoch-2 claim is fenced.
@@ -604,8 +605,8 @@ mod tests {
         // Heal the partition.
         deliver(&a, &mut b);
         deliver(&b, &mut a);
-        let la = a.lease(chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
-        let lb = b.lease(chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
+        let la = a.lease(ws, chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
+        let lb = b.lease(ws, chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
         assert_eq!((la.current.holder, la.current.epoch), (lb.current.holder, lb.current.epoch), "both devices agree");
         let winner_is_a = la.current.holder == a.device_id();
         let expected = if winner_is_a { "from-a" } else { "from-b" };

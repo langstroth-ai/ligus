@@ -129,7 +129,7 @@ impl ChatService {
                     out.removed.push(id.clone());
                 }
                 let closed = self
-                    .load(workspace_config_session_id(workspace_id))?
+                    .load_in(workspace_id, workspace_config_session_id(workspace_id))?
                     .is_some_and(|c| c.guards.closed_admissions.contains_key(invite));
                 if !closed {
                     self.append_signed(

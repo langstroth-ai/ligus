@@ -93,7 +93,7 @@ async fn world() -> World {
 }
 
 fn is_member(cfg: &Config, ws: Uuid, member: &str) -> bool {
-    open_service(cfg).unwrap().load(workspace_config_session_id(ws)).unwrap().unwrap().members.iter().any(|m| m.id == member)
+    open_service(cfg).unwrap().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap().members.iter().any(|m| m.id == member)
 }
 
 /// The box's own key-agreement keypair.
@@ -134,7 +134,7 @@ async fn a_removed_box_is_left_out_of_the_rotation_and_cant_read_what_follows() 
     );
     assert!(issued.rotation.sealed.contains_key(&w.ana_device.to_string()), "ana still gets the key");
     assert!(issued.rotation.sealed.contains_key(&svc.device_id().to_string()));
-    let config_log = svc.load(workspace_config_session_id(w.ws)).unwrap().unwrap();
+    let config_log = svc.load_in(w.ws, workspace_config_session_id(w.ws)).unwrap().unwrap();
     assert!(!config_log.members.iter().any(|m| m.id == w.box_member), "the box is off the roster");
     assert!(config_log.guards.closed_admissions.contains_key(&w.invite), "its admission is closed");
 
@@ -153,12 +153,12 @@ async fn a_removed_box_is_left_out_of_the_rotation_and_cant_read_what_follows() 
     let ring = crate::box_ring(&w.boxc).unwrap();
     assert!(!ring.keys_for(before.rotation.version, None).is_empty(), "control: the box held the key from before its removal");
     assert!(ring.keys_for(issued.rotation.version, None).is_empty(), "the box holds the post-removal key");
-    let on_box = open_service(&w.boxc).unwrap().load(chat.id).unwrap();
+    let on_box = open_service(&w.boxc).unwrap().load_resolving(chat.id).unwrap();
     assert!(
         on_box.is_none_or(|s| !s.messages.iter().any(|m| m.id == said)),
         "the removed box read a message sent after its removal"
     );
-    let on_ana = open_service(&w.ana).unwrap().load(chat.id).unwrap().expect("ana got the chat");
+    let on_ana = open_service(&w.ana).unwrap().load_resolving(chat.id).unwrap().expect("ana got the chat");
     assert!(on_ana.messages.iter().any(|m| m.id == said), "ana reads it");
 }
 
@@ -182,7 +182,7 @@ async fn removing_a_box_that_never_joined_closes_its_admission() {
         let (removal, issued) = svc.remove_for_relay_subject_and_rotate(w.ws, &target).unwrap();
         assert!(removal.removed.is_empty());
         assert_eq!(removal.closed_admission, Some(invite));
-        assert_eq!(svc.load(config_id).unwrap().unwrap().guards.closed_admissions.get(&invite), Some(&vec![None]));
+        assert_eq!(svc.load_resolving(config_id).unwrap().unwrap().guards.closed_admissions.get(&invite), Some(&vec![None]));
         // The first box, untouched, is still a recipient.
         assert!(issued.rotation.sealed.contains_key(&w.box_device.to_string()));
     }
@@ -193,7 +193,7 @@ async fn removing_a_box_that_never_joined_closes_its_admission() {
     let joined = crate::admit::prepare_box(&mut late, "late", None, Some(code), |c| async move { sync_once(&c).await }).await;
     assert!(joined.is_err(), "a box joined through a closed admission");
     sync(&w.desktop).await;
-    assert!(open_service(&w.desktop).unwrap().load(config_id).unwrap().unwrap().members.iter().all(|m| m.actor.kind != ligus_core::ActorKind::Service || m.id == w.box_member));
+    assert!(open_service(&w.desktop).unwrap().load_resolving(config_id).unwrap().unwrap().members.iter().all(|m| m.actor.kind != ligus_core::ActorKind::Service || m.id == w.box_member));
 }
 
 /// Removing a person works as before: every member of their account leaves
@@ -287,12 +287,12 @@ async fn a_box_admitted_from_its_join_request_is_removed_from_its_member_row() {
     // The People pane lists it on a chat's members (the config roster is
     // hoisted onto every chat), with the remove actions.
     let chat = svc.create_chat("ops", w.ws, "rt").unwrap();
-    assert!(svc.load(chat.id).unwrap().unwrap().members.iter().any(|m| m.id == member && m.actor.kind == ligus_core::ActorKind::Service));
+    assert!(svc.load_resolving(chat.id).unwrap().unwrap().members.iter().any(|m| m.id == member && m.actor.kind == ligus_core::ActorKind::Service));
 
     // Remove & revoke on its row: remove_member (routed to the config log),
     // then the rotation.
     svc.remove_member(chat.id, w.ws, member.clone()).unwrap();
-    assert!(!svc.load(config_id).unwrap().unwrap().members.iter().any(|m| m.id == member), "MemberRemoved on the config log");
+    assert!(!svc.load_resolving(config_id).unwrap().unwrap().members.iter().any(|m| m.id == member), "MemberRemoved on the config log");
     let issued = svc.rotate_workspace_key(w.ws).unwrap();
     assert!(!issued.rotation.sealed.contains_key(&dev), "the rotation sealed to the removed box");
     assert!(issued.rotation.sealed.contains_key(&w.ana_device.to_string()));
@@ -304,8 +304,8 @@ async fn a_box_admitted_from_its_join_request_is_removed_from_its_member_row() {
         sync(&w.ana).await;
     }
     assert!(crate::box_ring(&home).unwrap().keys_for(issued.rotation.version, None).is_empty(), "the box holds the new key");
-    let on_box = open_service(&home).unwrap().load(chat.id).unwrap();
+    let on_box = open_service(&home).unwrap().load_resolving(chat.id).unwrap();
     assert!(on_box.is_none_or(|s| !s.messages.iter().any(|m| m.id == said)), "the removed box read what followed");
-    let on_ana = open_service(&w.ana).unwrap().load(chat.id).unwrap().expect("ana got the chat");
+    let on_ana = open_service(&w.ana).unwrap().load_resolving(chat.id).unwrap().expect("ana got the chat");
     assert!(on_ana.messages.iter().any(|m| m.id == said));
 }

@@ -570,7 +570,7 @@ async fn check(State(s): S, prov: Option<Extension<ProvisionalPeer>>, peer: Opti
             None => Value::Null,
         };
         let name = svc
-            .load(ligus_core::workspace_config_session_id(s.ws))
+            .load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))
             .ok()
             .flatten()
             .map(|c| ligus_runtime::display::workspace_name(&c.title))

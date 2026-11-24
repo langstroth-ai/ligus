@@ -27,7 +27,7 @@ fn agent_name(s: &Shared, key: &str) -> String {
         return "Ligus".into();
     }
     let Some(id) = ligus_core::flow::agent_from_key(key) else { return String::new() };
-    let config = s.lock().load(ligus_core::workspace_config_session_id(s.ws)).ok().flatten();
+    let config = s.lock().load_in(s.ws, ligus_core::workspace_config_session_id(s.ws)).ok().flatten();
     config.and_then(|c| c.workspace_agents.into_iter().find(|a| a.id == id).map(|a| shown(&a.name))).unwrap_or_default()
 }
 

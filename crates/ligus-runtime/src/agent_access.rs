@@ -252,14 +252,14 @@ impl ChatService {
     /// `session_id`, and who it is counted against (module docs). In the
     /// device-local workspace (one person, never synced) every turn is the
     /// owner's.
-    pub fn agent_turn_access(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<AccessDecision> {
-        Ok(self.agent_turn_access_for(session_id, trigger, agent_id)?.0)
+    pub fn agent_turn_access(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<AccessDecision> {
+        Ok(self.agent_turn_access_for(workspace_id, session_id, trigger, agent_id)?.0)
     }
 
     /// [`Self::agent_turn_access`] and the person the turn is for (the
     /// requester, for a refusal note's rate limit; empty when untraced).
-    fn agent_turn_access_for(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<(AccessDecision, String)> {
-        let Some(session) = self.load(session_id)? else {
+    fn agent_turn_access_for(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> Result<(AccessDecision, String)> {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok((AccessDecision::Refuse("the chat is gone".into()), String::new()));
         };
         let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else {
@@ -272,10 +272,10 @@ impl ChatService {
         let trigger = judged_trigger(&session, trigger);
         let links = self.device_links(session.workspace_id).unwrap_or_default();
         let roster = self.workspace_roster(session.workspace_id).ok();
-        let mut people = self.people_behind(session_id, trigger, &links)?;
+        let mut people = self.people_behind(workspace_id, session_id, trigger, &links)?;
         // A tool or directive hand-off card waking this agent on `trigger`
         // is a request by whoever signed it.
-        match self.handoff_card_people(session_id, trigger, agent_id)? {
+        match self.handoff_card_people_in(workspace_id, session_id, trigger, agent_id)? {
             Some(cards) => {
                 if let Some(p) = people.as_mut() {
                     for who in cards {
@@ -306,8 +306,8 @@ impl ChatService {
 
     /// The people behind `trigger`, mapped through `links`, deduplicated,
     /// nearest (the requester) first.
-    fn people_behind(&self, session_id: Uuid, trigger: Uuid, links: &DeviceLinks) -> Result<Option<Vec<String>>> {
-        Ok(self.trigger_people(session_id, trigger)?.map(|p| {
+    fn people_behind(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, links: &DeviceLinks) -> Result<Option<Vec<String>>> {
+        Ok(self.trigger_people_in(workspace_id, session_id, trigger)?.map(|p| {
             let mut out: Vec<String> = Vec::new();
             for who in p {
                 let person = links.person(&who).to_string();
@@ -322,15 +322,15 @@ impl ChatService {
     /// Whether the person behind `trigger` may use `agent_id` at all (who,
     /// not budgets): what the router asks before offering an agent an
     /// un-addressed message.
-    pub fn agent_usable_for(&self, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> bool {
-        let Ok(Some(session)) = self.load(session_id) else { return false };
+    pub fn agent_usable_for(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, agent_id: Uuid) -> bool {
+        let Ok(Some(session)) = self.load_in(workspace_id, session_id) else { return false };
         let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else { return false };
         if self.is_local_workspace(session.workspace_id) {
             return true;
         }
         let links = self.device_links(session.workspace_id).unwrap_or_default();
         let roster = self.workspace_roster(session.workspace_id).ok();
-        let Ok(people) = self.people_behind(session_id, trigger, &links) else { return false };
+        let Ok(people) = self.people_behind(workspace_id, session_id, trigger, &links) else { return false };
         let me = links.person(&self.author().id).to_string();
         if crate::turn_dispatch::human_member_count(&session, &links) <= 1 && people.as_ref().is_some_and(|p| !p.is_empty() && p.iter().all(|x| *x == me)) {
             return true;
@@ -349,12 +349,12 @@ impl ChatService {
     /// unless they opened it to members (`open`, a device-local setting).
     /// Alone in the room, or in the device-local workspace, it always
     /// answers.
-    pub fn primary_turn_access(&self, session_id: Uuid, trigger: Uuid, open: bool) -> Result<AccessDecision> {
-        Ok(self.primary_turn_access_for(session_id, trigger, open)?.0)
+    pub fn primary_turn_access(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, open: bool) -> Result<AccessDecision> {
+        Ok(self.primary_turn_access_for(workspace_id, session_id, trigger, open)?.0)
     }
 
-    fn primary_turn_access_for(&self, session_id: Uuid, trigger: Uuid, open: bool) -> Result<(AccessDecision, String)> {
-        let Some(session) = self.load(session_id)? else {
+    fn primary_turn_access_for(&self, workspace_id: Uuid, session_id: Uuid, trigger: Uuid, open: bool) -> Result<(AccessDecision, String)> {
+        let Some(session) = self.load_in(workspace_id, session_id)? else {
             return Ok((AccessDecision::Refuse("the chat is gone".into()), String::new()));
         };
         let links = self.device_links(session.workspace_id).unwrap_or_default();
@@ -363,7 +363,7 @@ impl ChatService {
             return Ok((AccessDecision::Allow(AgentUse { requester: me.clone(), teammate: false, notify: false }), me));
         }
         let trigger = judged_trigger(&session, trigger);
-        let people = self.people_behind(session_id, trigger, &links)?;
+        let people = self.people_behind(workspace_id, session_id, trigger, &links)?;
         let requester = people.as_ref().and_then(|p| p.first().cloned()).unwrap_or_default();
         Ok(match people {
             Some(p) if !p.is_empty() && p.iter().all(|x| *x == me) => (AccessDecision::Allow(AgentUse { requester: me, teammate: false, notify: false }), requester),
@@ -383,7 +383,7 @@ impl ChatService {
     /// [`Self::refuse_agent_turn`] for an agent, or for the primary
     /// (`None`: the note is in Ligus's name, with no responder).
     fn refuse_turn(&mut self, session_id: Uuid, workspace_id: Uuid, trigger: Uuid, agent: Option<&WorkspaceAgent>, note: &str) -> Result<bool> {
-        let Some(s) = self.load(session_id)? else { return Ok(false) };
+        let Some(s) = self.load_in(workspace_id, session_id)? else { return Ok(false) };
         let (name, runtime) = match agent {
             Some(a) => (a.name.clone(), a.runtime_id.clone()),
             None => (PRIMARY_NAME.to_string(), s.runtime_id.clone()),
@@ -434,11 +434,11 @@ impl ChatService {
         if let Some(note) = self.refusals.hushed(trigger, &ligus_core::flow::agent_key(Some(agent_id))) {
             return Ok(Err(note.clone()));
         }
-        let (decision, requester) = self.agent_turn_access_for(session_id, trigger, agent_id)?;
+        let (decision, requester) = self.agent_turn_access_for(workspace_id, session_id, trigger, agent_id)?;
         match decision {
             AccessDecision::Allow(u) => Ok(Ok(u)),
             AccessDecision::Refuse(note) => {
-                let agent = self.load(session_id)?.and_then(|s| s.workspace_agents.into_iter().find(|a| a.id == agent_id));
+                let agent = self.load_in(workspace_id, session_id)?.and_then(|s| s.workspace_agents.into_iter().find(|a| a.id == agent_id));
                 if let Some(agent) = agent {
                     if self.note_refusal(session_id, workspace_id, trigger, Some(&agent), &requester, &note)? {
                         tracing::info!(target: "dispatch", agent = %agent.name, "agent turn refused: {note}");
@@ -468,7 +468,7 @@ impl ChatService {
         if let Some(note) = self.refusals.hushed(trigger, ligus_core::flow::PRIMARY) {
             return Ok(Err(note.clone()));
         }
-        let (decision, requester) = self.primary_turn_access_for(session_id, trigger, open)?;
+        let (decision, requester) = self.primary_turn_access_for(workspace_id, session_id, trigger, open)?;
         match decision {
             AccessDecision::Allow(u) => Ok(Ok(u)),
             AccessDecision::Refuse(note) => {
@@ -503,7 +503,7 @@ impl ChatService {
             return Err(ChatError::Unauthorized(format!("unknown access {:?}: use \"owner\" or \"everyone\"", policy.access)));
         }
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        let agents = self.load(config_id)?.map(|s| s.workspace_agents).unwrap_or_default();
+        let agents = self.load_in(workspace_id, config_id)?.map(|s| s.workspace_agents).unwrap_or_default();
         let Some(mut agent) = agents.into_iter().find(|a| a.id == agent_id) else {
             return Err(ChatError::NotFound("unknown agent".into()));
         };

@@ -49,7 +49,7 @@ fn parse_repo(raw: &str) -> ApiResult<Uuid> {
 pub fn listing(s: &Shared) -> ApiResult<Value> {
     let svc = s.lock();
     let roster = svc.workspace_roster(s.ws)?;
-    let hosts = svc.load(ligus_core::workspace_config_session_id(s.ws))?.map(|c| c.workspace_hosts).unwrap_or_default();
+    let hosts = svc.load_in(s.ws, ligus_core::workspace_config_session_id(s.ws))?.map(|c| c.workspace_hosts).unwrap_or_default();
     let reports = rr::host_reports(&roster, &hosts, &s.presence);
     let entries = rr::workspace_repos(&roster);
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
@@ -217,7 +217,7 @@ pub async fn set_chat_repo(State(s): S, peer: Option<Extension<TunnelPeer>>, Pat
 /// A chat's workspace repo for `GET /v1/chats/:id/details` (`workspaceRepo`).
 pub fn chat_repo(s: &Shared, chat: Uuid) -> ApiResult<Value> {
     let svc = s.lock();
-    let Some(c) = svc.load(chat)? else { return Ok(Value::Null) };
+    let Some(c) = svc.load_resolving(chat)? else { return Ok(Value::Null) };
     let Some(cr) = c.repo.clone().filter(|r| r.repo_id.is_some()) else { return Ok(Value::Null) };
     let roster = svc.workspace_roster(s.ws)?;
     let id = cr.repo_id.unwrap_or_default();

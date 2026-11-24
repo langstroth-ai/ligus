@@ -171,7 +171,7 @@ impl ChatService {
         }
         let actor = self.phone_person(workspace_id, phone)?;
         let chat = self
-            .load(action.chat_id())?
+            .load_in(workspace_id, action.chat_id())?
             .filter(|c| c.workspace_id == workspace_id)
             .ok_or_else(|| ChatError::Unauthorized("no such chat in this workspace".into()))?;
         let payload = match action {
@@ -301,7 +301,7 @@ impl ChatService {
     pub fn append_phone_signed(&mut self, draft: PhoneDraft, signature: Vec<u8>) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
         let phone = env.actor_stamp.as_ref().and_then(|s| s.actor.device_id).ok_or_else(|| ChatError::Unauthorized("no phone".into()))?;
-        if self.store.has_event(env.event_id)? {
+        if self.store.has_event_in(env.workspace_id, env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
         if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.workspace_id, env.session_id, phone, u64::MAX)? {

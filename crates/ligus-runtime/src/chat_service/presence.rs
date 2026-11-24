@@ -283,7 +283,7 @@ impl ChatService {
     /// its stamp (the digest fields are the ones frozen at prepare time).
     pub fn commit_presence(&mut self, draft: PresenceDraft, assertion: PresenceAssertion) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
-        if self.store.has_event(env.event_id)? {
+        if self.store.has_event_in(env.workspace_id, env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
         if let Some(stamp) = env.actor_stamp.as_mut() {

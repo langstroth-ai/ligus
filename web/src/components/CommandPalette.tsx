@@ -12,7 +12,10 @@ import { useChatAttention } from "@/state/useSessionStates";
 export interface PaletteActions {
   newChat: () => void;
   openSettings: () => void;
-  selectChat: (id: string) => void;
+  /// A chat is (workspace, chat): `workspaceId` is the chat's own, so a
+  /// chat of another workspace is opened there, never as the active
+  /// workspace's chat with the same id.
+  selectChat: (id: string, workspaceId?: string) => void;
   selectWorkspace: (id: string) => void;
   /// Keyboard chat stepping (⌘⇧] / ⌘⇧[) and composer focus (⌘L).
   stepChat?: (dir: 1 | -1) => void;
@@ -255,7 +258,7 @@ export function CommandPalette({
         id: `chat-${c.id}`,
         label: c.title || "Untitled chat",
         hint: "Chat",
-        run: run(() => actions.selectChat(c.id)),
+        run: run(() => actions.selectChat(c.id, c.workspaceId || undefined)),
       });
     }
     if (actions.mentionAgent) {

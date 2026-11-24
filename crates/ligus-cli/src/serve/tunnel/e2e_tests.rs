@@ -1347,7 +1347,7 @@ async fn add_this_phone_then_pair_and_ask_who_am_i() {
     assert_eq!(v["device"]["fingerprint"], json!(ligus_runtime::device_enroll::fingerprint(&phone.public_key())));
     assert_eq!(v["account"]["id"], json!(account));
     assert_eq!(v["account"]["memberId"], json!(member_id));
-    let role = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap().role_of(&member_id);
+    let role = h.handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap().role_of(&member_id);
     assert_eq!(v["account"]["role"], json!(role));
     let rp = h.handle.shared.lock().workspace_presence_policy(ws).unwrap();
     assert_eq!(v["rpId"], json!(rp.rp_id));
@@ -1459,7 +1459,7 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
     // The desktop sees the proposal, rejects it, and both reach the box.
     for _ in 0..200 {
         sync_once(&h.desktop).await.unwrap();
-        if crate::open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == pid)) {
+        if crate::open_service(&h.desktop).unwrap().load_in(ws, chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == pid)) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1470,7 +1470,7 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
         h.handle.shared.sync_kick.notify_one();
         let s = &h.handle.shared;
         let phone_known = s.lock().phone_person(ws, phone.device_id).is_ok();
-        let voted = s.lock().load(chat_id).unwrap().unwrap().proposals.iter().any(|p| p.id == pid && !p.approvals.is_empty());
+        let voted = s.lock().load_in(ws, chat_id).unwrap().unwrap().proposals.iter().any(|p| p.id == pid && !p.approvals.is_empty());
         phone_known && voted
     })
     .await;
@@ -1499,7 +1499,7 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
     assert_eq!((head.ty, head.stream), (frame::RESPONSE, sse));
     {
         let s = &h.handle.shared;
-        let chat = s.lock().load(chat_id).unwrap().unwrap();
+        let chat = s.lock().load_in(ws, chat_id).unwrap().unwrap();
         let prop = chat.proposals.iter().find(|p| p.id == pid).unwrap().clone();
         s.hub.emit("proposal.updated", crate::serve::hub::wrap("proposal", crate::serve::api::proposal_dto_as(&chat, &prop, &box_id)));
     }
@@ -1520,7 +1520,7 @@ async fn a_phone_sees_its_own_persons_role_and_vote() {
     // A pairing that names no device this box can place claims nothing.
     assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, &pid_pair), owner);
     assert_eq!(crate::serve::api::tunnel_viewer(&h.handle.shared, "no-such-pairing"), "");
-    let chat = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let chat = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
     let prop = chat.proposals.iter().find(|p| p.id == pid).unwrap();
     let blank = crate::serve::api::proposal_dto_as(&chat, prop, "");
     assert_eq!(
