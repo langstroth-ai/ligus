@@ -17,7 +17,6 @@ import {
   workspaceListInvites,
   workspaceCreateInvite,
   workspaceRevokeInvite,
-  workspaceJoinViaInvite,
   hasIssuerKey,
   generateAgentBootstrap,
   type InviteEntry,
@@ -33,6 +32,7 @@ import {
   listAgents,
   listMcpServers,
   listMembers,
+  myProfile,
   presenceList,
   listProposals,
   listQueuedWork,
@@ -78,7 +78,9 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
-import { MoreMenu } from "@/components/MoreMenu";
+import { useRowMenu, type RowAction } from "@/components/RowMenu";
+import { MoreMenu, type MoreMenuItem } from "@/components/MoreMenu";
+import { Sheet } from "@/components/kit/Sheet";
 import {
   Button,
   IconButton,
@@ -95,8 +97,12 @@ import {
   Badge,
   StatusDot,
   type Tone,
-  SELECT_TINT,
   LinkButton,
+  Hint,
+  MetaTag,
+  InfoTip,
+  RowList,
+  ListRow,
 } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import { Menu } from "@/components/Menu";
@@ -250,6 +256,8 @@ export function RailFrame({
   docs,
   children,
   actions,
+  primary,
+  more,
 }: {
   title: string;
   /// What the pane is for, in a sentence. Not shown on screen: it's the "?"
@@ -258,8 +266,12 @@ export function RailFrame({
   /// The docs page the "?" link opens (a path under the docs site).
   docs: string;
   children: ReactNode;
-  /// Optional header controls, right-aligned under the close button's row.
+  /// Optional header controls, on the title row left of the close button.
   actions?: ReactNode;
+  /// The pane's one primary action ("Invite", "Add skill"), in the header.
+  primary?: { label: string; onClick: () => void; disabled?: boolean };
+  /// Secondary and rare pane actions, behind the header's "⋯".
+  more?: MoreMenuItem[];
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -298,8 +310,18 @@ export function RailFrame({
         <div className="flex items-center gap-1.5 pr-8">
           <h2 className="ligus-title">{title}</h2>
           <PaneHelpLink title={title} about={about} docs={docs} />
+          {(actions || primary || (more && more.length > 0)) && (
+            <div className="ml-auto flex items-center gap-1.5">
+              {actions}
+              {primary && (
+                <Button size="sm" disabled={primary.disabled} onClick={primary.onClick}>
+                  {primary.label}
+                </Button>
+              )}
+              {more && more.length > 0 && <MoreMenu label={`More ${title} actions`} items={more} />}
+            </div>
+          )}
         </div>
-        {actions && <div className="mt-2">{actions}</div>}
       </div>
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
         {children}
@@ -452,102 +474,102 @@ function ToolsPane({
 
       {scope === "chat" ? (
         <>
-          <div
-            className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2.5 text-[12px] leading-5"
-            style={{
-              borderColor: "color-mix(in srgb, var(--ligus-accent-cool) 38%, transparent)",
-              background: SELECT_TINT,
-              color: "var(--ligus-ink)",
-            }}
-          >
-            <span>These are inherited from the workspace.</span>
-            <button
-              onClick={() => setScope("workspace")}
-              className="font-medium underline underline-offset-2 hover:opacity-80"
-              style={{ color: "var(--ligus-accent-ink)" }}
-            >
-              Edit in Workspace
-            </button>
-          </div>
-
-          <Section title="Answering runtime">
+          <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only.">
             {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured yet." />
+              <EmptyHint text="No runtimes configured" />
             ) : (
-              runtimeList.map((rt) => (
-                <RuntimeCard
-                  key={rt.id}
-                  runtime={rt}
-                  active={rt.id === activeRuntimeId}
-                  onSelect={() => selectRuntime(rt.id)}
-                />
-              ))
+              <RuntimeSwitcher
+                runtimes={runtimeList}
+                activeId={activeRuntimeId}
+                onSelect={(id) => void selectRuntime(id)}
+              />
             )}
           </Section>
 
-          <Section title="Agents available to @mention">
-            {/* The default agent (@ligus) always exists — it answers untagged
-                messages and is bound to the active runtime — even before the
-                user adds any of their own. Showing it here (and counting it in
-                the sidebar) stops the pane claiming "no agents" while one is
-                mid-reply (F1). It has no roster record, so no edit/remove. */}
-            <Card className="flex items-center gap-2.5 px-3 py-2.5">
-              <Avatar
-                name={PRIMARY_NAME}
-                kind="agent"
-                host={activeRuntime?.location?.trim().toLowerCase() === "remote" ? "remote" : "local"}
-                size={28}
-              />
-              <div className="min-w-0">
-                <div className="truncate text-[13px] font-medium">@{PRIMARY_HANDLE}</div>
-                <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  {activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"} · default
-                </div>
-              </div>
-            </Card>
-            {agentList.map((agent) => (
-              <Card key={agent.id} className="flex items-center gap-2.5 px-3 py-2.5">
-                <Avatar
-                  name={agent.name}
-                  url={agent.avatarUrl}
-                  colorHex={agent.avatarColorHex}
-                  kind="agent"
-                  size={28}
+          <Section
+            title="Agents"
+            info="Agents you can @mention in this chat. The roster belongs to the workspace, so it's edited there."
+            tag={
+              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
+                from workspace
+              </MetaTag>
+            }
+          >
+            <RowList label="Agents">
+              {/* The default agent (@ligus) always exists — it answers untagged
+                  messages and is bound to the active runtime — even before the
+                  user adds any of their own (F1). It has no roster record, so no
+                  edit/remove. A roster agent with the same handle IS the default
+                  (a legacy roster entry), so it's shown once, as the default. */}
+              {!agentList.some((a) => a.name.toLowerCase() === PRIMARY_HANDLE) && (
+                <ListRow
+                  leading={
+                    <Avatar
+                      name={PRIMARY_NAME}
+                      kind="agent"
+                      host={activeRuntime?.location?.trim().toLowerCase() === "remote" ? "remote" : "local"}
+                      size={22}
+                    />
+                  }
+                  title={`@${PRIMARY_HANDLE}`}
+                  meta={activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"}
+                  tip="The default agent: answers untagged messages on this chat's runtime"
                 />
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-medium">@{agent.name}</div>
-                  <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                    {agent.runtimeId} · {agent.role || "agent"}
-                  </div>
-                  <div className="mt-0.5">
-                    <AgentHostBadge hostId={agent.hostId} hosts={hostList} />
-                  </div>
-                </div>
-              </Card>
-            ))}
+              )}
+              {agentList.map((agent) => (
+                <ListRow
+                  key={agent.id}
+                  leading={
+                    <Avatar
+                      name={agent.name}
+                      url={agent.avatarUrl}
+                      colorHex={agent.avatarColorHex}
+                      kind="agent"
+                      size={22}
+                    />
+                  }
+                  title={`@${agent.name}`}
+                  meta={
+                    agent.name.toLowerCase() === PRIMARY_HANDLE
+                      ? `${agent.runtimeId} · default`
+                      : agent.runtimeId
+                  }
+                  tip={agent.role || undefined}
+                  trailing={<AgentHostDot hostId={agent.hostId} hosts={hostList} />}
+                />
+              ))}
+            </RowList>
             {/* Agents live on the workspace roster, so adding one happens in the
-                Workspace scope — but the chat view is the default, so surface a
-                one-click entry point here that jumps there with the form open,
-                instead of leaving "add an agent" undiscoverable behind the toggle. */}
+                Workspace scope; this jumps there with the form open. */}
             <button
               onClick={() => {
                 setScope("workspace");
                 setShowAddAgent(true);
               }}
-              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed px-3 py-2 text-[12px] font-medium transition-colors hover:brightness-110"
-              style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
+              className="flex h-[30px] w-full items-center gap-2 rounded-xl px-1 text-left text-[13px] transition-colors hover:bg-[color:var(--ligus-overlay)]"
+              style={{ color: "var(--ligus-accent-ink)" }}
             >
               <IconPlus size={13} /> Add an agent
             </button>
           </Section>
 
-          <Section title="Tools reachable">
+          <Section
+            title="Tools"
+            info="MCP servers enabled for the workspace. Only enabled servers give agents external tools."
+            tag={
+              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
+                from workspace
+              </MetaTag>
+            }
+          >
             {enabledMcp.length === 0 ? (
-              <EmptyHint text="No MCP servers are enabled, so no external tools are reachable here." />
+              <EmptyHint text="No MCP servers enabled" />
             ) : (
-              enabledMcp.map((server) => (
-                <McpServerCard key={server.id} server={server} editable={false} />
-              ))
+              <RowList label="MCP servers">
+                {enabledMcp.map((server) => (
+                  <McpServerCard key={server.id} server={server} editable={false} />
+                ))}
+              </RowList>
             )}
           </Section>
         </>
@@ -564,9 +586,10 @@ function ToolsPane({
             }
           >
             {agentList.length === 0 ? (
-              <EmptyHint text="No workspace agents yet. Add one below." />
+              <EmptyHint text="No agents yet" />
             ) : (
-              agentList.map((agent) => (
+              <RowList label="Agent roster">
+              {agentList.map((agent) => (
                 <AgentRosterRow
                   key={agent.id}
                   sessionId={sessionId}
@@ -581,7 +604,8 @@ function ToolsPane({
                   }
                   onChanged={() => qc.invalidateQueries({ queryKey: ["agents", sessionId] })}
                 />
-              ))
+              ))}
+              </RowList>
             )}
             <FormDisclosure
               label="Add an agent"
@@ -659,37 +683,39 @@ function ToolsPane({
 
           <Section title="Runtimes">
             {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured yet." />
+              <EmptyHint text="No runtimes configured" />
             ) : (
-              runtimeList.map((rt) => (
-                <RuntimeCard key={rt.id} runtime={rt} active={rt.id === activeRuntimeId} />
-              ))
+              <RowList label="Runtimes">
+                {runtimeList.map((rt) => (
+                  <RuntimeRow key={rt.id} runtime={rt} active={rt.id === activeRuntimeId} />
+                ))}
+              </RowList>
             )}
-            <p className="px-1 pt-1 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Manage in Settings → Models.
-            </p>
+            <Hint>Manage in Settings → Models</Hint>
           </Section>
 
           <Section title="MCP servers">
             {mcpList.length === 0 ? (
-              <EmptyHint text="No MCP servers configured." />
+              <EmptyHint text="No MCP servers" />
             ) : (
-              mcpList.map((server) => (
-                <McpServerCard
-                  key={server.id}
-                  server={server}
-                  editable
-                  onToggle={(v) => toggleMcp(server, v)}
-                  onRemove={
-                    server.isManaged
-                      ? () =>
-                          confirmThen("Remove this MCP server?", () =>
-                            removeMcpMutation.mutate(server.id),
-                          )
-                      : undefined
-                  }
-                />
-              ))
+              <RowList label="MCP servers">
+                {mcpList.map((server) => (
+                  <McpServerCard
+                    key={server.id}
+                    server={server}
+                    editable
+                    onToggle={(v) => toggleMcp(server, v)}
+                    onRemove={
+                      server.isManaged
+                        ? () =>
+                            confirmThen("Remove this MCP server?", () =>
+                              removeMcpMutation.mutate(server.id),
+                            )
+                        : undefined
+                    }
+                  />
+                ))}
+              </RowList>
             )}
             <FormDisclosure
               label="Install a server"
@@ -697,13 +723,10 @@ function ToolsPane({
               onToggle={() => setShowInstallMcp((v) => !v)}
             >
               <Card className="space-y-2 p-3">
-                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  Paste a manifest URL, GitHub blob URL, or owner/repo/path reference.
-                </p>
                 <input
                   value={mcpSource}
                   onChange={(event) => setMcpSource(event.target.value)}
-                  placeholder="owner/repo/mcp.json or https://…"
+                  placeholder="URL, GitHub blob URL or owner/repo/mcp.json"
                   className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
                   style={fieldStyle}
                 />
@@ -765,11 +788,9 @@ function ScopeToggle({ scope, onScope }: { scope: ToolsScope; onScope: (s: Tools
   );
 }
 
-/// One MCP server card (§6.4). Header carries the disclosure chevron, id,
-/// transport detail, an enabled/inert label and a Switch (editable) or a plain
-/// state pill (read-only). The backend exposes no per-tool policy or tool list
-/// (McpServerDto = {id,transport,detail,enabled,isManaged}), so there are no
-/// per-tool rows — only an honest note in the expanded body.
+/// One MCP server row (§6.4): id, transport detail, a Switch (editable) or a
+/// plain on/off (read-only); Remove lives in the row menu. The backend exposes
+/// no per-tool policy or tool list, so the row's tooltip says so honestly.
 function McpServerCard({
   server,
   editable,
@@ -781,111 +802,97 @@ function McpServerCard({
   onToggle?: (enabled: boolean) => void;
   onRemove?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const disabled = !server.enabled;
   return (
-    <Card className="px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => setOpen((o) => !o)}
-          aria-label={open ? `Collapse ${server.id}` : `Expand ${server.id}`}
-          data-tip={open ? "Collapse" : "Expand"}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md hover:bg-[color:var(--ligus-overlay)]"
-          style={{ color: "var(--ligus-ink-soft)" }}
-        >
-          <span
-            className="transition-transform"
-            style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)" }}
-          >
-            <IconChevronDown size={14} />
-          </span>
-        </button>
-        <div className="min-w-0 flex-1" style={{ opacity: disabled ? 0.6 : 1 }}>
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[13px] font-medium">{server.id}</span>
-            <span
-              className="shrink-0 text-[11px] uppercase tracking-[0.08em]"
-              style={{ color: disabled ? "var(--ligus-ink-soft)" : "var(--ligus-success-ink)" }}
-            >
-              {disabled ? "inert" : "enabled"}
-            </span>
-          </div>
-          <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-            [{server.transport}] {server.detail}
-          </div>
-        </div>
-        {editable ? (
-          <Switch
-            on={server.enabled}
-            onChange={(v) => onToggle?.(v)}
-            label={`Enable ${server.id}`}
-          />
+    <ListRow
+      title={server.id}
+      meta={`${server.transport} · ${server.detail}`}
+      tip={
+        disabled
+          ? "Disabled — inert gate: this server is never launched or connected."
+          : "Per-tool permissions arrive with backend support."
+      }
+      actionsLabel={`Actions for ${server.id}`}
+      actions={editable && onRemove ? [{ label: "Remove server", danger: true, onSelect: onRemove }] : undefined}
+      trailing={
+        editable ? (
+          <Switch on={server.enabled} onChange={(v) => onToggle?.(v)} label={`Enable ${server.id}`} />
         ) : (
-          <span
-            className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase"
-            style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
-          >
+          <span className="shrink-0 text-[11px]" style={{ color: disabled ? "var(--ligus-ink-soft)" : "var(--ligus-success-ink)" }}>
             {disabled ? "off" : "on"}
           </span>
-        )}
-      </div>
-      {open && (
-        <div
-          className="mt-2.5 border-t pt-2.5 text-[11.5px] leading-5"
-          style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
-        >
-          {disabled
-            ? "Disabled — inert gate: this server is never launched or connected."
-            : "Per-tool permissions arrive with backend support."}
-          {editable && onRemove && (
-            <div className="mt-2.5">
-              <Button variant="danger" onClick={onRemove}>
-                Remove server
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-    </Card>
+        )
+      }
+    />
   );
 }
 
-/// Host badge shown on every agent card. Resolves an agent's `hostId` against
-/// the workspace host roster: empty ⇒ the owner's own device (a local persona),
-/// a worker id ⇒ a headless, worker-hosted agent. Always visible so the two
-/// kinds are never confused.
-function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHostDto[] }) {
+/// The chat's runtime: the active one as a single row, the others behind one
+/// "N more" disclosure (a click there switches this chat to it).
+function RuntimeSwitcher({
+  runtimes,
+  activeId,
+  onSelect,
+}: {
+  runtimes: RuntimeSummaryDto[];
+  activeId: string;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = runtimes.find((r) => r.id === activeId);
+  const others = runtimes.filter((r) => r.id !== activeId);
+  return (
+    <>
+      <RowList label="Runtime">
+        {active ? (
+          <RuntimeRow runtime={active} active />
+        ) : (
+          <ListRow title="Default runtime" meta="none selected" />
+        )}
+      </RowList>
+      {others.length > 0 && (
+        <FormDisclosure
+          label={open ? "Hide other runtimes" : `${others.length} more`}
+          open={open}
+          onToggle={() => setOpen((v) => !v)}
+        >
+          <RowList label="Other runtimes">
+            {others.map((rt) => (
+              <RuntimeRow key={rt.id} runtime={rt} active={false} onSelect={() => onSelect(rt.id)} />
+            ))}
+          </RowList>
+        </FormDisclosure>
+      )}
+    </>
+  );
+}
+
+/// An agent's host as a small glyph with a tooltip: this device (a dot) or a
+/// worker (a monitor). An offline worker keeps a short visible "offline".
+function AgentHostDot({ hostId, hosts }: { hostId: string; hosts: WorkspaceHostDto[] }) {
   if (!hostId) {
     return (
-      <span
-        className="inline-flex items-center gap-1 text-[11px]"
-        style={{ color: "var(--ligus-ink-soft)" }}
-        data-tip="Runs on this device — a local persona"
-      >
-        <span className="h-2 w-2 rounded-full" style={{ background: "var(--ligus-line)" }} aria-hidden />
-        This device
+      <span className="inline-flex items-center" data-tip="Runs on this device" aria-label="Runs on this device" role="img">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ligus-ink-faint, var(--ligus-line))" }} />
       </span>
     );
   }
   const host = hosts.find((h) => h.id === hostId);
   const label = host?.label || `${hostId.slice(0, 8)}…`;
   const online = host?.online ?? false;
+  const tipText = online
+    ? `Headless — runs on worker “${label}”`
+    : `Worker “${label}” is offline; queued work waits until it reconnects`;
   return (
     <span
       className="inline-flex items-center gap-1 text-[11px]"
-      style={{ color: "var(--ligus-ink-soft)" }}
-      data-tip={
-        online
-          ? `Headless — runs on worker “${label}”`
-          : `Worker “${label}” is offline; queued work waits until it reconnects`
-      }
+      data-tip={tipText}
+      aria-label={tipText}
+      role="img"
+      style={{ color: online ? "var(--ligus-ink-soft)" : "var(--ligus-warn-ink)" }}
     >
-      <span aria-hidden className="inline-flex"><IconMonitor size={12} /></span>
-      <span className="truncate">{label}</span>
-      <span aria-hidden>·</span>
-      <span style={{ color: online ? "var(--ligus-success-ink)" : "var(--ligus-warn-ink)" }}>
-        {online ? "online" : "offline"}
-      </span>
+      <IconMonitor size={12} />
+      {!online && <span aria-hidden>offline</span>}
     </span>
   );
 }
@@ -915,89 +922,78 @@ function AgentRosterRow({
   onRemove: () => void;
   onChanged: () => void;
 }) {
+  const rm = useRowMenu(`More actions for @${agent.name}`, [
+    ...(agent.avatarUrl
+      ? [
+          {
+            label: "Clear avatar",
+            onSelect: async () => {
+              try {
+                await setAgentAvatar(sessionId, agent.id, null, null);
+                onChanged();
+              } catch (err) {
+                toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
+              }
+            },
+          },
+        ]
+      : []),
+    { label: "Remove from workspace…", danger: true, onSelect: onRemove },
+  ]);
   return (
-    <Card className="px-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <label className="group/av relative cursor-pointer" data-tip="Upload an avatar for this agent">
-            <Avatar
-              name={agent.name}
-              url={agent.avatarUrl}
-              colorHex={agent.avatarColorHex}
-              kind="agent"
-              size={32}
-            />
-            <span
-              className="absolute inset-0 flex items-center justify-center rounded-[30%] text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
-              style={{
-                background: "color-mix(in srgb, var(--ligus-ink) 55%, transparent)",
-                color: "var(--ligus-canvas)",
-              }}
-            >
-              Edit
-            </span>
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = "";
-                if (!file) return;
-                try {
-                  const url = await fileToAvatarDataUrl(file);
-                  await setAgentAvatar(sessionId, agent.id, url, null);
-                  onChanged();
-                  toast.success("Agent avatar updated.");
-                } catch (err) {
-                  toast.error(`Couldn't set avatar: ${errMsg(err)}`);
-                }
-              }}
-            />
-          </label>
-          <div className="min-w-0">
-            <div className="font-medium">@{agent.name}</div>
-            <div className="mt-1 text-xs text-ink-soft">
-              {agent.runtimeId} · {agent.role || "agent"}
-            </div>
-            <div className="mt-1">
-              <AgentHostBadge hostId={agent.hostId} hosts={hosts} />
-            </div>
-            {!agent.canManageAccess && (
-              <div className="mt-1">
-                <AgentAccessPanel sessionId={sessionId} agent={agent} />
-              </div>
-            )}
-          </div>
-        </div>
-        <MoreMenu
-          label={`More actions for @${agent.name}`}
-          items={[
-            ...(agent.avatarUrl
-              ? [
-                  {
-                    label: "Clear avatar",
-                    onSelect: async () => {
-                      try {
-                        await setAgentAvatar(sessionId, agent.id, null, null);
-                        onChanged();
-                      } catch (err) {
-                        toast.error(`Couldn't clear avatar: ${errMsg(err)}`);
-                      }
-                    },
-                  },
-                ]
-              : []),
-            { label: "Remove from workspace…", danger: true, onSelect: onRemove },
-          ]}
-        />
+    <li className="px-1" {...rm.rowProps}>
+      <div className="ligus-listrow flex items-center gap-2">
+        <label className="group/av relative shrink-0 cursor-pointer" data-tip="Upload an avatar for this agent">
+          <Avatar
+            name={agent.name}
+            url={agent.avatarUrl}
+            colorHex={agent.avatarColorHex}
+            kind="agent"
+            size={22}
+          />
+          <span
+            aria-hidden
+            className="absolute inset-0 rounded-[30%] opacity-0 transition-opacity group-hover/av:opacity-100"
+            style={{ background: "color-mix(in srgb, var(--ligus-ink) 35%, transparent)" }}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            aria-label={`Upload an avatar for @${agent.name}`}
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              try {
+                const url = await fileToAvatarDataUrl(file);
+                await setAgentAvatar(sessionId, agent.id, url, null);
+                onChanged();
+                toast.success("Agent avatar updated.");
+              } catch (err) {
+                toast.error(`Couldn't set avatar: ${errMsg(err)}`);
+              }
+            }}
+          />
+        </label>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5" data-tip={agent.role || undefined}>
+          <span className="shrink-0 truncate text-[13px] font-medium">@{agent.name}</span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
+            {agent.runtimeId}
+          </span>
+        </span>
+        <AgentHostDot hostId={agent.hostId} hosts={hosts} />
+        {rm.button}
       </div>
-      {agent.canManageAccess && <AgentAccessPanel sessionId={sessionId} agent={agent} />}
-    </Card>
+      {rm.menu}
+      <div className="pb-2 pl-[30px]">
+        <AgentAccessPanel sessionId={sessionId} agent={agent} />
+      </div>
+    </li>
   );
 }
 
-function RuntimeCard({
+function RuntimeRow({
   runtime,
   active,
   onSelect,
@@ -1006,58 +1002,26 @@ function RuntimeCard({
   active: boolean;
   onSelect?: () => void;
 }) {
-  const style = {
-    borderColor: active ? "var(--ligus-accent-cool)" : "var(--ligus-line)",
-    background: active ? SELECT_TINT : "var(--ligus-mist)",
-  } as const;
-  const inner = (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="truncate text-base font-semibold">{runtime.label}</div>
-        <div className="mt-1 truncate text-xs text-ink-soft">
-          {runtime.location} · {runtime.provider}
-          {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        {runtime.isManaged && (
-          <span
-            className="rounded-full px-2 py-1 text-[11px] font-semibold uppercase text-ink-soft"
-            style={{ background: "var(--ligus-mist)" }}
-            data-tip="A runtime you configured (vs. an auto-detected local CLI)"
-          >
-            Configured
-          </span>
-        )}
-        {active && (
-          <span
-            className="rounded-full px-2 py-1 text-xs font-semibold"
-            style={{
-              background: "color-mix(in srgb, var(--ligus-success) 18%, transparent)",
-              color: "var(--ligus-success-ink)",
-            }}
-          >
-            Active
-          </span>
-        )}
-      </div>
-    </div>
-  );
-  if (!onSelect) {
-    return (
-      <div className="w-full rounded-2xl border px-3.5 py-3.5 text-left" style={style}>
-        {inner}
-      </div>
-    );
-  }
   return (
-    <button
+    <ListRow
+      title={runtime.label}
+      meta={`${runtime.location} · ${runtime.provider}`}
+      tip={[
+        runtime.endpoint,
+        runtime.isManaged ? "A runtime you configured (vs. an auto-detected local CLI)" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || undefined}
       onClick={onSelect}
-      className="w-full rounded-2xl border px-3.5 py-3.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
-      style={style}
-    >
-      {inner}
-    </button>
+      selected={active}
+      trailing={
+        active ? (
+          <span className="text-[11px] font-semibold" style={{ color: "var(--ligus-success-ink)" }}>
+            active
+          </span>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -1143,21 +1107,21 @@ function QueuedWorkRow({
 }) {
   const needsHandoff = item.hostStatus === "offline" || item.hostStatus === "device";
   return (
-    <Card className="px-3 py-2.5">
-      <div className="flex min-w-0 items-baseline gap-1.5">
-        <span className="shrink-0 text-[13px] font-semibold">@{item.agentName}</span>
-        <span className="min-w-0 truncate text-xs text-ink-soft">in {item.chatTitle || "Untitled chat"}</span>
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-        <HostStatusBadge item={item} />
-        {needsHandoff && (
-          <RunOnWorkerMenu
-            workers={workers}
-            onReassign={(hostId) => onReassign(item.agentId, hostId)}
-          />
-        )}
-      </div>
-    </Card>
+    <ListRow
+      title={`@${item.agentName}`}
+      meta={`in ${item.chatTitle || "Untitled chat"}`}
+      trailing={
+        <>
+          <HostStatusBadge item={item} />
+          {needsHandoff && (
+            <RunOnWorkerMenu
+              workers={workers}
+              onReassign={(hostId) => onReassign(item.agentId, hostId)}
+            />
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -1181,20 +1145,20 @@ function QueuedWorkSection() {
   });
 
   const items = queued.data ?? [];
+  // Nothing queued: no section at all, rather than an empty box.
+  if (items.length === 0) return null;
   return (
     <Section title="Queued work">
-      {items.length === 0 ? (
-        <EmptyHint text="Nothing queued." />
-      ) : (
-        items.map((item) => (
+      <RowList label="Queued work">
+        {items.map((item) => (
           <QueuedWorkRow
             key={`${item.sessionId}:${item.agentId}`}
             item={item}
             workers={workers}
             onReassign={(agentId, hostId) => reassign.mutate({ agentId, hostId })}
           />
-        ))
-      )}
+        ))}
+      </RowList>
     </Section>
   );
 }
@@ -1535,7 +1499,7 @@ function ProposalCard({
                 <Markdown content={proposal.workflow.description} size="sm" className="mt-2 text-ink-soft" />
               )}
               <div className="mt-2 text-xs text-ink-soft">
-                Approving adds this workflow to the Workflows pane. Runs still start only when someone presses Run.
+                Approving adds it to Workflows. It runs only when someone presses Run.
               </div>
               <WorkflowStages
                 nodes={proposal.workflow.nodes}
@@ -1696,7 +1660,7 @@ function ProposalCard({
       {proposal.quorumMet && proposal.status !== "applied" && !openRequest && (
         <div data-testid="next-step" className="mt-1.5 text-xs text-ink-soft">
           {cantImplement ??
-            `Quorum met. Next: implement it${proposal.canRequestApply && applyHosts.length > 0 ? ", or ask a host to apply it" : ""}.`}
+            "Quorum met"}
         </div>
       )}
 
@@ -2015,7 +1979,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
       <Section title="Pending proposals">
         {groups.active.map(card)}
         {groups.active.length === 0 && (
-          <EmptyHint icon={<IconInbox size={18} />} text="Nothing is waiting for review." />
+          <EmptyHint icon={<IconInbox size={18} />} text="Nothing to review" />
         )}
       </Section>
 
@@ -2063,6 +2027,7 @@ const MEMBER_ROLES = ["owner", "admin", "contributor", "viewer"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function PeoplePane({ sessionId }: { sessionId: string }) {
+  const profile = useQuery({ queryKey: ["my-profile"], queryFn: myProfile });
   const qc = useQueryClient();
   const members = useQuery({ queryKey: ["members", sessionId], queryFn: () => listMembers(sessionId) });
   // Presence only exists with a relay; skip the poll entirely when solo so we
@@ -2105,7 +2070,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
   // An invite link is how a person joins: single-use, issued by an Admin on
   // the config log, carrying your safety code. Open by default.
-  const [showInvite, setShowInvite] = useState(true);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteOptions, setInviteOptions] = useState(false);
+  const [sheet, setSheet] = useState<"history" | "agent" | null>(null);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const workspacesQ = useQuery({ queryKey: ["workspaces"], queryFn: listWorkspaces });
   const activeRoom = (workspacesQ.data ?? []).find((w) => w.active && w.kind === "room");
@@ -2196,7 +2163,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     enabled: relayOn,
   });
   const audit = useQuery({ queryKey: ["membership-audit", sessionId], queryFn: listMembershipAudit });
-  const [showAudit, setShowAudit] = useState(false);
   const refreshSrv = () => qc.invalidateQueries({ queryKey: ["server-members"] });
   const claimMutation = useMutation({
     mutationFn: workspaceClaimMembership,
@@ -2262,21 +2228,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     },
     onError: (e) => toast.error(`Couldn't revoke: ${errMsg(e)}`),
   });
-  const [joinCode, setJoinCode] = useState("");
-  const joinMutation = useMutation({
-    mutationFn: () => workspaceJoinViaInvite(joinCode.trim()),
-    onSuccess: (role) => {
-      if (role) {
-        setJoinCode("");
-        refreshSrv();
-        toast.success(`Joined as ${role}.`);
-      } else {
-        toast.error("That invite code was refused (invalid, expired, revoked, or used up).");
-      }
-    },
-    onError: (e) => toast.error(`Couldn't join: ${errMsg(e)}`),
-  });
-
   // Remote-agent bootstrap generator (relay admins with an issuer key).
   const issuerKey = useQuery({ queryKey: ["has-issuer-key"], queryFn: hasIssuerKey, enabled: relayOn });
   const [agentRole, setAgentRole] = useState("contributor");
@@ -2294,166 +2245,260 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     onError: (e) => toast.error(`Couldn't generate: ${errMsg(e)}`),
   });
 
+  // Relay (server-enforced) membership merged into the member rows: a relay
+  // entry that maps to a workspace member marks that row; the rest are
+  // "Relay only".
+  const roster = members.data ?? [];
+  const relayByMember = new Map<string, ServerMember>();
+  const relayOnly: ServerMember[] = [];
+  for (const m of srvMembers.data ?? []) {
+    const hit = relayMemberFor(m, profile.data?.accountId, roster);
+    if (hit) relayByMember.set(hit.id, m);
+    else relayOnly.push(m);
+  }
+  const removeFromRelay = (m: ServerMember, name: string) =>
+    confirmThen(
+      `Remove ${name} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`,
+      () => srvRemoveMutation.mutate(m.account),
+    );
+  const relayEnforced = relayOn && (srvMembers.data ?? []).length > 0;
+  const openInvites = (invites.data ?? []).filter((i) => !i.revoked);
+
   return (
-    <RailFrame title="People" about="Workspace members and governance roles for this chat." docs={PANE_DOCS.people}>
-      <Section title="Members">
+    <RailFrame
+      title="People"
+      about="Workspace members and governance roles for this chat."
+      docs={PANE_DOCS.people}
+      primary={{ label: "Invite", onClick: () => setInviteOpen(true) }}
+      more={[
+        { label: "Membership history", onSelect: () => setSheet("history") },
+        ...(relayOn ? [{ label: "Add a remote agent…", onSelect: () => setSheet("agent") }] : []),
+      ]}
+    >
+      <Section
+        title="Members"
+        tag={relayEnforced ? <MetaTag>relay enforced</MetaTag> : undefined}
+      >
         {error && (
           <div className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
             {error}
           </div>
         )}
-        {selfMember ? (
-          <Card className="flex items-center justify-between px-3 py-2">
-            <div className="min-w-0">
-              <div className="font-medium">
-                {selfMember.displayName} <span className="text-xs text-ink-soft">· you</span>
-              </div>
-              <div className="text-xs text-ink-soft">{selfMember.role}</div>
-            </div>
-          </Card>
-        ) : (
+        {!selfMember && (
           <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-warm-ink)" }}>
             You aren't in this workspace's roster — it was created under a different identity. If it's
             your own, re-create it; identity is stable going forward.
           </div>
         )}
-        {collaborators.map((member) => {
-          const online = onlineActors.has(member.actorId);
-          const dup = (nameCounts.get(member.displayName) ?? 0) > 1 && member.index > 0;
-          return (
-            <Card key={member.id} className="px-3 py-3">
-              <div className="flex items-center gap-2 font-medium">
-                <span className="relative shrink-0">
-                  <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={26} />
-                  <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--ligus-panel)" }}>
-                    <StatusDot
-                      on={online}
-                      size={9}
-                      label={sync.data?.relayConfigured ? (online ? "Online" : "Offline") : "Presence needs a relay"}
-                    />
-                  </span>
-                </span>
-                {member.displayName}
-                {dup && (
-                  <span
-                    className="text-xs text-ink-soft"
-                    data-tip={`Mention precisely with @${member.displayName}#${member.index}`}
-                  >
-                    #{member.index}
-                  </span>
-                )}
-                {member.title && <span className="text-xs text-ink-soft">· {member.title}</span>}
-                {member.isFounder && (
-                  <Badge title="The workspace's founder: nobody can remove or demote them">founder</Badge>
-                )}
-                {member.kind === "service" && (
-                  <Badge title="A box (ligus serve or a worker): its own member, at most Contributor">service</Badge>
-                )}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                {(() => {
-                  // The backend computes each refusal with the fold's own rules
-                  // (an older backend sends none: everything stays offered).
-                  const refusalOf = (r: string) => member.roleOptions?.find((o) => o.role === r)?.refusal ?? null;
-                  const others = MEMBER_ROLES.filter((r) => r !== member.role);
-                  const allRefused = (member.roleOptions?.length ?? 0) > 0 && others.every((r) => refusalOf(r));
-                  return (
-                    <SubtleSelectField
-                      label="Role"
-                      value={member.role}
-                      disabled={allRefused}
-                      title={allRefused ? `You can't change ${member.displayName}'s role: ${refusalOf(others[0])}` : undefined}
-                      onChange={(r) => setRoleMutation.mutate({ id: member.id, role: r })}
-                    >
-                      {MEMBER_ROLES.map((r) => {
-                        const why = r === member.role ? null : refusalOf(r);
-                        return (
-                          <option key={r} value={r} disabled={Boolean(why)} title={why ?? undefined}>
-                            {r}
-                          </option>
-                        );
-                      })}
-                    </SubtleSelectField>
-                  );
-                })()}
-                <button
-                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
-                  disabled={Boolean(member.removeRefusal)}
-                  onClick={() =>
-                    confirmThen("Remove this member from the roster?", () =>
-                      removeMutation.mutate(member.id),
-                    )
-                  }
-                  data-tip={member.removeRefusal ?? "Remove from the member list only"}
-                >
-                  Remove
-                </button>
-                <button
-                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
-                  disabled={Boolean(member.regrantRefusal)}
-                  onClick={() => regrantMutation.mutate(member.id)}
-                  data-tip={
-                    member.regrantRefusal ??
-                    "Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
-                  }
-                >
-                  Allow new passkey
-                </button>
-                <button
-                  className="shrink-0 text-xs font-medium hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ color: "var(--ligus-danger-ink)" }}
-                  disabled={Boolean(member.removeRefusal)}
-                  onClick={() =>
-                    confirmThen(
-                      `Remove ${member.displayName} and revoke their access? The workspace key will be rotated so they can't read new messages.`,
-                      () => revokeMutation.mutate(member.id),
-                    )
-                  }
-                  data-tip={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
-                >
-                  Remove &amp; revoke
-                </button>
-              </div>
-            </Card>
-          );
-        })}
-        {collaborators.length === 0 && (
-          <EmptyHint text="No extra members have been added yet." />
-        )}
-
-        <FormDisclosure label="Invite someone" open={showInvite} onToggle={() => setShowInvite((v) => !v)}>
-          <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Make a single-use invite link and send it over a channel you trust. It carries your safety code so they
-              can check it came from you. To invite someone you already share another workspace with, use People.
-            </p>
-            <Button variant="primary" disabled={!activeRoom || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
-              {inviteMutation.isPending ? "…" : "Create invite link"}
+        {relayOn && srvMembers.isSuccess && (srvMembers.data ?? []).length === 0 && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs"
+            style={{ borderColor: "var(--ligus-warn-line)", background: "var(--ligus-warn-tint)" }}
+          >
+            <span className="font-semibold" style={{ color: "var(--ligus-warn-ink)" }}>
+              Not enforced: anyone can write
+            </span>
+            <InfoTip
+              label="member controls"
+              text="Who the relay accepts writes from (server-enforced). Claim this workspace on the relay so it enforces who can write; you become the owner. Requires a relay with membership turned on (LANGSTROTH_RELAY_MEMBERSHIP=1); no-op on an open relay."
+            />
+            <span className="flex-1" />
+            <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
+              {claimMutation.isPending ? "…" : "Claim ownership"}
             </Button>
-            {inviteLink && (
-              <textarea
-                readOnly
-                value={inviteLink}
-                rows={3}
-                className="w-full rounded-xl border px-3 py-2 font-mono text-[11px]"
-                style={fieldStyle}
-                aria-label="Invite link"
+          </div>
+        )}
+        <RowList label="Members">
+          {selfMember && (
+            <ListRow
+              leading={<Avatar name={selfMember.displayName} url={selfMember.avatarUrl} kind="human" size={22} />}
+              title={selfMember.displayName}
+              meta={`you · ${selfMember.role}`}
+              trailing={relayByMember.has(selfMember.id) ? <RelayMark role={relayByMember.get(selfMember.id)!.role} /> : undefined}
+            />
+          )}
+          {collaborators.map((member) => {
+            const relay = relayByMember.get(member.id);
+            return (
+              <MemberRow
+                key={member.id}
+                member={member}
+                online={onlineActors.has(member.actorId)}
+                presenceKnown={relayOn}
+                dup={(nameCounts.get(member.displayName) ?? 0) > 1 && member.index > 0}
+                relayRole={relay?.role}
+                onRole={(role) => setRoleMutation.mutate({ id: member.id, role })}
+                onRemove={() =>
+                  confirmThen("Remove this member from the roster?", () => removeMutation.mutate(member.id))
+                }
+                onRegrant={() => regrantMutation.mutate(member.id)}
+                onRevoke={() =>
+                  confirmThen(
+                    `Remove ${member.displayName} and revoke their access? The workspace key will be rotated so they can't read new messages.`,
+                    () => revokeMutation.mutate(member.id),
+                  )
+                }
+                onRemoveFromRelay={relay ? () => removeFromRelay(relay, member.displayName) : undefined}
               />
-            )}
-          </Card>
-        </FormDisclosure>
+            );
+          })}
+        </RowList>
+        {collaborators.length === 0 && <EmptyHint text="No other members yet" />}
+      </Section>
 
-        <FormDisclosure label="Membership history" open={showAudit} onToggle={() => setShowAudit((v) => !v)}>
-          <Card className="space-y-1.5 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              A tamper-evident audit from the signed config log — who joined or was removed, by whom,
-              and when.
-            </p>
-            {(audit.data ?? []).length === 0 ? (
-              <EmptyHint text="No membership changes recorded yet." />
-            ) : (
-              (audit.data ?? []).map((e, i) => (
-                <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
+      {relayOnly.length > 0 && (
+        <Section
+          title="Relay only"
+          info="Accounts the relay accepts writes from that match no member here (for example a box that never joined)."
+        >
+          <RowList label="Relay only">
+            {relayOnly.map((m) => {
+              const name = relayMemberName(m, profile.data?.accountId, roster);
+              return (
+                <ListRow
+                  key={m.account}
+                  title={name}
+                  meta={m.role}
+                  tip={m.account}
+                  actionsLabel={`Actions for ${name}`}
+                  actions={[
+                    { label: "Copy account id", onSelect: () => void navigator.clipboard.writeText(m.account).catch(() => {}) },
+                    { label: "Remove from relay…", danger: true, onSelect: () => removeFromRelay(m, name) },
+                  ]}
+                />
+              );
+            })}
+          </RowList>
+        </Section>
+      )}
+
+      {relayOn && openInvites.length > 0 && (
+        <Section title="Open invites">
+          <RowList label="Open invites">
+            {openInvites.map((i: InviteEntry) => (
+              <ListRow
+                key={i.id}
+                title={i.role}
+                meta={`${i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}${
+                  i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""
+                }`}
+                tip="The code itself was shown once, when it was created."
+                actionsLabel={`Actions for the ${i.role} invite`}
+                actions={[{ label: "Revoke invite", danger: true, onSelect: () => revokeInviteMutation.mutate(i.id) }]}
+              />
+            ))}
+          </RowList>
+        </Section>
+      )}
+
+      <Section title="Workers & hosts">
+        {(hosts.data ?? []).length === 0 ? (
+          <EmptyHint text="No hosts yet" />
+        ) : (
+          <RowList label="Workers and hosts">
+            {(hosts.data ?? []).map((host) => <HostRow key={host.id} host={host} />)}
+          </RowList>
+        )}
+      </Section>
+
+      {inviteOpen && (
+        <Sheet
+          title="Invite someone"
+          side="center"
+          width={420}
+          onClose={() => setInviteOpen(false)}
+          footer={<Button onClick={() => setInviteOpen(false)}>Done</Button>}
+        >
+          <div className="space-y-3">
+          <div className="flex items-center gap-1.5">
+            <Hint className="px-0">Single-use. Send it over a channel you trust.</Hint>
+            <InfoTip
+              label="invite links"
+              text="The link carries your safety code so they can check it came from you. To invite someone you already share another workspace with, use People."
+            />
+          </div>
+          <Button variant="primary" disabled={!activeRoom || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
+            {inviteMutation.isPending ? "…" : "Create invite link"}
+          </Button>
+          {inviteLink && (
+            <textarea
+              readOnly
+              value={inviteLink}
+              rows={3}
+              className="w-full rounded-xl border px-3 py-2 font-mono text-[11px]"
+              style={fieldStyle}
+              aria-label="Invite link"
+            />
+          )}
+          {relayOn && (
+            <FormDisclosure label="Options: a relay invite code" open={inviteOptions} onToggle={() => setInviteOptions((v) => !v)}>
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Hint className="px-0">Joins at a set role; revocable.</Hint>
+                  <InfoTip
+                    label="relay invite codes"
+                    text="Share a code so someone can join at a set role. Codes are revocable, can expire, and can cap how many times they're used. 0 days = never expires; 0 uses = unlimited. The code shows once, on creation."
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={invRole}
+                    onChange={(e) => setInvRole(e.target.value)}
+                    aria-label="Role"
+                    className="rounded-lg border px-2 py-1.5 text-sm"
+                    style={fieldStyle}
+                  >
+                    <option value="viewer">viewer</option>
+                    <option value="contributor">contributor</option>
+                    <option value="admin">admin</option>
+                  </select>
+                  <label className="flex items-center gap-1 text-xs text-ink-soft">
+                    days
+                    <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-ink-soft">
+                    uses
+                    <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
+                  </label>
+                  <Button disabled={createInviteMutation.isPending} onClick={() => createInviteMutation.mutate()}>
+                    Create code
+                  </Button>
+                </div>
+                {lastCode && (
+                  <>
+                    <Hint className="px-0">Shown once. Copy it now.</Hint>
+                    <div
+                      className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
+                      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
+                    >
+                      <code className="truncate text-xs">{lastCode}</code>
+                      <button className="shrink-0 text-xs underline hover:opacity-80" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
+                        Copy
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </FormDisclosure>
+          )}
+          </div>
+        </Sheet>
+      )}
+
+      {sheet === "history" && (
+        <Sheet
+          title="Membership history"
+          description="Signed, tamper-evident log"
+          side="center"
+          width={460}
+          onClose={() => setSheet(null)}
+        >
+          {(audit.data ?? []).length === 0 ? (
+            <EmptyHint text="No changes yet" />
+          ) : (
+            <RowList label="Membership changes">
+              {(audit.data ?? []).map((e, i) => (
+                <li key={i} className="ligus-listrow flex items-baseline justify-between gap-2 px-1 text-xs">
                   <span className="min-w-0 truncate">
                     <span style={{ color: e.action === "removed" ? "var(--ligus-danger-ink)" : "var(--ligus-accent-warm)" }}>
                       {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
@@ -2463,208 +2508,220 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   <span className="shrink-0 text-ink-soft" data-tip={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
-                </div>
-              ))
-            )}
-          </Card>
-        </FormDisclosure>
-      </Section>
+                </li>
+              ))}
+            </RowList>
+          )}
+        </Sheet>
+      )}
 
-      <Section title="Team members (server-enforced)">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to use server-enforced membership." />
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Who the relay accepts writes from. Requires a relay with membership turned on
-              (LANGSTROTH_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write.
-            </p>
-            {(srvMembers.data ?? []).map((m) => (
-              <Card key={m.account} className="flex items-center justify-between px-3 py-2">
-                <div className="min-w-0">
-                  <div className="truncate font-medium">@{m.login}</div>
-                  <div className="text-xs text-ink-soft">
-                    {m.role} · {m.account}
-                  </div>
-                </div>
-                <button
-                  className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--ligus-danger-ink)" }}
-                  onClick={() =>
-                    confirmThen(`Remove @${m.login} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`, () =>
-                      srvRemoveMutation.mutate(m.account),
-                    )
-                  }
-                  data-tip="Remove them on the relay and from the workspace, then rotate the key"
+      {sheet === "agent" && (
+        <Sheet title="Add a remote agent" side="center" width={460} onClose={() => setSheet(null)}>
+          <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Hint className="px-0">A one-paste command for a headless box.</Hint>
+            <InfoTip
+              label="remote agents"
+              text="Generate makes the one-paste command a developer runs on its box (installs the CLI, connects to this workspace, starts the worker). Your relay issuer key mints the agent's identity token locally; only the token travels to the box."
+            />
+          </div>
+          {!issuerKey.data ? (
+            <Hint className="px-0">Add your relay issuer key in Settings → Team sync</Hint>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={agentRole}
+                  onChange={(e) => setAgentRole(e.target.value)}
+                  aria-label="Agent role"
+                  className="rounded-lg border px-2 py-1.5 text-sm"
+                  style={fieldStyle}
                 >
-                  Remove
-                </button>
-              </Card>
-            ))}
-            {(srvMembers.data ?? []).length === 0 && (
-              <Card className="space-y-2 p-3">
-                <div className="text-sm font-semibold">Enable member controls</div>
-                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  Claim this workspace on the relay so it enforces who can write — you become the
-                  owner. No-op on an open relay.
-                </p>
-                <Button variant="primary" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
-                  {claimMutation.isPending ? "…" : "Claim ownership"}
-                </Button>
-              </Card>
-            )}
-          </>
-        )}
-      </Section>
-
-      <Section title="Invites">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to issue invites." />
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Share a code so someone can join at a set role. Codes are revocable, can expire, and
-              can cap how many times they're used. The code shows once, on creation.
-            </p>
-            {/* Issue */}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <select
-                value={invRole}
-                onChange={(e) => setInvRole(e.target.value)}
-                className="rounded-lg border px-2 py-1.5 text-sm"
-                style={fieldStyle}
-              >
-                <option value="viewer">viewer</option>
-                <option value="contributor">contributor</option>
-                <option value="admin">admin</option>
-              </select>
-              <label className="flex items-center gap-1 text-xs text-ink-soft">
-                days
-                <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
-              </label>
-              <label className="flex items-center gap-1 text-xs text-ink-soft">
-                uses
-                <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
-              </label>
-              <Button variant="primary" disabled={createInviteMutation.isPending} onClick={() => createInviteMutation.mutate()}>
-                Create invite
-              </Button>
-            </div>
-            <p className="mt-1 text-[11px] text-ink-soft">0 days = never expires · 0 uses = unlimited.</p>
-            {lastCode && (
-              <div
-                className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
-                style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-              >
-                <code className="truncate text-xs">{lastCode}</code>
-                <button className="shrink-0 text-xs underline hover:opacity-80" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
-                  Copy
-                </button>
-              </div>
-            )}
-            {/* Existing invites */}
-            {(invites.data ?? []).filter((i) => !i.revoked).map((i: InviteEntry) => (
-              <div key={i.id} className="mt-1.5 flex items-center justify-between gap-2 text-sm">
-                <span className="min-w-0">
-                  <span className="font-medium">{i.role}</span>{" "}
-                  <span className="text-xs text-ink-soft">
-                    · {i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}
-                    {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
-                  </span>
-                </span>
-                <button className="shrink-0 text-xs underline-offset-2 hover:underline" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
-                  Revoke
-                </button>
-              </div>
-            ))}
-            {/* Redeem (for a joiner) */}
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value)}
-                placeholder="Have a code? Paste it to join"
-                className="flex-1 rounded-lg border px-2.5 py-1.5 font-mono text-xs"
-                style={fieldStyle}
-                onKeyDown={(e) => e.key === "Enter" && joinCode.trim() && joinMutation.mutate()}
-              />
-              <Button variant="ghost" disabled={!joinCode.trim() || joinMutation.isPending} onClick={() => joinMutation.mutate()}>
-                Join
-              </Button>
-            </div>
-          </>
-        )}
-      </Section>
-
-      <Section title="Remote agents">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to add remote agents." />
-        ) : !issuerKey.data ? (
-          <p className="text-xs text-ink-soft">
-            To generate a one-paste command for a headless agent, add your relay issuer key in
-            Settings → Team sync (advanced). The key mints the agent's identity token locally; only
-            the token travels to the box.
-          </p>
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Enroll a remote agent and generate the exact command a developer runs on its box —
-              installs the CLI, connects to this workspace, and starts the worker.
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <select
-                value={agentRole}
-                onChange={(e) => setAgentRole(e.target.value)}
-                className="rounded-lg border px-2 py-1.5 text-sm"
-                style={fieldStyle}
-              >
-                <option value="viewer">viewer</option>
-                <option value="contributor">contributor</option>
-                <option value="admin">admin</option>
-              </select>
-              <input
-                value={agentLabel}
-                onChange={(e) => setAgentLabel(e.target.value)}
-                placeholder="box label (optional)"
-                className="w-28 rounded-lg border px-2.5 py-1.5 text-sm"
-                style={fieldStyle}
-              />
-              <Button
-                variant="primary"
-                disabled={bootstrapMutation.isPending}
-                onClick={() => bootstrapMutation.mutate()}
-              >
-                Generate
-              </Button>
-            </div>
-            {agentBlock && (
-              <div className="mt-2">
-                <textarea
-                  readOnly
-                  value={agentBlock}
-                  spellCheck={false}
-                  className="h-28 w-full rounded-lg border p-2 font-mono text-[11px]"
+                  <option value="viewer">viewer</option>
+                  <option value="contributor">contributor</option>
+                  <option value="admin">admin</option>
+                </select>
+                <input
+                  value={agentLabel}
+                  onChange={(e) => setAgentLabel(e.target.value)}
+                  placeholder="box label (optional)"
+                  className="w-36 rounded-lg border px-2.5 py-1.5 text-sm"
                   style={fieldStyle}
                 />
-                <button
-                  className="mt-1 text-xs underline text-ink-soft hover:text-ink"
-                  onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
-                >
-                  Copy again
-                </button>
+                <Button variant="primary" disabled={bootstrapMutation.isPending} onClick={() => bootstrapMutation.mutate()}>
+                  Generate
+                </Button>
               </div>
-            )}
-          </>
-        )}
-      </Section>
-
-      <Section title="Workers & hosts">
-        {(hosts.data ?? []).length === 0 ? (
-          <EmptyHint text="No hosts registered." />
-        ) : (
-          (hosts.data ?? []).map((host) => <HostRow key={host.id} host={host} />)
-        )}
-      </Section>
+              {agentBlock && (
+                <div>
+                  <textarea
+                    readOnly
+                    value={agentBlock}
+                    spellCheck={false}
+                    aria-label="Bootstrap command"
+                    className="h-28 w-full rounded-lg border p-2 font-mono text-[11px]"
+                    style={fieldStyle}
+                  />
+                  <button
+                    className="mt-1 text-xs underline text-ink-soft hover:text-ink"
+                    onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
+                  >
+                    Copy again
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          </div>
+        </Sheet>
+      )}
     </RailFrame>
+  );
+}
+
+type ServerMember = import("@/lib/ipc").MemberEntry;
+
+/// The workspace member a relay entry belongs to: your own account, or the
+/// member whose actor id is the relay account (with or without "ligus:").
+function relayMemberFor<T extends { id: string; actorId: string; isSelf?: boolean }>(
+  m: { account: string },
+  myAccountId: string | undefined,
+  roster: T[],
+): T | undefined {
+  const id = m.account.replace(/^ligus:/, "");
+  if (myAccountId && id === myAccountId) return roster.find((r) => r.isSelf);
+  return roster.find((r) => r.actorId === id || r.actorId === m.account);
+}
+
+/// A relay member's readable name: their forge login when the relay has one,
+/// else the matching member, else a short account id. Never a bare "@".
+function relayMemberName(
+  m: { account: string; login: string },
+  myAccountId: string | undefined,
+  roster: { id: string; actorId: string; displayName: string; isSelf?: boolean }[],
+): string {
+  if (m.login) return `@${m.login}`;
+  const hit = relayMemberFor(m, myAccountId, roster);
+  if (hit) return hit.isSelf ? "you" : hit.displayName;
+  return `account ${m.account.replace(/^ligus:/, "").slice(0, 8)}`;
+}
+
+/// A small mark on a member row: the relay also enforces this member.
+function RelayMark({ role }: { role: string }) {
+  return (
+    <span
+      className="shrink-0 text-[11px]"
+      style={{ color: "var(--ligus-ink-soft)" }}
+      data-tip={`The relay accepts writes from them (${role})`}
+      aria-label={`On the relay as ${role}`}
+      role="img"
+    >
+      relay
+    </span>
+  );
+}
+
+type RosterMember = import("@/bindings/WorkspaceMemberDto").WorkspaceMemberDto & { index: number };
+
+/// One workspace member as a single row; role changes and removal live in
+/// the row menu (right-click, the hover "⋯", or Shift+F10).
+function MemberRow({
+  member,
+  online,
+  presenceKnown,
+  dup,
+  relayRole,
+  onRole,
+  onRemove,
+  onRegrant,
+  onRevoke,
+  onRemoveFromRelay,
+}: {
+  member: RosterMember;
+  online: boolean;
+  presenceKnown: boolean;
+  dup: boolean;
+  /// Set when the relay also enforces this member.
+  relayRole?: string;
+  onRole: (role: string) => void;
+  onRemove: () => void;
+  onRegrant: () => void;
+  onRevoke: () => void;
+  onRemoveFromRelay?: () => void;
+}) {
+  // The backend computes each refusal with the fold's own rules (an older
+  // backend sends none: everything stays offered).
+  const refusalOf = (r: string) => member.roleOptions?.find((o) => o.role === r)?.refusal ?? null;
+  const roleActions: RowAction[] = MEMBER_ROLES.filter((r) => r !== member.role).map((r) => ({
+    label: `Change role to ${r}`,
+    onSelect: () => onRole(r),
+    disabled: Boolean(refusalOf(r)),
+    title: refusalOf(r) ?? undefined,
+  }));
+  const rm = useRowMenu(`Actions for ${member.displayName}`, [
+    ...roleActions,
+    {
+      label: "Allow new passkey",
+      onSelect: onRegrant,
+      disabled: Boolean(member.regrantRefusal),
+      title:
+        member.regrantRefusal ??
+        "Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey.",
+    },
+    {
+      label: "Remove",
+      onSelect: onRemove,
+      danger: true,
+      disabled: Boolean(member.removeRefusal),
+      title: member.removeRefusal ?? "Remove from the member list only",
+    },
+    {
+      label: "Remove & revoke",
+      onSelect: onRevoke,
+      danger: true,
+      disabled: Boolean(member.removeRefusal),
+      title: member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)",
+    },
+    ...(onRemoveFromRelay
+      ? [
+          {
+            label: "Remove from relay…",
+            onSelect: onRemoveFromRelay,
+            danger: true,
+            title: "Remove them on the relay and from the workspace, then rotate the key",
+          },
+        ]
+      : []),
+  ]);
+  return (
+    <li className="px-1" {...rm.rowProps} data-testid={`member-${member.id}`}>
+      <div className="ligus-listrow flex items-center gap-2">
+        <span className="relative shrink-0">
+          <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={22} />
+          <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--ligus-panel)" }}>
+            <StatusDot on={online} size={8} label={presenceKnown ? (online ? "Online" : "Offline") : "Presence needs a relay"} />
+          </span>
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 truncate text-[13px] font-medium">{member.displayName}</span>
+          {dup && (
+            <span className="shrink-0 text-xs text-ink-soft" data-tip={`Mention precisely with @${member.displayName}#${member.index}`}>
+              #{member.index}
+            </span>
+          )}
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-soft">
+            {member.title ? `${member.title} · ${member.role}` : member.role}
+          </span>
+        </span>
+        {member.isFounder && <Badge title="The workspace's founder: nobody can remove or demote them">founder</Badge>}
+        {member.kind === "service" && (
+          <Badge title="A box (ligus serve or a worker): its own member, at most Contributor">service</Badge>
+        )}
+        {relayRole && <RelayMark role={relayRole} />}
+        {rm.button}
+      </div>
+      {rm.menu}
+    </li>
   );
 }
 
@@ -2673,31 +2730,12 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 function HostRow({ host }: { host: WorkspaceHostDto }) {
   const gateways = hostGatewaysLabel(host);
   return (
-    <Card className="px-3 py-2">
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
-        <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
-        <span
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider"
-          style={{
-            background: "color-mix(in srgb, var(--ligus-accent-cool) 15%, transparent)",
-            color: "var(--ligus-accent-ink)",
-          }}
-        >
-          {host.kind}
-        </span>
-      </div>
-      <span className="shrink-0 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
-        {host.online ? "online" : relativeAgo(host.lastSeen)}
-      </span>
-    </div>
-    {gateways && (
-      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--ligus-ink-soft)" }} data-tip="Model gateways this host's operator lists">
-        Gateways: {gateways}
-      </div>
-    )}
-    </Card>
+    <ListRow
+      leading={<StatusDot on={host.online} size={8} label={host.online ? "Online" : "Offline"} />}
+      title={host.label || "Unnamed host"}
+      meta={`${host.kind} · ${host.online ? "online" : relativeAgo(host.lastSeen)}`}
+      tip={gateways ? `Gateways: ${gateways}` : undefined}
+    />
   );
 }
 
@@ -2745,7 +2783,7 @@ function AgentTargetPicker({
       </div>
       {agents.length === 0 ? (
         <div className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-          No agents in this workspace — this stays global.
+          No agents yet: applies to all.
         </div>
       ) : (
         <div
@@ -2766,18 +2804,6 @@ function AgentTargetPicker({
         </div>
       )}
     </div>
-  );
-}
-
-/** Small pill showing a skill/vault's target scope on its row. */
-function TargetBadge({ agentIds, agents }: { agentIds: string[]; agents: WorkspaceAgentDto[] }) {
-  return (
-    <span
-      className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-      style={{ background: "var(--ligus-mist)", color: "var(--ligus-ink-soft)" }}
-    >
-      {targetLabel(agentIds, agents)}
-    </span>
   );
 }
 
@@ -2816,43 +2842,42 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
   return (
     <RailFrame title="Vaults" about="Reference material mounted into this workspace." docs={PANE_DOCS.vaults}>
       <Section title="Sources">
-        {(vaults.data ?? []).map((vault) => (
-          <Card key={vault.url} className="px-3 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="font-medium">{vault.label}</div>
-                <div className="mt-1 truncate text-xs text-ink-soft">
-                  {vault.kind} · {vault.url}
-                </div>
-                <div className="mt-1.5">
-                  <TargetBadge agentIds={vault.agentIds} agents={agents.data ?? []} />
-                </div>
-              </div>
-              <div className="flex gap-2 text-xs">
-                <button className="text-ink-soft hover:text-ink" onClick={() => previewVaultMutation.mutate(vault.url)}>
-                  Preview
-                </button>
-                <button
-                  className="hover:opacity-80"
-                  style={{ color: "var(--ligus-danger-ink)" }}
-                  onClick={() => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url))}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-            {preview?.url === vault.url && (
-              <pre
-                className="mt-3 max-h-56 overflow-auto rounded-2xl p-3 text-xs leading-5"
-                style={{ background: "var(--ligus-mist)" }}
+        {(vaults.data ?? []).length > 0 && (
+          <RowList label="Vaults">
+            {(vaults.data ?? []).map((vault) => (
+              <ListRow
+                key={vault.url}
+                title={vault.label}
+                meta={`${vault.kind} · ${targetLabel(vault.agentIds, agents.data ?? [])}`}
+                tip={vault.url}
+                onClick={() =>
+                  preview?.url === vault.url ? setPreview(null) : previewVaultMutation.mutate(vault.url)
+                }
+                selected={preview?.url === vault.url}
+                actionsLabel={`Actions for ${vault.label}`}
+                actions={[
+                  { label: "Preview", onSelect: () => previewVaultMutation.mutate(vault.url) },
+                  {
+                    label: "Remove vault…",
+                    danger: true,
+                    onSelect: () => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url)),
+                  },
+                ]}
               >
-                {preview.text}
-              </pre>
-            )}
-          </Card>
-        ))}
+                {preview?.url === vault.url ? (
+                  <pre
+                    className="max-h-56 overflow-auto rounded-xl p-3 text-xs leading-5"
+                    style={{ background: "var(--ligus-mist)" }}
+                  >
+                    {preview.text}
+                  </pre>
+                ) : undefined}
+              </ListRow>
+            ))}
+          </RowList>
+        )}
         {(vaults.data ?? []).length === 0 && (
-          <EmptyHint text="No vault sources are mounted in this chat." />
+          <EmptyHint text="No vaults mounted" />
         )}
         <FormDisclosure label="Add vault" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
           <Card className="space-y-2 p-3">
@@ -2889,6 +2914,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
 }
 
 function SkillsPane({ sessionId }: { sessionId: string }) {
+  const [openSkill, setOpenSkill] = useState<string | null>(null);
   const qc = useQueryClient();
   const skills = useQuery({ queryKey: ["skills", sessionId], queryFn: () => listSkills(sessionId) });
   const agents = useQuery({ queryKey: ["agents", sessionId], queryFn: () => listAgents(sessionId) });
@@ -2916,34 +2942,36 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
 
   return (
     <RailFrame title="Skills" about="Instruction bundles injected into the active participants." docs={PANE_DOCS.skills}>
-      <Section title="Loaded Skills">
-        {(skills.data ?? []).map((skill) => (
-          <Card key={skill.id} className="px-3 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="font-medium">{skill.name}</div>
-                {skill.sourceUrl && <div className="mt-1 truncate text-xs text-ink-soft">{skill.sourceUrl}</div>}
-                <div className="mt-2 line-clamp-3 text-xs leading-5 text-ink-soft">{skill.instructions}</div>
-                <div className="mt-1.5">
-                  <TargetBadge agentIds={skill.agentIds} agents={agents.data ?? []} />
-                </div>
-              </div>
-              <button
-                onClick={() => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id))}
-                className="text-xs hover:opacity-80"
-                style={{ color: "var(--ligus-danger-ink)" }}
+      <Section title="Loaded">
+        {(skills.data ?? []).length > 0 && (
+          <RowList label="Skills">
+            {(skills.data ?? []).map((skill) => (
+              <ListRow
+                key={skill.id}
+                title={skill.name}
+                meta={targetLabel(skill.agentIds, agents.data ?? [])}
+                tip={skill.sourceUrl || undefined}
+                onClick={() => setOpenSkill(openSkill === skill.id ? null : skill.id)}
+                selected={openSkill === skill.id}
+                actionsLabel={`Actions for ${skill.name}`}
+                actions={[
+                  {
+                    label: "Remove skill…",
+                    danger: true,
+                    onSelect: () => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id)),
+                  },
+                ]}
               >
-                Remove
-              </button>
-            </div>
-          </Card>
-        ))}
-        {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded for this chat." />}
+                {openSkill === skill.id ? (
+                  <div className="whitespace-pre-wrap px-1 text-xs leading-5 text-ink-soft">{skill.instructions}</div>
+                ) : undefined}
+              </ListRow>
+            ))}
+          </RowList>
+        )}
+        {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded" />}
         <FormDisclosure label="Install skill" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
           <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Supports direct URLs, GitHub blob URLs, and owner/repo/path references.
-            </p>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -2954,7 +2982,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             <input
               value={source}
               onChange={(event) => setSource(event.target.value)}
-              placeholder="skills.sh/... or owner/repo/SKILL.md"
+              placeholder="URL, GitHub blob URL or owner/repo/SKILL.md"
               className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
               style={fieldStyle}
             />
@@ -3070,7 +3098,7 @@ function ContextPane({
   if (telemetry.isError) {
     return (
       <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
-        <EmptyHint text="Context telemetry is temporarily unavailable. Keep chatting and retry this tab." />
+        <EmptyHint text="Context unavailable right now" />
       </RailFrame>
     );
   }
@@ -3127,69 +3155,61 @@ function ContextPane({
                 color: "var(--ligus-danger-ink)",
               }}
             >
-              Context is getting full — consider removing unused skills or vaults below.
+              Context is getting full. Remove unused skills or vaults.
             </div>
           )}
         </div>
-        <div className="mt-2 grid grid-cols-3 gap-1.5 text-center">
-          <ContextStat label="Messages" value={String(data?.messageCount ?? 0)} />
-          <ContextStat label="Skills" value={String(data?.skillCount ?? 0)} />
-          <ContextStat label="Vaults" value={String(data?.vaultCount ?? 0)} />
-        </div>
+        <Hint className="mt-1.5">
+          {data?.messageCount ?? 0} messages · {data?.skillCount ?? 0} skills · {data?.vaultCount ?? 0} vaults
+        </Hint>
       </Section>
 
-      <Section title="Injected Skills">
+      <Section title="Skills">
         {(skills.data ?? []).length === 0 ? (
-          <EmptyHint text="No skills loaded. Skills inject instructions into every turn." />
+          <EmptyHint text="No skills loaded" />
         ) : (
-          (skills.data ?? []).map((skill) => {
-            const est = Math.ceil(skill.instructions.length / 4);
-            return (
-              <div
+          <RowList label="Injected skills">
+            {(skills.data ?? []).map((skill) => (
+              <ListRow
                 key={skill.id}
-                className="flex items-start gap-2 rounded-xl border px-2.5 py-2"
-                style={panelStyle}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{skill.name}</div>
-                  <div className="mt-0.5 text-xs text-ink-soft">~{fmtTokens(est)} tokens in prompt</div>
-                </div>
-                <IconButton
-                  label="Remove skill"
-                  size={24}
-                  onClick={() => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id))}
-                >
-                  <IconX size={14} />
-                </IconButton>
-              </div>
-            );
-          })
+                title={skill.name}
+                meta={`~${fmtTokens(Math.ceil(skill.instructions.length / 4))} tokens`}
+                actionsLabel={`Actions for ${skill.name}`}
+                actions={[
+                  {
+                    label: "Remove skill…",
+                    danger: true,
+                    onSelect: () => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id)),
+                  },
+                ]}
+              />
+            ))}
+          </RowList>
         )}
       </Section>
 
-      <Section title="Mounted Vaults">
+      <Section title="Vaults">
         {(vaults.data ?? []).length === 0 ? (
-          <EmptyHint text="No vaults mounted. Vaults inject reference material into context." />
+          <EmptyHint text="No vaults mounted" />
         ) : (
-          (vaults.data ?? []).map((vault) => (
-            <div
-              key={vault.url}
-              className="flex items-start gap-2 rounded-xl border px-2.5 py-2"
-              style={panelStyle}
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{vault.label}</div>
-                <div className="mt-0.5 text-xs text-ink-soft">{vault.kind} reference source</div>
-              </div>
-              <IconButton
-                label="Unmount vault"
-                size={24}
-                onClick={() => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url))}
-              >
-                <IconX size={14} />
-              </IconButton>
-            </div>
-          ))
+          <RowList label="Mounted vaults">
+            {(vaults.data ?? []).map((vault) => (
+              <ListRow
+                key={vault.url}
+                title={vault.label}
+                meta={vault.kind}
+                tip={vault.url}
+                actionsLabel={`Actions for ${vault.label}`}
+                actions={[
+                  {
+                    label: "Unmount vault…",
+                    danger: true,
+                    onSelect: () => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url)),
+                  },
+                ]}
+              />
+            ))}
+          </RowList>
         )}
       </Section>
     </RailFrame>
@@ -3244,15 +3264,6 @@ export function SubtleSelectField({
         <IconChevronDown size={13} />
       </span>
     </label>
-  );
-}
-
-function ContextStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border py-2 text-center" style={panelStyle}>
-      <div className="text-base font-semibold">{value}</div>
-      <div className="text-[11px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
-    </div>
   );
 }
 

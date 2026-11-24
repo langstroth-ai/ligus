@@ -81,7 +81,10 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const fieldStyle = { borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" };
   return (
     <>
-      <Section title="Dearth mode">
+      <Section
+        title="Dearth mode"
+        info="A tight entrance for hostile periods: a leaked invite, an untrusted repository or a new worker host."
+      >
         <div
           className="rounded-xl border p-3"
           style={{
@@ -99,18 +102,15 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13.5px] font-semibold">A tight entrance for hostile periods</span>
+                <span className="text-[13.5px] font-semibold">When it's on</span>
                 <Badge tone={d.enabled ? "warn" : "neutral"}>{d.enabled ? "on" : "off"}</Badge>
               </div>
-              <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
-                For a leaked invite, an untrusted repository or a new worker host.
-                {d.enabled && (
-                  <>
-                    {" "}On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
-                    {d.setBy ? `, by ${d.setBy}` : ""}.
-                  </>
-                )}
-              </p>
+              {d.enabled && (
+                <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
+                  On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
+                  {d.setBy ? `, by ${d.setBy}` : ""}.
+                </p>
+              )}
             </div>
             {d.canManage && (
               <Button
@@ -173,9 +173,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
 
       {d.pending.length > 0 && (
         <Section title="Waiting for a second approval">
-          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }}>
+          <ul className="ligus-rowlist">
             {d.pending.map((p) => (
-              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={p.subject} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
                 <span className="min-w-0">
                   <span className="font-medium">{p.name}</span>{" "}
                   <span className="text-xs text-ink-soft">
@@ -196,9 +196,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
       )}
 
       <Section title="Entrances">
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="entrances">
+        <ul className="ligus-rowlist" data-testid="entrances">
           {d.entrances.map((e) => (
-            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+            <li key={`${e.kind}:${e.name}`} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
               <span>
                 {e.name} <span className="text-xs text-ink-soft">{e.kind}</span>
               </span>
@@ -234,17 +234,13 @@ function HygienePanel() {
   return (
     <Section
       title="Hygiene"
+      info="Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer apply to their chat's branch."
       action={
         <Button disabled={run.isPending} onClick={() => run.mutate()}>
           Sweep now
         </Button>
       }
     >
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the
-        checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer
-        apply to their chat&apos;s branch.
-      </p>
       {r && (
         <p className="text-[13px]" data-testid="hygiene-summary">
           {hygieneSummary(r)}
@@ -279,22 +275,20 @@ function ThrottlePanel() {
   if (q.isPending) return <LoadingState rows={1} label="Loading plan windows" />;
   if (!t) return null;
   return (
-    <Section title="Plan windows">
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Near a subscription&apos;s usage limit, agents back off in steps instead of all stopping at once: scheduled runs
-        pause from about {t.backgroundPct}%, workflow stages and agent hand-offs from about {t.workflowPct}% (each agent
-        at a slightly different point). Your own requests always run.
-      </p>
+    <Section
+      title="Plan windows"
+      info={`Near a subscription's usage limit, agents back off in steps instead of all stopping at once: scheduled runs pause from about ${t.backgroundPct}%, workflow stages and agent hand-offs from about ${t.workflowPct}% (each agent at a slightly different point). Your own requests always run.`}
+    >
       {t.windows.length === 0 ? (
         <div data-testid="no-windows">
-          <EmptyHint text="No runtime has reported a plan window yet." />
+          <EmptyHint text="No plan windows reported yet" />
         </div>
       ) : (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="windows">
+        <ul className="ligus-rowlist" data-testid="windows">
           {t.windows.map((w) => {
             const tone = TONE[windowTone(w.effectivePct, t)];
             return (
-              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={w.runtime} className="ligus-listrow px-1 text-[13px]">
                 <div className="flex items-center justify-between gap-2">
                   <span>
                     <span className="font-medium">{w.runtime}</span>

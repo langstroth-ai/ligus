@@ -11,7 +11,9 @@ import {
   setMcpEnabled,
   setMcpBearerToken,
 } from "@/lib/ipc";
-import { Button, Field, FormDisclosure, Section, Switch, fieldStyle } from "@/components/ui";
+import { Button, Field, FormDisclosure, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
+import type { RowAction } from "@/components/RowMenu";
+import type { McpServerDto } from "@/lib/ipc";
 import { IconPlus } from "@/lib/icons";
 import { toast, errMsg } from "@/components/Toast";
 import { promptDialog } from "@/components/Dialog";
@@ -112,11 +114,10 @@ export function ToolsSection() {
   });
   const hasLinear = (servers.data ?? []).some((s) => s.id === "linear");
   return (
-    <Section title="MCP servers">
-      <p className="text-xs text-ink-soft">
-        Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize
-        it, or install a workspace-scoped entry from a manifest URL or GitHub reference.
-      </p>
+    <Section
+      title="MCP servers"
+      info="Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize it, or install a workspace-scoped entry from a manifest URL or GitHub reference."
+    >
       {!hasLinear && (
         <Button onClick={() => addLinear.mutate()} disabled={addLinear.isPending} className="self-start">
           <IconPlus size={15} /> Add Linear (issues)
@@ -127,6 +128,7 @@ export function ToolsSection() {
           value={source}
           onChange={(e) => setSource(e.target.value)}
           placeholder="owner/repo/mcp.json or https://…"
+          aria-label="MCP manifest URL or GitHub reference"
           className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm"
           style={fieldStyle}
         />
@@ -186,103 +188,132 @@ export function ToolsSection() {
         </form>
       </FormDisclosure>
       {servers.data?.length === 0 && <p className="text-sm text-ink-soft">None configured.</p>}
-      {(servers.data ?? []).map((s) => (
-        <div
-          key={s.id}
-          className="flex items-center justify-between rounded-xl border px-3 py-2"
-          style={fieldStyle}
-        >
-          <span>
-            <span className="font-medium">{s.id}</span>{" "}
-            <span className="text-xs text-ink-soft">
-              [{s.transport}] {s.detail}
-            </span>
-            {s.hasBearerToken && (
-              <span className="ml-2 text-xs text-ink-soft" data-tip="A static bearer token is saved on this device">
-                · token set
-              </span>
-            )}
-            {!s.hasBearerToken && s.oauthConnected && (
-              <span className="ml-2 text-xs text-ink-soft">· connected</span>
-            )}
-            {s.shellTools && s.shellTools.length > 0 && (
-              <span
-                className="ml-2 text-xs font-medium"
-                style={{ color: "var(--ligus-danger-ink)" }}
-                data-tip="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
-              >
-                · offers a shell ({s.shellTools.join(", ")}): Owner turns only
-              </span>
-            )}
-            {s.enabled && s.shellTools === null && (
-              <span
-                className="ml-2 text-xs text-ink-soft"
-                data-tip="Until this device has listed the server's tools, turns without the shell don't get it."
-              >
-                · tools not checked yet
-              </span>
-            )}
-            {s.secretForOtherUrl && (
-              <span
-                className="ml-2 text-xs text-ink-soft"
-                data-tip="This server's URL changed since its token was saved, so the token is not sent. Set the token again or reconnect."
-              >
-                · token saved for a different URL
-              </span>
-            )}
-          </span>
-          <span className="flex items-center gap-3">
-            {s.transport === "http" && (
-              <button
-                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
-                disabled={setToken.isPending}
-                onClick={() => setToken.mutate({ id: s.id, clear: s.hasBearerToken })}
-                data-tip={
-                  s.hasBearerToken
-                    ? "Remove the saved bearer token"
-                    : "Save a static bearer token (stored on this device only)"
-                }
-              >
-                {s.hasBearerToken ? "Clear token" : "Set token"}
-              </button>
-            )}
-            {s.transport === "http" && (
-              <button
-                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
-                disabled={connect.isPending}
-                onClick={() => connect.mutate(s.id)}
-                data-tip="Authorize this server in your browser (OAuth)"
-              >
-                Connect
-              </button>
-            )}
-            {s.enabled && (
-              <button
-                className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
-                disabled={inspect.isPending}
-                onClick={() => inspect.mutate(s.id)}
-                data-tip="List this server's tools now and flag any that run shell commands"
-              >
-                Check tools
-              </button>
-            )}
-            <Switch
-              on={s.enabled}
-              onChange={(v) => toggle.mutate({ id: s.id, enabled: v })}
-              label={`Enable ${s.id}`}
+      {(servers.data ?? []).length > 0 && (
+        <RowList label="MCP servers">
+          {(servers.data ?? []).map((s) => (
+            <McpRow
+              key={s.id}
+              s={s}
+              onToggle={(v) => toggle.mutate({ id: s.id, enabled: v })}
+              onToken={() => setToken.mutate({ id: s.id, clear: s.hasBearerToken })}
+              tokenBusy={setToken.isPending}
+              onConnect={() => connect.mutate(s.id)}
+              connectBusy={connect.isPending}
+              onInspect={() => inspect.mutate(s.id)}
+              inspectBusy={inspect.isPending}
+              onRemove={() => remove.mutate(s.id)}
             />
-            {s.isManaged && (
-              <button
-                className="text-xs hover:opacity-80"
-                style={{ color: "var(--ligus-danger-ink)" }}
-                onClick={() => remove.mutate(s.id)}
-              >
-                Remove
-              </button>
-            )}
-          </span>
-        </div>
-      ))}
+          ))}
+        </RowList>
+      )}
     </Section>
+  );
+}
+
+/// One MCP server: a single line (id, transport, status, switch). The token,
+/// connect, check and remove actions live in the row menu (right-click or ⋯).
+/// An HTTP server that isn't authorized yet keeps a visible Connect, and the
+/// shell warning is security information, so it stays under the line.
+function McpRow({
+  s,
+  onToggle,
+  onToken,
+  tokenBusy,
+  onConnect,
+  connectBusy,
+  onInspect,
+  inspectBusy,
+  onRemove,
+}: {
+  s: McpServerDto;
+  onToggle: (v: boolean) => void;
+  onToken: () => void;
+  tokenBusy: boolean;
+  onConnect: () => void;
+  connectBusy: boolean;
+  onInspect: () => void;
+  inspectBusy: boolean;
+  onRemove: () => void;
+}) {
+  const http = s.transport === "http";
+  const needsAuth = http && !s.hasBearerToken && !s.oauthConnected;
+  const actions: RowAction[] = [
+    ...(http
+      ? [
+          {
+            label: s.hasBearerToken ? "Clear token" : "Set token",
+            onSelect: onToken,
+            disabled: tokenBusy,
+            title: s.hasBearerToken ? "Remove the saved bearer token" : "Save a static bearer token (stored on this device only)",
+          },
+          { label: "Connect", onSelect: onConnect, disabled: connectBusy, title: "Authorize this server in your browser (OAuth)" },
+        ]
+      : []),
+    ...(s.enabled
+      ? [
+          {
+            label: "Check tools",
+            onSelect: onInspect,
+            disabled: inspectBusy,
+            title: "List this server's tools now and flag any that run shell commands",
+          },
+        ]
+      : []),
+    ...(s.isManaged ? [{ label: "Remove", onSelect: onRemove, danger: true }] : []),
+  ];
+  return (
+    <ListRow
+      title={s.id}
+      actions={actions}
+      meta={
+        <>
+          [{s.transport}] {s.detail}
+          {s.hasBearerToken && (
+            <span className="ml-1" data-tip="A static bearer token is saved on this device">
+              · token set
+            </span>
+          )}
+          {!s.hasBearerToken && s.oauthConnected && <span className="ml-1">· connected</span>}
+          {s.enabled && s.shellTools === null && (
+            <span className="ml-1" data-tip="Until this device has listed the server's tools, turns without the shell don't get it.">
+              · tools not checked yet
+            </span>
+          )}
+          {s.secretForOtherUrl && (
+            <span
+              className="ml-1"
+              data-tip="This server's URL changed since its token was saved, so the token is not sent. Set the token again or reconnect."
+            >
+              · token saved for a different URL
+            </span>
+          )}
+        </>
+      }
+      trailing={
+        <>
+          {needsAuth && (
+            <button
+              className="text-xs underline text-ink-soft hover:text-ink disabled:opacity-40"
+              disabled={connectBusy}
+              onClick={onConnect}
+              data-tip="Authorize this server in your browser (OAuth)"
+            >
+              Connect
+            </button>
+          )}
+          <Switch on={s.enabled} onChange={onToggle} label={`Enable ${s.id}`} />
+        </>
+      }
+    >
+      {s.shellTools && s.shellTools.length > 0 ? (
+        <div
+          className="px-1 text-xs font-medium"
+          style={{ color: "var(--ligus-danger-ink)" }}
+          data-tip="A tool that runs shell commands is a shell: only turns that have the shell (the workspace Owner's, or an agent the Owner granted it) get this server."
+        >
+          · offers a shell ({s.shellTools.join(", ")}): Owner turns only
+        </div>
+      ) : null}
+    </ListRow>
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from "react";
+import { useRowMenu } from "@/components/RowMenu";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { listZones, removeZone, setZone, type PathZone, type Role, type ZoneKind } from "@/lib/flow";
 
@@ -53,26 +53,16 @@ export function ZonesView({
   const [approvals, setApprovals] = useState("");
   return (
     <div className="space-y-4">
-      <Muted>
-        A change touching any core path needs its bar (a core zone only ever raises it). A change whose every file is low-bar
-        may need fewer approvals, never fewer than one. Patterns: a folder (<code>crates/core/</code>), a file, or a glob
-        (<code>**/*.md</code>).
-      </Muted>
-      <Section title="Zones">
+      <Section
+        title="Zones"
+        info="A change touching any core path needs its bar (a core zone only ever raises it). A change whose every file is low-bar may need fewer approvals, never fewer than one. Patterns: a folder (crates/core/), a file, or a glob (**/*.md)."
+      >
         {zones.length === 0 ? (
-          <EmptyHint text="No zones yet. Every change uses its proposal's own bar." />
+          <EmptyHint text="No zones yet." />
         ) : (
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {zones.map((z) => (
-              <li key={z.id} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
-                <span>
-                  <code className="break-all">{z.pattern}</code> · {zoneSummary(z)}
-                  {z.note && ` — ${z.note}`}
-                </span>
-                <Button size="sm" onClick={() => onRemove(z.id)}>
-                  Remove
-                </Button>
-              </li>
+              <ZoneItem key={z.id} z={z} onRemove={onRemove} />
             ))}
           </ul>
         )}
@@ -113,5 +103,19 @@ export function ZonesView({
         </Button>
       </Section>
     </div>
+  );
+}
+
+function ZoneItem({ z, onRemove }: { z: Parameters<typeof zoneSummary>[0] & { id: string; pattern: string; note?: string | null }; onRemove: (id: string) => void }) {
+  const menu = useRowMenu(`Actions for zone ${z.pattern}`, [{ label: "Remove", danger: true, onSelect: () => onRemove(z.id) }]);
+  return (
+    <li className="ligus-listrow flex items-center justify-between gap-2 px-1" {...menu.rowProps}>
+      <span className="min-w-0 truncate" data-tip={z.note || undefined}>
+        <code>{z.pattern}</code> · {zoneSummary(z)}
+        {z.note && ` — ${z.note}`}
+      </span>
+      {menu.button}
+      {menu.menu}
+    </li>
   );
 }

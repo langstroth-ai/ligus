@@ -6,6 +6,7 @@ import { PANE_DOCS } from "@/lib/docs";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { cleanDisplayName } from "@/lib/names";
+import { useRowMenu } from "@/components/RowMenu";
 import { onWorkspaceSynced } from "@/lib/ipc";
 import {
   canChange,
@@ -122,7 +123,8 @@ export function MemoryPaneView({
       <div className="flex gap-1.5">
         <input
           aria-label="Search memory"
-          placeholder="Search notes (every word must match)"
+          placeholder="Search notes"
+          data-tip="Every word must match"
           className="min-w-0 flex-1 rounded-xl border px-3 py-1.5 text-sm"
           style={fieldStyle}
           value={query}
@@ -152,9 +154,9 @@ export function MemoryPaneView({
       )}
       <Section title={query ? `Matches (${view.entries.length} of ${view.total})` : `Notes (${view.total})`}>
         {view.entries.length === 0 ? (
-          <EmptyHint text={query ? "No note matches every word." : "No notes yet. Add one, or accept an agent's proposal."} />
+          <EmptyHint text={query ? "No note matches every word." : "No notes yet."} />
         ) : (
-          <ul className="space-y-2">
+          <ul className="ligus-rowlist" aria-label="Notes">
             {view.entries.map((e) => (
               <EntryCard key={e.id} e={e} view={view} onSave={onSave} onRemove={onRemove} onPropose={onPropose} />
             ))}
@@ -187,8 +189,29 @@ function EntryCard({
   const conflicts = e.conflicts ?? [];
   const src = e.current.source?.chatId;
   const restricted = egressNote(e);
+  const rowMenu = useRowMenu(
+    `Actions for note ${cleanDisplayName(e.current.title)}`,
+    mine
+      ? [
+          {
+            label: "Edit",
+            onSelect: () =>
+              setEditing({ entryId: e.id, base: e.current.rev, title: e.current.title, body: e.current.body, tags: e.current.tags ?? [], resolves: conflicts.map((c) => c.rev) }),
+          },
+          {
+            label: "Remove…",
+            danger: true,
+            onSelect: () =>
+              confirmThen(
+                `Remove “${cleanDisplayName(e.current.title)}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
+                () => onRemove(e),
+              ),
+          },
+        ]
+      : [{ label: "Suggest an edit", onSelect: () => setSuggesting(true) }],
+  );
   return (
-    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-entry">
+    <li className="px-1 text-sm" data-testid="memory-entry" {...rowMenu.rowProps}>
       {editing ? (
         <EntryEditor
           initial={editing}
@@ -210,9 +233,22 @@ function EntryCard({
         />
       ) : (
         <>
-          <div className="flex items-start justify-between gap-2">
-            <button className="min-w-0 text-left font-semibold" onClick={() => setExpanded((x) => !x)} aria-expanded={expanded}>
-              <bdi>{e.current.title}</bdi>
+          {/* One line: title, muted tags, then any state badge. The body,
+              provenance and actions open with the row. */}
+          <div className="ligus-listrow flex items-center justify-between gap-2">
+            <button
+              className="-mx-1 flex min-w-0 flex-1 items-baseline gap-1.5 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+              onClick={() => setExpanded((x) => !x)}
+              aria-expanded={expanded}
+            >
+              <span className="min-w-0 shrink truncate text-[13px] font-medium">
+                <bdi>{e.current.title}</bdi>
+              </span>
+              {(e.current.tags ?? []).length > 0 && (
+                <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
+                  {(e.current.tags ?? []).join(" · ")}
+                </span>
+              )}
             </button>
             <div className="flex shrink-0 gap-1">
               {restricted && (
@@ -221,21 +257,20 @@ function EntryCard({
                 </Badge>
               )}
               {conflicts.length > 0 && <Badge tone="warn">{conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`}</Badge>}
+              {rowMenu.button}
+              {rowMenu.menu}
             </div>
           </div>
-          {(e.current.tags ?? []).length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {(e.current.tags ?? []).map((t) => (
-                <Badge key={t}>{t}</Badge>
-              ))}
-            </div>
+          {expanded && (
+            <>
+              <p className="whitespace-pre-wrap break-words text-xs">{e.current.body}</p>
+              <div className="mt-1 pb-2 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
+                {provenance(e.current)} · {when(e.current.atMs)}
+                {src && view.chatTitles[src] && ` · from “${view.chatTitles[src]}”`}
+                {e.revisionCount > 1 && ` · ${e.revisionCount} versions`}
+              </div>
+            </>
           )}
-          <p className={`mt-1 whitespace-pre-wrap break-words text-xs ${expanded ? "" : "line-clamp-3"}`}>{e.current.body}</p>
-          <div className="mt-1 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
-            {provenance(e.current)} · {when(e.current.atMs)}
-            {src && view.chatTitles[src] && ` · from “${view.chatTitles[src]}”`}
-            {e.revisionCount > 1 && ` · ${e.revisionCount} versions`}
-          </div>
           {conflicts.map((c) => (
             <ConflictRow
               key={c.rev}
@@ -251,36 +286,6 @@ function EntryCard({
               }
             />
           ))}
-          {!mine && (
-            <div className="mt-1.5 flex gap-1.5">
-              <Button size="sm" onClick={() => setSuggesting(true)}>
-                Suggest an edit
-              </Button>
-            </div>
-          )}
-          {mine && (
-            <div className="mt-1.5 flex gap-1.5">
-              <Button
-                size="sm"
-                onClick={() =>
-                  setEditing({ entryId: e.id, base: e.current.rev, title: e.current.title, body: e.current.body, tags: e.current.tags ?? [], resolves: conflicts.map((c) => c.rev) })
-                }
-              >
-                Edit
-              </Button>
-              <Button
-                size="sm"
-                onClick={() =>
-                  confirmThen(
-                    `Remove “${cleanDisplayName(e.current.title)}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
-                    () => onRemove(e),
-                  )
-                }
-              >
-                Remove
-              </Button>
-            </div>
-          )}
         </>
       )}
     </li>

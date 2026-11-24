@@ -4,7 +4,7 @@ Ligus has no user directory, no friend requests and no lookup by username.
 You reach people through workspaces you share with them, or by handing them a
 link. Open **People** from the button on the left workspace rail.
 
-## People you share a workspace with
+## In your workspaces
 
 People lists every member of every workspace you share with them, once per
 account, with:

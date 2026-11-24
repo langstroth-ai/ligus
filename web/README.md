@@ -59,5 +59,76 @@ change that fixes some of it, shrink the baseline with
 the screenshots and a `report.json`; `--only chat,review` limits the views.
 CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
 
+### Panes: rows, menus, one primary action
+
+Every pane, sidebar view and Settings tab follows one pattern (the People
+pane is the reference):
+
+- **One-line rows by default**: identity (avatar or name) plus one muted
+  status on the same line. State is a small dot or tag with a tooltip, never
+  a repeated label on every item (no "ROLE", "CONFIGURED" per row).
+- **Per-item actions only in the row menu** (right-click, the row's `⋯`,
+  Shift+F10). The row click is the row's one primary action (open, select,
+  expand).
+- **One primary action per pane, in the header** (`RailFrame primary`:
+  "Invite", "Add an agent", "Add skill"). Secondary and rare pane actions go
+  in the header's `⋯` (`RailFrame more`).
+- **Creation forms open in a sheet** (`kit/Sheet`, centred), not inline in
+  the list. Advanced fields sit under "More options".
+- **No duplicated lists of the same entities**: one list, with marks for the
+  extra facets (a member the relay also enforces is a "relay" mark on its
+  row, not a second list).
+- **Fewer borders and fills**: rows on the pane background, separators
+  between them; cards only for a single object that needs attention.
+- **Tokens and density**: shared type sizes (13px row title, 11.5px meta),
+  `RowList`/`ListRow` spacing from `--row-h`/`--pad-row`.
+
+### Copy in panels
+
+Panels (the right-rail panes, the sidebar's workspace views, Settings tabs,
+the Inbox) open on their content, not on an explanation of it. The rules,
+with the primitives in `src/components/ui.tsx`:
+
+- **Pane header = title only.** What the pane is for goes behind the "?"
+  beside the title (`RailFrame`'s `about`, which also links the docs page).
+  No subtitles.
+- **Explanations go behind a "?".** A section that needs one gets
+  `<Section info="…">` (an `InfoTip`); a control gets an `InfoTip` beside it.
+  The text stays reachable by hover, keyboard focus and screen reader (the
+  button is `aria-describedby` a visually hidden copy).
+- **No always-shown info boxes.** An explanatory box becomes nothing (if the
+  UI already says it), a one-line muted `Hint`, or a `OnceHint` the viewer
+  dismisses once (remembered per device in `lib/hints.ts`; blocked storage
+  just shows it again, never breaks rendering).
+- **Empty states: one short line** (about six words: "No MCP servers
+  enabled") and at most one action. Don't explain consequences.
+- **Inherited or derived state is a tag, not a banner.** `<Section tag={<MetaTag
+  action={…}>from workspace</MetaTag>}>`, with the edit link compact beside it.
+- **Short labels.** Section titles are a few words; a card caption is one
+  line; don't repeat a word the row already shows ("default runtime ·
+  default").
+- **Lists are rows, not tiles.** A list in a panel is a `RowList` of
+  `ListRow`s: one line (name, muted meta on the same line, a small trailing
+  state), rows on the pane background with hairline separators, height from
+  the density setting. Details (descriptions, long captions, editors) open on
+  the row or sit in its tooltip. A `Card` is for a single object that needs
+  attention (a decision, a warning, a form being filled), not for list items.
+- **Row actions live in the row menu.** A row's secondary actions (Edit,
+  Remove, Revoke, Copy, Rename, Set default, Delete, …) are not buttons around
+  the row: they open from a right-click on the row, from the row's `⋯`
+  (shown on hover and keyboard focus, always on touch), or with Shift+F10 /
+  the Menu key (`ListRow actions`, or `useRowMenu` in `RowMenu.tsx`). The
+  row click keeps the row's one primary action (open, select, expand).
+  Destructive items go last after a separator and keep their confirm and
+  consequence text. A row that needs attention may keep one visible button
+  (Approve a pending device, a warning's fix).
+- **Never hide what protects someone.** Warnings, blocking states and
+  security information stay on screen: sandbox off, lockdown, unverified
+  identity, offline hosts, and the consequences shown before an irreversible
+  action (remove, revoke, delete, reset).
+- **Density and accessibility hold.** Use the shared primitives so the
+  density setting applies, and keep every hidden explanation keyboard- and
+  screen-reader-reachable through the tooltip layer (`data-tip`).
+
 The full app runs via `cargo tauri dev` from the repo root, which serves this
 frontend and the Rust backend together.

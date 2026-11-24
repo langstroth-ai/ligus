@@ -116,22 +116,38 @@
 :root,
 :root[data-density="comfortable"] {
   --row-h: 30px;
+  --pad-row: 7px;
   --pad-card: 14px;
   --gap-turn: 16px;
   --text-transcript: 1rem;
 }
 :root[data-density="compact"] {
   --row-h: 26px;
+  --pad-row: 4px;
   --pad-card: 10px;
   --gap-turn: 10px;
   --text-transcript: 0.875rem;
 }
 :root[data-density="spacious"] {
   --row-h: 36px;
+  --pad-row: 10px;
   --pad-card: 18px;
   --gap-turn: 22px;
   --text-transcript: 1rem;
 }
+
+/* List rows (ui.tsx RowList/ListRow): rows sit on the pane background,
+   separated by a hairline, not boxed. Height and padding follow density. */
+.ligus-rowlist > li + li { border-top: 1px solid var(--ligus-line); }
+.ligus-listrow { min-height: var(--row-h); padding-block: var(--pad-row); }
+/* A row's "⋯" (RowMenu) shows on hover or keyboard focus, and always on touch. */
+.ligus-rowmenu-btn { opacity: 0; }
+:where(li, [data-rowmenu]):hover > * > .ligus-rowmenu-btn,
+:where(li, [data-rowmenu]):hover .ligus-rowmenu-btn,
+:where(li, [data-rowmenu]):focus-within .ligus-rowmenu-btn,
+.ligus-rowmenu-btn[aria-expanded="true"],
+.ligus-rowmenu-btn:focus-visible { opacity: 1; }
+@media (hover: none) { .ligus-rowmenu-btn { opacity: 1; } }
 
 /* One heading treatment per level: display 22 (onboarding, empty states),
    title 17 (pages, panes, dialogs, the chat), section 13, caps 11. */

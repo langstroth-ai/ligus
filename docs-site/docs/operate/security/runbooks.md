@@ -148,7 +148,7 @@ can act as that device and read everything it could.
    configured, so the key wasn't rotated" means it wasn't). Your browser
    asks for a passkey for each of the two events.
 2. If the relay enforces membership, also remove them from the relay
-   roster (**People → Team members (server-enforced)**). That removes them from the
+   roster (**People → Relay members**). That removes them from the
    workspace roster too, if step 1 hasn't, and rotates the key again.
 3. Revoke their relay token ([below](#relay-token)).
 4. If they had access to shared worker or serve boxes, remove their logins
@@ -170,7 +170,7 @@ For a `ligus serve` or `ligus worker` box that is its own member (see
 [Admitting a box](../ops/admitting-a-box.md)).
 
 1. **Admin, People pane → Members → Remove & revoke** on the box's member,
-   or, on the desktop that generated its bootstrap, **People → Team members (server-enforced) → Remove** on its `ligus-box:` identity. Either one removes
+   or, on the desktop that generated its bootstrap, **People → Relay members → Remove** on its `ligus-box:` identity. Either one removes
    the box's member from the workspace roster and then rotates the
    workspace key to the members who remain. The relay-roster path also
    takes the box off the relay, and for a box that never joined it closes

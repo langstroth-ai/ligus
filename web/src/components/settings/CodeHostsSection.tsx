@@ -17,7 +17,8 @@ import {
   type ForgeDeviceStart,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { useRowMenu } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
 
 /// The kinds a person picks from, with where each one lives by default.
@@ -52,16 +53,17 @@ export function CodeHostsSection() {
 
   return (
     <div>
-      <p className="mb-4 text-sm text-ink-soft">
-        Code hosts are for repository work on this device: listing, cloning and opening pull or merge requests.
-        Ligus doesn't use them to sign you in. Tokens stay on this device, in its secret store. They are never
-        synced and never sent to your relay.
-      </p>
-      <Section title="Connections">
+      <Section
+        title="Connections"
+        info="Code hosts are for repository work on this device: listing, cloning and opening pull or merge requests. Ligus doesn't use them to sign you in. Tokens stay on this device, in its secret store. They are never synced and never sent to your relay."
+      >
+        <p className="text-xs text-ink-soft">Tokens stay on this device and are never synced.</p>
         {list.isLoading && <p className="text-sm text-ink-soft">Loading…</p>}
-        {(list.data ?? []).map((c) => (
-          <ConnectionRow key={c.id} c={c} onChange={refresh} />
-        ))}
+        <RowList label="Code hosts">
+          {(list.data ?? []).map((c) => (
+            <ConnectionRow key={c.id} c={c} onChange={refresh} />
+          ))}
+        </RowList>
         {list.data && list.data.length === 0 && <p className="text-sm text-ink-soft">No code hosts yet.</p>}
       </Section>
       <AddConnection onAdded={refresh} />
@@ -75,6 +77,8 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
   const [token, setToken] = useState("");
   const [purpose, setPurpose] = useState<"read" | "write">("write");
   const [device, setDevice] = useState<ForgeDeviceStart | null>(null);
+  // A connection without a credential opens with its token field showing.
+  const [editing, setEditing] = useState(!c.hasRead && !c.hasWrite && c.authSource !== "gh");
   const shown = status ?? c;
 
   async function test() {
@@ -137,33 +141,35 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
     }
   }
 
+  const rm = useRowMenu(`Actions for ${c.displayName}`, [
+    { label: "Test", onSelect: () => void test() },
+    ...(c.deviceFlow && c.authSource !== "gh" ? [{ label: "Sign in", onSelect: () => void signIn() }] : []),
+    ...(c.authSource !== "gh" ? [{ label: editing ? "Hide token field" : "Set a token…", onSelect: () => setEditing((v) => !v) }] : []),
+    { label: "Remove", danger: true, onSelect: () => void remove() },
+  ]);
   return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }} data-testid={`forge-${c.id}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-sm font-medium">{c.displayName}</div>
-          <div className="truncate text-xs text-ink-soft">
+    <li className="px-1" data-testid={`forge-${c.id}`} {...rm.rowProps}>
+      <div className="ligus-listrow flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className="shrink-0 text-[13px] font-medium">{c.displayName}</span>
+          <span className="truncate text-[11.5px] text-ink-soft">
             {c.baseUrl} · {authLabel(c)} · held by {c.holder}
             {shown.user ? ` · as ${shown.user}` : ""}
-          </div>
-          {shown.available === false && shown.reason && <div className="text-xs text-ink-soft">{shown.reason}</div>}
+          </span>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button size="sm" onClick={() => void test()}>
-            Test
-          </Button>
-          {c.deviceFlow && c.authSource !== "gh" && (
+        <span className="flex shrink-0 items-center gap-2">
+          {/* Not signed in yet: the one action it needs stays visible. */}
+          {c.deviceFlow && c.authSource !== "gh" && !c.hasRead && !c.hasWrite && (
             <Button size="sm" onClick={() => void signIn()}>
               Sign in
             </Button>
           )}
-          <Button size="sm" variant="danger" onClick={() => void remove()}>
-            Remove
-          </Button>
-        </div>
+          {rm.button}
+        </span>
       </div>
+      {shown.available === false && shown.reason && <div className="pb-1 text-xs text-ink-soft">{shown.reason}</div>}
       {device && (
-        <p className="mt-2 text-sm">
+        <p className="pb-2 text-sm">
           Enter <span className="font-mono font-semibold">{device.userCode}</span> at{" "}
           <button className="underline" onClick={() => void openExternal(device.verificationUri)}>
             {device.verificationUri}
@@ -171,8 +177,8 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
           . Check that the page names the Ligus app before you approve.
         </p>
       )}
-      {c.authSource !== "gh" && (
-        <div className="mt-2 flex gap-2">
+      {editing && c.authSource !== "gh" && (
+        <div className="flex gap-2 pb-2">
           <select
             aria-label="Token purpose"
             value={purpose}
@@ -198,7 +204,8 @@ function ConnectionRow({ c, onChange }: { c: ForgeConnection; onChange: () => vo
           </Button>
         </div>
       )}
-    </div>
+      {rm.menu}
+    </li>
   );
 }
 
@@ -319,24 +326,24 @@ function RepoPicker({ connections }: { connections: ForgeConnection[] }) {
         />
       </div>
       {repos.isError && <p className="text-sm text-ink-soft">{errMsg(repos.error)}</p>}
-      <ul className="space-y-1">
+      <RowList label="Repositories">
         {(repos.data?.repos ?? []).map((r) => {
           const full = `${r.repo.owner}/${r.repo.name}`;
           return (
-            <li key={full} className="flex items-center justify-between gap-2 text-sm">
-              <span className="min-w-0 truncate">
-                <span className="font-medium">{full}</span>
-                {r.private ? " · private" : ""}
-                {r.fork ? " · fork" : ""}
-                {r.description ? <span className="text-ink-soft"> · {r.description}</span> : null}
-              </span>
-              <Button size="sm" onClick={() => void clone(full)}>
-                Clone…
-              </Button>
-            </li>
+            <ListRow
+              key={full}
+              title={full}
+              meta={[r.private ? "private" : "", r.fork ? "fork" : "", r.description].filter(Boolean).join(" · ")}
+              tip={r.description || undefined}
+              trailing={
+                <Button size="sm" onClick={() => void clone(full)}>
+                  Clone…
+                </Button>
+              }
+            />
           );
         })}
-      </ul>
+      </RowList>
     </Section>
   );
 }

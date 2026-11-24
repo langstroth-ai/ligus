@@ -23,7 +23,8 @@ describe("workspace marks", () => {
     render(<MarksView marks={[mark]} onAdd={() => {}} onClear={(id) => cleared.push(id)} />);
     expect(screen.getByText("Under construction")).toBeInTheDocument();
     expect(screen.getByText(/by coder in “Parser” · 30 min left — splitting the lexer/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByRole("button", { name: /^Actions for mark/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Clear" }));
     expect(cleared).toEqual(["m1"]);
   });
 

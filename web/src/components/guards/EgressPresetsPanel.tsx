@@ -57,16 +57,14 @@ export function EgressPresetsPanel({ chat }: { chat?: { id: string; title: strin
   });
   const d = q.data;
   return (
-    <Section title="Network presets">
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Agents reach only their model provider and the chat&apos;s MCP servers. A preset adds a named set of hosts to that
-        allow-list. Presets are off by default, apply to turns that run on this device, and are ignored while a chat is
-        locked down or the workspace is in dearth mode.
-      </p>
+    <Section
+      title="Network presets"
+      info="Agents reach only their model provider and the chat's MCP servers. A preset adds a named set of hosts to that allow-list. Presets are off by default, apply to turns that run on this device, and are ignored while a chat is locked down or the workspace is in dearth mode."
+    >
       {q.isError && <ErrorState text="Couldn't load network presets." onRetry={() => void q.refetch()} />}
       {q.isPending && <LoadingState rows={1} label="Loading network presets" />}
       {d && (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="egress-presets">
+        <ul className="ligus-rowlist" data-testid="egress-presets">
           {d.available.map((p) => (
             <PresetRow
               key={p.name}
@@ -102,7 +100,7 @@ function PresetRow({
   const wsOn = d.workspace.includes(p.name);
   const viaHost = d.host.includes(p.name);
   return (
-    <li className="space-y-2 px-3 py-2.5 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+    <li className="ligus-listrow space-y-2 px-1 text-[13px]">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

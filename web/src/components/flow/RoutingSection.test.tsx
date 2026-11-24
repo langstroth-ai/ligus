@@ -77,7 +77,8 @@ describe("route cool-downs", () => {
     );
     expect(screen.getByText("every agent on cc")).toBeInTheDocument();
     expect(screen.getByText(/rate limited · 10 min left/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for stopped route every agent on cc" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Clear" }));
     expect(cleared).toEqual(["runtime:cc"]);
   });
 });

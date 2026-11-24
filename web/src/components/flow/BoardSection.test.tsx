@@ -44,4 +44,14 @@ describe("task board", () => {
     render(<BoardView rows={[]} onPickup={() => {}} />);
     expect(screen.getByText(/Nothing waiting/)).toBeInTheDocument();
   });
+
+  it("shows the pickup hint once, until it's dismissed", () => {
+    const { unmount } = render(<BoardView rows={[]} onPickup={() => {}} />);
+    expect(screen.getByTestId("hint-flow-board")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss hint" }));
+    expect(screen.queryByTestId("hint-flow-board")).not.toBeInTheDocument();
+    unmount();
+    render(<BoardView rows={[]} onPickup={() => {}} />);
+    expect(screen.queryByTestId("hint-flow-board")).not.toBeInTheDocument();
+  });
 });

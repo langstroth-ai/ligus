@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRowMenu } from "@/components/RowMenu";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   identityLinkStatuses,
@@ -70,9 +71,9 @@ function PersonLinks({ p }: { p: CoMemberDto }) {
 export function contactsNote(status: string | undefined): string | null {
   switch (status) {
     case "unsupported":
-      return "Your relay doesn't support contacts yet, so invites can't be delivered in the app. Share invite links or QR codes instead.";
+      return "Your relay can't deliver invites yet: share links or QR codes.";
     case "noRelay":
-      return "No relay is configured: invites are links you hand over yourself.";
+      return "No relay: invites are links you hand over.";
     default:
       return null;
   }
@@ -296,6 +297,8 @@ export function FriendsView({
   const note = contactsNote(pending.data?.contacts);
 
   return (
+    // Fill the canvas (and scroll inside it) so the status bar stays at the foot.
+    <div className="min-h-0 w-full flex-1 overflow-y-auto">
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-8" style={{ color: "var(--ligus-ink)" }}>
       <header className="flex items-center justify-between gap-3">
         <h1 className="ligus-title flex items-center gap-2">
@@ -400,70 +403,96 @@ export function FriendsView({
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="ligus-cap">People you share a workspace with</h2>
+        <h2 className="ligus-cap">In your workspaces</h2>
         {people.data && people.data.length === 0 && (
-          <p className="text-sm text-ink-soft">Nobody yet. Create a workspace and share its invite link, or join one from a link above.</p>
+          <p className="text-sm text-ink-soft">Nobody yet.</p>
         )}
-        {people.data?.map((p) => {
-          const elsewhere = rooms.filter((w) => !p.workspaces.some((x) => x.id === w.id));
-          return (
-            <div
+        <ul className="ligus-rowlist" aria-label="People in your workspaces">
+          {people.data?.map((p) => (
+            <PersonRow
               key={p.accountId}
-              className="flex flex-col gap-1.5 rounded-lg border px-3 py-2"
-              style={{ borderColor: p.keyConflict ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)" }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex min-w-0 items-center gap-2 text-sm">
-                  <Avatar name={p.displayName} url={p.avatarUrl} kind="human" size={24} />
-                  <span className="truncate font-medium">{p.displayName || "Unnamed"}</span>
-                  {p.lookAlike && (
-                    <span
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
-                      style={{ color: "var(--ligus-danger-ink)", border: "1px solid var(--ligus-danger-ink)" }}
-                      data-tip="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
-                    >
-                      Look-alike name
-                    </span>
-                  )}
-                </span>
-                <button
-                  onClick={() => (p.dmWorkspaceId ? void openExistingDm(p.dmWorkspaceId) : void message(p))}
-                  disabled={p.keyConflict}
-                  className="shrink-0 rounded-md border px-3 py-1 text-xs font-medium hover:brightness-110 disabled:opacity-40"
-                  style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)" }}
-                >
-                  Message
-                </button>
-              </div>
-              <PersonLinks p={p} />
-              <div className="font-mono text-[11px] text-ink-soft" data-tip="Their safety code">
-                {p.keyConflict
-                  ? "Your shared workspaces disagree about this person's key: nothing is sent to them."
-                  : (p.safetyCode ?? "no safety code yet")}
-              </div>
-              <div className="flex flex-wrap items-center gap-1 text-[11px] text-ink-soft">
-                In {p.workspaces.map((w) => w.name).join(", ") || "a direct message"}
-                {elsewhere.length > 0 && !p.keyConflict && (
-                  <select
-                    className="ml-auto rounded border px-1 py-0.5 text-[11px]"
-                    style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-canvas)" }}
-                    value=""
-                    aria-label={`Invite ${p.displayName} to a workspace`}
-                    onChange={(e) => e.target.value && void invite(p, e.target.value)}
-                  >
-                    <option value="">Invite to…</option>
-                    {elsewhere.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
-          );
-        })}
+              p={p}
+              elsewhere={rooms.filter((w) => !p.workspaces.some((x) => x.id === w.id))}
+              onMessage={() => (p.dmWorkspaceId ? void openExistingDm(p.dmWorkspaceId) : void message(p))}
+              onInvite={(id) => void invite(p, id)}
+            />
+          ))}
+        </ul>
       </section>
     </div>
+    </div>
+  );
+}
+
+/// One person: avatar, name, verified links and Message on one line. The
+/// safety code, shared workspaces and "Invite to…" open with the row. A key
+/// conflict is never hidden: it shows on the row itself.
+function PersonRow({
+  p,
+  elsewhere,
+  onMessage,
+  onInvite,
+}: {
+  p: CoMemberDto;
+  elsewhere: { id: string; name: string }[];
+  onMessage: () => void;
+  onInvite: (workspaceId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menu = useRowMenu(`Actions for ${p.displayName || "this person"}`, [
+    {
+      label: "Message",
+      disabled: p.keyConflict,
+      title: p.keyConflict ? "Nothing is sent while their key is in conflict" : undefined,
+      onSelect: onMessage,
+    },
+    ...(p.keyConflict ? [] : elsewhere.map((w) => ({ label: `Invite to ${w.name}`, onSelect: () => onInvite(w.id) }))),
+  ]);
+  return (
+    <li className="px-1" {...menu.rowProps}>
+      <div className="ligus-listrow flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left text-sm transition-colors hover:bg-[color:var(--ligus-overlay)]"
+          data-tip={p.safetyCode ? `Safety code ${p.safetyCode}` : undefined}
+        >
+          <Avatar name={p.displayName} url={p.avatarUrl} kind="human" size={24} />
+          <span className="truncate font-medium">{p.displayName || "Unnamed"}</span>
+          {p.lookAlike && (
+            <span
+              className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
+              style={{ color: "var(--ligus-danger-ink)", border: "1px solid var(--ligus-danger-ink)" }}
+              data-tip="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
+            >
+              Look-alike name
+            </span>
+          )}
+        </button>
+        <span className="flex min-w-0 shrink items-center">
+          <PersonLinks p={p} />
+        </span>
+        {menu.button}
+        {menu.menu}
+      </div>
+      {p.keyConflict && (
+        <div className="pb-1.5 text-[11.5px]" role="alert" style={{ color: "var(--ligus-danger-ink)" }}>
+          Your shared workspaces disagree about this person&apos;s key: nothing is sent to them.
+        </div>
+      )}
+      {open && (
+        <div className="flex flex-col gap-1 pb-2 pl-8">
+          {!p.keyConflict && (
+            <div className="font-mono text-[11px] text-ink-soft" data-tip="Their safety code">
+              {p.safetyCode ?? "no safety code yet"}
+            </div>
+          )}
+          <div className="text-[11px] text-ink-soft">
+            In {p.workspaces.map((w) => w.name).join(", ") || "a direct message"}
+          </div>
+        </div>
+      )}
+    </li>
   );
 }

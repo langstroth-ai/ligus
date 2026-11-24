@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { THEMES, type AppearanceMode, type ThemeName } from "@/lib/theme";
 import { DENSITIES, applyDensity, loadDensity, saveDensity, type Density } from "@/lib/density";
-import { Section } from "@/components/ui";
+import { InfoTip, Section } from "@/components/ui";
 
 /// Appearance: light/dark mode, accent family and density. Every control
 /// applies live.
@@ -24,7 +24,13 @@ export function AppearanceSection({
   };
   return (
     <Section title="Appearance">
-      <label className="block text-sm text-ink-soft">Mode</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft">Mode</label>
+        <InfoTip
+          label="Mode"
+          text="Auto follows your operating system's light/dark setting. Every theme has a light and a dark variant."
+        />
+      </div>
       <div className="flex gap-2">
         {(["auto", "light", "dark"] as AppearanceMode[]).map((m) => (
           <button
@@ -40,10 +46,6 @@ export function AppearanceSection({
           </button>
         ))}
       </div>
-      <p className="text-xs text-ink-soft">
-        Auto follows your operating system's light/dark setting. Every theme has a light and a dark
-        variant.
-      </p>
 
       <label className="mt-3 block text-sm text-ink-soft">Theme</label>
       <div className="flex flex-wrap gap-2">
@@ -63,9 +65,15 @@ export function AppearanceSection({
         ))}
       </div>
 
-      <label className="mt-3 block text-sm text-ink-soft" id="density-label">
-        Density
-      </label>
+      <div className="mt-3 flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" id="density-label">
+          Density
+        </label>
+        <InfoTip
+          label="Density"
+          text="How much room rows, cards and messages take. Separate from zoom (⌘+ and ⌘−)."
+        />
+      </div>
       <div className="flex gap-2" role="radiogroup" aria-labelledby="density-label">
         {DENSITIES.map((d) => (
           <button
@@ -83,9 +91,6 @@ export function AppearanceSection({
           </button>
         ))}
       </div>
-      <p className="text-xs text-ink-soft">
-        How much room rows, cards and messages take. Separate from zoom (⌘+ and ⌘−).
-      </p>
     </Section>
   );
 }

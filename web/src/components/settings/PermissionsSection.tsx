@@ -11,7 +11,7 @@ import {
   type AgentToolSettings,
   type ClaudePermissionMode,
 } from "@/lib/ipc";
-import { Button, Section, SelectField, Switch } from "@/components/ui";
+import { InfoTip, Button, Section, SelectField, Switch } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 
@@ -141,12 +141,15 @@ export function PermissionsSection() {
           className="space-y-2 rounded-2xl border p-3"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
         >
-          <div className="text-sm font-medium">macOS file access</div>
+          <div className="flex items-center gap-1.5">
+            <div className="text-sm font-medium">macOS file access</div>
+            <InfoTip
+              label="macOS file access"
+              text="Agents run local CLIs (Claude Code, Codex) that read your workspace files. macOS attributes that access to Ligus and may put up a folder-permission modal a turn silently waits on."
+            />
+          </div>
           <p className="text-xs text-ink-soft">
-            Agents run local CLIs (Claude Code, Codex) that read your workspace files. macOS
-            attributes that access to Ligus and may put up a folder-permission modal a turn silently
-            waits on. Grant Ligus <strong>Full Disk Access</strong> so agent turns don't stall on a
-            hidden prompt.
+            Grant Ligus <strong>Full Disk Access</strong> so agent turns don't stall on a hidden prompt.
           </p>
           {health.data?.translocated && (
             <p className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
@@ -166,14 +169,13 @@ export function PermissionsSection() {
           </Button>
         </div>
       )}
-      <p className="text-xs text-ink-soft">
-        The setting below controls the <code>claude</code> CLI's permission mode (it runs headless,
-        so it can't show an approval prompt), and the same tier for the subscription CLIs{" "}
-        <code>agy</code> (Google Antigravity) and <code>copilot</code> (GitHub Copilot), mapped to their
-        own flags. Other agents gate file access their own way: aider/pi via their flags, and
-        API/MCP-backed agents via built-in-tool consent + per-tool MCP trust.
-      </p>
-      <label className="block text-xs text-ink-soft">Claude Code permission mode</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-xs text-ink-soft">Claude Code permission mode</label>
+        <InfoTip
+          label="Claude Code permission mode"
+          text="Sets the claude CLI's permission mode (it runs headless, so it can't show an approval prompt), and the same tier for the subscription CLIs agy (Google Antigravity) and copilot (GitHub Copilot), mapped to their own flags. Other agents gate file access their own way: aider/pi via their flags, and API/MCP-backed agents via built-in-tool consent and per-tool MCP trust."
+        />
+      </div>
       <SelectField
         value={permissionMode}
         onChange={(v) => setMode(v as ClaudePermissionMode)}
@@ -187,8 +189,7 @@ export function PermissionsSection() {
       </SelectField>
       {permissionMode === "default" ? (
         <p className="text-xs text-ink-soft">
-          In read-only mode the <code>claude</code> agent's file writes are blocked. Choose{" "}
-          <strong>Accept file edits</strong> to let it create/modify files in your workspace.
+          The <code>claude</code> agent's file writes are blocked.
         </p>
       ) : (
         <p className="text-xs" style={{ color: "var(--ligus-warm-ink)" }}>
@@ -199,15 +200,13 @@ export function PermissionsSection() {
         </p>
       )}
       <div className="mt-4 space-y-2">
-        <div className="text-sm font-medium">Local model file tools</div>
-        <p className="text-xs text-ink-soft">
-          Local or self-hosted model runtimes (Ollama, or a Custom / Ligus daemon endpoint such as a
-          llama.cpp server — never hosted APIs like OpenAI or OpenRouter) with{" "}
-          <strong>Supports tools</strong> on get Ligus's built-in tools: <code>read_file</code>,{" "}
-          <code>list_dir</code> and <code>search</code>, plus <code>edit_file</code> and{" "}
-          <code>write_file</code> when the turn runs in the chat's isolated git worktree — their
-          changes come back as a proposal in the Review pane, never straight into your folder.
-        </p>
+        <div className="flex items-center gap-1.5">
+          <div className="text-sm font-medium">Local model file tools</div>
+          <InfoTip
+            label="Local model file tools"
+            text="Local or self-hosted model runtimes (Ollama, or a Custom / Ligus daemon endpoint such as a llama.cpp server; never hosted APIs like OpenAI or OpenRouter) with Supports tools on get Ligus's built-in tools: read_file, list_dir and search, plus edit_file and write_file when the turn runs in the chat's isolated git worktree. Their changes come back as a proposal in the Review pane, never straight into your folder."
+          />
+        </div>
         <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch
             on={tools.enabled}

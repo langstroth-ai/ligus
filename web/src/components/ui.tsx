@@ -5,7 +5,7 @@
 // Radius scale (app-wide): controls = rounded-xl, cards = rounded-2xl,
 // hero surfaces = rounded-3xl.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode, RefObject } from "react";
 import {
   IconAlertTriangle,
@@ -17,6 +17,8 @@ import {
   IconStateWorking,
 } from "@/lib/icons";
 import { SESSION_STATE_META, type SessionState } from "@/lib/sessionState";
+import { dismissHint, isHintDismissed } from "@/lib/hints";
+import { useRowMenu, type RowAction } from "@/components/RowMenu";
 
 type Variant = "primary" | "ghost" | "danger" | "success" | "quiet";
 type Size = "sm" | "md";
@@ -99,21 +101,36 @@ export function IconButton({
 
 /// One section-header treatment for panes/settings: small-caps title, an
 /// optional trailing action, consistent spacing.
+///
+/// Copy in panels (web/README.md): the title is a short label. What the
+/// section is for goes in `info` (an InfoTip beside the title, reachable by
+/// keyboard and screen reader), and inherited or derived state goes in `tag`
+/// (a small muted label), never in a paragraph or a boxed banner.
 export function Section({
   title,
   action,
+  info,
+  tag,
   children,
   className = "",
 }: {
   title: string;
   action?: ReactNode;
+  /// The explanation, behind a small "?" beside the title.
+  info?: string;
+  /// A small muted label after the title ("from workspace").
+  tag?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
     <section className={`mb-5 ${className}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="ligus-section">{title}</h2>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h2 className="ligus-section">{title}</h2>
+          {info && <InfoTip label={title} text={info} />}
+          {tag}
+        </div>
         {action}
       </div>
       <div className="space-y-2.5">{children}</div>
@@ -619,7 +636,183 @@ export function SelectField({
   );
 }
 
-/// §7.1 EmptyHint — one terse sentence for an empty list (state matrix §8),
+/// The one "what is this" affordance: a small "?" that shows `text` as a
+/// tooltip on hover or keyboard focus. The text is also in the accessibility
+/// tree (aria-describedby on a visually hidden copy), so hiding the
+/// explanation from the screen never hides it from a screen reader. With
+/// `docs`, clicking opens that docs page.
+export function InfoTip({
+  label,
+  text,
+  onOpen,
+}: {
+  /// What it explains, for the accessible name ("About Tools reachable").
+  label: string;
+  text: string;
+  /// Optional click action (open the docs page).
+  onOpen?: () => void;
+}) {
+  const id = useId();
+  return (
+    <>
+      <button
+        type="button"
+        data-tip={text}
+        aria-label={`About ${label}`}
+        aria-describedby={id}
+        data-testid="info-tip"
+        onClick={onOpen}
+        className="inline-grid h-[18px] align-middle w-[18px] shrink-0 place-items-center rounded-full border text-[11px] font-semibold leading-none text-ink-soft transition-colors hover:text-ink"
+        style={{ borderColor: "var(--ligus-line)", cursor: onOpen ? "pointer" : "help" }}
+      >
+        ?
+      </button>
+      <span id={id} className="sr-only">
+        {text}
+      </span>
+    </>
+  );
+}
+
+/// A compact inline hint: one short muted line, never a paragraph.
+export function Hint({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <p className={`px-1 text-[11.5px] leading-5 ${className}`} style={{ color: "var(--ligus-ink-soft)" }}>
+      {children}
+    </p>
+  );
+}
+
+/// A one-time hint: a short muted line with a dismiss button. Dismissal is
+/// remembered per viewer on this device (lib/hints.ts); if storage is blocked
+/// it shows again next time, and it never blocks rendering.
+export function OnceHint({ id, children }: { id: string; children: ReactNode }) {
+  const [hidden, setHidden] = useState(() => isHintDismissed(id));
+  if (hidden) return null;
+  return (
+    <div
+      data-testid={`hint-${id}`}
+      className="mb-3 flex items-start gap-2 px-1 text-[11.5px] leading-5"
+      style={{ color: "var(--ligus-ink-soft)" }}
+    >
+      <span className="min-w-0 flex-1">{children}</span>
+      <button
+        type="button"
+        aria-label="Dismiss hint"
+        data-tip="Dismiss"
+        onClick={() => {
+          dismissHint(id);
+          setHidden(true);
+        }}
+        className="shrink-0 rounded px-1 leading-5 text-ink-soft hover:text-ink"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+/// A small muted label for inherited or derived state, next to a section
+/// title ("from workspace · Edit"). Replaces boxed "inherited from" banners.
+export function MetaTag({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
+      <span className="rounded-full border px-1.5 leading-4" style={{ borderColor: "var(--ligus-line)" }}>
+        {children}
+      </span>
+      {action}
+    </span>
+  );
+}
+
+/// A list of one-line rows separated by hairlines, on the pane background
+/// (no boxed tiles). Use it for any list in a panel; keep Card for a single
+/// object that needs attention. Row height follows the density setting.
+export function RowList({ children, label, className = "" }: { children: ReactNode; label?: string; className?: string }) {
+  return (
+    <ul role="list" aria-label={label} className={`ligus-rowlist ${className}`}>
+      {children}
+    </ul>
+  );
+}
+
+/// One row: optional leading glyph/avatar, a title, a muted meta on the same
+/// line, trailing controls. Anything longer goes in `tip` (hover/focus) or in
+/// `children`, which the caller shows only when the row is expanded.
+export function ListRow({
+  leading,
+  title,
+  meta,
+  trailing,
+  tip,
+  onClick,
+  selected = false,
+  children,
+  testId,
+  actions,
+  actionsLabel,
+}: {
+  /// Secondary actions: right-click, the hover "⋯" or Shift+F10 (RowMenu).
+  actions?: RowAction[];
+  /// The menu's accessible name ("Actions for fs"); defaults from the title.
+  actionsLabel?: string;
+  leading?: ReactNode;
+  title: ReactNode;
+  meta?: ReactNode;
+  trailing?: ReactNode;
+  tip?: string;
+  onClick?: () => void;
+  selected?: boolean;
+  children?: ReactNode;
+  testId?: string;
+}) {
+  const line = (
+    <>
+      {leading && <span className="flex shrink-0 items-center">{leading}</span>}
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="min-w-0 shrink truncate text-[13px] font-medium">{title}</span>
+        {meta && (
+          <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
+            {meta}
+          </span>
+        )}
+      </span>
+    </>
+  );
+  const rm = useRowMenu(
+    actionsLabel ?? `Actions for ${typeof title === "string" ? title : "this row"}`,
+    actions ?? [],
+  );
+  return (
+    <li data-testid={testId} className="px-1" {...rm.rowProps}>
+      <div className="ligus-listrow flex items-center gap-2" data-tip={tip}>
+        {onClick ? (
+          <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={selected}
+            className="-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+          >
+            {line}
+          </button>
+        ) : (
+          line
+        )}
+        {(trailing || rm.button) && (
+          <span className="flex shrink-0 items-center gap-2">
+            {trailing}
+            {rm.button}
+          </span>
+        )}
+      </div>
+      {children && <div className="pb-2">{children}</div>}
+      {rm.menu}
+    </li>
+  );
+}
+
+/// §7.1 EmptyHint — one short line (about six words, no consequences explained)
+/// for an empty list (state matrix §8),
 /// with an optional glyph and a single next action.
 export function EmptyHint({ text, action, icon }: { text: string; action?: ReactNode; icon?: ReactNode }) {
   return (

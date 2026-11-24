@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceToList,
+  workspaceJoinViaInvite,
   createChat,
   ensureSelfMember,
   getAppSettings,
@@ -170,6 +171,19 @@ export function App() {
   // "Admit a box" for the active workspace, from the workspace menu or ⌘K
   // (the rail's right-click menu keeps its own entry).
   const [admitBoxOpen, setAdmitBoxOpen] = useState(false);
+  // "Have a code? Join": redeem a relay invite code for this workspace. It
+  // lives in ⌘K (Join with an invite code…), not in the People pane.
+  const redeemInviteCode = async () => {
+    const code = (await promptDialog("Paste the invite code you were given.", { title: "Join with an invite code", placeholder: "Invite code" }))?.trim();
+    if (!code) return;
+    try {
+      const role = await workspaceJoinViaInvite(code);
+      if (role) toast.success(`Joined as ${role}.`);
+      else toast.error("That invite code was refused (invalid, expired, revoked, or used up).");
+    } catch (e) {
+      toast.error(`Couldn't join: ${errMsg(e)}`);
+    }
+  };
   const [mode, setMode] = useState<CanvasMode>("chat");
   // Live mirror of `mode` for non-React callbacks (the editorStore subscription
   // below) so they read the current canvas mode without re-subscribing.
@@ -1078,6 +1092,7 @@ export function App() {
             setAppearanceMode(appearanceMode === "dark" ? "light" : "dark"),
           takeTour: () => startTour(),
           admitBox: activeWorkspace?.kind === "room" ? () => setAdmitBoxOpen(true) : undefined,
+          redeemInvite: activeWorkspace?.kind === "room" ? () => void redeemInviteCode() : undefined,
           stepChat: (dir) => stepChatRef.current(dir),
           openProposal: (sessionId) => {
             rememberChat(sessionId);
