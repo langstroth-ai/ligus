@@ -555,7 +555,7 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 0.1.1. Each stays on this list until a release fixes
+Stated plainly, as of 0.2.0. Each stays on this list until a release fixes
 it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
@@ -982,6 +982,15 @@ it.
     its person can't act from it in that workspace, and they reset the
     phone's device key. The QR flow isn't affected. A fix is planned after
     0.1.1.
+34. **Older members can still show a forged proposal comment.** Since 0.2.0
+    a proposal comment whose named author isn't its signer is refused, and
+    only verified comments are forwarded to an agent. The check runs on each
+    member's own device, so a 0.1.x desktop or `ligus serve` box in the
+    workspace can still show a comment under someone else's name and forward
+    it to an agent when its user asks for a revision. Upgrade every member.
+35. **Another workspace's member can disturb a chat on one device.** A
+    member of another workspace you share who knows a chat's id can disturb
+    that chat on one device. Fixed in 0.2.1.
 
 ## Out of scope {#out-of-scope}
 

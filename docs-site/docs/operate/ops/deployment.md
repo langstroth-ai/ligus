@@ -73,7 +73,8 @@ revoked one at a time on the open-source relay, so give them an expiry; see
 3. Workspace rail **＋ → Add workspace → Create**. Ligus generates a random
    room id and workspace key; you are the Owner.
 
-Expected result: the sync pill reads **live** and encrypted.
+Expected result: the status bar at the foot of the window reads **Live**, with
+the lock (encrypted).
 
 ## 4. Bring teammates in
 
@@ -147,7 +148,7 @@ See
 - [ ] co-member invites where possible; invite links only over trusted channels; compare safety codes on first contact
 - [ ] roles set; few Admins
 - [ ] workspace runtimes use `--secret-ref`, not inline secrets
-- [ ] everyone's sync pill reads **live**, encrypted
+- [ ] everyone's status bar reads **Live**, with the lock (encrypted)
 - [ ] relay backups scheduled ([Operations](operations.md))
 
 ## Offboarding and incidents

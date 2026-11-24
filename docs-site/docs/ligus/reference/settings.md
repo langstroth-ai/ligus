@@ -1,7 +1,7 @@
 # Settings reference
 
 Where Ligus keeps its settings and every key in each place, checked against
-the 0.1.0 code. For what each Settings tab does in the app, see
+the 0.2.0 code. For what each Settings tab does in the app, see
 [Settings](../features/settings.md).
 
 | Store | Scope | Synced? | Edited by |
@@ -12,6 +12,7 @@ the 0.1.0 code. For what each Settings tab does in the app, see
 | Environment variables | one process | no | you; see [Environment variables](../../operate/reference/env-vars.md) |
 | The workspace config log | the workspace | **yes**, E2EE | Admins and members, through the app and CLI |
 | `<repo>/.ligus/runtimes.json`, `mcp-servers.json` | one workspace folder on this device | no | the app |
+| The window's own storage | this desktop | no | the app (see [Window preferences](#window-preferences)) |
 
 ## Desktop `settings.json`
 
@@ -34,6 +35,9 @@ private.
 | `api_key` | none | legacy single Anthropic/OpenAI key |
 | `claude_permission_mode` | `default` | `default`, `acceptEdits`, `runCommands`, `bypassPermissions` for Claude Code (**Settings → Permissions**) |
 | `claude_code_model` | empty | `--model` for Claude Code |
+| `chat_models` | `{}` | the model picked per chat on this device, per runtime (chat id → runtime id → model); applies only to the chat's untagged turns this device runs. See [Pick a model](../getting-started/configuring-a-runtime.md#pick-a-model) |
+| `share_typing` | `true` | tell people in a chat when you're typing (**Settings → Profile**) |
+| `primary_open_to_members` | `false` | let other members use this device's primary runtime (`@ligus`) in shared chats |
 | `summarize_prompt`, `compact_prompt` | none | custom `/summarize` and `/compact` instructions |
 | `utility_runtime_id` | none | runtime for quick tasks such as chat titles |
 | `builtin_tools` | `true` | offer built-in file tools to HTTP runtimes |
@@ -55,7 +59,6 @@ private.
 | `identity_links` | none | [Linked accounts](../features/linked-identities.md) on this device: `checkForges` (absent = on), `forges` (self-managed forges this device may ask: `provider`, `host`, `baseUrl`), `contactLinks` (links signed for this device's contact card). Never synced |
 | `provider_keys`, `provider_base_urls` | `{}` | per provider: `anthropic`, `openAI`, `openRouter`, `custom` |
 | `workspaces` | `[]` | each `{name, relay_url, room, key, icon, dm_account, founder_actor_id}` |
-| `dismissed_invites` | `[]` | |
 | `agent_templates` | `[]` | `{id, name, runtimeId, role, instructions}` |
 | `local_workspace_icon` | none | |
 | `schedules` | `[]` | `{id, enabled, label, workspaceId, runtimeId, prompt, trigger, lastRun}`; daily times are UTC |
@@ -64,6 +67,22 @@ private.
 | `remote_file_tools_optins` | `{}` | per runtime: allow file tools for this non-private endpoint |
 | `workspace_root` | none | legacy last-used folder |
 | `workspace_dirs` | `{}` | folder per workspace on this device; never synced |
+| `phone_labels` | `{}` | the names phones gave themselves when this desktop added them (device id → label) |
+| `egress_presets_by_workspace`, `egress_presets_by_chat` | `{}` | opt-in network presets (**Settings → Guards**), per workspace and per chat |
+| `cli_user_config_workspaces` | `[]` | workspaces whose CLI agents run with your own CLI setup (hooks, plugins, skills) |
+| `sandbox_grants_here` | `{}` | per workspace: whether this device applies the workspace's signed sandbox grants (default: on for the Owner's devices, off for others) |
+| `sandbox_grants_seen` | `{}` | per workspace: the grants you last reviewed, so a change shows in the [Inbox](../features/inbox.md) |
+| `onboarded`, `tour_seen` | `false` | first-run onboarding finished; the feature tour ran once |
+| `passkey_policy` | none (`ligus.ai`) | the passkey relying party written into workspaces this device founds |
+
+### Window preferences
+
+A few view preferences live in the desktop window's own storage, not in
+`settings.json`: the appearance mode and theme, **Density**
+(`ligus.density`: `compact`, `comfortable` or `spacious`), the zoom, which
+panes are open and their widths, the command palette's recent items, a
+skipped update version and dismissed tips. Focus mode isn't stored: it ends
+when you leave it or restart.
 
 ### `flow`
 

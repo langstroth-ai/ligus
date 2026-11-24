@@ -260,8 +260,8 @@ what need a **passkey** assertion over the event:
 - **Any passkey.** Touch ID and iCloud Keychain, Windows Hello, Google
   Password Manager, phones over QR, YubiKeys. Secure Enclave-only keys aren't
   required. The desktop runs the ceremony in the system passkey dialog on
-  macOS (for a relying party the app is associated with) and Windows, and
-  otherwise in your browser on the relying party's `/presence` page; either
+  macOS (for a relying party the app is associated with) and Windows (for
+  the default `ligus.ai` relying party only), and otherwise in your browser on the relying party's `/presence` page; either
   way it checks the result is for its own challenge
   ([Native passkeys](native-passkeys.md)). The iPhone app uses
   `ASAuthorization` directly.
@@ -300,6 +300,21 @@ Findings from security reviews that change what this section says are
 recorded here, each with the date and the page section it affects. The full
 list with status is in
 [Reviewer findings](threat-model.md#reviewer-findings).
+
+**2026-11-22: 0.2.0.**
+
+- A proposal comment is by the member who signs it: a comment whose named
+  author isn't its signer is refused, its role is the signer's real role,
+  only verified comments are forwarded to an agent, and an edit to a
+  proposal can't replace or rewrite its comment thread. The check runs on
+  each member's device, so upgrade every member (see
+  [Known limitations](threat-model.md#known-limitations)).
+- A box shows a paired phone its own person's role and vote on a proposal,
+  not the box's.
+- A synced avatar colour that isn't a colour is ignored. Model listing runs
+  only the harness's own binary and refuses model ids that start with a
+  dash. `ligus doctor`'s relay probe has a timeout and redacts what it
+  prints. Sign-in links open only `http` and `https`.
 
 **2026-11-14: Phase 0 Track D (agent interface).**
 

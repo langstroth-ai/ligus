@@ -92,7 +92,10 @@ OpenAI-compatible)** fills in:
 
 Add one runtime per model you want to use (each sends a different
 `model` name). When you type the model name, the form shows Ligus's
-**recommended role** for that model family.
+**recommended role** for that model family. To try another model the
+gateway serves in one chat without adding a runtime, pick it from the
+route pill under the composer (the list is the gateway's `/v1/models`);
+see [Picking the model for a chat](configuring-a-runtime.md#pick-a-model).
 
 The equivalent `ligus.config.toml` block:
 
