@@ -205,13 +205,17 @@ pub fn find_macos(
         );
     }
     searched.add("LIGUS_APP (unset)");
-    let mut dirs = vec![PathBuf::from("/Applications")];
+    // macOS paths, built as strings so the tests read the same on any OS.
+    let mut dirs = vec!["/Applications".to_string()];
     match host.var("HOME") {
-        Some(home) => dirs.push(Path::new(&home).join("Applications")),
+        Some(home) => dirs.push(format!(
+            "{}/Applications",
+            home.to_string_lossy().trim_end_matches('/')
+        )),
         None => searched.add("~/Applications (HOME is unset)"),
     }
     for dir in dirs {
-        let p = dir.join(format!("{PRODUCT_NAME}.app"));
+        let p = PathBuf::from(format!("{dir}/{PRODUCT_NAME}.app"));
         if is_bundle(&p) {
             return Ok(Some(p));
         }
