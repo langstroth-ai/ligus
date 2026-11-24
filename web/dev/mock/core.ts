@@ -36,6 +36,8 @@ function chatRuntime(sid: string): string {
 function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
   switch (cmd) {
+    case "export_theme":
+      return `/Users/you/Downloads/${String(args?.fileName ?? "theme.toml")}`;
     case "get_app_info":
       return { name: "Ligus", coreVersion: "0.1.0", buildProfile: "debug" };
     case "get_app_settings":

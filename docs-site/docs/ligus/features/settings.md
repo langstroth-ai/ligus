@@ -58,6 +58,11 @@ the app data dir; the theme is stored locally per device.
   **obsidian is a true dark, monochrome theme** — a neutral near-black
   glass with an achromatic silver accent that stays dark regardless of
   the Mode toggle.
+- **Import a theme… / Export current theme** — bring your own colours as
+  a theme file (TOML or JSON, the same file lt reads), or save the theme in
+  use as a starting file. Imported themes are listed under the palettes,
+  with **Rename** and **Remove** in the row menu, and stay on this device.
+  See [Themes](themes.md).
 - **Density** — how much room rows, cards and messages take:
   **Compact** (shorter rows, tighter turns, a slightly smaller message
   body), **Comfortable** (the default) or **Spacious** (taller rows, more

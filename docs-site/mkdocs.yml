@@ -201,6 +201,7 @@ nav:
           - Security & trust: ligus/concepts/security.md
       - Features:
           - Settings: ligus/features/settings.md
+          - Themes: ligus/features/themes.md
           - Right Rail: ligus/features/right-rail.md
           - Multi-agent collaboration: ligus/features/multi-agent.md
           - Who can use your agents: ligus/features/agent-access.md

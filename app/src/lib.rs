@@ -3805,6 +3805,54 @@ pub(crate) fn export_chat_sync(state: State<AppState>, session_id: String) -> Re
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
+/// A theme file name for the save dialog: letters, digits and dashes, then
+/// `.toml` or `.json` (the page's export picks which).
+fn theme_file_name(name: &str) -> String {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if e.eq_ignore_ascii_case("json") => (s, "json"),
+        Some((s, e)) if e.eq_ignore_ascii_case("toml") => (s, "toml"),
+        _ => (name, "toml"),
+    };
+    let stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).take(40).collect();
+    let stem = stem.trim_matches('-');
+    format!("{}.{ext}", if stem.is_empty() { "ligus-theme" } else { stem })
+}
+
+/// The most a theme file the page asks to save may hold (the import limit).
+const THEME_FILE_MAX: usize = 64 * 1024;
+
+/// Save a theme file (Settings, Appearance, Export current theme) where the
+/// person picks. The text is the page's own export of colours; this only
+/// writes it. Returns the path, or `None` if the dialog was cancelled.
+#[tauri::command]
+async fn export_theme(ligus_app: tauri::AppHandle, file_name: String, contents: String) -> Result<Option<String>, String> {
+    if contents.len() > THEME_FILE_MAX {
+        return Err("the theme file is too large".into());
+    }
+    let name = theme_file_name(&file_name);
+    crate::off_main(ligus_app, move |_| {
+        let Some(path) =
+            rfd::FileDialog::new().set_file_name(&name).add_filter("Ligus theme", &["toml", "json"]).save_file()
+        else {
+            return Ok(None);
+        };
+        std::fs::write(&path, contents).map_err(map_err)?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    })
+    .await
+}
+
+#[cfg(test)]
+mod theme_file_tests {
+    #[test]
+    fn theme_file_names_are_plain() {
+        assert_eq!(super::theme_file_name("Heather Dusk.toml"), "heather-dusk.toml");
+        assert_eq!(super::theme_file_name("../../etc/passwd"), "etc-passwd.toml");
+        assert_eq!(super::theme_file_name("x.JSON"), "x.json");
+        assert_eq!(super::theme_file_name("..."), "ligus-theme.toml");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Composer attachments
 //
@@ -16445,6 +16493,7 @@ pub fn run() {
             probe_relay,
             probe_relay_at,
             export_chat,
+            export_theme,
             save_attachment,
             attachments::share_attachment,
             attachments::list_attachments,
