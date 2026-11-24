@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import { SessionStateChip } from "@/components/ui";
 import type { SessionState } from "@/lib/sessionState";
+import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import "./kit.css";
 
 export function InboxItem({
@@ -16,6 +17,7 @@ export function InboxItem({
   unread = false,
   onOpen,
   actions,
+  menu,
 }: {
   title: string;
   /// The glyph and word on the right ("◆ Needs you", "Failed").
@@ -31,9 +33,12 @@ export function InboxItem({
   onOpen?: () => void;
   /// Quick actions (Open, Answer). Clicking them doesn't open the item.
   actions?: ReactNode;
+  /// Secondary actions (Dismiss…) in the row menu: right-click, ⋯, Shift+F10.
+  menu?: RowAction[];
 }) {
+  const rm = useRowMenu(`Actions for ${title}`, menu ?? []);
   return (
-    <div role="listitem" data-unread={unread || undefined} className="ligus-row group/inbox flex items-start gap-2 px-3 py-2">
+    <div role="listitem" data-unread={unread || undefined} className="ligus-row group/inbox flex items-start gap-2 px-3 py-2" {...rm.rowProps}>
       <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
         <span className="flex items-center gap-2">
           <span
@@ -58,7 +63,13 @@ export function InboxItem({
           </span>
         )}
       </button>
-      {actions && <span className="flex shrink-0 items-center gap-1.5 pt-0.5">{actions}</span>}
+      {(actions || rm.button) && (
+        <span className="flex shrink-0 items-center gap-1.5 pt-0.5">
+          {actions}
+          {rm.button}
+        </span>
+      )}
+      {rm.menu}
     </div>
   );
 }

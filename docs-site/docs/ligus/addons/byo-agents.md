@@ -158,7 +158,7 @@ delivery, and bounds each run with a wall-clock timeout
 ## Attaching to a workspace agent
 
 Configure a `WorkspaceAgent` that points at the runtime — the easiest way is
-the right-rail **Tools** pane → **Workspace** → **Agent roster**:
+the right-rail **Tools** pane → **Agents**:
 
 - Name: `coder` (so peers `@coder` to invoke)
 - Runtime: pick `aider`

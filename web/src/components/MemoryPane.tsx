@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge, Button, EmptyHint, ErrorState, LoadingState, Section } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
+import { Sheet } from "@/components/kit/Sheet";
 import { PANE_DOCS } from "@/lib/docs";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
@@ -37,6 +38,7 @@ function when(ms: number): string {
 /// read. People write and edit; agents propose, and a person decides.
 export function MemoryPane({ sessionId }: { sessionId?: string }) {
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
   const q = useQuery({ queryKey: ["memory", query], queryFn: () => memoryView(query, []) });
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -46,7 +48,12 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
   const done = () => void q.refetch();
   const fail = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}: ${errMsg(e)}`);
   return (
-    <RailFrame title="Memory" about="Shared notes and facts. Agents read them and propose changes; people decide." docs={PANE_DOCS.memory}>
+    <RailFrame
+      title="Memory"
+      about="Shared notes and facts. Agents read them and propose changes; people decide."
+      docs={PANE_DOCS.memory}
+      primary={{ label: "New note", onClick: () => setCreating(true) }}
+    >
       {q.isError ? (
         <ErrorState text="Couldn't load the workspace memory." onRetry={() => void q.refetch()} />
       ) : q.isPending ? (
@@ -56,6 +63,8 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
           view={q.data}
           query={query}
           onQuery={setQuery}
+          creating={creating}
+          onCreating={setCreating}
           onSave={(d) =>
             writeMemory({ ...d, sourceChatId: d.entryId ? undefined : sessionId })
               .then(done)
@@ -98,16 +107,23 @@ export function MemoryPaneView({
   onRemove,
   onDecide,
   onPropose,
+  creating: creatingProp,
+  onCreating,
 }: {
   view: MemoryView;
   query: string;
   onQuery: (q: string) => void;
+  /// The new-note sheet, when the pane header owns the "New note" action.
+  creating?: boolean;
+  onCreating?: (v: boolean) => void;
   onSave: (d: Draft) => void;
   onRemove: (e: MemoryEntry) => void;
   onDecide: (p: MemoryProposalState, accepted: boolean) => void;
   onPropose: (op: MemoryOp) => void;
 }) {
-  const [creating, setCreating] = useState(false);
+  const [creatingLocal, setCreatingLocal] = useState(false);
+  const creating = creatingProp ?? creatingLocal;
+  const setCreating = onCreating ?? setCreatingLocal;
   const open = view.proposals.filter((p) => !p.decision);
   return (
     <div className="space-y-4" data-testid="memory-pane">
@@ -120,28 +136,27 @@ export function MemoryPaneView({
           </ul>
         </Section>
       )}
-      <div className="flex gap-1.5">
+      {(view.total > 0 || query) && (
         <input
           aria-label="Search memory"
           placeholder="Search notes"
           data-tip="Every word must match"
-          className="min-w-0 flex-1 rounded-xl border px-3 py-1.5 text-sm"
+          className="w-full rounded-xl border px-3 py-1.5 text-sm"
           style={fieldStyle}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
         />
-        <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating}>
-          New note
-        </Button>
-      </div>
+      )}
       {creating && (
-        <EntryEditor
-          onCancel={() => setCreating(false)}
-          onSave={(d) => {
-            onSave(d);
-            setCreating(false);
-          }}
-        />
+        <Sheet title="New note" side="center" width={460} onClose={() => setCreating(false)}>
+          <EntryEditor
+            onCancel={() => setCreating(false)}
+            onSave={(d) => {
+              onSave(d);
+              setCreating(false);
+            }}
+          />
+        </Sheet>
       )}
       {(view.editedAfterRemoval ?? []).length > 0 && (
         <Section title="Edited after removal">
@@ -154,7 +169,16 @@ export function MemoryPaneView({
       )}
       <Section title={query ? `Matches (${view.entries.length} of ${view.total})` : `Notes (${view.total})`}>
         {view.entries.length === 0 ? (
-          <EmptyHint text={query ? "No note matches every word." : "No notes yet."} />
+          <EmptyHint
+            text={query ? "No note matches every word." : "No notes yet."}
+            action={
+              query ? undefined : (
+                <Button size="sm" onClick={() => setCreating(true)}>
+                  New note
+                </Button>
+              )
+            }
+          />
         ) : (
           <ul className="ligus-rowlist" aria-label="Notes">
             {view.entries.map((e) => (
@@ -212,26 +236,32 @@ function EntryCard({
   );
   return (
     <li className="px-1 text-sm" data-testid="memory-entry" {...rowMenu.rowProps}>
-      {editing ? (
-        <EntryEditor
-          initial={editing}
-          onCancel={() => setEditing(null)}
-          onSave={(d) => {
-            onSave(d);
-            setEditing(null);
-          }}
-        />
-      ) : suggesting ? (
-        <EntryEditor
-          initial={{ title: e.current.title, body: e.current.body, tags: e.current.tags ?? [] }}
-          saveLabel="Propose"
-          onCancel={() => setSuggesting(false)}
-          onSave={(d) => {
-            onPropose({ op: "edit", entryId: e.id, base: e.current.rev, title: d.title, body: d.body, tags: d.tags });
-            setSuggesting(false);
-          }}
-        />
-      ) : (
+      {editing && (
+        <Sheet title="Edit note" side="center" width={460} onClose={() => setEditing(null)}>
+          <EntryEditor
+            initial={editing}
+            onCancel={() => setEditing(null)}
+            onSave={(d) => {
+              onSave(d);
+              setEditing(null);
+            }}
+          />
+        </Sheet>
+      )}
+      {suggesting && (
+        <Sheet title="Suggest an edit" side="center" width={460} onClose={() => setSuggesting(false)}>
+          <EntryEditor
+            initial={{ title: e.current.title, body: e.current.body, tags: e.current.tags ?? [] }}
+            saveLabel="Propose"
+            onCancel={() => setSuggesting(false)}
+            onSave={(d) => {
+              onPropose({ op: "edit", entryId: e.id, base: e.current.rev, title: d.title, body: d.body, tags: d.tags });
+              setSuggesting(false);
+            }}
+          />
+        </Sheet>
+      )}
+      {(
         <>
           {/* One line: title, muted tags, then any state badge. The body,
               provenance and actions open with the row. */}

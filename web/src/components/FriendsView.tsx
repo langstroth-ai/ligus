@@ -26,6 +26,8 @@ import {
 import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
+import { Button } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
 import { IconUsers } from "@/lib/icons";
 import { confirmSafetyCode, trustNote } from "@/lib/people";
 import { LinkChips } from "@/components/LinkChips";
@@ -173,6 +175,7 @@ export function FriendsView({
     return () => off?.();
   }, [qc, dms.data]);
   const [paste, setPaste] = useState("");
+  const [joining, setJoining] = useState(false);
   const [info, setInfo] = useState<InviteInfoDto | null>(null);
 
   async function afterJoin() {
@@ -237,6 +240,7 @@ export function FriendsView({
       }
       setPaste("");
       setInfo(null);
+      setJoining(false);
       await afterJoin();
       toast.success("Joined.");
     } catch (e) {
@@ -304,12 +308,15 @@ export function FriendsView({
         <h1 className="ligus-title flex items-center gap-2">
           <IconUsers size={18} /> People
         </h1>
-        {profile.data?.safetyCode && (
-          <span className="text-right text-[11px] text-ink-soft" data-tip="Your safety code: people compare it with the one they see for you">
-            Your code <code className="font-mono">{profile.data.safetyCode}</code>
-          </span>
-        )}
+        <Button size="sm" onClick={() => setJoining(true)}>
+          Join with an invite…
+        </Button>
       </header>
+      {profile.data?.safetyCode && (
+        <p className="-mt-4 text-[11px] text-ink-soft" data-tip="Your safety code: people compare it with the one they see for you">
+          Your code <code className="font-mono">{profile.data.safetyCode}</code>
+        </p>
+      )}
       {note && <p className="text-xs text-ink-soft">{note}</p>}
       {link && (
         <LinkBox
@@ -321,9 +328,20 @@ export function FriendsView({
         />
       )}
 
+      {joining && (
+      <Sheet
+        title="Join with an invite"
+        side="center"
+        width={460}
+        onClose={() => {
+          setJoining(false);
+          setPaste("");
+          setInfo(null);
+        }}
+      >
       <section className="flex flex-col gap-2">
-        <h2 className="ligus-cap">Join with an invite</h2>
         <textarea
+          autoFocus
           value={paste}
           onChange={(e) => void inspect(e.target.value)}
           rows={2}
@@ -352,53 +370,24 @@ export function FriendsView({
           </div>
         )}
       </section>
+      </Sheet>
+      )}
 
       {(dms.data?.length ?? 0) > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="ligus-cap">Direct messages</h2>
-          {dms.data!.map((d) => {
-            const note = d.inviteDelivery?.pending || d.inviteDelivery?.state === "expired" ? inviteDeliveryNote(d.inviteDelivery, d.name) : null;
-            const warn = d.inviteDelivery?.state === "warning";
-            return (
-              <div key={d.workspaceId} className="flex flex-col gap-1">
-                <button
-                  onClick={() => void openExistingDm(d.workspaceId)}
-                  className="flex items-center justify-between rounded-lg border px-3 py-2 text-left"
-                  style={{ borderColor: warn ? "var(--ligus-danger-ink)" : "var(--ligus-line)", background: "var(--ligus-panel)" }}
-                >
-                  <span className="flex items-center gap-2 text-sm">
-                    <Avatar name={d.name} url={d.avatarUrl} kind="human" size={22} />
-                    {d.name}
-                  </span>
-                  {d.archived.length > 0 && (
-                    <span className="text-[11px] text-ink-soft" data-tip="You both opened a DM at the same time; the older one was kept">
-                      +{d.archived.length} archived
-                    </span>
-                  )}
-                </button>
-                {note && (
-                  <div className="flex flex-wrap items-center gap-2 px-3 text-[11px]" style={{ color: warn ? "var(--ligus-danger-ink)" : undefined }}>
-                    <span className={warn ? "" : "text-ink-soft"}>{note}</span>
-                    {d.inviteDelivery?.pending && (
-                      <>
-                        <button className="underline" onClick={() => void shareHeld(d)}>
-                          Share link
-                        </button>
-                        {warn && (
-                          <button className="underline" onClick={() => void deliverAnyway(d)}>
-                            Deliver anyway
-                          </button>
-                        )}
-                        <button className="text-ink-soft hover:text-ink" onClick={() => void stopWaiting(d)}>
-                          Stop waiting
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          <ul className="ligus-rowlist" aria-label="Direct messages">
+            {dms.data!.map((d) => (
+              <DmRow
+                key={d.workspaceId}
+                d={d}
+                onOpen={() => void openExistingDm(d.workspaceId)}
+                onShare={() => void shareHeld(d)}
+                onDeliverAnyway={() => void deliverAnyway(d)}
+                onStopWaiting={() => void stopWaiting(d)}
+              />
+            ))}
+          </ul>
         </section>
       )}
 
@@ -493,6 +482,63 @@ function PersonRow({
           </div>
         </div>
       )}
+    </li>
+  );
+}
+
+/// One DM as a row: the click opens it; sharing the held invite, delivering
+/// it anyway and giving up live in the row menu. A pending or unverified
+/// delivery keeps its note visible under the row.
+function DmRow({
+  d,
+  onOpen,
+  onShare,
+  onDeliverAnyway,
+  onStopWaiting,
+}: {
+  d: DmDto;
+  onOpen: () => void;
+  onShare: () => void;
+  onDeliverAnyway: () => void;
+  onStopWaiting: () => void;
+}) {
+  const note = d.inviteDelivery?.pending || d.inviteDelivery?.state === "expired" ? inviteDeliveryNote(d.inviteDelivery, d.name) : null;
+  const warn = d.inviteDelivery?.state === "warning";
+  const pendingInvite = Boolean(d.inviteDelivery?.pending);
+  const rm = useRowMenu(
+    `Actions for the DM with ${d.name}`,
+    pendingInvite
+      ? [
+          { label: "Share link", onSelect: onShare },
+          ...(warn ? [{ label: "Deliver anyway…", danger: true, onSelect: onDeliverAnyway }] : []),
+          { label: "Stop waiting", onSelect: onStopWaiting },
+        ]
+      : [],
+  );
+  return (
+    <li className="px-1" {...rm.rowProps}>
+      <div className="ligus-listrow flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+        >
+          <Avatar name={d.name} url={d.avatarUrl} kind="human" size={22} />
+          <span className="min-w-0 truncate text-[13px] font-medium">{d.name}</span>
+          {d.archived.length > 0 && (
+            <span className="shrink-0 text-[11px] text-ink-soft" data-tip="You both opened a DM at the same time; the older one was kept">
+              +{d.archived.length} archived
+            </span>
+          )}
+        </button>
+        {rm.button}
+      </div>
+      {note && (
+        <div className="pb-2 pl-[30px] text-[11px]" role={warn ? "alert" : undefined} style={{ color: warn ? "var(--ligus-danger-ink)" : "var(--ligus-ink-soft)" }}>
+          {note}
+        </div>
+      )}
+      {rm.menu}
     </li>
   );
 }

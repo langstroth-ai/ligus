@@ -9,9 +9,9 @@ before it starts. This page shows the settings; the rules behind them are in
 
 ## Where the settings are
 
-Open the right rail's **Tools** pane and switch it to **Workspace** (or click the
-**Edit** link beside **from workspace**). Each agent in **Agent roster** has its access
-settings at the bottom of its card:
+Open the right rail's **Tools** pane. Each agent row under **Agents** shows a
+one-line access summary (for example "Only me · 50 turns/day"); open the row's
+menu (right-click, or its **⋯**) and choose **Access…**:
 
 - **Who can use this agent**: **Only me** or **Everyone in the workspace**.
 - **Turns per member per day**: **Default**, **Unlimited** or **Custom…**.
@@ -20,7 +20,7 @@ settings at the bottom of its card:
 - **Usage on this device**: who used the agent today and this month.
 
 Change them and press **Save access**. Only the agent's owner sees these
-controls. Everyone else sees a small badge on the card instead: **Only its
+controls. Everyone else sees the access in the row instead: **Only its
 owner**, **Everyone** or **Admins only**.
 
 ## Who can use an agent

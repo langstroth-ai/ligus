@@ -78,7 +78,8 @@ describe("Inbox", () => {
     const items = needsYouItems({ live: liveTurns.snapshot(), chatTitles: titles });
     mount(items);
     expect(screen.getByText("the model refused")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Actions for / }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Dismiss" }));
     expect(liveTurns.failureOf("c1")).toBeNull();
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RightRail } from "./RightRail";
 import type { ProposalDto } from "@/lib/ipc";
@@ -86,6 +86,8 @@ describe("proposal sets in the Review pane", () => {
 
     expect(within(card).getByRole("radio", { name: "Balanced" })).toHaveAttribute("aria-checked", "true");
     expect(within(card).queryByRole("button", { name: "Send scouts" })).toBeNull();
-    expect(within(card).getByRole("button", { name: "Close without choosing" })).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "Actions for “Which cache?”" }));
+    expect(screen.getByRole("menuitem", { name: "Close without choosing" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "New round" })).toBeInTheDocument();
   });
 });

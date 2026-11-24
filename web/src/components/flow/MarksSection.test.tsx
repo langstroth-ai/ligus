@@ -32,6 +32,7 @@ describe("workspace marks", () => {
     const added: string[][] = [];
     render(<MarksView marks={[]} onAdd={(k, p, n) => added.push([k, p, n])} onClear={() => {}} />);
     expect(screen.getByText("No marks in this workspace.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Leave a mark" }));
     fireEvent.change(screen.getByLabelText("Mark kind"), { target: { value: "lock" } });
     fireEvent.change(screen.getByLabelText("Path"), { target: { value: " docs/a.md " } });
     fireEvent.click(screen.getByText("Leave mark"));

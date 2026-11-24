@@ -30,22 +30,39 @@ let lastFlowTab: FlowTab | null = null;
 export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
   // Remember the last Flow tab, so leaving the pane and coming back lands where you were.
   const [tab, setTab] = useState<FlowTab>(() => lastFlowTab ?? initialTab);
+  const [adding, setAdding] = useState(false);
   const selectTab = (t: FlowTab) => {
     lastFlowTab = t;
     setTab(t);
+    setAdding(false);
   };
+  // The one primary action follows the tab: only tabs that create something
+  // have one, and its form opens in a sheet.
+  const primary =
+    tab === "marks"
+      ? { label: "Leave a mark", onClick: () => setAdding(true) }
+      : tab === "zones"
+        ? { label: "Add zone", onClick: () => setAdding(true) }
+        : tab === "home"
+          ? { label: "Publish…", onClick: () => setAdding(true) }
+          : undefined;
   return (
-    <RailFrame title="Flow" about="Who picks up work, where it waits, and what agents left for each other." docs={PANE_DOCS.flow}>
+    <RailFrame
+      title="Flow"
+      about="Who picks up work, where it waits, and what agents left for each other."
+      docs={PANE_DOCS.flow}
+      primary={primary}
+    >
       <div className="mb-3">
         <SegmentedTabs tabs={TABS} value={tab} onChange={selectTab} label="Flow sections" />
       </div>
       {tab === "board" && <BoardSection />}
       {tab === "queue" && <QueueSection />}
-      {tab === "marks" && <MarksSection />}
+      {tab === "marks" && <MarksSection adding={adding} onAdding={setAdding} />}
       {tab === "routing" && <RoutingSection />}
       {tab === "roster" && <RosterSection />}
-      {tab === "zones" && <ZonesSection />}
-      {tab === "home" && <HomeSection />}
+      {tab === "zones" && <ZonesSection adding={adding} onAdding={setAdding} />}
+      {tab === "home" && <HomeSection publishing={adding} onPublishing={setAdding} />}
     </RailFrame>
   );
 }
