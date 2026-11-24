@@ -296,23 +296,29 @@ export function ltScheme(t, name, variant) {
     selection = mixed(p.accentCool, a);
     if (backgrounds.every((b) => deltaE(selection, b) >= LT_SELECTION_DELTA_E)) break;
   }
+  // Every ink also sits on the selected row's tint.
+  const under = [...backgrounds, selection];
+  const css = (rgb) => `rgb(${rgb.join(",")})`;
+  const ink = (c) => inkOn(css(c), under, variant);
+  let dim = mixed(p.ink, LT_DIM_MIX);
+  for (let a = LT_DIM_MIX; a <= 1.0001 && !under.every((b) => contrast(dim, b) >= LT_TEXT_CONTRAST); a += 0.02) dim = mixed(p.ink, a);
   return {
     canvas: solid(p.canvas),
-    text: solid(p.ink),
-    dim: mixed(p.ink, LT_DIM_MIX),
-    accent: inkOn(p.accentCool, backgrounds, variant),
+    text: ink(solid(p.ink)),
+    dim,
+    accent: inkOn(p.accentCool, under, variant),
     border,
     selection,
-    mention: inkOn(p.accentWarm, backgrounds, variant),
-    ok: atL(s.status.ok),
-    info: atL(s.status.info),
-    warn: atL(s.status.warn),
-    danger: atL(s.status.danger),
-    neutral: atL(s.status.neutral),
-    diff_add: solid(s.diff.addInk),
-    diff_del: solid(s.diff.delInk),
+    mention: inkOn(p.accentWarm, under, variant),
+    ok: ink(atL(s.status.ok)),
+    info: ink(atL(s.status.info)),
+    warn: ink(atL(s.status.warn)),
+    danger: ink(atL(s.status.danger)),
+    neutral: ink(atL(s.status.neutral)),
+    diff_add: ink(solid(s.diff.addInk)),
+    diff_del: ink(solid(s.diff.delInk)),
     diff_comment: solid(s.diff.comment),
-    agent: inkOn(s.presence[3], backgrounds, variant),
+    agent: inkOn(s.presence[3], under, variant),
     presence: s.presence.map(solid),
   };
 }
