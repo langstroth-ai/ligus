@@ -10,10 +10,12 @@
 //!   the domain's `apple-app-site-association`. A workspace whose RP isn't one
 //!   of them (a self-hosted RP) keeps the browser hand-off. Apple writes the
 //!   `clientDataJSON` itself, with origin `https://<rp id>`.
-//! * **Windows**: `webauthn.dll` ([`windows`]), loaded at run time. The app
-//!   builds the `clientDataJSON` itself
+//! * **Windows**: `webauthn.dll` ([`windows`]), loaded at run time, and only
+//!   for Ligus's own relying party (`ligus.ai`, [`windows_serves`]):
+//!   webauthn.dll has no domain association, so any other RP uses the
+//!   browser hand-off. The app builds the `clientDataJSON` itself
 //!   ([`ligus_core::presence::client_data_json`], origin: the workspace's
-//!   hand-off page origin), so any well-formed workspace RP works.
+//!   hand-off page origin).
 //! * **Linux**: no platform API; the browser hand-off as before.
 //!
 //! The hand-off ([`crate::passkey_ui`]) stays the fallback everywhere: when

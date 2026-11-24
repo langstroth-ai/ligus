@@ -4,6 +4,46 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## 0.2.1
+
+A security release: a chat's history is now kept per workspace, so a
+member of another workspace you share can't hide, re-home or disturb your
+chats. Upgrade every member of a workspace.
+
+### Security
+
+- **A chat's history belongs to its workspace.** Chat ids aren't
+  namespaced by workspace, so someone in another workspace you share (an
+  ex-member, a DM peer) who knew a chat's id could sign events under it
+  and, on your device, decide which workspace the chat belonged to, blank
+  it, or make your next message unreadable on other devices. Each chat's
+  log is now kept per workspace; their events form a separate chat in
+  their own workspace, visible only there. This fixes the 0.2.0 known
+  issue.
+- **Event ids are unique per workspace.** An event id planted first in
+  another workspace no longer keeps the genuine event out of its chat.
+- **Checks use the chat's own workspace.** The check a box runs before it
+  applies code and the agent access gates read the chat in its own
+  workspace. See [Agent access](../features/agent-access.md).
+- **Chat lists and notifications carry the workspace.** The chat list,
+  the Inbox and notifications know each chat's workspace, and the command
+  palette opens a chat in it. Deleting a chat removes only that
+  workspace's copy.
+- **Secret redaction fails closed.** If the fast matcher can't be built,
+  every registered secret is still masked, one at a time, instead of none.
+- **Upgrade every member.** Each device protects its own copy of a chat;
+  upgrade every desktop and `ligus serve` box in the workspace.
+
+### Upgrading
+
+- **A one-time database upgrade.** The first launch of 0.2.1 (the desktop,
+  `ligus serve` or a worker) upgrades the local database once. It can take
+  a few seconds on a large history and needs about 2.5 times the
+  database's size in free disk space. If there isn't enough, Ligus says
+  how much to free ("free N GB ...") and changes nothing. A temporary
+  backup is kept beside the database and removed after the next clean
+  launch.
+
 ## 0.2.0
 
 A calmer desktop (an Inbox for what needs you, a quiet status bar, focus
