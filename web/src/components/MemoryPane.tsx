@@ -122,7 +122,8 @@ export function MemoryPaneView({
       <div className="flex gap-1.5">
         <input
           aria-label="Search memory"
-          placeholder="Search notes (every word must match)"
+          placeholder="Search notes"
+          data-tip="Every word must match"
           className="min-w-0 flex-1 rounded-xl border px-3 py-1.5 text-sm"
           style={fieldStyle}
           value={query}
@@ -152,7 +153,7 @@ export function MemoryPaneView({
       )}
       <Section title={query ? `Matches (${view.entries.length} of ${view.total})` : `Notes (${view.total})`}>
         {view.entries.length === 0 ? (
-          <EmptyHint text={query ? "No note matches every word." : "No notes yet. Add one, or accept an agent's proposal."} />
+          <EmptyHint text={query ? "No note matches every word." : "No notes yet."} />
         ) : (
           <ul className="space-y-2">
             {view.entries.map((e) => (

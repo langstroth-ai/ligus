@@ -61,6 +61,11 @@ describe("AgentAccessPanel", () => {
     const user = userEvent.setup();
     renderPanel(base);
     expect(screen.getByRole("option", { name: "Only me" })).toBeInTheDocument();
+    // The explanations sit behind "?" buttons but stay in the accessibility tree.
+    expect(screen.getByRole("button", { name: "About who can use this agent" })).toHaveAccessibleDescription(
+      /on their credentials/,
+    );
+    expect(screen.getByRole("button", { name: "About the daily cap" })).toHaveAccessibleDescription(/never limited/);
     await user.selectOptions(screen.getByLabelText("Who can use this agent"), "everyone");
     await user.selectOptions(screen.getByLabelText("Turns per member per day"), "custom");
     await user.type(screen.getByLabelText("Turns per member per day (number)"), "20");

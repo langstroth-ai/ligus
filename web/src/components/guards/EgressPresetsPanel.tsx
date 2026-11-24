@@ -57,12 +57,10 @@ export function EgressPresetsPanel({ chat }: { chat?: { id: string; title: strin
   });
   const d = q.data;
   return (
-    <Section title="Network presets">
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Agents reach only their model provider and the chat&apos;s MCP servers. A preset adds a named set of hosts to that
-        allow-list. Presets are off by default, apply to turns that run on this device, and are ignored while a chat is
-        locked down or the workspace is in dearth mode.
-      </p>
+    <Section
+      title="Network presets"
+      info="Agents reach only their model provider and the chat's MCP servers. A preset adds a named set of hosts to that allow-list. Presets are off by default, apply to turns that run on this device, and are ignored while a chat is locked down or the workspace is in dearth mode."
+    >
       {q.isError && <ErrorState text="Couldn't load network presets." onRetry={() => void q.refetch()} />}
       {q.isPending && <LoadingState rows={1} label="Loading network presets" />}
       {d && (

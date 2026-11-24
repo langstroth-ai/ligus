@@ -112,11 +112,10 @@ export function ToolsSection() {
   });
   const hasLinear = (servers.data ?? []).some((s) => s.id === "linear");
   return (
-    <Section title="MCP servers">
-      <p className="text-xs text-ink-soft">
-        Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize
-        it, or install a workspace-scoped entry from a manifest URL or GitHub reference.
-      </p>
+    <Section
+      title="MCP servers"
+      info="Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize it, or install a workspace-scoped entry from a manifest URL or GitHub reference."
+    >
       {!hasLinear && (
         <Button onClick={() => addLinear.mutate()} disabled={addLinear.isPending} className="self-start">
           <IconPlus size={15} /> Add Linear (issues)
@@ -127,6 +126,7 @@ export function ToolsSection() {
           value={source}
           onChange={(e) => setSource(e.target.value)}
           placeholder="owner/repo/mcp.json or https://…"
+          aria-label="MCP manifest URL or GitHub reference"
           className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm"
           style={fieldStyle}
         />

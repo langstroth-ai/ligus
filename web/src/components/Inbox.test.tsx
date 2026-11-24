@@ -45,7 +45,7 @@ describe("Inbox", () => {
 
   it("says when nothing needs you", () => {
     mount([]);
-    expect(screen.getByText("Nothing needs you right now.")).toBeInTheDocument();
+    expect(screen.getByText("Nothing needs you.")).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Needs you" })).toBeNull();
   });
 

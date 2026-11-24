@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { addRuntime, detectCliRuntimes, listRuntimes, type DetectedCliDto } from "@/lib/ipc";
-import { Button, fieldStyle } from "@/components/ui";
+import { Button, fieldStyle, InfoTip } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { ModelFieldHelp } from "@/components/ModelPicker";
 
@@ -48,7 +48,13 @@ export function CliRuntimesPanel() {
   return (
     <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-medium">Subscription CLIs</div>
+        <div className="flex items-center gap-1.5">
+          <div className="text-sm font-medium">Subscription CLIs</div>
+          <InfoTip
+            label="Subscription CLIs"
+            text="Use a Google AI Pro / Ultra or GitHub Copilot subscription through its official CLI. Ligus runs the CLI headless with your permission setting."
+          />
+        </div>
         <div className="flex gap-1.5">
           <Button size="sm" variant="ghost" disabled={clis.isFetching} onClick={() => void clis.refetch()}>
             {clis.isFetching ? "Scanning…" : "Re-scan"}
@@ -66,10 +72,7 @@ export function CliRuntimesPanel() {
           )}
         </div>
       </div>
-      <p className="mt-0.5 text-xs text-ink-soft">
-        Use a Google AI Pro / Ultra or GitHub Copilot subscription through its official CLI. Ligus runs the CLI
-        headless with your permission setting; the login stays in the CLI — Ligus never sees it.
-      </p>
+      <p className="mt-0.5 text-xs text-ink-soft">The login stays in the CLI; Ligus never sees it.</p>
       {clis.isError && <p className="mt-2 text-xs text-ink-soft">{errMsg(clis.error)}</p>}
       <div className="mt-2 space-y-2">
         {list.map((c) => (

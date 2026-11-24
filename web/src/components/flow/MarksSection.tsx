@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { MARK_LABEL, addMark, clearMark, listMarks, minutesLeft, type MarkRow } from "@/lib/flow";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -50,8 +49,10 @@ export function MarksView({
   const [note, setNote] = useState("");
   return (
     <div className="space-y-4">
-      <Muted>Agents read active marks on their own schedule, so they coordinate without mentioning each other. Claims last 4 h and locks 1 h unless cleared.</Muted>
-      <Section title="Active">
+      <Section
+        title="Active"
+        info="Agents read active marks on their own schedule, so they coordinate without mentioning each other. Claims last 4 h and locks 1 h unless cleared."
+      >
         {marks.length === 0 ? (
           <EmptyHint text="No marks in this workspace." />
         ) : (

@@ -97,6 +97,9 @@ import {
   type Tone,
   SELECT_TINT,
   LinkButton,
+  Hint,
+  MetaTag,
+  InfoTip,
 } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import { Menu } from "@/components/Menu";
@@ -452,27 +455,9 @@ function ToolsPane({
 
       {scope === "chat" ? (
         <>
-          <div
-            className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2.5 text-[12px] leading-5"
-            style={{
-              borderColor: "color-mix(in srgb, var(--ligus-accent-cool) 38%, transparent)",
-              background: SELECT_TINT,
-              color: "var(--ligus-ink)",
-            }}
-          >
-            <span>These are inherited from the workspace.</span>
-            <button
-              onClick={() => setScope("workspace")}
-              className="font-medium underline underline-offset-2 hover:opacity-80"
-              style={{ color: "var(--ligus-accent-ink)" }}
-            >
-              Edit in Workspace
-            </button>
-          </div>
-
-          <Section title="Answering runtime">
+          <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only.">
             {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured yet." />
+              <EmptyHint text="No runtimes configured" />
             ) : (
               runtimeList.map((rt) => (
                 <RuntimeCard
@@ -485,7 +470,15 @@ function ToolsPane({
             )}
           </Section>
 
-          <Section title="Agents available to @mention">
+          <Section
+            title="Agents"
+            info="Agents you can @mention in this chat. The roster belongs to the workspace, so it's edited there."
+            tag={
+              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
+                from workspace
+              </MetaTag>
+            }
+          >
             {/* The default agent (@ligus) always exists — it answers untagged
                 messages and is bound to the active runtime — even before the
                 user adds any of their own. Showing it here (and counting it in
@@ -501,7 +494,7 @@ function ToolsPane({
               <div className="min-w-0">
                 <div className="truncate text-[13px] font-medium">@{PRIMARY_HANDLE}</div>
                 <div className="truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  {activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"} · default
+                  {activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"}
                 </div>
               </div>
             </Card>
@@ -534,16 +527,24 @@ function ToolsPane({
                 setScope("workspace");
                 setShowAddAgent(true);
               }}
-              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed px-3 py-2 text-[12px] font-medium transition-colors hover:brightness-110"
-              style={{ borderColor: "var(--ligus-line)", color: "var(--ligus-ink-soft)" }}
+              className="flex h-[30px] w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--ligus-overlay)]"
+              style={{ color: "var(--ligus-accent-ink)" }}
             >
               <IconPlus size={13} /> Add an agent
             </button>
           </Section>
 
-          <Section title="Tools reachable">
+          <Section
+            title="Tools"
+            info="MCP servers enabled for the workspace. Only enabled servers give agents external tools."
+            tag={
+              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
+                from workspace
+              </MetaTag>
+            }
+          >
             {enabledMcp.length === 0 ? (
-              <EmptyHint text="No MCP servers are enabled, so no external tools are reachable here." />
+              <EmptyHint text="No MCP servers enabled" />
             ) : (
               enabledMcp.map((server) => (
                 <McpServerCard key={server.id} server={server} editable={false} />
@@ -564,7 +565,7 @@ function ToolsPane({
             }
           >
             {agentList.length === 0 ? (
-              <EmptyHint text="No workspace agents yet. Add one below." />
+              <EmptyHint text="No agents yet" />
             ) : (
               agentList.map((agent) => (
                 <AgentRosterRow
@@ -659,20 +660,18 @@ function ToolsPane({
 
           <Section title="Runtimes">
             {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured yet." />
+              <EmptyHint text="No runtimes configured" />
             ) : (
               runtimeList.map((rt) => (
                 <RuntimeCard key={rt.id} runtime={rt} active={rt.id === activeRuntimeId} />
               ))
             )}
-            <p className="px-1 pt-1 text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Manage in Settings → Models.
-            </p>
+            <Hint>Manage in Settings → Models</Hint>
           </Section>
 
           <Section title="MCP servers">
             {mcpList.length === 0 ? (
-              <EmptyHint text="No MCP servers configured." />
+              <EmptyHint text="No MCP servers" />
             ) : (
               mcpList.map((server) => (
                 <McpServerCard
@@ -697,13 +696,10 @@ function ToolsPane({
               onToggle={() => setShowInstallMcp((v) => !v)}
             >
               <Card className="space-y-2 p-3">
-                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  Paste a manifest URL, GitHub blob URL, or owner/repo/path reference.
-                </p>
                 <input
                   value={mcpSource}
                   onChange={(event) => setMcpSource(event.target.value)}
-                  placeholder="owner/repo/mcp.json or https://…"
+                  placeholder="URL, GitHub blob URL or owner/repo/mcp.json"
                   className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
                   style={fieldStyle}
                 />
@@ -1013,8 +1009,8 @@ function RuntimeCard({
   const inner = (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
-        <div className="truncate text-base font-semibold">{runtime.label}</div>
-        <div className="mt-1 truncate text-xs text-ink-soft">
+        <div className="truncate text-[13px] font-medium">{runtime.label}</div>
+        <div className="truncate text-[11.5px] text-ink-soft">
           {runtime.location} · {runtime.provider}
           {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
         </div>
@@ -1022,16 +1018,15 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[11px] font-semibold uppercase text-ink-soft"
-            style={{ background: "var(--ligus-mist)" }}
+            className="text-[11px] text-ink-soft"
             data-tip="A runtime you configured (vs. an auto-detected local CLI)"
           >
-            Configured
+            configured
           </span>
         )}
         {active && (
           <span
-            className="rounded-full px-2 py-1 text-xs font-semibold"
+            className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
             style={{
               background: "color-mix(in srgb, var(--ligus-success) 18%, transparent)",
               color: "var(--ligus-success-ink)",
@@ -1045,7 +1040,7 @@ function RuntimeCard({
   );
   if (!onSelect) {
     return (
-      <div className="w-full rounded-2xl border px-3.5 py-3.5 text-left" style={style}>
+      <div className="w-full rounded-xl border px-3 py-2 text-left" style={style}>
         {inner}
       </div>
     );
@@ -1053,7 +1048,7 @@ function RuntimeCard({
   return (
     <button
       onClick={onSelect}
-      className="w-full rounded-2xl border px-3.5 py-3.5 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+      className="w-full rounded-xl border px-3 py-2 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
       style={style}
     >
       {inner}
@@ -1181,20 +1176,18 @@ function QueuedWorkSection() {
   });
 
   const items = queued.data ?? [];
+  // Nothing queued: no section at all, rather than an empty box.
+  if (items.length === 0) return null;
   return (
     <Section title="Queued work">
-      {items.length === 0 ? (
-        <EmptyHint text="Nothing queued." />
-      ) : (
-        items.map((item) => (
-          <QueuedWorkRow
-            key={`${item.sessionId}:${item.agentId}`}
-            item={item}
-            workers={workers}
-            onReassign={(agentId, hostId) => reassign.mutate({ agentId, hostId })}
-          />
-        ))
-      )}
+      {items.map((item) => (
+        <QueuedWorkRow
+          key={`${item.sessionId}:${item.agentId}`}
+          item={item}
+          workers={workers}
+          onReassign={(agentId, hostId) => reassign.mutate({ agentId, hostId })}
+        />
+      ))}
     </Section>
   );
 }
@@ -1535,7 +1528,7 @@ function ProposalCard({
                 <Markdown content={proposal.workflow.description} size="sm" className="mt-2 text-ink-soft" />
               )}
               <div className="mt-2 text-xs text-ink-soft">
-                Approving adds this workflow to the Workflows pane. Runs still start only when someone presses Run.
+                Approving adds it to Workflows. It runs only when someone presses Run.
               </div>
               <WorkflowStages
                 nodes={proposal.workflow.nodes}
@@ -1696,7 +1689,7 @@ function ProposalCard({
       {proposal.quorumMet && proposal.status !== "applied" && !openRequest && (
         <div data-testid="next-step" className="mt-1.5 text-xs text-ink-soft">
           {cantImplement ??
-            `Quorum met. Next: implement it${proposal.canRequestApply && applyHosts.length > 0 ? ", or ask a host to apply it" : ""}.`}
+            "Quorum met"}
         </div>
       )}
 
@@ -2015,7 +2008,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
       <Section title="Pending proposals">
         {groups.active.map(card)}
         {groups.active.length === 0 && (
-          <EmptyHint icon={<IconInbox size={18} />} text="Nothing is waiting for review." />
+          <EmptyHint icon={<IconInbox size={18} />} text="Nothing to review" />
         )}
       </Section>
 
@@ -2418,15 +2411,18 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           );
         })}
         {collaborators.length === 0 && (
-          <EmptyHint text="No extra members have been added yet." />
+          <EmptyHint text="No other members yet" />
         )}
 
         <FormDisclosure label="Invite someone" open={showInvite} onToggle={() => setShowInvite((v) => !v)}>
           <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Make a single-use invite link and send it over a channel you trust. It carries your safety code so they
-              can check it came from you. To invite someone you already share another workspace with, use People.
-            </p>
+            <div className="flex items-center gap-1.5">
+              <Hint className="px-0">Single-use. Send it over a channel you trust.</Hint>
+              <InfoTip
+                label="invite links"
+                text="The link carries your safety code so they can check it came from you. To invite someone you already share another workspace with, use People."
+              />
+            </div>
             <Button variant="primary" disabled={!activeRoom || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
               {inviteMutation.isPending ? "…" : "Create invite link"}
             </Button>
@@ -2445,12 +2441,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 
         <FormDisclosure label="Membership history" open={showAudit} onToggle={() => setShowAudit((v) => !v)}>
           <Card className="space-y-1.5 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              A tamper-evident audit from the signed config log — who joined or was removed, by whom,
-              and when.
-            </p>
+            <Hint className="px-0">Signed, tamper-evident log</Hint>
             {(audit.data ?? []).length === 0 ? (
-              <EmptyHint text="No membership changes recorded yet." />
+              <EmptyHint text="No changes yet" />
             ) : (
               (audit.data ?? []).map((e, i) => (
                 <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
@@ -2470,196 +2463,190 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
         </FormDisclosure>
       </Section>
 
-      <Section title="Team members (server-enforced)">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to use server-enforced membership." />
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Who the relay accepts writes from. Requires a relay with membership turned on
-              (LANGSTROTH_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write.
-            </p>
-            {(srvMembers.data ?? []).map((m) => (
-              <Card key={m.account} className="flex items-center justify-between px-3 py-2">
-                <div className="min-w-0">
-                  <div className="truncate font-medium">@{m.login}</div>
-                  <div className="text-xs text-ink-soft">
-                    {m.role} · {m.account}
-                  </div>
+      {relayOn ? (
+        <>
+          <Section
+            title="Relay members"
+            info="Who the relay accepts writes from (server-enforced). Requires a relay with membership turned on (LANGSTROTH_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write."
+          >
+              <>
+                {(srvMembers.data ?? []).map((m) => (
+                  <Card key={m.account} className="flex items-center justify-between px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">@{m.login}</div>
+                      <div className="text-xs text-ink-soft">
+                        {m.role} · {m.account}
+                      </div>
+                    </div>
+                    <button
+                      className="shrink-0 text-xs font-medium hover:opacity-80"
+                      style={{ color: "var(--ligus-danger-ink)" }}
+                      onClick={() =>
+                        confirmThen(`Remove @${m.login} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`, () =>
+                          srvRemoveMutation.mutate(m.account),
+                        )
+                      }
+                      data-tip="Remove them on the relay and from the workspace, then rotate the key"
+                    >
+                      Remove
+                    </button>
+                  </Card>
+                ))}
+                {(srvMembers.data ?? []).length === 0 && (
+                  <Card className="space-y-2 p-3">
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-sm font-semibold">Not enforced: anyone can write</div>
+                      <InfoTip
+                        label="member controls"
+                        text="Claim this workspace on the relay so it enforces who can write; you become the owner. No-op on an open relay."
+                      />
+                    </div>
+                    <Button variant="primary" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
+                      {claimMutation.isPending ? "…" : "Claim ownership"}
+                    </Button>
+                  </Card>
+                )}
+              </>
+          </Section>
+
+          <Section
+            title="Invites"
+            info="Share a code so someone can join at a set role. Codes are revocable, can expire, and can cap how many times they're used. 0 days = never expires; 0 uses = unlimited. The code shows once, on creation."
+          >
+              <>
+                {/* Issue */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={invRole}
+                    onChange={(e) => setInvRole(e.target.value)}
+                    className="rounded-lg border px-2 py-1.5 text-sm"
+                    style={fieldStyle}
+                  >
+                    <option value="viewer">viewer</option>
+                    <option value="contributor">contributor</option>
+                    <option value="admin">admin</option>
+                  </select>
+                  <label className="flex items-center gap-1 text-xs text-ink-soft">
+                    days
+                    <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-ink-soft">
+                    uses
+                    <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
+                  </label>
+                  <Button variant="primary" disabled={createInviteMutation.isPending} onClick={() => createInviteMutation.mutate()}>
+                    Create invite
+                  </Button>
                 </div>
-                <button
-                  className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--ligus-danger-ink)" }}
-                  onClick={() =>
-                    confirmThen(`Remove @${m.login} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`, () =>
-                      srvRemoveMutation.mutate(m.account),
-                    )
-                  }
-                  data-tip="Remove them on the relay and from the workspace, then rotate the key"
-                >
-                  Remove
-                </button>
-              </Card>
-            ))}
-            {(srvMembers.data ?? []).length === 0 && (
-              <Card className="space-y-2 p-3">
-                <div className="text-sm font-semibold">Enable member controls</div>
-                <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-                  Claim this workspace on the relay so it enforces who can write — you become the
-                  owner. No-op on an open relay.
-                </p>
-                <Button variant="primary" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
-                  {claimMutation.isPending ? "…" : "Claim ownership"}
-                </Button>
-              </Card>
-            )}
-          </>
-        )}
-      </Section>
+                {lastCode && <Hint className="mt-2">Shown once. Copy it now.</Hint>}
+                {lastCode && (
+                  <div
+                    className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
+                    style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
+                  >
+                    <code className="truncate text-xs">{lastCode}</code>
+                    <button className="shrink-0 text-xs underline hover:opacity-80" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
+                      Copy
+                    </button>
+                  </div>
+                )}
+                {/* Existing invites */}
+                {(invites.data ?? []).filter((i) => !i.revoked).map((i: InviteEntry) => (
+                  <div key={i.id} className="mt-1.5 flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0">
+                      <span className="font-medium">{i.role}</span>{" "}
+                      <span className="text-xs text-ink-soft">
+                        · {i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}
+                        {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
+                      </span>
+                    </span>
+                    <button className="shrink-0 text-xs underline-offset-2 hover:underline" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+                {/* Redeem (for a joiner) */}
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value)}
+                    placeholder="Have a code? Paste it to join"
+                    className="flex-1 rounded-lg border px-2.5 py-1.5 font-mono text-xs"
+                    style={fieldStyle}
+                    onKeyDown={(e) => e.key === "Enter" && joinCode.trim() && joinMutation.mutate()}
+                  />
+                  <Button variant="ghost" disabled={!joinCode.trim() || joinMutation.isPending} onClick={() => joinMutation.mutate()}>
+                    Join
+                  </Button>
+                </div>
+              </>
+          </Section>
 
-      <Section title="Invites">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to issue invites." />
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Share a code so someone can join at a set role. Codes are revocable, can expire, and
-              can cap how many times they're used. The code shows once, on creation.
-            </p>
-            {/* Issue */}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <select
-                value={invRole}
-                onChange={(e) => setInvRole(e.target.value)}
-                className="rounded-lg border px-2 py-1.5 text-sm"
-                style={fieldStyle}
-              >
-                <option value="viewer">viewer</option>
-                <option value="contributor">contributor</option>
-                <option value="admin">admin</option>
-              </select>
-              <label className="flex items-center gap-1 text-xs text-ink-soft">
-                days
-                <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
-              </label>
-              <label className="flex items-center gap-1 text-xs text-ink-soft">
-                uses
-                <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
-              </label>
-              <Button variant="primary" disabled={createInviteMutation.isPending} onClick={() => createInviteMutation.mutate()}>
-                Create invite
-              </Button>
-            </div>
-            <p className="mt-1 text-[11px] text-ink-soft">0 days = never expires · 0 uses = unlimited.</p>
-            {lastCode && (
-              <div
-                className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
-                style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-              >
-                <code className="truncate text-xs">{lastCode}</code>
-                <button className="shrink-0 text-xs underline hover:opacity-80" onClick={() => void navigator.clipboard.writeText(lastCode).catch(() => {})}>
-                  Copy
-                </button>
-              </div>
+          <Section
+            title="Remote agents"
+            info="Enroll a headless agent: Generate makes the one-paste command a developer runs on its box (installs the CLI, connects to this workspace, starts the worker). Your relay issuer key mints the agent's identity token locally; only the token travels to the box."
+          >
+            {!issuerKey.data ? (
+              <Hint>Add your relay issuer key in Settings → Team sync</Hint>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={agentRole}
+                    onChange={(e) => setAgentRole(e.target.value)}
+                    className="rounded-lg border px-2 py-1.5 text-sm"
+                    style={fieldStyle}
+                  >
+                    <option value="viewer">viewer</option>
+                    <option value="contributor">contributor</option>
+                    <option value="admin">admin</option>
+                  </select>
+                  <input
+                    value={agentLabel}
+                    onChange={(e) => setAgentLabel(e.target.value)}
+                    placeholder="box label (optional)"
+                    className="w-28 rounded-lg border px-2.5 py-1.5 text-sm"
+                    style={fieldStyle}
+                  />
+                  <Button
+                    variant="primary"
+                    disabled={bootstrapMutation.isPending}
+                    onClick={() => bootstrapMutation.mutate()}
+                  >
+                    Generate
+                  </Button>
+                </div>
+                {agentBlock && (
+                  <div className="mt-2">
+                    <textarea
+                      readOnly
+                      value={agentBlock}
+                      spellCheck={false}
+                      className="h-28 w-full rounded-lg border p-2 font-mono text-[11px]"
+                      style={fieldStyle}
+                    />
+                    <button
+                      className="mt-1 text-xs underline text-ink-soft hover:text-ink"
+                      onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
+                    >
+                      Copy again
+                    </button>
+                  </div>
+                )}
+              </>
             )}
-            {/* Existing invites */}
-            {(invites.data ?? []).filter((i) => !i.revoked).map((i: InviteEntry) => (
-              <div key={i.id} className="mt-1.5 flex items-center justify-between gap-2 text-sm">
-                <span className="min-w-0">
-                  <span className="font-medium">{i.role}</span>{" "}
-                  <span className="text-xs text-ink-soft">
-                    · {i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}
-                    {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
-                  </span>
-                </span>
-                <button className="shrink-0 text-xs underline-offset-2 hover:underline" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
-                  Revoke
-                </button>
-              </div>
-            ))}
-            {/* Redeem (for a joiner) */}
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value)}
-                placeholder="Have a code? Paste it to join"
-                className="flex-1 rounded-lg border px-2.5 py-1.5 font-mono text-xs"
-                style={fieldStyle}
-                onKeyDown={(e) => e.key === "Enter" && joinCode.trim() && joinMutation.mutate()}
-              />
-              <Button variant="ghost" disabled={!joinCode.trim() || joinMutation.isPending} onClick={() => joinMutation.mutate()}>
-                Join
-              </Button>
-            </div>
-          </>
-        )}
-      </Section>
+          </Section>
 
-      <Section title="Remote agents">
-        {!relayOn ? (
-          <EmptyHint text="Connect a relay (Settings → Team sync) to add remote agents." />
-        ) : !issuerKey.data ? (
-          <p className="text-xs text-ink-soft">
-            To generate a one-paste command for a headless agent, add your relay issuer key in
-            Settings → Team sync (advanced). The key mints the agent's identity token locally; only
-            the token travels to the box.
-          </p>
-        ) : (
-          <>
-            <p className="text-xs text-ink-soft">
-              Enroll a remote agent and generate the exact command a developer runs on its box —
-              installs the CLI, connects to this workspace, and starts the worker.
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <select
-                value={agentRole}
-                onChange={(e) => setAgentRole(e.target.value)}
-                className="rounded-lg border px-2 py-1.5 text-sm"
-                style={fieldStyle}
-              >
-                <option value="viewer">viewer</option>
-                <option value="contributor">contributor</option>
-                <option value="admin">admin</option>
-              </select>
-              <input
-                value={agentLabel}
-                onChange={(e) => setAgentLabel(e.target.value)}
-                placeholder="box label (optional)"
-                className="w-28 rounded-lg border px-2.5 py-1.5 text-sm"
-                style={fieldStyle}
-              />
-              <Button
-                variant="primary"
-                disabled={bootstrapMutation.isPending}
-                onClick={() => bootstrapMutation.mutate()}
-              >
-                Generate
-              </Button>
-            </div>
-            {agentBlock && (
-              <div className="mt-2">
-                <textarea
-                  readOnly
-                  value={agentBlock}
-                  spellCheck={false}
-                  className="h-28 w-full rounded-lg border p-2 font-mono text-[11px]"
-                  style={fieldStyle}
-                />
-                <button
-                  className="mt-1 text-xs underline text-ink-soft hover:text-ink"
-                  onClick={() => void navigator.clipboard.writeText(agentBlock).catch(() => {})}
-                >
-                  Copy again
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </Section>
+        </>
+      ) : (
+        <Section title="Relay" info="Relay members, invites and remote agents need a relay. Connect one in Settings → Team sync.">
+          <EmptyHint text="No relay connected" />
+        </Section>
+      )}
 
       <Section title="Workers & hosts">
         {(hosts.data ?? []).length === 0 ? (
-          <EmptyHint text="No hosts registered." />
+          <EmptyHint text="No hosts yet" />
         ) : (
           (hosts.data ?? []).map((host) => <HostRow key={host.id} host={host} />)
         )}
@@ -2745,7 +2732,7 @@ function AgentTargetPicker({
       </div>
       {agents.length === 0 ? (
         <div className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-          No agents in this workspace — this stays global.
+          No agents yet: applies to all.
         </div>
       ) : (
         <div
@@ -2852,7 +2839,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
           </Card>
         ))}
         {(vaults.data ?? []).length === 0 && (
-          <EmptyHint text="No vault sources are mounted in this chat." />
+          <EmptyHint text="No vaults mounted" />
         )}
         <FormDisclosure label="Add vault" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
           <Card className="space-y-2 p-3">
@@ -2916,7 +2903,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
 
   return (
     <RailFrame title="Skills" about="Instruction bundles injected into the active participants." docs={PANE_DOCS.skills}>
-      <Section title="Loaded Skills">
+      <Section title="Loaded">
         {(skills.data ?? []).map((skill) => (
           <Card key={skill.id} className="px-3 py-3">
             <div className="flex items-start justify-between gap-3">
@@ -2938,12 +2925,9 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             </div>
           </Card>
         ))}
-        {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded for this chat." />}
+        {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded" />}
         <FormDisclosure label="Install skill" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
           <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-              Supports direct URLs, GitHub blob URLs, and owner/repo/path references.
-            </p>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -2954,7 +2938,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             <input
               value={source}
               onChange={(event) => setSource(event.target.value)}
-              placeholder="skills.sh/... or owner/repo/SKILL.md"
+              placeholder="URL, GitHub blob URL or owner/repo/SKILL.md"
               className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
               style={fieldStyle}
             />
@@ -3070,7 +3054,7 @@ function ContextPane({
   if (telemetry.isError) {
     return (
       <RailFrame title="Context" about="Real backend context budget and compaction state." docs={PANE_DOCS.context}>
-        <EmptyHint text="Context telemetry is temporarily unavailable. Keep chatting and retry this tab." />
+        <EmptyHint text="Context unavailable right now" />
       </RailFrame>
     );
   }
@@ -3127,7 +3111,7 @@ function ContextPane({
                 color: "var(--ligus-danger-ink)",
               }}
             >
-              Context is getting full — consider removing unused skills or vaults below.
+              Context is getting full. Remove unused skills or vaults.
             </div>
           )}
         </div>
@@ -3138,9 +3122,9 @@ function ContextPane({
         </div>
       </Section>
 
-      <Section title="Injected Skills">
+      <Section title="Skills">
         {(skills.data ?? []).length === 0 ? (
-          <EmptyHint text="No skills loaded. Skills inject instructions into every turn." />
+          <EmptyHint text="No skills loaded" />
         ) : (
           (skills.data ?? []).map((skill) => {
             const est = Math.ceil(skill.instructions.length / 4);
@@ -3167,9 +3151,9 @@ function ContextPane({
         )}
       </Section>
 
-      <Section title="Mounted Vaults">
+      <Section title="Vaults">
         {(vaults.data ?? []).length === 0 ? (
-          <EmptyHint text="No vaults mounted. Vaults inject reference material into context." />
+          <EmptyHint text="No vaults mounted" />
         ) : (
           (vaults.data ?? []).map((vault) => (
             <div
@@ -3179,7 +3163,7 @@ function ContextPane({
             >
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{vault.label}</div>
-                <div className="mt-0.5 text-xs text-ink-soft">{vault.kind} reference source</div>
+                <div className="mt-0.5 text-xs text-ink-soft">{vault.kind}</div>
               </div>
               <IconButton
                 label="Unmount vault"

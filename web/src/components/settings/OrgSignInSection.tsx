@@ -83,7 +83,10 @@ export function OrgSignInSection() {
   const st = status.data;
 
   return (
-    <Section title="Organization sign-in">
+    <Section
+      title="Organization sign-in"
+      info="If your organization runs langstroth-auth, sign in with your company account instead of pasting a relay token. This only lets you reach the relay: to join a workspace, an Admin still has to add you as a member."
+    >
       {st ? (
         <div className="space-y-1 rounded-xl border px-3 py-2.5" style={fieldStyle}>
           <div className="flex items-center justify-between gap-3">
@@ -125,15 +128,12 @@ export function OrgSignInSection() {
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="text-xs text-ink-soft">
-            If your organization runs langstroth-auth, sign in with your company account instead of
-            pasting a relay token. Paste the address your admin gave you.
-          </p>
           <div className="flex gap-2">
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://auth.example.com/t/your-team"
+              aria-label="Sign-in address from your admin"
               className="flex-1 rounded-xl border px-3 py-2 text-sm"
               style={fieldStyle}
             />
@@ -143,10 +143,6 @@ export function OrgSignInSection() {
           </div>
         </div>
       )}
-      <p className="mt-2 text-xs text-ink-soft">
-        This only lets you reach the relay. To join a workspace, an Admin still has to add you as a
-        member.
-      </p>
     </Section>
   );
 }

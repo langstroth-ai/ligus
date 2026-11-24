@@ -7,7 +7,7 @@ import {
   pickWorkspaceFolder,
   setWorkspaceRoot,
 } from "@/lib/ipc";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, InfoTip, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 
 /// Folder & Git: the workspace root the Diff canvas + git operate on. Writes
@@ -58,7 +58,10 @@ export function FolderGitSection() {
 
   return (
     <Section title="Folder & Git">
-      <label className="block text-sm text-ink-soft">Root path (for the Diff canvas + git)</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft">Root path</label>
+        <InfoTip label="Root path" text="The folder the Diff canvas and git work in." />
+      </div>
       <div className="flex gap-2">
         <input
           value={root}

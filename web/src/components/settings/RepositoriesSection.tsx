@@ -300,15 +300,14 @@ export function RepositoriesSection() {
 
   return (
     <div>
-      <p className="mb-4 text-sm text-ink-soft">
-        The workspace&rsquo;s repositories are shared with every member. Where each one lives on a device stays on
-        that device; other hosts show only whether they have it checked out.
-      </p>
       {q.isError && <div className="text-sm">Couldn&rsquo;t load repositories: {errMsg(q.error)}</div>}
       {data && <RepoSuggestion data={data} onDone={refresh} />}
-      <Section title="Repositories">
+      <Section
+        title="Repositories"
+        info="The workspace's repositories are shared with every member. Where each one lives on a device stays on that device; other hosts show only whether they have it checked out."
+      >
         {data && data.repos.length === 0 && (
-          <div className="text-sm text-ink-soft">This workspace has no repositories yet.</div>
+          <div className="text-sm text-ink-soft">No repositories yet.</div>
         )}
         {data?.repos.map((r) => <RepoRow key={r.id} r={r} data={data} refresh={refresh} />)}
         {data && (data.canAdmin ? (
@@ -406,12 +405,10 @@ export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto;
     }
   };
   return (
-    <Section title="Host aliases">
-      <p className="mb-2 text-xs text-ink-soft">
-        Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this
-        workspace recognizes checkouts, never where git connects, and each device uses it only after someone there
-        accepts it.
-      </p>
+    <Section
+      title="Host aliases"
+      info="Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this workspace recognizes checkouts, never where git connects, and each device uses it only after someone there accepts it."
+    >
       {list.map((h) => (
         <div key={h.alias} className="flex flex-wrap items-center gap-2 py-1 text-sm">
           <code>{h.alias}</code> → <code>{h.host}</code>

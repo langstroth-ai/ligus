@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { EmptyHint, ErrorState, Section, SelectField, Switch, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { CAREER_LABEL, rosterReport, setAgentProfile, type Career, type RosterReport, type RosterRow } from "@/lib/flow";
 
@@ -44,8 +43,10 @@ export function RosterView({
         </div>
         <div>{d.advice}</div>
       </div>
-      <Muted>New agents start on probation (reviews, docs, tests) and graduate after 5 judged proposals with at least 60% approved. When the review queue is long, the strongest proposer is pulled back to review until it drains.</Muted>
-      <Section title="Agents">
+      <Section
+        title="Agents"
+        info="New agents start on probation (reviews, docs, tests) and graduate after 5 judged proposals with at least 60% approved. When the review queue is long, the strongest proposer is pulled back to review until it drains."
+      >
         {report.agents.length === 0 ? (
           <EmptyHint text="No named agents yet." />
         ) : (

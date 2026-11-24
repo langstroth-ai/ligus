@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, ErrorState, Section, Switch, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
+import { Button, ErrorState, Hint, InfoTip, Section, Switch, LoadingState } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { homeReport, publishBeacon, type HomeReport } from "@/lib/flow";
 
@@ -51,7 +50,7 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
           <div className="text-ink-soft">Published by {b.updatedBy}</div>
         </div>
       ) : (
-        <Muted>No home beacon yet. An admin can publish this device's setup as the workspace's home.</Muted>
+        <Hint className="px-0">No home beacon yet.</Hint>
       )}
       {r.mismatches.length > 0 && (
         <div role="alert" className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--ligus-warn)" }}>
@@ -60,8 +59,11 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
           ))}
         </div>
       )}
-      <Section title="Publish this device's setup as home">
-        <Muted>Shares the relay address and base branch, never a token or passphrase. Admins only.</Muted>
+      <Section
+        title="Publish as home"
+        info="Publishes this device's setup as the workspace's home. Admins only."
+      >
+        <Hint className="px-0">Shares the relay address and base branch, never a token or passphrase.</Hint>
         <input
           aria-label="Home note"
           placeholder="Note (optional)"
@@ -71,7 +73,10 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
           onChange={(e) => setNote(e.target.value)}
         />
         <div className="flex items-center justify-between gap-2 text-sm">
-          <span>This device coordinates (runs workflows, serves the phone)</span>
+          <span className="flex items-center gap-1.5">
+            This device coordinates
+            <InfoTip label="coordinating" text="The coordinator runs workflows and serves the phone." />
+          </span>
           <Switch on={coordinator} onChange={setCoordinator} label="This device coordinates" />
         </div>
         <Button size="sm" onClick={() => onPublish(note.trim(), coordinator)}>

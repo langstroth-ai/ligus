@@ -70,9 +70,9 @@ function PersonLinks({ p }: { p: CoMemberDto }) {
 export function contactsNote(status: string | undefined): string | null {
   switch (status) {
     case "unsupported":
-      return "Your relay doesn't support contacts yet, so invites can't be delivered in the app. Share invite links or QR codes instead.";
+      return "Your relay can't deliver invites yet: share links or QR codes.";
     case "noRelay":
-      return "No relay is configured: invites are links you hand over yourself.";
+      return "No relay: invites are links you hand over.";
     default:
       return null;
   }
@@ -400,9 +400,9 @@ export function FriendsView({
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="ligus-cap">People you share a workspace with</h2>
+        <h2 className="ligus-cap">In your workspaces</h2>
         {people.data && people.data.length === 0 && (
-          <p className="text-sm text-ink-soft">Nobody yet. Create a workspace and share its invite link, or join one from a link above.</p>
+          <p className="text-sm text-ink-soft">Nobody yet.</p>
         )}
         {people.data?.map((p) => {
           const elsewhere = rooms.filter((w) => !p.workspaces.some((x) => x.id === w.id));

@@ -80,12 +80,10 @@ export function SecuritySection() {
           </Button>
         </Section>
       )}
-      <Section title="Passkeys">
-        <p className="text-xs text-ink-soft">
-          A passkey confirms that you, not just your device, approved an admin action. Any passkey works: Touch ID
-          and iCloud Keychain, Windows Hello, Google Password Manager, a phone, or a security key. Register at least
-          two.
-        </p>
+      <Section
+        title="Passkeys"
+        info="A passkey confirms that you, not just your device, approved an admin action. Any passkey works: Touch ID and iCloud Keychain, Windows Hello, Google Password Manager, a phone, or a security key. Register at least two."
+      >
         {status.isError && (
           <p role="alert" className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
             Couldn't read this workspace's passkeys: {errMsg(status.error)}
@@ -130,11 +128,8 @@ export function SecuritySection() {
           </Button>
         </div>
       </Section>
-      <Section title="Recovery key">
-        <p className="text-xs text-ink-soft">
-          24 words that stand in for a lost passkey. They're shown once and never stored: write them down and keep
-          them offline.
-        </p>
+      <Section title="Recovery key" info="24 words that stand in for a lost passkey.">
+        <p className="text-xs text-ink-soft">Shown once and never stored: write them down and keep them offline.</p>
         {words ? (
           <div className="space-y-2 rounded-xl border px-3 py-2.5" style={fieldStyle}>
             <code className="block whitespace-pre-wrap text-sm" data-testid="recovery-words">

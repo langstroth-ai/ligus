@@ -132,7 +132,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             key={item.key}
             state="idle"
             title={item.title}
-            detail="Approve it in Settings, Profile, with the code it shows (ligus serve enroll)."
+            detail="Approve it in Settings → Profile with the code it shows."
             onOpen={() => actions.openSettingsTab("account")}
             actions={
               <Button size="sm" onClick={() => actions.openSettingsTab("account")}>
@@ -154,7 +154,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
         <h1 className="ligus-title" style={{ color: "var(--ligus-ink)" }}>
           Inbox
         </h1>
-        <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you right now."}</p>
+        <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you."}</p>
         {items.length > 0 && (
           <div role="list" aria-label="Needs you" className="mt-4 flex flex-col gap-0.5">
             {items.flatMap((i) => row(i) ?? [])}

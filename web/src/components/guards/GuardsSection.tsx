@@ -81,7 +81,10 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const fieldStyle = { borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" };
   return (
     <>
-      <Section title="Dearth mode">
+      <Section
+        title="Dearth mode"
+        info="A tight entrance for hostile periods: a leaked invite, an untrusted repository or a new worker host."
+      >
         <div
           className="rounded-xl border p-3"
           style={{
@@ -99,18 +102,15 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13.5px] font-semibold">A tight entrance for hostile periods</span>
+                <span className="text-[13.5px] font-semibold">When it's on</span>
                 <Badge tone={d.enabled ? "warn" : "neutral"}>{d.enabled ? "on" : "off"}</Badge>
               </div>
-              <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
-                For a leaked invite, an untrusted repository or a new worker host.
-                {d.enabled && (
-                  <>
-                    {" "}On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
-                    {d.setBy ? `, by ${d.setBy}` : ""}.
-                  </>
-                )}
-              </p>
+              {d.enabled && (
+                <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
+                  On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
+                  {d.setBy ? `, by ${d.setBy}` : ""}.
+                </p>
+              )}
             </div>
             {d.canManage && (
               <Button
@@ -234,17 +234,13 @@ function HygienePanel() {
   return (
     <Section
       title="Hygiene"
+      info="Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer apply to their chat's branch."
       action={
         <Button disabled={run.isPending} onClick={() => run.mutate()}>
           Sweep now
         </Button>
       }
     >
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the
-        checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer
-        apply to their chat&apos;s branch.
-      </p>
       {r && (
         <p className="text-[13px]" data-testid="hygiene-summary">
           {hygieneSummary(r)}
@@ -279,15 +275,13 @@ function ThrottlePanel() {
   if (q.isPending) return <LoadingState rows={1} label="Loading plan windows" />;
   if (!t) return null;
   return (
-    <Section title="Plan windows">
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Near a subscription&apos;s usage limit, agents back off in steps instead of all stopping at once: scheduled runs
-        pause from about {t.backgroundPct}%, workflow stages and agent hand-offs from about {t.workflowPct}% (each agent
-        at a slightly different point). Your own requests always run.
-      </p>
+    <Section
+      title="Plan windows"
+      info={`Near a subscription's usage limit, agents back off in steps instead of all stopping at once: scheduled runs pause from about ${t.backgroundPct}%, workflow stages and agent hand-offs from about ${t.workflowPct}% (each agent at a slightly different point). Your own requests always run.`}
+    >
       {t.windows.length === 0 ? (
         <div data-testid="no-windows">
-          <EmptyHint text="No runtime has reported a plan window yet." />
+          <EmptyHint text="No plan windows reported yet" />
         </div>
       ) : (
         <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="windows">

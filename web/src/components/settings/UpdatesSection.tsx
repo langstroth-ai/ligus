@@ -55,18 +55,15 @@ export function UpdatesSection() {
     pct === null ? "Download & install" : pct < 0 ? "Starting…" : pct >= 100 ? "Restarting…" : `Installing… ${pct}%`;
 
   return (
-    <Section title="Updates">
+    <Section
+      title="Updates"
+      info="A shared workspace for you, your teammates and your coding agents. Ligus is short for ligustica (Apis mellifera ligustica, the Italian honeybee). Open source under the MIT license."
+    >
       <div className="text-sm">
         You're on <b>Ligus v{info.data?.coreVersion ?? "…"}</b>
         {info.data?.buildProfile === "debug" && <span className="text-ink-soft"> · debug build</span>}
       </div>
-      <p className="text-sm text-ink-soft">
-        A shared workspace for you, your teammates and your coding agents. Ligus is short for{" "}
-        <i>ligustica</i> (<i>Apis mellifera ligustica</i>, the Italian honeybee). Open source under the MIT
-        license.
-      </p>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-ink-soft">Check whether a newer signed build is available, and install it.</p>
+      <div>
         <Button
           onClick={() => check.mutate()}
           disabled={check.isPending || installing}

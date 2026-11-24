@@ -70,6 +70,7 @@ export function LinkedAccountsSection() {
   return (
     <Section
       title="Linked accounts"
+      info="Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo or Gitea. You choose the workspaces; their members and agents can see it. Every device checks it with the forge itself, never through your relay. A link helps people recognize you; it never lets anyone in or vouches for their keys."
       action={
         !adding ? (
           <div className="flex gap-2">
@@ -85,12 +86,7 @@ export function LinkedAccountsSection() {
         ) : undefined
       }
     >
-      <p className="text-xs text-ink-soft">
-        Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo or
-        Gitea. You choose the workspaces; their members and agents can see it. Every device checks it
-        with the forge itself, never through your relay. A link helps people recognize you; it never lets anyone in
-        or vouches for their keys.
-      </p>
+      <p className="text-xs text-ink-soft">Helps people recognize you; never lets anyone in or vouches for keys.</p>
       {list.map((l) => (
         <div key={l.linkId} className="flex items-start justify-between gap-3 rounded-xl border px-3 py-2" style={fieldStyle}>
           <div className="min-w-0 space-y-1">

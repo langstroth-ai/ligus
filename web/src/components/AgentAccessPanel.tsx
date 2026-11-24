@@ -6,10 +6,12 @@ import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAgentUsage, setAgentAccess, type WorkspaceAgentDto } from "@/lib/ipc";
 import type { AgentUsageRowDto } from "@/bindings/AgentUsageRowDto";
-import { SelectField } from "@/components/ui";
+import { InfoTip, SelectField } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 
 const ACCESS_HINT = "Turns run on its owner's device or host, on their credentials.";
+const CAP_HINT =
+  "Your own turns are never limited; the cap stops other members' turns once the day's estimated spend reaches it.";
 
 /// The read-only label for who can use an agent.
 export function accessLabel(agent: WorkspaceAgentDto): string {
@@ -89,14 +91,16 @@ function AccessEditor({ sessionId, agent }: { sessionId: string; agent: Workspac
   return (
     <div className="mt-3 space-y-2 border-t pt-3 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
       <div>
-        <span className="mb-1 block font-medium">Who can use this agent</span>
+        <span className="mb-1 flex items-center gap-1.5 font-medium">
+          Who can use this agent
+          <InfoTip label="who can use this agent" text={ACCESS_HINT} />
+        </span>
         <div>
           <SelectField value={access} onChange={(v) => setAccess(v === "everyone" ? "everyone" : "owner")} ariaLabel="Who can use this agent">
             <option value="owner">{shared ? "Admins only" : "Only me"}</option>
             <option value="everyone">Everyone in the workspace</option>
           </SelectField>
         </div>
-        <p className="mt-1 text-ink-soft">{ACCESS_HINT}</p>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div>
@@ -119,9 +123,12 @@ function AccessEditor({ sessionId, agent }: { sessionId: string; agent: Workspac
           )}
         </div>
         <div>
-          <label htmlFor={`${ids}-cap`} className="mb-1 block font-medium">
-            Daily cap (USD, optional)
-          </label>
+          <span className="mb-1 flex items-center gap-1.5">
+            <label htmlFor={`${ids}-cap`} className="font-medium">
+              Daily cap (USD)
+            </label>
+            <InfoTip label="the daily cap" text={CAP_HINT} />
+          </span>
           <input
             id={`${ids}-cap`}
             aria-label="Daily spending cap in US dollars"
@@ -134,7 +141,6 @@ function AccessEditor({ sessionId, agent }: { sessionId: string; agent: Workspac
           />
         </div>
       </div>
-      <p className="text-ink-soft">Your own turns are never limited; the cap stops other members' turns once the day's estimated spend reaches it.</p>
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
         Notify me when someone else uses this agent

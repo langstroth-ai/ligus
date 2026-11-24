@@ -47,7 +47,7 @@ import {
   type OllamaPullEvent,
 } from "@/lib/ipc";
 import { IconChevronDown, IconChevronRight } from "@/lib/icons";
-import { Button, Section, Switch, fieldStyle } from "@/components/ui";
+import { Button, Section, Switch, fieldStyle, InfoTip } from "@/components/ui";
 import { SELECT_CLASS } from "@/components/settings/shared";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
@@ -112,12 +112,10 @@ function PortableConfigSection() {
   }
 
   return (
-    <Section title="Portable config">
-      <p className="text-xs text-ink-soft">
-        Export your runtimes, agents, and MCP servers as TOML to version-control and share with a
-        team — no API keys or tokens are included (each records only the env var its key comes from).
-        Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted).
-      </p>
+    <Section
+      title="Portable config"
+      info="Export your runtimes, agents, and MCP servers as TOML to version-control and share with a team. No API keys or tokens are included (each records only the env var its key comes from). Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted)."
+    >
       <div className="flex gap-2">
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void doExport()}>
           Export
@@ -186,15 +184,17 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
   return (
     <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-medium">Detect my setup</div>
+        <div className="flex items-center gap-1.5">
+          <div className="text-sm font-medium">Detect my setup</div>
+          <InfoTip
+            label="Detect my setup"
+            text="Finds providers that would answer right now: saved or environment API keys, a local Ollama server, and the Claude Code / Codex CLIs on your PATH."
+          />
+        </div>
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void detect()}>
           {busy ? "Scanning…" : found ? "Re-scan" : "Detect"}
         </Button>
       </div>
-      <p className="mt-0.5 text-xs text-ink-soft">
-        Finds providers that would answer right now — saved or environment API keys, a local Ollama
-        server, and the Claude Code / Codex CLIs on your PATH.
-      </p>
       {found && found.length === 0 && (
         <p className="mt-2 text-xs text-ink-soft">
           Nothing detected. Add a provider below, or set an API key / start Ollama, then re-scan.
@@ -252,17 +252,16 @@ function ProvidersSection() {
   }
 
   return (
-    <Section title="LLM providers">
+    <Section
+      title="LLM providers"
+      info="A provider is a backend and how to reach it (key and/or base URL). Add the ones you use; the rest stay tucked away. Models (below) pick a provider; agents pick a model."
+    >
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
-      <p className="text-xs text-ink-soft">
-        A provider is a backend + how to reach it (key and/or base URL). Add the ones you use — the
-        rest stay tucked away. Models (below) pick a provider; agents pick a model.
-      </p>
       <div className="space-y-2">
         {visible.length === 0 && (
           <p className="rounded-xl border px-3 py-4 text-xs text-ink-soft" style={fieldStyle}>
-            No providers configured yet. Add one below to start.
+            No providers yet.
           </p>
         )}
         {visible.map((p) => (
@@ -561,7 +560,13 @@ function DefaultModelPicker() {
   });
   return (
     <div className="mb-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
-      <label className="block text-xs text-ink-soft">Default model (Primary Runtime · Anthropic)</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-xs text-ink-soft">Default model (Primary Runtime · Anthropic)</label>
+        <InfoTip
+          label="Default model"
+          text="Used when a chat has no specific runtime selected. Separate from the local Claude Code model (set on its runtime row above)."
+        />
+      </div>
       <select
         value={current}
         onChange={(e) => save.mutate(e.target.value)}
@@ -574,10 +579,6 @@ function DefaultModelPicker() {
           </option>
         ))}
       </select>
-      <p className="mt-1 text-xs text-ink-soft">
-        Used when a chat has no specific runtime selected. Separate from the local Claude Code model
-        (set on its runtime row above).
-      </p>
     </div>
   );
 }
@@ -808,11 +809,10 @@ function RuntimesSection() {
   });
 
   return (
-    <Section title="Models (runtimes)">
-      <p className="text-xs text-ink-soft">
-        A model on a provider (above) — what powers a chat or agent. Pick a provider kind + model;
-        the key/base URL come from the provider. Mark one <strong>default</strong> for new chats.
-      </p>
+    <Section
+      title="Models (runtimes)"
+      info="A model on a provider (above): what powers a chat or agent. Pick a provider kind and model; the key and base URL come from the provider. Mark one default for new chats."
+    >
       {/* The "Default model" picker only configures the synthesized Anthropic
           Primary Runtime, which is surfaced only when no real runtime is
           configured. Once you have runtimes, the default is chosen per-row
@@ -1375,7 +1375,7 @@ function OllamaModelsPanel({
       )}
       {list.isLoading && <p className="text-xs text-ink-soft">Loading…</p>}
       {list.data && models.length === 0 && newPulls.length === 0 && (
-        <p className="text-xs text-ink-soft">No models installed yet. Pull one below.</p>
+        <p className="text-xs text-ink-soft">No models installed yet.</p>
       )}
       <div className="space-y-1">
         {models.map((m) => {
@@ -1571,11 +1571,10 @@ function AgentsSection() {
   });
 
   return (
-    <Section title="Agents">
-      <p className="text-xs text-ink-soft">
-        A reusable persona — name + model (runtime) + role + instructions. Define once here, then
-        attach it to any chat from that chat's Tools pane.
-      </p>
+    <Section
+      title="Agents"
+      info="A reusable persona: name, model (runtime), role and instructions. Define once here, then attach it to any chat from that chat's Tools pane."
+    >
       <div className="space-y-2">
         {(templates.data ?? []).map((t) => {
           const rt = rts.find((r) => r.id === t.runtimeId);
@@ -1665,10 +1664,10 @@ function TemplatesSection() {
   }
 
   return (
-    <Section title="Prompt templates">
-      <p className="text-xs text-ink-soft">
-        Reusable prompts you can drop into the composer with <code>/</code>.
-      </p>
+    <Section
+      title="Prompt templates"
+      info="Reusable prompts you can drop into the composer with /."
+    >
       <div className="space-y-2">
         {items.map((t) => (
           <div
@@ -1729,7 +1728,10 @@ function QuickTasksSection() {
   });
   const options = quickTaskOptions(runtimes.data ?? [], current.data);
   return (
-    <Section title="Quick tasks model">
+    <Section
+      title="Quick tasks model"
+      info="Used for chat titles. A small non-reasoning model works best, e.g. lfm2:8b on CPU."
+    >
       <select
         value={current.data ?? ""}
         onChange={(e) => save.mutate(e.target.value)}
@@ -1743,9 +1745,6 @@ function QuickTasksSection() {
           </option>
         ))}
       </select>
-      <p className="text-xs text-ink-soft">
-        Used for chat titles. A small non-reasoning model works best, e.g. lfm2:8b on CPU.
-      </p>
     </Section>
   );
 }
@@ -1784,13 +1783,10 @@ function ContextCommandsSection() {
   const fieldClass = "w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5";
 
   return (
-    <Section title="Context commands">
-      <p className="text-xs text-ink-soft">
-        The instructions the model follows for <code>/summarize</code> and <code>/compact</code>.
-        Blank = the built-in default (shown as the placeholder). The <code>/summarize</code>{" "}
-        instruction also guides the automatic summarization when a long chat overflows the
-        model's context window.
-      </p>
+    <Section
+      title="Context commands"
+      info="The instructions the model follows for /summarize and /compact. Blank = the built-in default (shown as the placeholder). The /summarize instruction also guides the automatic summarization when a long chat overflows the model's context window."
+    >
       <label className="block text-sm text-ink-soft">
         <code>/summarize</code> instruction
       </label>
@@ -1913,13 +1909,10 @@ function VaultRetrievalSection() {
   );
 
   return (
-    <Section title="Vault retrieval">
-      <p className="text-xs text-ink-soft">
-        Optional. With an embeddings endpoint set, chats search their vaults and add only the
-        passages that answer each message, instead of pasting whole documents into the system
-        prompt. Any OpenAI-compatible server works, e.g. a llama.cpp gateway. If retrieval fails,
-        the chat falls back to pasting.
-      </p>
+    <Section
+      title="Vault retrieval"
+      info="Optional. With an embeddings endpoint set, chats search their vaults and add only the passages that answer each message, instead of pasting whole documents into the system prompt. Any OpenAI-compatible server works, e.g. a llama.cpp gateway. If retrieval fails, the chat falls back to pasting."
+    >
       <div className="grid gap-3 sm:grid-cols-2">
         {text("embedUrl", "Embeddings URL", "http://host:8080/v1")}
         {text("embedModel", "Embeddings model", "embeddinggemma-300m")}

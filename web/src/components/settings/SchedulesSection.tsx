@@ -63,11 +63,11 @@ export function SchedulesSection() {
   });
 
   return (
-    <Section title="Schedules">
-      <p className="text-sm text-ink-soft">
-        Run an agent on a recurring schedule — each fire opens a new chat, posts the prompt, and the
-        agent answers. Times are UTC.
-      </p>
+    <Section
+      title="Schedules"
+      info="Run an agent on a recurring schedule: each fire opens a new chat, posts the prompt, and the agent answers. Times are UTC."
+    >
+      <p className="text-xs text-ink-soft">Times are UTC.</p>
 
       {(schedules.data ?? []).map((s) => (
         <div

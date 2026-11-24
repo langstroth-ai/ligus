@@ -25,7 +25,7 @@ import {
   IconChevronDown,
   IconChevronRight,
 } from "@/lib/icons";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, Section, fieldStyle, InfoTip } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
@@ -146,7 +146,10 @@ function SyncSection() {
   const inputClass = "w-full rounded-xl border px-3 py-2 font-mono text-sm";
 
   return (
-    <Section title="Team sync">
+    <Section
+      title="Team sync"
+      info="Teams live in the left rail: hit ＋ to create or join one. Ligus generates the room, encryption key, and a shareable code for you. The relay just brokers sync, short pairing codes, and member revocation; messages stay end-to-end encrypted and the relay only ever sees ciphertext."
+    >
       {/* Live status — driven by real connection health (connectionState), not
           just "a relay URL is set", so a dead relay / bad key is visible here. */}
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
@@ -235,26 +238,23 @@ function SyncSection() {
         )}
       </div>
 
-      {/* How teams work now */}
-      <p className="text-xs text-ink-soft">
-        Teams live in the left rail — hit <strong>＋</strong> to create or join one. Ligus
-        generates the room, encryption key, and a shareable code for you. The relay below just
-        brokers sync, short pairing codes, and member revocation; messages stay end-to-end
-        encrypted and the relay only ever sees ciphertext.
-      </p>
-
-      <label className="block text-sm text-ink-soft">Relay URL</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" htmlFor="team-sync-relay-url">
+          Relay URL
+        </label>
+        <InfoTip label="Relay URL" text="Use the same relay URL on every device that should sync." />
+      </div>
       <input
         value={relayUrl}
+        id="team-sync-relay-url"
         onChange={(e) => setRelayUrl(e.target.value)}
         onBlur={() => void commit()}
         placeholder="https://relay.example  ·  blank = local only"
         className={inputClass}
         style={fieldStyle}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="flex-1 text-xs text-ink-soft">Use the same relay URL on every device that should sync.</p>
-        {relayUrl.trim() !== COMMUNITY_RELAY_URL && (
+      {relayUrl.trim() !== COMMUNITY_RELAY_URL && (
+        <div>
           <Button
             size="sm"
             onClick={() => {
@@ -264,8 +264,8 @@ function SyncSection() {
           >
             Use the community relay
           </Button>
-        )}
-      </div>
+        </div>
+      )}
       {relayUrl.trim() === COMMUNITY_RELAY_URL && (
         <p className="text-xs text-ink-soft">
           The community relay is free and best-effort: no uptime guarantee, and it may be reset with
@@ -273,10 +273,19 @@ function SyncSection() {
         </p>
       )}
 
-      <label className="block text-sm text-ink-soft">Relay access token</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" htmlFor="team-sync-relay-token">
+          Relay access token
+        </label>
+        <InfoTip
+          label="Relay access token"
+          text="Needed only for a relay that gates access with tokens. Leave blank for an open relay. Paste only the token value: if yours looks like name:abc123, drop the name: prefix."
+        />
+      </div>
       <div className="flex items-center gap-2">
         <input
           type="password"
+          id="team-sync-relay-token"
           value={relayAccessToken}
           onChange={(e) => setRelayAccessToken(e.target.value)}
           onBlur={() => void commit()}
@@ -294,11 +303,6 @@ function SyncSection() {
           </button>
         )}
       </div>
-      <p className="text-xs text-ink-soft">
-        Needed only for a relay that gates access with tokens. Leave blank for an open relay.
-        Paste only the token value — if yours looks like <code>name:abc123</code>, drop the
-        <code> name:</code> prefix.
-      </p>
 
       {/* Advanced: manual room + key (the rail normally fills these in) */}
       <button
@@ -422,11 +426,10 @@ function PeersSection() {
   });
 
   return (
-    <Section title="Direct peers (P2P)">
-      <p className="text-xs text-ink-soft">
-        Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync
-        directly. Falls back to a relay when a direct connection can't be made.
-      </p>
+    <Section
+      title="Direct peers (P2P)"
+      info="Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync directly. Falls back to a relay when a direct connection can't be made."
+    >
       <label className="block text-sm text-ink-soft">Your peer code</label>
       <div className="flex gap-2">
         <input
@@ -517,7 +520,7 @@ function PeersSection() {
             </button>
           </div>
         ))}
-        {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers added yet.</p>}
+        {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers yet.</p>}
       </div>
 
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>

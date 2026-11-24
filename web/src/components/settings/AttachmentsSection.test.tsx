@@ -44,6 +44,12 @@ describe("AttachmentsSection", () => {
     expect(box).toBeDisabled();
     expect(screen.getByLabelText(/Let agents offer files/)).not.toBeChecked();
     expect(screen.queryByRole("button", { name: "Save policy" })).toBeNull();
+    // Who may change it stays on screen; the explanation moved behind the
+    // section's "?" and stays in the accessibility tree.
+    expect(screen.getByText("Only an Admin can change these.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "About File attachments" })).toHaveAccessibleDescription(
+      /end-to-end encrypted, so the relay can't scan them/,
+    );
   });
 
   it("an Admin turns on the recommended policy and blocks a hash", async () => {

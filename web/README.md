@@ -59,5 +59,37 @@ change that fixes some of it, shrink the baseline with
 the screenshots and a `report.json`; `--only chat,review` limits the views.
 CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
 
+### Copy in panels
+
+Panels (the right-rail panes, the sidebar's workspace views, Settings tabs,
+the Inbox) open on their content, not on an explanation of it. The rules,
+with the primitives in `src/components/ui.tsx`:
+
+- **Pane header = title only.** What the pane is for goes behind the "?"
+  beside the title (`RailFrame`'s `about`, which also links the docs page).
+  No subtitles.
+- **Explanations go behind a "?".** A section that needs one gets
+  `<Section info="…">` (an `InfoTip`); a control gets an `InfoTip` beside it.
+  The text stays reachable by hover, keyboard focus and screen reader (the
+  button is `aria-describedby` a visually hidden copy).
+- **No always-shown info boxes.** An explanatory box becomes nothing (if the
+  UI already says it), a one-line muted `Hint`, or a `OnceHint` the viewer
+  dismisses once (remembered per device in `lib/hints.ts`; blocked storage
+  just shows it again, never breaks rendering).
+- **Empty states: one short line** (about six words: "No MCP servers
+  enabled") and at most one action. Don't explain consequences.
+- **Inherited or derived state is a tag, not a banner.** `<Section tag={<MetaTag
+  action={…}>from workspace</MetaTag>}>`, with the edit link compact beside it.
+- **Short labels.** Section titles are a few words; a card caption is one
+  line; don't repeat a word the row already shows ("default runtime ·
+  default").
+- **Never hide what protects someone.** Warnings, blocking states and
+  security information stay on screen: sandbox off, lockdown, unverified
+  identity, offline hosts, and the consequences shown before an irreversible
+  action (remove, revoke, delete, reset).
+- **Density and accessibility hold.** Use the shared primitives so the
+  density setting applies, and keep every hidden explanation keyboard- and
+  screen-reader-reachable through the tooltip layer (`data-tip`).
+
 The full app runs via `cargo tauri dev` from the repo root, which serves this
 frontend and the Rust backend together.

@@ -25,12 +25,10 @@ export function DiagnosticsSection() {
   };
 
   return (
-    <Section title="Diagnostics">
-      <p className="text-xs text-ink-soft">
-        Recent internal log output — background errors from sync, agents, scheduling, and workflows,
-        plus panics. Useful when something misbehaves silently. Set <code>LIGUS_LOG=debug</code> for
-        more detail. Newest lines are at the bottom.
-      </p>
+    <Section
+      title="Diagnostics"
+      info="Recent internal log output: background errors from sync, agents, scheduling and workflows, plus panics. Set LIGUS_LOG=debug for more detail. Newest lines are at the bottom."
+    >
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={() => logs.refetch()}>
           Refresh
@@ -50,7 +48,7 @@ export function DiagnosticsSection() {
         style={{ ...fieldStyle, fontFamily: "var(--ligus-mono, ui-monospace, monospace)", whiteSpace: "pre-wrap" }}
       >
         {logs.isError
-          ? "No log file yet — it appears once the app has logged something this session."
+          ? "No log file yet."
           : logs.data?.trim()
             ? logs.data
             : "No recent log output."}

@@ -52,12 +52,11 @@ export function CodeHostsSection() {
 
   return (
     <div>
-      <p className="mb-4 text-sm text-ink-soft">
-        Code hosts are for repository work on this device: listing, cloning and opening pull or merge requests.
-        Ligus doesn't use them to sign you in. Tokens stay on this device, in its secret store. They are never
-        synced and never sent to your relay.
-      </p>
-      <Section title="Connections">
+      <Section
+        title="Connections"
+        info="Code hosts are for repository work on this device: listing, cloning and opening pull or merge requests. Ligus doesn't use them to sign you in. Tokens stay on this device, in its secret store. They are never synced and never sent to your relay."
+      >
+        <p className="text-xs text-ink-soft">Tokens stay on this device and are never synced.</p>
         {list.isLoading && <p className="text-sm text-ink-soft">Loading…</p>}
         {(list.data ?? []).map((c) => (
           <ConnectionRow key={c.id} c={c} onChange={refresh} />

@@ -185,7 +185,10 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
       about="Multi-stage agent pipelines with approval gates. Agents write them; you approve, run and pause them."
       docs={PANE_DOCS.workflows}
     >
-      <Section title="Definitions">
+      <Section
+        title="Definitions"
+        info="Ask an agent in this chat to set one up, e.g. “build a workflow that drafts, reviews, and waits for my approval”. It arrives in the Review pane; approve it and it shows up here."
+      >
         <Stack>
           {(workflows.data ?? []).map((wf) =>
             deletes.pending.has(wf.id) ? (
@@ -204,7 +207,7 @@ export function WorkflowsPane({ sessionId }: { sessionId: string }) {
             <ErrorState text="Couldn't load workflows." onRetry={() => void workflows.refetch()} />
           ) : (
             (workflows.data ?? []).length === 0 && (
-              <EmptyHint text="No workflows yet. Ask an agent in this chat to set one up, e.g. “build a workflow that drafts, reviews, and waits for my approval”. It arrives in the Review pane; approve it and it shows up here." />
+              <EmptyHint text="No workflows yet." />
             )
           )}
         </Stack>

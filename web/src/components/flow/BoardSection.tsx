@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Badge, Button, EmptyHint, ErrorState, LoadingState } from "@/components/ui";
+import { Badge, Button, EmptyHint, ErrorState, InfoTip, LoadingState, OnceHint } from "@/components/ui";
 import { openChat } from "@/lib/nav";
 import { editorStore } from "@/state/editorStore";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { BOARD_KIND_LABEL, duration, listBoard, pickupItem, type BoardRow } from "@/lib/flow";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -38,12 +37,15 @@ export function BoardSection() {
 export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow[]; onPickup: (row: BoardRow) => void; now?: number }) {
   return (
     <div className="space-y-3">
-      <Muted>
-        Unassigned work goes to the agent whose threshold it crosses first, not to the primary. Thresholds differ a little
-        per agent, by career and persona. Auto pickup is opt-in (Settings → Flow).
-      </Muted>
+      <OnceHint id="flow-board">
+        Unassigned work goes to the first agent past its threshold.{" "}
+        <InfoTip
+          label="the task board"
+          text="Unassigned work goes to the agent whose threshold it crosses first, not to the primary. Thresholds differ a little per agent, by career and persona. Auto pickup is opt-in (Settings → Flow)."
+        />
+      </OnceHint>
       {rows.length === 0 ? (
-        <EmptyHint text="Nothing waiting: no failing tests, unreviewed proposals, failed stages or review markers." />
+        <EmptyHint text="Nothing waiting." />
       ) : (
         <ul className="space-y-2 text-xs">
           {rows.map((r) => (

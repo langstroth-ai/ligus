@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { listZones, removeZone, setZone, type PathZone, type Role, type ZoneKind } from "@/lib/flow";
 
@@ -53,14 +52,12 @@ export function ZonesView({
   const [approvals, setApprovals] = useState("");
   return (
     <div className="space-y-4">
-      <Muted>
-        A change touching any core path needs its bar (a core zone only ever raises it). A change whose every file is low-bar
-        may need fewer approvals, never fewer than one. Patterns: a folder (<code>crates/core/</code>), a file, or a glob
-        (<code>**/*.md</code>).
-      </Muted>
-      <Section title="Zones">
+      <Section
+        title="Zones"
+        info="A change touching any core path needs its bar (a core zone only ever raises it). A change whose every file is low-bar may need fewer approvals, never fewer than one. Patterns: a folder (crates/core/), a file, or a glob (**/*.md)."
+      >
         {zones.length === 0 ? (
-          <EmptyHint text="No zones yet. Every change uses its proposal's own bar." />
+          <EmptyHint text="No zones yet." />
         ) : (
           <ul className="space-y-1.5 text-xs">
             {zones.map((z) => (
