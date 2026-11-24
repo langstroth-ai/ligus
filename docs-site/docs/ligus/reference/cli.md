@@ -141,13 +141,21 @@ room    : default
 
 | Command | What it does |
 |---|---|
-| `ligus app` | opens the Ligus desktop app and returns at once. The app is started detached from the terminal, so closing the terminal leaves it running. It takes no arguments: the desktop app has no command-line options or `ligus://` links |
+| `ligus app [--json]` | opens the Ligus desktop app and returns at once. The app is started detached from the terminal, so closing the terminal leaves it running. It takes no arguments but `--json`: the desktop app has no command-line options or `ligus://` links |
 
 How it finds the app:
 
-- **macOS:** Launch Services, by bundle id (`open -b ai.ligus.desktop`),
-  then by name (`open -a Ligus`). An app that is already running is brought
-  to the front.
+- **macOS:** in this order, the bundle named by `LIGUS_APP`, then
+  `/Applications/Ligus.app`, then `~/Applications/Ligus.app`, then, as a
+  last resort, the copies Spotlight knows by bundle id `ai.ligus.desktop`
+  (the one at the CLI's version, else the newest). A copy on a mounted disk
+  image (under `/Volumes/`) or an App Translocation copy is never picked
+  unless `LIGUS_APP` names it. The chosen bundle is opened by path
+  (`open /Applications/Ligus.app`), not by bundle id: Launch Services would
+  pick the highest `CFBundleVersion` it has seen, which can be an old test
+  build on a mounted disk image. An app that is already running from that
+  path is brought to the front. A `LIGUS_APP` that isn't an app bundle is
+  an error.
 - **Windows:** where the installer recorded it in the registry (the NSIS
   uninstall key's `InstallLocation` and `Software\ligus\Ligus`, or the MSI's
   `InstallDir`), then `%LOCALAPPDATA%\Ligus`, `%LOCALAPPDATA%\Programs\Ligus`,
@@ -159,13 +167,30 @@ How it finds the app:
   neither `DISPLAY` nor `WAYLAND_DISPLAY` set (a `ligus serve` box, a
   container, an SSH login) it stops with an error and starts nothing.
 
+On macOS, two more checks:
+
+- When the app's version (its `CFBundleShortVersionString`) differs from
+  the CLI's, a one-line note on stderr names both and the one to update
+  (an older app: `brew upgrade --cask --greedy ligus-app`; an older CLI:
+  `brew upgrade ligus`). The app opens anyway.
+- When Ligus is already running from another path (a disk image, a build
+  directory), `ligus app` prints `Ligus is already running from <path>;
+  quit it to use /Applications/Ligus.app` on stderr and opens nothing,
+  rather than switching to that copy without a word.
+
+With `--json` it prints one `ligus.app.v1` object on stdout: `path` (the
+app it chose), `version`, `cliVersion`, `versionMatches`, `launched`,
+`alreadyRunning`, `runningFrom` (macOS: the other running copy) and `note`
+(the version note). `version` is set on macOS only.
+
 On Windows and Linux the desktop app has no single-instance handoff, so
 when it is already running `ligus app` prints `Ligus is already running;
 switch to its window.` and does not start a second copy.
 
 When the app isn't found, `ligus app` lists where it looked, points to
 <https://langstroth.ai/ligus/download> (on macOS also
-`brew install --cask langstroth-ai/ligus/ligus-app`) and exits 1.
+`brew install --cask langstroth-ai/ligus/ligus-app`, and `LIGUS_APP` for
+an app elsewhere) and exits 1.
 
 ## Secrets on the command line
 

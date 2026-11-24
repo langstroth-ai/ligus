@@ -24,6 +24,16 @@ Full release notes are on the
   removed in 0.1; a box that still names you as its owner now shows how to
   admit it (`ligus admit request`, then workspace menu → Admit a box).
 
+- **`ligus app` on macOS opens the installed app.** It asked Launch
+  Services by bundle id, which picks the highest `CFBundleVersion` it has
+  seen, so an old test build on a mounted disk image could open instead of
+  `/Applications/Ligus.app`. It now looks in a fixed order (`LIGUS_APP`,
+  `/Applications`, `~/Applications`, then Spotlight, never a disk image or
+  an App Translocation copy unless `LIGUS_APP` names it) and opens that
+  bundle by path. It notes on stderr when the app and the CLI are different
+  versions, says so when Ligus is already running from another path
+  instead of switching to it, and `--json` reports the path and version.
+  See [Opening the desktop app](cli.md#opening-the-desktop-app).
 - **The keychain stops asking (macOS).** A release of Ligus that finds its
   keychain items saved by a different Ligus build (a test or development
   build) no longer prompts again and again. It reads the keychain's unlock
