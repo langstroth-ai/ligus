@@ -340,7 +340,8 @@ pub async fn cmd_redeem(
             Some("use another LIGUS_DATA_DIR for this computer's link"),
         ));
     }
-    // Review M4: the person checks who approved it before anything is saved.
+    // The person checks who approved it before anything is saved: a request
+    // is public, so anyone could answer it from their own workspace.
     let shown_ws = clamp(&shown(if grant.conn.name.trim().is_empty() { &grant.conn.room } else { &grant.conn.name }));
     match (approver_fingerprint, confirm) {
         (Some(f), _) if f.trim().eq_ignore_ascii_case(&grant.approver_fingerprint()) => {}
@@ -382,8 +383,7 @@ pub async fn cmd_redeem(
     // The device the request named becomes this install's. Until the link
     // is recorded nothing is written to the workspace; if it fails, the
     // install goes back to its old device, so the new key never signs as the
-    // install's own member (it would become a bridge to the person: review
-    // S-a).
+    // install's own member (it would become a bridge to the person).
     let old_device = stored.device.id;
     if device_id != old_device {
         ids.adopt_device(device_id)?;
@@ -414,8 +414,8 @@ pub async fn cmd_redeem(
 /// The writes of a redeem, once the person confirmed: the connection, the
 /// pull, the check, the link record, the key-agreement key.
 async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkState, founder: String, fk: String) -> Result<ligus_core::ActorIdentity> {
-    // The connection lives in memory until the link is recorded (review:
-    // a failed redeem must not leave this data dir connected as its own
+    // The connection lives in memory until the link is recorded (a failed
+    // redeem must not leave this data dir connected as its own
     // identity with the device key the desktop certified for the person).
     let before = cfg.clone();
     if crate::env_opt("LIGUS_RELAY_URL").is_none() {

@@ -265,7 +265,7 @@ async fn a_linked_computer_is_the_persons_own_device_until_revoked() {
     let phone_id = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::P256, &phone_pk);
     assert!(lt.svc.certify_phone(ws, phone_id, &phone_pk).is_err());
 
-    // Review M1: the computer re-publishing the desktop's own certificate
+    // The computer re-publishing the desktop's own certificate
     // doesn't turn the desktop into a delegated device.
     let mac_cert = mac
         .svc
