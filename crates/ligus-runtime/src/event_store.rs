@@ -43,6 +43,15 @@ pub enum EventStoreError {
     BackupExists(std::path::PathBuf),
     #[error("this is too large to share with the workspace ({bytes} bytes; the most one change can be is {max} bytes). Split it up, or share a large file as an attachment")]
     TooLarge { bytes: usize, max: usize },
+    /// Upgrading the database (a one-time rewrite, with a backup first)
+    /// needs more free disk than there is. Nothing was changed.
+    #[error("free {} on this disk to upgrade the Ligus database (it needs about {} free, {} is free); nothing was changed", gb(need.saturating_sub(*free)), gb(*need), gb(*free))]
+    NeedsSpaceToUpgrade { need: u64, free: u64 },
+}
+
+/// Bytes as gigabytes, for a person (`1.4 GB`).
+fn gb(bytes: u64) -> String {
+    format!("{:.1} GB", (bytes as f64 / 1e9).max(0.1))
 }
 
 pub type Result<T> = std::result::Result<T, EventStoreError>;
@@ -204,21 +213,153 @@ fn needs_event_id_migration(conn: &Connection) -> Result<bool> {
         .exists([])?)
 }
 
+/// What the migration's backups are named after: `<db>.bak-ws-event-ids-…`.
+const MIGRATION_BACKUP_MARK: &str = ".bak-ws-event-ids-";
+
+/// The database file a connection has open (none: in memory).
+fn db_path(conn: &Connection) -> Option<std::path::PathBuf> {
+    conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from)
+}
+
+/// Remove a backup file and SQLite's side files for it.
+fn remove_backup(path: &Path) {
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(p));
+    }
+}
+
+/// Remove every migration backup next to `db` (and its side files). Called
+/// at the start of an open, before any new backup: a backup still there is
+/// either left by an attempt that failed or crashed (the database itself
+/// was never changed: the migration is one transaction), or kept from a
+/// migration that succeeded, which this open of the migrated database
+/// retires. Either way, no full copy of the store piles up.
+fn remove_migration_backups(db: &Path) {
+    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else { return };
+    let prefix = format!("{name}{MIGRATION_BACKUP_MARK}");
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let file = e.file_name();
+        let Some(file) = file.to_str() else { continue };
+        if file.starts_with(&prefix) {
+            let _ = std::fs::remove_file(e.path());
+            tracing::info!(target: "event_store", file, "removed an earlier upgrade backup");
+        }
+    }
+}
+
+/// Free bytes on the volume holding `dir` (none when it can't be told).
+fn free_bytes(dir: &Path) -> Option<u64> {
+    #[cfg(test)]
+    if let Some(v) = test_hooks::FREE_BYTES.with(|f| f.get()) {
+        return Some(v);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a valid NUL-terminated path and `st` a zeroed
+        // struct statvfs fills in.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        #[allow(clippy::unnecessary_cast)]
+        return Some(st.f_bavail as u64 * st.f_frsize as u64);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut free: u64 = 0;
+        // SAFETY: `wide` is a NUL-terminated UTF-16 path; the out pointer is
+        // valid for one u64, the other two may be null.
+        let ok = unsafe { windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+        return (ok != 0).then_some(free);
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+/// The database's size on disk, its write-ahead log included.
+fn db_bytes(db: &Path) -> u64 {
+    let mut wal = db.as_os_str().to_os_string();
+    wal.push("-wal");
+    [db.to_path_buf(), std::path::PathBuf::from(wal)].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+}
+
+/// Refuse the upgrade, with nothing changed, when the disk can't hold its
+/// backup, the rebuilt table and the write-ahead log (about 2.5 times the
+/// database).
+fn check_upgrade_space(db: &Path) -> Result<()> {
+    let need = db_bytes(db).saturating_mul(5) / 2;
+    let Some(free) = db.parent().and_then(free_bytes) else { return Ok(()) };
+    if free < need {
+        return Err(EventStoreError::NeedsSpaceToUpgrade { need, free });
+    }
+    Ok(())
+}
+
+/// Tests only: make one step of the upgrade fail, or report a free-space
+/// figure, on this thread.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+    thread_local! {
+        pub(crate) static FAIL_STEP: Cell<Option<&'static str>> = const { Cell::new(None) };
+        pub(crate) static FREE_BYTES: Cell<Option<u64>> = const { Cell::new(None) };
+    }
+    pub(crate) fn fails(step: &str) -> bool {
+        FAIL_STEP.with(|f| f.get()) == Some(step)
+    }
+}
+
 /// A copy of the whole database next to it before a migration rewrites a
 /// table (`<db>.bak-ws-event-ids-<time>-<pid>`); none for an in-memory or
-/// empty store.
+/// empty store. A copy that fails part way is removed again.
 fn migration_backup(conn: &Connection) -> Result<Option<std::path::PathBuf>> {
-    let Some(db) = conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from) else { return Ok(None) };
+    let Some(db) = db_path(conn) else { return Ok(None) };
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
     if rows == 0 {
         return Ok(None);
     }
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let mut name = db.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(".bak-ws-event-ids-{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
+    name.push(format!("{MIGRATION_BACKUP_MARK}{}-{:09}-{}", now.as_secs(), now.subsec_nanos(), std::process::id()));
     let path = db.with_file_name(name);
-    conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
+    let copied = conn.execute("VACUUM INTO ?1", [path.to_string_lossy()]).map(|_| ());
+    #[cfg(test)]
+    let copied = if test_hooks::fails("backup") { Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None)) } else { copied };
+    if let Err(e) = copied {
+        remove_backup(&path);
+        return Err(e.into());
+    }
     Ok(Some(path))
+}
+
+/// After a migration: give the rewritten table's old pages back to the disk
+/// (`VACUUM`, when there is room for it), so the file doesn't stay twice
+/// its size. Best effort: a failure leaves a larger file, nothing else.
+fn reclaim_after_migration(conn: &Connection, db: &Path) {
+    let room = db.parent().and_then(free_bytes).is_none_or(|free| free > db_bytes(db).saturating_mul(2));
+    if !room {
+        tracing::info!(target: "event_store", "not enough free disk to compact the upgraded database now");
+        return;
+    }
+    if let Err(e) = conn.execute_batch("VACUUM") {
+        tracing::warn!(target: "event_store", "compacting the upgraded database failed: {e}");
+    }
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+}
+
+/// One upgrade at a time in this process (the service and the sync loop
+/// open the store together on a first start): one backup, and no open
+/// removes a backup another is still making.
+fn upgrade_lock() -> &'static Mutex<()> {
+    static L: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    L.get_or_init(Default::default)
 }
 
 /// Rebuild `events` with event ids unique per workspace instead of across
@@ -367,20 +508,62 @@ impl EventStore {
         // copied aside first (`VACUUM INTO`, outside any transaction), then
         // migrated under the write lock. A backup that turns out unneeded
         // (another connection migrated first) is removed again.
-        let backup = if needs_event_id_migration(&conn)? { migration_backup(&conn)? } else { None };
+        //
+        // Any backup already there is from a failed or crashed attempt, or
+        // from an upgrade a previous open finished: removed first. Short of
+        // disk, the upgrade is refused with a clear error and nothing
+        // changed; a failed upgrade removes its own backup.
+        let _upgrade = upgrade_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let db = db_path(&conn);
+        if let Some(db) = &db {
+            remove_migration_backups(db);
+        }
+        let backup = if needs_event_id_migration(&conn)? {
+            if let Some(db) = &db {
+                check_upgrade_space(db)?;
+            }
+            migration_backup(&conn)?
+        } else {
+            None
+        };
         // The schema is checked and migrated under the write lock, so two
         // connections opening one file at once never both add a column.
-        let tx = write_tx(&conn)?;
-        Self::init_schema(&tx)?;
-        let migrated = needs_event_id_migration(&tx)?;
-        if migrated {
-            migrate_event_ids_per_workspace(&tx)?;
+        let migrate = || -> Result<bool> {
+            let tx = write_tx(&conn)?;
             Self::init_schema(&tx)?;
+            let migrated = needs_event_id_migration(&tx)?;
+            if migrated {
+                migrate_event_ids_per_workspace(&tx)?;
+                Self::init_schema(&tx)?;
+                #[cfg(test)]
+                if test_hooks::fails("migrate") {
+                    return Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), None).into());
+                }
+            }
+            tx.commit()?;
+            Ok(migrated)
+        };
+        let migrated = match migrate() {
+            Ok(m) => m,
+            Err(e) => {
+                if let Some(path) = &backup {
+                    remove_backup(path);
+                }
+                return Err(e);
+            }
+        };
+        match (&backup, migrated) {
+            // Kept until the next open of the upgraded database.
+            (Some(_), true) => {}
+            (Some(path), false) => remove_backup(path),
+            (None, _) => {}
         }
-        tx.commit()?;
-        if let Some(path) = backup.filter(|_| !migrated) {
-            let _ = std::fs::remove_file(path);
+        if migrated {
+            if let Some(db) = &db {
+                reclaim_after_migration(&conn, db);
+            }
         }
+        drop(_upgrade);
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
     }
 
@@ -2729,11 +2912,133 @@ mod tests {
         let rows: Vec<i64> = store.conn.prepare("SELECT row_id FROM events ORDER BY row_id").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
         assert_eq!(&rows[..2], &[1, 2], "row ids kept");
         assert!(rows[2] > 9, "the row-id counter never goes back: {rows:?}");
-        // A second open is a no-op (no new backup).
+        // The next open of the upgraded database retires the backup and
+        // changes nothing else.
         drop(store);
         EventStore::open(&path).unwrap();
-        let n = std::fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".bak-ws-event-ids-")).count();
-        assert_eq!(n, 1);
+        assert!(upgrade_leftovers(dir.path()).is_empty());
+    }
+
+    /// The upgrade's backups and their side files next to a database.
+    fn upgrade_leftovers(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(MIGRATION_BACKUP_MARK))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A database in the old shape (event ids unique across workspaces)
+    /// with `n` events of `pad` bytes each.
+    fn old_database(path: &Path, n: usize, pad: usize) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (row_id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, \
+             workspace_id TEXT NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL, scope TEXT NOT NULL, timestamp TEXT NOT NULL, \
+             envelope_json TEXT NOT NULL, sealed_epoch INTEGER, UNIQUE (session_id, sequence));",
+        )
+        .unwrap();
+        let (ws, sid) = (Uuid::new_v4(), Uuid::new_v4());
+        let body = "x".repeat(pad);
+        let tx = conn.unchecked_transaction().unwrap();
+        for i in 0..n {
+            let e = SessionEventEnvelope::new(sid, ws, i as i64 + 1, SessionEvent::SessionTitleChanged { title: body.clone() });
+            tx.execute(
+                "INSERT INTO events (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json) VALUES (?1, ?2, ?3, ?4, ?5, 'session', 't', ?6)",
+                rusqlite::params![e.event_id.to_string(), sid.to_string(), ws.to_string(), i as i64 + 1, e.payload.kind_str(), serde_json::to_string(&e).unwrap()],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    fn still_old(path: &Path) -> bool {
+        let conn = Connection::open(path).unwrap();
+        needs_event_id_migration(&conn).unwrap()
+    }
+
+    /// Short of disk, the upgrade is refused with a clear error, before any
+    /// backup is made, and the database is left as it was.
+    #[test]
+    fn an_upgrade_short_of_disk_is_refused_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        old_database(&path, 50, 100);
+        test_hooks::FREE_BYTES.with(|f| f.set(Some(1000)));
+        let err = EventStore::open(&path).err().expect("refused");
+        test_hooks::FREE_BYTES.with(|f| f.set(None));
+        assert!(matches!(err, EventStoreError::NeedsSpaceToUpgrade { free: 1000, .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.starts_with("free ") && msg.contains("to upgrade the Ligus database") && msg.contains("nothing was changed"), "{msg}");
+        assert!(upgrade_leftovers(dir.path()).is_empty());
+        assert!(still_old(&path));
+        // With room, the next open upgrades.
+        EventStore::open(&path).unwrap();
+        assert!(!still_old(&path));
+    }
+
+    /// A backup or an upgrade that fails part way (a full disk) leaves no
+    /// backup or journal behind and the database as it was, so the next
+    /// open with room simply tries again.
+    #[test]
+    fn a_failed_upgrade_leaves_no_backup_behind() {
+        for step in ["backup", "migrate"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("ligus.db");
+            old_database(&path, 50, 100);
+            test_hooks::FAIL_STEP.with(|f| f.set(Some(step)));
+            let r = EventStore::open(&path);
+            test_hooks::FAIL_STEP.with(|f| f.set(None));
+            assert!(r.is_err(), "{step}");
+            assert!(upgrade_leftovers(dir.path()).is_empty(), "{step}: {:?}", upgrade_leftovers(dir.path()));
+            assert!(still_old(&path), "{step}: the database is untouched");
+            EventStore::open(&path).unwrap();
+            assert!(!still_old(&path));
+        }
+    }
+
+    /// Backups (and journals) a crashed attempt left are removed on the next
+    /// open, whether it upgrades or the database is already upgraded.
+    #[test]
+    fn crash_leftovers_are_removed_on_the_next_open() {
+        for upgraded in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("ligus.db");
+            old_database(&path, 20, 50);
+            if upgraded {
+                drop(EventStore::open(&path).unwrap());
+            }
+            for f in ["ligus.db.bak-ws-event-ids-1-000000001-42", "ligus.db.bak-ws-event-ids-1-000000001-42-journal", "ligus.db.bak-ws-event-ids-2-000000002-43"] {
+                std::fs::write(dir.path().join(f), b"partial").unwrap();
+            }
+            std::fs::write(dir.path().join("unrelated.db.bak"), b"keep").unwrap();
+            EventStore::open(&path).unwrap();
+            let left = upgrade_leftovers(dir.path());
+            if upgraded {
+                assert!(left.is_empty(), "{left:?}");
+            } else {
+                // Only this upgrade's own backup, kept until the next open.
+                assert_eq!(left.len(), 1, "{left:?}");
+                assert!(!left[0].ends_with("-42") && !left[0].ends_with("-43"));
+            }
+            assert!(dir.path().join("unrelated.db.bak").exists());
+        }
+    }
+
+    /// The upgrade gives the rewritten table's pages back: the file doesn't
+    /// stay about twice its size.
+    #[test]
+    fn an_upgraded_database_is_compacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        old_database(&path, 4000, 1000);
+        let before = db_bytes(&path);
+        drop(EventStore::open(&path).unwrap());
+        let after = db_bytes(&path);
+        assert!(after * 10 <= before * 12, "{before} -> {after}");
     }
 
     /// Ids are unique per workspace: another workspace's row under an id

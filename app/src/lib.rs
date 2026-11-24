@@ -12389,6 +12389,9 @@ enum InitFailure {
     /// The OS keychain (or Secret Service) refused or was cancelled: the
     /// user can allow it and try again.
     Keychain(String),
+    /// The database needs a one-time upgrade and the disk is too full for
+    /// it (nothing was changed): free some space and try again.
+    DiskSpace(String),
     /// Anything else.
     Other(String),
 }
@@ -12398,6 +12401,9 @@ impl InitFailure {
         let l = e.to_ascii_lowercase();
         if ["keychain", "key vault", "secret service", "secret store", "user canceled", "user cancelled", "interaction is not allowed"].iter().any(|k| l.contains(k)) {
             return Self::Keychain(e.to_string());
+        }
+        if l.contains("to upgrade the ligus database") {
+            return Self::DiskSpace(e.to_string());
         }
         Self::Other(e.to_string())
     }
@@ -12412,6 +12418,11 @@ impl InitFailure {
                      If you cancelled or denied the keychain prompt, choose Try again and allow access \
                      (Always Allow keeps it from asking each launch). Nothing was changed."
                 ),
+                true,
+            ),
+            Self::DiskSpace(e) => (
+                "Ligus needs more disk space",
+                format!("Ligus has to upgrade its database once, and there isn't room: {e}.\n\nFree up space on this disk, then choose Try again."),
                 true,
             ),
             Self::Other(e) => (
@@ -19136,6 +19147,11 @@ mod init_recovery_tests {
         let got: Option<()> = init_with_recovery(|| Err("disk full".into()), |_| InitChoice::Quit);
         assert_eq!(got, None);
         assert!(matches!(InitFailure::of("disk full"), InitFailure::Other(_)));
+        let space = ligus_runtime::event_store::EventStoreError::NeedsSpaceToUpgrade { need: 3_000_000_000, free: 1_000_000_000 }.to_string();
+        let f = InitFailure::of(&space);
+        assert!(matches!(f, InitFailure::DiskSpace(_)), "{space}");
+        let (title, text, retry) = f.explain();
+        assert!(title.contains("disk space") && text.contains("free 2.0 GB") && retry, "{text}");
     }
 }
 
