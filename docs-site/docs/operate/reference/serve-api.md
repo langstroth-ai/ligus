@@ -2,7 +2,7 @@
 
 `ligus serve` exposes a small JSON + Server-Sent Events API under `/v1/`.
 The phone app is its main client, but any client can use it. This page lists
-every route in 0.1.1, checked against the router in
+every route in 0.2.0, checked against the router in
 `crates/ligus-cli/src/serve/api.rs`. The contract the phone implements is in
 [`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md).
 
@@ -51,13 +51,13 @@ There are two ways in, and both reach the same router:
 
 | Method + path | Notes |
 |---|---|
-| `GET /v1/health` | `{"ok":true,"version":"0.1.0"}`. With a valid token it adds `workspace`, `deviceLabel` and `identity` (`mode`: `owner`, `member`, `pending` or `revoked`; `actorId`, `displayName`, `deviceFingerprint`) |
+| `GET /v1/health` | `{"ok":true,"version":"0.2.0"}`. With a valid token it adds `workspace`, `deviceLabel` and `identity` (`mode`: `owner`, `member`, `pending` or `revoked`; `actorId`, `displayName`, `deviceFingerprint`) |
 
 ```console
 $ curl -s http://127.0.0.1:8787/v1/health
-{"ok":true,"version":"0.1.0"}
+{"ok":true,"version":"0.2.0"}
 $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.operator.token)"
-{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F-9A41-07CE","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
+{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F-9A41-07CE","displayName":"home-box","mode":"member"},"ok":true,"version":"0.2.0","workspace":"acme"}
 ```
 
 ### Who am I {#me}
@@ -349,14 +349,14 @@ voter's account, so they never act as the person (see
 | Method + path | Request | Notes |
 |---|---|---|
 | `POST /v1/presence/prepare` | `{action: "agent_host"\|"invite", target, hostId?}` | for a box enrolled as its owner's device: drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm. `approve`, `reject` and `lockdown_clear` answer **410**: the phone signs a vote or a clear itself ([phone actions](#phone-actions)) |
-| `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId, invite?}` (`invite`, for `action: "invite"`: the code to share). 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
+| `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId, invite?}` (`invite`, for `action: "invite"`: the code to share). 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId`; **409** `{error: "stale_draft", message, hint}` when another write by the same signer landed while the person confirmed: nothing was stored, so prepare again and ask for the passkey again (once; show a second 409) |
 
 ### Proposals
 
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
-| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`, `diffDigest` (what a vote or an apply request binds), `baseCommit?`, `repoId?`, `applyRequests` (`[{id, hostDeviceId, state, expectedBaseCommit?, reason?, commit?}]`, `state` one of `open`, `applied`, `failed`, `withdrawn`; at most one `open`) and `canRequestApply` (approved, and no request open). Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan`. A proposal that offers a file (an agent's offer) carries `attachment`: `{id, sha256, size, contentType, name}`, the reference `diffDigest` binds as its ninth part, so a phone can show the file and recompute the digest |
+| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine` (for the person asking: through the tunnel, the member the calling phone is certified for, not the box; a phone the box can't place gets no role and no vote; the operator and the direct-path bearer get the box's own identity), `diffDigest` (what a vote or an apply request binds), `baseCommit?`, `repoId?`, `applyRequests` (`[{id, hostDeviceId, state, expectedBaseCommit?, reason?, commit?}]`, `state` one of `open`, `applied`, `failed`, `withdrawn`; at most one `open`) and `canRequestApply` (approved, and no request open). Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan`. A proposal that offers a file (an agent's offer) carries `attachment`: `{id, sha256, size, contentType, name}`, the reference `diffDigest` binds as its ninth part, so a phone can show the file and recompute the digest |
 | `POST /v1/proposals/:id/approve`, `/reject` | | **410 Gone** `{error: "gone", message, use: "POST /v1/phone-actions/prepare"}`: a person votes from the phone with the `vote` [phone action](#phone-actions), signed by the phone's own key. The box never votes from the API, as itself or for anyone; approving never applies anything (a box applies only when a person asks it to, [Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |

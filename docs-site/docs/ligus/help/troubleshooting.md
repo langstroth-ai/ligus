@@ -73,9 +73,10 @@ Notes:
   or for an account whose key is disputed) doesn't stop sync either: it
   waits aside and applies on its own once what it waits for arrives.
   Settings → Team sync says how many wait ("N events wait for a device
-  certificate or an admission"); on a box, `ligus doctor` prints `held
-  events: N from M device(s), D dropped by a cap (R to fetch again from the
-  relay), L given up, E expired` and the reasons. A few that never go away
+  certificate or an admission"); on a box, `ligus doctor` prints a
+  `held events` check (`sync.held` in `--json`): `N from M device(s), D
+  dropped by a cap (R to fetch again from the relay), L given up, E expired`,
+  and the reasons. A few that never go away
   are normal when someone wrote from a device nobody certified (or as
   someone they aren't). A device keeps at most 1,000 per signing device,
   10,000 per workspace, and none past 30 days. One dropped by a cap is

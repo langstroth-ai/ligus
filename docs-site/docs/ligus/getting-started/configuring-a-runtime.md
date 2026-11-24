@@ -258,6 +258,11 @@ again):
 | OpenAI-compatible servers, OpenAI, OpenRouter, Anthropic | the provider's `/models` list |
 | pi, aider, Hermes, a named model gateway | none; use **Other…** |
 
+Ligus lists a CLI's models only by running a program named `agy`,
+`copilot` or `codex`, in an empty temporary folder, and never sends the
+legacy global API key to a custom endpoint. A model id that starts with a
+dash is never listed and can't be picked.
+
 **When a model won't run.** If a turn on this computer fails because the
 model isn't available (for example a Copilot model your plan doesn't
 include), the composer shows one line, such as *claude-opus-4.8 isn't

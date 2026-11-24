@@ -80,15 +80,15 @@ The invite contains the relay URL, the room **and the workspace key**.
 Anyone holding it can read the workspace. Move it only over a channel you
 trust (SSH, a password manager), never chat or email.
 
-Expected result: the sync pill reads **live** and shows the workspace as
-encrypted.
+Expected result: the sync item in the status bar at the foot of the window
+reads **Live**, with a lock for end-to-end encrypted.
 
 ## 3. Install `ligus` on the home server
 
 ```sh
 brew install langstroth-ai/ligus/ligus      # macOS or Linux with Homebrew
 ligus --version
-# ligus 0.1.1
+# ligus 0.2.0
 ```
 
 Or build the container image (`deploy/container/Dockerfile`) and run
@@ -208,7 +208,7 @@ curl -s http://192.0.2.10:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
 # On the server itself (loopback), the operator uses its own token:
 # curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.operator.token)"
-# {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.1.0",…}
+# {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.2.0",…}
 ```
 
 ## 7. Bind a repository
@@ -282,7 +282,7 @@ See [Headless agents](../concepts/headless-agents.md).
 
 ## Verify the whole thing
 
-- [ ] laptop sync pill **live**, encrypted
+- [ ] laptop status bar reads **Live**, with the lock (encrypted)
 - [ ] `ligus chats` on the server lists the laptop's chats
 - [ ] `/v1/health` with the token shows `"mode":"member"`
 - [ ] the laptop's People list shows the server as a service member

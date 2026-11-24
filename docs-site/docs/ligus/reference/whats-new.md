@@ -4,10 +4,47 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## Unreleased
+## 0.2.0
+
+A calmer desktop (an Inbox for what needs you, a quiet status bar, focus
+mode and quieter notifications), a model picker in every chat, the system
+passkey sheet on macOS, one set of CLI conventions, a more reliable event
+store, and security fixes. Upgrade every member of a workspace.
 
 ### Desktop
 
+- **An Inbox for everything that needs you.** One list, most urgent first:
+  an agent's question (answer it right there), proposals waiting on your
+  vote or ready to apply, a failed run, changed sandbox grants, invites and
+  device requests. Things that only report what happened stay out of it.
+  See [Inbox](../features/inbox.md).
+- **Badges count only what needs you.** The Inbox, the dock icon and the
+  tray show the same number; unread messages keep their dot in the sidebar.
+- **A quiet status bar, and one banner at most.** Sync, agents working,
+  queued work, errors and an available update sit at the foot of the
+  window. Only a lockdown or dearth mode gets a banner across the top, one
+  at a time. See
+  [The status bar and the one banner](../features/inbox.md#the-status-bar-and-the-one-banner).
+- **Focus mode.** **⌘.** (or "Focus mode" in the ⌘K palette) hides
+  everything but the chat and the message box; press it again to bring
+  everything back. See [Settings](../features/settings.md).
+- **Quiet notifications.** The desktop notifies you only about mentions,
+  an agent's question, runs you asked for, your vote and agents of yours
+  that someone else used. Nothing shows while the window is in front, and
+  a burst becomes one notification ("3 chats finished"). See
+  [Desktop notifications](../features/mentions-and-notifications.md#desktop-notifications).
+- **Density.** **Settings → Appearance → Density**: Compact, Comfortable
+  (the default) or Spacious. Text is quieter without fading, and each
+  heading level has one style. See [Appearance](../features/settings.md#appearance).
+- **Tooltips and menus.** Themed tooltips appear on hover and on keyboard
+  focus, with the shortcut as a chip, and menus work from the keyboard.
+- **Chat rows show their state** (Working, Queued, Needs you, Done,
+  Failed) and where the chat runs; the command palette is better and
+  **⌘/** opens a shortcuts sheet. Destructive actions ask more clearly.
+- **One colour source** for the desktop, the phone app and `lt`, checked
+  for contrast in CI.
+- **Implement is hidden on a rejected proposal**, even when it still has
+  its quorum of approvals.
 - **Pick the model while you chat.** The route pill under the composer
   opens a second step for each runtime: **Default**, the models its harness
   offers (Claude Code, Codex, Copilot CLI, Antigravity, Ollama and
@@ -17,6 +54,51 @@ Full release notes are on the
   use is reported in one line with **Pick another model** instead of a
   failed reply. Settings offers the same lists. See
   [Picking the model for a chat](../getting-started/configuring-a-runtime.md#pick-a-model).
+
+### Passkeys
+
+- **The system passkey sheet on macOS.** For workspaces that use the
+  `ligus.ai` passkey relying party (the default), the desktop asks with
+  macOS's own passkey dialog (Touch ID, iCloud Keychain, an iPhone nearby)
+  instead of opening your browser. The browser stays available from the
+  sheet. See [Native passkeys](../../operate/security/native-passkeys.md).
+
+### CLI
+
+- **`ligus doctor` runs every check** and prints one `ligus.checks.v1`
+  report (`--json` for the machine form), shared with the deploy scripts.
+  See [CLI conventions](../../operate/reference/cli-conventions.md#checks-v1).
+- **One exit-code table, 0 to 7**, for `ligus` and the deploy scripts:
+  done, failed, usage, a fixable precondition, a person must act, not
+  found, refused by workspace rules, offline. `--legacy-exit-codes` keeps
+  the old codes for this one release. See
+  [Exit codes](../../operate/reference/cli-conventions.md#exit-codes).
+- **Errors say what, why and how to fix it**, and with `--json` an error is
+  one `ligus.error.v1` object. See
+  [Errors](../../operate/reference/cli-conventions.md#errors).
+- **Common flags everywhere:** `--flag=value`, `-o`, `-q`, `--color`,
+  `--dry-run` (a command that can't preview refuses it instead of running)
+  and `ligus send --wait`. Colour only on a terminal. See
+  [Common flags](../../operate/reference/cli-conventions.md#flags).
+- **One help layout** across `ligus` and the deploy scripts, and
+  `ligus help --json` for agents and completion scripts. zsh and fish
+  completions for `ligus-local` and `ligus-k8s`. See the
+  [CLI reference](cli.md).
+
+### Reliability
+
+- **No lost writes when the phone, the desktop and sync write at once.**
+  A message or vote written while sync was storing events in the same chat
+  could be refused ("UNIQUE constraint failed"), and a box's sync could
+  fail with "database is locked", most often on Windows. Every write now
+  takes the database's write lock up front and waits its turn, and a
+  passkey or phone-signed action that raced another write asks again
+  instead of failing.
+- **Safer cleanup.** Purging a workspace keeps one that gained an event
+  after its backup was taken, and a second cleanup in the same second no
+  longer deletes the first one's backup.
+- **Faster secret redaction.** Registering many secrets no longer stalls
+  replies; the CLI's test suite runs about seven times faster.
 
 ### Security
 
@@ -32,6 +114,22 @@ Full release notes are on the
   a forged comment under someone else's name and forward it to an agent when
   their user asks for a revision. Upgrade every member's desktop (and any
   `ligus serve` box) to this release.
+- **The phone sees its own vote.** A box showed a phone the box's own role
+  and vote on a proposal instead of the phone owner's.
+- **Avatar colours are checked.** A synced avatar colour that isn't a
+  colour is ignored, and security alerts rank first.
+- **`ligus doctor`'s relay probe** has a timeout and redacts what it
+  prints; durations are capped, and `--dry-run` on a command that can't
+  preview is refused.
+- **Model listing runs only the harness's own binary**, asks each endpoint
+  separately and refuses model ids that start with a dash. The deploy
+  scripts never echo an unknown argument's value.
+- **url 2.5.9**, and sign-in links open only `http` and `https`.
+
+### Known issue
+
+- A member of another workspace you share who knows a chat's id can disturb
+  that chat on one device. Fixed in 0.2.1.
 
 ## 0.1.1
 

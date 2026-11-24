@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh
 
 Both put the prebuilt `ligus` binary on your `PATH`. The installer puts it
 in `$HOME/.local/bin` (set `LIGUS_INSTALL_DIR` to change that, or
-`LIGUS_VERSION=v0.1.0` to pin a release) and checks it against the
+`LIGUS_VERSION=v0.2.0` to pin a release) and checks it against the
 release's `ligus-<target>.sha256`, refusing to install on a missing or
 mismatched checksum. Or build from source:
 `cargo install --path crates/ligus-cli`.

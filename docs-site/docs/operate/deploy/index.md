@@ -101,7 +101,7 @@ gate who may connect with tokens. Guide:
     optional `langstroth-auth` chart 0.1.0 with its 0.3.0 image. The
     `ligus` chart and image are not published: install the chart from
     `deploy/helm/ligus` in a checkout of this repository and build the image
-    from `deploy/container/Dockerfile`. The Ligus 0.1.0 release ships the
+    from `deploy/container/Dockerfile`. The Ligus 0.2.0 release ships the
     desktop apps and `ligus` CLI binaries only. Expect changes. See
     [Kubernetes (preview)](kubernetes.md).
 

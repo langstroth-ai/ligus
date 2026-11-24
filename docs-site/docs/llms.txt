@@ -130,6 +130,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 - [Environment variables](https://docs.langstroth.ai/operate/reference/env-vars/): Every `LIGUS_*` variable, its default and who reads it.
 - [Configuration (TOML)](https://docs.langstroth.ai/operate/reference/config-toml/): The `ligus.config.toml` reference.
+- [CLI conventions](https://docs.langstroth.ai/operate/reference/cli-conventions/): The `ligus.checks.v1` report, exit codes 0 to 7, the `ligus.error.v1` error shape and common flags shared by `ligus` and the deploy scripts.
 - [Serve HTTP API](https://docs.langstroth.ai/operate/reference/serve-api/): Every `ligus serve` route, auth, limits and the SSE stream.
 - [Invite payload format](https://docs.langstroth.ai/operate/reference/invite-payload/): The invite/enroll payload structure.
 - [Identity link statement](https://docs.langstroth.ai/operate/reference/identity-link-statement/): The exact bytes a linked account signs, the signature format and the events that carry it.

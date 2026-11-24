@@ -9,7 +9,7 @@ already share a workspace with.
 <!-- Screenshot pending (Invite controls in the People pane): images/invite-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Create / join a team (the ＋ button)
 
-![Creating a team â the invite code is redacted here](../images/team-invite.png){ width="760" }
+![Creating a team: the invite code is redacted here](../images/team-invite.png){ width="760" }
 
 The common path is the **workspace rail's ＋ button**, which opens
 the **Add workspace** modal with two tabs:

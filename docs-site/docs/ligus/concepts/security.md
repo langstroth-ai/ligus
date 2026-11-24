@@ -100,6 +100,20 @@ second key for the founder, to hijack or fork the workspace out from under
 everyone else. Trust rosters are kept per workspace: a removal in one
 workspace doesn't touch devices in another.
 
+### Proposal comments are by their signer {#comment-authorship}
+
+Since 0.2.0 a comment on a proposal counts only when the member it names as
+its author is the member who signed it; any other is refused. It shows the
+signer's real role, not one the comment claims, and **Send to agent to
+revise** forwards only verified comments to the agent. A proposal's comment
+thread only grows: an edit to the proposal keeps the thread, and an edit
+that changes an existing comment is refused.
+
+This check runs on each member's own device. A member still on 0.1.x can
+see a forged comment under someone else's name and forward it to an agent,
+so **upgrade every member** of a workspace (each desktop and any
+`ligus serve` box) to 0.2.0 or later.
+
 ## The sandbox envelope around every agent turn
 
 The workspace, not each runtime, decides how far an agent turn may reach, and
@@ -894,8 +908,10 @@ it. So the changes that decide who can do what in a workspace also need a
   agent's host or runtime, and votes on proposals a person has to decide.
 - **Any passkey works:** Touch ID and iCloud Keychain, Windows Hello, Google
   Password Manager, a phone over QR, a YubiKey. The desktop asks through
-  the system passkey dialog on macOS and Windows and through your browser
-  otherwise ([Native passkeys](../../operate/security/native-passkeys.md));
+  the system passkey dialog on macOS and Windows (Windows Hello) for
+  workspaces that use the default `ligus.ai` relying party, and through
+  your browser otherwise, including on Linux
+  ([Native passkeys](../../operate/security/native-passkeys.md));
   the iPhone app asks directly.
 - **Agents never count as you.** An agent's output can't vote, approve or
   administer, whatever it says.

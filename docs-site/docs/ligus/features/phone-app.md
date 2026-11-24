@@ -66,7 +66,9 @@ itself, through your `ligus serve` box.
    ("No box in this workspace → **Admit a box**", "→ **Add a passkey**",
    "→ **Open Team & sync**") and offers [Can't scan?](#cant-scan) instead.
    If the workspace has a box that hasn't been seen for a while, the panel
-   says so above **Show code** but still lets you try.
+   says so above **Show code** but still lets you try. If the check itself
+   couldn't run, the panel says so with **Check again**. **Add a phone…** is
+   also in the command palette (⌘K).
 2. **On the phone:** **Settings → This phone → Add to my devices**. If the
    phone would call itself just "iPhone" (iOS doesn't let apps read the
    name you gave your iPhone), the app first asks you to **Name this
@@ -763,6 +765,18 @@ way.
 Chat messages don't ask for Face ID: a message you post, or a reply you type
 in a notification, is signed without a prompt, behind the
 [app lock](#app-lock-face-id) if you turned it on.
+
+**If something changes while you confirm.** Confirming takes a few
+seconds, and your box can write to the same chat meanwhile. Then nothing is
+recorded, and the phone asks for a new draft. If the new draft shows
+exactly what you confirmed, the phone asks once more on its own (the
+passkey or Face ID again) with "Something changed while you were
+confirming. Confirm again."; if it shows something else, the sheet shows it
+and waits for your tap. A chat message never re-signs on its own: its sheet
+comes back ("Something changed on your host while this was sending, so it
+wasn't posted. Check it, then sign it again.") and waits for your tap, so
+one tap never gives the box two signed copies. If it happens twice in a
+row, the sheet says **Not recorded** with **Try again**.
 
 For each, the box drafts the exact event and the phone reads it before
 signing: it signs only if the bytes are exactly what you asked for, in this

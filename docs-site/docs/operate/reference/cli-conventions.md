@@ -15,7 +15,7 @@ With `--json`, a check command prints exactly one JSON document on stdout
 {
   "schema": "ligus.checks.v1",
   "tool": "ligus",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "command": "doctor",
   "ok": false,
   "exitCode": 1,
@@ -115,7 +115,7 @@ A usage error's fix names the help to read, for example ``fix: see `ligus tail -
 `--json` (or `-o json`), the error is also the one JSON document on stdout:
 
 ```json
-{"schema": "ligus.error.v1", "tool": "ligus", "version": "0.1.1", "command": "sync",
+{"schema": "ligus.error.v1", "tool": "ligus", "version": "0.2.0", "command": "sync",
  "exitCode": 7,
  "error": {"code": "relay_unreachable", "message": "sync failed",
            "why": "error sending request for url (...)",
@@ -138,7 +138,7 @@ their profile: a usage error is a report with one failed `usage` check (its
 | `-q`, `--quiet` | `ligus doctor`: only the checks that need attention | only the warn and FAIL checks | |
 | `--color auto\|always\|never` | `ligus doctor`'s text | the `[FAIL]` and `[WARN]` marks on stderr | |
 | `--dry-run` | `add-runtime`, `rm-runtime`, `add-agent`, `set-agent-host` | `ligus-k8s install` | |
-| `--wait`, `--timeout` | `ligus send` (wait for an answer) | `ligus-k8s install` (`--timeout`) | |
+| `--wait`, `--timeout` | `ligus send` (wait for an answer; `--timeout` alone also waits, default 5m; no answer in time exits 7) | `ligus-k8s install` (`--timeout`) | |
 | `--force` | | `ligus-local configure` (rewrite the env file) | |
 
 Colour is only ever on a terminal unless asked for: `NO_COLOR` turns it off,

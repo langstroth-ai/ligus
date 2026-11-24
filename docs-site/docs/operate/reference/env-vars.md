@@ -1,6 +1,6 @@
 # Environment variables
 
-Every `LIGUS_*` variable Ligus 0.1.0 reads, from the code. Variables used
+Every `LIGUS_*` variable Ligus 0.2.0 reads, from the code. Variables used
 only by the test suites are left out.
 
 **Spelling.** Only `LIGUS_*` names are read. A blank value counts as unset. Boolean flags accept `1`/`true`/`on`/`yes` and
@@ -150,7 +150,7 @@ step with the code.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LIGUS_VERSION` | latest | release `install.sh` installs: `latest`, or a release tag such as `v0.1.0` (or `0.1.0`); anything else is refused |
+| `LIGUS_VERSION` | latest | release `install.sh` installs: `latest`, or a release tag such as `v0.2.0` (or `0.2.0`); anything else is refused |
 | `LIGUS_INSTALL_DIR` | `$HOME/.local/bin` | where it installs `ligus` |
 
 `install.sh` downloads `ligus-<target>.sha256` next to the binary from the
