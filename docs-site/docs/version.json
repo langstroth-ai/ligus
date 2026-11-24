@@ -1,6 +1,6 @@
 {
-  "tag": "v0.1.1",
-  "name": "Ligus 0.1.1",
+  "tag": "v0.2.1",
+  "name": "Ligus 0.2.1",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "A patch release of Ligus (short for ligustica): adding a phone by scanning the desktop's code, a faster desktop launch, clearer buttons and proposals, and security and membership fixes. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "Ligus (short for ligustica) 0.2.1 is a security release: a chat's history is now kept per workspace, so a member of another workspace you share can no longer hide, re-home or disturb your chats; upgrade every member of a workspace. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }
