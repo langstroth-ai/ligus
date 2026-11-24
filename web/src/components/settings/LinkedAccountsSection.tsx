@@ -16,7 +16,9 @@ import {
   type SelfHostedForge,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, FormDisclosure, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
+import { MoreMenu } from "@/components/MoreMenu";
 import { toast, errMsg } from "@/components/Toast";
 import { LinkChips } from "@/components/LinkChips";
 import { FORGES, forgeLabel, normalizeHandle } from "@/lib/links";
@@ -70,54 +72,55 @@ export function LinkedAccountsSection() {
   return (
     <Section
       title="Linked accounts"
+      info="Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo or Gitea. You choose the workspaces; their members and agents can see it. Every device checks it with the forge itself, never through your relay. A link helps people recognize you; it never lets anyone in or vouches for their keys."
       action={
-        !adding ? (
-          <div className="flex gap-2">
-            {list.length > 0 && (
-              <Button size="sm" disabled={checking} onClick={() => void checkNow()}>
-                {checking ? "Checking…" : "Check now"}
-              </Button>
-            )}
-            <Button size="sm" onClick={() => setAdding(true)}>
-              Link an account
-            </Button>
-          </div>
-        ) : undefined
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" onClick={() => setAdding(true)}>
+            Link an account
+          </Button>
+          {list.length > 0 && (
+            <MoreMenu
+              label="More linked-account actions"
+              items={[{ label: checking ? "Checking…" : "Check links now", disabled: checking, onSelect: () => void checkNow() }]}
+            />
+          )}
+        </div>
       }
     >
-      <p className="text-xs text-ink-soft">
-        Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo or
-        Gitea. You choose the workspaces; their members and agents can see it. Every device checks it
-        with the forge itself, never through your relay. A link helps people recognize you; it never lets anyone in
-        or vouches for their keys.
-      </p>
-      {list.map((l) => (
-        <div key={l.linkId} className="flex items-start justify-between gap-3 rounded-xl border px-3 py-2" style={fieldStyle}>
-          <div className="min-w-0 space-y-1">
-            <LinkChips links={[l]} />
-            <div className="text-[11px] text-ink-soft">
-              In {l.workspaces.map((w) => w.name).join(", ") || "no workspace"}
-              {l.discoverable && " · on your contact card"} · until {l.expiresAt.slice(0, 10)}
-              {l.method === "keyPublished" && " · Ligus key on the forge"}
-            </div>
-          </div>
-          <button
-            className="shrink-0 text-xs hover:opacity-80"
-            style={{ color: "var(--ligus-danger-ink)" }}
-            onClick={() => void unlink(l.linkId, `${forgeLabel(l.provider, l.host)} ${l.handle}`)}
-          >
-            Unlink
-          </button>
-        </div>
-      ))}
+      <p className="text-xs text-ink-soft">Helps people recognize you; never lets anyone in or vouches for keys.</p>
+      <RowList label="Linked accounts">
+        {list.map((l) => (
+          <ListRow
+            key={l.linkId}
+            title={<LinkChips links={[l]} />}
+            actionsLabel={`Actions for ${forgeLabel(l.provider, l.host)} ${l.handle}`}
+            meta={
+              <>
+                In {l.workspaces.map((w) => w.name).join(", ") || "no workspace"}
+                {l.discoverable && " · on your contact card"} · until {l.expiresAt.slice(0, 10)}
+                {l.method === "keyPublished" && " · Ligus key on the forge"}
+              </>
+            }
+            actions={[
+              {
+                label: "Unlink",
+                danger: true,
+                onSelect: () => void unlink(l.linkId, `${forgeLabel(l.provider, l.host)} ${l.handle}`),
+              },
+            ]}
+          />
+        ))}
+      </RowList>
       {adding && (
-        <LinkFlow
-          onDone={() => {
-            setAdding(false);
-            qc.invalidateQueries({ queryKey: ["my-links"] });
-            qc.invalidateQueries({ queryKey: ["co-members"] });
-          }}
-        />
+        <Sheet title="Link an account" side="center" width={520} onClose={() => setAdding(false)}>
+          <LinkFlow
+            onDone={() => {
+              setAdding(false);
+              qc.invalidateQueries({ queryKey: ["my-links"] });
+              qc.invalidateQueries({ queryKey: ["co-members"] });
+            }}
+          />
+        </Sheet>
       )}
       <ForgeCheckSettings />
     </Section>
@@ -201,7 +204,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
   if (draft) {
     const allSigned = draft.method === "keyPublished" || draft.statements.every((s) => (sigs[s.workspaceId] ?? "").trim());
     return (
-      <div className="space-y-3 rounded-xl border px-3 py-3 text-xs" style={fieldStyle}>
+      <div className="space-y-3 text-xs">
         <div>
           <strong>{forgeLabel(draft.provider, draft.host)}</strong>{" "}
           <span className="font-mono">{draft.handle}</span> <span className="text-ink-soft">(id {draft.subjectId})</span>
@@ -273,7 +276,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="space-y-2 rounded-xl border px-3 py-3 text-xs" style={fieldStyle}>
+    <div className="space-y-2 text-xs">
       <label className="block text-ink-soft">Forge</label>
       <select
         value={forgeIdx}
@@ -349,6 +352,7 @@ function ForgeCheckSettings() {
   const s = useQuery({ queryKey: ["link-settings"], queryFn: identityLinkSettings });
   const [provider, setProvider] = useState("gitlab");
   const [url, setUrl] = useState("");
+  const [showForges, setShowForges] = useState(false);
 
   async function save(next: { checkForges: boolean; forges: SelfHostedForge[] }) {
     try {
@@ -370,16 +374,23 @@ function ForgeCheckSettings() {
         Checking tells the forge (not your relay) that this device looked, at most once a day per link. With it off,
         links show "signature valid" and are never marked verified.
       </p>
-      {cur.forges.map((f) => (
-        <div key={`${f.provider}/${f.host}`} className="flex items-center justify-between gap-2">
-          <span className="font-mono">
-            {f.provider} · {f.baseUrl}
-          </span>
-          <button className="hover:opacity-80" style={{ color: "var(--ligus-danger-ink)" }} onClick={() => void save({ ...cur, forges: cur.forges.filter((x) => x !== f) })}>
-            Remove
-          </button>
-        </div>
-      ))}
+      <FormDisclosure label={`Self-managed forges${cur.forges.length ? ` (${cur.forges.length})` : ""}`} open={showForges} onToggle={() => setShowForges((v) => !v)}>
+      <div className="space-y-2">
+      {cur.forges.length > 0 && (
+        <RowList label="Self-managed forges">
+          {cur.forges.map((f) => (
+            <ListRow
+              key={`${f.provider}/${f.host}`}
+              title={<span className="font-mono font-normal">{f.provider}</span>}
+              meta={<span className="font-mono">{f.baseUrl}</span>}
+              actionsLabel={`Actions for ${f.baseUrl}`}
+              actions={[
+                { label: "Remove", danger: true, onSelect: () => void save({ ...cur, forges: cur.forges.filter((x) => x !== f) }) },
+              ]}
+            />
+          ))}
+        </RowList>
+      )}
       <div className="flex gap-2">
         <select value={provider} onChange={(e) => setProvider(e.target.value)} className="rounded-lg border px-2 py-1" style={fieldStyle} aria-label="Self-managed forge kind">
           <option value="gitlab">GitLab</option>
@@ -406,6 +417,8 @@ function ForgeCheckSettings() {
           Add forge
         </Button>
       </div>
+      </div>
+      </FormDisclosure>
     </div>
   );
 }

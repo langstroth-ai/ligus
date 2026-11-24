@@ -49,11 +49,6 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             title={item.title}
             context={where}
             onOpen={() => actions.openChat(item.chatId!)}
-            actions={
-              <Button size="sm" variant="quiet" onClick={() => actions.openChat(item.chatId!)}>
-                Open chat
-              </Button>
-            }
           />,
           <div key={`${item.key}:answer`} role="listitem" aria-label={`Answer in ${where ?? "the chat"}`} className="px-3 pb-1">
             <AgentAsks sessionId={item.chatId!} />
@@ -84,16 +79,10 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             context={where}
             detail={liveTurns.failureOf(item.chatId!) ?? undefined}
             onOpen={() => actions.openChat(item.chatId!)}
-            actions={
-              <>
-                <Button size="sm" onClick={() => actions.openChat(item.chatId!)}>
-                  Open chat
-                </Button>
-                <Button size="sm" variant="quiet" onClick={() => liveTurns.clearFailure(item.chatId!)}>
-                  Dismiss
-                </Button>
-              </>
-            }
+            menu={[
+              { label: "Open chat", onSelect: () => actions.openChat(item.chatId!) },
+              { label: "Dismiss", onSelect: () => liveTurns.clearFailure(item.chatId!) },
+            ]}
           />
         );
       case "phone":
@@ -132,7 +121,7 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             key={item.key}
             state="idle"
             title={item.title}
-            detail="Boxes join as their own member now: on it, run ligus admit request, then approve it under workspace menu, Admit a box."
+            detail="Boxes join as their own member: run ligus admit request on it, then Admit a box."
             onOpen={() => actions.openSettingsTab("account")}
             actions={
               <Button size="sm" onClick={() => actions.openSettingsTab("account")}>
@@ -154,9 +143,9 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
         <h1 className="ligus-title" style={{ color: "var(--ligus-ink)" }}>
           Inbox
         </h1>
-        <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you right now."}</p>
+        <p className="mt-0.5 text-[12.5px] text-ink-soft">{n > 0 ? needsYouLabel(n) : "Nothing needs you."}</p>
         {items.length > 0 && (
-          <div role="list" aria-label="Needs you" className="mt-4 flex flex-col gap-0.5">
+          <div role="list" aria-label="Needs you" className="mt-4 flex flex-col divide-y divide-[color:var(--ligus-line)]">
             {items.flatMap((i) => row(i) ?? [])}
           </div>
         )}

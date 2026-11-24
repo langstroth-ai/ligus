@@ -16,9 +16,12 @@ describe("path zones", () => {
         zones={[{ id: "z1", pattern: "crates/core/", kind: "core", note: "crypto", atMs: 0 }]}
         onAdd={(z) => added.push(z)}
         onRemove={(id) => removed.push(id)}
+        adding
+        onAdding={() => {}}
       />,
     );
-    fireEvent.click(screen.getByText("Remove"));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for zone crates/core/" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
     expect(removed).toEqual(["z1"]);
     fireEvent.change(screen.getByLabelText("Pattern"), { target: { value: "**/*.md" } });
     fireEvent.change(screen.getByLabelText("Zone kind"), { target: { value: "lowBar" } });

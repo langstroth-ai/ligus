@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToolsSection } from "./ToolsSection";
@@ -62,6 +62,15 @@ vi.mock("@/components/Dialog", () => ({
   promptDialog: vi.fn(async () => "  new-token  "),
 }));
 
+/// Rows are one line; their token/connect/check/remove actions live in the
+/// row menu (the ⋯ button named "Actions for <id>").
+function openMenu(id: string) {
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${id}` }));
+}
+function menuItem(name: string) {
+  return screen.getByRole("menuitem", { name });
+}
+
 function renderSection() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -79,9 +88,15 @@ describe("ToolsSection bearer tokens", () => {
     expect(await screen.findByText("· token set")).toBeTruthy();
     expect(screen.getByText("· connected")).toBeTruthy();
     expect(screen.queryByText("· token saved for a different URL")).toBeNull();
-    // Token controls only on HTTP servers.
-    expect(screen.getByRole("button", { name: "Clear token" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Set token" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Clear token" })).toBeNull();
+    // Token controls only on HTTP servers, in the row menu.
+    openMenu("docs");
+    expect(menuItem("Clear token")).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menuitem")).toBeNull());
+    openMenu("fs");
+    expect(screen.queryByRole("menuitem", { name: "Set token" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Clear token" })).toBeNull();
   });
 
   it("flags a token saved for a different URL under the same id", async () => {
@@ -101,13 +116,15 @@ describe("ToolsSection bearer tokens", () => {
     renderSection();
     expect(await screen.findByText("· token saved for a different URL")).toBeTruthy();
     // It can still be cleared or replaced.
-    expect(screen.getByRole("button", { name: "Clear token" })).toBeTruthy();
+    openMenu("docs");
+    expect(menuItem("Clear token")).toBeTruthy();
   });
 
   it("adds an HTTP server with a password-type bearer field", async () => {
     const user = userEvent.setup();
     renderSection();
     await screen.findByText("docs");
+    await user.click(screen.getByRole("button", { name: "Add a server" }));
     await user.click(screen.getByRole("button", { name: /Add HTTP server/ }));
     const token = screen.getByLabelText(/Bearer token \(optional\)/) as HTMLInputElement;
     expect(token.type).toBe("password");
@@ -124,6 +141,7 @@ describe("ToolsSection bearer tokens", () => {
     const user = userEvent.setup();
     renderSection();
     await screen.findByText("docs");
+    await user.click(screen.getByRole("button", { name: "Add a server" }));
     await user.click(screen.getByRole("button", { name: /Add HTTP server/ }));
     await user.type(screen.getByLabelText("Name"), "open");
     await user.type(screen.getByLabelText("URL"), "http://h/mcp");
@@ -137,13 +155,15 @@ describe("ToolsSection bearer tokens", () => {
     const user = userEvent.setup();
     renderSection();
     await screen.findByText("docs");
-    await user.click(screen.getByRole("button", { name: "Set token" }));
+    openMenu("linear");
+    await user.click(menuItem("Set token"));
     await waitFor(() => expect(ipc.setMcpBearerToken).toHaveBeenCalledWith("linear", "  new-token  "));
     expect(promptDialog).toHaveBeenCalledWith(
       expect.stringContaining("linear"),
       expect.objectContaining({ password: true }),
     );
-    await user.click(screen.getByRole("button", { name: "Clear token" }));
+    openMenu("docs");
+    await user.click(menuItem("Clear token"));
     await waitFor(() => expect(ipc.setMcpBearerToken).toHaveBeenCalledWith("docs", ""));
   });
 
@@ -156,7 +176,8 @@ describe("ToolsSection bearer tokens", () => {
     renderSection();
     expect(await screen.findByText("· offers a shell (bash, exec): Owner turns only")).toBeTruthy();
     expect(screen.getByText("· tools not checked yet")).toBeTruthy();
-    await user.click(screen.getAllByRole("button", { name: "Check tools" })[1]);
+    openMenu("new");
+    await user.click(menuItem("Check tools"));
     await waitFor(() => expect(ipc.inspectMcpServer).toHaveBeenCalledWith("new"));
   });
 });

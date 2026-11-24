@@ -37,6 +37,8 @@ export interface PaletteActions {
   takeTour?: () => void;
   /// Admit a box (ligus serve / worker) to the active shared workspace.
   admitBox?: () => void;
+  /// Redeem a relay invite code for this workspace ("Have a code? Join").
+  redeemInvite?: () => void;
   /// Open a chat's Review pane on one of its proposals.
   openProposal?: (sessionId: string, proposalId: string) => void;
   /// Start a message to an agent ("@name " in the composer).
@@ -206,6 +208,15 @@ export function CommandPalette({
     }
     if (actions.admitBox) {
       items.push({ id: "admit-box", label: "Admit a box…", hint: "Workspace", run: run(actions.admitBox) });
+    }
+    if (actions.redeemInvite) {
+      items.push({
+        id: "redeem-invite",
+        label: "Join with an invite code…",
+        hint: "Workspace",
+        keywords: "join code redeem relay invite",
+        run: run(actions.redeemInvite),
+      });
     }
     if (actions.takeTour) {
       items.push({ id: "take-tour", label: "Take the tour", hint: "Help", run: run(actions.takeTour) });

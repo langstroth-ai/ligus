@@ -205,7 +205,7 @@ it from a fresh data dir and admit it again.
 Remote agents** has a relay identity of its own (`ligus-box:<id>`), and the
 desktop that made the bootstrap issued the box's admission with it and
 remembers which admission goes with which identity. Removing that identity
-under **People → Team members (server-enforced)** on that desktop:
+under **People → Relay members** on that desktop:
 
 1. removes it from the relay;
 2. removes the box's service member from the workspace (the member the

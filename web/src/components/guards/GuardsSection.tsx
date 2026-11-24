@@ -12,7 +12,7 @@ import {
   type ThrottleStateDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
-import { Badge, Button, EmptyHint, ErrorState, Field, LoadingState, Section, type Tone } from "@/components/ui";
+import { Badge, Button, EmptyHint, ErrorState, Field, FormDisclosure, LoadingState, Section, type Tone } from "@/components/ui";
 import { IconLock } from "@/lib/icons";
 import { EgressPresetsPanel } from "./EgressPresetsPanel";
 import { CliUserConfigPanel } from "./CliUserConfigPanel";
@@ -54,6 +54,7 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const [reason, setReason] = useState(d.reason);
   const [brood, setBrood] = useState(d.broodPaths.join("\n"));
   const [allowed, setAllowed] = useState(d.allowedMcpServers.join("\n"));
+  const [showSettings, setShowSettings] = useState(false);
   useEffect(() => {
     setReason(d.reason);
     setBrood(d.broodPaths.join("\n"));
@@ -81,7 +82,10 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const fieldStyle = { borderColor: "var(--ligus-line)", background: "var(--ligus-panel)", color: "var(--ligus-ink)" };
   return (
     <>
-      <Section title="Dearth mode">
+      <Section
+        title="Dearth mode"
+        info="A tight entrance for hostile periods: a leaked invite, an untrusted repository or a new worker host."
+      >
         <div
           className="rounded-xl border p-3"
           style={{
@@ -99,18 +103,15 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[13.5px] font-semibold">A tight entrance for hostile periods</span>
+                <span className="text-[13.5px] font-semibold">When it's on</span>
                 <Badge tone={d.enabled ? "warn" : "neutral"}>{d.enabled ? "on" : "off"}</Badge>
               </div>
-              <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
-                For a leaked invite, an untrusted repository or a new worker host.
-                {d.enabled && (
-                  <>
-                    {" "}On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
-                    {d.setBy ? `, by ${d.setBy}` : ""}.
-                  </>
-                )}
-              </p>
+              {d.enabled && (
+                <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
+                  On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
+                  {d.setBy ? `, by ${d.setBy}` : ""}.
+                </p>
+              )}
             </div>
             {d.canManage && (
               <Button
@@ -124,7 +125,7 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
           </div>
           <ul className="mt-2.5 space-y-1 pl-11 text-xs leading-[1.5]">
             <li>New members and devices need approvals from two different Admins.</li>
-            <li>Agents reach only the MCP servers listed below: no web or shell tools; runtimes Ligus can&apos;t confine are refused.</li>
+            <li>Agents reach only the allowed MCP servers (under More options): no web or shell tools; runtimes Ligus can&apos;t confine are refused.</li>
             <li>Changes to protected paths need a human member&apos;s approval before they apply.</li>
             <li>Everyone sees a banner.</li>
           </ul>
@@ -140,6 +141,8 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             placeholder="e.g. invite link leaked"
           />
         </Field>
+        <FormDisclosure label="More options: allowed servers and protected paths" open={showSettings} onToggle={() => setShowSettings((v) => !v)}>
+        <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Allowed MCP servers" hint="One per line.">
             <textarea
@@ -169,13 +172,15 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
             </Button>
           </div>
         )}
+        </div>
+        </FormDisclosure>
       </Section>
 
       {d.pending.length > 0 && (
         <Section title="Waiting for a second approval">
-          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }}>
+          <ul className="ligus-rowlist">
             {d.pending.map((p) => (
-              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={p.subject} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
                 <span className="min-w-0">
                   <span className="font-medium">{p.name}</span>{" "}
                   <span className="text-xs text-ink-soft">
@@ -196,9 +201,9 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
       )}
 
       <Section title="Entrances">
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="entrances">
+        <ul className="ligus-rowlist" data-testid="entrances">
           {d.entrances.map((e) => (
-            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+            <li key={`${e.kind}:${e.name}`} className="ligus-listrow flex items-center justify-between gap-2 px-1 text-[13px]">
               <span>
                 {e.name} <span className="text-xs text-ink-soft">{e.kind}</span>
               </span>
@@ -234,17 +239,13 @@ function HygienePanel() {
   return (
     <Section
       title="Hygiene"
+      info="Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer apply to their chat's branch."
       action={
         <Button disabled={run.isPending} onClick={() => run.mutate()}>
           Sweep now
         </Button>
       }
     >
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the
-        checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer
-        apply to their chat&apos;s branch.
-      </p>
       {r && (
         <p className="text-[13px]" data-testid="hygiene-summary">
           {hygieneSummary(r)}
@@ -279,22 +280,20 @@ function ThrottlePanel() {
   if (q.isPending) return <LoadingState rows={1} label="Loading plan windows" />;
   if (!t) return null;
   return (
-    <Section title="Plan windows">
-      <p className="text-xs leading-[1.5] text-ink-soft">
-        Near a subscription&apos;s usage limit, agents back off in steps instead of all stopping at once: scheduled runs
-        pause from about {t.backgroundPct}%, workflow stages and agent hand-offs from about {t.workflowPct}% (each agent
-        at a slightly different point). Your own requests always run.
-      </p>
+    <Section
+      title="Plan windows"
+      info={`Near a subscription's usage limit, agents back off in steps instead of all stopping at once: scheduled runs pause from about ${t.backgroundPct}%, workflow stages and agent hand-offs from about ${t.workflowPct}% (each agent at a slightly different point). Your own requests always run.`}
+    >
       {t.windows.length === 0 ? (
         <div data-testid="no-windows">
-          <EmptyHint text="No runtime has reported a plan window yet." />
+          <EmptyHint text="No plan windows reported yet" />
         </div>
       ) : (
-        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--ligus-line)" }} data-testid="windows">
+        <ul className="ligus-rowlist" data-testid="windows">
           {t.windows.map((w) => {
             const tone = TONE[windowTone(w.effectivePct, t)];
             return (
-              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={w.runtime} className="ligus-listrow px-1 text-[13px]">
                 <div className="flex items-center justify-between gap-2">
                   <span>
                     <span className="font-medium">{w.runtime}</span>

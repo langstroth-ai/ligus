@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Field, Section, SelectField, Switch } from "@/components/ui";
+import { useState } from "react";
+import { FormDisclosure, InfoTip, Section, SelectField, Switch } from "@/components/ui";
+import { InfoField } from "@/components/settings/shared";
 import { toast, errMsg } from "@/components/Toast";
 import { getFlowSettings, setFlowSettings, type FlowSettings, type RouteMode, type StopUpstream } from "@/lib/flow";
 
@@ -14,59 +16,50 @@ export function FlowSection() {
     onSuccess: (s) => qc.setQueryData(["flow-settings"], s),
     onError: (e) => toast.error(`Couldn't save flow settings: ${errMsg(e)}`),
   });
+  // Tuning knobs stay folded under "More options" until asked for.
+  const [moreRouting, setMoreRouting] = useState(false);
+  const [moreQueue, setMoreQueue] = useState(false);
   const s = q.data;
   if (!s) return null;
   const set = (patch: Partial<FlowSettings>) => save.mutate({ ...s, ...patch });
   return (
     <>
       <Section title="Routing">
-        <Field
+        <InfoField
           label="Route un-addressed messages"
-          hint="Shadow logs what the router would pick while the primary still answers (see Flow → Routing). Live lets the pick answer. An @mention always wins."
+          info="Shadow logs what the router would pick while the primary still answers (see Flow → Routing). Live lets the pick answer. An @mention always wins."
         >
           <SelectField value={s.routeMode} onChange={(v) => set({ routeMode: v as RouteMode })} ariaLabel="Routing mode">
             <option value="off">Off</option>
             <option value="shadow">Shadow (log only)</option>
             <option value="live">Live</option>
           </SelectField>
-        </Field>
-        <Field label="Outcome half-life (days)" hint="How fast old outcomes stop counting in an agent's score.">
+        </InfoField>
+        <FormDisclosure label="More options" open={moreRouting} onToggle={() => setMoreRouting((v) => !v)}>
+        <div className="flex flex-col gap-3">
+        <InfoField label="Outcome half-life (days)" info="How fast old outcomes stop counting in an agent's score.">
           <NumberInput value={s.halfLifeDays} min={1} max={180} onChange={(v) => set({ halfLifeDays: v })} label="Outcome half-life" />
-        </Field>
-        <Field
+        </InfoField>
+        <InfoField
           label="Cool-down after a failure (minutes)"
-          hint="A rate limit, an exhausted plan window, a provider outage or an unreachable server takes the route out of rotation at once; other errors after a repeat. 0 = never."
+          info="A rate limit, an exhausted plan window, a provider outage or an unreachable server takes the route out of rotation at once; other errors after a repeat. 0 = never."
         >
           <NumberInput value={s.cooldownMinutes} min={0} max={1440} onChange={(v) => set({ cooldownMinutes: v })} label="Cool-down minutes" />
-        </Field>
-        <Field
+        </InfoField>
+        <InfoField
           label="Exploration share (%)"
-          hint="Between these bounds, the router sends some decisions to an agent other than the top scorer so weaker agents can recover. Higher when the best known agent is weak or slipping."
+          info="Between these bounds, the router sends some decisions to an agent other than the top scorer so weaker agents can recover. Higher when the best known agent is weak or slipping."
         >
           <div className="flex items-center gap-2">
             <NumberInput value={Math.round(s.epsilonMin * 100)} min={0} max={50} onChange={(v) => set({ epsilonMin: v / 100, epsilonMax: Math.max(s.epsilonMax, v / 100) })} label="Minimum exploration %" />
             <span className="text-xs text-ink-soft">to</span>
             <NumberInput value={Math.round(s.epsilonMax * 100)} min={0} max={50} onChange={(v) => set({ epsilonMax: v / 100, epsilonMin: Math.min(s.epsilonMin, v / 100) })} label="Maximum exploration %" />
           </div>
-        </Field>
+        </InfoField>
+        </div>
+        </FormDisclosure>
       </Section>
       <Section title="Review queue">
-        <Field label="Queue limit" hint="Open proposals waiting for review above which the gate counts as full.">
-          <NumberInput value={s.queueLimit} min={1} max={100} onChange={(v) => set({ queueLimit: v })} label="Queue limit" />
-        </Field>
-        <Field label="Long wait (minutes)" hint="A proposal waiting longer than this counts as a long wait.">
-          <NumberInput value={s.longWaitMinutes} min={5} max={10080} onChange={(v) => set({ longWaitMinutes: v })} label="Long wait minutes" />
-        </Field>
-        <Field
-          label="Stop-upstream note"
-          hint="While the queue is full, agents are told to finish or refine open proposals before opening new ones. A/B applies it in half the chats so you can compare."
-        >
-          <SelectField value={s.stopUpstream} onChange={(v) => set({ stopUpstream: v as StopUpstream })} ariaLabel="Stop-upstream note">
-            <option value="on">On</option>
-            <option value="ab">A/B (half the chats)</option>
-            <option value="off">Off</option>
-          </SelectField>
-        </Field>
         <Row label="Ask more reviewers" hint="When the queue backs up, notify members who could approve and haven't voted (at most hourly).">
           <Switch on={s.recruitApprovers} onChange={(v) => set({ recruitApprovers: v })} label="Ask more reviewers" />
         </Row>
@@ -76,29 +69,43 @@ export function FlowSection() {
         >
           <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
         </Row>
+        <FormDisclosure label="More options" open={moreQueue} onToggle={() => setMoreQueue((v) => !v)}>
+        <div className="flex flex-col gap-3">
+        <InfoField label="Queue limit" info="Open proposals waiting for review above which the gate counts as full.">
+          <NumberInput value={s.queueLimit} min={1} max={100} onChange={(v) => set({ queueLimit: v })} label="Queue limit" />
+        </InfoField>
+        <InfoField label="Long wait (minutes)" info="A proposal waiting longer than this counts as a long wait.">
+          <NumberInput value={s.longWaitMinutes} min={5} max={10080} onChange={(v) => set({ longWaitMinutes: v })} label="Long wait minutes" />
+        </InfoField>
+        <InfoField
+          label="Stop-upstream note"
+          info="While the queue is full, agents are told to finish or refine open proposals before opening new ones. A/B applies it in half the chats so you can compare."
+        >
+          <SelectField value={s.stopUpstream} onChange={(v) => set({ stopUpstream: v as StopUpstream })} ariaLabel="Stop-upstream note">
+            <option value="on">On</option>
+            <option value="ab">A/B (half the chats)</option>
+            <option value="off">Off</option>
+          </SelectField>
+        </InfoField>
+        </div>
+        </FormDisclosure>
       </Section>
-      <Section title="Task board">
+      <Section title="Agents">
         <Row
           label="Agents pick up work on their own"
           hint="When an open item's stimulus crosses an agent's threshold, hand it over without asking (one at a time, only for agents that run on this device). Off: the board suggests and you hand items over."
         >
           <Switch on={s.boardAutoPickup} onChange={(v) => set({ boardAutoPickup: v })} label="Task board auto pickup" />
         </Row>
-      </Section>
-      <Section title="Workspace marks">
         <Row label="Marks in agent context" hint="Show active claims, locks and review markers to every agent turn, and teach agents to leave their own.">
           <Switch on={s.marksInContext} onChange={(v) => set({ marksInContext: v })} label="Marks in agent context" />
         </Row>
-      </Section>
-      <Section title="Worktrees">
         <Row
           label="Reuse turn worktrees"
           hint="Keep a finished turn's isolated worktree, with its build output and dependency caches, for the chat's next turn (up to two per chat). Tracked changes and stray files are cleared first."
         >
           <Switch on={s.reuseWorktrees} onChange={(v) => set({ reuseWorktrees: v })} label="Reuse turn worktrees" />
         </Row>
-      </Section>
-      <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
           <Switch on={s.handoffCards} onChange={(v) => set({ handoffCards: v })} label="Hand-off cards" />
         </Row>
@@ -107,14 +114,30 @@ export function FlowSection() {
   );
 }
 
-export function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+/// A settings row: label and control on one line. `hint` (the explanation)
+/// sits behind an InfoTip beside the label; `note` is the rare short line that
+/// must stay visible (a security or privacy consequence).
+export function Row({
+  label,
+  hint,
+  note,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  note?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="flex items-start justify-between gap-3">
+    <div className="ligus-listrow flex items-center justify-between gap-3 border-t px-1 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }}>
       <div>
-        <div className="text-sm">{label}</div>
-        {hint && (
+        <div className="flex items-center gap-1.5 text-[13px]">
+          <span>{label}</span>
+          {hint && <InfoTip label={label} text={hint} />}
+        </div>
+        {note && (
           <div className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
-            {hint}
+            {note}
           </div>
         )}
       </div>

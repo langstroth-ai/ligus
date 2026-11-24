@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { useRowMenu } from "@/components/RowMenu";
 import { useQuery } from "@tanstack/react-query";
+import { Sheet } from "@/components/kit/Sheet";
 import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
-import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { MARK_LABEL, addMark, clearMark, listMarks, minutesLeft, type MarkRow } from "@/lib/flow";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -9,7 +10,7 @@ import { onWorkspaceSynced } from "@/lib/ipc";
 /// Workspace marks: claims, under-construction locks and needs-review
 /// markers that agents and people leave on files. Agents see the active ones
 /// in their context and leave their own with a [[mark: …]] directive.
-export function MarksSection() {
+export function MarksSection({ adding, onAdding }: { adding?: boolean; onAdding?: (v: boolean) => void } = {}) {
   const q = useQuery({ queryKey: ["flow-marks"], queryFn: listMarks });
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -22,6 +23,8 @@ export function MarksSection() {
   return (
     <MarksView
       marks={q.data ?? []}
+      adding={adding}
+      onAdding={onAdding}
       onAdd={(kind, path, note) =>
         addMark(kind, path, note)
           .then(done)
@@ -40,7 +43,12 @@ export function MarksView({
   marks,
   onAdd,
   onClear,
+  adding: addingProp,
+  onAdding,
 }: {
+  /// The "Leave a mark" sheet, opened from the pane header.
+  adding?: boolean;
+  onAdding?: (v: boolean) => void;
   marks: MarkRow[];
   onAdd: (kind: "claim" | "lock" | "review", path: string, note: string) => void;
   onClear: (id: string) => void;
@@ -48,37 +56,35 @@ export function MarksView({
   const [kind, setKind] = useState<"claim" | "lock" | "review">("review");
   const [path, setPath] = useState("");
   const [note, setNote] = useState("");
+  const [addingLocal, setAddingLocal] = useState(false);
+  const adding = addingProp ?? addingLocal;
+  const setAdding = onAdding ?? setAddingLocal;
   return (
     <div className="space-y-4">
-      <Muted>Agents read active marks on their own schedule, so they coordinate without mentioning each other. Claims last 4 h and locks 1 h unless cleared.</Muted>
-      <Section title="Active">
+      <Section
+        title="Active"
+        info="Agents read active marks on their own schedule, so they coordinate without mentioning each other. Claims last 4 h and locks 1 h unless cleared."
+      >
         {marks.length === 0 ? (
-          <EmptyHint text="No marks in this workspace." />
+          <EmptyHint
+            text="No marks in this workspace."
+            action={
+              <Button size="sm" onClick={() => setAdding(true)}>
+                Leave a mark
+              </Button>
+            }
+          />
         ) : (
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {marks.map((m) => (
-              <li key={m.id} className="flex items-start justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
-                <div className="min-w-0">
-                  <div>
-                    <span className="font-semibold">{MARK_LABEL[m.kind]}</span> · <code className="break-all">{m.path || m.taskId}</code>
-                    {m.lines && ` :${m.lines[0]}-${m.lines[1]}`}
-                  </div>
-                  <div style={{ color: "var(--ligus-ink-soft)" }}>
-                    by {m.by}
-                    {m.chatTitle && ` in “${m.chatTitle}”`}
-                    {m.expiresMs != null && ` · ${minutesLeft(m.expiresMs)} min left`}
-                    {m.note && ` — ${m.note}`}
-                  </div>
-                </div>
-                <Button size="sm" onClick={() => onClear(m.id)}>
-                  Clear
-                </Button>
-              </li>
+              <MarkItem key={m.id} m={m} onClear={onClear} />
             ))}
           </ul>
         )}
       </Section>
-      <Section title="Leave a mark">
+      {adding && (
+      <Sheet title="Leave a mark" side="center" width={420} onClose={() => setAdding(false)}>
+      <div className="space-y-2.5">
         <SelectField value={kind} onChange={(v) => setKind(v as typeof kind)} ariaLabel="Mark kind">
           <option value="review">Needs review</option>
           <option value="claim">Claim</option>
@@ -107,11 +113,38 @@ export function MarksView({
             onAdd(kind, path.trim(), note.trim());
             setPath("");
             setNote("");
+            setAdding(false);
           }}
         >
           Leave mark
         </Button>
-      </Section>
+      </div>
+      </Sheet>
+      )}
     </div>
+  );
+}
+
+/// One mark: what and where on one line, who and how long on a muted line;
+/// Clear is in the row's action menu.
+function MarkItem({ m, onClear }: { m: MarkRow; onClear: (id: string) => void }) {
+  const menu = useRowMenu(`Actions for mark ${m.path || m.taskId}`, [{ label: "Clear", onSelect: () => onClear(m.id) }]);
+  return (
+    <li className="ligus-listrow flex items-start justify-between gap-2 px-1" {...menu.rowProps}>
+      <div className="min-w-0">
+        <div className="truncate">
+          <span className="font-semibold">{MARK_LABEL[m.kind]}</span> · <code>{m.path || m.taskId}</code>
+          {m.lines && ` :${m.lines[0]}-${m.lines[1]}`}
+        </div>
+        <div className="truncate" style={{ color: "var(--ligus-ink-soft)" }} data-tip={m.note || undefined}>
+          by {m.by}
+          {m.chatTitle && ` in “${m.chatTitle}”`}
+          {m.expiresMs != null && ` · ${minutesLeft(m.expiresMs)} min left`}
+          {m.note && ` — ${m.note}`}
+        </div>
+      </div>
+      {menu.button}
+      {menu.menu}
+    </li>
   );
 }

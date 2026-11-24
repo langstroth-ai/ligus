@@ -69,17 +69,14 @@ export function QueueView({ report: r }: { report: QueueReport }) {
           </tbody>
         </table>
       </Section>
-      <Section title="Responses">
-        <Muted>
-          Stop-upstream note: {r.stopUpstream === "ab" ? "on in half the chats (A/B)" : r.stopUpstream}. Asking reviewers and
-          offering stages to an idle host are opt-in (Settings → Flow).
-        </Muted>
+      <Section title="Responses" info="Asking reviewers and offering stages to an idle host are opt-in (Settings → Flow).">
+        <Muted>Stop-upstream note: {r.stopUpstream === "ab" ? "on in half the chats (A/B)" : r.stopUpstream}.</Muted>
         {r.recruits.length === 0 ? (
           <EmptyHint text="No backpressure responses this week." />
         ) : (
-          <ul className="space-y-1 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {r.recruits.map((x) => (
-              <li key={x.id}>
+              <li key={x.id} className="ligus-listrow px-1">
                 {new Date(x.atMs).toLocaleString()} · {RECRUIT_LABEL[x.action] ?? x.action}
                 {x.queueLen > 0 && ` (${x.queueLen} waiting)`}
               </li>

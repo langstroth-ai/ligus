@@ -24,6 +24,7 @@ describe("home beacon", () => {
   it("publishes", () => {
     const calls: unknown[] = [];
     render(<HomeView report={{ ...report, beacon: null, mismatches: [] }} onPublish={(n, c) => calls.push([n, c])} />);
+    fireEvent.click(screen.getByRole("button", { name: "Publish as home" }));
     fireEvent.click(screen.getByLabelText("This device coordinates"));
     fireEvent.click(screen.getByText("Publish home"));
     expect(calls).toEqual([["", true]]);

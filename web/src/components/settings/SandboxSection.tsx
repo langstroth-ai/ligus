@@ -9,7 +9,7 @@ import {
   type EffectivePolicy,
   type SandboxGrants,
 } from "@/lib/ipc";
-import { Button, Field, Section, Switch, fieldStyle } from "@/components/ui";
+import { InfoTip, Button, Field, Section, Switch, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { SELECT_CLASS } from "@/components/settings/shared";
 
@@ -51,7 +51,7 @@ const ACCESS_LABEL: Record<string, string> = { denied: "Denied", read: "Read", "
 
 function PolicyTable({ p }: { p: EffectivePolicy }) {
   return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="border-t px-1 pt-2" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <span className="text-[12.5px] font-semibold">{p.runtime}</span>
         <span className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
@@ -199,11 +199,11 @@ export function SandboxSection() {
 
   return (
     <>
-      <Section title="Sandbox">
-        <p className="text-[12.5px]">
-          Agents can't read or write your home folder except the paths listed below: each turn gets its own worktree,
-          scratch dir and home, and your keys, credentials and Ligus's data stay out of reach whatever a grant says.
-        </p>
+      <Section
+        title="Sandbox"
+        info="Each turn gets its own worktree, scratch dir and home, and your keys, credentials and Ligus's data stay out of reach whatever a grant says."
+      >
+        <p className="text-[12.5px]">Agents can't read or write your home folder except the paths listed below.</p>
         <Field label="Show the policy for">
           <select
             aria-label="Show the policy for"
@@ -232,17 +232,18 @@ export function SandboxSection() {
 
       <Section
         title="Signed grants"
+        info="Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns."
         action={
           <Button variant="primary" disabled={!d.canEditPaths || !dirty || save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? "Confirm with your passkey…" : "Save"}
           </Button>
         }
       >
-        <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
-          Grants are signed into the workspace and reach every device that runs these agents and applies them. Changing
-          paths needs an Admin and a passkey; only the workspace Owner grants an agent the shell for other members' turns.
-          {!d.canEditPaths && " You can view them; an Admin changes them."}
-        </p>
+        {!d.canEditPaths && (
+          <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
+            You can view them; an Admin changes them.
+          </p>
+        )}
         {d.changed && (
           <div
             role="status"
@@ -253,9 +254,15 @@ export function SandboxSection() {
             <Button onClick={() => ack.mutate()}>Got it</Button>
           </div>
         )}
-        <div className="space-y-1 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+        <div className="space-y-1 border-y px-1 py-2" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[12.5px] font-semibold">Apply workspace sandbox grants on this device</span>
+            <span className="flex items-center gap-1.5">
+              <span className="text-[12.5px] font-semibold">Apply workspace sandbox grants on this device</span>
+              <InfoTip
+                label="Apply workspace sandbox grants"
+                text="By default the workspace Owner's own devices apply them and every other member's device doesn't. The policy above shows what applies here."
+              />
+            </span>
             <Switch
               on={d.appliesHere}
               onChange={(v) => here.mutate(v === d.appliesByDefault ? null : v)}
@@ -264,15 +271,13 @@ export function SandboxSection() {
             />
           </div>
           <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
-            {d.appliesWhy}. By default the workspace Owner's own devices apply them and every other member's device
-            doesn't: a grant opens paths (and an agent's shell) on your computer, so it's your choice. The policy above
-            shows what applies here.
+            {d.appliesWhy}. A grant opens paths (and an agent's shell) on your computer, so it's your choice.
           </p>
         </div>
         <PathsField label="Every agent: read-only" value={wsRo} onChange={setWsRo} disabled={!d.canEditPaths} />
         <PathsField label="Every agent: read and write" value={wsRw} onChange={setWsRw} disabled={!d.canEditPaths} />
         {agent ? (
-          <div className="space-y-2.5 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+          <div className="space-y-2.5 border-l pl-3" style={{ borderColor: "var(--ligus-line)" }}>
             <span className="text-[12.5px] font-semibold">@{agent.name} only</span>
             <PathsField label={`@${agent.name}: read-only`} value={cur.ro} onChange={(v) => setCur({ ro: v })} disabled={!d.canEditPaths} />
             <PathsField label={`@${agent.name}: read and write`} value={cur.rw} onChange={(v) => setCur({ rw: v })} disabled={!d.canEditPaths} />
@@ -291,7 +296,7 @@ export function SandboxSection() {
           </div>
         ) : (
           <p className="text-[12px]" style={{ color: "var(--ligus-ink-soft)" }}>
-            Pick an agent above to give it paths of its own or the shell.
+            Pick an agent above for its own paths.
           </p>
         )}
       </Section>

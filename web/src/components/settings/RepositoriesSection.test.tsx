@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RepositoriesSection, RepoSuggestionNotice, coverageLabel } from "./RepositoriesSection";
@@ -69,9 +69,11 @@ describe("RepositoriesSection", () => {
     expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("github.com/old-org/wefit", true, "r1");
     await userEvent.click(screen.getByLabelText("Accept ssh.git.example.com here"));
     expect(ipc.acceptRepoAlias).toHaveBeenCalledWith("ssh.git.example.com", true, "git.example.com");
-    await userEvent.type(screen.getByLabelText("Alias host"), "ssh2.git.example.com");
-    await userEvent.type(screen.getByLabelText("Repository host"), "git.example.com");
-    await userEvent.click(screen.getByText("Add alias"));
+    await userEvent.click(screen.getByRole("button", { name: "Add alias" }));
+    const sheet = within(screen.getByRole("dialog"));
+    await userEvent.type(sheet.getByLabelText("Alias host"), "ssh2.git.example.com");
+    await userEvent.type(sheet.getByLabelText("Repository host"), "git.example.com");
+    await userEvent.click(sheet.getByRole("button", { name: "Add alias" }));
     expect(ipc.setHostAlias).toHaveBeenCalledWith("ssh2.git.example.com", "git.example.com");
   });
 
@@ -95,9 +97,20 @@ describe("RepositoriesSection", () => {
   it("lets an admin add by URL; a member is told to ask", async () => {
     vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
     wrap(<RepositoriesSection />);
-    await userEvent.type(await screen.findByLabelText("Repository URL"), "git@github.com:a/b.git");
-    await userEvent.click(screen.getByText("Add repository"));
+    await userEvent.click(await screen.findByRole("button", { name: "Add a repository" }));
+    const sheet = within(screen.getByRole("dialog"));
+    await userEvent.type(sheet.getByLabelText("Repository URL"), "git@github.com:a/b.git");
+    await userEvent.click(sheet.getByRole("button", { name: "Add repository" }));
     expect(ipc.addWorkspaceRepo).toHaveBeenCalledWith("git@github.com:a/b.git");
+  });
+
+  it("keeps an admin's rename and remove in the repository's row menu", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data());
+    wrap(<RepositoriesSection />);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for WeFit" }));
+    expect(screen.getByRole("menuitem", { name: "Aliases…" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeTruthy();
   });
 
   it("hides admin actions from members", async () => {

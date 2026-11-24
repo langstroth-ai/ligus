@@ -14,6 +14,7 @@ describe("roster", () => {
     render(<RosterView report={report} onChange={(row, patch) => changes.push([row.name, patch])} />);
     expect(screen.getByText(/Every agent runs on the same runtime/)).toBeInTheDocument();
     expect(screen.getByText(/Probation \(low-risk work\) · new · 1\/1 approved/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Probation \(low-risk work\) · new · 1\/1 approved/));
     fireEvent.change(screen.getByLabelText("Career for newbie"), { target: { value: "proposer" } });
     fireEvent.click(screen.getByLabelText("Task board for newbie"));
     expect(changes).toEqual([

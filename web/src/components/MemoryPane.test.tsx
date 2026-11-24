@@ -59,7 +59,8 @@ describe("memory pane", () => {
   it("the remove confirm quotes the title cleaned", async () => {
     const evil = { ...entry, conflicts: [], current: { ...entry.current, title: "Notes\u202Etxt.exe\u200B\u2028x" } };
     setup(view({ entries: [evil] }));
-    fireEvent.click(screen.getByText("Remove"));
+    fireEvent.click(screen.getByRole("button", { name: /^Actions for note/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove…" }));
     const msg = String(vi.mocked(dialog.confirmDialog).mock.calls.at(-1)?.[0]);
     expect(msg).toContain("“Notestxt.exe x”");
     expect(msg).not.toMatch(/[\u202E\u200B\u2028]/);
@@ -68,6 +69,9 @@ describe("memory pane", () => {
   it("shows an entry with provenance and its conflict, and resolves it", () => {
     const { saved } = setup(view());
     expect(screen.getByText("Relay ports")).toBeInTheDocument();
+    // The conflict is visible with the row closed; provenance opens with it.
+    expect(screen.getByText("1 conflict")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Relay ports"));
     expect(screen.getByText(/Ana, proposed by Ligus/)).toBeInTheDocument();
     expect(screen.getByText("1 conflict")).toBeInTheDocument();
     expect(screen.getByText("It's 8080.")).toBeInTheDocument();
@@ -128,7 +132,8 @@ describe("memory pane", () => {
 
   it("lets a member suggest an edit to someone else's note", () => {
     const { proposed, saved } = setup(view({ me: "bo" }));
-    fireEvent.click(screen.getByText("Suggest an edit"));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for note Relay ports" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Suggest an edit" }));
     fireEvent.change(screen.getByLabelText("Note"), { target: { value: "8443, or 443 behind the proxy" } });
     fireEvent.click(screen.getByText("Propose"));
     expect(saved).toEqual([]);
@@ -142,7 +147,8 @@ describe("memory pane", () => {
 
   it("hides edit and remove from someone else's entry unless moderating", () => {
     setup(view({ me: "bo" }));
-    expect(screen.queryByText("Edit")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for note Relay ports" }));
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
     expect(screen.queryByText("Use theirs")).toBeNull();
   });
 

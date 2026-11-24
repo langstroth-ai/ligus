@@ -25,10 +25,11 @@ import {
   IconChevronDown,
   IconChevronRight,
 } from "@/lib/icons";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, FormDisclosure, ListRow, RowList, Section, fieldStyle, InfoTip } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
+import { Sheet } from "@/components/kit/Sheet";
 import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
 
 /// Team sync: the relay connection (E2EE), organization sign-in, and direct
@@ -146,7 +147,10 @@ function SyncSection() {
   const inputClass = "w-full rounded-xl border px-3 py-2 font-mono text-sm";
 
   return (
-    <Section title="Team sync">
+    <Section
+      title="Team sync"
+      info="Teams live in the left rail: hit ＋ to create or join one. Ligus generates the room, encryption key, and a shareable code for you. The relay just brokers sync, short pairing codes, and member revocation; messages stay end-to-end encrypted and the relay only ever sees ciphertext."
+    >
       {/* Live status — driven by real connection health (connectionState), not
           just "a relay URL is set", so a dead relay / bad key is visible here. */}
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
@@ -235,26 +239,23 @@ function SyncSection() {
         )}
       </div>
 
-      {/* How teams work now */}
-      <p className="text-xs text-ink-soft">
-        Teams live in the left rail — hit <strong>＋</strong> to create or join one. Ligus
-        generates the room, encryption key, and a shareable code for you. The relay below just
-        brokers sync, short pairing codes, and member revocation; messages stay end-to-end
-        encrypted and the relay only ever sees ciphertext.
-      </p>
-
-      <label className="block text-sm text-ink-soft">Relay URL</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" htmlFor="team-sync-relay-url">
+          Relay URL
+        </label>
+        <InfoTip label="Relay URL" text="Use the same relay URL on every device that should sync." />
+      </div>
       <input
         value={relayUrl}
+        id="team-sync-relay-url"
         onChange={(e) => setRelayUrl(e.target.value)}
         onBlur={() => void commit()}
         placeholder="https://relay.example  ·  blank = local only"
         className={inputClass}
         style={fieldStyle}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="flex-1 text-xs text-ink-soft">Use the same relay URL on every device that should sync.</p>
-        {relayUrl.trim() !== COMMUNITY_RELAY_URL && (
+      {relayUrl.trim() !== COMMUNITY_RELAY_URL && (
+        <div>
           <Button
             size="sm"
             onClick={() => {
@@ -264,8 +265,8 @@ function SyncSection() {
           >
             Use the community relay
           </Button>
-        )}
-      </div>
+        </div>
+      )}
       {relayUrl.trim() === COMMUNITY_RELAY_URL && (
         <p className="text-xs text-ink-soft">
           The community relay is free and best-effort: no uptime guarantee, and it may be reset with
@@ -273,10 +274,19 @@ function SyncSection() {
         </p>
       )}
 
-      <label className="block text-sm text-ink-soft">Relay access token</label>
+      <div className="flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" htmlFor="team-sync-relay-token">
+          Relay access token
+        </label>
+        <InfoTip
+          label="Relay access token"
+          text="Needed only for a relay that gates access with tokens. Leave blank for an open relay. Paste only the token value: if yours looks like name:abc123, drop the name: prefix."
+        />
+      </div>
       <div className="flex items-center gap-2">
         <input
           type="password"
+          id="team-sync-relay-token"
           value={relayAccessToken}
           onChange={(e) => setRelayAccessToken(e.target.value)}
           onBlur={() => void commit()}
@@ -294,11 +304,6 @@ function SyncSection() {
           </button>
         )}
       </div>
-      <p className="text-xs text-ink-soft">
-        Needed only for a relay that gates access with tokens. Leave blank for an open relay.
-        Paste only the token value — if yours looks like <code>name:abc123</code>, drop the
-        <code> name:</code> prefix.
-      </p>
 
       {/* Advanced: manual room + key (the rail normally fills these in) */}
       <button
@@ -386,6 +391,8 @@ function PeersSection() {
   const myCode = useQuery({ queryKey: ["p2p-code"], queryFn: p2pMyCode, retry: false });
   const contacts = useQuery({ queryKey: ["p2p-contacts"], queryFn: p2pListContacts });
   const [code, setCode] = useState("");
+  const [showAddPeer, setShowAddPeer] = useState(false);
+  const [showRedeem, setShowRedeem] = useState(false);
   const [label, setLabel] = useState("");
   const [shortCode, setShortCode] = useState<{ code: string; expiresIn: number } | null>(null);
   const [redeemInput, setRedeemInput] = useState("");
@@ -399,6 +406,7 @@ function PeersSection() {
     mutationFn: () => redeemShortCode(redeemInput.trim()),
     onSuccess: (r) => {
       setRedeemInput("");
+      setShowAddPeer(false);
       toast.success(r.kind === "workspace" ? `Joined "${r.label}".` : "Peer added.");
       qc.invalidateQueries({ queryKey: ["p2p-contacts"] });
       qc.invalidateQueries({ queryKey: ["workspaces"] });
@@ -411,6 +419,7 @@ function PeersSection() {
     onSuccess: () => {
       setCode("");
       setLabel("");
+      setShowAddPeer(false);
       qc.invalidateQueries({ queryKey: ["p2p-contacts"] });
     },
     onError: (e) => toast.error(`Couldn't add peer: ${errMsg(e)}`),
@@ -421,43 +430,44 @@ function PeersSection() {
     onError: (e) => toast.error(`Couldn't remove peer: ${errMsg(e)}`),
   });
 
+  const copyMyCode = () => {
+    if (myCode.data) {
+      void navigator.clipboard.writeText(myCode.data);
+      toast.success("Peer code copied.");
+    }
+  };
   return (
-    <Section title="Direct peers (P2P)">
-      <p className="text-xs text-ink-soft">
-        Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync
-        directly. Falls back to a relay when a direct connection can't be made.
-      </p>
-      <label className="block text-sm text-ink-soft">Your peer code</label>
-      <div className="flex gap-2">
-        <input
-          readOnly
-          value={myCode.data ?? (myCode.isError ? "P2P unavailable in this build" : "…")}
-          className="flex-1 rounded-xl border px-3 py-2 font-mono text-xs"
-          style={fieldStyle}
-          onFocus={(e) => e.currentTarget.select()}
+    <Section
+      title="Direct peers (P2P)"
+      info="Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync directly. Falls back to a relay when a direct connection can't be made."
+      action={
+        <Button size="sm" onClick={() => setShowAddPeer(true)}>
+          Add a peer
+        </Button>
+      }
+    >
+      <RowList label="Your peer code">
+        <ListRow
+          title="Your peer code"
+          meta={<span className="font-mono">{myCode.data ?? (myCode.isError ? "P2P unavailable in this build" : "…")}</span>}
+          tip={myCode.data ? "Click to copy" : undefined}
+          onClick={myCode.data ? copyMyCode : undefined}
+          actionsLabel="Actions for your peer code"
+          actions={
+            myCode.data
+              ? [
+                  { label: "Copy peer code", onSelect: copyMyCode },
+                  {
+                    label: "Make a short code",
+                    title: "Create a short, speakable code you can read out over a call",
+                    disabled: share.isPending,
+                    onSelect: () => share.mutate(),
+                  },
+                ]
+              : undefined
+          }
         />
-        <Button
-          variant="primary"
-          size="md"
-          disabled={!myCode.data}
-          onClick={() => {
-            if (myCode.data) {
-              void navigator.clipboard.writeText(myCode.data);
-              toast.success("Peer code copied.");
-            }
-          }}
-        >
-          Copy
-        </Button>
-        <Button
-          size="md"
-          disabled={!myCode.data || share.isPending}
-          onClick={() => share.mutate()}
-          title="Create a short, speakable code you can read out over a call"
-        >
-          {share.isPending ? "…" : "Short code"}
-        </Button>
-      </div>
+      </RowList>
 
       {shortCode && (
         <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--ligus-accent-cool)" }}>
@@ -481,64 +491,83 @@ function PeersSection() {
         </div>
       )}
 
-      <div className="flex gap-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <input
-          value={redeemInput}
-          onChange={(e) => setRedeemInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && redeemInput.trim() && redeem.mutate()}
-          placeholder="Got a short code? e.g. K7P2QX"
-          className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm uppercase"
-          style={fieldStyle}
-        />
-        <Button
-          variant="primary"
-          size="md"
-          className="shrink-0"
-          disabled={!redeemInput.trim() || redeem.isPending}
-          onClick={() => redeem.mutate()}
+      {(contacts.data ?? []).length === 0 ? (
+        <p className="px-1 text-sm text-ink-soft">No peers yet.</p>
+      ) : (
+        <RowList label="Peers">
+          {(contacts.data ?? []).map((c) => (
+            <ListRow
+              key={c.peerId}
+              title={c.label || "Unnamed peer"}
+              meta={<span className="font-mono">{c.peerId}</span>}
+              actions={[
+                {
+                  label: "Remove",
+                  danger: true,
+                  onSelect: () => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId)),
+                },
+              ]}
+            />
+          ))}
+        </RowList>
+      )}
+
+      {showAddPeer && (
+        <Sheet
+          title="Add a peer"
+          side="center"
+          width={460}
+          onClose={() => setShowAddPeer(false)}
+          footer={
+            <>
+              <Button onClick={() => setShowAddPeer(false)}>Cancel</Button>
+              <Button variant="primary" size="md" disabled={!code.trim() || add.isPending} onClick={() => add.mutate()}>
+                Add peer
+              </Button>
+            </>
+          }
         >
-          {redeem.isPending ? "…" : "Use code"}
-        </Button>
-      </div>
-
-      <div className="space-y-2">
-        {(contacts.data ?? []).map((c) => (
-          <div key={c.peerId} className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={fieldStyle}>
-            <div className="min-w-0">
-              <div className="font-medium">{c.label || "Unnamed peer"}</div>
-              <div className="truncate font-mono text-xs text-ink-soft">{c.peerId}</div>
-            </div>
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId))}
-            >
-              Remove
-            </button>
+          <div className="space-y-2">
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="Friend's full peer code (ligus_…)"
+              aria-label="Peer code"
+              className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
+              style={fieldStyle}
+            />
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Label (e.g. Sam's laptop)"
+              aria-label="Peer label"
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              style={fieldStyle}
+            />
+            <FormDisclosure label="Have a short code instead?" open={showRedeem} onToggle={() => setShowRedeem((v) => !v)}>
+              <div className="flex gap-2">
+                <input
+                  value={redeemInput}
+                  onChange={(e) => setRedeemInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && redeemInput.trim() && redeem.mutate()}
+                  placeholder="e.g. K7P2QX"
+                  aria-label="Short code"
+                  className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm uppercase"
+                  style={fieldStyle}
+                />
+                <Button
+                  size="md"
+                  className="shrink-0"
+                  disabled={!redeemInput.trim() || redeem.isPending}
+                  onClick={() => redeem.mutate()}
+                >
+                  {redeem.isPending ? "…" : "Use code"}
+                </Button>
+              </div>
+            </FormDisclosure>
           </div>
-        ))}
-        {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers added yet.</p>}
-      </div>
-
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Friend's full peer code (ligus_…)"
-          className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
-          style={fieldStyle}
-        />
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="Label (e.g. Sam's laptop)"
-          className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        />
-        <Button variant="primary" size="md" onClick={() => add.mutate()}>
-          Add peer
-        </Button>
-      </div>
+        </Sheet>
+      )}
     </Section>
   );
 }

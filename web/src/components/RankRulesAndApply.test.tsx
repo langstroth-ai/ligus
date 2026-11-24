@@ -98,40 +98,43 @@ function rail(pane: "people" | "review") {
   );
 }
 
-const card = async (name: string) => (await screen.findByText(name)).closest("[class*='px-3 py-3']") as HTMLElement;
+// Member actions live in the row menu (right-click, the "⋯", Shift+F10).
+const openMenu = async (name: string) => {
+  fireEvent.click(await screen.findByRole("button", { name: `Actions for ${name}` }));
+  return within(await screen.findByRole("menu"));
+};
 
 beforeEach(() => vi.mocked(invoke).mockClear());
 
 describe("the People pane follows the rank rules", () => {
   it("disables what the fold refuses and says why", async () => {
     rail("people");
-    const maya = within(await card("Maya"));
-    const remove = maya.getByRole("button", { name: "Remove" });
-    expect(remove).toBeDisabled();
+    const menu = await openMenu("Maya");
+    const remove = menu.getByRole("menuitem", { name: "Remove" });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
     expect(remove).toHaveAttribute("data-tip", "a cut goes strictly down the ranks");
-    const revoke = maya.getByRole("button", { name: /Remove & revoke/ });
-    expect(revoke).toBeDisabled();
+    const revoke = menu.getByRole("menuitem", { name: /Remove & revoke/ });
+    expect(revoke).toHaveAttribute("aria-disabled", "true");
     expect(revoke).toHaveAttribute("data-tip", "a cut goes strictly down the ranks");
-    const owner = maya.getByRole("option", { name: "owner" }) as HTMLOptionElement;
-    const viewer = maya.getByRole("option", { name: "viewer" }) as HTMLOptionElement;
-    expect(owner.disabled).toBe(true);
-    expect(owner.title).toBe("no one grants a role above their own");
-    expect(viewer.disabled).toBe(true);
-    // Every other role is refused: the picker itself is off.
-    expect(maya.getByRole("combobox")).toBeDisabled();
+    const owner = menu.getByRole("menuitem", { name: "Change role to owner" });
+    expect(owner).toHaveAttribute("aria-disabled", "true");
+    expect(owner).toHaveAttribute("data-tip", "no one grants a role above their own");
+    // Every other role is refused too.
+    for (const item of menu.getAllByRole("menuitem", { name: /^Change role to / })) {
+      expect(item).toHaveAttribute("aria-disabled", "true");
+    }
   });
 
   it("tags a service member and keeps passkey re-grants off it", async () => {
     rail("people");
-    const box = within(await card("build-box"));
-    expect(box.getByText("service")).toBeInTheDocument();
-    const regrant = box.getByRole("button", { name: /Allow new passkey/ });
-    expect(regrant).toBeDisabled();
+    expect(within((await screen.findByText("build-box")).closest("li") as HTMLElement).getByText("service")).toBeInTheDocument();
+    const menu = await openMenu("build-box");
+    const regrant = menu.getByRole("menuitem", { name: /Allow new passkey/ });
+    expect(regrant).toHaveAttribute("aria-disabled", "true");
     expect(regrant).toHaveAttribute("data-tip", "a service member holds no passkey");
-    expect((box.getByRole("option", { name: "admin" }) as HTMLOptionElement).disabled).toBe(true);
-    expect((box.getByRole("option", { name: "viewer" }) as HTMLOptionElement).disabled).toBe(false);
-    expect(box.getByRole("combobox")).not.toBeDisabled();
-    expect(box.getByRole("button", { name: /Remove & revoke/ })).not.toBeDisabled();
+    expect(menu.getByRole("menuitem", { name: "Change role to admin" })).toHaveAttribute("aria-disabled", "true");
+    expect(menu.getByRole("menuitem", { name: "Change role to viewer" })).not.toHaveAttribute("aria-disabled");
+    expect(menu.getByRole("menuitem", { name: /Remove & revoke/ })).not.toHaveAttribute("aria-disabled");
   });
 });
 
@@ -139,9 +142,11 @@ describe("Apply on a host", () => {
   it("asks the picked host to apply an approved proposal", async () => {
     proposals = [{ ...base, canRequestApply: true }];
     rail("review");
-    const button = await screen.findByRole("button", { name: "Apply on sff" });
-    expect(screen.queryByRole("option", { name: /legacy/ })).toBeNull();
-    fireEvent.click(button);
+    // "Apply on <host>" lives in the proposal's row menu, one item per host.
+    fireEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+    const item = await screen.findByRole("menuitem", { name: "Apply on sff" });
+    expect(screen.queryByRole("menuitem", { name: /legacy/ })).toBeNull();
+    fireEvent.click(item);
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("request_apply_on_host", { sessionId: "s1", proposalId: "p1", hostDeviceId: HOST }),
     );

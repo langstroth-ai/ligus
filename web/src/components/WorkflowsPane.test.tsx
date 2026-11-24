@@ -102,6 +102,15 @@ describe("WorkflowsPane", () => {
     expect(ipc.voteProposal).toHaveBeenCalledWith("s1", "p1", true);
   });
 
+  it("cancels a live run from its row menu", async () => {
+    const user = userEvent.setup();
+    setup();
+    await screen.findByText(/needs your decision/);
+    await user.click(screen.getByRole("button", { name: "More actions for run of Review gate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Cancel run" }));
+    expect(ipc.cancelWorkflowRun).toHaveBeenCalled();
+  });
+
   it("is read-only: no editor, no presets, no new-workflow button", async () => {
     setup();
     await screen.findAllByText("Review gate");
@@ -113,12 +122,14 @@ describe("WorkflowsPane", () => {
   it("renders a definition's stages readably in dependency order", async () => {
     const user = userEvent.setup();
     setup();
-    await user.click((await screen.findAllByText(/show stages/))[0]);
+    await user.click(await screen.findByRole("button", { name: /^Review gate, 2 stages/ }));
     expect(await screen.findByText("@Coder")).toBeInTheDocument();
     expect(screen.getByText("Build {{input}}")).toBeInTheDocument();
     expect(screen.getByText(/2 approvals/)).toBeInTheDocument();
     expect(screen.getByText(/reject retries from implement/)).toBeInTheDocument();
-    const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const items = within(screen.getByRole("list", { name: "Workflow definitions" }))
+      .getAllByRole("listitem")
+      .flatMap((row) => Array.from(row.querySelectorAll("ol > li")).map((li) => li.textContent ?? ""));
     expect(items[0]).toContain("Implement");
     expect(items[1]).toContain("Approval");
   });
@@ -129,9 +140,12 @@ describe("WorkflowsPane", () => {
     await screen.findByText("Nightly");
     expect(screen.getByText("paused")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Run" })[1]).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Pause workflow Review gate" }));
+    // Pause and Resume live in the row's action menu.
+    await user.click(screen.getByRole("button", { name: "More actions for workflow Review gate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Pause" }));
     expect(ipc.setWorkflowEnabled).toHaveBeenCalledWith("s1", "wf-1", false);
-    await user.click(screen.getByRole("button", { name: "Resume workflow Nightly" }));
+    await user.click(screen.getByRole("button", { name: "More actions for workflow Nightly" }));
+    await user.click(screen.getByRole("menuitem", { name: "Resume" }));
     expect(ipc.setWorkflowEnabled).toHaveBeenCalledWith("s1", "wf-2", true);
   });
 
@@ -139,7 +153,8 @@ describe("WorkflowsPane", () => {
     const user = userEvent.setup();
     setup();
     await screen.findAllByText("Review gate");
-    await user.click(screen.getAllByRole("button", { name: "Ask an agent to change this" })[0]);
+    await user.click(screen.getByRole("button", { name: "More actions for workflow Review gate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Ask an agent to change this" }));
     await user.type(screen.getByLabelText("Requested change"), "add a test stage{Enter}");
     expect(ipc.workflowChangeRequest).toHaveBeenCalledWith("s1", "wf-1", "add a test stage");
     expect(ipc.sendMessage).toHaveBeenCalledWith("s1", "Please revise the workflow");

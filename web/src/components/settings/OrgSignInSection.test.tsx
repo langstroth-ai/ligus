@@ -58,8 +58,10 @@ describe("OrgSignInSection", () => {
     });
     renderIt();
     expect(await screen.findByText("acme")).toBeTruthy();
-    expect(screen.getByText(/Relay access to 2 workspaces/)).toBeTruthy();
-    await userEvent.click(screen.getByText("Sign out"));
+    expect(screen.getByText(/2 workspaces/)).toBeTruthy();
+    // Sign out lives in the row menu.
+    await userEvent.click(screen.getByRole("button", { name: "Actions for acme" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
     expect(ipc.ligusAuthSignOut).toHaveBeenCalled();
   });
 });

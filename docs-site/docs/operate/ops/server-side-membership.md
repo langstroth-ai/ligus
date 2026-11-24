@@ -58,7 +58,7 @@ Viewer's envelopes on a claimed workspace, so a Viewer there never gets the
 rotated key. Run v0.3.2 or later if your workspaces have Viewers.
 
 **Removing someone = remove + rotate.** `DELETE …/members/:account` stops
-their access on the relay at once. Removing an entry from **People → Team members (server-enforced)** in the app does three things in order: removes it on the relay,
+their access on the relay at once. Removing an entry from **People → Relay members** in the app does three things in order: removes it on the relay,
 removes the matching member from the workspace roster, then rotates the
 workspace key to the members who remain, so they also lose the key to new
 traffic. The app matches a person by their account (`ligus:<account id>`)

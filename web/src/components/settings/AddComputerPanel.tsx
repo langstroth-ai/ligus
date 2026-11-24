@@ -69,7 +69,7 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
 
   if (grant) {
     return (
-      <div className="space-y-2.5 rounded-xl border px-3 py-3 text-xs" style={fieldStyle} data-testid="add-computer-grant">
+      <div className="space-y-2.5 text-xs" data-testid="add-computer-grant">
         <p className="text-sm">
           <strong>{preview?.label || "The computer"}</strong> is one of your devices. Paste this on it within{" "}
           {grant.expiresInMinutes} minutes:
@@ -109,7 +109,7 @@ export function AddComputerPanel({ onDone, onCancel }: { onDone: () => void; onC
 
   const canAdd = preview && !preview.alreadyMine && !preview.revoked && !preview.someoneElses;
   return (
-    <div className="space-y-2 rounded-xl border px-3 py-3" style={fieldStyle} data-testid="add-computer">
+    <div className="space-y-2" data-testid="add-computer">
       <p className="text-xs text-ink-soft">
         On the other computer, choose <em>Add to my devices</em> in lt, or run <code>ligus devices request</code>. Paste
         what it shows. An invite would make a second member; this makes the computer yours.
