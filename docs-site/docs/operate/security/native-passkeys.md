@@ -97,8 +97,10 @@ it, so a change can take a day to reach Macs.
 keeps using the browser hand-off on macOS: the published app is associated
 only with `ligus.ai`. To go native, build the app with your domain added to
 `app/Ligus.entitlements`, sign it with your own team, and serve the
-association file above on your domain with your team and bundle id. Windows
-needs none of this.
+association file above on your domain with your team and bundle id. On
+Windows a self-hosted RP always uses the browser hand-off: Windows lets any
+app name any relying party, so the app runs the native dialog only for
+`ligus.ai`.
 
 ### Signing the entitlement {#signing}
 
@@ -165,6 +167,6 @@ among them). These need a person and real hardware:
 
 **Windows** (Windows 10 1903 or later): the same steps 1 to 4 with Windows
 Hello, plus a USB security key through the same dialog, and a workspace
-with a self-hosted RP (the native dialog is used).
+with a self-hosted RP (the browser opens directly).
 
 **Linux**: unchanged, the browser hand-off.

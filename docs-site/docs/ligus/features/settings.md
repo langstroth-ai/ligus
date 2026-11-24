@@ -308,8 +308,28 @@ developer to copy and run on the agent's box. Detached agents run on
   chat's primary runtime — no setting required. Rename any chat with the
   ✎ pencil next to its title.
 - **System tray / menu bar** — the tray icon's menu jumps straight to
-  **Friends**, **Team & Relay Sync** (this page's Team sync tab), and
-  **Settings**, besides showing/quitting the app.
+  **People**, **Team & Relay Sync** (this page's Team sync tab), and
+  **Settings**, besides showing/quitting the app. Its tooltip says how many
+  things need you ("Ligus · 2 need you"), the same number as the
+  [Inbox](inbox.md).
+- **Command palette** — **⌘K** finds anything by typing part of it (the
+  match is fuzzy, so "nw ch" finds "New chat"): chats, workspaces,
+  settings tabs, panes, proposals waiting on a decision (**Review "…"**),
+  the workspace's agents (**@name** starts a message to it), **Add a
+  phone…**, **Open Inbox**, **Recent errors** and **Keyboard shortcuts**.
+  With nothing typed it lists what you ran recently, then what needs you,
+  then everything else; what you ran recently also ranks higher as you
+  type.
+- **Keyboard shortcuts** — **⌘/** (or "Keyboard shortcuts" in the
+  palette) opens a sheet of every shortcut, grouped General, Chat, Panes,
+  View and Code. It's built from the same list the keys use, so it is
+  always current. **⌘⌥1** to **⌘⌥0** open the ten panes, and **Esc** stops
+  a running turn unless you're typing in a field with text in it (your
+  draft is never touched). On Windows and Linux, ⌘ is Ctrl and ⌥ is Alt.
+- **Tooltips** — buttons and controls show a short themed tooltip on
+  hover and when they get keyboard focus, with the shortcut as a small key
+  chip where there is one. Menus (such as the **⋯** more-actions menus)
+  work from the keyboard: arrow keys to move, Enter to pick, Esc to close.
 - **Focus mode** — **⌘.** (or "Focus mode" in the ⌘K palette) hides
   everything but the chat and the message box: the workspace rail, the
   sidebar, the tools rail and the status bar. A lockdown or dearth-mode

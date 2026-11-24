@@ -10,11 +10,11 @@ upgrades. For problems by symptom, see [Troubleshooting](../../ligus/help/troubl
 | Relay | `curl -fsS https://relay.example.com/v1/health` | `ok` (200). `503` = the relay runs but its store doesn't answer |
 | Relay | `GET /metrics` (bearer `LANGSTROTH_RELAY_METRICS_TOKEN` if set) | `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight` |
 | Relay tunnel | `curl -s https://relay.example.com/v1/tunnel/info` | `{"versions":[1],…}`; 404 = tunnel off |
-| `ligus serve` | `curl -s http://<listen>/v1/health` | `{"ok":true,"version":"0.1.0"}`; with the bearer token also `identity.mode` (`owner`, `member`; `pending` or `revoked` means it can't write) |
+| `ligus serve` | `curl -s http://<listen>/v1/health` | `{"ok":true,"version":"0.2.0"}`; with the bearer token also `identity.mode` (`owner`, `member`; `pending` or `revoked` means it can't write) |
 | `ligus serve` relay link | `ligus remote status` (server's env) | `serve: connected for …` |
 | `ligus serve` sync | the dashboard's built-in Ligus section (relay and push status, turns) | |
 | `ligus worker` | the process is running; its host shows **online** in `ligus queue` / the desktop's Review pane | there is no health endpoint |
-| Desktop | the sync pill | **live**, encrypted |
+| Desktop | the sync item in the status bar | **Live**, with the lock (encrypted) |
 
 A host counts as online while it beats on the relay's presence channel
 (about every 30 s; offline after about 90 s without a beat). `ligus queue`

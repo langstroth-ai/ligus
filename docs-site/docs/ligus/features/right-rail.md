@@ -1,11 +1,11 @@
 # Right Rail
 
 The right side of the window is a single utility pane with a
-vertical icon strip you click to switch contents. Nine sections:
+vertical icon strip you click to switch contents. Ten panes:
 
 | Pane      | What's in it                                                    |
 |-----------|-----------------------------------------------------------------|
-| Tools     | Runtimes, workspace agent CRUD, MCP servers                     |
+| Agents & tools | Runtimes, workspace agent CRUD, MCP servers                |
 | Context   | Context-budget telemetry + summarize/compact controls           |
 | Review    | Pending proposals (quorum votes + agreement-gated implement) **and** queued work: unanswered agent mentions + host status |
 | People    | Members, presence, roles, invites                               |
@@ -24,11 +24,15 @@ pane's page in these docs.
 
 ## When to use each
 
-- **Tools**: workspace agents (add/edit/remove), the active runtime,
+- **Agents & tools**: workspace agents (add/edit/remove), the active runtime,
   and MCP servers — open it when a run is in flight (it shows each
   agent's planning → working → awaiting-review state) or when an MCP
   server is misbehaving and you want to disable a tool. The wrench
-  glyph in the chat header also opens this pane.
+  glyph in the chat header also opens this pane. To remove an agent, open
+  its **⋯** menu and pick **Remove from workspace…**; the confirmation says
+  what follows: the agent leaves every chat in the workspace for everyone,
+  mentions of it go unanswered, workflow stages that use it stop with an
+  error, and its avatar and access settings are deleted.
 - **Context**: when a chat's reasoning depends on specific facts.
   Shows the context-budget telemetry and the summarize/compact
   controls; pinning a context item bumps it to the top of the
@@ -39,6 +43,11 @@ pane's page in these docs.
   approve / disposition — approval counts at the voter's real role and an
   author can't approve their own — then **Implement** once quorum is met.
   See [agent-authored proposals](multi-agent.md#agent-authored-proposals).
+  A proposal's description renders as Markdown. Once you've voted, the
+  card says **You approved** (or **You rejected**) with a link to change
+  your vote. **Implement** shows only when it can run: a proposal rejected
+  at or above the approval floor, or replaced by a newer revision, says so
+  instead, even when it has its quorum of approvals.
   Each card shows what the proposal is and where it came from, as badges:
   its **kind** (file change, command, decision, workflow), its **author**
   (a person, or an agent with "agent-signed" when its own key signed it, or

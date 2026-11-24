@@ -582,7 +582,7 @@ up for convenience, not as your only copy.
    start. The wire protocol (`/v1`, `hrt1` tokens) is kept compatible, so
    clients don't need to upgrade in step.
 4. Check `curl -s https://relay.example.com/v1/health` → `ok`, and that a
-   device's sync pill reads **live**.
+   device's status bar reads **Live**.
 
 To roll back, run the previous binary against a restored backup; schema
 changes have no down migration.

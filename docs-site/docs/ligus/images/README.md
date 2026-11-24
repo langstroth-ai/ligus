@@ -21,6 +21,18 @@ drop them into this folder, and the docs render.
 | `first-chat-empty.png` | Empty new chat, composer focused |
 | `collaborators.png` | **Friends** view (rail ☺): add-by-username, request, presence |
 
+## Stale since 0.2.0
+
+These were captured before 0.2.0 and need recapturing:
+
+- `overview.png` still shows the old name, the sync pill in the chat
+  header and counts on the sidebar's pane rows. In 0.2.0 sync sits in the
+  status bar at the foot of the window, the sidebar has an **Inbox** row,
+  and only the Review pane shows a count. It is no longer embedded.
+- `settings-general.png` (embedded by `features/settings.md`) shows the
+  same old window behind Settings, with the first tab named Account
+  (now Profile).
+
 ## Optional / gallery + new 0.1 surfaces
 
 | File | What to capture |
