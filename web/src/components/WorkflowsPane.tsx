@@ -29,6 +29,7 @@ import { Badge, Button, Section, ErrorState, LinkButton, RowList } from "@/compo
 import { useRowMenu } from "@/components/RowMenu";
 import { PANE_DOCS } from "@/lib/docs";
 import { IconChevronRight, IconLock } from "@/lib/icons";
+import { Sheet } from "@/components/kit/Sheet";
 import { RailFrame, EmptyHint, fieldStyle } from "@/components/RightRail";
 import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 
@@ -425,7 +426,13 @@ function DefinitionRow({
         </div>
       )}
       {open !== "none" && (
-        <div className="flex gap-2 pb-2">
+        <Sheet
+          title={open === "run" ? `Run “${wf.name}”` : `Change “${wf.name}”`}
+          side="center"
+          width={440}
+          onClose={() => toggle(open)}
+        >
+        <div className="flex gap-2">
           <input
             autoFocus
             value={text}
@@ -442,6 +449,7 @@ function DefinitionRow({
             {open === "run" ? "Start" : "Ask"}
           </Button>
         </div>
+        </Sheet>
       )}
     </li>
   );

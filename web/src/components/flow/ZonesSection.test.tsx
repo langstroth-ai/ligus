@@ -16,6 +16,8 @@ describe("path zones", () => {
         zones={[{ id: "z1", pattern: "crates/core/", kind: "core", note: "crypto", atMs: 0 }]}
         onAdd={(z) => added.push(z)}
         onRemove={(id) => removed.push(id)}
+        adding
+        onAdding={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Actions for zone crates/core/" }));

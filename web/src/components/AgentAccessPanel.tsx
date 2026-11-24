@@ -77,12 +77,12 @@ function AccessDisclosure({ sessionId, agent }: { sessionId: string; agent: Work
         </span>
         <span className="min-w-0 truncate text-ink-soft">{accessSummary(agent)}</span>
       </button>
-      {open && <AccessEditor sessionId={sessionId} agent={agent} />}
+      {open && <AgentAccessEditor sessionId={sessionId} agent={agent} />}
     </div>
   );
 }
 
-function AccessEditor({ sessionId, agent }: { sessionId: string; agent: WorkspaceAgentDto }) {
+export function AgentAccessEditor({ sessionId, agent }: { sessionId: string; agent: WorkspaceAgentDto }) {
   const qc = useQueryClient();
   const ids = useId();
   const shared = !agent.ownerActorId;

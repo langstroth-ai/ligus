@@ -72,7 +72,7 @@ import { parseUnifiedDiff } from "@/lib/diff";
 import { relTime } from "@/lib/time";
 import { LogsView } from "@/components/LogsView";
 import { Avatar } from "@/components/Avatar";
-import { AgentAccessPanel } from "@/components/AgentAccessPanel";
+import { AgentAccessEditor, accessLabel, accessSummary } from "@/components/AgentAccessPanel";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
@@ -84,10 +84,8 @@ import { Sheet } from "@/components/kit/Sheet";
 import {
   Button,
   IconButton,
-  Card,
   Modal,
   Section,
-  Switch,
   Field,
   SelectField,
   FormDisclosure,
@@ -109,7 +107,6 @@ import { Menu } from "@/components/Menu";
 import {
   IconX,
   IconChevronDown,
-  IconPlus,
   IconCheck,
   IconInbox,
   IconMonitor,
@@ -356,13 +353,10 @@ export function PaneHelpLink({ title, about, docs }: { title: string; about: str
 }
 
 // ─── Tools pane (design spec §6.3 / §6.4 / §7.5) ─────────────────────────────
-// Scope is the top-level split: "In this chat" is READ-ONLY (what the agents
-// here can reach, inherited from the workspace); "Workspace" is where those
-// same records are actually edited. §11.1 made the workspace own configuration,
-// so the chat side never renders an editable control — except the answering
-// runtime, which is genuinely per-chat.
+// One view, no scope toggle: this chat's runtime (genuinely per-chat), then
+// the workspace's agents and MCP servers, tagged "workspace" and edited in
+// place through their row menus (§11.1: the workspace owns configuration).
 
-type ToolsScope = "chat" | "workspace";
 
 function ToolsPane({
   sessionId,
@@ -379,7 +373,6 @@ function ToolsPane({
   const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts });
   const hostList = hosts.data ?? [];
   const workerHosts = hostList.filter((h) => h.kind === "worker");
-  const [scope, setScope] = useState<ToolsScope>("chat");
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState("");
   const [agentRuntimeId, setAgentRuntimeId] = useState(activeRuntimeId);
@@ -466,153 +459,97 @@ function ToolsPane({
   const activeRuntime = runtimeList.find((r) => r.id === activeRuntimeId);
   const agentList = agents.data ?? [];
   const mcpList = mcp.data ?? [];
-  const enabledMcp = mcpList.filter((s) => s.enabled);
 
   return (
-    <RailFrame title="Tools" about="What the agents here can reach, and where it's configured." docs={PANE_DOCS.tools}>
-      <ScopeToggle scope={scope} onScope={setScope} />
+    <RailFrame
+      title="Tools"
+      about="What the agents here can reach: this chat's runtime, the workspace's agents and its MCP servers."
+      docs={PANE_DOCS.tools}
+      primary={{ label: "Add an agent", onClick: () => setShowAddAgent(true) }}
+      more={[{ label: "Install an MCP server…", onSelect: () => setShowInstallMcp(true) }]}
+    >
+      <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only. Manage runtimes in Settings → Models.">
+        {runtimeList.length === 0 ? (
+          <EmptyHint text="No runtimes configured" />
+        ) : (
+          <RuntimeSwitcher runtimes={runtimeList} activeId={activeRuntimeId} onSelect={(id) => void selectRuntime(id)} />
+        )}
+      </Section>
 
-      {scope === "chat" ? (
-        <>
-          <Section title="Runtime" info="The runtime that answers untagged messages in this chat. Pick one here; it applies to this chat only.">
-            {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured" />
-            ) : (
-              <RuntimeSwitcher
-                runtimes={runtimeList}
-                activeId={activeRuntimeId}
-                onSelect={(id) => void selectRuntime(id)}
+      <Section
+        title="Agents"
+        info="Agents you can @mention. The roster belongs to the workspace: changes here apply in every chat. Each agent runs on a host: this device, or a worker (a headless box you enroll under People)."
+        tag={<MetaTag>workspace</MetaTag>}
+      >
+        <RowList label="Agents">
+          {/* The default agent (@ligus) always exists: it answers untagged
+              messages on this chat's runtime (F1). It has no roster record, so
+              no menu. A roster agent with the same handle IS the default (a
+              legacy entry), so it's shown once. */}
+          {!agentList.some((a) => a.name.toLowerCase() === PRIMARY_HANDLE) && (
+            <ListRow
+              leading={
+                <Avatar
+                  name={PRIMARY_NAME}
+                  kind="agent"
+                  host={activeRuntime?.location?.trim().toLowerCase() === "remote" ? "remote" : "local"}
+                  size={22}
+                />
+              }
+              title={`@${PRIMARY_HANDLE}`}
+              meta={activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"}
+              tip="The default agent: answers untagged messages on this chat's runtime"
+            />
+          )}
+          {agentList.map((agent) => (
+            <AgentRosterRow
+              key={agent.id}
+              sessionId={sessionId}
+              agent={agent}
+              hosts={hostList}
+              isDefault={agent.name.toLowerCase() === PRIMARY_HANDLE}
+              onRemove={() =>
+                void confirmDialog(agentRemovalConsequences(agent.name), {
+                  title: `Remove @${agent.name}?`,
+                  confirmLabel: "Remove agent",
+                  danger: true,
+                }).then((ok) => ok && removeAgentMutation.mutate(agent.id))
+              }
+              onChanged={() => qc.invalidateQueries({ queryKey: ["agents", sessionId] })}
+            />
+          ))}
+        </RowList>
+      </Section>
+
+      <Section
+        title="MCP servers"
+        info="Servers stay inert until enabled. Only enabled servers give agents external tools. The list belongs to the workspace."
+        tag={<MetaTag>workspace</MetaTag>}
+      >
+        {mcpList.length === 0 ? (
+          <EmptyHint text="No MCP servers" />
+        ) : (
+          <RowList label="MCP servers">
+            {mcpList.map((server) => (
+              <McpServerCard
+                key={server.id}
+                server={server}
+                editable
+                onToggle={(v) => toggleMcp(server, v)}
+                onRemove={
+                  server.isManaged
+                    ? () => confirmThen("Remove this MCP server?", () => removeMcpMutation.mutate(server.id))
+                    : undefined
+                }
               />
-            )}
-          </Section>
+            ))}
+          </RowList>
+        )}
+      </Section>
 
-          <Section
-            title="Agents"
-            info="Agents you can @mention in this chat. The roster belongs to the workspace, so it's edited there."
-            tag={
-              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
-                from workspace
-              </MetaTag>
-            }
-          >
-            <RowList label="Agents">
-              {/* The default agent (@ligus) always exists — it answers untagged
-                  messages and is bound to the active runtime — even before the
-                  user adds any of their own (F1). It has no roster record, so no
-                  edit/remove. A roster agent with the same handle IS the default
-                  (a legacy roster entry), so it's shown once, as the default. */}
-              {!agentList.some((a) => a.name.toLowerCase() === PRIMARY_HANDLE) && (
-                <ListRow
-                  leading={
-                    <Avatar
-                      name={PRIMARY_NAME}
-                      kind="agent"
-                      host={activeRuntime?.location?.trim().toLowerCase() === "remote" ? "remote" : "local"}
-                      size={22}
-                    />
-                  }
-                  title={`@${PRIMARY_HANDLE}`}
-                  meta={activeRuntime ? runtimePickerLabel(activeRuntime) : "default runtime"}
-                  tip="The default agent: answers untagged messages on this chat's runtime"
-                />
-              )}
-              {agentList.map((agent) => (
-                <ListRow
-                  key={agent.id}
-                  leading={
-                    <Avatar
-                      name={agent.name}
-                      url={agent.avatarUrl}
-                      colorHex={agent.avatarColorHex}
-                      kind="agent"
-                      size={22}
-                    />
-                  }
-                  title={`@${agent.name}`}
-                  meta={
-                    agent.name.toLowerCase() === PRIMARY_HANDLE
-                      ? `${agent.runtimeId} · default`
-                      : agent.runtimeId
-                  }
-                  tip={agent.role || undefined}
-                  trailing={<AgentHostDot hostId={agent.hostId} hosts={hostList} />}
-                />
-              ))}
-            </RowList>
-            {/* Agents live on the workspace roster, so adding one happens in the
-                Workspace scope; this jumps there with the form open. */}
-            <button
-              onClick={() => {
-                setScope("workspace");
-                setShowAddAgent(true);
-              }}
-              className="flex h-[30px] w-full items-center gap-2 rounded-xl px-1 text-left text-[13px] transition-colors hover:bg-[color:var(--ligus-overlay)]"
-              style={{ color: "var(--ligus-accent-ink)" }}
-            >
-              <IconPlus size={13} /> Add an agent
-            </button>
-          </Section>
-
-          <Section
-            title="Tools"
-            info="MCP servers enabled for the workspace. Only enabled servers give agents external tools."
-            tag={
-              <MetaTag action={<LinkButton onClick={() => setScope("workspace")}>Edit</LinkButton>}>
-                from workspace
-              </MetaTag>
-            }
-          >
-            {enabledMcp.length === 0 ? (
-              <EmptyHint text="No MCP servers enabled" />
-            ) : (
-              <RowList label="MCP servers">
-                {enabledMcp.map((server) => (
-                  <McpServerCard key={server.id} server={server} editable={false} />
-                ))}
-              </RowList>
-            )}
-          </Section>
-        </>
-      ) : (
-        <>
-          <Section
-            title="Agent roster"
-            action={
-              <PaneHelpLink
-                title="agents"
-                about="Agents are personas you @mention, each bound to a host: this device, or a worker (a headless box you enroll under People → Remote agents)."
-                docs="ligus/concepts/agents/"
-              />
-            }
-          >
-            {agentList.length === 0 ? (
-              <EmptyHint text="No agents yet" />
-            ) : (
-              <RowList label="Agent roster">
-              {agentList.map((agent) => (
-                <AgentRosterRow
-                  key={agent.id}
-                  sessionId={sessionId}
-                  agent={agent}
-                  hosts={hostList}
-                  onRemove={() =>
-                    void confirmDialog(agentRemovalConsequences(agent.name), {
-                      title: `Remove @${agent.name}?`,
-                      confirmLabel: "Remove agent",
-                      danger: true,
-                    }).then((ok) => ok && removeAgentMutation.mutate(agent.id))
-                  }
-                  onChanged={() => qc.invalidateQueries({ queryKey: ["agents", sessionId] })}
-                />
-              ))}
-              </RowList>
-            )}
-            <FormDisclosure
-              label="Add an agent"
-              open={showAddAgent}
-              onToggle={() => setShowAddAgent((v) => !v)}
-            >
-              <Card className="space-y-2 p-3">
+      {showAddAgent && (
+        <Sheet title="Add an agent" side="center" width={420} onClose={() => setShowAddAgent(false)}>
+              <div className="space-y-2">
                 {(agentTemplates.data ?? []).length > 0 && (
                   <Field label="Start from a saved agent">
                     <SelectField
@@ -677,52 +614,12 @@ function ToolsPane({
                 >
                   Add agent
                 </Button>
-              </Card>
-            </FormDisclosure>
-          </Section>
-
-          <Section title="Runtimes">
-            {runtimeList.length === 0 ? (
-              <EmptyHint text="No runtimes configured" />
-            ) : (
-              <RowList label="Runtimes">
-                {runtimeList.map((rt) => (
-                  <RuntimeRow key={rt.id} runtime={rt} active={rt.id === activeRuntimeId} />
-                ))}
-              </RowList>
-            )}
-            <Hint>Manage in Settings → Models</Hint>
-          </Section>
-
-          <Section title="MCP servers">
-            {mcpList.length === 0 ? (
-              <EmptyHint text="No MCP servers" />
-            ) : (
-              <RowList label="MCP servers">
-                {mcpList.map((server) => (
-                  <McpServerCard
-                    key={server.id}
-                    server={server}
-                    editable
-                    onToggle={(v) => toggleMcp(server, v)}
-                    onRemove={
-                      server.isManaged
-                        ? () =>
-                            confirmThen("Remove this MCP server?", () =>
-                              removeMcpMutation.mutate(server.id),
-                            )
-                        : undefined
-                    }
-                  />
-                ))}
-              </RowList>
-            )}
-            <FormDisclosure
-              label="Install a server"
-              open={showInstallMcp}
-              onToggle={() => setShowInstallMcp((v) => !v)}
-            >
-              <Card className="space-y-2 p-3">
+              </div>
+        </Sheet>
+      )}
+      {showInstallMcp && (
+        <Sheet title="Install an MCP server" side="center" width={420} onClose={() => setShowInstallMcp(false)}>
+              <div className="space-y-2">
                 <input
                   value={mcpSource}
                   onChange={(event) => setMcpSource(event.target.value)}
@@ -742,49 +639,10 @@ function ToolsPane({
                 >
                   Install
                 </Button>
-              </Card>
-            </FormDisclosure>
-          </Section>
-        </>
+              </div>
+        </Sheet>
       )}
     </RailFrame>
-  );
-}
-
-/// The top-level scope split for the Tools pane (§6.3).
-function ScopeToggle({ scope, onScope }: { scope: ToolsScope; onScope: (s: ToolsScope) => void }) {
-  const opts: { id: ToolsScope; label: string }[] = [
-    { id: "chat", label: "In this chat" },
-    { id: "workspace", label: "Workspace" },
-  ];
-  return (
-    <div
-      className="mb-4 flex rounded-xl border p-0.5"
-      style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
-    >
-      {opts.map((o) => {
-        const active = scope === o.id;
-        return (
-          <button
-            key={o.id}
-            onClick={() => onScope(o.id)}
-            aria-pressed={active}
-            className="ligus-press flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium"
-            style={
-              active
-                ? {
-                    background: "var(--ligus-panel)",
-                    color: "var(--ligus-ink)",
-                    boxShadow: "0 1px 2px color-mix(in srgb, var(--ligus-ink) 14%, transparent)",
-                  }
-                : { color: "var(--ligus-ink-soft)" }
-            }
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -813,15 +671,22 @@ function McpServerCard({
           : "Per-tool permissions arrive with backend support."
       }
       actionsLabel={`Actions for ${server.id}`}
-      actions={editable && onRemove ? [{ label: "Remove server", danger: true, onSelect: onRemove }] : undefined}
+      actions={
+        editable
+          ? [
+              { label: disabled ? "Enable" : "Disable", onSelect: () => onToggle?.(disabled) },
+              ...(onRemove ? [{ label: "Remove server", danger: true, onSelect: onRemove }] : []),
+            ]
+          : undefined
+      }
       trailing={
-        editable ? (
-          <Switch on={server.enabled} onChange={(v) => onToggle?.(v)} label={`Enable ${server.id}`} />
-        ) : (
-          <span className="shrink-0 text-[11px]" style={{ color: disabled ? "var(--ligus-ink-soft)" : "var(--ligus-success-ink)" }}>
-            {disabled ? "off" : "on"}
-          </span>
-        )
+        <span
+          className="inline-flex shrink-0 items-center gap-1 text-[11px]"
+          style={{ color: disabled ? "var(--ligus-ink-soft)" : "var(--ligus-success-ink)" }}
+        >
+          <StatusDot on={!disabled} size={7} label={disabled ? "Off: never launched or connected" : "On"} />
+          {disabled ? "off" : "on"}
+        </span>
       }
     />
   );
@@ -913,16 +778,23 @@ function AgentRosterRow({
   sessionId,
   agent,
   hosts,
+  isDefault = false,
   onRemove,
   onChanged,
 }: {
   sessionId: string;
   agent: import("@/lib/ipc").WorkspaceAgentDto;
   hosts: WorkspaceHostDto[];
+  /// The roster entry that carries the default handle (@ligus).
+  isDefault?: boolean;
   onRemove: () => void;
   onChanged: () => void;
 }) {
+  const [accessOpen, setAccessOpen] = useState(false);
+  const avatarInput = useRef<HTMLInputElement>(null);
   const rm = useRowMenu(`More actions for @${agent.name}`, [
+    ...(agent.canManageAccess ? [{ label: "Access…", onSelect: () => setAccessOpen(true) }] : []),
+    { label: "Upload avatar…", onSelect: () => avatarInput.current?.click() },
     ...(agent.avatarUrl
       ? [
           {
@@ -957,6 +829,7 @@ function AgentRosterRow({
             style={{ background: "color-mix(in srgb, var(--ligus-ink) 35%, transparent)" }}
           />
           <input
+            ref={avatarInput}
             type="file"
             accept="image/*"
             aria-label={`Upload an avatar for @${agent.name}`}
@@ -980,15 +853,20 @@ function AgentRosterRow({
           <span className="shrink-0 truncate text-[13px] font-medium">@{agent.name}</span>
           <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
             {agent.runtimeId}
+            {isDefault ? " · default" : ""}
+            {" · "}
+            {agent.canManageAccess ? accessSummary(agent) : accessLabel(agent)}
           </span>
         </span>
         <AgentHostDot hostId={agent.hostId} hosts={hosts} />
         {rm.button}
       </div>
       {rm.menu}
-      <div className="pb-2 pl-[30px]">
-        <AgentAccessPanel sessionId={sessionId} agent={agent} />
-      </div>
+      {accessOpen && (
+        <Sheet title={`Access for @${agent.name}`} side="center" width={440} onClose={() => setAccessOpen(false)}>
+          <AgentAccessEditor sessionId={sessionId} agent={agent} />
+        </Sheet>
+      )}
     </li>
   );
 }
@@ -1305,17 +1183,19 @@ function ProposalCard({
   sessionId,
   onChanged,
   onDismiss,
+  defaultOpen,
 }: {
   proposal: ProposalDto;
   sessionId: string;
   onChanged: () => void;
   onDismiss: (dismissed: boolean) => void;
+  /// Open the detail on mount. Rows start as one line; the first active
+  /// proposal opens (you're reviewing it), the rest and settled ones don't.
+  defaultOpen?: boolean;
 }) {
   const qc = useQueryClient();
   const settled = isSettled(proposal);
-  // Bulky detail (body + diff) collapses; active proposals open by default (you're
-  // reviewing them), settled ones start collapsed (they're history).
-  const [expanded, setExpanded] = useState(!settled);
+  const [expanded, setExpanded] = useState(defaultOpen ?? !settled);
   const hasDetail = Boolean(proposal.body) || Boolean(proposal.diff) || Boolean(proposal.workflow);
   // Who "you" are, to show your own vote (shares the People pane's cache).
   const members = useQuery({ queryKey: ["members", sessionId], queryFn: () => listMembers(sessionId) });
@@ -1384,12 +1264,10 @@ function ProposalCard({
     enabled: Boolean(proposal.canRequestApply),
   });
   const applyHosts = (hosts.data ?? []).filter((h) => UUID_RE.test(h.id));
-  const [applyHost, setApplyHost] = useState<string>("");
-  const pickedHost = applyHosts.find((h) => h.id === applyHost) ?? applyHosts[0];
   const requestApply = useMutation({
     mutationFn: (hostId: string) => requestApplyOnHost(sessionId, proposal.id, hostId),
-    onSuccess: () => {
-      toast.success(`Asked ${pickedHost?.label ?? "the host"} to apply it.`);
+    onSuccess: (_r, hostId) => {
+      toast.success(`Asked ${applyHosts.find((h) => h.id === hostId)?.label ?? "the host"} to apply it.`);
       onChanged();
     },
     onError: (e) => toast.error(`Couldn't ask the host: ${errMsg(e)}`),
@@ -1446,12 +1324,29 @@ function ProposalCard({
     requestApply.isPending ||
     withdraw.isPending;
 
+  const rowMenu = useRowMenu(`Actions for ${proposal.title}`, [
+    ...(proposal.diff ? [{ label: "View full diff", onSelect: () => setDiffOpen(true) }] : []),
+    ...(mine !== null && isVotable(proposal)
+      ? [{ label: mine ? "Change vote to reject" : "Change vote to approve", onSelect: () => vote.mutate(!mine), disabled: busy }]
+      : []),
+    ...(proposal.canRequestApply
+      ? applyHosts.map((h) => ({
+          label: `Apply on ${h.label}${h.online ? "" : " (offline)"}`,
+          title: "That host applies it once, on its checkout, and reports the result. Nobody else applies it meanwhile.",
+          disabled: busy,
+          onSelect: () => requestApply.mutate(h.id),
+        }))
+      : []),
+    ...(settled
+      ? [{ label: proposal.dismissed ? "Restore to the inbox" : "Dismiss", onSelect: () => onDismiss(!proposal.dismissed) }]
+      : []),
+  ]);
   return (
-    <Card className="px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
+    <li className="px-1 py-2" {...rowMenu.rowProps} data-testid="proposal-row">
+      <div className="flex items-center justify-between gap-2">
         <button
           type="button"
-          className="-mx-1 -my-0.5 flex min-w-0 items-start gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors enabled:hover:bg-[color:var(--ligus-hover)]"
+          className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors enabled:hover:bg-[color:var(--ligus-hover)]"
           onClick={() => hasDetail && setExpanded((v) => !v)}
           aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}
@@ -1459,28 +1354,28 @@ function ProposalCard({
           {hasDetail && (
             <span
               aria-hidden
-              className="mt-0.5 shrink-0 transition-transform"
+              className="shrink-0 transition-transform"
               style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)", opacity: 0.5 }}
             >
-              <IconChevronDown size={14} />
+              <IconChevronDown size={13} />
             </span>
           )}
-          <span className="min-w-0 font-semibold">{proposal.title}</span>
+          <span className="min-w-0 truncate text-[13px] font-medium">{proposal.title}</span>
+          <span className="shrink-0 text-[11.5px] text-ink-soft">{relTime(proposal.createdAt)}</span>
         </button>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span
+            className="text-[11px] text-ink-soft"
+            data-tip={`${proposal.qualifyingApprovals} of ${proposal.requiredApprovals} approvals needed`}
+          >
+            {proposal.qualifyingApprovals}/{proposal.requiredApprovals}
+          </span>
           <StatusPill status={proposal.status} />
-          {settled && (
-            <IconButton
-              label={proposal.dismissed ? "Restore to the inbox" : "Dismiss"}
-              onClick={() => onDismiss(!proposal.dismissed)}
-            >
-              <IconX size={12} />
-            </IconButton>
-          )}
+          {rowMenu.button}
         </div>
       </div>
-      <div className="mt-0.5 pl-[22px] text-xs text-ink-soft">{relTime(proposal.createdAt)}</div>
-      <ProposalBadges proposal={proposal} />
+      {rowMenu.menu}
+      {expanded && <ProposalBadges proposal={proposal} />}
 
       {superseded && (
         <div
@@ -1568,14 +1463,16 @@ function ProposalCard({
         </>
       )}
 
-      <div className="mt-3 text-xs text-ink-soft">
-        {proposal.qualifyingApprovals}/{proposal.requiredApprovals} approvals
-      </div>
-      {/* Who voted: tag each approver/rejecter by name + role. */}
+      {/* Who voted: one compact chip per voter (role in the tooltip). */}
       {proposal.approvals.length > 0 && (
-        <div className="mt-1.5 flex flex-col gap-1">
+        <div className="mt-1.5 flex flex-wrap gap-1" aria-label="Votes">
           {proposal.approvals.map((a) => (
-            <div key={a.actorId} className="flex items-center gap-1.5 text-xs">
+            <span
+              key={a.actorId}
+              className="inline-flex items-center gap-1 rounded-full border px-1.5 text-[11px] leading-5"
+              style={{ borderColor: "var(--ligus-line)" }}
+              data-tip={`${a.displayName} ${a.approved ? "approved" : "rejected"} · ${a.role}`}
+            >
               <span
                 aria-hidden
                 style={{ color: a.approved ? "var(--ligus-success-ink)" : "var(--ligus-danger-ink)" }}
@@ -1583,10 +1480,8 @@ function ProposalCard({
                 {a.approved ? "✓" : "✕"}
               </span>
               <span className="font-medium">{a.displayName}</span>
-              <span className="text-ink-soft">
-                {a.approved ? "approved" : "rejected"} · {a.role}
-              </span>
-            </div>
+              <span className="sr-only">{a.approved ? "approved" : "rejected"} · {a.role}</span>
+            </span>
           ))}
         </div>
       )}
@@ -1605,9 +1500,6 @@ function ProposalCard({
             <span aria-hidden>{mine ? "✓" : "✕"}</span>
             {mine ? "You approved" : "You rejected"}
           </span>
-          <LinkButton disabled={busy} onClick={() => vote.mutate(!mine)}>
-            {vote.isPending ? "Changing…" : mine ? "Change to reject" : "Change to approve"}
-          </LinkButton>
         </div>
       )}
 
@@ -1701,37 +1593,6 @@ function ProposalCard({
           ))}
         </div>
       )}
-      {proposal.canRequestApply && applyHosts.length > 0 && (
-        <div className="mt-2 flex items-center gap-2">
-          {applyHosts.length > 1 && (
-            <select
-              aria-label="Host to apply on"
-              className="min-w-0 rounded-lg border bg-transparent px-2 py-1 text-xs"
-              style={{ borderColor: "var(--ligus-line)" }}
-              value={pickedHost?.id ?? ""}
-              onChange={(e) => setApplyHost(e.target.value)}
-            >
-              {applyHosts.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.label} {h.online ? "(online)" : "(offline)"}
-                </option>
-              ))}
-            </select>
-          )}
-          <Button
-            variant="ghost"
-            disabled={busy || !pickedHost}
-            title="That host applies it once, on its checkout, and reports the result. Nobody else applies it meanwhile."
-            onClick={() => pickedHost && requestApply.mutate(pickedHost.id)}
-          >
-            {requestApply.isPending ? "Asking…" : `Apply on ${pickedHost?.label ?? "host"}`}
-          </Button>
-          {applyHosts.length === 1 && (
-            <span className="text-xs text-ink-soft">{pickedHost?.online ? "online" : "offline"}</span>
-          )}
-        </div>
-      )}
-
       {/* Send-back-to-agent: available while the proposal is still live and there's
           feedback to act on. The agent produces a linked new version. */}
       {!superseded && proposal.status !== "applied" && hasChangeRequests && (
@@ -1765,7 +1626,7 @@ function ProposalCard({
           onClose={() => setDiffOpen(false)}
         />
       )}
-    </Card>
+    </li>
   );
 }
 
@@ -1941,13 +1802,14 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
       toast.error(`Couldn't ${dismissed ? "dismiss" : "restore"}: ${errMsg(e)}`);
     }
   };
-  const card = (proposal: ProposalDto) => (
+  const card = (proposal: ProposalDto, i = 1) => (
     <ProposalCard
       key={proposal.id}
       proposal={proposal}
       sessionId={sessionId}
       onChanged={refresh}
       onDismiss={(dismissed) => dismiss([proposal.id], dismissed)}
+      defaultOpen={!isSettled(proposal) && i === 0}
     />
   );
 
@@ -1977,7 +1839,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
         </Section>
       )}
       <Section title="Pending proposals">
-        {groups.active.map(card)}
+        {groups.active.length > 0 && <RowList label="Pending proposals">{groups.active.map((p, i) => card(p, i))}</RowList>}
         {groups.active.length === 0 && (
           <EmptyHint icon={<IconInbox size={18} />} text="Nothing to review" />
         )}
@@ -2000,7 +1862,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
             open={showSettled}
             onToggle={() => setShowSettled((v) => !v)}
           >
-            <div className="space-y-2.5">{groups.settled.map(card)}</div>
+            <RowList label="Settled proposals">{groups.settled.map((p) => card(p))}</RowList>
           </FormDisclosure>
         </Section>
       )}
@@ -2012,7 +1874,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
             open={showDismissed}
             onToggle={() => setShowDismissed((v) => !v)}
           >
-            <div className="space-y-2.5">{groups.dismissed.map(card)}</div>
+            <RowList label="Dismissed proposals">{groups.dismissed.map((p) => card(p))}</RowList>
           </FormDisclosure>
         </Section>
       )}
@@ -2840,7 +2702,12 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
   const placeholder = kind === "https" ? "https://…/file.md" : "owner/repo/path.md@main";
 
   return (
-    <RailFrame title="Vaults" about="Reference material mounted into this workspace." docs={PANE_DOCS.vaults}>
+    <RailFrame
+      title="Vaults"
+      about="Reference material mounted into this workspace."
+      docs={PANE_DOCS.vaults}
+      primary={{ label: "Add vault", onClick: () => setShowAdd(true) }}
+    >
       <Section title="Sources">
         {(vaults.data ?? []).length > 0 && (
           <RowList label="Vaults">
@@ -2879,8 +2746,9 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
         {(vaults.data ?? []).length === 0 && (
           <EmptyHint text="No vaults mounted" />
         )}
-        <FormDisclosure label="Add vault" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
-          <Card className="space-y-2 p-3">
+        {showAdd && (
+        <Sheet title="Add a vault" side="center" width={420} onClose={() => setShowAdd(false)}>
+          <div className="space-y-2">
             <SubtleSelectField label="Vault source" value={kind} onChange={setKind}>
               <option value="github">GitHub</option>
               <option value="gitlab">GitLab</option>
@@ -2906,8 +2774,9 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
             <Button variant="primary" disabled={!reference.trim() || addVaultMutation.isPending} onClick={() => addVaultMutation.mutate()}>
               Add
             </Button>
-          </Card>
-        </FormDisclosure>
+          </div>
+        </Sheet>
+        )}
       </Section>
     </RailFrame>
   );
@@ -2941,7 +2810,12 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <RailFrame title="Skills" about="Instruction bundles injected into the active participants." docs={PANE_DOCS.skills}>
+    <RailFrame
+      title="Skills"
+      about="Instruction bundles injected into the active participants."
+      docs={PANE_DOCS.skills}
+      primary={{ label: "Install skill", onClick: () => setShowAdd(true) }}
+    >
       <Section title="Loaded">
         {(skills.data ?? []).length > 0 && (
           <RowList label="Skills">
@@ -2970,8 +2844,9 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
           </RowList>
         )}
         {(skills.data ?? []).length === 0 && <EmptyHint text="No skills loaded" />}
-        <FormDisclosure label="Install skill" open={showAdd} onToggle={() => setShowAdd((v) => !v)}>
-          <Card className="space-y-2 p-3">
+        {showAdd && (
+        <Sheet title="Install a skill" side="center" width={420} onClose={() => setShowAdd(false)}>
+          <div className="space-y-2">
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -2999,8 +2874,9 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             <Button variant="primary" disabled={!source.trim() || installSkillMutation.isPending} onClick={() => installSkillMutation.mutate()}>
               Install
             </Button>
-          </Card>
-        </FormDisclosure>
+          </div>
+        </Sheet>
+        )}
       </Section>
     </RailFrame>
   );

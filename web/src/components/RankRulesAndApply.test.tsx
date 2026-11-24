@@ -142,9 +142,11 @@ describe("Apply on a host", () => {
   it("asks the picked host to apply an approved proposal", async () => {
     proposals = [{ ...base, canRequestApply: true }];
     rail("review");
-    const button = await screen.findByRole("button", { name: "Apply on sff" });
-    expect(screen.queryByRole("option", { name: /legacy/ })).toBeNull();
-    fireEvent.click(button);
+    // "Apply on <host>" lives in the proposal's row menu, one item per host.
+    fireEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+    const item = await screen.findByRole("menuitem", { name: "Apply on sff" });
+    expect(screen.queryByRole("menuitem", { name: /legacy/ })).toBeNull();
+    fireEvent.click(item);
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("request_apply_on_host", { sessionId: "s1", proposalId: "p1", hostDeviceId: HOST }),
     );

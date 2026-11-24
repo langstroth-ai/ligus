@@ -49,11 +49,6 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             title={item.title}
             context={where}
             onOpen={() => actions.openChat(item.chatId!)}
-            actions={
-              <Button size="sm" variant="quiet" onClick={() => actions.openChat(item.chatId!)}>
-                Open chat
-              </Button>
-            }
           />,
           <div key={`${item.key}:answer`} role="listitem" aria-label={`Answer in ${where ?? "the chat"}`} className="px-3 pb-1">
             <AgentAsks sessionId={item.chatId!} />
@@ -84,16 +79,10 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
             context={where}
             detail={liveTurns.failureOf(item.chatId!) ?? undefined}
             onOpen={() => actions.openChat(item.chatId!)}
-            actions={
-              <>
-                <Button size="sm" onClick={() => actions.openChat(item.chatId!)}>
-                  Open chat
-                </Button>
-                <Button size="sm" variant="quiet" onClick={() => liveTurns.clearFailure(item.chatId!)}>
-                  Dismiss
-                </Button>
-              </>
-            }
+            menu={[
+              { label: "Open chat", onSelect: () => actions.openChat(item.chatId!) },
+              { label: "Dismiss", onSelect: () => liveTurns.clearFailure(item.chatId!) },
+            ]}
           />
         );
       case "phone":
