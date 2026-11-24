@@ -74,8 +74,9 @@ describe("colour grammar", () => {
     expect(parseColor(" rgb(1, 2, 3) ")).toMatchObject({ css: "rgb(1,2,3)" });
     expect(parseColor("RGBA(1,2,3,.5)")).toMatchObject({ css: "rgba(1,2,3,0.5)" });
     expect(parseColor("rgb(1 2 3 / 0.25)")).toMatchObject({ css: "rgba(1,2,3,0.25)" });
-    expect(parseColor("oklch(0.5 0.1 200)")).toMatchObject({ css: "oklch(0.5 0.1 200)" });
-    expect(parseColor("OKLCH(50% 0.1 200 / 0.5)")).toMatchObject({ css: "oklch(0.5 0.1 200 / 0.5)" });
+    // oklch() is applied as rgb(): the editor, terminal and title bar read it back.
+    expect(parseColor("oklch(0.2376 0.0267 76.06)")).toMatchObject({ css: "rgb(38,29,16)" });
+    expect(parseColor("OKLCH(23.76% 0.0267 76.06 / 0.5)")).toMatchObject({ css: "rgba(38,29,16,0.5)" });
   });
 
   it("refuses anything that isn't one colour", () => {
@@ -360,5 +361,25 @@ describe("the shared schema", () => {
       expect("css" in parseColor(v), v).toBe(true);
     }
     for (const v of ["url(x)", "#fff;", "var(--x)"]) expect(pattern.test(v), v).toBe(false);
+  });
+});
+
+describe("review follow-ups", () => {
+  it("refuses names with bidi controls, lone surrogates or only invisible characters", () => {
+    for (const name of ["\u202egnp.exe", "a\u2066b", "\ud800x", "\u200b", "\ufeff \u200d"]) {
+      const r = parseThemeFile(JSON.stringify({ name, dark: { ink: "#fff" } }), "x.json");
+      expect(r.ok, JSON.stringify(name)).toBe(false);
+    }
+  });
+
+  it("finds JSON lines fast and in the right table", () => {
+    const pad = "\n".repeat(30000);
+    const keys = Array.from({ length: 2000 }, (_, i) => `"k${i}":"#000"`).join(",\n");
+    const text = `{"name": "light dark", ${pad}"light": {\n${keys},\n"ink": "nope"\n}}`;
+    const t0 = performance.now();
+    const r = parseThemeFile(text, "x.json");
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join("\n")).toMatch(/line 3\d{4}: /);
   });
 });

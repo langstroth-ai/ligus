@@ -14,16 +14,17 @@ and in lt.
 | **harbor** | ocean blue |
 | **meadow** | green |
 | **slate** | cool blue-grey |
-| **obsidian** | true dark, monochrome (dark in both variants on the desktop) |
+| **obsidian** | true dark, monochrome (dark in both variants on the desktop; lt re-lights it for a light terminal) |
 
 **Appearance** picks the variant: **auto** follows the system (the desktop)
 or the terminal's background (lt), or choose **light** or **dark**.
 
 - **Desktop:** Settings → Appearance → **Mode** and **Theme**. Changes apply
   at once and are kept on this device.
-- **lt:** the **Theme** and **Appearance** rows in Settings, or **Switch the
-  theme** in the palette (`ctrl-k`), preview live for the session. To keep
-  a choice, set it in lt's `config.toml`:
+- **lt:** the **Theme** and **Appearance** rows in Settings cycle them for
+  the session. The palette (`:` or `ctrl-k`, then type "theme") lists every
+  theme and shows each one as you move onto it: `enter` keeps it, `esc` goes
+  back. To keep a choice, set it in lt's `config.toml`:
 
   ```toml
   theme = "harbor"        # a palette, a custom theme's name, or mono
@@ -159,11 +160,17 @@ the desktop gets the palette the theme extends.
 
 ### In lt
 
-Put theme files in a `themes` folder next to lt's `config.toml`
-(`lt --print-config` and Settings show where it is), as
-`themes/<name>.toml` or `themes/<name>.json`, then pick it by name:
-`theme = "heather"`. Custom themes appear in Settings and in **Switch the
-theme**.
+Put theme files in a `themes` folder next to lt's `config.toml` (Settings
+shows where it is), as `themes/<name>.toml` or `themes/<name>.json`, then
+pick it by name: `theme = "heather"`. The name is lowercase letters, digits,
+`-` and `_`, and can't be a palette's. Custom themes appear in Settings and
+in the palette.
+
+lt draws accents and status colours as text. One too faint for text on the
+canvas (a desktop export gives the accent as a button fill, for example) is
+shown as the nearest readable shade of the same hue, with a warning saying
+which. lt's own palettes do the same: their text keeps 4.5:1 and borders
+3:1 on white, Solarized, black and GitHub Dark terminals.
 
 ```sh
 lt themes list            # the palettes and your themes

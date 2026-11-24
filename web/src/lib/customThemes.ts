@@ -152,9 +152,11 @@ export function parseColor(raw: unknown): ParsedColor | { error: string } {
     if (C > 0.5) return { error: `“${preview(raw)}”: chroma goes from 0 to 0.5` };
     if (H > 360) return { error: `“${preview(raw)}”: hue goes from 0 to 360` };
     if (a > 1) return { error: `“${preview(raw)}”: alpha goes from 0 to 1` };
-    const [r, g, b] = oklchToRgb(L, C, H);
-    const body = `${fmt(L, 4)} ${fmt(C, 4)} ${fmt(H, 2)}`;
-    return { rgba: { r, g, b, a }, css: a >= 1 ? `oklch(${body})` : `oklch(${body} / ${fmt(a, 3)})` };
+    // Applied as rgb(): the editor, the terminal and the title bar read
+    // these tokens back and understand rgb() and hex only.
+    const clip = (v: number) => Math.round(Math.min(255, Math.max(0, v)));
+    const [r, g, b] = oklchToRgb(L, C, H).map(clip);
+    return rgbResult(r, g, b, a);
   }
   return bad;
 }
@@ -305,9 +307,23 @@ export function readJson(text: string): Doc {
     throw new FileError(`not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (!isPlainObject(data)) throw new FileError("the file must be a JSON object");
+  // Line starts, once, so each lookup is a binary search (a 64 KB file of
+  // short lines stays fast).
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  const lineAt = (at: number) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= at) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
   const lineOf = (key: string, from = 0) => {
     const at = text.indexOf(JSON.stringify(key), from);
-    return at < 0 ? undefined : text.slice(0, at).split("\n").length;
+    return at < 0 ? undefined : lineAt(at);
   };
   const top: Table = new Map();
   const tables = new Map<string, Table>();
@@ -315,7 +331,10 @@ export function readJson(text: string): Doc {
     const value = (data as Record<string, unknown>)[key];
     if ((key === "light" || key === "dark") && isPlainObject(value)) {
       const t: Table = new Map();
-      const from = text.indexOf(JSON.stringify(key));
+      // The table's own key (a key followed by a colon), not an earlier
+      // mention of the word in a string.
+      const m = new RegExp(`${JSON.stringify(key)}\\s*:`).exec(text);
+      const from = m ? m.index : 0;
       for (const k of Object.keys(value)) t.set(k, { value: (value as Record<string, unknown>)[k], line: lineOf(k, from) });
       tables.set(key, t);
     } else {
@@ -421,6 +440,10 @@ function checkName(v: unknown): string | { error: string } {
   if (s.length > MAX_NAME_CHARS) return { error: `is longer than ${MAX_NAME_CHARS} characters` };
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(s)) return { error: "has control characters" };
+  if (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(s)) return { error: "has bidi control characters" };
+  // A lone surrogate couldn't be written back to a file (export, lt).
+  if (/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(s)) return { error: "isn't valid text" };
+  if (!s.replace(/[\u200b-\u200d\ufeff]/g, "").trim()) return { error: "is empty" };
   return s;
 }
 
