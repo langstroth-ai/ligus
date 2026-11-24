@@ -349,7 +349,7 @@ pub struct StepDef {
     pub fields: Vec<Field>,
     /// For a person step: which surface it happens in ("desktop: workspace
     /// menu > Admit a box").
-    #[serde(skip_serializing_if = "str::is_empty")]
+    #[serde(rename = "where", skip_serializing_if = "str::is_empty")]
     pub where_: &'static str,
 }
 
