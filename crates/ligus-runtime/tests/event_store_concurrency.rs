@@ -53,7 +53,7 @@ fn race(writers: Vec<Box<dyn FnOnce() -> Vec<String> + Send>>) -> Vec<String> {
 /// `store_authored` do: the sequence is read first, the envelope stored
 /// after (a phone-signed one can wait seconds in between).
 fn author(store: &EventStore, sid: Uuid, ws: Uuid, body: String) -> Result<SessionEventEnvelope, String> {
-    let seq = store.max_sequence(sid).map_err(|e| e.to_string())?.unwrap_or(0) + 1;
+    let seq = store.max_sequence(ws, sid).map_err(|e| e.to_string())?.unwrap_or(0) + 1;
     let env = SessionEventEnvelope::new(sid, ws, seq, message(body));
     store.append_envelope(&env).map_err(|e| e.to_string())?;
     Ok(env)
@@ -146,7 +146,7 @@ fn authoring_and_relay_ingest_of_one_chat_never_collide() {
     }
     let named: HashSet<Uuid> = mine.iter().filter_map(|e| e.actor_stamp.as_ref().and_then(|s| s.prev)).collect();
     assert_eq!(mine.iter().filter(|e| !named.contains(&e.event_id)).count(), 1, "the device's chain has one head");
-    assert_eq!(store.max_sequence(sid).unwrap(), Some(stored.len() as i64), "positions 1..=n, no gaps");
+    assert_eq!(store.max_sequence(ws, sid).unwrap(), Some(stored.len() as i64), "positions 1..=n, no gaps");
 }
 
 /// Two sync engines (the serve loop and a one-shot sync, or the DM sync)
@@ -277,7 +277,7 @@ fn opening_the_store_while_another_connection_writes_never_reports_busy() {
         let path = path.clone();
         writers.push(Box::new(move || {
             (0..n / 4)
-                .filter_map(|_| EventStore::open(&path).and_then(|s| s.max_sequence(sid)).err().map(|e| format!("open: {e}")))
+                .filter_map(|_| EventStore::open(&path).and_then(|s| s.max_sequence(ws, sid)).err().map(|e| format!("open: {e}")))
                 .collect()
         }));
     }

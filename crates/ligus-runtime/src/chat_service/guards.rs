@@ -206,7 +206,7 @@ impl ChatService {
         grants.well_formed().map_err(|e| ChatError::Unauthorized(format!("sandbox grants: {}", e.0)))?;
         let config_id = self.ensure_workspace_config(workspace_id)?;
         if self.local_workspace_id != Some(workspace_id) {
-            if let Some(cfg) = self.load(config_id)? {
+            if let Some(cfg) = self.load_in(workspace_id, config_id)? {
                 let shell_change = !grants.shell_changes(&cfg.guards.sandbox_grants).is_empty();
                 if shell_change && self.actor_role(&cfg) != ligus_core::WorkspaceRole::Owner {
                     return Err(ChatError::Unauthorized("only the Owner grants or withdraws an agent's shell".into()));

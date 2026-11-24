@@ -78,7 +78,7 @@ impl ChatService {
     /// What relay subject `subject` names in `workspace_id` (reads only).
     pub fn relay_subject_target(&self, workspace_id: Uuid, subject: &str) -> Result<RelaySubject> {
         let config_id = workspace_config_session_id(workspace_id);
-        let config = self.load(config_id)?;
+        let config = self.load_in(workspace_id, config_id)?;
         let members = config.as_ref().map(|c| c.members.as_slice()).unwrap_or_default();
         let subject = subject.trim();
 

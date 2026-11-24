@@ -352,9 +352,10 @@ pub async fn drain_tick(
         let mut runtimes = svc.list_workspace_runtimes(ctx.ws)?;
         runtimes.extend(local_runtimes(&ctx.cfg.data_dir));
         let mut candidates: Vec<PendingMention> = Vec::new();
-        for id in svc.store().list_session_ids()? {
+        // This workspace's chats, each read as (workspace, chat).
+        for id in svc.store().sessions_of_workspace(ctx.ws)? {
             // Skip a session that fails to load rather than aborting the whole tick.
-            let s = match svc.load(id) {
+            let s = match svc.load_in(ctx.ws, id) {
                 Ok(Some(s)) => s,
                 Ok(None) => continue,
                 Err(e) => {
@@ -558,7 +559,8 @@ async fn run_turn(
 ) -> Result<()> {
     // `Queued` was already reported: every exit must end in Done or Error, or
     // the phone's turn strip waits forever.
-    let Some(s) = lock(svc).load(pm.session_id)? else {
+    // The chat of this worker's workspace: its log is (workspace, chat).
+    let Some(s) = lock(svc).load_in(ctx.ws, pm.session_id)? else {
         sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("chat no longer exists"));
         return Ok(());
     };
@@ -612,10 +614,10 @@ async fn run_turn(
     // config roster at its frontier), not today's; an agent's message (a
     // hand-off, an @mention cascade) has none of its own and resolves to the
     // lowest of the humans behind its chain (the rule every host shares).
-    let author_role = lock(svc).trigger_author_role(pm.session_id, pm.message_id).ok().flatten();
+    let author_role = lock(svc).trigger_author_role_in(ctx.ws, pm.session_id, pm.message_id).ok().flatten();
     // Phase C: the shell is the Owner's (every person behind the turn a
     // workspace Owner), or an Owner granted it to this agent.
-    let shell_role = lock(svc).trigger_shell_role(pm.session_id, pm.message_id).ok().flatten();
+    let shell_role = lock(svc).trigger_shell_role_in(ctx.ws, pm.session_id, pm.message_id).ok().flatten();
     // The signed grants, when this host applies them (`LIGUS_SANDBOX_GRANTS`;
     // by default only on the workspace Owner's own hosts).
     let grants = lock(svc).sandbox_grants_here(s.workspace_id, ligus_runtime::sandbox::grants_setting_from_env()).0;

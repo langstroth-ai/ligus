@@ -34,7 +34,7 @@ impl ChatService {
     /// The workspace memory, folded from the config log (empty before it
     /// syncs).
     pub fn memory(&self, workspace_id: Uuid) -> Result<MemoryState> {
-        Ok(self.load(workspace_config_session_id(workspace_id))?.map(|s| s.flow.memory).unwrap_or_default())
+        Ok(self.load_in(workspace_id, workspace_config_session_id(workspace_id))?.map(|s| s.flow.memory).unwrap_or_default())
     }
 
     /// The task-state slots of a chat.

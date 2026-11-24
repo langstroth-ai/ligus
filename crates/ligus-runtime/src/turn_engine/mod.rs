@@ -937,8 +937,9 @@ pub fn decide_gate(
     rt: ResolvedRuntime,
     grants_setting: Option<bool>,
 ) -> Result<Gated, String> {
-    let author_role = svc.trigger_author_role(session.id, trigger).ok().flatten();
-    let shell_role = svc.trigger_shell_role(session.id, trigger).ok().flatten();
+    // The dispatching chat's own workspace: its log is (workspace, chat).
+    let author_role = svc.trigger_author_role_in(session.workspace_id, session.id, trigger).ok().flatten();
+    let shell_role = svc.trigger_shell_role_in(session.workspace_id, session.id, trigger).ok().flatten();
     let grants = svc.sandbox_grants_here(session.workspace_id, grants_setting).0;
     let granted = agent_id.is_some_and(|id| grants.shell_granted(id));
     decide_gate_with(session, rt, author_role, shell_role, granted, grants.paths_for(agent_id))

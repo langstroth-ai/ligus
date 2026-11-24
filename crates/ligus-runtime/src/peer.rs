@@ -207,8 +207,13 @@ impl PeerSync {
         let mut out = Vec::new();
         let ids = store.list_session_ids().map_err(|e| PeerError::Store(e.to_string()))?;
         for session_id in ids {
-            // Every copy held, not only the first of an id to arrive here.
-            let envs = store.list_copies(session_id).map_err(|e| PeerError::Store(e.to_string()))?;
+            // Every copy held, not only the first of an id to arrive here,
+            // of each log (workspace, session) this peer shares.
+            let claims = store.workspaces_claiming(session_id).map_err(|e| PeerError::Store(e.to_string()))?;
+            let mut envs = Vec::new();
+            for ws in claims.into_iter().filter(|w| self.workspaces.contains(w)) {
+                envs.extend(store.list_copies_in(ws, session_id).map_err(|e| PeerError::Store(e.to_string()))?);
+            }
             for env in envs {
                 if self.workspaces.contains(&env.workspace_id) && self.seen.insert((env.event_id, env.signature.clone())) {
                     out.push(serde_json::to_vec(&env)?);

@@ -81,7 +81,7 @@ pub(crate) fn founder_status_sync(state: State<AppState>, session_id: String) ->
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let waiting = {
         let svc = state.service.lock().unwrap();
-        match svc.store().workspace_of(sid).map_err(map_err)? {
+        match svc.workspace_of(sid).map_err(map_err)? {
             Some(ws) => svc.waiting_for_founder(ws).map_err(map_err)?,
             None => None,
         }

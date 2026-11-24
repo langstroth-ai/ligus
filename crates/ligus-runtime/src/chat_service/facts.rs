@@ -171,15 +171,17 @@ impl ChatService {
             // the config log (membership, revocation, rules, agents) re-judges
             // every chat of the workspace. Observe those chats again so a
             // reader never keeps a state the fold has since withdrawn.
-            let mut changed = self.store.sessions_changed_after(from.events)?;
-            changed.extend(self.store.sessions_equivocated_after(from.equivocations)?);
+            // Each log (workspace, session) on its own: a session id another
+            // workspace also stamped is another log.
+            let mut changed = self.store.logs_changed_after(from.events)?;
+            changed.extend(self.store.logs_equivocated_after(from.equivocations)?);
             for ws in self.store.trust_changed_workspaces_after(from.events, from.equivocations)? {
-                changed.extend(self.store.sessions_of_workspace(ws)?);
+                changed.extend(self.store.sessions_of_workspace(ws)?.into_iter().map(|sid| (ws, sid)));
             }
             let mut seen = std::collections::HashSet::new();
-            changed.retain(|sid| seen.insert(*sid));
-            for sid in changed {
-                let Ok(Some(session)) = self.load(sid) else { continue };
+            changed.retain(|log| seen.insert(*log));
+            for (ws, sid) in changed {
+                let Ok(Some(session)) = self.load_in(ws, sid) else { continue };
                 let config = sid == ligus_core::workspace_config_session_id(session.workspace_id);
                 out.extend(crate::facts::state_lines(next.events, now_ms, &session, config));
             }

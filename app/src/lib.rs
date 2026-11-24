@@ -4894,7 +4894,7 @@ pub(crate) fn list_membership_audit_sync(state: State<AppState>) -> Result<Vec<M
     let svc = state.service.lock().unwrap();
     // What the log decided, copy by copy: a refused event (or another
     // signer's copy under a real event's id) never shows as a change.
-    let all = svc.store().list_copies(config_id).map_err(map_err)?;
+    let all = svc.store().list_copies_in(active, config_id).map_err(map_err)?;
     let verdicts = ligus_core::fold_copy_decisions(&all, svc.trusted_founder(), None, ligus_core::WorkspaceAuthz::Unchecked);
     let mut envs: Vec<_> = all.iter().filter(|e| verdicts.get(e) == Some(ligus_core::Verdict::Allowed)).cloned().collect();
     envs.sort_by_key(|e| e.canonical_key());
@@ -10350,9 +10350,11 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
 /// every unanswered user message of the pull in order ([`synced_user_triggers`]),
 /// then the chat's trailing message (an agent hand-off). Each chat runs on its
 /// own task; the per-chat busy guard and the turn claim keep a chat the UI is
-/// also dispatching from answering twice. `arrived` is `(chat, message,
-/// signing device)` from [`ligus_runtime::EventStore::messages_after`].
-fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uuid>)>) {
+/// also dispatching from answering twice. `arrived` is `(workspace, chat,
+/// message, signing device)` from
+/// [`ligus_runtime::EventStore::messages_after`]; only the active
+/// workspace's chats are answered, each read as (active workspace, chat).
+fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Uuid, Option<Uuid>)>) {
     if arrived.is_empty() {
         return;
     }
@@ -10361,20 +10363,26 @@ fn dispatch_synced_messages(app: &AppHandle, arrived: Vec<(Uuid, Uuid, Option<Uu
     let my_device = state.service.lock().unwrap().device_id();
     // Group by chat, keeping arrival order. This device's own posts are left
     // to `send_message`, which answers (or defers) them as they're sent.
-    let mut by_chat: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
-    for (sid, mid, signer) in arrived {
+    let mut by_chat: Vec<((Uuid, Uuid), Vec<Uuid>)> = Vec::new();
+    for (ws, sid, mid, signer) in arrived {
         let foreign = signer != Some(my_device);
-        match by_chat.iter_mut().find(|(s, _)| *s == sid) {
+        match by_chat.iter_mut().find(|(log, _)| *log == (ws, sid)) {
             Some((_, ids)) => ids.extend(foreign.then_some(mid)),
-            None => by_chat.push((sid, foreign.then_some(mid).into_iter().collect())),
+            None => by_chat.push(((ws, sid), foreign.then_some(mid).into_iter().collect())),
         }
     }
-    for (sid, ids) in by_chat {
+    for ((ws, sid), ids) in by_chat {
         notify_agent_use_synced(app, &state, sid, &ids);
         notices::synced_replies(app, &state, sid, &ids);
         let triggers = {
             let svc = state.service.lock().unwrap();
-            match svc.load(sid) {
+            // Only the active workspace's chats, each read as (active
+            // workspace, chat): another workspace's log under a chat id this
+            // workspace uses is never this workspace's chat.
+            if ws != active {
+                continue;
+            }
+            match svc.load_in(active, sid) {
                 Ok(Some(s)) if s.workspace_id == active => synced_user_triggers(&s, &ids),
                 _ => continue,
             }
@@ -12666,6 +12674,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // an identity churn can't lock the sole user out of routine actions in their
     // own Home workspace.
     service.set_local_workspace(local_workspace_id);
+    service.set_context_workspace(Some(local_workspace_id));
     // Make the current user the sole Owner of their auto-created Home workspace,
     // repairing any churn residue (a stranded Owner under an old id + a demoted
     // "self" Contributor). Idempotent — a no-op once the roster is clean.
@@ -13609,6 +13618,8 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
         // uses the in-band self-consistency rule.
         let mut svc = state.service.lock().unwrap();
         svc.set_trusted_founder(None);
+        // A chat id several workspaces claim reads as the active one's.
+        svc.set_context_workspace(Some(state.local_workspace_id));
         *state.active_workspace.lock().unwrap() = state.local_workspace_id;
         // Every workspace gets a #general so the channel tree is never empty
         // (idempotent — no-op once any channel exists).
@@ -13640,6 +13651,8 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
             // projection this activation triggers, so the founder's config seed is
             // the base and a forged low-lamport seed can't take over (B2 residual).
             svc.set_trusted_founder(founder.clone());
+            // A chat id several workspaces claim reads as the active one's.
+            svc.set_context_workspace(Some(id));
             // P0.4: pin the founder's key fingerprint from the invite (first pin
             // wins), so the trust roster rejects a forged founder registration.
             if let (Some(f), Some(fk)) = (founder.as_deref(), fk.as_deref()) {
@@ -13669,6 +13682,7 @@ pub(crate) fn set_active_workspace_sync(state: State<AppState>, workspace_id: St
     } else {
         drop(s);
         *state.active_workspace.lock().unwrap() = state.local_workspace_id;
+        state.service.lock().unwrap().set_context_workspace(Some(state.local_workspace_id));
     }
     // Make the effective code dir follow the now-active workspace (its
     // device-local folder binding, or empty/no-watch if unbound). Mirrors

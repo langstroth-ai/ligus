@@ -66,7 +66,7 @@ impl ChatService {
     ) -> Result<ProposalSet> {
         let set_id = set.id;
         let session = self
-            .load(session_id)?
+            .load_in(workspace_id, session_id)?
             .ok_or_else(|| ChatError::NotFound(format!("session {session_id}")))?;
         for id in &set.alternatives {
             if let Some(mut p) = session.proposals.iter().find(|p| p.id == *id).cloned() {
@@ -449,7 +449,7 @@ mod tests {
             forged(&eve, 9_003, SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::now() }),
         ] {
             let mut env = env;
-            ligus_core::lamport::stamp_next(&mut env, svc.store().lamport_head(sid).unwrap());
+            ligus_core::lamport::stamp_next(&mut env, svc.store().lamport_head(wid, sid).unwrap());
             svc.store().append_envelope(&env).unwrap();
         }
         // The raw fold (no workspace roster) would take them.

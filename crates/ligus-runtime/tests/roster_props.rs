@@ -322,7 +322,7 @@ proptest! {
                 store.ingest(&back).unwrap();
             }
             let (cfg, timeline) = store.load_config(ws, None, None).unwrap();
-            let chat = store.load_session_authorized(sid, None, None, ligus_core::WorkspaceAuthz::Timeline(&timeline)).unwrap();
+            let chat = store.load_session_authorized(ws, sid, None, None, ligus_core::WorkspaceAuthz::Timeline(&timeline)).unwrap();
             (cfg.map(|c| c.members), chat.map(|c| (c.proposals, c.authz.held)), store.list(sid).unwrap().len())
         };
         let a = fold(&events);
