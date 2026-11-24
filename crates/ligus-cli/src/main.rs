@@ -158,8 +158,13 @@ fn config() -> Config {
         .or_else(|| env_opt("HOME").map(|h| ligus_core::names::home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./ligus-data"));
     create_data_dir_or_exit(&data_dir);
-    // B2: secrets come from the OS secret store from here on.
-    ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
+    // B2: secrets come from the OS secret store from here on. `ligus doctor`
+    // opens it with keychain prompts off: checking never asks.
+    if std::env::args().skip(1).find(|a| !a.starts_with('-')).as_deref() == Some("doctor") {
+        ligus_runtime::secret_store::without_prompts(|| ligus_runtime::secret_store::init_for_data_dir(&data_dir, None));
+    } else {
+        ligus_runtime::secret_store::init_for_data_dir(&data_dir, None);
+    }
     // Env wins; the saved config.toml (from `ligus enroll`) fills the rest.
     let f = load_file_config(&data_dir);
     Config {
@@ -1437,6 +1442,11 @@ fn cmd_add_agent(
     role: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
+    // The desktop refuses these too: a mention word ("ligus", "primary", the
+    // legacy "hive", "all", ...) would shadow the default agent or a group.
+    if ligus_core::agent::is_reserved_agent_name(name) {
+        return Err(crate::help::usage_error(format!("'{name}' is a reserved mention name: pick another agent name")));
+    }
     if dry_run {
         // The dry run checks what the real run needs: the runtime exists.
         let svc = open_service(cfg)?;
@@ -2085,6 +2095,45 @@ fn doctor_text(r: &checks::Report, quiet: bool, color: bool) -> String {
     s
 }
 
+/// `secrets.keychain-access`: whether this build can use the Ligus keychain
+/// without macOS asking (found without a prompt: every read runs with
+/// keychain prompts off).
+#[cfg(target_os = "macos")]
+fn keychain_access_check(access: &ligus_runtime::secret_store::KeychainAccess) -> checks::Check {
+    use checks::Check;
+    use ligus_runtime::secret_store::KeychainAccess as A;
+    const ID: &str = "secrets.keychain-access";
+    const TITLE: &str = "keychain access";
+    match access {
+        A::NoKeychain => Check::skip(ID, TITLE, "no Ligus keychain in this data dir yet"),
+        A::Trusted { untrusted } if untrusted.is_empty() => Check::ok(ID, TITLE, "this build reads the Ligus keychain without a prompt"),
+        A::Trusted { untrusted } => Check::warn(
+            ID,
+            TITLE,
+            format!("{} item(s) in the Ligus keychain were saved by a different Ligus build: {}", untrusted.len(), untrusted.join(", ")),
+        )
+        .fix(
+            "quit and reopen a signed release of the Ligus app: it repairs their access by itself, without asking (the ligus CLI and \
+             development builds don't; use the build that saved them). If macOS asks for the \"ligus\" keychain password, choose \
+             Cancel: that password is random and only Ligus knows it",
+        ),
+        A::UnlockNotTrusted => Check::warn(
+            ID,
+            TITLE,
+            "the keychain's unlock password (ai.ligus.secrets.unlock in the login keychain) exists, but this build isn't trusted to read it, \
+             so macOS asks (it was saved by a different Ligus build)",
+        )
+        .fix(
+            "run the build that uses this data dir in this Mac's desktop session (the Ligus app, or ligus with the same data dir in a \
+             desktop terminal), enter your login password when macOS asks about ai.ligus.secrets.unlock and choose Always Allow; a \
+             signed release of the Ligus app then repairs the item so it never asks again",
+        ),
+        A::UnlockMissing => Check::fail(ID, TITLE, "the Ligus keychain's unlock password is missing from the login keychain")
+            .fix("the keychain in this data dir can't be opened without it (was the data dir copied from another Mac or user?): ligus help security"),
+        A::Other(e) => Check::warn(ID, TITLE, format!("couldn't check the Ligus keychain without a prompt ({e})")).fix("ligus help security"),
+    }
+}
+
 /// `ligus doctor`'s workspace checks: the secret store, the connection, the
 /// relay (one request), and the events held aside.
 fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
@@ -2100,6 +2149,17 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
     } else {
         Check::ok("secrets.backend", "secret store", backend.as_str())
     });
+    #[cfg(target_os = "macos")]
+    if matches!(backend, ligus_runtime::secret_store::Backend::MacKeychain | ligus_runtime::secret_store::Backend::Unavailable) {
+        // Never in a test binary unless it opted in: the probe reads the
+        // login keychain (read-only, prompts off).
+        let real = !ligus_runtime::executor::cli_home::in_test_binary() || ligus_runtime::executor::cli_home::test_keychain_opt_in();
+        r.add(if real {
+            keychain_access_check(&ligus_runtime::secret_store::MacKeychain::access(&cfg.data_dir))
+        } else {
+            Check::skip("secrets.keychain-access", "keychain access", "not probed in tests")
+        });
+    }
 
     let st = status_report(cfg);
     let w = &st["workspace"];
@@ -3040,6 +3100,29 @@ mod cli_tests {
         assert!(doctor_text(&r, false, true).contains("\x1b[33mwarn"), "colour on request");
     }
 
+    /// `secrets.keychain-access` says what was found and what to do,
+    /// without ever saying to delete the keychain.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_access_check_explains_each_case() {
+        use ligus_runtime::secret_store::KeychainAccess as A;
+        let s = |a: A| keychain_access_check(&a);
+        assert_eq!(s(A::NoKeychain).status, checks::Status::Skip);
+        assert_eq!(s(A::Trusted { untrusted: vec![] }).status, checks::Status::Ok);
+        let c = s(A::UnlockNotTrusted);
+        assert_eq!(c.status, checks::Status::Warn);
+        assert!(c.id == "secrets.keychain-access" && c.detail.contains("isn't trusted"), "{}", c.detail);
+        assert!(c.fix.as_deref().is_some_and(|f| f.contains("Always Allow") && f.contains("ai.ligus.secrets.unlock")));
+        let c = s(A::Trusted { untrusted: vec!["seed:device".into()] });
+        assert!(c.status == checks::Status::Warn && c.detail.contains("seed:device"), "{}", c.detail);
+        assert!(c.fix.as_deref().is_some_and(|f| f.contains("choose Cancel")));
+        assert_eq!(s(A::UnlockMissing).status, checks::Status::Fail);
+        for a in [A::UnlockNotTrusted, A::UnlockMissing, A::Trusted { untrusted: vec!["x".into()] }, A::Other("e".into())] {
+            let c = s(a);
+            assert!(!format!("{} {:?}", c.detail, c.fix).to_ascii_lowercase().contains("delete"), "{}", c.detail);
+        }
+    }
+
     /// A bare doctor runs everything; --sandbox, --gateways and the
     /// preflight flags narrow it.
     #[test]
@@ -3089,6 +3172,22 @@ mod cli_tests {
         let ws = uuid_of_room(&cfg.room);
         let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
         assert!(agents.is_empty(), "a dry run created an agent");
+    }
+
+    /// A mention word is no agent name: `ligus`, `primary` and the legacy
+    /// `hive` would shadow the default agent (a usage error, nothing signed).
+    #[test]
+    fn add_agent_refuses_the_default_agents_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        for name in ["ligus", "Hive", " primary ", "all"] {
+            let e = cmd_add_agent(&cfg, name, "rt", None, None, false).unwrap_err();
+            assert!(crate::help::is_usage(&e), "{name}: {e:#}");
+        }
+        let svc = open_service(&cfg).unwrap();
+        let ws = uuid_of_room(&cfg.room);
+        let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
+        assert!(agents.is_empty());
     }
 
     /// Only scheme://host[:port] of a relay URL is ever printed.

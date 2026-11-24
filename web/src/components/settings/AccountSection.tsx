@@ -26,13 +26,15 @@ import {
 } from "@/lib/ipc";
 import { deviceName, pairingLine, revokeConfirmText } from "@/lib/myDevices";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, Section, Switch, fieldStyle } from "@/components/ui";
+import { Button, Hint, InfoTip, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
 import { Row } from "@/components/settings/FlowSection";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { LinkedAccountsSection } from "@/components/settings/LinkedAccountsSection";
 import { AddPhonePanel } from "@/components/settings/AddPhonePanel";
+import { Sheet } from "@/components/kit/Sheet";
+import { MoreMenu } from "@/components/MoreMenu";
 
 /// Profile page: your name, picture, safety code and commit email, and the
 /// devices that act as you. Your account is a key made on this device; no
@@ -75,6 +77,7 @@ export function PrivacySection() {
       <Row
         label="Let members use @ligus on this device"
         hint="In a chat with other people, @ligus runs on this device and your account. Off: it answers only you, and other members are told to use their own agents."
+        note="Runs on this device and your account."
       >
         <Switch
           on={primary.data ?? false}
@@ -99,11 +102,11 @@ export function SafetyCodeSection() {
   const profile = useQuery({ queryKey: ["my-profile"], queryFn: myProfile });
   const code = profile.data?.safetyCode;
   return (
-    <Section title="Safety code">
-      <p className="text-xs text-ink-soft">
-        Read this to someone you're inviting, or compare it with the code they see for you. If the codes match,
-        the invite really is from you.
-      </p>
+    <Section
+      title="Safety code"
+      info="Read this to someone you're inviting, or compare it with the code they see for you. If the codes match, the invite really is from you."
+    >
+      <Hint>Compare it with the code they see for you.</Hint>
       {code ? (
         <div className="flex items-center gap-3">
           <code className="font-mono text-sm font-bold tracking-wider" aria-label="Your safety code">
@@ -196,7 +199,7 @@ function IdentitySection() {
   return (
     <Section title="Profile">
       <div className="mb-4 flex items-center gap-3">
-        <label className="group/av relative cursor-pointer" data-tip="Upload an avatar">
+        <label className="group/av relative cursor-pointer" data-tip="Upload an avatar. Everyone in the workspace sees it.">
           <Avatar name={settings.data?.displayName || name || "You"} url={settings.data?.avatarUrl} kind="human" size={52} />
           <span
             className="absolute inset-0 flex items-center justify-center rounded-full text-[11px] font-semibold opacity-0 transition-opacity group-hover/av:opacity-100"
@@ -216,7 +219,6 @@ function IdentitySection() {
           />
         </label>
         <div className="text-xs text-ink-soft">
-          <div>Your avatar is shown to everyone in the workspace.</div>
           {settings.data?.avatarUrl && (
             <button onClick={() => void clearAvatar()} className="mt-1 underline text-ink-soft hover:text-ink">
               Remove
@@ -232,19 +234,25 @@ function IdentitySection() {
         className="w-full rounded-xl border px-3 py-2 text-sm"
         style={fieldStyle}
       />
-      <label className="mt-2 block text-sm text-ink-soft">Git email</label>
+      <div className="mt-2 flex items-center gap-1.5">
+        <label className="block text-sm text-ink-soft" htmlFor="profile-git-email">
+          Git email
+        </label>
+        <InfoTip
+          label="Git email"
+          text="Used to credit you as the commit author when an agent does work you asked for, even if it runs on a teammate's machine. Members of your workspaces can see it."
+        />
+      </div>
       <input
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         onBlur={() => void commitEmail()}
+        id="profile-git-email"
         placeholder="you@example.com"
         className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
         style={fieldStyle}
       />
-      <p className="text-xs text-ink-soft">
-        Used to credit you as the commit author when an agent does work you asked for, even if it runs on a
-        teammate's machine. Members of your workspaces can see it.
-      </p>
+      <Hint>Visible to workspace members.</Hint>
       <span className="text-xs text-ink-soft">Device: {settings.data?.deviceName ?? "…"}</span>
     </Section>
   );
@@ -338,23 +346,16 @@ export function DevicesSection() {
   return (
     <Section
       title="My devices"
+      info="Devices that act as you in this workspace. Add your phone's home host (ligus serve) here so what you do from your phone is yours, not a separate member's."
       action={
-        !adding && !addingPhone ? (
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => setAddingPhone(true)}>
-              Add a phone
-            </Button>
-            <Button size="sm" onClick={() => setAdding(true)}>
-              Add a device
-            </Button>
-          </div>
-        ) : undefined
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" onClick={() => setAdding(true)}>
+            Add a device
+          </Button>
+          <MoreMenu label="More device actions" items={[{ label: "Add a phone…", onSelect: () => setAddingPhone(true) }]} />
+        </div>
       }
     >
-      <p className="text-xs text-ink-soft">
-        Devices that act as you in this workspace. Add your phone's home host (<code>ligus serve</code>) here
-        so what you do from your phone is yours, not a separate member's.
-      </p>
       {pending.map((r) => (
         <div
           key={r.hostId}
@@ -366,18 +367,30 @@ export function DevicesSection() {
         </div>
       ))}
       {addingPhone && (
-        <div ref={phoneRef}>
-          <AddPhonePanel
-            onDone={() => {
-              setAddingPhone(false);
-              refresh();
-            }}
-            onCancel={() => setAddingPhone(false)}
-          />
-        </div>
+        <Sheet title="Add a phone" side="center" width={520} onClose={() => setAddingPhone(false)}>
+          <div ref={phoneRef}>
+            <AddPhonePanel
+              onDone={() => {
+                setAddingPhone(false);
+                refresh();
+              }}
+              onCancel={() => setAddingPhone(false)}
+            />
+          </div>
+        </Sheet>
       )}
       {adding && (
-        <div className="space-y-2 rounded-xl border px-3 py-3" style={fieldStyle}>
+        <Sheet
+          title="Add a device"
+          side="center"
+          width={500}
+          onClose={() => {
+            setAdding(false);
+            setCode("");
+            setPreview(null);
+          }}
+        >
+        <div className="space-y-2">
           <textarea
             value={code}
             onChange={(e) => void check(e.target.value)}
@@ -436,39 +449,40 @@ export function DevicesSection() {
             </Button>
           </div>
         </div>
+        </Sheet>
       )}
-      {list.map((d) => (
-        <div
-          key={d.deviceId}
-          className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2"
-          style={{ ...fieldStyle, opacity: d.revoked ? 0.55 : 1 }}
-        >
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {deviceName(d, pairings.data ?? [])}
-              {d.thisDevice && <span className="text-ink-soft"> · this device</span>}
-              {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
-            </div>
-            <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
-            {!d.revoked && pairingLine(d, pairings.data ?? []) && (
-              <div className="truncate text-[11px] text-ink-soft">{pairingLine(d, pairings.data ?? [])}</div>
-            )}
-            {d.revoked &&
-              (revocations.data ?? [])
-                .filter((r) => r.deviceId === d.deviceId)
-                .map((r) => <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />)}
-          </div>
-          {!d.thisDevice && !d.revoked && (
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => void revoke(d)}
+      <RowList label="My devices">
+        {list.map((d) => {
+          const pl = !d.revoked ? pairingLine(d, pairings.data ?? []) : "";
+          const revs = d.revoked ? (revocations.data ?? []).filter((r) => r.deviceId === d.deviceId) : [];
+          return (
+            <ListRow
+              key={d.deviceId}
+              title={
+                <span style={{ opacity: d.revoked ? 0.55 : 1 }}>
+                  {deviceName(d, pairings.data ?? [])}
+                  {d.thisDevice && <span className="font-normal text-ink-soft"> · this device</span>}
+                  {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
+                </span>
+              }
+              meta={<span className="font-mono">{d.fingerprint}</span>}
+              actionsLabel={`Actions for ${deviceName(d, pairings.data ?? [])}`}
+              actions={
+                !d.thisDevice && !d.revoked ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []
+              }
             >
-              Revoke
-            </button>
-          )}
-        </div>
-      ))}
+              {(pl || revs.length > 0) && (
+                <div className="px-1">
+                  {pl && <div className="truncate text-[11px] text-ink-soft">{pl}</div>}
+                  {revs.map((r) => (
+                    <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />
+                  ))}
+                </div>
+              )}
+            </ListRow>
+          );
+        })}
+      </RowList>
     </Section>
   );
 }

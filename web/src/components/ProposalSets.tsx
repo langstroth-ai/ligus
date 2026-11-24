@@ -31,6 +31,7 @@ import { ProposalDiffModal } from "@/components/RightRail";
 import { IconCheck, IconChevronRight, IconX } from "@/lib/icons";
 import type { ProposalDto } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
+import { useRowMenu } from "@/components/RowMenu";
 
 function Chip({ tone, icon, children }: { tone: Tone; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -85,6 +86,27 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
       return r;
     });
   const live = isOpen(set);
+  // Set-level secondary actions live in the set's menu (right-click the
+  // header, its ⋯, or Shift+F10); "Send scouts" stays the one visible step.
+  const setMenu = useRowMenu(
+    `Actions for “${set.question}”`,
+    live
+      ? [
+          {
+            label: "New round",
+            disabled: busy,
+            title: "New evidence: older scout support decays one round",
+            onSelect: () => run(() => advanceProposalSetRound(sessionId, set.id)),
+          },
+          {
+            label: "Close without choosing",
+            danger: true,
+            disabled: busy,
+            onSelect: () => run(() => closeProposalSet(sessionId, set.id)),
+          },
+        ]
+      : [],
+  );
   const maxSupport = Math.max(1, ...set.alternatives.map((a) => a.support));
 
   return (
@@ -92,9 +114,11 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
       className="rounded-xl border"
       style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
       data-testid="proposal-set"
+      {...setMenu.rowProps}
     >
+      <div className="flex items-start">
       <button
-        className="flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--ligus-hover)]"
+        className="flex min-w-0 flex-1 items-start gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[color:var(--ligus-hover)]"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
@@ -114,6 +138,9 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
           <span className="mt-1 block text-xs leading-[1.45] text-ink-soft">{phaseLine(set)}</span>
         </span>
       </button>
+      <span className="pr-2 pt-2.5">{setMenu.button}</span>
+      </div>
+      {setMenu.menu}
 
       {open && (
         <div className="space-y-3 border-t px-3 pb-3 pt-2.5" style={{ borderColor: "var(--ligus-line)" }}>
@@ -130,7 +157,7 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
             onDial={(dial) => run(() => tuneProposalSet(sessionId, set.id, { dial }))}
           />
 
-          <div className="space-y-2">
+          <ul className="ligus-rowlist" aria-label="Alternatives">
             {set.alternatives.map((alt) => (
               <Alternative
                 key={alt.proposalId}
@@ -146,33 +173,21 @@ function ProposalSetCard({ sessionId, set }: { sessionId: string; set: ProposalS
                 sessionId={sessionId}
               />
             ))}
-          </div>
+          </ul>
 
-          {live && (
-            <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "var(--ligus-line)" }}>
-              {set.phase === "scouting" && (
-                <Button
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      const n = await sendScouts(sessionId, set.id);
-                      toast.success(`Sent ${n} scout${n === 1 ? "" : "s"}.`);
-                    })
-                  }
-                >
-                  Send scouts
-                </Button>
-              )}
+          {live && set.phase === "scouting" && (
+            <div className="flex flex-wrap gap-2">
               <Button
+                variant="primary"
                 disabled={busy}
-                title="New evidence: older scout support decays one round"
-                onClick={() => run(() => advanceProposalSetRound(sessionId, set.id))}
+                onClick={() =>
+                  run(async () => {
+                    const n = await sendScouts(sessionId, set.id);
+                    toast.success(`Sent ${n} scout${n === 1 ? "" : "s"}.`);
+                  })
+                }
               >
-                New round
-              </Button>
-              <Button disabled={busy} onClick={() => run(() => closeProposalSet(sessionId, set.id))}>
-                Close without choosing
+                Send scouts
               </Button>
             </div>
           )}
@@ -267,15 +282,24 @@ function Alternative({
   const step = nextStep(set, alt);
   const awaiting = Math.max(0, set.agentQuorum - alt.scouts - alt.pendingScouts.length);
   const pct = Math.round((alt.support / maxSupport) * 100);
+  const canWithdraw = isOpen(set) && alt.active && !front;
+  // The one decision the row asks for stays a visible button (Approve, Run
+  // pre-flight, Apply, Revert); Reject, Withdraw and the diff are in the
+  // row's menu.
+  const menu = useRowMenu(`Actions for alternative ${alt.label}`, [
+    ...(diff ? [{ label: "View diff", onSelect: () => setDiffOpen(true) }] : []),
+    ...(canWithdraw ? [{ label: "Withdraw", disabled: busy, onSelect: onWithdraw }] : []),
+    ...(step === "approve" ? [{ label: "Reject", danger: true, disabled: busy, onSelect: () => onVote(false) }] : []),
+  ]);
   return (
-    <div
-      className="rounded-lg border p-2.5"
+    <li
+      className="py-2.5 pl-2.5 pr-1"
       data-testid={`alternative-${alt.label}`}
       style={{
-        borderColor: front || winner ? "var(--tint-cool-line)" : "var(--ligus-line)",
-        background: front || winner ? "color-mix(in srgb, var(--tint-cool) 45%, transparent)" : "transparent",
+        borderLeft: `2px solid ${front || winner ? "var(--tint-cool-line)" : "transparent"}`,
         opacity: alt.active || winner ? 1 : 0.7,
       }}
+      {...menu.rowProps}
     >
       <div className="flex items-start gap-2">
         <span
@@ -286,7 +310,10 @@ function Alternative({
           {alt.label}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold leading-snug">{alt.title}</div>
+          <div className="flex items-start gap-1">
+            <div className="min-w-0 flex-1 text-[13px] font-semibold leading-snug">{alt.title}</div>
+            {menu.button}
+          </div>
           {(winner || front || alt.stopReason || alt.frozen || alt.reverted) && (
             <div className="mt-1 flex flex-wrap gap-1">
               {winner && <Chip tone="success" icon={<IconCheck size={10} />}>winner</Chip>}
@@ -304,20 +331,8 @@ function Alternative({
         </div>
       )}
       {alt.changedFiles.length > 0 && (
-        <div className="mt-1 flex items-center gap-2 text-[11.5px] text-ink-soft">
-          <span>
-            {alt.changedFiles.length} file{alt.changedFiles.length === 1 ? "" : "s"} changed
-          </span>
-          {diff && (
-            <button
-              type="button"
-              className="font-medium underline-offset-2 hover:underline"
-              style={{ color: "var(--ligus-accent-ink)" }}
-              onClick={() => setDiffOpen(true)}
-            >
-              View diff
-            </button>
-          )}
+        <div className="mt-1 text-[11.5px] text-ink-soft">
+          {alt.changedFiles.length} file{alt.changedFiles.length === 1 ? "" : "s"} changed
         </div>
       )}
 
@@ -357,7 +372,7 @@ function Alternative({
 
       {/* Posted assessments only; pending scouts never show a number. */}
       {(alt.assessments.length > 0 || alt.pendingScouts.length > 0 || (awaiting > 0 && alt.active && set.phase === "scouting")) && (
-        <div className="mt-2 space-y-1 rounded-md px-2 py-1.5" style={{ background: "var(--ligus-mist)" }}>
+        <div className="mt-2 space-y-1 border-l pl-2" style={{ borderColor: "var(--ligus-line)" }}>
           {alt.assessments.map((a) => (
             <div key={a.id} className="flex items-center gap-1.5 text-xs" data-testid="assessment">
               <span className="font-medium">{a.scoutName}</span>
@@ -408,24 +423,10 @@ function Alternative({
           {alt.qualifyingApprovals}/{alt.requiredApprovals} approval{alt.requiredApprovals === 1 ? "" : "s"}
         </span>
         <span className="flex-1" />
-        {isOpen(set) && alt.active && !front && (
-          <button
-            className="text-[11.5px] text-ink-soft underline-offset-2 hover:text-ink hover:underline"
-            disabled={busy}
-            onClick={onWithdraw}
-          >
-            Withdraw
-          </button>
-        )}
         {step === "approve" && (
-          <>
-            <Button size="sm" variant="danger" disabled={busy} onClick={() => onVote(false)}>
-              Reject
-            </Button>
-            <Button size="sm" disabled={busy} onClick={() => onVote(true)}>
-              Approve
-            </Button>
-          </>
+          <Button size="sm" disabled={busy} onClick={() => onVote(true)}>
+            Approve
+          </Button>
         )}
         {step === "preflight" && (
           <Button size="sm" variant="primary" disabled={busy} onClick={onPreflight}>
@@ -451,7 +452,8 @@ function Alternative({
           onClose={() => setDiffOpen(false)}
         />
       )}
-    </div>
+      {menu.menu}
+    </li>
   );
 }
 

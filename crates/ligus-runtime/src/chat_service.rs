@@ -3859,7 +3859,14 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
     // (no agent id) fall back to a primary-authored turn matched by name.
     let is_own = |m: &ChatMessage| match own_id {
         Some(oid) => m.responder_id == Some(oid),
-        None => m.responder_id.is_none() && !own_author.is_empty() && m.author == own_author,
+        // A Hive-era reply of the default agent (author "Hive") is the
+        // default agent's own turn too.
+        None => {
+            m.responder_id.is_none()
+                && !own_author.is_empty()
+                && (m.author == own_author
+                    || (own_author == ligus_core::agent::PRIMARY_NAME && ligus_core::agent::is_legacy_primary_reply(m)))
+        }
     };
     // A superseded answer (the dispatcher fenced a duplicate) is never context.
     let kept: Vec<&ChatMessage> = messages.iter().filter(|m| !m.body.is_empty() && !m.is_streaming && !m.superseded).collect();
@@ -3867,7 +3874,7 @@ fn attributed_turns(messages: &[ChatMessage], own_id: Option<Uuid>, own_author: 
         .iter()
         .filter_map(|m| {
             let attributed = || {
-                let who = m.author.trim();
+                let who = ligus_core::agent::display_author(m).trim();
                 if who.is_empty() {
                     m.body.clone()
                 } else {
@@ -4021,6 +4028,86 @@ mod tests {
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", ligus_core::ActorKind::Human);
         (ChatService::new(store, kp, account_kp, author), public)
+    }
+
+    /// A workspace from the Hive builds, written in the events those builds
+    /// signed: the whole-list `AgentRosterUpdated` (no roster record for the
+    /// default agent, which never had one), `@hive` mentions, and default
+    /// replies authored "Hive" with no responder id. Loaded by this build,
+    /// `@hive` still summons the default agent, and its old replies read as
+    /// "Ligus" and count as its own turns, while the stored events keep their
+    /// signed author.
+    fn hive_era_chat(svc: &mut ChatService, roster: Vec<WorkspaceAgent>) -> (Uuid, Uuid) {
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("HomeLab", wid, "claude-code").unwrap();
+        svc.append_signed(chat.id, wid, SessionEvent::AgentRosterUpdated { agents: roster }).unwrap();
+        let ask = ChatMessage::new(MessageRole::User, "Mara", "@hive what's the disk at?");
+        svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: ask }).unwrap();
+        let reply = ChatMessage::new(MessageRole::Assistant, "Hive", "71% used.");
+        svc.append_signed(chat.id, wid, SessionEvent::MessageAppended { message: reply }).unwrap();
+        (wid, chat.id)
+    }
+
+    #[test]
+    fn hive_era_workspace_reads_and_routes_as_ligus() {
+        let (mut svc, _) = service();
+        let (_, chat) = hive_era_chat(&mut svc, Vec::new());
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let ask = &s.messages[s.messages.len() - 2];
+        let reply = s.messages.last().unwrap();
+        // The stored, signed author is unchanged...
+        assert_eq!(reply.author, "Hive");
+        // ...but it is the default agent's reply, shown as "Ligus".
+        assert!(ligus_core::agent::is_legacy_primary_reply(reply));
+        assert_eq!(ligus_core::agent::display_author(reply), "Ligus");
+        // `@hive` (an old message, a script, an older phone) summons the
+        // default agent, exactly like `@ligus`.
+        let t = crate::mentions::parse_mentions(&ask.body, &s);
+        assert!(t.primary && t.agents.is_empty(), "{t:?}");
+        assert!(crate::mentions::parse_mentions("@HIVE status?", &s).primary);
+        assert!(crate::mentions::parse_mentions("@ligus status?", &s).primary);
+        // Not inside a word or an address.
+        assert!(!crate::mentions::parse_mentions("mail me@hive.local", &s).primary);
+        // The default agent's history: its Hive-era reply is its own turn
+        // (unprefixed), not another participant's "Hive: ...".
+        let turns = turns_for(&s, None, "Ligus");
+        assert!(turns.iter().any(|t| t.role == "assistant" && t.content == "71% used."), "{turns:?}");
+        // A named agent reading the same history sees it as Ligus's.
+        let turns = turns_for(&s, Some(Uuid::new_v4()), "coder");
+        assert!(turns.iter().any(|t| t.content.contains("Ligus: 71% used.")), "{turns:?}");
+    }
+
+    /// A custom agent someone deliberately named "hive" (possible before the
+    /// name was reserved again) keeps its name and its mentions: the default
+    /// agent never had a roster record, so a roster "hive" is never it.
+    #[test]
+    fn a_custom_agent_named_hive_keeps_its_mentions() {
+        let (mut svc, _) = service();
+        let hive = WorkspaceAgent::new("hive", "ollama");
+        let (wid, chat) = hive_era_chat(&mut svc, vec![hive.clone()]);
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let t = crate::mentions::parse_mentions("@hive what's the disk at?", &s);
+        assert!(!t.primary && t.agents == vec![hive.id], "{t:?}");
+        // Its replies carry its roster id, so they are never read as Ligus's.
+        let id = svc.begin_assistant_message(chat, wid, "hive", "ollama", Some(hive.id), None).unwrap();
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        let mine = s.messages.iter().find(|m| m.id == id).unwrap();
+        assert!(!ligus_core::agent::is_legacy_primary_reply(mine));
+        assert_eq!(ligus_core::agent::display_author(mine), "hive");
+    }
+
+    /// A roster agent named after the default agent can't take its mentions:
+    /// no current client creates one, and one that syncs in anyway (an older
+    /// client, a hand-made event) is ignored as a mention target.
+    #[test]
+    fn a_roster_agent_named_ligus_never_answers_the_default_agents_mentions() {
+        let (mut svc, _) = service();
+        let (_, chat) = hive_era_chat(&mut svc, vec![WorkspaceAgent::new("Ligus", "evil"), WorkspaceAgent::new("primary", "evil")]);
+        let s = svc.load_resolving(chat).unwrap().unwrap();
+        for body in ["@ligus hi", "@primary hi", "@hive hi"] {
+            let t = crate::mentions::parse_mentions(body, &s);
+            assert!(t.primary && t.agents.is_empty(), "{body}: {t:?}");
+        }
     }
 
     /// A reverse-QR answer slot is signed by this device's key: it verifies

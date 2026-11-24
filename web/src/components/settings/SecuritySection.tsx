@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, Section, fieldStyle } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
 import { toast, errMsg } from "@/components/Toast";
 import {
   deviceConfirm,
@@ -20,11 +21,13 @@ export function SecuritySection() {
   const status = useQuery({ queryKey: ["security-status"], queryFn: securityStatus });
   const [label, setLabel] = useState("");
   const [words, setWords] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["security-status"] });
   const register = useMutation({
     mutationFn: () => passkeyRegister(label.trim() || "Passkey"),
     onSuccess: () => {
       setLabel("");
+      setRegistering(false);
       refresh();
       toast.success("Passkey registered.");
     },
@@ -80,61 +83,71 @@ export function SecuritySection() {
           </Button>
         </Section>
       )}
-      <Section title="Passkeys">
-        <p className="text-xs text-ink-soft">
-          A passkey confirms that you, not just your device, approved an admin action. Any passkey works: Touch ID
-          and iCloud Keychain, Windows Hello, Google Password Manager, a phone, or a security key. Register at least
-          two.
-        </p>
+      <Section
+        title="Passkeys"
+        action={
+          <Button size="sm" onClick={() => setRegistering(true)}>
+            Register a passkey
+          </Button>
+        }
+        info="A passkey confirms that you, not just your device, approved an admin action. Any passkey works: Touch ID and iCloud Keychain, Windows Hello, Google Password Manager, a phone, or a security key. Register at least two."
+      >
         {status.isError && (
           <p role="alert" className="text-xs" style={{ color: "var(--ligus-danger-ink)" }}>
             Couldn't read this workspace's passkeys: {errMsg(status.error)}
           </p>
         )}
         {status.isPending && <p className="text-xs text-ink-soft">Loading…</p>}
-        <ul className="space-y-1 text-sm" data-testid="passkey-list">
+        <ul className="ligus-rowlist text-sm" data-testid="passkey-list">
           {(st?.passkeys ?? []).map((p) => (
-            <li key={p.credentialId} className="flex items-center justify-between gap-2">
-              <code className="truncate">
-                {p.recovery ? "Recovery key " : ""}
-                {p.credentialId.slice(0, 16)}…
-              </code>
-              <button
-                className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--ligus-danger-ink)" }}
-                disabled={remove.isPending}
-                onClick={() => remove.mutate(p.credentialId)}
-              >
-                Remove
-              </button>
-            </li>
+            <ListRow
+              key={p.credentialId}
+              title={
+                <code>
+                  {p.recovery ? "Recovery key " : ""}
+                  {p.credentialId.slice(0, 16)}…
+                </code>
+              }
+              actionsLabel={`Actions for ${p.recovery ? "recovery key" : "passkey"} ${p.credentialId.slice(0, 16)}`}
+              actions={[{ label: "Remove", danger: true, disabled: remove.isPending, onSelect: () => remove.mutate(p.credentialId) }]}
+            />
           ))}
-          {st && passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}
+          {st && passkeys.length === 0 && <li className="ligus-listrow px-1 text-xs text-ink-soft">No passkeys yet.</li>}
         </ul>
         {passkeys.length === 1 && (
           <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
             Register another passkey so losing one device doesn't lock you out.
           </p>
         )}
-        <div className="flex gap-2">
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="MacBook Touch ID"
-            maxLength={64}
-            className="flex-1 rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-          />
-          <Button variant="primary" size="md" disabled={register.isPending} onClick={() => register.mutate()}>
-            Add passkey
-          </Button>
-        </div>
+        {registering && (
+          <Sheet
+            title="Register a passkey"
+            side="center"
+            width={420}
+            onClose={() => setRegistering(false)}
+            footer={
+              <>
+                <Button onClick={() => setRegistering(false)}>Cancel</Button>
+                <Button variant="primary" size="md" disabled={register.isPending} onClick={() => register.mutate()}>
+                  Add passkey
+                </Button>
+              </>
+            }
+          >
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="MacBook Touch ID"
+              aria-label="Passkey name"
+              maxLength={64}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              style={fieldStyle}
+            />
+          </Sheet>
+        )}
       </Section>
-      <Section title="Recovery key">
-        <p className="text-xs text-ink-soft">
-          24 words that stand in for a lost passkey. They're shown once and never stored: write them down and keep
-          them offline.
-        </p>
+      <Section title="Recovery key" info="24 words that stand in for a lost passkey.">
+        <p className="text-xs text-ink-soft">Shown once and never stored: write them down and keep them offline.</p>
         {words ? (
           <div className="space-y-2 rounded-xl border px-3 py-2.5" style={fieldStyle}>
             <code className="block whitespace-pre-wrap text-sm" data-testid="recovery-words">

@@ -53,7 +53,7 @@ describe("workflow proposals in the Review pane", () => {
     expect(await screen.findByText("Add workflow “Triage”")).toBeInTheDocument();
     expect(await screen.findByText("@Scout")).toBeInTheDocument();
     expect(screen.getByText("Scan {{input}}")).toBeInTheDocument();
-    expect(screen.getByText(/Approving adds this workflow/)).toBeInTheDocument();
+    expect(screen.getByText(/Approving adds it to Workflows/)).toBeInTheDocument();
     expect(screen.queryByText("1. Scan [scan], @Scout")).toBeNull();
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });

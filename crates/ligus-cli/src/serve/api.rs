@@ -230,7 +230,9 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage, viewer: Viewer) -> Value {
     let mut v = json!({
         "id": m.id,
         "chatId": chat,
-        "author": ligus_proto::names::clean_display_name(&m.author),
+        // A Hive-era reply of the default agent (author "Hive") reads as
+        // "Ligus"; the signed author is unchanged.
+        "author": ligus_proto::names::clean_display_name(ligus_core::agent::display_author(m)),
         "role": role_str(m),
         "body": m.body,
         "createdAt": iso(m.created_at),
@@ -1820,6 +1822,19 @@ mod responder_device_tests {
     /// account, "mine" when another device of that account did, and carries
     /// no place for someone else's (even one naming this box's device). A
     /// named agent's reply and a person's message carry neither field.
+    /// The phone reads a Hive-era reply of the default agent (stored author
+    /// "Hive", no responder id) as "Ligus", the chat's primary.
+    #[test]
+    fn hive_era_default_reply_reads_as_ligus_on_the_phone() {
+        let old = ChatMessage::new(MessageRole::Assistant, "Hive", "71% used.");
+        let v = message_dto(Uuid::new_v4(), &old, Viewer::default());
+        assert_eq!(v["author"], "Ligus");
+        assert_eq!(v["role"], "assistant");
+        let mut named = ChatMessage::new(MessageRole::Assistant, "hive", "hi");
+        named.responder_id = Some(Uuid::new_v4());
+        assert_eq!(message_dto(Uuid::new_v4(), &named, Viewer::default())["author"], "hive");
+    }
+
     #[test]
     fn primary_turns_are_placed_from_the_boxs_point_of_view() {
         let (box_dev, other_dev, acct) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());

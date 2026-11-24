@@ -23,7 +23,8 @@ describe("workspace marks", () => {
     render(<MarksView marks={[mark]} onAdd={() => {}} onClear={(id) => cleared.push(id)} />);
     expect(screen.getByText("Under construction")).toBeInTheDocument();
     expect(screen.getByText(/by coder in “Parser” · 30 min left — splitting the lexer/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByRole("button", { name: /^Actions for mark/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Clear" }));
     expect(cleared).toEqual(["m1"]);
   });
 
@@ -31,6 +32,7 @@ describe("workspace marks", () => {
     const added: string[][] = [];
     render(<MarksView marks={[]} onAdd={(k, p, n) => added.push([k, p, n])} onClear={() => {}} />);
     expect(screen.getByText("No marks in this workspace.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Leave a mark" }));
     fireEvent.change(screen.getByLabelText("Mark kind"), { target: { value: "lock" } });
     fireEvent.change(screen.getByLabelText("Path"), { target: { value: " docs/a.md " } });
     fireEvent.click(screen.getByText("Leave mark"));

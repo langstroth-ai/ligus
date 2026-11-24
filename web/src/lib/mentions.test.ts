@@ -92,3 +92,20 @@ describe("agent access in the @mention autocomplete", () => {
     expect(filterMentions(cands, "pri")).toEqual([priv]);
   });
 });
+
+describe("the default agent's handle", () => {
+  it("a roster agent named ligus or primary is never offered: @ligus is the default agent's", async () => {
+    const { agentMentionCandidates } = await import("./mentions");
+    const cands = agentMentionCandidates([
+      { name: "Ligus" },
+      { name: " primary " },
+      { name: "L\u0456gus" },
+      { name: "li\u200bgus" },
+      { name: "scout" },
+      { name: "ligusbot" },
+      { name: "hive" },
+    ]);
+    // A custom agent deliberately named "hive" keeps its mention.
+    expect(cands.map((c) => c.handle)).toEqual(["scout", "ligusbot", "hive"]);
+  });
+});

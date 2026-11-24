@@ -94,7 +94,8 @@ describe("CliRuntimesPanel", () => {
     renderPanel();
     const agy = await screen.findByTestId("cli-antigravity");
     expect(within(agy).getByText("sign-in not checked")).toBeTruthy();
-    await user.click(screen.getByText("Check Google sign-in"));
+    await user.click(screen.getByRole("button", { name: /^Actions for / }));
+    await user.click(screen.getByRole("menuitem", { name: "Check Google sign-in" }));
     await waitFor(() => expect(ipc.detectCliRuntimes).toHaveBeenCalledWith(true));
     await waitFor(() => expect(within(screen.getByTestId("cli-antigravity")).getByText("signed in")).toBeTruthy());
 

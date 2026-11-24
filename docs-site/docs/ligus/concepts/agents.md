@@ -19,7 +19,7 @@ That's it. The agent isn't a "persona" with hardcoded prompts. It's
 a pointer: "when someone in this chat says `@coder`, route the
 message to runtime `aider-runtime` on Alice's device."
 
-Configure agents from the right-rail **Tools** pane → **Workspace** → **Agent roster**.
+Configure agents from the right-rail **Tools** pane → **Agents**.
 
 <!-- Screenshot pending (Workspace Agents pane): images/agents-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Why no built-in personas?
@@ -156,7 +156,7 @@ turn enforces it.
 | Shared (no owner) | **Everyone** who can post | an Admin; restricted, it is usable by workspace Admins and Owners |
 
 The owner sets **Who can use this agent** to **Everyone in the workspace**
-in the agent's card (right-rail **Tools** → **Workspace** → **Agent roster**; see [Who can use your agents](../features/agent-access.md)). The setting is part of the agent's signed
+in the agent's card (right-rail **Tools** → **Agents**; see [Who can use your agents](../features/agent-access.md)). The setting is part of the agent's signed
 record (`access`: `"owner"` or `"everyone"`), so every device sees the same
 value, and every device's fold refuses a change to it, or to the agent's
 budgets, by anyone but the owner (an Admin on a shared agent): an Admin's

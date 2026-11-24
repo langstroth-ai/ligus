@@ -127,7 +127,7 @@ identity (`ligus-box:<id>`), enrolls it, issues the box admission it joins the
 workspace with (confirm with your passkey), and shows the
 same copy-paste command in a box — no terminal needed on the admin side. That
 desktop remembers which admission goes with the identity, so removing the
-identity under **People → Team members (server-enforced)** later removes the
+identity under **People → Relay members** later removes the
 box from the workspace too and rotates the key without it. See
 [Right Rail — People](../../ligus/features/right-rail.md).
 

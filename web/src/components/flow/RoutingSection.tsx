@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { ErrorState, EmptyHint, Section, LoadingState } from "@/components/ui";
+import { useRowMenu } from "@/components/RowMenu";
+import { ErrorState, EmptyHint, InfoTip, Section, LoadingState } from "@/components/ui";
 import { REASON_LABEL, clearRouteStop, minutesLeft, pct, routingReport, type RoutingReport } from "@/lib/flow";
-import { Button } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { Muted, Stat } from "@/components/flow/FlowPane";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -30,13 +30,19 @@ export function RoutingSection() {
 export function RoutingReportView({ report: r, onClearStop }: { report: RoutingReport; onClearStop?: (route: string) => void }) {
   const modeText =
     r.mode === "shadow"
-      ? "Shadow mode: un-addressed messages still go to the primary; the router only logs its pick."
+      ? "Shadow mode: the router only logs its pick."
       : r.mode === "live"
-        ? "Live: the router's pick answers un-addressed messages. @mentions always win."
-        : "Routing is off. Turn it on in Settings → Flow.";
+        ? "Live: the router answers un-addressed messages."
+        : "Routing is off (Settings → Flow).";
   return (
     <div className="space-y-4">
-      <Muted>{modeText}</Muted>
+      <div className="flex items-center gap-1.5">
+        <Muted>{modeText}</Muted>
+        <InfoTip
+          label="routing modes"
+          text="Shadow: un-addressed messages still go to the primary and the router only logs its pick. Live: the router's pick answers them. @mentions always win."
+        />
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Stat label="Decisions (14 d)" value={r.decisions} />
         <Stat
@@ -47,29 +53,24 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
       </div>
 
       {r.stops.length > 0 && (
-        <Section title="In cool-down">
-          <Muted>A severe failure (rate limit, exhausted plan window, provider outage, unreachable server) takes a route out of rotation at once.</Muted>
-          <ul className="space-y-1.5 text-xs">
+        <Section
+          title="In cool-down"
+          info="A severe failure (rate limit, exhausted plan window, provider outage, unreachable server) takes a route out of rotation at once."
+        >
+          <ul className="ligus-rowlist text-xs">
             {r.stops.map((st) => (
-              <li key={st.route} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
-                <span>
-                  <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
-                </span>
-                {onClearStop && (
-                  <Button size="sm" onClick={() => onClearStop(st.route)}>
-                    Clear
-                  </Button>
-                )}
-              </li>
+              <StopItem key={st.route} st={st} onClearStop={onClearStop} />
             ))}
           </ul>
         </Section>
       )}
 
-      <Section title="Exploration">
+      <Section
+        title="Exploration"
+        info={`The exploration share in force averaged ${pct(r.exploration.meanEpsilon)}; it rises when the best known agent is weak, unproven or slipping.`}
+      >
         <Muted>
-          {pct(r.exploration.share)} of decisions went to an agent other than the top scorer (share in force averaged{" "}
-          {pct(r.exploration.meanEpsilon)}; it rises when the best known agent is weak, unproven or slipping).
+          {pct(r.exploration.share)} of decisions went to an agent other than the top scorer.
           {r.exploration.exploredJudged > 0 &&
             ` ${r.exploration.exploredWins} of ${r.exploration.exploredJudged} explored turns succeeded` +
               (r.exploration.incumbentRate != null ? `, against ${pct(r.exploration.incumbentRate)} for the top scorer.` : ".")}
@@ -107,10 +108,12 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         )}
       </Section>
 
-      <Section title="Scores">
-        <Muted>From measured outcomes only: approvals, revise loops, stage results, failed turns and test runs. Never an agent's own claims.</Muted>
+      <Section
+        title="Scores"
+        info="From measured outcomes only: approvals, revise loops, stage results, failed turns and test runs. Never an agent's own claims."
+      >
         {r.scores.length === 0 ? (
-          <EmptyHint text="No outcomes yet. Scores appear once proposals are decided." />
+          <EmptyHint text="No decided proposals yet." />
         ) : (
           <table className="w-full text-xs" aria-label="Scores">
             <thead>
@@ -141,9 +144,9 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         {r.recent.length === 0 ? (
           <EmptyHint text="No un-addressed messages routed yet." />
         ) : (
-          <ul className="space-y-1.5 text-xs">
+          <ul className="ligus-rowlist text-xs">
             {r.recent.slice(0, 20).map((d) => (
-              <li key={`${d.sessionId}:${d.atMs}`} className="rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--ligus-line)" }}>
+              <li key={`${d.sessionId}:${d.atMs}`} className="ligus-listrow px-1">
                 <span className="font-medium">{d.taskClass}</span> · {d.mode === "live" ? "sent to" : "would send to"}{" "}
                 <span className="font-medium">{d.wouldPick}</span>
                 {d.wouldPick !== d.preferred && <> (top score: {d.preferred})</>}
@@ -154,5 +157,24 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         )}
       </Section>
     </div>
+  );
+}
+
+function StopItem({
+  st,
+  onClearStop,
+}: {
+  st: { route: string; name: string; reason: string; untilMs: number };
+  onClearStop?: (route: string) => void;
+}) {
+  const menu = useRowMenu(`Actions for stopped route ${st.name}`, onClearStop ? [{ label: "Clear", onSelect: () => onClearStop(st.route) }] : []);
+  return (
+    <li className="ligus-listrow flex items-center justify-between gap-2 px-1" {...menu.rowProps}>
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
+      </span>
+      {menu.button}
+      {menu.menu}
+    </li>
   );
 }

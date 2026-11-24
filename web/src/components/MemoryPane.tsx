@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge, Button, EmptyHint, ErrorState, LoadingState, Section } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
+import { Sheet } from "@/components/kit/Sheet";
 import { PANE_DOCS } from "@/lib/docs";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { cleanDisplayName } from "@/lib/names";
+import { useRowMenu } from "@/components/RowMenu";
 import { onWorkspaceSynced } from "@/lib/ipc";
 import {
   canChange,
@@ -36,6 +38,7 @@ function when(ms: number): string {
 /// read. People write and edit; agents propose, and a person decides.
 export function MemoryPane({ sessionId }: { sessionId?: string }) {
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
   const q = useQuery({ queryKey: ["memory", query], queryFn: () => memoryView(query, []) });
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -45,7 +48,12 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
   const done = () => void q.refetch();
   const fail = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}: ${errMsg(e)}`);
   return (
-    <RailFrame title="Memory" about="Shared notes and facts. Agents read them and propose changes; people decide." docs={PANE_DOCS.memory}>
+    <RailFrame
+      title="Memory"
+      about="Shared notes and facts. Agents read them and propose changes; people decide."
+      docs={PANE_DOCS.memory}
+      primary={{ label: "New note", onClick: () => setCreating(true) }}
+    >
       {q.isError ? (
         <ErrorState text="Couldn't load the workspace memory." onRetry={() => void q.refetch()} />
       ) : q.isPending ? (
@@ -55,6 +63,8 @@ export function MemoryPane({ sessionId }: { sessionId?: string }) {
           view={q.data}
           query={query}
           onQuery={setQuery}
+          creating={creating}
+          onCreating={setCreating}
           onSave={(d) =>
             writeMemory({ ...d, sourceChatId: d.entryId ? undefined : sessionId })
               .then(done)
@@ -97,16 +107,23 @@ export function MemoryPaneView({
   onRemove,
   onDecide,
   onPropose,
+  creating: creatingProp,
+  onCreating,
 }: {
   view: MemoryView;
   query: string;
   onQuery: (q: string) => void;
+  /// The new-note sheet, when the pane header owns the "New note" action.
+  creating?: boolean;
+  onCreating?: (v: boolean) => void;
   onSave: (d: Draft) => void;
   onRemove: (e: MemoryEntry) => void;
   onDecide: (p: MemoryProposalState, accepted: boolean) => void;
   onPropose: (op: MemoryOp) => void;
 }) {
-  const [creating, setCreating] = useState(false);
+  const [creatingLocal, setCreatingLocal] = useState(false);
+  const creating = creatingProp ?? creatingLocal;
+  const setCreating = onCreating ?? setCreatingLocal;
   const open = view.proposals.filter((p) => !p.decision);
   return (
     <div className="space-y-4" data-testid="memory-pane">
@@ -119,27 +136,27 @@ export function MemoryPaneView({
           </ul>
         </Section>
       )}
-      <div className="flex gap-1.5">
+      {(view.total > 0 || query) && (
         <input
           aria-label="Search memory"
-          placeholder="Search notes (every word must match)"
-          className="min-w-0 flex-1 rounded-xl border px-3 py-1.5 text-sm"
+          placeholder="Search notes"
+          data-tip="Every word must match"
+          className="w-full rounded-xl border px-3 py-1.5 text-sm"
           style={fieldStyle}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
         />
-        <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating}>
-          New note
-        </Button>
-      </div>
+      )}
       {creating && (
-        <EntryEditor
-          onCancel={() => setCreating(false)}
-          onSave={(d) => {
-            onSave(d);
-            setCreating(false);
-          }}
-        />
+        <Sheet title="New note" side="center" width={460} onClose={() => setCreating(false)}>
+          <EntryEditor
+            onCancel={() => setCreating(false)}
+            onSave={(d) => {
+              onSave(d);
+              setCreating(false);
+            }}
+          />
+        </Sheet>
       )}
       {(view.editedAfterRemoval ?? []).length > 0 && (
         <Section title="Edited after removal">
@@ -152,9 +169,18 @@ export function MemoryPaneView({
       )}
       <Section title={query ? `Matches (${view.entries.length} of ${view.total})` : `Notes (${view.total})`}>
         {view.entries.length === 0 ? (
-          <EmptyHint text={query ? "No note matches every word." : "No notes yet. Add one, or accept an agent's proposal."} />
+          <EmptyHint
+            text={query ? "No note matches every word." : "No notes yet."}
+            action={
+              query ? undefined : (
+                <Button size="sm" onClick={() => setCreating(true)}>
+                  New note
+                </Button>
+              )
+            }
+          />
         ) : (
-          <ul className="space-y-2">
+          <ul className="ligus-rowlist" aria-label="Notes">
             {view.entries.map((e) => (
               <EntryCard key={e.id} e={e} view={view} onSave={onSave} onRemove={onRemove} onPropose={onPropose} />
             ))}
@@ -187,32 +213,72 @@ function EntryCard({
   const conflicts = e.conflicts ?? [];
   const src = e.current.source?.chatId;
   const restricted = egressNote(e);
+  const rowMenu = useRowMenu(
+    `Actions for note ${cleanDisplayName(e.current.title)}`,
+    mine
+      ? [
+          {
+            label: "Edit",
+            onSelect: () =>
+              setEditing({ entryId: e.id, base: e.current.rev, title: e.current.title, body: e.current.body, tags: e.current.tags ?? [], resolves: conflicts.map((c) => c.rev) }),
+          },
+          {
+            label: "Remove…",
+            danger: true,
+            onSelect: () =>
+              confirmThen(
+                `Remove “${cleanDisplayName(e.current.title)}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
+                () => onRemove(e),
+              ),
+          },
+        ]
+      : [{ label: "Suggest an edit", onSelect: () => setSuggesting(true) }],
+  );
   return (
-    <li className="rounded-lg border px-2.5 py-2 text-sm" style={{ borderColor: "var(--ligus-line)" }} data-testid="memory-entry">
-      {editing ? (
-        <EntryEditor
-          initial={editing}
-          onCancel={() => setEditing(null)}
-          onSave={(d) => {
-            onSave(d);
-            setEditing(null);
-          }}
-        />
-      ) : suggesting ? (
-        <EntryEditor
-          initial={{ title: e.current.title, body: e.current.body, tags: e.current.tags ?? [] }}
-          saveLabel="Propose"
-          onCancel={() => setSuggesting(false)}
-          onSave={(d) => {
-            onPropose({ op: "edit", entryId: e.id, base: e.current.rev, title: d.title, body: d.body, tags: d.tags });
-            setSuggesting(false);
-          }}
-        />
-      ) : (
+    <li className="px-1 text-sm" data-testid="memory-entry" {...rowMenu.rowProps}>
+      {editing && (
+        <Sheet title="Edit note" side="center" width={460} onClose={() => setEditing(null)}>
+          <EntryEditor
+            initial={editing}
+            onCancel={() => setEditing(null)}
+            onSave={(d) => {
+              onSave(d);
+              setEditing(null);
+            }}
+          />
+        </Sheet>
+      )}
+      {suggesting && (
+        <Sheet title="Suggest an edit" side="center" width={460} onClose={() => setSuggesting(false)}>
+          <EntryEditor
+            initial={{ title: e.current.title, body: e.current.body, tags: e.current.tags ?? [] }}
+            saveLabel="Propose"
+            onCancel={() => setSuggesting(false)}
+            onSave={(d) => {
+              onPropose({ op: "edit", entryId: e.id, base: e.current.rev, title: d.title, body: d.body, tags: d.tags });
+              setSuggesting(false);
+            }}
+          />
+        </Sheet>
+      )}
+      {(
         <>
-          <div className="flex items-start justify-between gap-2">
-            <button className="min-w-0 text-left font-semibold" onClick={() => setExpanded((x) => !x)} aria-expanded={expanded}>
-              <bdi>{e.current.title}</bdi>
+          {/* One line: title, muted tags, then any state badge. The body,
+              provenance and actions open with the row. */}
+          <div className="ligus-listrow flex items-center justify-between gap-2">
+            <button
+              className="-mx-1 flex min-w-0 flex-1 items-baseline gap-1.5 rounded-lg px-1 text-left transition-colors hover:bg-[color:var(--ligus-overlay)]"
+              onClick={() => setExpanded((x) => !x)}
+              aria-expanded={expanded}
+            >
+              <span className="min-w-0 shrink truncate text-[13px] font-medium">
+                <bdi>{e.current.title}</bdi>
+              </span>
+              {(e.current.tags ?? []).length > 0 && (
+                <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
+                  {(e.current.tags ?? []).join(" · ")}
+                </span>
+              )}
             </button>
             <div className="flex shrink-0 gap-1">
               {restricted && (
@@ -221,21 +287,20 @@ function EntryCard({
                 </Badge>
               )}
               {conflicts.length > 0 && <Badge tone="warn">{conflicts.length === 1 ? "1 conflict" : `${conflicts.length} conflicts`}</Badge>}
+              {rowMenu.button}
+              {rowMenu.menu}
             </div>
           </div>
-          {(e.current.tags ?? []).length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {(e.current.tags ?? []).map((t) => (
-                <Badge key={t}>{t}</Badge>
-              ))}
-            </div>
+          {expanded && (
+            <>
+              <p className="whitespace-pre-wrap break-words text-xs">{e.current.body}</p>
+              <div className="mt-1 pb-2 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
+                {provenance(e.current)} · {when(e.current.atMs)}
+                {src && view.chatTitles[src] && ` · from “${view.chatTitles[src]}”`}
+                {e.revisionCount > 1 && ` · ${e.revisionCount} versions`}
+              </div>
+            </>
           )}
-          <p className={`mt-1 whitespace-pre-wrap break-words text-xs ${expanded ? "" : "line-clamp-3"}`}>{e.current.body}</p>
-          <div className="mt-1 text-xs" style={{ color: "var(--ligus-ink-soft)" }}>
-            {provenance(e.current)} · {when(e.current.atMs)}
-            {src && view.chatTitles[src] && ` · from “${view.chatTitles[src]}”`}
-            {e.revisionCount > 1 && ` · ${e.revisionCount} versions`}
-          </div>
           {conflicts.map((c) => (
             <ConflictRow
               key={c.rev}
@@ -251,36 +316,6 @@ function EntryCard({
               }
             />
           ))}
-          {!mine && (
-            <div className="mt-1.5 flex gap-1.5">
-              <Button size="sm" onClick={() => setSuggesting(true)}>
-                Suggest an edit
-              </Button>
-            </div>
-          )}
-          {mine && (
-            <div className="mt-1.5 flex gap-1.5">
-              <Button
-                size="sm"
-                onClick={() =>
-                  setEditing({ entryId: e.id, base: e.current.rev, title: e.current.title, body: e.current.body, tags: e.current.tags ?? [], resolves: conflicts.map((c) => c.rev) })
-                }
-              >
-                Edit
-              </Button>
-              <Button
-                size="sm"
-                onClick={() =>
-                  confirmThen(
-                    `Remove “${cleanDisplayName(e.current.title)}”? It disappears from the memory for everyone, but its earlier versions stay in the workspace history on every device.`,
-                    () => onRemove(e),
-                  )
-                }
-              >
-                Remove
-              </Button>
-            </div>
-          )}
         </>
       )}
     </li>

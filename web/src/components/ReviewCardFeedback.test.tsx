@@ -112,7 +112,9 @@ describe("the Review card", () => {
     await waitFor(() => expect(screen.getByTestId("my-vote").textContent).toContain("You approved"));
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Change to reject" }));
+    // Changing a vote lives in the proposal's row menu.
+    fireEvent.click(screen.getByRole("button", { name: /^Actions for / }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Change vote to reject" }));
     await waitFor(() =>
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("vote_proposal", expect.objectContaining({ approved: false })),
     );

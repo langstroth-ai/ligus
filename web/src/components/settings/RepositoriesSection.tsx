@@ -20,7 +20,10 @@ import {
   type WorkspaceReposDto,
 } from "@/lib/ipc";
 import { confirmDialog, promptDialog } from "@/components/Dialog";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, EmptyHint, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
+import { MoreMenu } from "@/components/MoreMenu";
+import { useRowMenu } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
 
 export const REPOS_KEY = ["workspace-repos"];
@@ -135,8 +138,49 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
       toast.error(`${what}: ${errMsg(e)}`);
     }
   };
+  const admin = data.canAdmin && !r.removed;
+  const rm = useRowMenu(`Actions for ${r.name}`, [
+    ...(!r.removed && r.here.path
+      ? [{ label: "Unbind", onSelect: () => void run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!)) }]
+      : []),
+    ...(admin
+      ? [
+          {
+            label: "Aliases…",
+            onSelect: async () => {
+              const list = await promptDialog(
+                "Other names of this repository (comma separated): an old owner, or a different case on a case-sensitive server. Names only; each device uses one after someone there accepts it.",
+                { defaultValue: (r.aliases ?? []).map((a) => a.alias).join(", ") },
+              );
+              if (list === null) return;
+              const aliases = list.split(",").map((a) => a.trim()).filter(Boolean);
+              await run("Couldn't set the aliases", () => setRepoAliases(r.id, aliases));
+            },
+          },
+          {
+            label: "Rename",
+            onSelect: async () => {
+              const name = await promptDialog("Repository name", { defaultValue: r.name });
+              if (name && name.trim() && name !== r.name) await run("Couldn't rename it", () => renameWorkspaceRepo(r.id, name.trim()));
+            },
+          },
+          {
+            label: "Remove",
+            danger: true,
+            onSelect: async () => {
+              const ok = await confirmDialog("Chats that use it keep naming it. Checkouts on devices stay where they are.", {
+                title: `Remove ${r.name}?`,
+                confirmLabel: "Remove",
+                danger: true,
+              });
+              if (ok) await run("Couldn't remove it", () => removeWorkspaceRepo(r.id));
+            },
+          },
+        ]
+      : []),
+  ]);
   return (
-    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="border-b py-3 last:border-b-0" style={{ borderColor: "var(--ligus-line)" }} {...rm.rowProps}>
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium">
@@ -152,49 +196,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
             </div>
           )}
         </div>
-        {data.canAdmin && !r.removed && (
-          <div className="flex shrink-0 gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const list = await promptDialog(
-                  "Other names of this repository (comma separated): an old owner, or a different case on a case-sensitive server. Names only; each device uses one after someone there accepts it.",
-                  { defaultValue: (r.aliases ?? []).map((a) => a.alias).join(", ") },
-                );
-                if (list === null) return;
-                const aliases = list.split(",").map((a) => a.trim()).filter(Boolean);
-                await run("Couldn't set the aliases", () => setRepoAliases(r.id, aliases));
-              }}
-            >
-              Aliases…
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const name = await promptDialog("Repository name", { defaultValue: r.name });
-                if (name && name.trim() && name !== r.name) await run("Couldn't rename it", () => renameWorkspaceRepo(r.id, name.trim()));
-              }}
-            >
-              Rename
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                const ok = await confirmDialog("Chats that use it keep naming it. Checkouts on devices stay where they are.", {
-                  title: `Remove ${r.name}?`,
-                  confirmLabel: "Remove",
-                  danger: true,
-                });
-                if (ok) await run("Couldn't remove it", () => removeWorkspaceRepo(r.id));
-              }}
-            >
-              Remove
-            </Button>
-          </div>
-        )}
+        {rm.button}
       </div>
       {!r.removed && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -207,9 +209,6 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
                 {r.here.viaAlias ? " (via alias)" : ""}
               </span>
               {r.here.state === "error" && <span className="text-xs">now points elsewhere; it no longer counts as {r.name}</span>}
-              <Button size="sm" variant="ghost" onClick={() => run("Couldn't unbind it", () => unbindRepoCheckout(r.id, r.here.path!))}>
-                Unbind
-              </Button>
             </>
           ) : (
             <>
@@ -281,6 +280,7 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
           ))}
         </div>
       )}
+      {rm.menu}
     </div>
   );
 }
@@ -296,82 +296,95 @@ export function RepositoriesSection() {
   const refresh = () => void qc.invalidateQueries({ queryKey: REPOS_KEY });
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const data = q.data;
 
   return (
     <div>
-      <p className="mb-4 text-sm text-ink-soft">
-        The workspace&rsquo;s repositories are shared with every member. Where each one lives on a device stays on
-        that device; other hosts show only whether they have it checked out.
-      </p>
       {q.isError && <div className="text-sm">Couldn&rsquo;t load repositories: {errMsg(q.error)}</div>}
       {data && <RepoSuggestion data={data} onDone={refresh} />}
-      <Section title="Repositories">
-        {data && data.repos.length === 0 && (
-          <div className="text-sm text-ink-soft">This workspace has no repositories yet.</div>
-        )}
-        {data?.repos.map((r) => <RepoRow key={r.id} r={r} data={data} refresh={refresh} />)}
-        {data && (data.canAdmin ? (
-          <form
-            className="mt-3 flex gap-2"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!input.trim()) return;
-              setBusy(true);
-              try {
-                const r = await addWorkspaceRepo(input.trim());
-                toast.success(`Added ${r.name} (${r.canonical})`);
-                setInput("");
-                refresh();
-              } catch (err) {
-                toast.error(`Couldn't add it: ${errMsg(err)}`);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <input
-              aria-label="Repository URL"
-              className="flex-1 rounded-xl border px-3 py-2 text-sm"
-              style={fieldStyle}
-              placeholder="github.com/owner/name or a git remote URL"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <Button type="submit" variant="primary" disabled={busy || !input.trim()}>
-              Add repository
+      <Section
+        title="Repositories"
+        action={
+          data?.canAdmin ? (
+            <Button size="sm" onClick={() => setAdding(true)}>
+              Add a repository
             </Button>
-          </form>
-        ) : (
-          <div className="mt-3 text-sm text-ink-soft">Ask an admin to add a repository.</div>
-        ))}
-      </Section>
-      {data && <HostAliasesSection data={data} refresh={refresh} />}
-      {data && (
-        <Section title="On this device">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Button
-              size="sm"
-              onClick={async () => {
-                const p = await pickWorkspaceFolder();
-                if (!p) return;
+          ) : undefined
+        }
+        info="The workspace's repositories are shared with every member. Where each one lives on a device stays on that device; other hosts show only whether they have it checked out."
+      >
+        {data && data.repos.length === 0 && <EmptyHint text="No repositories yet" />}
+        {data?.repos.map((r) => <RepoRow key={r.id} r={r} data={data} refresh={refresh} />)}
+        {data && !data.canAdmin && <div className="mt-2 px-1 text-xs text-ink-soft">Ask an admin to add a repository.</div>}
+        {adding && (
+          <Sheet title="Add a repository" side="center" width={460} onClose={() => setAdding(false)}>
+            <form
+              className="flex gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!input.trim()) return;
+                setBusy(true);
                 try {
-                  const n = await rescanRepos(p);
-                  toast.success(n ? `Found ${n} checkout${n === 1 ? "" : "s"}` : "No checkouts of this workspace's repositories there");
+                  const r = await addWorkspaceRepo(input.trim());
+                  toast.success(`Added ${r.name} (${r.canonical})`);
+                  setInput("");
+                  setAdding(false);
                   refresh();
-                } catch (e) {
-                  toast.error(errMsg(e));
+                } catch (err) {
+                  toast.error(`Couldn't add it: ${errMsg(err)}`);
+                } finally {
+                  setBusy(false);
                 }
               }}
             >
-              Scan a folder…
-            </Button>
-            <Button size="sm" variant="ghost" onClick={async () => { await rescanRepos(); refresh(); }}>
-              Rescan
-            </Button>
-            {data.scanRoots.length > 0 && <span className="text-xs text-ink-soft">Scanning: {data.scanRoots.join(", ")}</span>}
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm">
+              <input
+                aria-label="Repository URL"
+                autoFocus
+                className="flex-1 rounded-xl border px-3 py-2 text-sm"
+                style={fieldStyle}
+                placeholder="github.com/owner/name or a git remote URL"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+              />
+              <Button type="submit" variant="primary" disabled={busy || !input.trim()}>
+                Add repository
+              </Button>
+            </form>
+          </Sheet>
+        )}
+      </Section>
+      {data && <HostAliasesSection data={data} refresh={refresh} />}
+      {data && (
+        <Section
+          title="On this device"
+          action={
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                onClick={async () => {
+                  const p = await pickWorkspaceFolder();
+                  if (!p) return;
+                  try {
+                    const n = await rescanRepos(p);
+                    toast.success(n ? `Found ${n} checkout${n === 1 ? "" : "s"}` : "No checkouts of this workspace's repositories there");
+                    refresh();
+                  } catch (e) {
+                    toast.error(errMsg(e));
+                  }
+                }}
+              >
+                Scan a folder…
+              </Button>
+              <MoreMenu
+                label="More scan actions"
+                items={[{ label: "Rescan", onSelect: () => void rescanRepos().then(refresh) }]}
+              />
+            </div>
+          }
+        >
+          {data.scanRoots.length > 0 && <div className="px-1 text-xs text-ink-soft">Scanning: {data.scanRoots.join(", ")}</div>}
+          <label className="mt-1 flex items-center gap-2 text-sm">
             <input
               type="checkbox"
               checked={data.coverageReporting}
@@ -395,6 +408,7 @@ export function RepositoriesSection() {
 export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto; refresh: () => void }) {
   const [alias, setAlias] = useState("");
   const [host, setHost] = useState("");
+  const [addingAlias, setAddingAlias] = useState(false);
   const list: HostAliasDto[] = data.hostAliases ?? [];
   if (!data.canAdmin && list.length === 0) return null;
   const run = async (what: string, f: () => Promise<unknown>) => {
@@ -406,54 +420,74 @@ export function HostAliasesSection({ data, refresh }: { data: WorkspaceReposDto;
     }
   };
   return (
-    <Section title="Host aliases">
-      <p className="mb-2 text-xs text-ink-soft">
-        Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this
-        workspace recognizes checkouts, never where git connects, and each device uses it only after someone there
-        accepts it.
-      </p>
-      {list.map((h) => (
-        <div key={h.alias} className="flex flex-wrap items-center gap-2 py-1 text-sm">
-          <code>{h.alias}</code> → <code>{h.host}</code>
-          <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
-          {data.canAdmin && (
-            <Button size="sm" variant="ghost" onClick={() => void run("Couldn't remove it", () => setHostAlias(h.alias, ""))}>
-              Remove
-            </Button>
-          )}
-        </div>
-      ))}
-      {data.canAdmin && (
-        <form
-          className="mt-2 flex gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!alias.trim() || !host.trim()) return;
-            await run("Couldn't add it", () => setHostAlias(alias.trim(), host.trim()));
-            setAlias("");
-            setHost("");
-          }}
-        >
-          <input
-            aria-label="Alias host"
-            className="flex-1 rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-            placeholder="ssh.git.example.com"
-            value={alias}
-            onChange={(e) => setAlias(e.target.value)}
-          />
-          <input
-            aria-label="Repository host"
-            className="flex-1 rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-            placeholder="git.example.com"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-          />
-          <Button type="submit" disabled={!alias.trim() || !host.trim()}>
+    <Section
+      title="Host aliases"
+      action={
+        data.canAdmin ? (
+          <Button size="sm" onClick={() => setAddingAlias(true)}>
             Add alias
           </Button>
-        </form>
+        ) : undefined
+      }
+      info="Another name for a repository host, such as the SSH host a self-hosted forge uses. It changes only how this workspace recognizes checkouts, never where git connects, and each device uses it only after someone there accepts it."
+    >
+      <RowList label="Host aliases">
+        {list.map((h) => (
+          <ListRow
+            key={h.alias}
+            title={
+              <span className="font-normal">
+                <code>{h.alias}</code> → <code>{h.host}</code>
+              </span>
+            }
+            actionsLabel={`Actions for ${h.alias}`}
+            trailing={
+              <AliasChip alias={h.alias} accepted={h.accepted} onToggle={(accept) => void run("Couldn't change it", () => acceptRepoAlias(h.alias, accept, h.host))} />
+            }
+            actions={
+              data.canAdmin
+                ? [{ label: "Remove", danger: true, onSelect: () => void run("Couldn't remove it", () => setHostAlias(h.alias, "")) }]
+                : []
+            }
+          />
+        ))}
+      </RowList>
+      {list.length === 0 && <EmptyHint text="No host aliases" />}
+      {addingAlias && (
+        <Sheet title="Add a host alias" side="center" width={460} onClose={() => setAddingAlias(false)}>
+          <form
+            className="flex flex-wrap gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!alias.trim() || !host.trim()) return;
+              await run("Couldn't add it", () => setHostAlias(alias.trim(), host.trim()));
+              setAlias("");
+              setHost("");
+              setAddingAlias(false);
+            }}
+          >
+            <input
+              aria-label="Alias host"
+              autoFocus
+              className="flex-1 rounded-xl border px-3 py-2 text-sm"
+              style={fieldStyle}
+              placeholder="ssh.git.example.com"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+            />
+            <input
+              aria-label="Repository host"
+              className="flex-1 rounded-xl border px-3 py-2 text-sm"
+              style={fieldStyle}
+              placeholder="git.example.com"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+            />
+            <Button type="submit" variant="primary" disabled={!alias.trim() || !host.trim()}>
+              Add alias
+            </Button>
+          </form>
+        </Sheet>
       )}
     </Section>
   );

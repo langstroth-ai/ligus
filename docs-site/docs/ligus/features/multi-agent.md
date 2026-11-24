@@ -24,6 +24,14 @@ mention from anyone else gets a short "only available to its owner" reply.
 In a chat with other people, `@ligus` answers only the person whose device
 runs it. See [Who can use your agents](agent-access.md).
 
+Chats from the Hive builds keep working: `@hive`, the default agent's old
+handle, still reaches `@ligus`, and its old replies show as Ligus. If the
+workspace has an agent or a person named exactly "hive", `@hive` reaches them
+instead. New agents can't be named `ligus`, `primary`, `hive`, a group word or
+a look-alike of one; an agent named like the default agent that arrives from an
+older client is never mentioned in its place, so remove it and add it again
+under another name.
+
 `@all` is the only broadcast token — there is no `@here` or `@everyone`.
 `@you` is not a broadcast: in an agent's reply it reaches only the person
 the reply answers, and in a person's message it means nothing (see
