@@ -2158,6 +2158,18 @@ Keychain password prompts on macOS with a development build
   the build, or for tests and scripts use a throwaway data dir:
   LIGUS_DATA_DIR=$(mktemp -d) LIGUS_SECRET_BACKEND=file ligus …
 
+macOS keeps asking about ai.ligus.secrets.unlock, or \"didn't let Ligus read its
+keychain unlock password\"
+  The keychain items were saved by a different Ligus build. Enter your login
+  password and choose Always Allow; a signed release of the app then re-creates the
+  items so they trust it (the new item is written before the old one goes) and
+  nothing asks again. The CLI and development builds don't repair items: run the
+  build that saved them. If macOS asks for the \"ligus\" keychain password, choose
+  Cancel: it is random and only Ligus knows it. Over SSH macOS can't ask: run the
+  same command with the same data dir once in a desktop terminal. ligus doctor
+  reports secrets.keychain-access without prompting. Don't delete the keychain or
+  its unlock item: this device's keys are in it.
+
 Ubuntu: \"agent sandbox: landlock\" instead of bwrap, or bwrap fails to create a
 user namespace
   Ubuntu 24.04 restricts unprivileged user namespaces (AppArmor,

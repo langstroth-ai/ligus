@@ -4,6 +4,25 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Fixes
+
+- **The keychain stops asking (macOS).** A release of Ligus that finds its
+  keychain items saved by a different Ligus build (a test or development
+  build) no longer prompts again and again. It reads the keychain's unlock
+  password once per launch instead of on every use, and after you allow it
+  once it re-creates the unlock item, and the items inside the Ligus
+  keychain, so they trust the release; nothing asks again. The `ligus` CLI
+  and development builds never rewrite an item's access.
+- **Clearer keychain errors.** When macOS doesn't let Ligus read its
+  unlock password (you chose Deny or Cancel, or there's no desktop session
+  to ask in, as over SSH), Ligus says so and what to do (choose **Always
+  Allow**), instead of reporting the password as missing. The desktop
+  shows this with a **Try again** button. `ligus doctor` reports it as
+  `secrets.keychain-access`, without prompting. See
+  [The Ligus keychain on macOS](../../operate/security/runbooks.md#mac-keychain).
+
 ## 0.2.1
 
 A security release: a chat's history is now kept per workspace, so a
