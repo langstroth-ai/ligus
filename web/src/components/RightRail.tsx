@@ -507,6 +507,7 @@ function ToolsPane({
               sessionId={sessionId}
               agent={agent}
               hosts={hostList}
+              runtimes={runtimeList}
               isDefault={agent.name.toLowerCase() === PRIMARY_HANDLE}
               onRemove={() =>
                 void confirmDialog(agentRemovalConsequences(agent.name), {
@@ -732,32 +733,32 @@ function RuntimeSwitcher({
   );
 }
 
-/// An agent's host as a small glyph with a tooltip: this device (a dot) or a
-/// worker (a monitor). An offline worker keeps a short visible "offline".
-function AgentHostDot({ hostId, hosts }: { hostId: string; hosts: WorkspaceHostDto[] }) {
-  if (!hostId) {
-    return (
-      <span className="inline-flex items-center" data-tip="Runs on this device" aria-label="Runs on this device" role="img">
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ligus-ink-faint, var(--ligus-line))" }} />
-      </span>
-    );
-  }
+/// Where an agent runs, in words (for its row's tooltip).
+function agentHostText(hostId: string, hosts: WorkspaceHostDto[]): string {
+  if (!hostId) return "Runs on this device";
   const host = hosts.find((h) => h.id === hostId);
   const label = host?.label || `${hostId.slice(0, 8)}…`;
-  const online = host?.online ?? false;
-  const tipText = online
-    ? `Headless — runs on worker “${label}”`
+  return host?.online
+    ? `Runs on worker “${label}”`
     : `Worker “${label}” is offline; queued work waits until it reconnects`;
+}
+
+/// An agent's host state, shown only when it matters: an offline worker gets
+/// a labelled "offline". Everything else is in the row's tooltip.
+function AgentHostState({ hostId, hosts }: { hostId: string; hosts: WorkspaceHostDto[] }) {
+  if (!hostId) return null;
+  const host = hosts.find((h) => h.id === hostId);
+  if (host?.online) return null;
+  const text = agentHostText(hostId, hosts);
   return (
     <span
-      className="inline-flex items-center gap-1 text-[11px]"
-      data-tip={tipText}
-      aria-label={tipText}
-      role="img"
-      style={{ color: online ? "var(--ligus-ink-soft)" : "var(--ligus-warn-ink)" }}
+      className="inline-flex shrink-0 items-center gap-1 text-[11px]"
+      data-tip={text}
+      style={{ color: "var(--ligus-warn-ink)" }}
     >
       <IconMonitor size={12} />
-      {!online && <span aria-hidden>offline</span>}
+      offline
+      <span className="sr-only">: {text}</span>
     </span>
   );
 }
@@ -778,6 +779,7 @@ function AgentRosterRow({
   sessionId,
   agent,
   hosts,
+  runtimes,
   isDefault = false,
   onRemove,
   onChanged,
@@ -785,6 +787,7 @@ function AgentRosterRow({
   sessionId: string;
   agent: import("@/lib/ipc").WorkspaceAgentDto;
   hosts: WorkspaceHostDto[];
+  runtimes: RuntimeSummaryDto[];
   /// The roster entry that carries the default handle (@ligus).
   isDefault?: boolean;
   onRemove: () => void;
@@ -849,16 +852,23 @@ function AgentRosterRow({
             }}
           />
         </label>
-        <span className="flex min-w-0 flex-1 items-baseline gap-1.5" data-tip={agent.role || undefined}>
+        <span
+          className="flex min-w-0 flex-1 items-baseline gap-1.5"
+          data-tip={[
+            agent.role,
+            `Access: ${agent.canManageAccess ? accessSummary(agent) : accessLabel(agent)}`,
+            agentHostText(agent.hostId, hosts),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        >
           <span className="shrink-0 truncate text-[13px] font-medium">@{agent.name}</span>
           <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--ligus-ink-soft)" }}>
-            {agent.runtimeId}
+            {agentModelLabel(agent.runtimeId, runtimes)}
             {isDefault ? " · default" : ""}
-            {" · "}
-            {agent.canManageAccess ? accessSummary(agent) : accessLabel(agent)}
           </span>
         </span>
-        <AgentHostDot hostId={agent.hostId} hosts={hosts} />
+        <AgentHostState hostId={agent.hostId} hosts={hosts} />
         {rm.button}
       </div>
       {rm.menu}
@@ -2899,6 +2909,13 @@ function ActivityPane() {
 function fmtTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+/// An agent's model as its row shows it ("claude-code / opus"), falling back
+/// to the runtime id when the runtime isn't known here.
+function agentModelLabel(runtimeId: string, runtimes: RuntimeSummaryDto[]): string {
+  const rt = runtimes.find((r) => r.id === runtimeId);
+  return rt ? runtimePickerLabel(rt) : runtimeId;
 }
 
 function runtimePickerLabel(runtime: RuntimeSummaryDto) {
