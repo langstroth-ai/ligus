@@ -342,3 +342,15 @@ An adversarial review asked for **Revise**. Each finding and where it went:
 | Bind and device tools should need Contributor | raised |
 | Exit 4 is new for `ligus`; cancel as warn contradicts the table | docs updated; cancel is a failure |
 | Loopback http must reject look-alikes; probe needs pass criteria; relay config must be written atomically | defined in §4 relay |
+
+## 9. Security review of the code (2026-11-24)
+
+A prove-then-fix review of the diff found four issues, each fixed with a
+test that reproduces it:
+
+| Finding | Fix |
+|---|---|
+| Claude Code turns get their MCP servers on the command line, past `tool_set`, so reach didn't narrow them | the desktop hands Claude Code only the servers the answering agent may reach (`setup_ui::servers_for_agent`) |
+| The relay flow probed a new URL with this device's saved access token (dry run included), and a switch kept the old token | the saved token goes only to the relay it was saved for; switching elsewhere without a token drops it |
+| A CLI tool token wasn't bound to its URL, so an edited managed file or a reused id could redirect it | the token's origin is kept in the secret store beside it and checked on every load; removing a server removes its token |
+| A stray argument (a pasted admission code) was echoed in the usage error | it is no longer shown |
