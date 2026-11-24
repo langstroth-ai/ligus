@@ -2500,3 +2500,54 @@ export const openChatCheckout = (sessionId: string) => invoke<string>("open_chat
 /// After an apply conflict: a follow-up turn asking the proposal's agent to rebase it.
 export const askAgentToRebase = (sessionId: string, proposalId: string) =>
   invoke<void>("ask_agent_to_rebase", { sessionId, proposalId });
+
+// ── Guided setup (`ligus_runtime::setup`; app/src/setup_ui.rs) ────────────
+
+export type SetupFlowId = "agent" | "tool" | "folder" | "box" | "phone" | "invite" | "relay";
+export type SetupFlowDef = {
+  id: SetupFlowId;
+  title: string;
+  summary: string;
+  /// One line behind the (i).
+  why: string;
+  keywords: string;
+  minRole: string | null;
+  personSteps: boolean;
+};
+export type SetupChoice = { value: string; label: string; hint?: string; disabled?: boolean };
+export type SetupField = {
+  id: string;
+  label: string;
+  type: "text" | "choice" | "multi" | "suggest" | "secret" | "path" | "toggle";
+  options?: SetupChoice[];
+  required: boolean;
+  default?: string;
+  help?: string;
+  /// Shown only when another field has one of these values.
+  when?: [string, string[]];
+};
+export type SetupStep = { id: string; title: string; kind: "input" | "person" | "verify"; fields?: SetupField[]; where?: string };
+export type SetupCheck = { id: string; title: string; status: "ok" | "warn" | "fail" | "skip"; detail: string; fix?: string; notes?: string[] };
+export type SetupForm = { flow: SetupFlowDef; preflight: SetupCheck[]; blocked: boolean; steps: SetupStep[] };
+export type SetupStatus = { flow: SetupFlowDef; progress: "done" | "waiting" | "todo" | "unavailable"; detail: string };
+/// A run: a `ligus.checks.v1` report plus the flow's outcome.
+export type SetupOutcome = {
+  schema: string;
+  command: string;
+  ok: boolean;
+  exitCode: number;
+  checks: SetupCheck[];
+  next: string[];
+  flow: SetupFlowId;
+  done: boolean;
+  dryRun: boolean;
+  results: Record<string, string>;
+};
+
+export const setupFlows = () => invoke<SetupFlowDef[]>("setup_flows");
+export const setupStatus = () => invoke<SetupStatus[]>("setup_status");
+export const setupForm = (flow: SetupFlowId, inputs: Record<string, string>) => invoke<SetupForm>("setup_form", { flow, inputs });
+/// `secrets` are the masked fields: sent once, never stored by the page.
+export const setupRun = (flow: SetupFlowId, inputs: Record<string, string>, secrets: Record<string, string>, dryRun = false) =>
+  invoke<SetupOutcome>("setup_run", { flow, inputs, secrets, dryRun });
+export const setupCancel = (flow: SetupFlowId) => invoke<void>("setup_cancel", { flow });

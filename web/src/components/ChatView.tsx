@@ -96,6 +96,8 @@ import { editorStore } from "@/state/editorStore";
 import { applyStreamDelta, handleTerminal } from "@/lib/streams";
 import { pinToBottom, pinAfterScroll, jumpHint } from "@/lib/autoscroll";
 import { detectSlash } from "@/lib/slash";
+import { parseSetupCommand, setupSlashItems } from "@/lib/setup";
+import { openSetup } from "@/lib/nav";
 import { confirmThen } from "@/lib/confirm";
 import { promptDialog } from "@/components/Dialog";
 import { loadTemplates } from "@/lib/templates";
@@ -787,6 +789,17 @@ export function ChatView({
       { id: "explore", label: "Explore options", hint: "Proposals", run: () => insertText("Explore options for ") },
       { id: "export", label: "Export chat → Markdown", hint: "File", run: () => void exportChatToFile() },
       { id: "clear", label: "Clear input", hint: "Edit", run: () => setInput("") },
+      // Guided setup: the wizard opens; nothing is sent.
+      ...setupSlashItems(slash.query).map((i) => ({
+        id: i.id,
+        label: i.label,
+        hint: "Set up",
+        run: () => {
+          setInput("");
+          setSlash(null);
+          openSetup(i.flow);
+        },
+      })),
       ...loadTemplates().map((t) => ({
         id: t.id,
         label: t.name,
@@ -795,7 +808,7 @@ export function ChatView({
       })),
     ];
     const q = slash.query.toLowerCase();
-    return all.filter((i) => i.label.toLowerCase().includes(q)).slice(0, 8);
+    return all.filter((i) => i.label.toLowerCase().includes(q) || (i.id.startsWith("setup-") && setupSlashItems(q).some((x) => x.id === i.id))).slice(0, 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slash]);
 
@@ -843,6 +856,15 @@ export function ChatView({
   async function handleSend() {
     const text = input.trim();
     if (!text && attachments.length === 0) return;
+    // `/setup agent` opens the wizard; it is never sent as a message.
+    const setup = attachments.length === 0 ? parseSetupCommand(text) : undefined;
+    if (setup !== undefined) {
+      setInput("");
+      setSlash(null);
+      if (setup) openSetup(setup);
+      else setSlash({ query: "setup" });
+      return;
+    }
     // An untagged message runs on the chat's model: when this device
     // already knows that model won't run, say so instead of sending.
     if (routeHandle === "primary") {

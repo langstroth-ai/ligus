@@ -62,6 +62,19 @@ describe("CommandPalette", () => {
     expect(screen.queryByText("Archived thing")).not.toBeInTheDocument();
   });
 
+  it("offers every setup flow and opens the one picked", async () => {
+    const user = userEvent.setup();
+    const { acts, onClose } = setup({ setup: vi.fn() });
+    await screen.findByText("New chat");
+    for (const t of ["Set up an agent", "Connect a tool", "Add a code folder", "Add a box", "Add a phone", "Invite a person", "Set up a relay"]) {
+      expect(screen.getByText(t)).toBeInTheDocument();
+    }
+    await user.type(screen.getByPlaceholderText(/search/i), "mcp");
+    await user.keyboard("{Enter}");
+    expect(acts.setup).toHaveBeenCalledWith("tool");
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("filters by query", async () => {
     const user = userEvent.setup();
     setup();

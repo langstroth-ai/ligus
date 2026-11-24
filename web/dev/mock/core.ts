@@ -10,7 +10,9 @@
 //   &runtime=rt-copilot (the open chat's runtime) &chatmodel=gpt-5.3-codex
 //   (a model picked for the Copilot runtime) &modelproblem=1 (Copilot's
 //   model failed as unavailable: the composer's one-line note)
+//   &noagents=1 (no agents, MCP servers or hosts: the panes' Set up actions)
 import * as fx from "./fixtures";
+import { setupMock } from "./setup";
 
 const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "default";
@@ -21,6 +23,7 @@ const flags = {
   error: params.get("error") === "1",
   inbox: params.get("inbox") === "1",
   modelProblem: params.get("modelproblem") === "1",
+  noAgents: params.get("noagents") === "1",
   empty: scenario === "empty" || scenario === "onboarding",
 };
 
@@ -35,6 +38,8 @@ function chatRuntime(sid: string): string {
 
 function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
+  const setup = setupMock(cmd, args);
+  if (setup.handled) return setup.value;
   switch (cmd) {
     case "get_app_info":
       return { name: "Ligus", coreVersion: "0.1.0", buildProfile: "debug" };
@@ -67,7 +72,7 @@ function handle(cmd: string, args: Args): unknown {
     case "task_state":
       return [];
     case "list_agents":
-      return fx.agents;
+      return flags.noAgents ? [] : fx.agents;
     case "set_agent_access":
       return null;
     case "get_agent_usage":
@@ -93,7 +98,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_skills":
       return fx.skills;
     case "list_mcp_servers":
-      return fx.mcpServers;
+      return flags.noAgents ? [] : fx.mcpServers;
     case "list_vaults":
       return fx.vaults;
     case "list_workflows":
@@ -105,7 +110,7 @@ function handle(cmd: string, args: Args): unknown {
     case "list_chat_attention":
       return flags.empty ? [] : fx.chatAttention;
     case "list_workspace_hosts":
-      return fx.hosts;
+      return flags.noAgents ? [] : fx.hosts;
     case "list_mention_states":
     case "list_all_mention_states":
       return [];

@@ -27,6 +27,8 @@ serde_json.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+# The setup wizard's secret fields are zeroized as soon as they arrive.
+zeroize = "1"
 # Structured logging → a rolling daily file in the OS log dir (+ stderr), so
 # background errors (sync/scheduler/workflow) are diagnosable after the fact
 # instead of vanishing to a stderr no one sees in a GUI launch.
@@ -115,3 +117,4 @@ harness = false
 [dev-dependencies]
 # Tests answer passkey prompts with a test recovery key (never in a real build).
 ligus-runtime = { workspace = true, features = ["test-presence"] }
+tempfile = "3"

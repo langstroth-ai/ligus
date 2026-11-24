@@ -803,6 +803,17 @@ fn box_reach_for(state: &AppState, svc: &ChatService, ws: Uuid) -> BoxReach {
     )
 }
 
+/// The precheck's reasons as (code, text, blocking), for the setup flow.
+pub(crate) fn precheck_for(app: &AppHandle) -> Vec<(&'static str, String, bool)> {
+    let state = app.state::<AppState>();
+    let ws = state.active_workspace_id();
+    let presence = conn_for(&state, ws).is_some();
+    let local = ws == state.local_workspace_id;
+    let svc = state.service.lock().unwrap();
+    let boxes = box_reach_for(&state, &svc, ws);
+    precheck_reasons(&svc, ws, local, presence, &boxes).into_iter().map(|r| (r.code, r.text, r.blocking)).collect()
+}
+
 /// Can this desktop add a phone by QR right now? Otherwise the panel opens
 /// on the paste flow and says what's missing.
 #[tauri::command]

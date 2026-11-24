@@ -53,6 +53,7 @@ mod agent_iface;
 mod attachments;
 mod memory_ui;
 mod repos_ui;
+mod setup_ui;
 mod turn_host;
 mod attention;
 mod notices;
@@ -6017,9 +6018,18 @@ fn add_remote_mcp_server(
         auth: None,
         agents: Vec::new(),
     };
+    add_managed_mcp_server(&state, server)
+}
+
+/// Write `server` (as given: enabled or not, no token) to the workspace's
+/// config and managed catalog, trusted on this device as its own item, and
+/// reload the catalogs. Shared by [`add_remote_mcp_server`] and the setup
+/// flow (`setup_ui`), which writes a server only after its handshake passed.
+pub(crate) fn add_managed_mcp_server(state: &AppState, server: McpServerSpec) -> Result<(), String> {
+    let id = server.id.clone();
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_mcp_server_in_config(&state.data_dir, &root, &server)?;
-    trust_own_item(&state, ligus_runtime::workspace_trust::ItemKind::McpServer, ligus_runtime::workspace_trust::mcp_item(&server, "").digest);
+    trust_own_item(state, ligus_runtime::workspace_trust::ItemKind::McpServer, ligus_runtime::workspace_trust::mcp_item(&server, "").digest);
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
         if let Some(existing) = managed.iter_mut().find(|s| s.id == id) {
@@ -16232,6 +16242,11 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_poll,
             ligus_auth_ui::ligus_auth_sign_out,
             phones_ui::inspect_phone_code,
+            setup_ui::setup_flows,
+            setup_ui::setup_status,
+            setup_ui::setup_form,
+            setup_ui::setup_run,
+            setup_ui::setup_cancel,
             chat_models::list_runtime_models,
             chat_models::get_chat_model,
             chat_models::set_chat_model,

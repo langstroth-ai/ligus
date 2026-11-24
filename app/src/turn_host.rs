@@ -58,6 +58,9 @@ impl TurnHost for DesktopHost<'_> {
             // above are re-read from the settings.
             let mut servers = self.mcp.clone();
             crate::apply_mcp_auth(&mut servers, &self.state.settings.lock().unwrap());
+            // Which agents may reach each server: this device's choice
+            // (`ligus_runtime::McpReach`); the turn engine drops the rest.
+            crate::setup_ui::apply_reach(&self.state.data_dir, self.workspace_id, &mut servers);
             crate::guards::filter_mcp_servers(self.state, servers, &egress)
         }
     }
