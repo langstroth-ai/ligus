@@ -1416,7 +1416,8 @@ impl ChatService {
             ));
         }
         slot.avatar_url = avatar_url.filter(|u| !u.is_empty());
-        slot.avatar_color_hex = avatar_color_hex.filter(|c| !c.is_empty());
+        // Only a plain hex color is kept (the fold drops anything else too).
+        slot.avatar_color_hex = avatar_color_hex.filter(|c| ligus_core::agent::is_valid_color_hex(c));
         let agent = slot.clone();
         self.append_signed(
             session_id,
@@ -4104,6 +4105,24 @@ mod tests {
         assert_eq!(label(with).as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(label(without), None, "the harness default records nothing");
         assert_eq!(label(plain), None);
+    }
+
+    #[test]
+    fn set_agent_avatar_keeps_only_a_hex_color() {
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let agent = WorkspaceAgent::new("reviewer", "ws-claude");
+        let aid = agent.id;
+        svc.add_agent(chat.id, wid, agent).unwrap();
+        let color = |svc: &ChatService| {
+            let cfg = workspace_config_session_id(wid);
+            svc.load(cfg).unwrap().unwrap().workspace_agents.into_iter().find(|a| a.id == aid).unwrap().avatar_color_hex
+        };
+        svc.set_agent_avatar(chat.id, wid, aid, None, Some("#3f72a8".into())).unwrap();
+        assert_eq!(color(&svc).as_deref(), Some("#3f72a8"));
+        svc.set_agent_avatar(chat.id, wid, aid, None, Some("url(https://evil.example/p.gif)".into())).unwrap();
+        assert_eq!(color(&svc), None);
     }
 
     #[test]

@@ -406,7 +406,8 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
     if !secs.is_finite() || secs <= 0.0 {
         bail!("duration '{s}' must be positive");
     }
-    Ok(Duration::from_secs_f64(secs))
+    // A value past what a Duration holds is an error, not a panic.
+    Duration::try_from_secs_f64(secs).map_err(|_| anyhow::anyhow!("duration '{s}' is too long"))
 }
 
 fn dur_or(v: Option<&str>, default: Duration) -> Result<Duration> {
@@ -2024,6 +2025,7 @@ mod tests {
         assert!(parse_duration("0s").is_err());
         assert!(parse_duration("5w").is_err());
         assert!(parse_duration("soon").is_err());
+        assert!(parse_duration("99999999999999999999999d").is_err());
     }
 
     #[test]

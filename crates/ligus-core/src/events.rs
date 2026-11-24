@@ -894,13 +894,16 @@ impl ChatSession {
             // resolves them deterministically on every device.
             SessionEvent::AgentRosterUpdated { agents } => {
                 self.workspace_agents = agents.clone();
+                self.workspace_agents.iter_mut().for_each(WorkspaceAgent::sanitize_color);
             }
             // Per-item agent delta — upsert by id (mirrors `ChannelCreated`).
             SessionEvent::AgentUpserted { agent } => {
+                let mut agent = agent.clone();
+                agent.sanitize_color();
                 if let Some(slot) = self.workspace_agents.iter_mut().find(|a| a.id == agent.id) {
-                    *slot = agent.clone();
+                    *slot = agent;
                 } else {
-                    self.workspace_agents.push(agent.clone());
+                    self.workspace_agents.push(agent);
                 }
             }
             SessionEvent::AgentRemoved { agent_id } => {

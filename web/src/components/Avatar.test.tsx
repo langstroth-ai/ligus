@@ -21,4 +21,21 @@ describe("Avatar", () => {
       unmount();
     }
   });
+
+  it("uses a hex accent color but falls back for anything else", () => {
+    const bg = (colorHex: string) => {
+      const { container, unmount } = render(<Avatar name="Mallory" colorHex={colorHex} />);
+      const v = (container.firstChild as HTMLElement).style.background;
+      unmount();
+      return v;
+    };
+    const fallback = bg("");
+    expect(bg("#3f72a8")).not.toBe(fallback);
+    // A synced roster color goes into CSS: a url() would load a remote image
+    // and tell its host who is viewing.
+    for (const c of ["url(https://evil.example/p.gif)", "#fff url(https://evil.example/p.gif)", "red", "#12"]) {
+      expect(bg(c)).toBe(fallback);
+      expect(bg(c)).not.toContain("url(");
+    }
+  });
 });

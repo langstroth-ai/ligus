@@ -409,9 +409,9 @@ export const chatAttention = [
 ];
 export const queuedWork = [{ sessionId: "chat-2", chatTitle: "Relay reconnect backoff", agentId: "ag-builder", agentName: "builder", hostId: "h-box", hostLabel: "serve box", hostStatus: "offline" }];
 export const hosts = [
-  { id: "h-mac", kind: "desktop", label: "MacBook Pro", online: true, lastSeen: iso(0) },
-  { id: "h-box", kind: "worker", label: "serve box", online: false, lastSeen: iso(95) },
-  { id: "h-mara", kind: "device", label: "Mara's laptop", online: true, lastSeen: iso(0) },
+  { id: "h-mac", kind: "desktop", label: "MacBook Pro", online: true, lastSeen: iso(0), ownerName: "Zaz", mine: true },
+  { id: "h-box", kind: "worker", label: "serve box", online: false, lastSeen: iso(95), ownerName: "Zaz", mine: true },
+  { id: "h-mara", kind: "device", label: "Mara's laptop", online: true, lastSeen: iso(0), ownerName: "Mara", mine: false },
 ];
 
 export const dearth = (enabled: boolean) => ({

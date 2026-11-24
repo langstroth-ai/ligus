@@ -27,7 +27,7 @@ use ligus_core::ModelProviderKind;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli_detect::{find_on_path, run_bounded_split, DetectEnv};
+use crate::cli_detect::{find_on_path, run_bounded_split_in, DetectEnv};
 
 /// How long a CLI listing may take (`agy models` asks the network).
 pub const CLI_LIST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -106,7 +106,7 @@ impl ModelList {
 fn dedup(models: Vec<ModelOption>) -> Vec<ModelOption> {
     let mut out: Vec<ModelOption> = Vec::with_capacity(models.len());
     for m in models {
-        if !m.id.trim().is_empty() && !out.iter().any(|o| o.id == m.id) {
+        if is_model_id(&m.id) && !out.iter().any(|o| o.id == m.id) {
             out.push(m);
         }
     }
@@ -168,13 +168,21 @@ pub fn is_model_unavailable(text: &str) -> bool {
 // Parsers (pure; tested on recorded output).
 // ---------------------------------------------------------------------------
 
+/// Whether `id` can be offered as a model: non-empty, no spaces or control
+/// characters, and not starting with `-` (a harness takes the model as an
+/// argument, where a leading dash would read as a flag).
+pub fn is_model_id(id: &str) -> bool {
+    let id = id.trim();
+    !id.is_empty() && !id.starts_with('-') && !id.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// `agy models`: `<id>\t<display name>` lines (other lines, like
 /// "Fetching available models...", are skipped).
 pub fn parse_agy_models(out: &str) -> Vec<ModelOption> {
     out.lines()
         .filter_map(|l| l.split_once('\t'))
         .map(|(id, label)| (id.trim(), label.trim()))
-        .filter(|(id, _)| !id.is_empty() && !id.contains(' '))
+        .filter(|(id, _)| is_model_id(id))
         .map(|(id, label)| ModelOption::new(id, Some(label.to_string())))
         .collect()
 }
@@ -196,7 +204,7 @@ pub fn parse_copilot_config_help(out: &str) -> Vec<ModelOption> {
         }
         if let Some(rest) = t.strip_prefix("- ") {
             let id = rest.trim().trim_matches('"').trim();
-            if !id.is_empty() && !id.contains(' ') {
+            if is_model_id(id) {
                 models.push(ModelOption::new(id, None));
             }
         }
@@ -214,7 +222,7 @@ pub fn parse_codex_models(json: &str) -> Vec<ModelOption> {
             a.iter()
                 .filter(|m| m.get("visibility").and_then(Value::as_str).is_none_or(|v| v == "list"))
                 .filter_map(|m| {
-                    let id = m.get("slug").and_then(Value::as_str)?;
+                    let id = m.get("slug").and_then(Value::as_str).filter(|id| is_model_id(id))?;
                     Some(ModelOption::new(id, m.get("display_name").and_then(Value::as_str).map(str::to_string)))
                 })
                 .collect()
@@ -239,7 +247,7 @@ pub fn parse_openai_models(json: &Value) -> Vec<ModelOption> {
         .map(|a| {
             a.iter()
                 .filter_map(|m| {
-                    let id = m.get("id").and_then(Value::as_str)?;
+                    let id = m.get("id").and_then(Value::as_str).filter(|id| is_model_id(id))?;
                     let label = m.get("display_name").or_else(|| m.get("name")).and_then(Value::as_str).map(str::to_string);
                     Some(ModelOption::new(id, label.filter(|l| l != id)))
                 })
@@ -274,20 +282,72 @@ fn resolve_program(program: &str, env: &DetectEnv) -> Option<PathBuf> {
     find_on_path(program, &env.path)
 }
 
+/// Whether `path`'s file name is the harness's own binary (`agy`,
+/// `copilot`, `codex`; on Windows with `.exe`, `.cmd` or `.bat`). Listing
+/// runs the program, and the add-runtime form lists as the endpoint is
+/// typed, so any other file is never run.
+fn is_harness_binary(path: &Path, expected: &str) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    if name == expected {
+        return true;
+    }
+    cfg!(windows)
+        && [".exe", ".cmd", ".bat"]
+            .iter()
+            .any(|ext| name.eq_ignore_ascii_case(&format!("{expected}{ext}")))
+}
+
+/// A fresh empty directory to run a listing in, so a harness never reads
+/// project files (or config) from wherever the app was started. Removed on
+/// drop.
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new() -> Option<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ligus-model-list-{}-{nanos}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&dir).ok()?;
+        Some(Self(dir))
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// A subscription CLI's models (blocking; run it off the UI thread).
-/// `program` is the runtime's binary (`agy`, `copilot`, `codex`, or a path).
+/// `program` is the runtime's binary (`agy`, `copilot`, `codex`, or a path
+/// whose file name is one of those); any other program is refused.
 pub fn cli_models(provider: ModelProviderKind, program: &str, env: &DetectEnv) -> ModelList {
-    let (args, timeout, source): (&[&str], Duration, ModelSource) = match provider {
-        ModelProviderKind::Antigravity => (&["models"], AGY_LIST_TIMEOUT, ModelSource::Live),
-        ModelProviderKind::Copilot => (&["help", "config"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
-        ModelProviderKind::Codex => (&["debug", "models"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
+    let (expected, args, timeout, source): (&str, &[&str], Duration, ModelSource) = match provider {
+        ModelProviderKind::Antigravity => ("agy", &["models"], AGY_LIST_TIMEOUT, ModelSource::Live),
+        ModelProviderKind::Copilot => ("copilot", &["help", "config"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
+        ModelProviderKind::Codex => ("codex", &["debug", "models"], CLI_LIST_TIMEOUT, ModelSource::Catalog),
         _ => return ModelList::none("This harness has no model list; type a model name."),
     };
-    let Some(path) = resolve_program(program, env) else {
+    if !is_harness_binary(Path::new(program.trim()), expected) {
+        return ModelList::failed(source, format!("models are listed only from {expected} itself; type a model name"));
+    }
+    let Some(path) = resolve_program(program.trim(), env) else {
         return ModelList::failed(source, format!("{program} isn't installed on this device"));
     };
+    if !is_harness_binary(&path, expected) {
+        return ModelList::failed(source, format!("models are listed only from {expected} itself; type a model name"));
+    }
+    let Some(scratch) = ScratchDir::new() else {
+        return ModelList::failed(source, "couldn't make a temporary directory to list models in");
+    };
+    let run = |args: &[&str]| run_bounded_split_in(&path, args, env, timeout, Some(&scratch.0));
     let shown = args.iter().fold(program.to_string(), |a, s| format!("{a} {s}"));
-    match run_bounded_split(&path, args, env, timeout) {
+    match run(args) {
         None => ModelList::failed(source, format!("`{shown}` didn't answer within {}s", timeout.as_secs())),
         Some((false, out, err)) => {
             let detail = if err.trim().is_empty() { out } else { err };
@@ -317,7 +377,7 @@ pub fn cli_models(provider: ModelProviderKind, program: &str, env: &DetectEnv) -
                 if models.is_empty() {
                     // An offline refresh can fail quietly: fall back to the
                     // catalog bundled with the CLI.
-                    match run_bounded_split(&path, &["debug", "models", "--bundled"], env, timeout) {
+                    match run(&["debug", "models", "--bundled"]) {
                         Some((true, out, _)) => ModelList::of(parse_codex_models(&out), source, false, None),
                         _ => ModelList::failed(source, "`codex debug models` listed no models"),
                     }
@@ -548,6 +608,65 @@ mod tests {
         assert_eq!(pi.source, ModelSource::None);
         let missing = cli_models(ModelProviderKind::Antigravity, "/nowhere/agy", &env);
         assert!(missing.error.unwrap().contains("isn't installed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_program_that_isnt_the_harness() {
+        let bin = tempfile::tempdir().unwrap();
+        let marker = bin.path().join("ran");
+        let touch = format!("touch '{}'", marker.display());
+        // Files a person might type into the endpoint field: a script, a
+        // shell, a harness binary of another provider.
+        fake_bin(bin.path(), "evil.sh", &touch);
+        fake_bin(bin.path(), "codex", &touch);
+        let env = env_for(bin.path());
+        for (kind, program) in [
+            (ModelProviderKind::Codex, bin.path().join("evil.sh").display().to_string()),
+            (ModelProviderKind::Codex, "evil.sh".to_string()),
+            (ModelProviderKind::Antigravity, bin.path().join("codex").display().to_string()),
+            (ModelProviderKind::Copilot, "/bin/sh".to_string()),
+            (ModelProviderKind::Copilot, format!("{}/", bin.path().display())),
+        ] {
+            let l = cli_models(kind, &program, &env);
+            assert!(l.models.is_empty(), "{program}: {l:?}");
+            assert!(l.error.as_deref().is_some_and(|e| e.contains("only from")), "{program}: {l:?}");
+        }
+        assert!(!marker.exists(), "a program that isn't the harness never runs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lists_in_an_empty_temporary_directory() {
+        let bin = tempfile::tempdir().unwrap();
+        let out = bin.path().join("cwd");
+        fake_bin(
+            bin.path(),
+            "agy",
+            &format!("pwd > '{}'; ls -A >> '{}'; printf 'gemini-x\\tGemini X\\n'", out.display(), out.display()),
+        );
+        let l = cli_models(ModelProviderKind::Antigravity, "agy", &env_for(bin.path()));
+        assert_eq!(ids(&l.models), ["gemini-x"], "{l:?}");
+        let seen = std::fs::read_to_string(&out).unwrap();
+        let mut lines = seen.lines();
+        let cwd = std::path::PathBuf::from(lines.next().unwrap());
+        assert!(cwd.file_name().unwrap().to_string_lossy().starts_with("ligus-model-list-"), "{seen}");
+        assert_eq!(lines.next(), None, "the directory is empty");
+        assert!(!cwd.exists(), "and removed afterwards");
+        assert_ne!(cwd, std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn model_ids_starting_with_a_dash_are_never_listed() {
+        assert!(!is_model_id("--config=/tmp/x") && !is_model_id("-m") && !is_model_id(" ") && !is_model_id("a b"));
+        assert!(is_model_id("gpt-5.6-sol") && is_model_id("openai/gpt-6") && is_model_id("llama3.2:latest"));
+        assert_eq!(ids(&parse_agy_models("--yolo\tYolo\ngemini-x\tGemini X\n")), ["gemini-x"]);
+        let help = "  `model`: AI model\n    - \"--allow-all-tools\"\n    - \"gpt-5\"\n";
+        assert_eq!(ids(&parse_copilot_config_help(help)), ["gpt-5"]);
+        let codex = r#"{"models":[{"slug":"--dangerously-bypass","visibility":"list"},{"slug":"gpt-5.6-sol","visibility":"list"}]}"#;
+        assert_eq!(ids(&parse_codex_models(codex)), ["gpt-5.6-sol"]);
+        let v = serde_json::json!({"data": [{"id": "-x"}, {"id": "qwen3-coder"}]});
+        assert_eq!(ids(&parse_openai_models(&v)), ["qwen3-coder"]);
     }
 
     #[cfg(unix)]

@@ -75,6 +75,7 @@ import {
   type EmojiEntry,
 } from "@/lib/emoji";
 import { Avatar } from "@/components/Avatar";
+import { safeColorHex } from "@/lib/avatar";
 import { ChatRepoChip, PinnedHostWarning } from "@/components/ChatRepoChip";
 import {
   ModelStep,
@@ -1221,7 +1222,7 @@ export function ChatView({
               // (neutral tint); a personal agent keeps the cool agent tint and
               // takes its stored avatar colour as the turn accent.
               const shared = Boolean(rosterAgent) && rosterAgent!.ownerActorId.trim() === "";
-              const turnColor = rosterAgent?.avatarColorHex ?? m.authorColorHex ?? undefined;
+              const turnColor = safeColorHex(rosterAgent?.avatarColorHex ?? m.authorColorHex) ?? undefined;
               // The mentionable handle for an agent turn: the roster name, else
               // the default agent's "@ligus" (its author is stored as "Ligus").
               const handle =

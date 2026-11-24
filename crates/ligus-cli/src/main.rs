@@ -187,6 +187,27 @@ fn decode_ligusws_invite_full(
 /// A relay URL a box can sync with: an http(s) address with a host.
 use ligus_runtime::workspace_invite::usable_relay_url;
 
+/// A relay URL as it's safe to print: scheme://host[:port] only. A URL can
+/// carry user:password or a token in its path, query or fragment, and
+/// doctor and status output is pasted into chats and issues.
+fn relay_origin(url: &str) -> String {
+    let url = url.trim();
+    if let Ok(u) = reqwest::Url::parse(url) {
+        if let Some(host) = u.host() {
+            return match u.port() {
+                Some(p) => format!("{}://{host}:{p}", u.scheme()),
+                None => format!("{}://{host}", u.scheme()),
+            };
+        }
+    }
+    // Not a URL we can parse: keep the scheme, drop everything after the
+    // authority and any userinfo inside it.
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    if scheme.is_empty() { host.to_string() } else { format!("{scheme}://{host}") }
+}
+
 /// Why this box can't sync, named before any HTTP is tried: no relay URL,
 /// or one that isn't an http(s) address (an invite from a relayless
 /// workspace once enrolled as `relay_url = ""`).
@@ -195,7 +216,7 @@ fn relay_url_problem(relay_url: Option<&str>) -> Option<String> {
     match relay_url.map(str::trim) {
         None | Some("") => Some(format!("this box's workspace has no relay URL; {FIX}")),
         Some(r) if !usable_relay_url(r) => {
-            Some(format!("this box's workspace has no relay URL it can use ({r:?} is not an http(s) address); {FIX}"))
+            Some(format!("this box's workspace has no relay URL it can use ({:?} is not an http(s) address); {FIX}", relay_origin(r)))
         }
         Some(_) => None,
     }
@@ -600,7 +621,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
         })),
         "workspace": {
             "room": cfg.room,
-            "relayUrl": cfg.relay_url,
+            "relayUrl": cfg.relay_url.as_deref().map(relay_origin),
             "relayProblem": relay_problem,
             "accessToken": cfg.token.is_some() || auth::cell().is_some(),
             "workspaceKey": cfg.key.is_some(),
@@ -611,7 +632,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
         },
         "serve": {
             "tokenFile": cfg.data_dir.join("serve.token").is_file(),
-            "remoteRelay": remote.as_ref().map(|r| json!({ "url": r.relay, "enabled": r.enabled })),
+            "remoteRelay": remote.as_ref().map(|r| json!({ "url": relay_origin(&r.relay), "enabled": r.enabled })),
             "live": live.as_ref().map(|l| json!({
                 "connected": l.connected,
                 "status": l.status,
@@ -1417,6 +1438,12 @@ fn cmd_add_agent(
     dry_run: bool,
 ) -> Result<()> {
     if dry_run {
+        // The dry run checks what the real run needs: the runtime exists.
+        let svc = open_service(cfg)?;
+        let ws = uuid_of_room(&cfg.room);
+        if !svc.list_workspace_runtimes(ws)?.iter().any(|r| r.id == runtime_id) {
+            return Err(problem::not_found(format!("no runtime '{runtime_id}' in this workspace (ligus runtimes lists them)")));
+        }
         let on = host.as_deref().map(|h| format!(" on host {h}")).unwrap_or_default();
         println!("dry run: would create agent @{name} on runtime '{runtime_id}'{on}; nothing was signed or written.");
         return Ok(());
@@ -2096,8 +2123,10 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
 
     match cfg.relay_url.as_deref().filter(|u| usable_relay_url(u)) {
         None => r.add(Check::skip("relay.reachable", "relay", "no relay URL on this device")),
-        Some(url) => {
+        Some(full) => {
             use ligus_runtime::relay_client::RelayProbe as P;
+            // Only scheme://host[:port] is ever printed (see relay_origin).
+            let url = relay_origin(full);
             let probe = match (rt_current(), relay_client(cfg)) {
                 (Ok(rt), Ok(c)) => rt.block_on(c.with_request_timeout(Duration::from_secs(10)).probe(&cfg.room)),
                 (Err(e), _) | (_, Err(e)) => P::Unreachable(format!("{e:#}")),
@@ -2207,6 +2236,10 @@ fn run() -> Result<()> {
     if !help::is_command(first) {
         return Err(help::usage_error(format!("unknown command `{first}`: `ligus help` lists the commands and topics")));
     }
+    // `--dry-run` where it isn't supported would otherwise be ignored and the
+    // command would really run (sign, write, sync): refuse it up front,
+    // before the data dir, config or secrets are touched.
+    dry_run_supported(&args)?;
     // `ligus app` only opens the desktop app: no data dir, config or secrets.
     if first == "app" {
         return app_cmd::cmd_app(&args[1..]);
@@ -2651,6 +2684,23 @@ fn split_flag_values(args: Vec<String>) -> Vec<String> {
     out
 }
 
+/// The commands that take `--dry-run`.
+const DRY_RUN_COMMANDS: &[&str] = &["add-runtime", "rm-runtime", "add-agent", "set-agent-host"];
+
+/// A usage error when `--dry-run` (before any `--`) is given to a command
+/// that has no dry run.
+fn dry_run_supported(args: &[String]) -> Result<()> {
+    let cmd = args.first().map(String::as_str).unwrap_or("");
+    let asked = args.iter().skip(1).take_while(|a| *a != "--").any(|a| a == "--dry-run");
+    if asked && !DRY_RUN_COMMANDS.contains(&cmd) {
+        return Err(help::usage_error(format!(
+            "`ligus {cmd}` has no --dry-run (only {} do); nothing was run",
+            DRY_RUN_COMMANDS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn positional_args(rest: &[String]) -> Vec<&String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -2672,6 +2722,22 @@ fn positional_args(rest: &[String]) -> Vec<&String> {
 
 #[cfg(test)]
 mod cli_tests {
+    /// `--dry-run` on a command without one is a usage error (exit 2),
+    /// never silently ignored; the four that have one, and text after
+    /// `--`, pass.
+    #[test]
+    fn dry_run_only_where_supported() {
+        for cmd in ["new", "send", "sync", "enroll", "serve", "worker", "admit", "doctor"] {
+            let e = super::dry_run_supported(&argv(&[cmd, "x", "--dry-run"])).unwrap_err();
+            assert!(crate::help::is_usage(&e), "{cmd}: {e:#}");
+        }
+        for cmd in super::DRY_RUN_COMMANDS {
+            assert!(super::dry_run_supported(&argv(&[cmd, "a", "b", "--dry-run"])).is_ok(), "{cmd}");
+        }
+        assert!(super::dry_run_supported(&argv(&["send", "id", "--", "--dry-run"])).is_ok());
+        assert!(super::dry_run_supported(&argv(&["new", "a chat"])).is_ok());
+    }
+
     /// `--flag=value` and `--flag value` read the same; `=` inside a value,
     /// an empty value, positionals and anything after `--` are kept.
     #[test]
@@ -3010,5 +3076,59 @@ mod cli_tests {
         assert!(r.next.iter().all(|n| n.starts_with("ligus ")), "{:?}", r.next);
         let d = r.to_json(0);
         assert_eq!(d["schema"], "ligus.checks.v1");
+    }
+
+    /// add-agent --dry-run checks the runtime exists, as its help says.
+    #[test]
+    fn add_agent_dry_run_needs_a_known_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        let e = cmd_add_agent(&cfg, "coder", "no-such-runtime", None, None, true).unwrap_err();
+        assert!(format!("{e:#}").contains("no runtime 'no-such-runtime'"), "{e:#}");
+        let svc = open_service(&cfg).unwrap();
+        let ws = uuid_of_room(&cfg.room);
+        let agents = svc.load(workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
+        assert!(agents.is_empty(), "a dry run created an agent");
+    }
+
+    /// Only scheme://host[:port] of a relay URL is ever printed.
+    #[test]
+    fn relay_origin_drops_credentials_path_and_query() {
+        assert_eq!(relay_origin("https://u:p@relay.example/base?token=hrt1x#f"), "https://relay.example");
+        assert_eq!(relay_origin(" http://127.0.0.1:8080/x "), "http://127.0.0.1:8080");
+        assert_eq!(relay_origin("https://[::1]:9/a"), "https://[::1]:9");
+        assert_eq!(relay_origin("relay.example/x?t=1"), "relay.example");
+        assert_eq!(relay_origin("weird://a:b@h/x"), "weird://h");
+        assert!(!relay_origin("http://u:p@:bad/?t=1").contains("p@"));
+    }
+
+    /// doctor against a relay that accepts the connection and never
+    /// answers ends within the 10 s probe timeout, and neither the text nor
+    /// the JSON report carries the URL's credentials, path or query.
+    #[test]
+    fn doctor_relay_probe_is_bounded_and_redacted() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for c in listener.incoming() {
+                held.push(c);
+            }
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let url = format!("http://alice:s3cretpw@127.0.0.1:{port}/base/path?token=hrt1leak#frag");
+        let cfg = bare_cfg(tmp.path(), Some(&url));
+        std::fs::create_dir_all(&cfg.data_dir).unwrap();
+        let mut r = checks::Report::new("doctor");
+        let t0 = std::time::Instant::now();
+        doctor_workspace_checks(&cfg, &mut r);
+        assert!(t0.elapsed() < Duration::from_secs(20), "doctor hung for {:?}", t0.elapsed());
+        let relay = r.checks.iter().find(|c| c.id == "relay.reachable").unwrap();
+        assert_eq!(relay.status, checks::Status::Fail);
+        let out = format!("{}\n{}\n{}", r.to_json(0), doctor_text(&r, false, false), status_report(&cfg));
+        assert!(out.contains(&format!("http://127.0.0.1:{port}")), "{out}");
+        for leak in ["alice", "s3cretpw", "hrt1leak", "token=", "/base/path", "frag"] {
+            assert!(!out.contains(leak), "{leak} printed: {out}");
+        }
     }
 }

@@ -224,6 +224,56 @@ run "$TMP/eq2" "$K8S" install --json --context=x --namespace=x --scenario=team-e
 check_json "ligus-k8s --flag=value (external relay without --relay-url)" "$TMP/eq2" 2 "$RC"
 if grep -q 'needs --relay-url' "$TMP/eq2"; then pass "ligus-k8s reads --scenario=VALUE"; else fail "ligus-k8s --scenario=VALUE not read: $(cat "$TMP/eq2")"; fi
 
+# An unknown argument never echoes a value: not after "=", and not a bare
+# word that a flag taking no value was handed (--relay-access-token=VALUE).
+SECRETISH=hrt1secretvalue0123456789
+run "$TMP/r1" "$K8S" install --json --context=x --namespace=x --relay-access-token="$SECRETISH"
+check_json "ligus-k8s a boolean flag given a value is a usage error" "$TMP/r1" 2 "$RC" usage
+run "$TMP/r2" "$K8S" verify --json --bogus-token="$SECRETISH"
+check_json "ligus-k8s unknown --flag=value is a usage error" "$TMP/r2" 2 "$RC" usage
+run "$TMP/r3" env HOME="$TMP/vh" LIGUS_BIN=/usr/bin/true "$LOCAL" verify --json --role serve --force="$SECRETISH"
+check_json "ligus-local a boolean flag given a value is a usage error" "$TMP/r3" 2 "$RC" usage
+run "$TMP/r4" env HOME="$TMP/vh" LIGUS_BIN=/usr/bin/true "$LOCAL" verify --json --password="$SECRETISH" "$SECRETISH"
+check_json "ligus-local unknown --flag=value is a usage error" "$TMP/r4" 2 "$RC" usage
+leaked=""
+for f in r1 r2 r3 r4; do
+  if grep -q "$SECRETISH" "$TMP/$f" "$TMP/$f.err"; then leaked="$leaked $f"; fi
+done
+if [ -z "$leaked" ]; then pass "unknown arguments' values are not echoed (stderr or JSON)"; else fail "unknown argument values echoed:$leaked"; fi
+if grep -q 'unknown argument: --bogus-token$' "$TMP/r2.err"; then pass "an unknown flag is still named"; else fail "unknown flag not named: $(cat "$TMP/r2.err")"; fi
+
+# preflight measures the sandbox with doctor --sandbox only, in a scratch
+# data dir, without the caller's relay, gateways or keys (a bare doctor
+# would probe the relay and could send paid gateway turns).
+mkdir -p "$TMP/fl"
+cat >"$TMP/fl/ligus" <<'FAKE'
+#!/bin/sh
+case $1 in
+  --version) echo "ligus 0.2.0"; exit 0 ;;
+  doctor)
+    {
+      printf 'args:%s\n' "$*"
+      printf 'relay:%s\n' "${LIGUS_RELAY_URL:-}"
+      printf 'gateways:%s\n' "${LIGUS_MODEL_GATEWAYS_FILE:-}"
+      printf 'token:%s\n' "${LIGUS_RELAY_ACCESS_TOKEN:-}"
+      printf 'data:%s\n' "${LIGUS_DATA_DIR:-}"
+    } >"$FAKE_LIGUS_LOG"
+    printf 'agent sandbox: landlock\n  Landlock ABI 6\n'; exit 0 ;;
+esac
+exit 0
+FAKE
+chmod +x "$TMP/fl/ligus"
+run "$TMP/p1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux LIGUS_BIN="$TMP/fl/ligus" FAKE_LIGUS_LOG="$TMP/fl/log" \
+  LIGUS_RELAY_URL=http://127.0.0.1:9/ LIGUS_MODEL_GATEWAYS_FILE="$TMP/fl/gw.json" LIGUS_RELAY_ACCESS_TOKEN=x \
+  "$LOCAL" preflight --json --role serve --data-dir "$TMP/fl/real-data"
+if [ -f "$TMP/fl/log" ] && grep -qx 'args:doctor --sandbox' "$TMP/fl/log" && grep -qx 'relay:' "$TMP/fl/log" \
+  && grep -qx 'gateways:' "$TMP/fl/log" && grep -qx 'token:' "$TMP/fl/log" && ! grep -q 'real-data' "$TMP/fl/log"; then
+  pass "ligus-local preflight runs only doctor --sandbox, without relay or gateways, in a scratch dir"
+else
+  fail "ligus-local preflight doctor call: $(cat "$TMP/fl/log" 2>/dev/null)"
+fi
+if grep -q '"id":"sandbox","status":"pass"' "$TMP/p1"; then pass "ligus-local preflight reads the sandbox tier from doctor --sandbox"; else fail "preflight sandbox check: $(cat "$TMP/p1")"; fi
+
 # -o json is --json; -o text undoes it; -q prints only warn and FAIL checks.
 run "$TMP/o1" env HOME="$TMP/vh" LIGUS_LOCAL_OS=Linux PATH=/usr/bin:/bin LIGUS_BIN=/usr/bin/true \
   "$LOCAL" verify -o json --role serve --data-dir "$TMP/vd" --env-file "$TMP/ve"

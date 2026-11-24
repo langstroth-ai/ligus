@@ -45,13 +45,15 @@ describe("RunLeaseLine", () => {
   });
 });
 
-const host = (id: string, label: string, kind = "device", online = true): WorkspaceHostDto => ({
+const host = (id: string, label: string, kind = "device", online = true, ownerName = "Mara", mine = false): WorkspaceHostDto => ({
   id,
   kind,
   label,
   online,
   lastSeen: "2026-11-22T10:00:00Z",
   modelGateways: [],
+  ownerName,
+  mine,
 });
 
 describe("leaseNotice", () => {
@@ -97,12 +99,32 @@ describe("RunLeaseLine: the heartbeat notice", () => {
     const lease = { ...base, holder: "me", isMe: true, health: "degraded", lastBeatAgeMs: 40000 };
     render(<RunLeaseLine lease={lease} hosts={[host("me", "This Mac"), host("d2", "Mara's laptop")]} onHandOver={onHandOver} />);
     const picker = screen.getByLabelText("Device to hand the run to");
-    expect(Array.from((picker as HTMLSelectElement).options).map((o) => o.text)).toEqual(["Any online device", "Mara's laptop"]);
+    expect(Array.from((picker as HTMLSelectElement).options).map((o) => o.text)).toEqual(["Any online device", "Mara's laptop (Mara, d2)"]);
     await userEvent.click(screen.getByRole("button", { name: "Hand over" }));
     expect(onHandOver).toHaveBeenLastCalledWith(undefined);
     await userEvent.selectOptions(picker, "d2");
     await userEvent.click(screen.getByRole("button", { name: "Hand over" }));
     expect(onHandOver).toHaveBeenLastCalledWith("d2");
+  });
+
+  it("tells apart devices that share a label by owner and id", () => {
+    // Labels are chosen by each member, so another member can name theirs
+    // after yours; the picker must still say whose each one is.
+    const lease = { ...base, holder: "me", isMe: true, health: "degraded", lastBeatAgeMs: 40000 };
+    const hosts = [
+      host("me", "This Mac"),
+      host("aaaaaaaa-1111", "Studio Mac", "device", true, "Zaz", true),
+      host("bbbbbbbb-2222", "Studio Mac", "device", true, "Mallory", false),
+      host("cccccccc-3333", "", "device", true, "", false),
+    ];
+    render(<RunLeaseLine lease={lease} hosts={hosts} onHandOver={vi.fn()} />);
+    const picker = screen.getByLabelText("Device to hand the run to") as HTMLSelectElement;
+    expect(Array.from(picker.options).map((o) => o.text)).toEqual([
+      "Any online device",
+      "Studio Mac (yours, aaaaaaaa)",
+      "Studio Mac (Mallory, bbbbbbbb)",
+      "device (unknown owner, cccccccc)",
+    ]);
   });
 
   it("says so when no other device is online", () => {

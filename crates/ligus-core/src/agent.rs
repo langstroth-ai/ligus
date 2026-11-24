@@ -119,6 +119,15 @@ pub enum Access {
     Everyone,
 }
 
+/// Whether `s` is a plain CSS hex color: `#` and 3 to 8 hex digits. The
+/// roster is synced, so an agent's accent color can come from another
+/// member's client; anything else (a `url(...)`, a gradient) would reach the
+/// viewer's CSS, so it is dropped on fold and refused on edit.
+pub fn is_valid_color_hex(s: &str) -> bool {
+    let Some(hex) = s.strip_prefix('#') else { return false };
+    (3..=8).contains(&hex.len()) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 impl WorkspaceAgent {
     pub fn new(name: impl Into<String>, runtime_id: impl Into<String>) -> Self {
         Self {
@@ -138,6 +147,14 @@ impl WorkspaceAgent {
     }
 
     /// The owner-only settings, as one value.
+    /// Drops an accent color that isn't a plain hex color (see
+    /// [`is_valid_color_hex`]).
+    pub fn sanitize_color(&mut self) {
+        if self.avatar_color_hex.as_deref().is_some_and(|c| !is_valid_color_hex(c)) {
+            self.avatar_color_hex = None;
+        }
+    }
+
     pub fn policy(&self) -> AgentPolicy {
         AgentPolicy { access: self.access.clone(), limits: self.limits.clone(), notify_on_use: self.notify_on_use }
     }

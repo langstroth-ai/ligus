@@ -190,4 +190,27 @@ describe("ModelFieldHelp (Settings)", () => {
     await userEvent.click(screen.getByText("List this provider's models"));
     await waitFor(() => expect(ipc.listRuntimeModels).toHaveBeenCalledWith({ provider: "openai", endpoint: "http://box:8080" }));
   });
+
+  it("asks again before listing an edited endpoint", async () => {
+    vi.mocked(ipc.listRuntimeModels).mockResolvedValue(ollamaList);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const at = (endpoint: string) => (
+      <QueryClientProvider client={qc}>
+        <ModelFieldHelp listId="l" provider="custom" endpoint={endpoint} model="" />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(at("http://box:8080"));
+    await userEvent.click(screen.getByText("List this provider's models"));
+    await waitFor(() => expect(ipc.listRuntimeModels).toHaveBeenCalledTimes(1));
+    for (const typed of ["http://evil.example", "http://evil.example/x"]) {
+      rerender(at(typed));
+      expect(await screen.findByText("List this provider's models")).toBeInTheDocument();
+    }
+    expect(ipc.listRuntimeModels).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByText("List this provider's models"));
+    await waitFor(() =>
+      expect(ipc.listRuntimeModels).toHaveBeenLastCalledWith({ provider: "custom", endpoint: "http://evil.example/x" }),
+    );
+    expect(ipc.listRuntimeModels).toHaveBeenCalledTimes(2);
+  });
 });

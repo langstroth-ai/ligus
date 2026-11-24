@@ -552,7 +552,9 @@ impl RelayClient {
     pub async fn probe(&self, workspace: &str) -> RelayProbe {
         // limit=1: a probe only needs the status, never the room's history.
         let url = format!("{}/v1/workspaces/{}/envelopes?after=0&limit=1", self.base, workspace);
-        match self.authed(self.http.get(url)).send().await {
+        // Bounded like every envelope request, so a relay that accepts and
+        // never answers can't hang `ligus doctor` or the settings check.
+        match self.authed(self.http.get(url).timeout(self.request_timeout)).send().await {
             Ok(resp) => {
                 let code = resp.status().as_u16();
                 if resp.status().is_success() {
@@ -563,7 +565,18 @@ impl RelayClient {
                     RelayProbe::HttpStatus(code)
                 }
             }
-            Err(e) => RelayProbe::Unreachable(e.to_string()),
+            // Without the URL (it can carry credentials or a token; the
+            // caller names the relay itself), with the causes that say why.
+            Err(e) => {
+                let e = e.without_url();
+                let mut msg = e.to_string();
+                let mut src = std::error::Error::source(&e);
+                while let Some(c) = src {
+                    msg.push_str(&format!(": {c}"));
+                    src = c.source();
+                }
+                RelayProbe::Unreachable(msg)
+            }
         }
     }
 
@@ -1044,6 +1057,25 @@ mod tests {
         let c = RelayClient::new(format!("http://{addr}")).with_request_timeout(std::time::Duration::from_millis(300));
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.fetch_page("ws", 0, 10)).await;
         assert!(matches!(r, Ok(Err(_))), "a stalled relay hung the fetch: {:?}", r.map(|x| x.map(|p| p.rows.len())));
+        held.abort();
+    }
+
+    /// A relay that accepts the probe and never answers: the probe ends
+    /// with Unreachable within the request timeout instead of hanging.
+    #[tokio::test]
+    async fn probe_of_a_stalled_relay_times_out() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let held = tokio::spawn(async move {
+            let mut conns = Vec::new();
+            loop {
+                let (c, _) = listener.accept().await.unwrap();
+                conns.push(c);
+            }
+        });
+        let c = RelayClient::new(format!("http://{addr}")).with_request_timeout(std::time::Duration::from_millis(300));
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), c.probe("ws")).await;
+        assert!(matches!(r, Ok(RelayProbe::Unreachable(_))), "a stalled relay hung the probe");
         held.abort();
     }
 

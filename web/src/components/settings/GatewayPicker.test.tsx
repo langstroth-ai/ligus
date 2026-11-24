@@ -12,6 +12,8 @@ const host = (id: string, label: string, gws: [string, string][]): WorkspaceHost
   online: true,
   lastSeen: "",
   modelGateways: gws.map(([name, api]) => ({ name, api })),
+  ownerName: "",
+  mine: false,
 });
 
 const hosts = [

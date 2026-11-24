@@ -510,6 +510,7 @@ pub const COMMANDS: &[Cmd] = &[
             DRY_RUN,
         ],
         conn: true,
+        exit: &[(5, "--dry-run: no runtime with that id")],
         examples: &["ligus add-agent coder claude --host \"$(ligus whoami --json | jq -r .device)\" --role \"writes code\" && ligus sync"],
         see_also: &["ligus agents", "ligus set-agent-host", "ligus help agents"],
         ..D

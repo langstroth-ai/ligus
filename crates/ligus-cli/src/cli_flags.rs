@@ -105,18 +105,25 @@ pub fn stdout_color() -> bool {
     )
 }
 
-/// `--timeout` values: `90` or `90s`, `5m`, `1h`.
+/// The longest `--timeout` accepted: 30 days.
+pub const MAX_DURATION_SECS: u64 = 30 * 24 * 3600;
+
+/// `--timeout` values: `90` or `90s`, `5m`, `1h` (at most 30 days).
 pub fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     let s = s.trim();
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: u64 = num.parse().map_err(|_| crate::help::usage_error(format!("not a duration: {s:?} (try 90s, 5m or 1h)")))?;
     let secs = match unit {
-        "" | "s" => n,
-        "m" => n * 60,
-        "h" => n * 3600,
+        "" | "s" => Some(n),
+        "m" => n.checked_mul(60),
+        "h" => n.checked_mul(3600),
         _ => return Err(crate::help::usage_error(format!("not a duration: {s:?} (try 90s, 5m or 1h)"))),
     };
-    Ok(Duration::from_secs(secs))
+    // Capped (an overflowing or absurd value is a usage error, not a panic).
+    match secs {
+        Some(secs) if secs <= MAX_DURATION_SECS => Ok(Duration::from_secs(secs)),
+        _ => Err(crate::help::usage_error(format!("duration too long: {s:?} (at most 30 days)"))),
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +132,17 @@ mod tests {
 
     fn v(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn durations_overflow_and_cap_are_usage_errors() {
+        assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
+        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_duration("720h").unwrap(), Duration::from_secs(MAX_DURATION_SECS));
+        for bad in ["9999999999999999h", "18446744073709551615m", "721h", "99999999999999999999", "5d", "x"] {
+            let e = parse_duration(bad).unwrap_err();
+            assert!(crate::help::is_usage(&e), "{bad}: {e:#}");
+        }
     }
 
     #[test]

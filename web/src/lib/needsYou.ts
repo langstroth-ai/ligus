@@ -43,16 +43,19 @@ export interface NeedsYouItem {
   count?: number;
 }
 
-/// Most urgent first: something that blocks an agent or a security check,
-/// then decisions, then failures, then requests from outside.
+/// Most urgent first: security checks (a phone alert, then changed sandbox
+/// grants and repository commands waiting for trust), then what blocks an
+/// agent and decisions, then failures, then requests from outside. The
+/// security rows sit above asks and votes so another member can't bury them
+/// under a pile of those.
 const ORDER: Record<NeedsYouKind, number> = {
   phone: 0,
-  ask: 1,
-  vote: 2,
-  apply: 3,
-  failed: 4,
-  sandbox: 5,
-  trust: 6,
+  sandbox: 1,
+  trust: 2,
+  ask: 3,
+  vote: 4,
+  apply: 5,
+  failed: 6,
   device: 7,
   invite: 8,
 };
