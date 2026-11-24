@@ -241,7 +241,7 @@ an invite and an Admin.
 
 ## Guided setup {#setup}
 
-The same seven flows as the desktop's **Set up** commands.
+The same seven flows as the desktop's **Set up** commands ([Set up](../getting-started/set-up.md)).
 Each checks first, writes only when every check passed, and is safe to run
 again. `ligus help setup` is the guide; `ligus setup <flow> --help` lists a
 flow's flags.

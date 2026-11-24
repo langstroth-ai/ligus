@@ -18,6 +18,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 - [Configuring a runtime](https://docs.langstroth.ai/ligus/getting-started/configuring-a-runtime/): Setting up LLM providers and CLI coding agents (claude, aider, pi, codex, Google Antigravity, GitHub Copilot).
 - [Offline setup with local models](https://docs.langstroth.ai/ligus/getting-started/offline-local-models/): llama.cpp behind an OpenAI-compatible gateway, which model for which job, tools and MCP, compaction and retrieval for small local models.
 - [Your first chat](https://docs.langstroth.ai/ligus/getting-started/first-chat/): Sending a message and getting a first agent reply.
+- [Set up](https://docs.langstroth.ai/ligus/getting-started/set-up/): The guided setup flows (agent, tool, folder, box, phone, invite, relay) in the desktop and `ligus setup`.
 
 ## Using Ligus: Concepts
 
