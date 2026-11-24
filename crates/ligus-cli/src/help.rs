@@ -239,15 +239,23 @@ pub const COMMANDS: &[Cmd] = &[
         name: "app",
         group: G_START,
         summary: "open the desktop app, detached from this terminal",
-        purpose: "Open the Ligus desktop app (or bring it forward) and return at once. It takes no arguments and never \
-                  opens the data dir, the config or the secret store. macOS: Launch Services; Windows: the installer's \
-                  registry keys, the default install dirs, then PATH; Linux: ligus-desktop on PATH, then an AppImage \
-                  (needs DISPLAY or WAYLAND_DISPLAY).",
-        synopsis: &["ligus app"],
+        purpose: "Open the Ligus desktop app (or bring it forward) and return at once. It never opens the data dir, \
+                  the config or the secret store. macOS: LIGUS_APP, then /Applications/Ligus.app, then \
+                  ~/Applications/Ligus.app, then (last resort) the copies Spotlight knows by bundle id, never one on \
+                  a mounted disk image (/Volumes) or an App Translocation copy unless LIGUS_APP names it; the bundle is \
+                  opened by path. When the app's version differs from this CLI's, a note on stderr says which to \
+                  update, and the app opens anyway. When a copy is already running from another path, it says so on \
+                  stderr and opens nothing. Windows: the installer's registry keys, the default install dirs, then \
+                  PATH; Linux: ligus-desktop on PATH, then an AppImage (needs DISPLAY or WAYLAND_DISPLAY). --json \
+                  prints ligus.app.v1: path, version, cliVersion, versionMatches, launched, alreadyRunning, \
+                  runningFrom, note.",
+        synopsis: &["ligus app [--json]"],
+        flags: &[JSON],
         data: false,
-        env: &["LIGUS_APPIMAGE", "DISPLAY", "WAYLAND_DISPLAY", "PATH"],
-        examples: &["ligus app"],
-        exit: &[(1, "the app isn't installed (the message lists where it looked), or no graphical session on Linux")],
+        env: &["LIGUS_APP", "LIGUS_APPIMAGE", "HOME", "DISPLAY", "WAYLAND_DISPLAY", "PATH"],
+        examples: &["ligus app", "LIGUS_APP=\"/Volumes/Ligus 0.2.1/Ligus.app\" ligus app --json"],
+        exit: &[(1, "the app isn't installed (the message lists where it looked), LIGUS_APP or LIGUS_APPIMAGE names \
+                     no app, or no graphical session on Linux")],
         see_also: &["ligus help quickstart"],
         ..D
     },
@@ -1775,6 +1783,7 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
         "Other commands",
         &[
             e("LIGUS_HOST_LABEL", "$HOSTNAME, else \"this host\"", "ligus repos: this host's label"),
+            e("LIGUS_APP", "unset", "ligus app (macOS): the Ligus.app bundle to open, wherever it is"),
             e("LIGUS_APPIMAGE", "unset", "ligus app (Linux): the desktop AppImage"),
             e("LIGUS_GITHUB_APP_CLIENT_ID", "built in", "ligus forge login: GitHub App client id"),
             e("LIGUS_GITLAB_CLIENT_ID", "built in", "ligus forge login: GitLab application id"),
