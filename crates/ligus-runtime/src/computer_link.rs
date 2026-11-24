@@ -501,10 +501,14 @@ impl LinkState {
         crate::private_file::write_private_atomic(&Self::path(data_dir), &bytes)
     }
 
-    /// Remember `request` as pending (requests past [`REQUEST_TTL_MS`] are
+    /// How long a pending request stays redeemable: it may be approved until
+    /// [`REQUEST_TTL_MS`], and the grant then lives [`GRANT_TTL_MS`].
+    pub const PENDING_TTL_MS: i64 = REQUEST_TTL_MS + GRANT_TTL_MS;
+
+    /// Remember `request` as pending (requests past [`LinkState::PENDING_TTL_MS`] are
     /// dropped as they go).
     pub fn add_pending(&mut self, request: &LinkRequest, now_ms: i64) {
-        self.pending.retain(|p| now_ms.saturating_sub(p.created_at) <= REQUEST_TTL_MS);
+        self.pending.retain(|p| now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS);
         let digest = request.digest();
         if !self.pending.iter().any(|p| p.digest == digest) {
             self.pending.push(Pending {
@@ -517,9 +521,10 @@ impl LinkState {
         }
     }
 
-    /// The pending request `digest` names, if it is still fresh.
+    /// The pending request `digest` names, while a grant for it can still be
+    /// valid ([`LinkState::PENDING_TTL_MS`]).
     pub fn pending_for(&self, digest: &str, now_ms: i64) -> Option<&Pending> {
-        self.pending.iter().find(|p| p.digest == digest && now_ms.saturating_sub(p.created_at) <= REQUEST_TTL_MS)
+        self.pending.iter().find(|p| p.digest == digest && now_ms.saturating_sub(p.created_at) <= Self::PENDING_TTL_MS)
     }
 
     /// The newest pending request that is still fresh.
@@ -786,7 +791,8 @@ mod tests {
         s.save(dir.path()).unwrap();
         let mut s = LinkState::load(dir.path()).unwrap();
         assert!(s.pending_for(&r.digest(), 1_000).is_some());
-        assert!(s.pending_for(&r.digest(), 1_000 + REQUEST_TTL_MS + 1).is_none(), "stale");
+        assert!(s.pending_for(&r.digest(), 1_000 + REQUEST_TTL_MS + 1).is_some(), "approved late, the grant still has its life");
+        assert!(s.pending_for(&r.digest(), 1_000 + LinkState::PENDING_TTL_MS + 1).is_none(), "stale");
         let mut alex = ActorIdentity::new("a", "Alex", ActorKind::Human);
         alex.account_id = Some(Uuid::new_v4());
         let ws = Uuid::new_v4();

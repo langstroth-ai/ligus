@@ -89,4 +89,10 @@ async fn a_computer_links_as_the_persons_device_through_the_cli() {
     let e = devices_cmd::refuse_if_linked(&comp, "accept invites").unwrap_err();
     assert_eq!(crate::problem::classify(&e).0, crate::problem::EXIT_REFUSED);
     devices_cmd::cmd_list(&comp, true).unwrap();
+    // Anywhere else it would be its old identity under the person's device
+    // key: refused.
+    let mut elsewhere = comp.clone();
+    elsewhere.room = "another-room".into();
+    let e = open_service(&elsewhere).err().unwrap();
+    assert_eq!(crate::problem::classify(&e).0, crate::problem::EXIT_REFUSED, "{e}");
 }

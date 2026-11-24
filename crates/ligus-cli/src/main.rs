@@ -329,6 +329,15 @@ pub(crate) fn adopt_box_name(identity: &IdentityStore<impl ligus_runtime::KeyVau
 /// Open the local identity + event store and build a ChatService. Bootstraps a
 /// fresh identity on first run (idempotent thereafter).
 fn open_service(cfg: &Config) -> Result<ChatService> {
+    open_service_as(cfg, false)
+}
+
+/// [`open_service`]; `linking` lets `ligus devices redeem` open a linked
+/// install in the workspace it is being linked into, before the link is
+/// recorded. Otherwise a linked install opens only its linked workspaces:
+/// anywhere else it would act as its old identity with a device key that is
+/// the person's.
+fn open_service_as(cfg: &Config, linking: bool) -> Result<ChatService> {
     std::fs::create_dir_all(&cfg.data_dir)?;
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let stored = bootstrap_identity(&identity)?;
@@ -340,8 +349,21 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     // in the workspaces it was linked into, without their account key.
     let link = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir)
         .map_err(|e| anyhow!("{} is unreadable ({e}): fix or remove it", ligus_runtime::computer_link::LinkState::path(&cfg.data_dir).display()))?;
-    if let Some(person) = link.linked_in(uuid_of_room(&cfg.room)) {
-        svc.act_as_owner_device(person.clone());
+    match (link.linked_in(uuid_of_room(&cfg.room)), &link.person) {
+        (Some(person), _) => svc.act_as_owner_device(person.clone()),
+        (None, Some(person)) if !linking => {
+            return Err(anyhow::Error::new(problem::Problem {
+                exit: problem::EXIT_REFUSED,
+                code: "linked_device",
+                message: format!(
+                    "this computer is one of {}'s devices and isn't linked into workspace '{}'",
+                    shown(&person.display_name),
+                    cfg.room
+                ),
+                fix: Some("add it to that workspace from your desktop (My devices > Add a computer), or use another LIGUS_DATA_DIR".into()),
+            }));
+        }
+        _ => {}
     }
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
@@ -2498,6 +2520,7 @@ fn run() -> Result<()> {
             cmd_set_agent_host(&cfg, positional[0], positional[1], has("--dry-run"))
         }
         "worker" => {
+            devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             hardening::require_sandbox_or_exit("this worker");
             let health = flag_val("--health-listen").or_else(|| env_opt("LIGUS_WORKER_HEALTH_LISTEN"));
             rt()?.block_on(cmd_worker(&cfg, flag_val("--label"), health))
@@ -2545,6 +2568,7 @@ fn run() -> Result<()> {
         }
         "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),
         "serve" => {
+            devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             hardening::require_sandbox_or_exit("this serve host");
             let opts = serve::ServeOptions::from_flags(
                 &cfg,
@@ -2567,6 +2591,7 @@ fn run() -> Result<()> {
             serve::cmd_serve(cfg, opts)
         }
         "pair" => {
+            devices_cmd::refuse_if_linked(&cfg, "run as a box")?;
             let opts = serve::ServeOptions::from_flags(
                 &cfg,
                 flag_val("--listen"),

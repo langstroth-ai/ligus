@@ -344,7 +344,7 @@ First pass on the first draft (key-less self-published device): **Revise**.
 | # | Finding | Severity | Resolution |
 |---|---|---|---|
 | M1 | A key-less self-published device can re-publish the desktop's certificate and make it delegated forever | Must-fix | Design changed: the desktop publishes the certificate, the computer is delegated (section 3). Test T8 |
-| M2 | Any device certified for an account can self-certify under a throwaway key and register it, disputing the account (its events then quarantined in that workspace) | Must-fix for the first draft | Not introduced by this design: it holds for every certified device today, phones included. Recorded as residual R1 and decision D1 (rules v3: only a device that registered the account's key raises a dispute) |
+| M2 | A device that acts for an account without its key, with its Ed25519 key on disk, can re-publish its certificate, self-certify under a throwaway key and register it, disputing the account (its events then quarantined in that workspace) | Must-fix for the first draft | Confirmed on the second pass for every such device: legacy delegated boxes today, linked computers now; a phone only if its app is compromised (its Secure Enclave key signs allow-listed actions only). This design turns that class from a legacy-only path into a routine one. Residual R1 and decision D1 |
 | M3 | No runtime mode for a key-less own device | Must-fix | The computer uses `act_as_owner_device` (delegated); `publish_identity` returns early; test T3 asserts no `AccountKeyRegistered`/`AccountKeyRotated` from it; the desktop's key-agreement key and contact id aren't copied |
 | M4 | A grant from someone else's workspace answering a public request | Must-fix | Redeem shows the person, the workspace and the approving desktop's fingerprint and needs the person's yes (CLI: `--approver-fingerprint` or a terminal, else exit 4) |
 | S1 | Phishing the approval; long request life | Should-fix | Request life 15 min; "only a computer you are using right now"; the previous member is shown as a separate member. Notifying other devices after a link is follow-up F1 |
@@ -358,12 +358,37 @@ First pass on the first draft (key-less self-published device): **Revise**.
 | N2 | Unpushed `log_head` on the desktop | Nit | Gone with S3 |
 | N3 | The grant in `--json` and logs | Nit | `approve` prints it only as its result (or to `--out`, 0600); never logged |
 
+Second pass on the revised design: **Approve with risks**, no Must-fix.
+Should-fix items folded in: T8b (a second copy of the certificate signed by
+the computer leaves it delegated), account-key acts refused on the computer
+(test), the desktop's `device_id` not copied, the revoke text asks an Admin
+to rotate the key, residual R5.
+
+### Security review of the code
+
+**Approve with risks**, no Must-fix (a failed redeem was proved not to
+publish a bridge). Fixed: a failed redeem no longer leaves the data dir
+connected (the connection is saved only once the link is recorded, the pin
+is dropped); a linked install refuses to open any workspace it isn't linked
+into (it would be its old identity under the person's device key); `serve`,
+`worker` and `pair` refuse a linked install before marking it a box; a
+pending request lives as long as a grant for it can (15 + 30 minutes);
+"connected" also counts an existing identity with a database; stdin and
+names from a code are bounded. Kept: `remove_duplicate_member` uses the
+ordinary member-removal rules; the grant's plaintext strings aren't
+zeroized beyond the JSON buffer; unused prepared device seeds stay in the
+vault.
+
 ## 12. Residual risks and decisions
 
-- **R1.** Any device certified for a person (a phone, a linked computer) can,
-  if stolen and driven by hand, dispute the person's account key in that
-  workspace (M2). Revoking it and an Admin's key rotation recover reading; the
-  dispute itself needs D1.
+- **R1.** A linked computer (or a legacy delegated box), if stolen and
+  driven by hand, can dispute the person's account key in that workspace
+  (M2); a phone only if its app is compromised. Revoking it and an Admin's key
+  rotation recover reading; undoing the dispute needs D1.
+- **R5.** Reverse phishing: someone who sees a computer's request (it is
+  public) can answer it with a grant from their own workspace; every log
+  check passes there. The only control is the person confirming the person,
+  the workspace and the approving desktop's fingerprint before linking.
 - **R2.** A stolen linked computer acts as the person (posts, reads, runs
   agents bound to it) until revoked; governance acts need the person's
   passkey.

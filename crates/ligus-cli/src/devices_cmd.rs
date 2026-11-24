@@ -31,6 +31,15 @@ fn problem(exit: i32, code: &'static str, message: impl Into<String>, fix: Optio
     anyhow::Error::new(Problem { exit, code, message: message.into(), fix: fix.map(str::to_string) })
 }
 
+/// A name from a code, cut to what a prompt line can show.
+fn clamp(s: &str) -> String {
+    let mut out: String = s.chars().take(64).collect();
+    if out.len() < s.len() {
+        out.push('…');
+    }
+    out
+}
+
 fn now_ms() -> i64 {
     ligus_core::flow::now_ms()
 }
@@ -76,6 +85,7 @@ pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: 
             Some("on a box run `ligus admit request`; to link a person's computer use another LIGUS_DATA_DIR"),
         ));
     }
+    let existed = ids.load()?.is_some();
     let stored = bootstrap_identity(&ids)?;
     let mut state = link_state(cfg)?;
     let ws = uuid_of_room(&cfg.room);
@@ -87,7 +97,7 @@ pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: 
     }
     // An install that has been connected (it may have written as its own
     // member) asks with a new device key, switched to only on redeem.
-    let connected = load_file_config(&cfg.data_dir).room.is_some();
+    let connected = load_file_config(&cfg.data_dir).room.is_some() || (existed && cfg.data_dir.join("ligus.db").exists());
     let fresh_key = new_device || connected;
     let now = now_ms();
     let (device_id, device_kp) = if fresh_key {
@@ -174,7 +184,8 @@ fn read_code(arg: Option<&str>, file: Option<String>, usage: &str) -> Result<Str
     let code = match (arg, file) {
         (Some("-"), None) => {
             let mut s = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+            let limit = ligus_runtime::computer_link::MAX_CODE_LEN as u64 + 1;
+            std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), limit), &mut s)?;
             s
         }
         (Some(c), None) => c.to_string(),
@@ -330,7 +341,7 @@ pub async fn cmd_redeem(
         ));
     }
     // Review M4: the person checks who approved it before anything is saved.
-    let shown_ws = if grant.conn.name.trim().is_empty() { grant.conn.room.clone() } else { shown(&grant.conn.name) };
+    let shown_ws = clamp(&shown(if grant.conn.name.trim().is_empty() { &grant.conn.room } else { &grant.conn.name }));
     match (approver_fingerprint, confirm) {
         (Some(f), _) if f.trim().eq_ignore_ascii_case(&grant.approver_fingerprint()) => {}
         (Some(f), _) => {
@@ -344,7 +355,7 @@ pub async fn cmd_redeem(
         (None, Some(ask)) => {
             let prompt = format!(
                 "Approved by {}'s desktop {} for workspace '{shown_ws}'.\nIs that you, and does your desktop show this fingerprint (My devices > Add a computer)?",
-                shown(&person.display_name),
+                clamp(&shown(&person.display_name)),
                 grant.approver_fingerprint()
             );
             if !ask(&prompt)? {
@@ -357,7 +368,7 @@ pub async fn cmd_redeem(
                 "confirm_approver",
                 format!(
                     "a person confirms who approved this: {}'s desktop {} for workspace '{shown_ws}'",
-                    shown(&person.display_name),
+                    clamp(&shown(&person.display_name)),
                     grant.approver_fingerprint()
                 ),
                 Some("pass --approver-fingerprint XXXX-XXXX-XXXX-XXXX-XXXX as your desktop shows it, or run this at a terminal"),
@@ -388,12 +399,12 @@ pub async fn cmd_redeem(
         }
     };
     let mut r = Report::new("devices redeem");
-    r.add(Check::ok("devices.linked", "linked", format!("this computer is one of {}'s devices in '{}'", shown(&person.display_name), cfg.room)));
+    r.add(Check::ok("devices.linked", "linked", format!("this computer is one of {}'s devices in '{}'", clamp(&shown(&person.display_name)), cfg.room)));
     r.next("ligus chats");
     let text = format!(
         "This computer is now one of {}'s devices in workspace '{shown_ws}' (approved by desktop {}).\n\
          It acts as them here; votes ask for their passkey, and account changes stay on the desktop.\n",
-        shown(&person.display_name),
+        clamp(&shown(&person.display_name)),
         grant.approver_fingerprint()
     );
     print(&r, 0, json, serde_json::json!({ "person": person.id, "workspace": cfg.room, "approver": grant.approver_fingerprint() }), &text);
@@ -403,35 +414,57 @@ pub async fn cmd_redeem(
 /// The writes of a redeem, once the person confirmed: the connection, the
 /// pull, the check, the link record, the key-agreement key.
 async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkState, founder: String, fk: String) -> Result<ligus_core::ActorIdentity> {
-    let mut f = load_file_config(&cfg.data_dir);
+    // The connection lives in memory until the link is recorded (review:
+    // a failed redeem must not leave this data dir connected as its own
+    // identity with the device key the desktop certified for the person).
+    let before = cfg.clone();
     if crate::env_opt("LIGUS_RELAY_URL").is_none() {
         cfg.relay_url = Some(grant.conn.relay_url.trim().to_string());
     }
-    f.relay_url = cfg.relay_url.clone();
     cfg.room = grant.conn.room.clone();
-    f.room = Some(cfg.room.clone());
     cfg.key = grant.conn.key.clone();
-    f.key = grant.conn.key.clone();
     cfg.epoch_keys = grant.conn.ek.clone();
-    f.ek = grant.conn.ek.clone();
-    f.save(&cfg.data_dir)?;
     let ws = grant.workspace_id;
-    {
+    let had_pin = {
         let store = ligus_runtime::EventStore::open(cfg.data_dir.join("ligus.db"))?;
+        let had = store.workspace_pin(ws)?.is_some();
         store.set_workspace_pin(ws, &founder, &fk)?;
+        had
+    };
+    let linked = async {
+        crate::sync_once(cfg).await?;
+        let mut svc = crate::open_service_as(cfg, true)?;
+        svc.set_trusted_founder(Some(founder.clone()));
+        let person = match svc.check_computer_link(grant, now_ms()) {
+            Ok(p) => p,
+            Err(e) if e.to_string().contains(ligus_runtime::computer_link::NOT_ON_RELAY_YET) => {
+                return Err(problem(EXIT_OFFLINE, "not_yet", e.to_string(), Some("run this again in a few seconds (the grant stays valid for 30 minutes)")));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        Ok((svc, person))
     }
-    crate::sync_once(cfg).await?;
-    let mut svc = crate::open_service(cfg)?;
-    svc.set_trusted_founder(Some(founder));
-    let person = match svc.check_computer_link(grant, now_ms()) {
-        Ok(p) => p,
-        Err(e) if e.to_string().contains(ligus_runtime::computer_link::NOT_ON_RELAY_YET) => {
-            return Err(problem(EXIT_OFFLINE, "not_yet", e.to_string(), Some("run this again in a few seconds (the grant stays valid for 30 minutes)")));
+    .await;
+    let (mut svc, person) = match linked {
+        Ok(v) => v,
+        Err(e) => {
+            if !had_pin {
+                if let Ok(store) = ligus_runtime::EventStore::open(cfg.data_dir.join("ligus.db")) {
+                    let _ = store.forget_workspace(ws);
+                }
+            }
+            *cfg = before;
+            return Err(e);
         }
-        Err(e) => return Err(e.into()),
     };
     state.record_link(&person, ws).map_err(|e| anyhow!(e))?;
     state.save(&cfg.data_dir)?;
+    let mut f = load_file_config(&cfg.data_dir);
+    f.relay_url = cfg.relay_url.clone();
+    f.room = Some(cfg.room.clone());
+    f.key = cfg.key.clone();
+    f.ek = cfg.epoch_keys.clone();
+    f.save(&cfg.data_dir)?;
     svc.act_as_owner_device(person.clone());
     crate::publish_key_agreement(cfg, &mut svc);
     drop(svc);
