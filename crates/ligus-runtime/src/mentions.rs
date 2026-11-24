@@ -150,8 +150,14 @@ pub fn parse_mentions(body: &str, session: &ChatSession) -> MentionTargets {
     let mut targets = MentionTargets::default();
 
     // `@ligus` is the default agent's handle; `@primary` is the reserved alias
-    // (a role, not a name). Both summon the workspace's primary runtime.
-    if mentions_phrase(&lower, "primary") || mentions_phrase(&lower, "ligus") {
+    // (a role, not a name). Both summon the workspace's primary runtime. The
+    // Hive builds' `@hive` is a silent alias for the same agent (old messages,
+    // scripts, older phones), unless the workspace has a roster agent of that
+    // name or a member called Hive, who keep their mentions
+    // (`legacy_primary_alias_active`).
+    let legacy_alias = ligus_core::agent::legacy_primary_alias_active(session)
+        && mentions_phrase(&lower, ligus_core::agent::LEGACY_PRIMARY_HANDLE);
+    if mentions_phrase(&lower, "primary") || mentions_phrase(&lower, ligus_core::agent::PRIMARY_HANDLE) || legacy_alias {
         targets.primary = true;
     }
     if mentions_phrase(&lower, "all") {
@@ -164,6 +170,12 @@ pub fn parse_mentions(body: &str, session: &ChatSession) -> MentionTargets {
     let mut agents: Vec<_> = session.workspace_agents.iter().collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.name.len()));
     for agent in agents {
+        // A roster agent named after the default agent (`ligus`, `primary`)
+        // can't be made by a current client; one that syncs in anyway never
+        // answers the default agent's mentions.
+        if ligus_core::agent::names_primary(&agent.name) {
+            continue;
+        }
         if !agent.name.is_empty() && mentions_phrase(&lower, &agent.name) {
             if !targets.agents.contains(&agent.id) {
                 targets.agents.push(agent.id);
@@ -564,6 +576,32 @@ mod tests {
         assert!(parse_mentions("can you take this @ligus?", &s).primary);
         // Bare "ligus" in prose (no @) must not summon the primary.
         assert!(!parse_mentions("the ligus is busy today", &s).primary);
+    }
+
+    /// `@hive` (the Hive builds' handle) is the default agent, unless a person
+    /// or a roster agent is called exactly that: then it reaches them, and
+    /// never wakes the default agent on someone's credentials as well.
+    #[test]
+    fn legacy_hive_alias_yields_to_a_person_or_agent_named_hive() {
+        let s = session_with(vec![], vec![human("h1", "Hive", WorkspaceRole::Contributor, 0)]);
+        let t = parse_mentions("@Hive can you look?", &s);
+        assert!(!t.primary && t.humans == vec!["m-h1".to_string()], "{t:?}");
+        // A name that `@hive` doesn't match (" hive") leaves the alias on.
+        let s = session_with(vec![WorkspaceAgent::new(" hive", "r")], vec![]);
+        let t = parse_mentions("@hive x", &s);
+        assert!(t.primary && t.agents.is_empty(), "{t:?}");
+    }
+
+    /// A look-alike of `ligus` on the roster (Cyrillic і, a zero-width space)
+    /// is never a mention target, so it can't answer in the default agent's
+    /// place.
+    #[test]
+    fn look_alike_ligus_agents_are_never_mention_targets() {
+        let s = session_with(vec![WorkspaceAgent::new("l\u{0456}gus", "evil"), WorkspaceAgent::new("li\u{200B}gus", "evil")], vec![]);
+        for body in ["@l\u{0456}gus hi", "@li\u{200B}gus hi", "@ligus hi"] {
+            assert!(parse_mentions(body, &s).agents.is_empty(), "{body:?}");
+        }
+        assert!(parse_mentions("@ligus hi", &s).primary);
     }
 
     #[test]

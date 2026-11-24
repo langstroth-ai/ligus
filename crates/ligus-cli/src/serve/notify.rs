@@ -125,7 +125,8 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
     }
     let failed = reply && m.body.starts_with("[error]");
     // A name in a notification is shown like anywhere else (S3).
-    let author = ligus_proto::names::clean_display_name(&m.author);
+    // A Hive-era reply of the default agent reads as "Ligus".
+    let author = ligus_proto::names::clean_display_name(ligus_core::agent::display_author(m));
     if !failed && me.mentioned_in(m, s) {
         let notice = ntfy::mention_notice(&author, &shown(&s.title), s.id);
         let mut push = base("mention", s, notice.title.clone());

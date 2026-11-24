@@ -43,7 +43,7 @@ import { splitAttachments, fileBaseName, isImagePath } from "@/lib/attachments";
 import { SharedAttachmentCard } from "@/components/SharedAttachmentCard";
 import { useContextMenu } from "@/components/ContextMenu";
 import { relTime, absTime, clockTime, dayKey, dayLabel } from "@/lib/time";
-import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
+import { PRIMARY_NAME, PRIMARY_HANDLE, namesPrimary } from "@/lib/agent";
 import {
   IconCopy,
   IconRegenerate,
@@ -610,7 +610,9 @@ export function ChatView({
   // up the agent's stored avatar tint as its turn accent.
   const agentByName = useMemo(() => {
     const m = new Map<string, WorkspaceAgentDto>();
-    for (const a of agentList.data ?? []) m.set(a.name, a);
+    // A roster agent named after the default agent never takes the face of
+    // the default agent's replies (authored "Ligus").
+    for (const a of agentList.data ?? []) if (!namesPrimary(a.name)) m.set(a.name, a);
     return m;
   }, [agentList.data]);
   const mentionCands = useMemo(() => {

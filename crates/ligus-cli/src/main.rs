@@ -1442,6 +1442,11 @@ fn cmd_add_agent(
     role: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
+    // The desktop refuses these too: a mention word ("ligus", "primary", the
+    // legacy "hive", "all", ...) would shadow the default agent or a group.
+    if ligus_core::agent::is_reserved_agent_name(name) {
+        return Err(crate::help::usage_error(format!("'{name}' is a reserved mention name: pick another agent name")));
+    }
     if dry_run {
         // The dry run checks what the real run needs: the runtime exists.
         let svc = open_service(cfg)?;
@@ -3167,6 +3172,22 @@ mod cli_tests {
         let ws = uuid_of_room(&cfg.room);
         let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
         assert!(agents.is_empty(), "a dry run created an agent");
+    }
+
+    /// A mention word is no agent name: `ligus`, `primary` and the legacy
+    /// `hive` would shadow the default agent (a usage error, nothing signed).
+    #[test]
+    fn add_agent_refuses_the_default_agents_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = bare_cfg(tmp.path(), None);
+        for name in ["ligus", "Hive", " primary ", "all"] {
+            let e = cmd_add_agent(&cfg, name, "rt", None, None, false).unwrap_err();
+            assert!(crate::help::is_usage(&e), "{name}: {e:#}");
+        }
+        let svc = open_service(&cfg).unwrap();
+        let ws = uuid_of_room(&cfg.room);
+        let agents = svc.load_in(ws, workspace_config_session_id(ws)).unwrap().map(|s| s.workspace_agents).unwrap_or_default();
+        assert!(agents.is_empty());
     }
 
     /// Only scheme://host[:port] of a relay URL is ever printed.

@@ -1,5 +1,7 @@
 /// Composer @-mention helpers, factored out of ChatView so they're unit-testable.
 
+import { namesPrimary } from "./agent";
+
 export interface MentionCandidate {
   handle: string;
   kind: string;
@@ -10,11 +12,13 @@ export interface MentionCandidate {
 
 /// The @mention candidates for roster agents. An agent this person can't
 /// use (agent access controls: `available === false`) stays listed, greyed
-/// out with the reason, and can't be inserted.
+/// out with the reason, and can't be inserted. A roster agent named after the
+/// default agent (`ligus`, `primary`) is left out: that handle is the default
+/// agent's, listed once by the caller.
 export function agentMentionCandidates(
   agents: { name: string; available?: boolean; unavailableReason?: string | null }[],
 ): MentionCandidate[] {
-  return agents.map((a) =>
+  return agents.filter((a) => !namesPrimary(a.name)).map((a) =>
     a.available === false
       ? { handle: a.name, kind: "Not available", disabledReason: a.unavailableReason || "You can't use this agent" }
       : { handle: a.name, kind: "Agent" },

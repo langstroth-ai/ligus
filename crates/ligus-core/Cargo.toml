@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# Look-alike folding for the default agent's reserved names.
+ligus-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
