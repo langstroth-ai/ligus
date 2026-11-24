@@ -59,20 +59,9 @@ export function CliRuntimesPanel() {
           <Button size="sm" variant="ghost" disabled={clis.isFetching} onClick={() => void clis.refetch()}>
             {clis.isFetching ? "Scanning…" : "Re-scan"}
           </Button>
-          {list.some((c) => c.id === "antigravity" && c.installed) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={clis.isFetching}
-              title="Runs `agy models` (read-only, uses no quota) to confirm the Google sign-in"
-              onClick={() => (probe ? void clis.refetch() : setProbe(true))}
-            >
-              Check Google sign-in
-            </Button>
-          )}
         </div>
       </div>
-      <p className="mt-0.5 text-xs text-ink-soft">The login stays in the CLI; Ligus never sees it.</p>
+      <p className="mt-0.5 text-[11.5px] text-ink-soft">The login stays in the CLI; Ligus never sees it.</p>
       {clis.isError && <p className="mt-2 text-xs text-ink-soft">{errMsg(clis.error)}</p>}
       <RowList label="Subscription CLIs" className="mt-1">
         {list.map((c) => {
@@ -84,6 +73,18 @@ export function CliRuntimesPanel() {
               key={c.id}
               testId={`cli-${c.id}`}
               title={c.label}
+              actions={
+                c.id === "antigravity" && c.installed
+                  ? [
+                      {
+                        label: "Check Google sign-in",
+                        disabled: clis.isFetching,
+                        title: "Runs `agy models` (read-only, uses no quota) to confirm the Google sign-in",
+                        onSelect: () => (probe ? void clis.refetch() : setProbe(true)),
+                      },
+                    ]
+                  : undefined
+              }
               meta={
                 <>
                   <span className="font-mono">

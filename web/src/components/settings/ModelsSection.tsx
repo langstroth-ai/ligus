@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
 import { GatewayPicker } from "./GatewayPicker";
@@ -48,6 +48,7 @@ import {
 } from "@/lib/ipc";
 import { IconChevronDown, IconChevronRight } from "@/lib/icons";
 import { Button, FormDisclosure, ListRow, RowList, Section, Switch, fieldStyle, InfoTip } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
 import { SELECT_CLASS } from "@/components/settings/shared";
 import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import { toast, errMsg } from "@/components/Toast";
@@ -81,12 +82,15 @@ function PortableConfigSection() {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  // The TOML opens in a sheet: after Export (to read or copy it), or for Import.
+  const [sheet, setSheet] = useState<"export" | "import" | null>(null);
 
   async function doExport() {
     setBusy(true);
     try {
       const toml = await exportConfig();
       setText(toml);
+      setSheet("export");
       await navigator.clipboard.writeText(toml).catch(() => {});
       toast.success("Config exported + copied to clipboard.");
     } catch (e) {
@@ -105,6 +109,7 @@ function PortableConfigSection() {
       qc.invalidateQueries({ queryKey: ["agent-templates"] });
       qc.invalidateQueries({ queryKey: ["mcp"] });
       toast.success(summary);
+      setSheet(null);
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
@@ -116,23 +121,57 @@ function PortableConfigSection() {
     <Section
       title="Portable config"
       info="Export your runtimes, agents, and MCP servers as TOML to version-control and share with a team. No API keys or tokens are included (each records only the env var its key comes from). Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted)."
+      action={
+        <span className="flex gap-1.5">
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void doExport()}>
+            Export
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setText("");
+              setSheet("import");
+            }}
+          >
+            Import…
+          </Button>
+        </span>
+      }
     >
-      <div className="flex gap-2">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void doExport()}>
-          Export
-        </Button>
-        <Button size="sm" variant="primary" disabled={busy || !text.trim()} onClick={() => void doImport()}>
-          Import
-        </Button>
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="# Export to fill this, or paste a ligus.toml to import…"
-        spellCheck={false}
-        className="mt-2 h-40 w-full rounded-xl border p-3 font-mono text-xs"
-        style={fieldStyle}
-      />
+      <p className="px-1 text-[11.5px] text-ink-soft">No API keys or tokens are included.</p>
+      {sheet && (
+        <Sheet
+          title={sheet === "export" ? "Exported config" : "Import a config"}
+          description={sheet === "export" ? "Copied to the clipboard." : "Additive: nothing is deleted."}
+          side="center"
+          width={560}
+          onClose={() => setSheet(null)}
+          footer={
+            sheet === "import" ? (
+              <>
+                <Button onClick={() => setSheet(null)}>Cancel</Button>
+                <Button variant="primary" disabled={busy || !text.trim()} onClick={() => void doImport()}>
+                  Import
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => setSheet(null)}>Done</Button>
+            )
+          }
+        >
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            readOnly={sheet === "export"}
+            aria-label={sheet === "export" ? "Exported config" : "Config to import"}
+            placeholder="# Paste a ligus.toml to import…"
+            spellCheck={false}
+            className="h-56 w-full rounded-xl border p-3 font-mono text-xs"
+            style={fieldStyle}
+          />
+        </Sheet>
+      )}
     </Section>
   );
 }
@@ -198,26 +237,29 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
       </div>
       {found && found.length === 0 && (
         <p className="mt-2 text-xs text-ink-soft">
-          Nothing detected. Add a provider below, or set an API key / start Ollama, then re-scan.
+          Nothing detected. Add a provider, or set a key or start Ollama and re-scan.
         </p>
       )}
       {found && found.length > 0 && (
         <div className="mt-2 space-y-1.5">
-          {found.map((p) => (
-            <div key={p.kind} className="flex items-center justify-between gap-2 text-sm">
-              <span>
-                <span className="font-medium">{p.label}</span>{" "}
-                <span className="text-xs text-ink-soft">· {p.source}</span>
-              </span>
-              {p.addable ? (
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => void addOne(p).then(onConfigured)}>
-                  Add
-                </Button>
-              ) : (
-                <span className="text-xs text-ink-soft">available as @ligus</span>
-              )}
-            </div>
-          ))}
+          <RowList label="Detected providers">
+            {found.map((p) => (
+              <ListRow
+                key={p.kind}
+                title={p.label}
+                meta={p.source}
+                trailing={
+                  p.addable ? (
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => void addOne(p).then(onConfigured)}>
+                      Add
+                    </Button>
+                  ) : (
+                    <span className="text-[11.5px] text-ink-soft">available as @ligus</span>
+                  )
+                }
+              />
+            ))}
+          </RowList>
           {addable.length > 1 && (
             <div className="pt-1">
               <Button size="sm" variant="primary" disabled={busy} onClick={() => void addAll()}>
@@ -239,23 +281,38 @@ function ProvidersSection() {
   // row is currently expanded.
   const [added, setAdded] = useState<string[]>([]);
   const [openKind, setOpenKind] = useState<string | null>(null);
-  const [picker, setPicker] = useState("");
 
   const all = providers.data ?? [];
   const visible = all.filter((p) => isProviderConfigured(p) || added.includes(p.kind));
   const available = all.filter((p) => !visible.includes(p));
 
-  function addProvider() {
-    if (!picker) return;
-    setAdded((a) => (a.includes(picker) ? a : [...a, picker]));
-    setOpenKind(picker);
-    setPicker("");
-  }
-
   return (
     <Section
       title="LLM providers"
       info="A provider is a backend and how to reach it (key and/or base URL). Add the ones you use; the rest stay tucked away. Models (below) pick a provider; agents pick a model."
+      action={
+        available.length > 0 ? (
+          <select
+            value=""
+            aria-label="Add a provider"
+            onChange={(e) => {
+              const kind = e.target.value;
+              if (!kind) return;
+              setAdded((a) => (a.includes(kind) ? a : [...a, kind]));
+              setOpenKind(kind);
+            }}
+            className="rounded-lg border px-2 py-1 text-[12.5px]"
+            style={fieldStyle}
+          >
+            <option value="">Add a provider…</option>
+            {available.map((p) => (
+              <option key={p.kind} value={p.kind}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        ) : undefined
+      }
     >
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
@@ -276,26 +333,6 @@ function ProvidersSection() {
           />
         ))}
       </RowList>
-      {available.length > 0 && (
-        <div className="mt-3 flex items-center gap-2">
-          <select
-            value={picker}
-            onChange={(e) => setPicker(e.target.value)}
-            className="flex-1 rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-          >
-            <option value="">Add a provider…</option>
-            {available.map((p) => (
-              <option key={p.kind} value={p.kind}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <Button variant="primary" size="md" onClick={addProvider}>
-            Add
-          </Button>
-        </div>
-      )}
     </Section>
   );
 }
@@ -405,30 +442,53 @@ function ProviderRow({
   });
 
   const localOnly = !provider.needsKey && !provider.supportsBaseUrl;
+  const rm = useRowMenu(`Actions for ${provider.name}`, [
+    ...(provider.needsKey
+      ? [
+          {
+            label: probe === "running" ? "Testing…" : "Test connection",
+            onSelect: () => void runProbe(),
+            disabled: probe === "running" || !provider.hasKey,
+          },
+        ]
+      : []),
+    {
+      label: configured ? "Remove provider" : "Hide",
+      danger: configured,
+      onSelect: () => (configured ? remove.mutate() : onHide()),
+    },
+  ]);
   return (
-    <li className="px-1">
+    <li className="px-1" {...rm.rowProps}>
+      <div className="flex items-center gap-1">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="ligus-listrow flex w-full items-center justify-between gap-2 rounded-lg text-left text-[13px] hover:bg-[color:var(--ligus-overlay)]"
+        className="ligus-listrow flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg text-left text-[13px] hover:bg-[color:var(--ligus-overlay)]"
       >
         <span className="flex items-center gap-2">
           <span className="text-ink-soft">{open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}</span>
           <span className="font-medium">{provider.name}</span>
         </span>
-        <span className="flex items-center gap-2 text-xs">
+        <span className="flex items-center gap-2 text-[11.5px]">
           {provider.needsKey ? (
-            <span style={{ color: provider.hasKey ? "var(--ligus-success-ink)" : "var(--ligus-accent-warm)" }}>
+            <span
+              data-tip={provider.hasKey ? "API key set" : "No API key yet"}
+              style={{ color: provider.hasKey ? "var(--ligus-success-ink)" : "var(--ligus-accent-warm)" }}
+            >
               {provider.hasKey ? "● key set" : "○ no key"}
             </span>
           ) : configured && provider.baseUrl.trim() !== "" ? (
             <span className="text-ink-soft">custom URL</span>
           ) : (
-            <span className="text-ink-soft">{localOnly ? "local · no key" : "—"}</span>
+            <span className="text-ink-soft">{localOnly ? "local" : "—"}</span>
           )}
         </span>
       </button>
+      {rm.button}
+      </div>
+      {rm.menu}
       {open && (
         <div className="pb-3 pl-5 pr-1">
           <div className="text-xs text-ink-soft">{provider.note}</div>
@@ -520,15 +580,6 @@ function ProviderRow({
               </p>
             </div>
           )}
-          <div className="mt-2 text-right">
-            <button
-              className="text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => (configured ? remove.mutate() : onHide())}
-            >
-              Remove
-            </button>
-          </div>
         </div>
       )}
     </li>
@@ -557,7 +608,7 @@ function DefaultModelPicker() {
     onError: (e) => toast.error(`Couldn't set model: ${errMsg(e)}`),
   });
   return (
-    <div className="mb-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}>
+    <div className="mb-2 px-1">
       <div className="flex items-center gap-1.5">
         <label className="block text-xs text-ink-soft">Default model (Primary Runtime · Anthropic)</label>
         <InfoTip
@@ -630,7 +681,9 @@ function RuntimesSection() {
   // null = the form is adding; an id = editing that runtime in place (add_runtime
   // upserts by id, so the same form both adds and edits).
   const [editingId, setEditingId] = useState<string | null>(null);
-  const formRef = useRef<HTMLDivElement>(null);
+  // The add/edit form opens in a sheet (from "Add a runtime" or a row's Edit).
+  const [formOpen, setFormOpen] = useState(false);
+  const [moreOptions, setMoreOptions] = useState(false);
   const presets = useQuery({ queryKey: ["provider-presets"], queryFn: listProviderPresets });
 
   // Per-runtime preflight state: { pending } while testing, { result } after.
@@ -684,7 +737,7 @@ function RuntimesSection() {
     setRuntimeGateway(runtime.gateway ?? "");
     setRuntimeSupportsTools(runtime.supportsTools);
     setRuntimeSupportsEmbeddings(runtime.supportsEmbeddings);
-    formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setFormOpen(true);
   }
 
   const addRuntimeMutation = useMutation({
@@ -712,6 +765,7 @@ function RuntimesSection() {
       ),
     onSuccess: () => {
       resetRuntimeForm();
+      setFormOpen(false);
       qc.invalidateQueries({ queryKey: ["runtimes"] });
     },
     onError: (e) => toast.error(`Couldn't save runtime: ${errMsg(e)}`),
@@ -810,6 +864,17 @@ function RuntimesSection() {
     <Section
       title="Models (runtimes)"
       info="A model on a provider (above): what powers a chat or agent. Pick a provider kind and model; the key and base URL come from the provider. Mark one default for new chats."
+      action={
+        <Button
+          size="sm"
+          onClick={() => {
+            resetRuntimeForm();
+            setFormOpen(true);
+          }}
+        >
+          Add a runtime
+        </Button>
+      }
     >
       {/* The "Default model" picker only configures the synthesized Anthropic
           Primary Runtime, which is surfaced only when no real runtime is
@@ -863,7 +928,13 @@ function RuntimesSection() {
                   {runtime.gateway ? ` · via gateway ${runtime.gateway}` : runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
                 </>
               }
-              trailing={runtime.isDefault ? <span className="text-xs text-ink-soft">default</span> : undefined}
+              trailing={
+                runtime.isDefault ? (
+                  <span className="text-[11px] text-ink-soft" data-tip="New chats use this runtime">
+                    default
+                  </span>
+                ) : undefined
+              }
             >
               {(ccModel || result || ollamaOpen) && (
                 <div className="space-y-2 px-1">
@@ -894,29 +965,39 @@ function RuntimesSection() {
           );
         })}
       </RowList>
-      <div
-        ref={formRef}
-        className="space-y-2 rounded-2xl border p-4"
-        style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-mist)" }}
+      {formOpen && (
+      <Sheet
+        title={editingId ? `Edit runtime · ${editingId}` : "Add a runtime"}
+        side="center"
+        width={540}
+        onClose={() => {
+          resetRuntimeForm();
+          setFormOpen(false);
+        }}
+        footer={
+          <>
+            <Button
+              onClick={() => {
+                resetRuntimeForm();
+                setFormOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={addRuntimeMutation.isPending} onClick={() => addRuntimeMutation.mutate()}>
+              {editingId ? "Update runtime" : "Add runtime"}
+            </Button>
+          </>
+        }
       >
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-soft">
-          {editingId ? `Edit runtime · ${editingId}` : "Add runtime"}
-        </h3>
+      <div className="space-y-2">
         <div className="grid gap-2 md:grid-cols-2">
           <input
             value={runtimeName}
             onChange={(e) => setRuntimeName(e.target.value)}
             placeholder="Display name"
+            aria-label="Display name"
             className="rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-          />
-          <input
-            value={runtimeId}
-            onChange={(e) => setRuntimeId(e.target.value)}
-            placeholder="ID (optional)"
-            readOnly={editingId !== null}
-            title={editingId !== null ? "The id is fixed while editing" : undefined}
-            className="rounded-xl border px-3 py-2 font-mono text-sm read-only:opacity-60"
             style={fieldStyle}
           />
           <select
@@ -946,6 +1027,7 @@ function RuntimesSection() {
           <select
             value={runtimeProvider}
             onChange={(e) => setRuntimeProvider(e.target.value)}
+            aria-label="Provider"
             className="rounded-xl border px-3 py-2 text-sm"
             style={fieldStyle}
           >
@@ -1064,6 +1146,39 @@ function RuntimesSection() {
             </p>
           </>
         )}
+        {agentToolProviders.includes(runtimeProvider) && runtimeSupportsTools && (
+          <>
+            {(endpointIsRemote || runtimeAllowRemoteFileTools) && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm text-ink-soft">
+                  <Switch
+                    on={runtimeAllowRemoteFileTools}
+                    onChange={setRuntimeAllowRemoteFileTools}
+                    label="Allow workspace file tools for this endpoint"
+                  />
+                  <span>Allow workspace file tools for this endpoint</span>
+                </div>
+                <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
+                  This endpoint isn't on this machine or a private network (LAN, Tailscale). With this
+                  on, Ligus's file tools send the contents of files the model reads from your workspace
+                  to it. Off: the model here only gets your MCP tools.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+        <FormDisclosure label="More options" open={moreOptions} onToggle={() => setMoreOptions((v) => !v)}>
+          <div className="space-y-2">
+            <input
+              value={runtimeId}
+              onChange={(e) => setRuntimeId(e.target.value)}
+              placeholder="ID (optional)"
+              aria-label="Runtime ID"
+              readOnly={editingId !== null}
+              title={editingId !== null ? "The id is fixed while editing" : undefined}
+              className="w-full rounded-xl border px-3 py-2 font-mono text-sm read-only:opacity-60"
+              style={fieldStyle}
+            />
         <input
           value={runtimeContextWindow}
           onChange={(e) => setRuntimeContextWindow(e.target.value.replace(/[^0-9]/g, ""))}
@@ -1111,23 +1226,6 @@ function RuntimesSection() {
               How many times the model may call tools before it must answer. Tools also stop being
               offered when the conversation nears the context window.
             </p>
-            {(endpointIsRemote || runtimeAllowRemoteFileTools) && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-sm text-ink-soft">
-                  <Switch
-                    on={runtimeAllowRemoteFileTools}
-                    onChange={setRuntimeAllowRemoteFileTools}
-                    label="Allow workspace file tools for this endpoint"
-                  />
-                  <span>Allow workspace file tools for this endpoint</span>
-                </div>
-                <p className="text-xs" style={{ color: "var(--ligus-warn-ink)" }}>
-                  This endpoint isn't on this machine or a private network (LAN, Tailscale). With this
-                  on, Ligus's file tools send the contents of files the model reads from your workspace
-                  to it. Off: the model here only gets your MCP tools.
-                </p>
-              </div>
-            )}
           </>
         )}
         <div className="flex items-center gap-2 text-sm text-ink-soft">
@@ -1157,21 +1255,11 @@ function RuntimesSection() {
           <Switch on={runtimeSupportsEmbeddings} onChange={setRuntimeSupportsEmbeddings} label="Supports embeddings" />
           <span>Supports embeddings</span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="primary" size="md" onClick={() => addRuntimeMutation.mutate()}>
-            {editingId ? "Update runtime" : "Add runtime"}
-          </Button>
-          {editingId && (
-            <button
-              onClick={resetRuntimeForm}
-              className="rounded-xl border px-3 py-2 text-sm hover:opacity-80"
-              style={{ borderColor: "var(--ligus-line)" }}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
+          </div>
+        </FormDisclosure>
       </div>
+      </Sheet>
+      )}
     </Section>
   );
 }
@@ -1336,7 +1424,7 @@ function OllamaModelsPanel({
   };
 
   return (
-    <div className="mt-3 space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="mt-2 space-y-2 border-l pl-3" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
           Models on {list.data?.host ?? "this server"}
@@ -1428,9 +1516,8 @@ function OllamaModelsPanel({
           Pull
         </Button>
       </form>
-      <p className="text-xs text-ink-soft">
-        Pulls run on the server and continue while you use Ligus; a cancelled pull keeps what it downloaded and resumes on
-        the next attempt.
+      <p className="text-[11.5px] text-ink-soft" data-tip="A cancelled pull keeps what it downloaded and resumes on the next attempt.">
+        Pulls run on the server and resume if cancelled.
       </p>
     </div>
   );
@@ -1519,6 +1606,7 @@ function AgentsSection() {
     onSuccess: () => {
       setName("");
       setInstructions("");
+      setShowForm(false);
       refresh();
     },
     onError: (e) => toast.error(errMsg(e)),
@@ -1533,8 +1621,13 @@ function AgentsSection() {
     <Section
       title="Agents"
       info="A reusable persona: name, model (runtime), role and instructions. Define once here, then attach it to any chat from that chat's Tools pane."
+      action={
+        <Button size="sm" onClick={() => setShowForm(true)}>
+          Add an agent
+        </Button>
+      }
     >
-      {(templates.data ?? []).length === 0 && <p className="px-1 text-sm text-ink-soft">No saved agents yet.</p>}
+      {(templates.data ?? []).length === 0 && <p className="px-1 text-[13px] text-ink-soft">No saved agents yet</p>}
       <RowList label="Saved agents">
         {(templates.data ?? []).map((t) => {
           const rt = rts.find((r) => r.id === t.runtimeId);
@@ -1552,11 +1645,26 @@ function AgentsSection() {
         })}
       </RowList>
 
-      <FormDisclosure label="Add an agent" open={showForm} onToggle={() => setShowForm((v) => !v)}>
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+      {showForm && (
+      <Sheet
+        title="Add an agent"
+        side="center"
+        width={460}
+        onClose={() => setShowForm(false)}
+        footer={
+          <>
+            <Button onClick={() => setShowForm(false)}>Cancel</Button>
+            <Button variant="primary" disabled={!name.trim() || add.isPending} onClick={() => add.mutate()}>
+              Save agent
+            </Button>
+          </>
+        }
+      >
+      <div className="space-y-2">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          aria-label="Agent name"
           placeholder="Agent name (e.g. Reviewer)"
           className="w-full rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
@@ -1594,11 +1702,9 @@ function AgentsSection() {
           className="w-full resize-none rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
         />
-        <Button variant="primary" size="md" onClick={() => add.mutate()}>
-          Save agent
-        </Button>
       </div>
-      </FormDisclosure>
+      </Sheet>
+      )}
     </Section>
   );
 }
@@ -1614,14 +1720,20 @@ function TemplatesSection() {
     setItems(addTemplate(name, body));
     setName("");
     setBody("");
+    setShowForm(false);
   }
 
   return (
     <Section
       title="Prompt templates"
       info="Reusable prompts you can drop into the composer with /."
+      action={
+        <Button size="sm" onClick={() => setShowForm(true)}>
+          Add a template
+        </Button>
+      }
     >
-      {items.length === 0 && <p className="px-1 text-sm text-ink-soft">No templates yet.</p>}
+      {items.length === 0 && <p className="px-1 text-[13px] text-ink-soft">No templates yet</p>}
       <RowList label="Prompt templates">
         {items.map((t) => (
           <ListRow
@@ -1639,11 +1751,26 @@ function TemplatesSection() {
           />
         ))}
       </RowList>
-      <FormDisclosure label="Add a template" open={showForm} onToggle={() => setShowForm((v) => !v)}>
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+      {showForm && (
+      <Sheet
+        title="Add a template"
+        side="center"
+        width={460}
+        onClose={() => setShowForm(false)}
+        footer={
+          <>
+            <Button onClick={() => setShowForm(false)}>Cancel</Button>
+            <Button variant="primary" disabled={!name.trim() || !body.trim()} onClick={add}>
+              Add template
+            </Button>
+          </>
+        }
+      >
+      <div className="space-y-2">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          aria-label="Template name"
           placeholder="Template name (e.g. Bug report)"
           className="w-full rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
@@ -1656,11 +1783,9 @@ function TemplatesSection() {
           className="w-full resize-y rounded-xl border px-3 py-2 text-sm"
           style={fieldStyle}
         />
-        <Button variant="primary" size="md" onClick={add}>
-          Add template
-        </Button>
       </div>
-      </FormDisclosure>
+      </Sheet>
+      )}
     </Section>
   );
 }
@@ -1708,6 +1833,7 @@ function ContextCommandsSection() {
   const cmds = useQuery({ queryKey: ["context-commands"], queryFn: getContextCommands });
   const [summarize, setSummarize] = useState("");
   const [compact, setCompact] = useState("");
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (cmds.data) {
@@ -1731,6 +1857,7 @@ function ContextCommandsSection() {
   }
 
   const dflt = cmds.data?.defaultPrompt ?? "";
+  const custom = (cmds.data?.summarizePrompt ?? "") !== "" || (cmds.data?.compactPrompt ?? "") !== "";
   const fieldClass = "w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5";
 
   return (
@@ -1738,6 +1865,9 @@ function ContextCommandsSection() {
       title="Context commands"
       info="The instructions the model follows for /summarize and /compact. Blank = the built-in default (shown as the placeholder). The /summarize instruction also guides the automatic summarization when a long chat overflows the model's context window."
     >
+      <p className="px-1 text-[11.5px] text-ink-soft">{custom ? "Custom instructions" : "Built-in instructions"}</p>
+      <FormDisclosure label="Edit instructions" open={editing} onToggle={() => setEditing((v) => !v)}>
+      <div className="space-y-2">
       <label className="block text-sm text-ink-soft">
         <code>/summarize</code> instruction
       </label>
@@ -1774,6 +1904,8 @@ function ContextCommandsSection() {
           Reset to defaults
         </button>
       )}
+      </div>
+      </FormDisclosure>
     </Section>
   );
 }
@@ -1799,6 +1931,7 @@ function VaultRetrievalSection() {
   const saved = useQuery({ queryKey: ["retrieval-settings"], queryFn: getRetrievalSettings });
   const [draft, setDraft] = useState<RetrievalSettings>(RETRIEVAL_DEFAULTS);
   const [testing, setTesting] = useState(false);
+  const [more, setMore] = useState(false);
 
   useEffect(() => {
     if (saved.data) setDraft(saved.data);
@@ -1867,11 +2000,15 @@ function VaultRetrievalSection() {
       <div className="grid gap-3 sm:grid-cols-2">
         {text("embedUrl", "Embeddings URL", "http://host:8080/v1")}
         {text("embedModel", "Embeddings model", "embeddinggemma-300m")}
-        {text("rerankUrl", "Rerank URL (optional)", "http://host:8080/v1")}
-        {text("rerankModel", "Rerank model", "bge-reranker-v2-m3")}
-        {count("topK", "Passages per message", 20)}
-        {count("candidates", "Candidates to rerank", 100)}
       </div>
+      <FormDisclosure label="More options" open={more} onToggle={() => setMore((v) => !v)}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {text("rerankUrl", "Rerank URL (optional)", "http://host:8080/v1")}
+          {text("rerankModel", "Rerank model", "bge-reranker-v2-m3")}
+          {count("topK", "Passages per message", 20)}
+          {count("candidates", "Candidates to rerank", 100)}
+        </div>
+      </FormDisclosure>
       <div className="flex items-center gap-3">
         <Button disabled={!on || testing} onClick={() => void runTest()}>
           {testing ? "Testing…" : "Test"}
@@ -1907,21 +2044,17 @@ function OllamaModelLine({
 }) {
   const rm = useRowMenu(`Actions for ${name}`, actions);
   return (
-    <div className="border-t px-1 py-1.5 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }} {...rm.rowProps}>
+    <div className="ligus-listrow border-t px-1 first:border-t-0" style={{ borderColor: "var(--ligus-line)" }} {...rm.rowProps}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="truncate font-mono text-sm">{name}</span>
           {current && (
-            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--ligus-accent-fill)", color: "var(--ligus-on-accent)" }}>
+            <span className="text-[11px] font-semibold" style={{ color: "var(--ligus-accent-ink)" }} data-tip="This runtime uses it">
               current
             </span>
           )}
           {loaded && (
-            <span
-              className="rounded-full border px-2 py-0.5 text-[10px]"
-              style={{ borderColor: "var(--ligus-success)", color: "var(--ligus-success-ink)" }}
-              title={loadedTip}
-            >
+            <span className="text-[11px]" style={{ color: "var(--ligus-success-ink)" }} data-tip={loadedTip}>
               {loadedLabel}
             </span>
           )}

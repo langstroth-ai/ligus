@@ -8,7 +8,7 @@ import {
   openExternal,
   type LigusAuthStartDto,
 } from "@/lib/ipc";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 
 /// Organization sign-in: sign this device in at your organization's identity
@@ -88,25 +88,15 @@ export function OrgSignInSection() {
       info="If your organization runs langstroth-auth, sign in with your company account instead of pasting a relay token. This only lets you reach the relay: to join a workspace, an Admin still has to add you as a member."
     >
       {st ? (
-        <div className="space-y-1 rounded-xl border px-3 py-2.5" style={fieldStyle}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate font-medium">{st.tenant}</div>
-              <div className="truncate text-xs text-ink-soft">{st.authUrl}</div>
-            </div>
-            <button
-              className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--ligus-danger-ink)" }}
-              onClick={() => signOut.mutate()}
-            >
-              Sign out
-            </button>
-          </div>
-          <div className="text-xs text-ink-soft">
-            Relay access to {st.workspaces.length} workspace{st.workspaces.length === 1 ? "" : "s"}
-            {st.active ? "" : " · waiting for a fresh token"}
-          </div>
-        </div>
+        <RowList label="Organization sign-in">
+          <ListRow
+            title={st.tenant}
+            meta={`${st.workspaces.length} workspace${st.workspaces.length === 1 ? "" : "s"}${st.active ? "" : " · waiting for a fresh token"}`}
+            tip={`${st.authUrl} · relay access only`}
+            actionsLabel={`Actions for ${st.tenant}`}
+            actions={[{ label: "Sign out", danger: true, onSelect: () => signOut.mutate() }]}
+          />
+        </RowList>
       ) : flow ? (
         <div className="space-y-2 rounded-xl border px-3 py-3" style={{ borderColor: "var(--ligus-accent-cool)" }}>
           <p className="text-xs text-ink-soft">

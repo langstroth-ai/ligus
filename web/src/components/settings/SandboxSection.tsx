@@ -51,7 +51,7 @@ const ACCESS_LABEL: Record<string, string> = { denied: "Denied", read: "Read", "
 
 function PolicyTable({ p }: { p: EffectivePolicy }) {
   return (
-    <div className="rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+    <div className="border-t px-1 pt-2" style={{ borderColor: "var(--ligus-line)" }}>
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <span className="text-[12.5px] font-semibold">{p.runtime}</span>
         <span className="text-[11px]" style={{ color: "var(--ligus-ink-soft)" }}>
@@ -254,7 +254,7 @@ export function SandboxSection() {
             <Button onClick={() => ack.mutate()}>Got it</Button>
           </div>
         )}
-        <div className="space-y-1 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+        <div className="space-y-1 border-y px-1 py-2" style={{ borderColor: "var(--ligus-line)" }}>
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5">
               <span className="text-[12.5px] font-semibold">Apply workspace sandbox grants on this device</span>
@@ -277,7 +277,7 @@ export function SandboxSection() {
         <PathsField label="Every agent: read-only" value={wsRo} onChange={setWsRo} disabled={!d.canEditPaths} />
         <PathsField label="Every agent: read and write" value={wsRw} onChange={setWsRw} disabled={!d.canEditPaths} />
         {agent ? (
-          <div className="space-y-2.5 rounded-xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
+          <div className="space-y-2.5 border-l pl-3" style={{ borderColor: "var(--ligus-line)" }}>
             <span className="text-[12.5px] font-semibold">@{agent.name} only</span>
             <PathsField label={`@${agent.name}: read-only`} value={cur.ro} onChange={(v) => setCur({ ro: v })} disabled={!d.canEditPaths} />
             <PathsField label={`@${agent.name}: read and write`} value={cur.rw} onChange={(v) => setCur({ rw: v })} disabled={!d.canEditPaths} />

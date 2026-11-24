@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Button, FormDisclosure, ListRow, RowList, Section, fieldStyle } from "@/components/ui";
+import { Sheet } from "@/components/kit/Sheet";
 import { toast, errMsg } from "@/components/Toast";
 import {
   attachmentRules,
@@ -23,6 +24,8 @@ export function AttachmentsSection() {
   const rules = useQuery({ queryKey: ["attachment-rules"], queryFn: attachmentRules });
   const [draft, setDraft] = useState<AttachmentPolicy | null>(null);
   const [hash, setHash] = useState("");
+  const [moreOpts, setMoreOpts] = useState(false);
+  const [blocking, setBlocking] = useState(false);
   useEffect(() => {
     if (rules.data) setDraft(rules.data.policy);
   }, [rules.data]);
@@ -39,6 +42,7 @@ export function AttachmentsSection() {
     mutationFn: (h: string) => blockAttachmentHash(h),
     onSuccess: () => {
       setHash("");
+      setBlocking(false);
       refresh();
     },
     onError: (e) => toast.error(errMsg(e)),
@@ -101,6 +105,8 @@ export function AttachmentsSection() {
             <input type="checkbox" checked={draft.services} onChange={(e) => setDraft({ ...draft, services: e.target.checked })} />
             Let service members (serve boxes) share files
           </label>
+          <FormDisclosure label="More options" open={moreOpts} onToggle={() => setMoreOpts((v) => !v)}>
+          <div className="flex flex-col gap-2">
           <label className="flex items-center gap-2">
             Largest file (MB)
             <input
@@ -133,6 +139,8 @@ export function AttachmentsSection() {
               style={fieldStyle}
             />
           </label>
+          </div>
+          </FormDisclosure>
           {edit && (
             <div className="flex gap-2">
               <Button variant="primary" onClick={() => save.mutate(draft)}>
@@ -147,9 +155,16 @@ export function AttachmentsSection() {
       </Section>
       <Section
         title="Blocked files"
+        action={
+          edit ? (
+            <Button size="sm" onClick={() => setBlocking(true)}>
+              Block a file
+            </Button>
+          ) : undefined
+        }
         info="Files with these SHA-256 hashes are refused when shared and when downloaded, wherever they were shared."
       >
-        {r.blocked.length === 0 && <p className="mb-2 px-1 text-xs text-ink-soft">None</p>}
+        {r.blocked.length === 0 && <p className="mb-2 px-1 text-xs text-ink-soft">No blocked files</p>}
         <RowList label="Blocked files" className="mb-2">
           {r.blocked.map((h) => (
             <ListRow
@@ -160,10 +175,12 @@ export function AttachmentsSection() {
             />
           ))}
         </RowList>
-        {edit && (
+        {edit && blocking && (
+          <Sheet title="Block a file" description="Refused when shared and when downloaded." side="center" width={480} onClose={() => setBlocking(false)}>
           <div className="flex gap-2">
             <input
               aria-label="SHA-256 to block"
+              autoFocus
               placeholder="sha256 of the file"
               value={hash}
               onChange={(e) => setHash(e.target.value.trim().toLowerCase())}
@@ -174,6 +191,7 @@ export function AttachmentsSection() {
               Block
             </Button>
           </div>
+          </Sheet>
         )}
       </Section>
     </>

@@ -29,6 +29,7 @@ import { Button, FormDisclosure, ListRow, RowList, Section, fieldStyle, InfoTip 
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
+import { Sheet } from "@/components/kit/Sheet";
 import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
 
 /// Team sync: the relay connection (E2EE), organization sign-in, and direct
@@ -391,6 +392,7 @@ function PeersSection() {
   const contacts = useQuery({ queryKey: ["p2p-contacts"], queryFn: p2pListContacts });
   const [code, setCode] = useState("");
   const [showAddPeer, setShowAddPeer] = useState(false);
+  const [showRedeem, setShowRedeem] = useState(false);
   const [label, setLabel] = useState("");
   const [shortCode, setShortCode] = useState<{ code: string; expiresIn: number } | null>(null);
   const [redeemInput, setRedeemInput] = useState("");
@@ -404,6 +406,7 @@ function PeersSection() {
     mutationFn: () => redeemShortCode(redeemInput.trim()),
     onSuccess: (r) => {
       setRedeemInput("");
+      setShowAddPeer(false);
       toast.success(r.kind === "workspace" ? `Joined "${r.label}".` : "Peer added.");
       qc.invalidateQueries({ queryKey: ["p2p-contacts"] });
       qc.invalidateQueries({ queryKey: ["workspaces"] });
@@ -416,6 +419,7 @@ function PeersSection() {
     onSuccess: () => {
       setCode("");
       setLabel("");
+      setShowAddPeer(false);
       qc.invalidateQueries({ queryKey: ["p2p-contacts"] });
     },
     onError: (e) => toast.error(`Couldn't add peer: ${errMsg(e)}`),
@@ -426,42 +430,44 @@ function PeersSection() {
     onError: (e) => toast.error(`Couldn't remove peer: ${errMsg(e)}`),
   });
 
+  const copyMyCode = () => {
+    if (myCode.data) {
+      void navigator.clipboard.writeText(myCode.data);
+      toast.success("Peer code copied.");
+    }
+  };
   return (
     <Section
       title="Direct peers (P2P)"
       info="Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync directly. Falls back to a relay when a direct connection can't be made."
+      action={
+        <Button size="sm" onClick={() => setShowAddPeer(true)}>
+          Add a peer
+        </Button>
+      }
     >
-      <label className="block text-sm text-ink-soft">Your peer code</label>
-      <div className="flex gap-2">
-        <input
-          readOnly
-          value={myCode.data ?? (myCode.isError ? "P2P unavailable in this build" : "…")}
-          className="flex-1 rounded-xl border px-3 py-2 font-mono text-xs"
-          style={fieldStyle}
-          onFocus={(e) => e.currentTarget.select()}
+      <RowList label="Your peer code">
+        <ListRow
+          title="Your peer code"
+          meta={<span className="font-mono">{myCode.data ?? (myCode.isError ? "P2P unavailable in this build" : "…")}</span>}
+          tip={myCode.data ? "Click to copy" : undefined}
+          onClick={myCode.data ? copyMyCode : undefined}
+          actionsLabel="Actions for your peer code"
+          actions={
+            myCode.data
+              ? [
+                  { label: "Copy peer code", onSelect: copyMyCode },
+                  {
+                    label: "Make a short code",
+                    title: "Create a short, speakable code you can read out over a call",
+                    disabled: share.isPending,
+                    onSelect: () => share.mutate(),
+                  },
+                ]
+              : undefined
+          }
         />
-        <Button
-          variant="primary"
-          size="md"
-          disabled={!myCode.data}
-          onClick={() => {
-            if (myCode.data) {
-              void navigator.clipboard.writeText(myCode.data);
-              toast.success("Peer code copied.");
-            }
-          }}
-        >
-          Copy
-        </Button>
-        <Button
-          size="md"
-          disabled={!myCode.data || share.isPending}
-          onClick={() => share.mutate()}
-          title="Create a short, speakable code you can read out over a call"
-        >
-          {share.isPending ? "…" : "Short code"}
-        </Button>
-      </div>
+      </RowList>
 
       {shortCode && (
         <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--ligus-accent-cool)" }}>
@@ -485,65 +491,83 @@ function PeersSection() {
         </div>
       )}
 
-      <div className="flex gap-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <input
-          value={redeemInput}
-          onChange={(e) => setRedeemInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && redeemInput.trim() && redeem.mutate()}
-          placeholder="Got a short code? e.g. K7P2QX"
-          className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm uppercase"
-          style={fieldStyle}
-        />
-        <Button
-          variant="primary"
-          size="md"
-          className="shrink-0"
-          disabled={!redeemInput.trim() || redeem.isPending}
-          onClick={() => redeem.mutate()}
+      {(contacts.data ?? []).length === 0 ? (
+        <p className="px-1 text-sm text-ink-soft">No peers yet.</p>
+      ) : (
+        <RowList label="Peers">
+          {(contacts.data ?? []).map((c) => (
+            <ListRow
+              key={c.peerId}
+              title={c.label || "Unnamed peer"}
+              meta={<span className="font-mono">{c.peerId}</span>}
+              actions={[
+                {
+                  label: "Remove",
+                  danger: true,
+                  onSelect: () => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId)),
+                },
+              ]}
+            />
+          ))}
+        </RowList>
+      )}
+
+      {showAddPeer && (
+        <Sheet
+          title="Add a peer"
+          side="center"
+          width={460}
+          onClose={() => setShowAddPeer(false)}
+          footer={
+            <>
+              <Button onClick={() => setShowAddPeer(false)}>Cancel</Button>
+              <Button variant="primary" size="md" disabled={!code.trim() || add.isPending} onClick={() => add.mutate()}>
+                Add peer
+              </Button>
+            </>
+          }
         >
-          {redeem.isPending ? "…" : "Use code"}
-        </Button>
-      </div>
-
-      {(contacts.data ?? []).length === 0 && <p className="px-1 text-sm text-ink-soft">No peers yet.</p>}
-      <RowList label="Peers">
-        {(contacts.data ?? []).map((c) => (
-          <ListRow
-            key={c.peerId}
-            title={c.label || "Unnamed peer"}
-            meta={<span className="font-mono">{c.peerId}</span>}
-            actions={[
-              {
-                label: "Remove",
-                danger: true,
-                onSelect: () => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId)),
-              },
-            ]}
-          />
-        ))}
-      </RowList>
-
-      <FormDisclosure label="Add a peer" open={showAddPeer} onToggle={() => setShowAddPeer((v) => !v)}>
-      <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--ligus-line)" }}>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Friend's full peer code (ligus_…)"
-          className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
-          style={fieldStyle}
-        />
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="Label (e.g. Sam's laptop)"
-          className="w-full rounded-xl border px-3 py-2 text-sm"
-          style={fieldStyle}
-        />
-        <Button variant="primary" size="md" onClick={() => add.mutate()}>
-          Add peer
-        </Button>
-      </div>
-      </FormDisclosure>
+          <div className="space-y-2">
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="Friend's full peer code (ligus_…)"
+              aria-label="Peer code"
+              className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
+              style={fieldStyle}
+            />
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Label (e.g. Sam's laptop)"
+              aria-label="Peer label"
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              style={fieldStyle}
+            />
+            <FormDisclosure label="Have a short code instead?" open={showRedeem} onToggle={() => setShowRedeem((v) => !v)}>
+              <div className="flex gap-2">
+                <input
+                  value={redeemInput}
+                  onChange={(e) => setRedeemInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && redeemInput.trim() && redeem.mutate()}
+                  placeholder="e.g. K7P2QX"
+                  aria-label="Short code"
+                  className="flex-1 rounded-xl border px-3 py-2 font-mono text-sm uppercase"
+                  style={fieldStyle}
+                />
+                <Button
+                  size="md"
+                  className="shrink-0"
+                  disabled={!redeemInput.trim() || redeem.isPending}
+                  onClick={() => redeem.mutate()}
+                >
+                  {redeem.isPending ? "…" : "Use code"}
+                </Button>
+              </div>
+            </FormDisclosure>
+          </div>
+        </Sheet>
+      )}
     </Section>
   );
 }
