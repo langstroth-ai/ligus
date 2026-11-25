@@ -1344,3 +1344,23 @@ async fn memory_from_a_locked_down_chat_stays_behind_its_egress() {
     let r = turn.call("ligus_memory_read", &json!({"entryId": note.to_string()})).await;
     assert!(r.is_error && !r.text.contains("cache-later-locked"), "{}", r.text);
 }
+
+/// The host waits only on the ask it posted: when another record holds the
+/// ask id in the fold (one that got in first), an answer to it is never
+/// taken as the answer to the host's own, so a reworded or reordered
+/// question can't turn an "Allow once" into a grant.
+#[tokio::test]
+async fn the_host_never_takes_an_answer_to_someone_elses_ask_under_its_id() {
+    let w = world();
+    let ask_id = Uuid::new_v4();
+    let theirs = ligus_core::flow::HumanAsk { ask_id, turn_id: w.reply, agent_key: w.agent.to_string(), question: "Deny the cleanup?".into(), options: vec!["Yes, deny".into(), "No".into()], at_ms: 1, ..Default::default() };
+    {
+        let mut svc = w.host.svc.lock().unwrap();
+        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(theirs.clone())).unwrap();
+        svc.record_flow(w.chat, w.wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Yes, deny".into(), option_index: Some(0), by: "Alex".into(), at_ms: 2 })).unwrap();
+        assert!(svc.load(w.chat).unwrap().unwrap().flow.asks[&ask_id].answer.is_some(), "their ask took the answer");
+    }
+    let mine = ligus_core::flow::HumanAsk { question: "coder asks permission to run rm (execute). Allow it once?".into(), options: vec!["Allow once".into(), "Deny".into()], permission: true, ..theirs };
+    let got = super::server::wait_answer(&*w.host, w.chat, &mine, Duration::from_secs(5), || false).await;
+    assert!(got.is_none(), "an answer to another ask under the id is no answer to this one");
+}

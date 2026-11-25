@@ -110,7 +110,7 @@ pub(crate) fn ask_dtos(session: &ligus_core::ChatSession) -> Vec<AskDto> {
             answered_by: a.answer.as_ref().map(|x| x.by.clone()).filter(|b| !b.is_empty()),
             open: a.is_open(),
             kind: if a.ask.permission { "permission" } else { "question" },
-            posted_by: a.posted_by.as_ref().map(|p| ligus_proto::names::clean_display_name(if p.name.trim().is_empty() { &p.id } else { &p.name })),
+            posted_by: a.poster_name(&session.members).map(|n| ligus_proto::names::clean_display_name(&n)),
         })
         .collect()
 }

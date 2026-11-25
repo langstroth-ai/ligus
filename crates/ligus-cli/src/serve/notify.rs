@@ -174,14 +174,16 @@ pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState) -> Option<(Noti
     if a.closed {
         return None;
     }
-    let agent = match &st.posted_by {
-        Some(p) => shown(if p.name.trim().is_empty() { &p.id } else { &p.name }),
-        None => ligus_core::flow::agent_from_key(&a.agent_key)
-            .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
-            .map(|x| format!("@{}", shown(&x.name)))
-            .unwrap_or_else(|| "An agent".into()),
-    };
-    let notice = ntfy::ask_notice(&agent, &shown(&s.title), s.id);
+    let agent_name = ligus_core::flow::agent_from_key(&a.agent_key)
+        .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
+        .map(|x| format!("@{}", shown(&x.name)));
+    let poster = st.poster_name(&s.members).map(|n| shown(&n));
+    let agent = poster.clone().unwrap_or_else(|| agent_name.clone().unwrap_or_else(|| "An agent".into()));
+    let mut notice = ntfy::ask_notice(&agent, &shown(&s.title), s.id);
+    if poster.is_some() {
+        // Posted under an agent's name by someone else: say so.
+        notice.title = format!("{} (not from {})", notice.title, agent_name.as_deref().unwrap_or("the agent"));
+    }
     let mut push = base("ask.pending", s, notice.title.clone());
     push.sender = Some(agent);
     push.preview = Some(a.question.clone());
@@ -634,5 +636,30 @@ mod tests {
         let mut stop = r(vec!["desk-1"]);
         stop.action = "stop_upstream".into();
         assert!(for_recruit(&sessions, &f.s, &stop, &me).is_none());
+    }
+
+    /// An ask someone else posted under an agent's name is pushed as theirs,
+    /// by the roster's name for them (not the name their stamp chose), and
+    /// says it isn't from the agent.
+    #[test]
+    fn a_forged_ask_is_pushed_as_its_posters() {
+        let mut s = ChatSession::new("Fixes", Uuid::new_v4(), "rt");
+        let bo = actor("bo-1", "Bo");
+        s.members.push(member(&bo, WorkspaceRole::Contributor, 1));
+        let agent = WorkspaceAgent::new("coder", "rt");
+        let key = agent.id.to_string();
+        s.workspace_agents.push(agent);
+        let st = ligus_core::flow::AskState {
+            ask: ligus_core::flow::HumanAsk { agent_key: key.clone(), question: "Allow once?".into(), ..Default::default() },
+            posted_by: Some(ligus_core::flow::AskPoster { id: "bo-1".into(), name: "@coder".into() }),
+            ..Default::default()
+        };
+        let (notice, push) = for_ask(&s, &st).unwrap();
+        assert!(notice.title.starts_with("Bo has a question"), "{}", notice.title);
+        assert!(notice.title.contains("not from @coder"), "{}", notice.title);
+        assert_eq!(push.sender.as_deref(), Some("Bo"));
+        let own = ligus_core::flow::AskState { ask: ligus_core::flow::HumanAsk { agent_key: key, question: "Which db?".into(), ..Default::default() }, ..Default::default() };
+        let (notice, _) = for_ask(&s, &own).unwrap();
+        assert_eq!(notice.title, "@coder has a question");
     }
 }

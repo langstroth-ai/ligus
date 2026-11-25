@@ -441,8 +441,8 @@ pub fn ask_state_dto(s: &ChatSession, st: &ligus_core::flow::AskState) -> Value 
     v["open"] = json!(st.is_open());
     // Posted by someone other than the agent or its turn's host: theirs,
     // and never a permission request (`kind` is "question").
-    if let Some(p) = &st.posted_by {
-        v["postedBy"] = json!(shown(if p.name.trim().is_empty() { &p.id } else { &p.name }));
+    if let Some(name) = st.poster_name(&s.members) {
+        v["postedBy"] = json!(shown(&name));
     }
     if let Some(a) = &st.answer {
         v["answer"] = json!(a.answer);

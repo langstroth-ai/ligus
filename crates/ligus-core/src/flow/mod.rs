@@ -541,6 +541,14 @@ impl AskState {
         self.answer.is_none() && !self.ask.closed
     }
 
+    /// The name to show for [`AskState::posted_by`]: the roster's name for
+    /// that member (`members`, the chat's roster), never the stamp's own
+    /// claim, which its signer chose; the member id when unknown.
+    pub fn poster_name(&self, members: &[crate::identity::WorkspaceMember]) -> Option<String> {
+        let p = self.posted_by.as_ref()?;
+        Some(members.iter().find(|m| m.id == p.id).map(|m| m.actor.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| p.id.clone()))
+    }
+
     /// Settled for eviction: what every version agrees on.
     fn evictable(&self) -> bool {
         self.legacy_settled || !self.is_open()

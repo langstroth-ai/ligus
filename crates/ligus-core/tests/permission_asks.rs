@@ -259,3 +259,55 @@ fn a_grant_signed_by_another_device_under_the_hosts_name_counts_for_nothing() {
     let s = r.w.state(chat);
     assert!(s.flow.asks[&real.ask_id].answer.is_none(), "Bo's device can't grant as Ana");
 }
+
+/// Bo certifies Ana's device key for his own account (allowed: an adopter
+/// holds nothing). That doesn't make him the host's person: his answer
+/// counts for nothing, and Ana's still does.
+#[test]
+fn adopting_the_hosts_device_key_doesnt_make_you_its_person() {
+    let mut r = room();
+    let real = ask(r.turn, true);
+    record(&mut r, "ana", FlowRecord::HumanAsk(real.clone()));
+    let (bo, ana) = (&r.w.people["bo"], &r.w.people["ana"]);
+    let cert = ligus_core::crypto::DeviceCertificate::issue(&bo.account, bo.account_id, &ana.device.public_key_bytes(), ligus_core::Timestamp::epoch());
+    let adopt = r.w.push("bo", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    assert_eq!(r.w.verdict(adopt), Verdict::Allowed, "the probe's premise: adopting a key is allowed");
+    let ana_device = r.w.people["ana"].device_id;
+    assert!(r.w.roster().devices[&ana_device].accounts.contains(&r.w.people["bo"].account_id));
+    record(&mut r, "bo", answer(real.ask_id, "Bo"));
+    let s = r.w.state(r.chat);
+    assert!(s.flow.asks[&real.ask_id].answer.is_none(), "an adopter's answer isn't a grant");
+    record(&mut r, "ana", answer(real.ask_id, "Ana"));
+    assert_eq!(r.w.state(r.chat).flow.asks[&real.ask_id].answer.as_ref().map(|a| a.by.as_str()), Some("Ana"));
+}
+
+/// An ask id belongs to its first signer. Bo backdates a forged ask under
+/// the id the host uses (stamped as if he hadn't seen the host's record):
+/// his folds first and holds the id as his own plain question; the host's
+/// later record under that id changes nothing, and Bo's ask is never a
+/// permission prompt. (The host never takes an answer to it as one to its
+/// own: it waits only on the ask it posted.)
+#[test]
+fn a_backdated_ask_under_the_hosts_id_stays_its_signers_plain_question() {
+    let mut r = room();
+    let real = ask(r.turn, true);
+    let chat = r.chat;
+    let before = r.w.chats[&chat].clone();
+    record(&mut r, "ana", FlowRecord::HumanAsk(real.clone()));
+    let mut forged = real.clone();
+    forged.question = "Ligus asks: deny the cleanup?".into();
+    forged.options = vec!["Yes, deny".into(), "No".into()];
+    let mut env = r.w.draft("bo", Some(chat), SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(forged.clone()) }, None);
+    // Stamped as if he had seen only the log up to the request: it sorts
+    // before the host's ask.
+    ligus_core::lamport::stamp_after(&mut env, &before[..before.len() - 1]);
+    r.w.finish(&mut env, "bo", None);
+    let id = r.w.push_env(Some(chat), env);
+    assert_eq!(r.w.verdict(id), Verdict::Allowed);
+    let s = r.w.state(chat);
+    let st = &s.flow.asks[&real.ask_id];
+    assert_eq!(st.ask.question, forged.question, "the backdated record folds first and holds the id");
+    assert!(!st.ask.permission, "the pre-empting ask is no permission prompt");
+    assert_eq!(st.posted_by.as_ref().map(|p| p.id.as_str()), Some("bo"));
+    assert_eq!(st.ask.options, forged.options, "the host's later record under the id changes nothing");
+}

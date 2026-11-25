@@ -161,7 +161,8 @@ fn turn_host_ok(
 }
 
 /// Whether `author` may grant `st`'s permission: the asking agent's owner,
-/// or the person of the host that asked (an account that certified it).
+/// or the person of the host that asked (an account that holds that
+/// device; one that only certified its key for itself holds nothing).
 /// The answer's signing device must be certified for the author's account,
 /// whatever its stamp names.
 fn may_grant(st: &AskState, roster: &RosterState, author: &str, signer: Option<Uuid>) -> bool {
@@ -182,7 +183,7 @@ fn may_grant(st: &AskState, roster: &RosterState, author: &str, signer: Option<U
     let host_person = st
         .host
         .zip(account)
-        .is_some_and(|(h, acct)| roster.account_certified(acct, h));
+        .is_some_and(|(h, acct)| roster.account_holds_device(acct, h));
     is_owner || host_person
 }
 
