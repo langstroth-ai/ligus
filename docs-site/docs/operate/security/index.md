@@ -44,15 +44,17 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
 
 **Invite and admission seeds.** An invite you issue, and an admission a box
 redeems, each come with a small secret (a redeem key seed) that the code
-carries. From 0.4 that seed lives in the OS secret store, with the other
-secrets above. A copy also stays in `ligus.db` while the invite or admission
-is still open, so an older Ligus on the same data dir, or a downgrade, keeps
-working. Each start copies any seed it finds in the database to the secret
-store and reads it back. It removes the database copy once the invite is
-used or closed, or the admission has expired. A person invite that nobody
-redeems is removed 7 days after it was first copied. The removal overwrites
-the old bytes in the file and empties the write-ahead log, so the seed
-doesn't linger on disk.
+carries. From 0.4 that seed lives only in the OS secret store, with the
+other secrets above; it never reaches `ligus.db`. Seeds an older Ligus wrote
+to the database are copied to the secret store at each start and read back;
+the database copy stays while the invite or admission is open (an older
+Ligus on the same data dir, or a downgrade, still uses it) and goes once the
+invite is used or closed, or the admission has expired. A person invite that
+nobody redeems is removed 7 days after it was first copied. The removal
+overwrites the old bytes in the file and empties the write-ahead log (at the
+next start, if another program was reading at the time), so the seed
+doesn't linger on disk. After a downgrade, invites issued by 0.4 can't be
+turned into codes by the older version: issue them again.
 
 **Backups.** Before the 0.4 upgrade of its sync state, and before the
 cleanup of other workspaces' events, Ligus copies the whole database next to

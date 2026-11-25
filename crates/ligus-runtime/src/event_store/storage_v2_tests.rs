@@ -265,8 +265,9 @@ fn m1c_an_older_process_writing_beside_the_upgrade() {
     assert_eq!(count(&old, "SELECT last_fetched_seq FROM sync_cursor WHERE workspace = 'team'"), 299, "the older process's last write");
     assert_eq!(count(&old, "SELECT COUNT(*) FROM pushed WHERE workspace = 'team'"), 202);
     assert_eq!(count(&old, "SELECT COUNT(*) FROM parked_bodies WHERE workspace = 'later'"), 200);
-    // The live seeds are in their tables (and the store).
-    assert_eq!(count(&old, "SELECT COUNT(*) FROM issued_invite_keys"), 1);
+    // The live seeds are kept: the older process's in its table (and the
+    // store), this build's in the store only.
+    assert_eq!(count(&old, "SELECT COUNT(*) FROM issued_invite_keys"), 0);
     assert_eq!(count(&old, "SELECT COUNT(*) FROM join_redeem_keys"), 1);
     assert_eq!(files(dir.path()).get(&invite_secret(ws, invite)).unwrap().map(|v| v.to_vec()), Some(seed.to_vec()));
     // A room only the older process synced, after M1: drained from the old
@@ -275,7 +276,7 @@ fn m1c_an_older_process_writing_beside_the_upgrade() {
 }
 
 /// M2t: a seed is copied to the secret store and read back, whoever wrote
-/// it (this build writes both places; a 0.3 row is copied at the next
+/// it (this build writes the store only; a 0.3 row is copied at the next
 /// start); reads prefer the store.
 #[test]
 fn m2_seeds_are_copied_and_read_back() {
@@ -286,14 +287,14 @@ fn m2_seeds_are_copied_and_read_back() {
     let secrets = files(dir.path());
     assert_eq!(secrets.get(&invite_secret(ws, inv)).unwrap().map(|v| v.to_vec()), Some(seed.to_vec()));
     let old = old_build(&db);
-    assert_eq!(count(&old, "SELECT COUNT(*) FROM issued_invite_keys"), 1, "the row stays for an older build");
+    assert_eq!(count(&old, "SELECT COUNT(*) FROM issued_invite_keys"), 0, "this build's seed never reaches the table");
 
     // A 0.3 process writes a box's redeem key: copied on the next start.
     let (ws2, seed2) = (Uuid::new_v4(), [9u8; 32]);
     old.execute("INSERT INTO join_redeem_keys (workspace_id, seed) VALUES (?1, ?2)", [ws2.to_string(), hex(&seed2)]).unwrap();
     assert!(secrets.get(&redeem_secret(ws2)).unwrap().is_none());
     let (copied, deleted) = store.move_seeds().unwrap();
-    assert_eq!((copied, deleted), (2, 0));
+    assert_eq!((copied, deleted), (1, 0));
     assert_eq!(secrets.get(&redeem_secret(ws2)).unwrap().map(|v| v.to_vec()), Some(seed2.to_vec()));
     assert_eq!(store.join_redeem_key(ws2).unwrap(), Some(seed2));
     // The store's copy answers once the row is gone (a row an older build
@@ -303,7 +304,9 @@ fn m2_seeds_are_copied_and_read_back() {
     let mut bare = EventStore::open(&db).unwrap();
     bare.set_secret_store(None);
     assert_eq!(bare.join_redeem_key(ws2).unwrap(), None);
-    assert_eq!(bare.issued_invite_key(ws, inv).unwrap(), Some(seed));
+    // A seed this build issued lives in the store only: without one (or on
+    // 0.3) it isn't found, and that invite's code can't be built (design 12).
+    assert_eq!(bare.issued_invite_key(ws, inv).unwrap(), None);
     // Taking a seed forgets it in both places.
     assert_eq!(store.take_issued_invite_key(ws, inv).unwrap(), Some(seed));
     assert!(secrets.get(&invite_secret(ws, inv)).unwrap().is_none());
@@ -331,13 +334,13 @@ fn m2_a_seed_stays_while_its_invite_is_open_and_goes_once_it_closes() {
     let seed = owner.store().issued_invite_key(ws, invite).unwrap().unwrap();
     let secrets = files(dir.path());
 
-    // Open: kept, however often M2 runs.
+    // Open: kept, however often M2 runs. This build wrote it to the secret
+    // store only: no row to copy, nothing in the database.
     for _ in 0..2 {
-        assert_eq!(owner.store().move_seeds().unwrap(), (1, 0));
+        assert_eq!(owner.store().move_seeds().unwrap(), (0, 0));
     }
     assert_eq!(owner.store().issued_invite_key(ws, invite).unwrap(), Some(seed));
-    // (The scan below can see it: here it is.)
-    assert!(contains(&db, hex(&seed).as_bytes()) || contains(&wal(&db), hex(&seed).as_bytes()));
+    assert!(secrets.get(&invite_secret(ws, invite)).unwrap().is_some());
 
     // The invitee redeems it (the code carried the seed).
     let mut joiner = svc_on(&db, "j", "Jo");
@@ -375,8 +378,8 @@ fn m2_a_box_admission_seed_goes_when_it_expires() {
     // The box's side, in its store.
     owner.store().set_join_invite(ws, invite).unwrap();
     owner.store().set_join_redeem_key(ws, &seed).unwrap();
-    assert_eq!(owner.store().move_seeds_at(issued + ttl / 2).unwrap(), (1, 0), "kept while it can be redeemed");
-    assert_eq!(owner.store().move_seeds_at(issued + ttl + 60_000).unwrap(), (1, 1), "gone once expired");
+    assert_eq!(owner.store().move_seeds_at(issued + ttl / 2).unwrap(), (0, 0), "kept while it can be redeemed");
+    assert_eq!(owner.store().move_seeds_at(issued + ttl + 60_000).unwrap(), (0, 1), "gone once expired");
     assert!(files(dir.path()).get(&redeem_secret(ws)).unwrap().is_none());
     assert_eq!(owner.store().join_redeem_key(ws).unwrap(), None);
 }
@@ -392,9 +395,9 @@ fn m2_a_person_invite_never_redeemed_goes_after_seven_days() {
     let copied = now_ms();
     let invite = owner.issue_invite(ws).unwrap();
     let store = owner.store();
-    assert_eq!(store.move_seeds_at(copied + PERSON_SEED_KEEP_MS - 60_000).unwrap(), (1, 0));
+    assert_eq!(store.move_seeds_at(copied + PERSON_SEED_KEEP_MS - 60_000).unwrap(), (0, 0));
     assert!(store.issued_invite_key(ws, invite).unwrap().is_some());
-    assert_eq!(store.move_seeds_at(copied + PERSON_SEED_KEEP_MS + 60_000).unwrap(), (1, 1));
+    assert_eq!(store.move_seeds_at(copied + PERSON_SEED_KEEP_MS + 60_000).unwrap(), (0, 1));
     assert!(store.issued_invite_key(ws, invite).unwrap().is_none());
     // A seed this device never saw on any log ages out the same way.
     let lone = Uuid::new_v4();
@@ -447,7 +450,8 @@ fn m2_a_row_an_older_process_rewrites_overwrites_the_store_copy() {
     let ws = Uuid::new_v4();
     store.set_join_redeem_key(ws, &[1u8; 32]).unwrap();
     let old = old_build(&db);
-    old.execute("UPDATE join_redeem_keys SET seed = ?2 WHERE workspace_id = ?1", [ws.to_string(), hex(&[2u8; 32])]).unwrap();
+    // A 0.3 process on this data dir writes its own seed to the table.
+    old.execute("INSERT OR REPLACE INTO join_redeem_keys (workspace_id, seed) VALUES (?1, ?2)", [ws.to_string(), hex(&[2u8; 32])]).unwrap();
     assert_eq!(store.move_seeds().unwrap(), (1, 0));
     assert_eq!(secrets.get(&redeem_secret(ws)).unwrap().map(|v| v.to_vec()), Some(vec![2u8; 32]), "the start copied the newer row");
     old.execute("UPDATE join_redeem_keys SET seed = ?2 WHERE workspace_id = ?1", [ws.to_string(), hex(&[4u8; 32])]).unwrap();
@@ -506,4 +510,59 @@ fn m4_a_newer_database_opens_read_only() {
     assert_eq!(count(&c, "PRAGMA user_version"), SCHEMA_VERSION + 1);
     assert_eq!(count(&c, "SELECT last_fetched_seq FROM sync_cursor_v2"), 7);
     assert!(NEWER_DATA_MESSAGE.contains("newer Ligus"));
+}
+
+/// Design 10.3: a seed this build writes, with a secret store, never
+/// reaches the database file or its log.
+#[test]
+fn a_new_seed_never_reaches_sqlite() {
+    let (dir, db) = data_dir();
+    let mut store = EventStore::open(&db).unwrap();
+    store.set_secret_store(Some(files(dir.path())));
+    let (ws, invite) = (Uuid::new_v4(), Uuid::new_v4());
+    let seed = [0x3cu8; 32];
+    store.set_issued_invite_key(ws, invite, &seed).unwrap();
+    store.set_join_redeem_key(ws, &seed).unwrap();
+    assert_eq!(store.issued_invite_key(ws, invite).unwrap(), Some(seed));
+    assert_eq!(store.join_redeem_key(ws).unwrap(), Some(seed));
+    drop(store);
+    let mut wal = db.as_os_str().to_os_string();
+    wal.push("-wal");
+    assert!(!contains(&db, hex(&seed).as_bytes()), "a new seed is in the database file");
+    assert!(!contains(Path::new(&wal), hex(&seed).as_bytes()), "a new seed is in the log");
+}
+
+/// Review S1: a seed deleted while another connection reads stays only
+/// until the next start, which truncates the log again.
+#[test]
+fn a_seed_deleted_beside_a_reader_is_gone_after_the_next_start() {
+    let (dir, db) = data_dir();
+    let mut store = EventStore::open(&db).unwrap();
+    store.set_secret_store(None);
+    let (ws, invite) = (Uuid::new_v4(), Uuid::new_v4());
+    let seed = [0x5au8; 32];
+    store.set_issued_invite_key(ws, invite, &seed).unwrap(); // a 0.3-style row
+    store.set_secret_store(Some(files(dir.path())));
+    store.move_seeds_at(now_ms()).unwrap(); // copied now
+    {
+        let c = Connection::open(&db).unwrap();
+        let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+    }
+    let reader = Connection::open(&db).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0)).unwrap();
+    let later = now_ms() + 8 * 86_400_000;
+    let (_, deleted) = store.move_seeds_at(later).unwrap();
+    assert_eq!(deleted, 1);
+    reader.execute_batch("COMMIT").unwrap();
+    drop(reader);
+    drop(store);
+    let mut again = EventStore::open(&db).unwrap();
+    again.set_secret_store(Some(files(dir.path())));
+    again.move_seeds_at(later).unwrap();
+    drop(again);
+    let mut wal = db.as_os_str().to_os_string();
+    wal.push("-wal");
+    assert!(!contains(&db, hex(&seed).as_bytes()), "the database file holds the deleted seed");
+    assert!(!contains(Path::new(&wal), hex(&seed).as_bytes()), "the log holds the deleted seed");
 }
