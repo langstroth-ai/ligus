@@ -192,6 +192,7 @@ nav:
           - Configuring a runtime: ligus/getting-started/configuring-a-runtime.md
           - Offline setup with local models: ligus/getting-started/offline-local-models.md
           - Your first chat: ligus/getting-started/first-chat.md
+          - Set up: ligus/getting-started/set-up.md
       - Concepts:
           - Workspaces & chats: ligus/concepts/workspaces.md
           - Agents (built-in vs BYO): ligus/concepts/agents.md

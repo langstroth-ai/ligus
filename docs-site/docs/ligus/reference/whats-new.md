@@ -18,7 +18,13 @@ Full release notes are on the
   `--json` prints one `ligus.checks.v1` report and `--dry-run` writes
   nothing. Secrets are read only from stdin or an owner-only file. The
   earlier `ligus setup [--apply]` is now `ligus setup runtimes [--apply]`.
-  See [Guided setup](cli.md#setup) and `ligus help setup`.
+  See [Set up](../getting-started/set-up.md) and `ligus help setup`.
+- **Guided setup in the desktop.** ⌘K lists **Set up an agent**,
+  **Connect a tool**, **Add a code folder**, **Add a box**, **Add a
+  phone**, **Invite a person** and **Set up a relay**; `/setup` in the
+  composer does the same. Each opens one wizard, one step per screen, that
+  checks before it changes anything and shows a failure's fix right under
+  it. An empty list of runtimes, MCP servers or hosts offers its flow.
 - **Choose which agents may use a tool.** A tool (MCP server) can be
   limited to some agents. The choice is kept on the device that runs the
   server, never in a file a commit could change, and a turn of the
