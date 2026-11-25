@@ -1,6 +1,6 @@
 # Agent questions: decisions an agent waits on (design note)
 
-Status: design only, not implemented. Target: Ligus 0.4. Surfaces: the Ligus
+Status: design, owner decisions taken 2026-11-25 (section 13); not implemented. Target: Ligus 0.4. Surfaces: the Ligus
 MCP server, the desktop, the phone apps, `lt` (ligus-term), the `ligus` CLI
 and `ligus serve`. Ligus is short for *ligustica*, the Italian honeybee.
 
@@ -109,6 +109,12 @@ This note extends what exists. It adds no new system.
     (`acp.rs:286-296`).
   - The permission question text is the agent's own `title` and `kind`
     (`acp.rs:666-668`).
+
+  **Three of these are fixed in 0.3.1**, ahead of this note (decision D7):
+  the `allow_always` fallback, `HumanAsk` spoofing, and closing any ask.
+  Sections 5.1 and 6.2 are the 0.4 design for the same rules. They must
+  agree with the 0.3.1 fix as shipped, and where they differ, the shipped
+  fix is the base this note builds on.
 
 ## 3. Goals and non-goals
 
@@ -307,7 +313,7 @@ whose turn it owned. Its pending turns are cancelled anyway
   reveal a secret. The agent may act on it **within what it could already
   do**: delete fixtures it was already allowed to edit, for example. Anything
   beyond that still goes through its tier, the sandbox, proposals and apply
-  rules. The answer needs no passkey; on the phone see 7.4 and Q1.
+  rules. The answer needs no passkey; on the phone see 7.4 and D1.
 - **A grant** (`effect` present): only the host posts these (5.1). The answer
   lets the host do something it otherwise wouldn't:
   - `permission`: an ACP escalation, or a hook prompt (section 8). Allow
@@ -391,7 +397,7 @@ Agent text is untrusted. It may come from a prompt-injected turn.
 - **Plain text, not Markdown**, for `v: 2` cards. No links are rendered: a URL
   shows as text, can be selected and copied, and is never clickable or opened
   automatically. Older `ligus_ask_human` asks keep today's Markdown renderer
-  (click-only links) until Q4 is decided.
+  (click-only links) until 0.4, when they switch to plain text too (D4).
 - **Cleaning**: `clean_display_name`-style removal of bidi controls,
   zero-width characters and other controls, applied to the question and the
   options.
@@ -506,7 +512,7 @@ Builder asks you: "Use Postgres or SQLite for the test fixtures?"
 - **The card** is drawn from the raw signed ask (6.3). It has the same order
   and the same effect line, and options are full width.
 - **Face ID.** In 0.4 every phone answer still asks Face ID, as today. One
-  tap for questions comes later (Q1): a 0.3 host checks no `askDigest`, so
+  tap for questions comes later (D1): a 0.3 host checks no `askDigest`, so
   while such hosts exist a lying box could pass off a permission ask as a
   question.
 - A grant uses Face ID with reason "Allow Builder to run cargo publish
@@ -633,8 +639,7 @@ What `ligus hook permission` does:
 **Where the card lives.** Every chat is visible to every member of its
 workspace (there are no private chats), and a hook prompt can show commands,
 paths and file content. So `--workspace` and `--chat` are required, and
-`ligus hook install` asks for them. The recommended target is a workspace of
-one (open question Q3). The hook prints a warning to stderr, once per chat,
+`ligus hook install` asks for them. The target is a workspace of one (decision D3), which the desktop offers to make as "Personal". The hook prints a warning to stderr, once per chat,
 if the workspace has other members.
 
 **Limits.** 10 hook asks per minute per install, and at most 3 open. Past
@@ -673,7 +678,7 @@ preference asks a question. The guidance text says so.
 | A8 | **An agent answering as the person** through their CLI, or abusing the hook socket | **Presence is the real control**: every grant, and every hook ask, needs the person's passkey or Face ID. The CLI's terminal confirmation and its refusal of hook asks only stop casual misuse. The socket is owner-only with a token, rate-limited, and can only raise prompts to the person | An agent running as the person outside Ligus can read that install's device key and answer **questions and quorums** as the person. It can't grant. Prompts it raises are labelled "outside Ligus" |
 | A9 | **Ask flooding** to wear people down | Budgets, open-ask caps, a per-person push cap across chats, push collapse, no lock-screen actions | None |
 | A10 | **Links** in a question used for phishing | Not rendered as links on new cards; never opened automatically on any card | A person can still copy and paste a URL |
-| A11 | **Hook data leaked to teammates** | Explicit `--workspace`/`--chat`; a warning when others can read it; the recommended workspace of one (Q3) | A person who picks a shared chat shares their prompts |
+| A11 | **Hook data leaked to teammates** | Explicit `--workspace`/`--chat`; a warning when others can read it; the Personal workspace of one (D3) | A person who picks a shared chat shares their prompts |
 | A12 | **Stale answers** after a restart or timeout | The restart sweep, expiry as a read-time view, the host ignoring answers after it stopped waiting, `settledBy` | None |
 
 **Offline.** An answering device that is offline signs locally and syncs
@@ -716,17 +721,19 @@ host's own fold decides what runs.
 | Q-T11 | Mixed versions: a 0.3 peer's answer to a `v: 2` ask is not counted on 0.4; `ligus_ask_human` behaves as before | `flow` tests with recorded 0.3 envelopes |
 | Q-T12 | Calm UI: design-QA with an open card and an Inbox ask row (one banner at most, badge limits, AA contrast); no answer buttons on Inbox rows; screen readers read header, quote, options and the effect line in that order | design-qa, `web` a11y tests |
 
-## 13. Open questions for the owner
+## 13. Decisions (owner, 2026-11-25)
 
-| # | Question | Recommendation |
+The owner accepted every recommendation.
+
+| # | Question | Decision |
 |---|---|---|
-| Q1 | When may phone answers to **questions** skip Face ID? (The 2026-11-22 rule exempts only `post`) | **Not in 0.4.** From the release where hosts below 0.4 can no longer be in a workspace, a phone may skip it for an ask it verified from the raw envelope as `v: 2` with no effect. Grants keep Face ID always |
-| Q2 | Desktop permission grants: a passkey every time, or only when `effect.presence` is `required` (lockdown, dearth mode, outside the sandbox, the hook)? | **Only then**, with the 2-second hold otherwise. A passkey on every in-sandbox command teaches people to tap through it |
-| Q3 | Where hook prompts go, given that chats are workspace-visible | **A workspace of one** that the desktop offers to make ("Personal"), never a shared chat by default. Later: a device-local route to your own devices only |
-| Q4 | Switch old `ligus_ask_human` cards to plain text now? | **Yes in 0.4.** Click-only links are safe, but one renderer is simpler, and link text can mislead |
-| Q5 | Should `secret` effects exist before a secret-access flow does? | **Define the shape and rule now, post none**, so 0.5 adds no wire change |
-| Q6 | Should `Not now` on a room ask close it for everyone? | **No**, only for a single named person. In a room it is one person's abstention |
-| Q7 | Remove the ACP `allow_always` fallback now, as a fix ahead of 0.4? | **Yes, as its own small PR now.** It can grant a standing permission today |
+| D1 | When may phone answers to questions skip Face ID? | **Not in 0.4.** From the release where hosts below 0.4 can no longer be in a workspace, a phone may skip it for an ask it verified from the raw envelope as `v: 2` with no effect. Grants keep Face ID always |
+| D2 | Desktop passkey for permission grants? | **Only when `effect.presence` is `required`** (lockdown, dearth mode, outside the sandbox, every hook prompt); otherwise one click after the 2-second hold |
+| D3 | Where hook prompts go | **A workspace of one**, which the desktop offers to make ("Personal"); never a shared chat by default. A device-local route to your own devices only is a later option |
+| D4 | Plain text for old `ligus_ask_human` cards? | **Yes, in 0.4**, one renderer for every card |
+| D5 | Define `secret` effects now? | **Define the shape and the rule, post none**, so 0.5 adds no wire change |
+| D6 | Does "Not now" on a room ask close it for everyone? | **No**, only for a single named person; in a room it is that person's abstention |
+| D7 | The ACP `allow_always` fallback | **Fixed separately in 0.3.1**, together with `HumanAsk` spoofing and closing any ask (section 2) |
 
 ## 14. Review
 
@@ -742,8 +749,8 @@ the code, or contradicted it.
 | R2 | Anyone could close any ask (`flow/mod.rs:714` compares fields, not the signer) | Must-fix | 5.1 closing rule, for every ask |
 | R3 | The fold changes weren't deterministic (no envelope in `FlowState::apply`; expiry by wall clock fed eviction and ingest) | Must-fix | 5.2: an enveloped fold at stamped config frontiers, no wall clock, expiry as a view, eviction unchanged, quorum frozen at first settle, `settledBy` |
 | R4 | `effectDigest` didn't stop a lying box swapping options; canonical JSON from a DTO | Must-fix | `askDigest` over the raw signed payload bytes; the phone draws from the raw envelope; grant labels by index; preimage checked (6.3) |
-| R5 | Dropping Face ID while 0.3 hosts exist | Must-fix | Face ID kept in 0.4; Q1 deferred until no host is below 0.4 |
-| R6 | "Allow once" false in code: `option_for` falls back to `allow_always` (`acp.rs:286-296`); the detail is agent-supplied | Must-fix | Fallback removed (Q7, a fix now); the agent's title labelled as its own; the detail is the tool call's content (6.2, 6.4) |
+| R5 | Dropping Face ID while 0.3 hosts exist | Must-fix | Face ID kept in 0.4; one tap only once no host is below 0.4 (D1) |
+| R6 | "Allow once" false in code: `option_for` falls back to `allow_always` (`acp.rs:286-296`); the detail is agent-supplied | Must-fix | Fallback removed (D7: fixed in 0.3.1); the agent's title labelled as its own; the detail is the tool call's content (6.2, 6.4) |
 | R7 | An agent could answer its own cards through the person's CLI | Must-fix | Grants and hook asks always need presence; CLI answers need a terminal; hook asks not answerable from the CLI (7.5) |
 | R8 | One `memberId` couldn't say "host's person or agent's owner" | Should-fix | `audience: people` with several ids |
 | R9 | The passkey condition wasn't evaluable by peers | Should-fix | The host writes `effect.presence`; the hook always requires it (6.2) |

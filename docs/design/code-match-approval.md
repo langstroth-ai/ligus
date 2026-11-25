@@ -1,6 +1,6 @@
 # Code-match approval (design note)
 
-Status: design only, not implemented. Target: Ligus 0.4. Surfaces: the
+Status: design, owner decisions taken 2026-11-25 (section 12); not implemented. Target: Ligus 0.4. Surfaces: the
 desktop, the phone apps, `lt` (ligus-term), the `ligus` CLI and `ligus serve`,
 plus one additive route family on the relay (`langstroth-relay`). Ligus is
 short for *ligustica*, the Italian honeybee.
@@ -114,7 +114,7 @@ Non-goals:
   Ligus never shows that code next to a match code (section 8, threat T6).
 - Approving a computer or phone **from the phone**. The certificate must be
   published by a non-delegated, non-phone device that holds the account key
-  (`link-a-computer.md` §3). See open question Q3.
+  (`link-a-computer.md` §3). Decision D3: not in 0.4.
 
 ## 4. The design in one picture
 
@@ -315,8 +315,7 @@ The approver's device writes the event exactly as today (`JoinApproved`, or
 uses keys from a second copy. The passkey ceremony is the existing one. Its
 sheet summary gains the label and the code ("Admit box build-1, code K7Q4
 M9X2"), which closes the generic-summary gap (section 2). On the phone,
-Face ID's reason says the same. Nothing about the code goes on the log (open
-question Q4).
+Face ID's reason says the same. Nothing about the code goes on the log (decision D4).
 
 ### 6.3 What the requester checks
 
@@ -419,7 +418,7 @@ The fingerprint **stays**, and the code **augments** it:
   data is never shown (6.1).
 
 Removing the fingerprint compare from the live path everywhere is a later
-step (open question Q5).
+step (decision D5: after one release).
 
 ## 7. UX
 
@@ -472,9 +471,15 @@ All copy below is the exact proposed text.
   collapse per workspace. When more than 3 requests arrive in 10 minutes, the
   phone stops pushing and the Inbox shows one row, "Several join requests",
   so a flood can't wear the person down.
-- **Approval screen**: the code, one line; "Check the box shows the same
-  code."; **Codes match**, then Face ID, whose reason is "Admit build-1, code
-  K7Q4 M9X2"; **Don't match**. This uses the existing
+- **Approval screen, opened from a push: number matching** (decision D2).
+  "Which code does the box show?" offers three codes as full-width buttons in
+  random order: the real one and two random decoys. Below them is **None of
+  these**. Tapping the real code leads to Face ID, whose reason is "Admit
+  build-1, code K7Q4 M9X2". Tapping a decoy or None of these counts as
+  `Abort{mismatch}`, which ends the request. Opened from the phone's Inbox
+  instead of a push, the screen shows the one code with **Codes match** and
+  **Don't match**, as on the desktop. Screen readers read each button's code
+  spelled out, in groups. The screen uses the existing
   `/v1/admissions/prepare|presence|commit`. The serve API gains
   `GET /v1/approvals` (each request's raw `ligusreq1` plaintext) and
   `POST /v1/approvals/{rid}/claim|open|result|abort`, which carry
@@ -483,7 +488,7 @@ All copy below is the exact proposed text.
   code, as set out in 5.2. The box only relays bytes.
 - **A device of mine** (computer or phone) shows on the phone as read-only
   for 0.4: "Approve on your desktop", with the code, so the person can
-  compare it against both (Q3).
+  compare it against both (D3).
 
 ### 7.4 The requester: CLI and box
 
@@ -532,8 +537,8 @@ ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]
 | # | Threat | What stops it | Residual |
 |---|---|---|---|
 | T1 | **Relay man in the middle** substitutes keys in the request, or answers as a fake approver | The transcript covers both keys and both nonces. A substitution shows different codes (2^-40 per attempt, one attempt). The request is sealed, so the relay can't read labels. The grant checks in 6.3 | None beyond 2^-40 |
-| T2 | **Phishing the approver**: an attacker posts its own box or computer and asks a person to approve it, reading out "the code" | The code proves only that the two screens are in the same exchange. It can't tell whose device is at the other end. For devices of mine, the copy says "the device you're holding" and no Copy exists. Several requests at once each show their own code. The sheet names the kind and the label plainly, and the Inbox shows the request as "wants to be your device" | **Residual R1.** A person who approves a request someone else reads to them is phished, as today. Prior art accepts this; number matching (Q2) narrows it for rushed approvals, not for deceived ones |
-| T3 | **Rushed approvals and fatigue** (repeated pushes until someone taps yes) | 3-second hold; push collapse and a stop after 3 in 10 minutes; one attempt per request; Admin-only for boxes; passkey or Face ID every time | Q2 offers number matching on the phone |
+| T2 | **Phishing the approver**: an attacker posts its own box or computer and asks a person to approve it, reading out "the code" | The code proves only that the two screens are in the same exchange. It can't tell whose device is at the other end. For devices of mine, the copy says "the device you're holding" and no Copy exists. Several requests at once each show their own code. The sheet names the kind and the label plainly, and the Inbox shows the request as "wants to be your device" | **Residual R1.** A person who approves a request someone else reads to them is phished, as today. Prior art accepts this; number matching on the phone (D2) narrows it for rushed approvals, not for deceived ones |
+| T3 | **Rushed approvals and fatigue** (repeated pushes until someone taps yes) | 3-second hold; push collapse and a stop after 3 in 10 minutes; one attempt per request; Admin-only for boxes; passkey or Face ID every time | Number matching for push-started phone approvals (D2) |
 | T4 | **Shoulder-surfing** | The code is not a secret: seeing it gives nothing, and it can't be typed anywhere to gain access | None |
 | T5 | **Inbox spam** through a leaked address | `putCap` and Reset address; relay limits (64 live, 10/min per client); optionally a token for puts on gated relays; one Inbox row per request, collapsing past 3 | Between a leak and a reset, spam can fill the mailbox, which blocks live approvals (paste still works) |
 | T6 | **Code confusion**: an RFC 8628 sign-in code, a recovery word or a pairing link mistaken for a match code | Different shape (8 Crockford symbols in two groups) and different words ("code to compare"). A match code is never asked to be typed except by `ligus approvals approve --code`, a person's own CLI | None |
@@ -558,7 +563,7 @@ ligus devices request --to ligusaddr1:… [--label NAME] [--wait 15m] [--json]
   to the phone repositories.
 - The grant travels through the relay sealed, **only after a code match**.
   This reverses link-a-computer's "never through the relay" for the live path
-  (open question Q1). The paste path is unchanged.
+  (decision D1). The paste path is unchanged.
 
 ## 10. Mixed versions
 
@@ -592,18 +597,21 @@ work. It falls back to the full compare.
 | M9 | Mixed versions: an older requester (paste) and an older desktop (no polling) complete through paste; a relay without routes gives exit 3 | `approval_tests`, `deploy/tests` |
 | M10 | Relay limits: 65th request refused, 11th message refused, expiry, no overwrite; register and reset refused unless signed by the mailbox auth key; puts need `putCap` (and a token under `mailboxes: token`) | `langstroth-relay` tests |
 | M11 | UI: the code has the spelled `aria-label`; Codes match is disabled for 3 s; no Copy; design-QA scan passes with the sheet open (one banner at most, AA contrast) | `web` Vitest, design-qa |
+| M11b | Phone number matching: a push-started approval shows three distinct codes in random order plus None of these; a decoy or None of these aborts with nothing granted; Face ID only after the real code is tapped | phone UI tests |
 | M12 | The passkey sheet summary and the phone's Face ID reason name the label and the code | `chat_service::presence` tests, phone UI tests |
 
-## 12. Open questions for the owner
+## 12. Decisions (owner, 2026-11-25)
 
-| # | Question | Recommendation |
+The owner accepted every recommendation.
+
+| # | Question | Decision |
 |---|---|---|
-| Q1 | May the grant (`ligusadmit1`/`ligusgrant1`, sealed to the requester) travel through the relay mailbox after a code match? It removes the second paste, but reverses a rule in link-a-computer, and the relay briefly holds a sealed copy of the workspace keys (5.3, Retention) | **Yes**, only after a match, deleted as soon as the requester has it. The match binds the key it's sealed to. Paste stays |
-| Q2 | Number matching on the phone: the phone shows three codes and the person taps the one on the other screen, instead of "Codes match" | **Yes for push-started approvals on the phone**, where fatigue lives. Desktop keeps compare and confirm |
-| Q3 | Approve a computer or phone from the phone (the phone as the passkey for a certificate the desktop drafts) | **Not in 0.4.** It needs a desktop online to publish anyway. Show it read-only on the phone with the code |
-| Q4 | Record the transcript digest on the log (an optional field on `JoinApproved`) for audit | **No.** Keep the logs unchanged in 0.4; a device-local fact is enough |
-| Q5 | When to drop the fingerprint compare from the live path entirely | **After one release** with both, once mismatch telemetry (local facts only) shows no confusion |
-| Q6 | Open relays: allow anonymous mailbox puts at all? | **Yes, with `putCap`, Reset address and the limits**, since otherwise open-relay users keep pasting. Gated relays may also require a token for puts (`mailboxes: token`) |
+| D1 | May the sealed grant travel through the relay mailbox after a code match? | **Yes**, only after a match. The requester deletes it as soon as it has it (5.3). Paste stays. This supersedes link-a-computer's "never through the relay" for the live path only |
+| D2 | Number matching on the phone? | **Yes, for push-started approvals on the phone**: three codes and None of these (7.3). The desktop, and the phone's Inbox, keep compare and confirm |
+| D3 | Approve a computer or phone from the phone? | **Not in 0.4.** The phone shows these requests read-only, with the code |
+| D4 | Record the transcript digest on the log? | **No.** The logs are unchanged in 0.4; a device-local fact is enough |
+| D5 | When to drop the fingerprint compare from the live path? | **After one release** with both |
+| D6 | Anonymous mailbox puts on open relays? | **Yes, with `putCap`, Reset address and the limits.** Gated relays may also require a token (`mailboxes: token`) |
 
 ## 13. Review
 
@@ -622,7 +630,7 @@ of each end did not.
 | R5 | Racing `Open`s by any member | Should-fix | `Claim`, contested sheets and End this request; the requester shows the claimed approver as unverified (6.4) |
 | R6 | Mailbox DoS; refuse-both let one junk request block every addition; a 16-box rollout hit the cap | Should-fix | `putCap` and Reset address; 64 live; no refuse-both (5.1, 5.3, 6.4) |
 | R7 | A new computer on a gated relay can't read its own `rid` | Should-fix | `readKey` (5.2, 5.3) |
-| R8 | The relay holds a sealed copy of workspace keys | Should-fix | Delete on settle; stated in Q1 (5.3) |
+| R8 | The relay holds a sealed copy of workspace keys | Should-fix | Delete on settle; decided in D1 (5.3) |
 | R9 | An older desktop meant waiting 15 minutes before seeing the paste text; the Inbox `device` claim | Nit | Paste text printed straight away; section 1 corrected |
 | R10 | Hiding a non-secret code blocks remote help | Nit | Shown during screen sharing (7.1) |
 
@@ -635,7 +643,7 @@ new Must-fix. Folded in:
 | S2 | A member could race an `Open` and link Ana's computer as their own device | Should-fix | Check 6: a final confirmation of the verified person after check 5 (6.3). Test M6d |
 | S3 | Anyone's abort raised the intercept warning | Nit | Shown only for the device's own mismatch, or a named workspace device's abort (6.5) |
 | S4 | Check 5 raced sync | Nit | A 2-minute retry (6.3) |
-| S5 | Stale text from the first draft | Nit | Fixed (T2, section 10, M10, Q6) |
+| S5 | Stale text from the first draft | Nit | Fixed (T2, section 10, M10, D6) |
 
 **Third pass: Approve**, no Must-fix. Accepted: any member can derive
 the mailbox auth key, so any member can reset the address, which is denial
@@ -644,4 +652,4 @@ of service only.
 **Residual risks.** R1 in section 8: a person who approves a request someone
 else reads out to them is phished, as today. Denial of service by a key
 holder or a leaked address until Reset address. The relay briefly holds a
-sealed copy of the workspace keys (Q1).
+sealed copy of the workspace keys (D1).
