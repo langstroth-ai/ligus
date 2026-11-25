@@ -7,7 +7,8 @@ session.
 
 Open **Settings → Models** to add or edit.
 
-![Settings → Models & runtimes tab](../images/settings-runtimes.png){ width="800" }
+![Settings, Models & runtimes: subscription CLIs, providers and the runtimes this workspace uses (demo data)](../images/desktop-settings-models-light.png#only-light){ width="800" loading=lazy }
+![Settings, Models & runtimes: subscription CLIs, providers and the runtimes this workspace uses (demo data)](../images/desktop-settings-models-dark.png#only-dark){ width="800" loading=lazy }
 
 ## Supported providers
 

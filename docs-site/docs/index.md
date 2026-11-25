@@ -10,6 +10,24 @@ hide:
 shared LLM workspace for developers. *Ligus* is short for *ligustica*
 (*Apis mellifera ligustica*, the Italian honeybee).
 
+![The Ligus desktop app: a chat where agents hand work to each other, and the Review pane with a proposal, its diff and one of two approvals (demo data)](ligus/images/desktop-overview-light.png#only-light){ loading=lazy }
+![The Ligus desktop app: a chat where agents hand work to each other, and the Review pane with a proposal, its diff and one of two approvals (demo data)](ligus/images/desktop-overview-dark.png#only-dark){ loading=lazy }
+
+Ligus is for developers who want their teammates and their AI agents in one
+end-to-end encrypted workspace: agents propose changes, people review and
+approve them, and every agent runs in a sandbox on your own machines.
+
+```bash
+brew install --cask langstroth-ai/ligus/ligus-app   # the desktop app (macOS)
+brew install langstroth-ai/ligus/ligus              # the ligus CLI (macOS and Linux)
+brew install langstroth-ai/ligus/lt                 # lt, Ligus in the terminal
+```
+
+Windows and Linux desktop bundles are on the
+[releases page](https://github.com/langstroth-ai/ligus/releases). More in
+[Install with Homebrew](ligus/getting-started/homebrew.md) and
+[First launch](ligus/getting-started/first-launch.md).
+
 - **Ligus** is the app: the desktop app, the phone app and the `ligus` CLI.
   You bring your own subscription and your own agents, and work with people
   and agents in shared, end-to-end-encrypted workspaces.

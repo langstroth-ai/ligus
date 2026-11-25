@@ -6,6 +6,9 @@ The **Inbox** is one place for everything that needs **you**. Open it from
 Things that only report what happened (activity, finished work, totals)
 are never in it.
 
+![The Inbox: changed sandbox grants, a command to enable, an agent's question with its answers, a vote, a box asking to be added and an invite (demo data)](../images/desktop-inbox-light.png#only-light){ width="760" loading=lazy }
+![The Inbox: changed sandbox grants, a command to enable, an agent's question with its answers, a vote, a box asking to be added and an invite (demo data)](../images/desktop-inbox-dark.png#only-dark){ width="760" loading=lazy }
+
 ## What's in it
 
 Most urgent first:

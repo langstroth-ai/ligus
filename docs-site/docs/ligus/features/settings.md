@@ -14,7 +14,8 @@ Workspace-scoped config (runtimes, MCP servers) is written back to
 `ligus.config.toml`; connection settings persist to a `settings.json` in
 the app data dir; the theme is stored locally per device.
 
-![Settings — Profile tab](../images/settings-general.png){ width="900" }
+![Settings, Profile: linked accounts and My devices, with Add a computer (demo data)](../images/desktop-settings-profile-light.png#only-light){ width="800" loading=lazy }
+![Settings, Profile: linked accounts and My devices, with Add a computer (demo data)](../images/desktop-settings-profile-dark.png#only-dark){ width="800" loading=lazy }
 
 ## Profile
 

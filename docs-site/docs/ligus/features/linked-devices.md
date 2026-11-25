@@ -17,17 +17,23 @@ Ligus is short for *ligustica*, the Italian honeybee.
 
     It shows a **link request** (a code that holds no secret) and a
     **fingerprint**, five groups of four characters.
+
 2. **On your desktop**: **Settings → Profile → My devices → Add a computer**.
-   Paste the request. Compare **all five groups** of the fingerprint with the
-   computer's screen. Only add a computer you are using right now. Tick
-   **The computer shows the same fingerprint** and choose **Add with
-   passkey**: one passkey confirmation.
+    Paste the request. Compare **all five groups** of the fingerprint with the
+    computer's screen. Only add a computer you are using right now. Tick
+    **The computer shows the same fingerprint** and choose **Add with
+    passkey**: one passkey confirmation.
+
+    ![Settings, Profile, My devices: this MacBook and a paired phone, with Add a computer (demo data)](../images/desktop-settings-profile-light.png#only-light){ width="720" loading=lazy }
+    ![Settings, Profile, My devices: this MacBook and a paired phone, with Add a computer (demo data)](../images/desktop-settings-profile-dark.png#only-dark){ width="720" loading=lazy }
+
 3. The desktop shows a **grant**: copy it to the computer within 30 minutes
-   (any way you like: it is sealed so only that computer can open it). The
-   desktop also shows its own fingerprint, **This desktop**.
+    (any way you like: it is sealed so only that computer can open it). The
+    desktop also shows its own fingerprint, **This desktop**.
+
 4. **On the computer**, paste the grant (`lt`), or run
-   `ligus devices redeem --code-file grant`. It shows who approved it and the
-   approving desktop's fingerprint: check it is yours and confirm.
+    `ligus devices redeem --code-file grant`. It shows who approved it and the
+    approving desktop's fingerprint: check it is yours and confirm.
 
 From then on the computer acts as you in that workspace: your name, your
 role, your chats.
