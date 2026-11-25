@@ -376,11 +376,18 @@ impl RosterTracker {
         let directory = crate::copies::SignerDirectory::of(&trust);
         let devices: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> = directory.devices().collect();
         let mut out: BTreeSet<(Uuid, Uuid)> = BTreeSet::new();
-        // Phones: the statement, or a sole certifier.
+        // Phones: the statement, or a sole certifier. Only certificates the
+        // signer directory verified count (the id is its key's, the
+        // account's registered key signed it): a planted certificate, under
+        // a key of someone's own or for a made-up account, neither carries a
+        // statement nor makes a phone contested.
         let mut phone_certifiers: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
         for e in envelopes {
             if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
-                if c.alg == crate::crypto::SigAlg::P256 {
+                let verified = c.alg == crate::crypto::SigAlg::P256
+                    && c.id_matches_key()
+                    && devices.get(&c.device_id).is_some_and(|(key, claimants)| *key == c.device_public_key.as_slice() && claimants.contains(&c.account_id));
+                if verified {
                     phone_certifiers.entry(c.device_id).or_default().insert(c.account_id);
                     if c.phone_consent_ok(workspace_id) {
                         out.insert((c.device_id, c.account_id));

@@ -634,7 +634,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         // needs it.
         // Once: the first rules set on the log, never a second one written
         // while the workspace still holds no credential.
-        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if (RULES_GENESIS..=RULES_SUPPORTED).contains(&version))
+        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version == RULES_GENESIS)
             && on_config
             && !roster.rules_written
             && roster.passkeys.values().all(|m| m.is_empty());
@@ -738,7 +738,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
             // Rules 3: withdrawing a certificate of yours its device never
             // accepted (approved, never finished: identity model v2, 8.2).
-            if account.is_some_and(|a| ctx.running.unaccepted.contains(&(*device_id, a)) && !ctx.running.devices.contains_key(device_id)) {
+            // Only when every certificate of that device is the author's own:
+            // a revocation revokes the whole device id, so a member who
+            // certified someone else's unaccepted device can't burn it.
+            if account.is_some_and(|a| {
+                ctx.running.unaccepted.contains(&(*device_id, a))
+                    && ctx.running.unaccepted.iter().filter(|(d, _)| d == device_id).all(|(_, x)| *x == a)
+                    && !ctx.running.devices.contains_key(device_id)
+            }) {
                 return Decision::Allow;
             }
         }

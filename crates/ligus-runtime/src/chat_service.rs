@@ -1033,7 +1033,7 @@ impl ChatService {
         session.creator_actor_id = self.author.id.clone();
         session.members.push(WorkspaceMember {
             id: self.author.id.clone(),
-            actor: self.author.clone(),
+            actor: self.stamped_author(),
             role: WorkspaceRole::Owner,
             title: String::new(),
             index: 1,
@@ -1858,19 +1858,21 @@ impl ChatService {
                 self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
-            // Genesis rules (Phase A; rules 3 from 0.4, identity model v2):
-            // every workspace this build founds starts on rules v3 under
+            // Genesis rules (Phase A): presence-free rules v2 under
             // this deployment's passkey relying party. Written before anyone
             // holds a credential, so it carries no presence; the founder then
             // registers a passkey and a recovery key with the seed's one grant
             // (the desktop's create flow does it right away). Until then the
             // workspace can't admit anyone or change governance: every such
-            // event needs the founder's presence.
+            // event needs the founder's presence. With the founder's first
+            // credential it moves to rules 3 (`adopt_founding_rules`): a
+            // genesis on rules 3 would be refused by 0.3 builds, which would
+            // then keep writing on rules 2.
             self.append_signed(
                 config_id,
                 workspace_id,
                 SessionEvent::WorkspaceRulesSet {
-                    version: self.founding_rules,
+                    version: ligus_core::authz::RULES_GENESIS,
                     presence: Some(self.deployment_presence.clone()),
                 },
             )?;
