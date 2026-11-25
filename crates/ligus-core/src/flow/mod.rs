@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod ask_wire;
 pub mod asks;
 pub mod board;
 pub mod career;
@@ -455,7 +456,9 @@ pub const MAX_ASKS_PER_CHAT: usize = 256;
 
 /// An agent's question to the chat's humans. The asking turn is paused until
 /// the first answer (canonical order) or its timeout.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// Decoded by [`ask_wire`]: exactly what 0.3 decodes, whatever 0.4 adds.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HumanAsk {
     pub ask_id: Uuid,
@@ -484,27 +487,27 @@ pub struct HumanAsk {
     /// Every field from here on decodes leniently: a value this build can't
     /// read folds as absent, never as an event it can't decode (which older
     /// builds would accept), so every version accepts the same events.
-    #[serde(default, skip_serializing_if = "is_zero_u8", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
     pub v: u8,
     /// Who may answer. Absent: any Contributor or above (the older rule).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<AskAudience>,
     /// Distinct eligible people who must pick the same option (1 when
     /// absent).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quorum: Option<u8>,
     /// A free-text answer is allowed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_text: bool,
     /// What an answer authorises, written only by a host (absent: a
     /// question). It counts only when [`asks`] says so.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<AskEffect>,
     /// Where the ask came from (a sub-agent, a child chat, outside Ligus).
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<AskOrigin>,
     /// On a closing record by the asker: the answer event it acted on.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_by: Option<Uuid>,
 }
 
@@ -632,15 +635,11 @@ fn is_zero_u8(x: &u8) -> bool {
     *x == 0
 }
 
-/// Decode a field, or take its default when the value isn't one this build
-/// reads (the record still decodes).
-fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value(v).unwrap_or_default())
-}
 
 /// A human's answer to a [`HumanAsk`].
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// Decoded by [`ask_wire`], like [`HumanAsk`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HumanAnswered {
     pub ask_id: Uuid,
@@ -653,15 +652,15 @@ pub struct HumanAnswered {
     pub at_ms: i64,
     /// Free text, apart from the chosen option (whose text stays in
     /// `answer` for older readers).
-    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     /// [`asks::ask_digest`] of the ask this answers, computed by the
     /// answering device from the signed record it received (hex).
-    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ask_digest: String,
     /// "Not now": closes an ask to one named person; in a room, that
     /// person's abstention.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "lenient")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub decline: bool,
 }
 
@@ -719,10 +718,17 @@ pub struct AskState {
     /// [`MAX_COUNTED_ANSWERS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncounted: Vec<AskVote>,
+    /// The event that posted the ask (its first signer's): where a device
+    /// finds the signed record an answer binds to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Uuid>,
 }
 
 /// Answers an ask keeps in [`AskState::counted`] and [`AskState::uncounted`].
 pub const MAX_COUNTED_ANSWERS: usize = 32;
+/// The longest answer or free text an ask's fold keeps (characters); an
+/// uncounted answer keeps none.
+pub const MAX_FOLDED_TEXT_CHARS: usize = 1000;
 
 /// One answer as an ask's fold keeps it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
