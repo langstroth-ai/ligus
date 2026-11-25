@@ -78,7 +78,7 @@ equivalent.
 | Credential renewal (`POST /v1/tunnel/credential` when `iat` is more than 24 h old) | Same | |
 | Direct-token rotation (`GET /v1/tunnel/direct` after a direct-path 401) | Same | |
 | Tabs: Chats, Agents, Review, Dashboard (hidden when empty), Settings | Same, as a Compose `NavigationBar` (phones) or `NavigationRail` with list-detail panes (tablets and foldables) | iPad keyboard shortcuts map to hardware-keyboard shortcuts on tablets |
-| Chats: list (DMs first), chat view, composer, Markdown (GFM tables, task lists), streaming turns, hand-off cards, ask cards, lockdown bar with Clear, founder-wait note, typing row | Same | Markdown links open only `http`, `https` and `mailto` |
+| Chats: list (DMs first), chat view, composer, Markdown (GFM tables, task lists), streaming turns, hand-off cards, ask cards (0.4: decision cards drawn from the raw signed ask, as [the iOS contract](ios-app.md#decision-cards-04) says), lockdown bar with Clear, founder-wait note, typing row | Same | Markdown links open only `http`, `https` and `mailto` |
 | Repo chip, repo picker (all code hosts), clone or clone via fork, pull, draft PR/MR sheet | Same | Plain bearer API calls, not signed |
 | Chat details, DM person view | Same | |
 | "Propose as a memory note" (`proposeMemory`) | Same | |

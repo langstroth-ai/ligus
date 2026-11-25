@@ -48,13 +48,24 @@ pub enum PhoneAction {
     /// Approve (`approved: true`) or reject a proposal, binding the content
     /// digest the phone showed (`proposalVoteCast`).
     Vote { chat_id: Uuid, proposal_id: Uuid, diff_digest: String, approved: bool },
-    /// Answer an agent's question (`flowRecorded` / `humanAnswered`).
+    /// Answer an agent's question (`flowRecorded` / `humanAnswered`). On a
+    /// v2 card (`docs/design/agent-questions.md` 6.3) the phone also names
+    /// `askDigest`, computed from the signed ask it was given (the payload
+    /// of its preimage), and may add free `text` or say Not now
+    /// (`decline`); `answer` is then the option's text (empty for a
+    /// free-text-only answer).
     Answer {
         chat_id: Uuid,
         ask_id: Uuid,
         answer: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         option_index: Option<u32>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        ask_digest: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        decline: bool,
     },
     /// Clear the lockdowns of a chat the phone shows (`chatLockdownCleared`,
     /// on the workspace config log; always with the person's passkey
@@ -147,7 +158,9 @@ impl PhoneAction {
             PhoneAction::Vote { diff_digest, .. } | PhoneAction::RequestApply { diff_digest, .. } if !is_digest(diff_digest) => {
                 Some("a content digest is 64 lowercase hex digits")
             }
-            PhoneAction::Answer { answer, .. } if answer.trim().is_empty() => Some("an answer can't be empty"),
+            PhoneAction::Answer { answer, text, decline, .. } if answer.trim().is_empty() && text.trim().is_empty() && !decline => Some("an answer can't be empty"),
+            PhoneAction::Answer { text, .. } if text.chars().count() > ligus_proto::ask_text::MAX_TEXT_ANSWER_CHARS => Some("the reply is too long"),
+            PhoneAction::Answer { ask_digest, .. } if !ask_digest.is_empty() && (ask_digest.len() != 64 || !ask_digest.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())) => Some("askDigest is 64 lowercase hex characters"),
             PhoneAction::Answer { answer, .. } if answer.chars().count() > crate::flow::MAX_ANSWER_CHARS => Some("an answer is too long"),
             PhoneAction::RequestApply { expected_base_commit: Some(c), .. } if !crate::workspace_repo::is_commit_id(c) => {
                 Some("a base commit is 40 or 64 hex digits")
@@ -402,10 +415,17 @@ pub fn check_phone_action_preimage(
             }
         }
         (
-            PhoneAction::Answer { ask_id, answer, option_index, .. },
+            PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. },
             SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::HumanAnswered(a) },
         ) => {
-            if a.ask_id != *ask_id || a.answer != *answer || a.option_index != *option_index || a.by != actor.display_name {
+            if a.ask_id != *ask_id
+                || a.answer != *answer
+                || a.option_index != *option_index
+                || a.by != actor.display_name
+                || a.ask_digest != *ask_digest
+                || a.text != *text
+                || a.decline != *decline
+            {
                 return Err(mismatch);
             }
         }

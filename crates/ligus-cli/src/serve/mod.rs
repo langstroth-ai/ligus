@@ -257,6 +257,9 @@ pub struct Shared {
     pub svc: Mutex<ChatService>,
     pub hub: hub::Hub,
     differ: Mutex<hub::Differ>,
+    /// Pushes for agents' questions in the last hour (device-local; agent
+    /// questions 6.5).
+    pub ask_pushes: Mutex<notify::AskPushCap>,
     /// Replies this box's worker is streaming: their tokens already went out
     /// as `message.delta`, so the differ doesn't repeat their checkpoints.
     local_streams: Mutex<HashSet<Uuid>>,
@@ -829,9 +832,19 @@ impl Shared {
                     Change::AskPending { chat, ask } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(a) = s.flow.asks.get(&ask) else { continue };
-                        self.hub.emit("ask.pending", json!({ "ask": api::ask_state_dto(s, a) }));
+                        let dto = api::ask_card_dto(&self.lock(), s, a, &me);
+                        self.hub.emit("ask.pending", json!({ "ask": dto }));
                         if self.fresh(ligus_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000)) {
-                            notices.extend(notify::for_ask(s, a));
+                            let who = notify::Me::in_chat(&author, s, &links);
+                            // One push per ask, only to the people it asks,
+                            // and at most 10 an hour (agent questions 6.5).
+                            if let Some(n) = notify::for_ask(s, a, &who) {
+                                match self.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).admit(std::time::Instant::now()) {
+                                    notify::AskPush::Send => notices.push(n),
+                                    notify::AskPush::Summary => notices.push(notify::several_asking(s)),
+                                    notify::AskPush::Hold => {}
+                                }
+                            }
                         }
                     }
                     Change::ProposalUpdated { chat, proposal } => {
@@ -1144,6 +1157,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         svc: Mutex::new(svc),
         hub: hub::Hub::new(),
         differ: Mutex::new(hub::Differ::default()),
+        ask_pushes: Mutex::new(notify::AskPushCap::default()),
         local_streams: Mutex::new(HashSet::new()),
         read_marks: Mutex::new(load_read_marks(&cfg)),
         sync_kick: Notify::new(),
@@ -1709,7 +1723,18 @@ impl worker::ServiceSource for Shared {
         self.worker_kick.notify_one();
     }
     fn ask_posted(&self, chat: Uuid, ask: &ligus_core::flow::HumanAsk) {
-        self.hub.emit("ask.pending", json!({ "ask": api::ask_dto(chat, ask) }));
+        let dto = {
+            let svc = self.lock();
+            let me = svc.author().id.clone();
+            match svc.load_resolving(chat).ok().flatten().filter(|c| c.workspace_id == self.ws) {
+                Some(c) => match c.flow.asks.get(&ask.ask_id) {
+                    Some(st) => api::ask_card_dto(&svc, &c, st, &me),
+                    None => api::ask_dto(chat, ask),
+                },
+                None => api::ask_dto(chat, ask),
+            }
+        };
+        self.hub.emit("ask.pending", json!({ "ask": dto }));
     }
     /// The chat's bound checkout → its `origin` on one of this box's code
     /// hosts (and `upstream` for a fork), read-only.

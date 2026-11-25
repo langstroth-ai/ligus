@@ -170,6 +170,9 @@ impl ChatService {
             return Err(ChatError::Unauthorized(why.into()));
         }
         let actor = self.phone_person(workspace_id, phone)?;
+        // A grant whose effect needs the person's passkey (agent
+        // questions 6.2), whatever the rules say.
+        let mut needs_presence = false;
         let chat = self
             .load_in(workspace_id, action.chat_id())?
             .filter(|c| c.workspace_id == workspace_id)
@@ -195,9 +198,31 @@ impl ChatService {
                     },
                 }
             }
-            PhoneAction::Answer { ask_id, answer, option_index, .. } => {
-                if !chat.flow.asks.get(ask_id).is_some_and(|a| a.is_open()) {
-                    return Err(ChatError::Unauthorized("that question is already answered or closed".into()));
+            PhoneAction::Answer { ask_id, answer, option_index, ask_digest, text, decline, .. } => {
+                let st = chat.flow.asks.get(ask_id).filter(|a| a.is_open()).ok_or_else(|| ChatError::Unauthorized("that question is already answered or closed".into()))?;
+                if st.is_v2() {
+                    // A v2 card (agent questions 6.3): the phone drew it from
+                    // the signed ask and names its digest; the box drafts
+                    // nothing for a card the phone didn't see.
+                    let choice = super::asks::AskChoice { option: *option_index, text: text.clone(), decline: *decline };
+                    let ligus_core::flow::FlowRecord::HumanAnswered(mut a) = super::asks::answer_record(self, &chat, st, &choice)? else {
+                        return Err(ChatError::Unauthorized("not an answer".into()));
+                    };
+                    if a.ask_digest != *ask_digest {
+                        return Err(ChatError::Unauthorized("the question isn't the one the phone showed: refresh and answer again".into()));
+                    }
+                    if a.answer != *answer || a.text != *text {
+                        return Err(ChatError::Unauthorized("the answer doesn't match the card's option".into()));
+                    }
+                    a.by = actor.display_name.clone();
+                    needs_presence = st.grant_needs_presence();
+                    SessionEvent::FlowRecorded { record: ligus_core::flow::FlowRecord::HumanAnswered(a) }
+                } else {
+                if *decline || !text.is_empty() {
+                    return Err(ChatError::Unauthorized("an older question takes neither Not now nor a separate reply".into()));
+                }
+                if !ask_digest.is_empty() && self.ask_digest_here(workspace_id, chat.id, *ask_id)?.as_deref() != Some(ask_digest.as_str()) {
+                    return Err(ChatError::Unauthorized("the question isn't the one the phone showed: refresh and answer again".into()));
                 }
                 SessionEvent::FlowRecorded {
                     record: ligus_core::flow::FlowRecord::HumanAnswered(ligus_core::flow::HumanAnswered {
@@ -206,8 +231,10 @@ impl ChatService {
                         option_index: *option_index,
                         by: actor.display_name.clone(),
                         at_ms: ligus_core::flow::now_ms(),
+                        ask_digest: ask_digest.clone(),
                         ..Default::default()
                     }),
+                }
                 }
             }
             PhoneAction::ClearLockdown { chat_id, raises } => {
@@ -266,7 +293,7 @@ impl ChatService {
         probe.signer_device_id = Some(phone);
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let presence = match self.authorize_as_fold(&probe, config.as_ref(), &timeline) {
-            Ok(()) => false,
+            Ok(()) => needs_presence,
             Err(ChatError::Unauthorized(why)) if why == ligus_core::authz::PRESENCE_REQUIRED => true,
             Err(e) => return Err(e),
         };

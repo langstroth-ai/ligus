@@ -166,28 +166,120 @@ pub fn for_proposal(s: &ChatSession, p: &ActionProposal) -> Option<(Notice, Push
     Some((notice, push))
 }
 
-/// An agent's question waiting for a person (`ask.pending`).
-/// An ask someone other than the agent or its host posted is sent as
-/// theirs.
-pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState) -> Option<(Notice, PushContent)> {
+/// Whether the user is someone `st` asks (agent questions 6.5): a person
+/// it names, a role at or above its room's floor, or (an older ask, which
+/// asks anyone at Contributor or above) any member who can answer.
+pub fn in_audience(st: &ligus_core::flow::AskState, me: &Me) -> bool {
+    let answers = me.roles.iter().any(|r| r.rank() >= WorkspaceRole::Contributor.rank());
+    match st.ask.audience.as_ref() {
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_PEOPLE => a.member_ids.iter().any(|id| me.is(id)),
+        Some(a) if a.kind == ligus_core::flow::AUDIENCE_ROOM => a.floor().is_some_and(|f| me.roles.iter().any(|r| r.rank() >= f.rank())),
+        Some(_) => false,
+        None => answers,
+    }
+}
+
+/// The longest push title for a question (its text is never in it).
+pub const ASK_PUSH_CHARS: usize = 80;
+
+/// An agent's question waiting for the user (`ask.pending`): "Builder asks
+/// you · Fixtures" (or "asks Admins", "asks the room"), cut to
+/// [`ASK_PUSH_CHARS`], with the question as the preview (the previews
+/// setting applies) and no options or actions: nothing is decided from the
+/// lock screen. Only when the user is in its audience. An ask someone other
+/// than the agent or its host posted is sent as theirs.
+pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Option<(Notice, PushContent)> {
     let a = &st.ask;
-    if a.closed {
+    if !st.is_open() || !in_audience(st, me) {
         return None;
     }
-    let agent_name = ligus_core::flow::agent_from_key(&a.agent_key)
-        .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
-        .map(|x| format!("@{}", shown(&x.name)));
-    let poster = st.poster_name(&s.members).map(|n| shown(&n));
+    let outside = a.origin.as_ref().is_some_and(|o| o.via == ligus_core::flow::ORIGIN_OUTSIDE);
+    let agent_name = if outside {
+        Some("Claude Code".to_string())
+    } else {
+        ligus_core::flow::agent_from_key(&a.agent_key)
+            .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
+            .map(|x| format!("@{}", shown(&x.name)))
+    };
+    let poster = if outside { None } else { st.poster_name(&s.members).map(|n| shown(&n)) };
     let agent = poster.clone().unwrap_or_else(|| agent_name.clone().unwrap_or_else(|| "An agent".into()));
-    let mut notice = ntfy::ask_notice(&agent, &shown(&s.title), s.id);
+    let whom = match a.audience.as_ref() {
+        Some(au) if au.kind == ligus_core::flow::AUDIENCE_PEOPLE => "asks you",
+        Some(au) if au.floor() == Some(WorkspaceRole::Owner) => "asks Owners",
+        Some(au) if au.floor() == Some(WorkspaceRole::Admin) => "asks Admins",
+        _ => "asks the room",
+    };
+    let chat = shown(&s.title);
+    let chat = if chat.trim().is_empty() { "Untitled".to_string() } else { chat };
+    let mut notice = ntfy::ask_notice(&agent, &chat, s.id);
+    let mut title = format!("{agent} {whom} · {chat}");
     if poster.is_some() {
         // Posted under an agent's name by someone else: say so.
-        notice.title = format!("{} (not from {})", notice.title, agent_name.as_deref().unwrap_or("the agent"));
+        let not_from = format!(" (not from {})", agent_name.as_deref().unwrap_or("the agent"));
+        title = format!("{agent}{not_from} {whom} · {chat}");
     }
-    let mut push = base("ask.pending", s, notice.title.clone());
+    let title = ligus_proto::ask_text::cut(&title, ASK_PUSH_CHARS);
+    notice.title = title.clone();
+    let mut push = base("ask.pending", s, title);
     push.sender = Some(agent);
-    push.preview = Some(a.question.clone());
+    push.preview = Some(ligus_proto::ask_text::cut(&ligus_proto::ask_text::clean_option(&a.question), ASK_PUSH_CHARS));
     Some((notice, push))
+}
+
+/// What to do with one more question push.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskPush {
+    Send,
+    /// The cap was just reached: one "Several agents are asking" notice.
+    Summary,
+    /// Capped until the user opens their questions.
+    Hold,
+}
+
+/// Question pushes per hour before they are held (6.5).
+pub const ASK_PUSHES_PER_HOUR: usize = 10;
+
+/// The device-local push cap for agents' questions: at most
+/// [`ASK_PUSHES_PER_HOUR`] an hour across chats, then one summary and no
+/// more until the user opens the questions (`GET /v1/chats/{id}/asks`).
+#[derive(Debug, Default)]
+pub struct AskPushCap {
+    sent: std::collections::VecDeque<std::time::Instant>,
+    held: bool,
+}
+
+impl AskPushCap {
+    pub fn admit(&mut self, now: std::time::Instant) -> AskPush {
+        if self.held {
+            return AskPush::Hold;
+        }
+        let hour = std::time::Duration::from_secs(3600);
+        while self.sent.front().is_some_and(|t| now.duration_since(*t) >= hour) {
+            self.sent.pop_front();
+        }
+        if self.sent.len() >= ASK_PUSHES_PER_HOUR {
+            self.held = true;
+            return AskPush::Summary;
+        }
+        self.sent.push_back(now);
+        AskPush::Send
+    }
+
+    /// The user opened their questions: pushes may resume.
+    pub fn opened(&mut self) {
+        self.held = false;
+    }
+}
+
+/// The one notice sent when the question push cap is reached.
+pub fn several_asking(s: &ChatSession) -> (Notice, PushContent) {
+    let mut notice = ntfy::ask_notice("Several agents", "", s.id);
+    notice.title = "Several agents are asking".into();
+    notice.body = "Open Ligus to answer.".into();
+    let mut push = base("ask.pending", s, notice.title.clone());
+    push.chat_id = None;
+    push.fixed_body = notice.body.clone();
+    (notice, push)
 }
 
 /// A workflow run's gate `node` waiting for approval.
@@ -654,12 +746,58 @@ mod tests {
             posted_by: Some(ligus_core::flow::AskPoster { id: "bo-1".into(), name: "@coder".into() }),
             ..Default::default()
         };
-        let (notice, push) = for_ask(&s, &st).unwrap();
-        assert!(notice.title.starts_with("Bo has a question"), "{}", notice.title);
-        assert!(notice.title.contains("not from @coder"), "{}", notice.title);
+        let me = Me::in_chat(&bo, &s, &DeviceLinks::default());
+        let (notice, push) = for_ask(&s, &st, &me).unwrap();
+        assert!(notice.title.starts_with("Bo (not from @coder) asks the room"), "{}", notice.title);
         assert_eq!(push.sender.as_deref(), Some("Bo"));
         let own = ligus_core::flow::AskState { ask: ligus_core::flow::HumanAsk { agent_key: key, question: "Which db?".into(), ..Default::default() }, ..Default::default() };
-        let (notice, _) = for_ask(&s, &own).unwrap();
-        assert_eq!(notice.title, "@coder has a question");
+        let (notice, _) = for_ask(&s, &own, &me).unwrap();
+        assert_eq!(notice.title, "@coder asks the room · Fixes");
+    }
+
+    /// A question is pushed only to the people it asks, in Ligus's words, cut
+    /// to 80 characters, with no options in it.
+    #[test]
+    fn a_question_is_pushed_only_to_its_audience() {
+        use ligus_core::flow::{AskAudience, AskState, HumanAsk, ASK_V2};
+        let mut s = ChatSession::new("Fixtures for the long-running integration suite of the shop", Uuid::new_v4(), "rt");
+        let ana = actor("ana-1", "Ana");
+        let bo = actor("bo-1", "Bo");
+        s.members.push(member(&ana, WorkspaceRole::Owner, 1));
+        s.members.push(member(&bo, WorkspaceRole::Contributor, 2));
+        let agent = WorkspaceAgent::new("Builder", "rt");
+        let key = agent.id.to_string();
+        s.workspace_agents.push(agent);
+        let ask = |audience| AskState {
+            ask: HumanAsk { agent_key: key.clone(), question: "Use Postgres or SQLite?".into(), options: vec!["Postgres".into(), "SQLite".into()], v: ASK_V2, audience: Some(audience), ..Default::default() },
+            ..Default::default()
+        };
+        let ana_me = Me::in_chat(&ana, &s, &DeviceLinks::default());
+        let bo_me = Me::in_chat(&bo, &s, &DeviceLinks::default());
+        let to_bo = ask(AskAudience::people(vec!["bo-1".into()]));
+        assert!(for_ask(&s, &to_bo, &ana_me).is_none(), "not asked: no push");
+        let (n, p) = for_ask(&s, &to_bo, &bo_me).unwrap();
+        assert!(n.title.starts_with("@Builder asks you · Fixtures"), "{}", n.title);
+        assert!(n.title.chars().count() <= ASK_PUSH_CHARS);
+        assert!(!n.title.contains("Postgres") && !p.title.contains("SQLite"), "no options in a push");
+        let admins = ask(AskAudience::room(WorkspaceRole::Admin));
+        assert!(for_ask(&s, &admins, &bo_me).is_none());
+        assert!(for_ask(&s, &admins, &ana_me).unwrap().0.title.contains("asks Admins"));
+        let mut done = to_bo.clone();
+        done.ask.closed = true;
+        assert!(for_ask(&s, &done, &bo_me).is_none());
+    }
+
+    #[test]
+    fn question_pushes_are_capped_at_ten_an_hour_until_opened() {
+        let mut cap = AskPushCap::default();
+        let t0 = std::time::Instant::now();
+        for _ in 0..ASK_PUSHES_PER_HOUR {
+            assert_eq!(cap.admit(t0), AskPush::Send);
+        }
+        assert_eq!(cap.admit(t0), AskPush::Summary, "one summary");
+        assert_eq!(cap.admit(t0 + std::time::Duration::from_secs(7200)), AskPush::Hold, "held until opened, even an hour later");
+        cap.opened();
+        assert_eq!(cap.admit(t0 + std::time::Duration::from_secs(7200)), AskPush::Send);
     }
 }

@@ -3514,6 +3514,9 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         ask_id: Uuid::parse_str(&ask_id).unwrap(),
         answer: "postgres".into(),
         option_index: Some(1),
+        ask_digest: String::new(),
+        text: String::new(),
+        decline: false,
     };
     wd.stage("the phone answers");
     let (code, v) = phone_act(&h, &phone, account, &answer).await;
@@ -4634,7 +4637,7 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
         ..Default::default()
     };
     h.handle.shared.lock().as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, ligus_core::flow::FlowRecord::HumanAsk(ask))).unwrap();
-    let answer = PhoneAction::Answer { chat_id, ask_id, answer: "yes".into(), option_index: Some(0) };
+    let answer = PhoneAction::Answer { chat_id, ask_id, answer: "yes".into(), option_index: Some(0), ask_digest: String::new(), text: String::new(), decline: false };
     let (code, done) = phone_act(&h, &phone, account, &answer).await;
     assert_eq!(code, 200, "{done}");
     let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
@@ -5225,3 +5228,76 @@ async fn internal_errors_answer_a_generic_message() {
 
 mod box_removal;
 mod devices_link;
+
+/// The payload field of a hive-envelope-v3 preimage (its fourth
+/// length-prefixed field): what a phone digests (agent questions 6.3).
+fn preimage_payload(pre: &[u8]) -> Vec<u8> {
+    let mut rest = &pre[b"hive-envelope-v3\0".len() + 16 + 16 + 8 + 8 + 16..];
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        let len = u32::from_le_bytes(rest[..4].try_into().unwrap()) as usize;
+        out = rest[4..4 + len].to_vec();
+        rest = &rest[4 + len..];
+    }
+    out
+}
+
+/// A v2 decision card reaches the phone with its raw signed ask; the phone
+/// digests the preimage's payload itself and answers over that digest. An
+/// answer naming another digest is refused before the phone signs, and the
+/// one that names it counts for the person (Q-T4, serve side).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_answers_a_decision_card_over_its_signed_ask() {
+    use ligus_core::flow::{AskAudience, FlowRecord, HumanAsk, ASK_V2};
+    use ligus_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Fixtures" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    bind_here(&h, &this_host(&h).await, &[h.agent_id]).await;
+    let ask = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        turn_id: Uuid::new_v4(),
+        agent_key: ligus_core::flow::agent_key(Some(h.agent_id)),
+        question: "Use Postgres or SQLite for the test fixtures?".into(),
+        options: vec!["Postgres".into(), "SQLite".into()],
+        at_ms: ligus_core::flow::now_ms(),
+        expires_at_ms: ligus_core::flow::now_ms() + 600_000,
+        v: ASK_V2,
+        audience: Some(AskAudience::people(vec![person.clone()])),
+        allow_text: true,
+        ..Default::default()
+    };
+    let ask_id = ask.ask_id;
+    h.handle.shared.lock().as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, FlowRecord::HumanAsk(ask))).unwrap();
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    let a = &listed["asks"][0];
+    assert_eq!(a["kind"], "question", "the older fields stay");
+    assert_eq!(a["card"]["v"], 2);
+    assert_eq!(a["card"]["audience"]["kind"], "people");
+    assert_eq!(a["card"]["options"], json!(["Postgres", "SQLite"]));
+    let pre = b64d(a["signed"]["preimage"].as_str().unwrap());
+    let digest = ligus_core::flow::asks::ask_digest(ask_id, &preimage_payload(&pre));
+    assert_eq!(a["signed"]["askDigest"], json!(digest), "the phone's own digest is the box's");
+    assert!(a["signed"]["signature"].is_string() && a["signed"]["signerDeviceId"].is_string());
+    let answer = |d: &str| PhoneAction::Answer {
+        chat_id,
+        ask_id,
+        answer: "SQLite".into(),
+        option_index: Some(1),
+        ask_digest: d.into(),
+        text: "keep the dev db".into(),
+        decline: false,
+    };
+    let (code, v) = phone_act(&h, &phone, account, &answer(&"0".repeat(64))).await;
+    assert_eq!(code, 403, "another card's digest: {v}");
+    let (code, v) = phone_act(&h, &phone, account, &answer(&digest)).await;
+    assert_eq!(code, 200, "{v}");
+    let s = h.handle.shared.lock().load_in(ws, chat_id).unwrap().unwrap();
+    let st = &s.flow.asks[&ask_id];
+    assert_eq!(st.answered_by.iter().map(|v| v.member_id.as_str()).collect::<Vec<_>>(), vec![person.as_str()], "{st:?}");
+    assert_eq!(st.answer.as_ref().map(|a| a.text.as_str()), Some("keep the dev db"));
+}

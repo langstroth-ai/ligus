@@ -269,7 +269,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 |---|---|---|---|---|
 | `post` | `chatId`, `text` (not blank, at most 16 000 characters) | `messageAppended`, a user message | the chat | never |
 | `vote` | `chatId`, `proposalId`, `diffDigest` (64 lowercase hex), `approved` | `proposalVoteCast`, bound to `diffDigest` | the chat | when the proposal is a workflow proposal or human-gated (a lockdown, dearth-mode brood paths) |
-| `answer` | `chatId`, `askId`, `answer` (not blank), `optionIndex?` | `flowRecorded` / `humanAnswered` | the chat | never |
+| `answer` | `chatId`, `askId`, `answer` (not blank, unless `text` or `decline`), `optionIndex?`, and for a 0.4 decision card `askDigest` (64 lowercase hex, computed by the phone from `signed`, below), `text?` (free text, at most 1000 characters, where the card allows it), `decline?` (Not now) | `flowRecorded` / `humanAnswered` | the chat | when the card is a grant whose effect needs the person's passkey (`card.effect.presenceRequired`) |
 | `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
@@ -315,8 +315,10 @@ word until the phone has read it; refuse to sign unless all of these hold:
       `message`, and every other field its default;
     - `vote`: `proposalId` as asked, `approval.actorId` the stamped person,
       `approved` as asked, `diffDigest` as asked;
-    - `answer`: `askId`, `answer` and `optionIndex` as asked, `by` the
-      stamped person's display name;
+    - `answer`: `askId`, `answer`, `optionIndex`, `askDigest`, `text` and
+      `decline` as asked, `by` the stamped person's display name. For a
+      0.4 card the box drafts nothing unless `askDigest` is the digest of
+      the signed ask it holds (403 otherwise: refresh and answer again);
     - `clearLockdown`: `chatId` as asked, and `raises` exactly the list
       the phone asked to clear (same ids, same order);
     - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
@@ -362,7 +364,7 @@ voter's account, so they never act as the person (see
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
-| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, postedBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant, posted by the host that runs the turn). `postedBy` names whoever posted an ask that isn't the agent's or its host's; such an ask is always a `question` |
+| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, postedBy?, expiresAtMs, card, signed}]}`. `kind` is `question` (an agent's question) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant, posted by the host that runs the turn). `postedBy` names whoever posted an ask that isn't the agent's or its host's; such an ask is always a `question`. 0.4 adds `card` (the [decision card](../../ligus/addons/ligus-mcp.md#asks) every surface draws: `v`, `kind`, the cleaned plain-text `question` and `options` (a grant's are Ligus's labels by index), `allowText`, `audience` `{kind: people\|room, memberIds?, names?, minRole?}`, `quorum`, `eligible` (whether the caller's person may answer), `effect?` `{kind, tool, title, detail, cwd, hostDeviceId, hostLabel, presenceRequired, standing, tooLarge}`, `origin?`, `tally`, `live`, `declined`, `answer?`, `answerText?`, `answeredBy` `[{memberId, name, deviceId, atMs}]`, `olderAnswerUncounted`) and `signed` `{preimage, signature, signerDeviceId, askDigest}`: the hive-envelope-v3 preimage (base64url) exactly as the asking envelope signs it. A phone draws the card from the preimage's payload (its fourth length-prefixed field), never from the other fields, and computes `askDigest = hex(SHA-256("ligus-ask-digest-v1\0" ‖ askId (16 bytes) ‖ payload))` itself (golden vectors: `crates/ligus-core/tests/golden/ask_digest_v1.json`). Opening this list also lifts the box's question push cap |
 | `POST /v1/asks/:id/answer` | | **410 Gone**: only a person answers an agent's question; the phone answers with the `answer` [phone action](#phone-actions), or answer from the desktop |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
@@ -456,8 +458,12 @@ replays the backlog after the `Last-Event-ID` header (a ring of 1024
 events), then streams live, with a keep-alive every 15 s. Event names:
 `message.created`, `message.delta`, `message.done`, `proposal.created`,
 `proposal.updated`, `chat.updated`, `turn.status`, `ask.pending` (an
-agent's question or permission request, with its `kind`, also pushed to
-phones), and `typing` (`{chatId, typing: [{actorId, name}]}`, the full
+agent's question or permission request, the same `Ask` as `GET
+/v1/chats/:id/asks` with `card.eligible` for the stream's person; pushed
+only to the people it asks, as "Builder asks you · ‹chat›", "asks Admins"
+or "asks the room", cut to 80 characters, never with its options or
+actions, one per ask, collapsed per chat, at most 10 an hour and then one
+"Several agents are asking" until the questions are opened), and `typing` (`{chatId, typing: [{actorId, name}]}`, the full
 list of other people typing in that chat, an empty list when they stop; you
 and the person the box writes as are never in it; names are cleaned of
 control and bidi characters). `typing` is live only: it isn't kept for

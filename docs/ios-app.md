@@ -84,7 +84,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | POST | `/v1/chats/{id}/messages` `{body}` | `{message}`. `@Name` mentions route to agents exactly as on the desktop/CLI |
 | GET | `/v1/chats/{id}/details` | The chat's details (the desktop's right-hand panel, read-only); see below |
 | GET | `/v1/agents` | `{agents: [{id, name, runtimeLabel, model?, hostId?, hostLabel?, hostKind, hostOnline?, role?, avatarUrl?, avatarColorHex?, ownerActorId?, available, unavailableReason?, access}]}`. `ownerActorId` (absent when the agent has no recorded owner) is the account that may grant the agent's permission requests besides the host's own person: show the Allow button on a `permission` ask only when it is yours. `available` is whether this box's person may use the agent; when false, grey it out (no @mention) and show `unavailableReason` ("Only its owner can use this agent", "Only workspace Admins can use this agent"). `access` is `owner` or `everyone` ([agent access](../docs-site/docs/ligus/features/agent-access.md)); budgets aren't checked here |
-| GET | `/v1/chats/{id}/asks` | `{asks: [Ask]}`, newest first. `Ask = {id, chatId, turnId, agentKey, agentName, kind, question, options, expiresAtMs, closed, open, answer?, answeredBy?, postedBy?}`; `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation the turn's host posted); decide on `kind`, never on the question's text. `postedBy` (0.3.1) names whoever posted an ask that isn't the agent's or its host's: show it as theirs; its `kind` is always `question`. `ask.pending` events carry the same `Ask` |
+| GET | `/v1/chats/{id}/asks` | `{asks: [Ask]}`, newest first. `Ask = {id, chatId, turnId, agentKey, agentName, kind, question, options, expiresAtMs, closed, open, answer?, answeredBy?, postedBy?, card?, signed?}`; `kind` is `question` (an agent's question) or `permission` (an ACP permission escalation the turn's host posted); decide on `kind`, never on the question's text. `postedBy` (0.3.1) names whoever posted an ask that isn't the agent's or its host's: show it as theirs; its `kind` is always `question`. `card` and `signed` (0.4): see [Decision cards](#decision-cards-04). `ask.pending` events carry the same `Ask` |
 | GET | `/v1/people` | `{people: [Person]}`, the workspace's human members |
 | GET | `/v1/channels` | `{channels: [{id, name, purpose?, position, archived, defaultChatId}]}`, in sidebar order |
 | GET | `/v1/hosts` | `{hosts: [{id, label, isThis: bool, online: bool}]}` |
@@ -813,7 +813,7 @@ sheet as a calm "Not recorded" with Try again, never an error toast. Details:
 |---|---|---|
 | `post` | `chatId`, `text` (1 to 16 000 characters, not blank) | no |
 | `vote` | `chatId`, `proposalId`, `diffDigest`, `approved` | workflow or human-gated proposals |
-| `answer` | `chatId`, `askId`, `answer`, `optionIndex?` (send the option's text as `answer` when one is picked) | no |
+| `answer` | `chatId`, `askId`, `answer`, `optionIndex?` (send the option's text as `answer` when one is picked); on a 0.4 card also `askDigest`, `text?`, `decline?` ([Decision cards](#decision-cards-04)) | when `presenceRequired` (a grant that needs the passkey) |
 | `clearLockdown` | `chatId`, `raises`: the `raiseEventId` of each signal the lockdown bar shows (from `GET /v1/guards`; 1 to 16, each once). A signal raised after the bar was drawn isn't named, so it stays in force | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?`, `repoId?` | human-gated proposals |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | no |
@@ -869,7 +869,8 @@ digest is what binds.
     - `vote` → `proposalVoteCast`: `proposalId`, `approval.actorId` =
       `actor.id`, `approval.approved`, `approval.diffDigest` as asked;
     - `answer` → `flowRecorded` with `humanAnswered`: `askId`, `answer`,
-      `optionIndex` as asked, `by` = `actor.displayName`;
+      `optionIndex`, `askDigest`, `text` and `decline` as asked, `by` =
+      `actor.displayName`;
     - `clearLockdown` → `chatLockdownCleared`: `chatId` as asked, and
       `raises` exactly the list you asked to clear (same ids, same order).
       Show those signals (match each id against the `GET /v1/guards`
@@ -920,6 +921,55 @@ answer as the box's claim until the event stream shows it.
   its text and its index.
 - Not on the phone: rebinding an agent to a host, inviting a person, DMs as
   the person.
+
+### Decision cards (0.4)
+
+An agent's question and a host's permission request are **decision cards**
+(`docs/design/agent-questions.md`). The phone draws each card from the
+**raw signed ask**, never from fields the box wrote, so a lying box can't
+pass a permission request off as a question or swap the options:
+
+1. `signed.preimage` (base64url) is the hive-envelope-v3 preimage of the
+   envelope that posted the ask: `"hive-envelope-v3\0"`, workspace id,
+   session id, sequence, lamport and event id, then four fields, each a
+   little-endian u32 length and its JSON (scope, timestamp, actor stamp,
+   payload). Parse it strictly. When the app knows the signer's Ed25519
+   key (`signed.signerDeviceId`), verify `signed.signature` over it.
+2. Decode the payload (`{"kind":"flowRecorded","record":{"type":"humanAsk",…}}`)
+   and draw from it: the question and options as **plain text** (no
+   Markdown, no links; strip bidi, zero-width and control characters;
+   options on one line), in the record's order, full width. `effect`
+   present: a **grant** card. Its buttons are Ligus's labels **by index**,
+   0 allows and 1 denies: `["Allow once", "Deny"]`, or `["Allow for the rest
+   of the session", "Deny"]` when `effect.standing`. Never use the record's
+   option text for them. `effect.tooLarge`: Deny only.
+3. Compute `askDigest = hex(SHA-256("ligus-ask-digest-v1\0" ‖ askId (16
+   raw bytes) ‖ payload bytes))` from those payload bytes (golden vectors:
+   `crates/ligus-core/tests/golden/ask_digest_v1.json`), and send it in the
+   `answer` action. Check the preimage the box drafts names that `askId`,
+   that digest and the `optionIndex` you tapped (`check_phone_action_preimage`
+   does). An answer over any other digest counts for nothing.
+4. **Face ID on every answer** in 0.4 (decision D1), as for every phone
+   action but a post. The reason names the effect for a grant: "Allow
+   Builder to run ‹detail cut to 60› on ‹host›". A grant with
+   `presenceRequired` runs the passkey first (`presenceRequired` in the
+   prepare answer). One tap without Face ID comes only once no host in
+   the workspace is older than 0.4.
+5. The effect line is Ligus's, always shown, outside the quoted question:
+   "Builder decides what to do next. Your answer grants no new permission."
+   for a question; "Allow once lets Builder run this once on ‹host›:" and
+   the detail in mono for a grant, with "Builder describes it as: ‹title›".
+6. `card.eligible` false: read-only, "Waiting on Ana" or "Waiting on Admins
+   · 1 of 2". Settled: one line, "Ana answered Postgres · 9:42". Expired
+   (`expiresAtMs` passed): "Builder stopped waiting." Not now: `decline:
+   true` (it closes a card put to you alone; in a room it is only your
+   abstention).
+7. Through a box older than 0.4 (no `signed`): treat every ask as a
+   possible grant and ask Face ID, as before.
+
+Pushes say "Builder asks you · ‹chat›" (or "asks Admins", "asks the room"),
+cut to 80 characters, with no options and no actions on the notification:
+nothing is decided from the lock screen.
 
 ### Events (`GET /v1/events`)
 

@@ -451,6 +451,46 @@ pub fn ask_state_dto(s: &ChatSession, st: &ligus_core::flow::AskState) -> Value 
     v
 }
 
+/// The raw signed ask (agent questions 6.3): the hive-envelope-v3 preimage
+/// exactly as the envelope that posted `ask_id` signs it, its signature and
+/// signer, so a phone draws the card from bytes the box can't rewrite
+/// unnoticed and digests the payload (the preimage's fourth length-prefixed
+/// field) itself. `None` when this box doesn't hold the envelope.
+pub fn signed_ask(svc: &ligus_runtime::ChatService, ws: Uuid, chat: Uuid, ask_id: Uuid) -> Option<Value> {
+    let env = svc.ask_envelope(ws, chat, ask_id).ok().flatten()?;
+    let preimage = ligus_core::crypto::envelope_preimage(&env);
+    Some(json!({
+        "preimage": ligus_core::presence::b64url(&preimage),
+        "signature": env.signature.as_deref().map(ligus_core::presence::b64url),
+        "signerDeviceId": env.signer_device_id,
+        "askDigest": ligus_core::flow::asks::envelope_ask_digest(&env),
+    }))
+}
+
+/// [`ask_state_dto`] with the 0.4 card for `viewer` (`card`: who may answer,
+/// what an answer does, the cleaned text, grant labels by index; see
+/// `ligus_runtime::ask_view`) and the raw signed ask (`signed`). The older
+/// fields stay for older phones.
+pub fn ask_card_dto(svc: &ligus_runtime::ChatService, s: &ChatSession, st: &ligus_core::flow::AskState, viewer: &str) -> Value {
+    let mut v = ask_state_dto(s, st);
+    let hosts = svc.list_hosts(s.workspace_id).unwrap_or_default();
+    let label = |d: Uuid| hosts.iter().find(|h| h.id == d.to_string()).map(|h| ligus_proto::names::clean_display_name(&h.label)).filter(|l| !l.is_empty());
+    let card = ligus_runtime::ask_view::view(s, st, viewer, ligus_core::flow::now_ms(), &label);
+    v["card"] = serde_json::to_value(card).unwrap_or(Value::Null);
+    v["signed"] = signed_ask(svc, s.workspace_id, s.id, st.ask.ask_id).unwrap_or(Value::Null);
+    v
+}
+
+/// The card's "you" field (`eligible`) for `viewer`, recomputed on an event
+/// the hub built for this box's own identity.
+fn ask_as_viewer(dto: &mut Value, s: &ChatSession, viewer: &str) {
+    let Some(id) = dto.get("id").and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok()) else { return };
+    let eligible = s.flow.asks.get(&id).is_some_and(|st| !viewer.is_empty() && ligus_runtime::ask_view::eligible(s, st, viewer));
+    if let Some(card) = dto.get_mut("card").filter(|c| c.is_object()) {
+        card["eligible"] = json!(eligible);
+    }
+}
+
 pub(super) fn role_name(r: WorkspaceRole) -> &'static str {
     match r {
         WorkspaceRole::Owner => "owner",
@@ -630,6 +670,14 @@ pub(super) fn tunnel_viewer(s: &Shared, pid: &str) -> String {
 /// A proposal event from the hub (built for this box's identity) as `viewer`
 /// sees it: its "you" fields recomputed from the chat it belongs to.
 fn as_viewer(s: &Shared, mut ev: super::hub::SseEvent, viewer: &str) -> super::hub::SseEvent {
+    if ev.name == "ask.pending" {
+        let chat_id = ev.data.get("ask").and_then(|a| a.get("chatId")).and_then(Value::as_str).and_then(|x| Uuid::parse_str(x).ok());
+        let chat = chat_id.and_then(|c| s.lock().load_resolving(c).ok().flatten()).filter(|c| c.workspace_id == s.ws);
+        if let (Some(c), Some(dto)) = (chat, ev.data.get_mut("ask")) {
+            ask_as_viewer(dto, &c, viewer);
+        }
+        return ev;
+    }
     if !matches!(ev.name, "proposal.created" | "proposal.updated") {
         return ev;
     }
@@ -1468,9 +1516,13 @@ async fn implement_plan(State(s): S, Path(id): Path<String>) -> ApiResult<Json<V
 
 async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
+    let me = viewer(&s);
     let mut asks: Vec<&ligus_core::flow::AskState> = chat.flow.asks.values().collect();
     asks.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
-    Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_state_dto(&chat, a)).collect::<Vec<_>>() })))
+    // Opening the cards lifts the push cap (agent questions 6.5).
+    s.ask_pushes.lock().unwrap_or_else(|e| e.into_inner()).opened();
+    let svc = s.lock();
+    Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_card_dto(&svc, &chat, a, &me)).collect::<Vec<_>>() })))
 }
 
 /// `POST v1/asks/{id}/answer`: gone (410). A person answers an agent's
