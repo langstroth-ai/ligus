@@ -1,6 +1,6 @@
 {
-  "tag": "v0.2.1",
-  "name": "Ligus 0.2.1",
+  "tag": "v0.3.0",
+  "name": "Ligus 0.3.0",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "Ligus (short for ligustica) 0.2.1 is a security release: a chat's history is now kept per workspace, so a member of another workspace you share can no longer hide, re-home or disturb your chats; upgrade every member of a workspace. See https://docs.langstroth.ai/ligus/reference/whats-new/."
+  "notes": "Ligus (short for ligustica) 0.3.0 brings a calmer desktop, guided setup for everything you connect, a way to add a second computer to your own devices, custom themes, and security fixes for agent tools. See https://docs.langstroth.ai/ligus/reference/whats-new/."
 }
