@@ -1883,6 +1883,7 @@ fn fold_pass(
     session.updated_at = ordered[base].timestamp;
     session.authz = Default::default();
     session.attachments.clear();
+    session.flow.reseat_snapshot_asks();
     // A chat founded by someone who wasn't a workspace member at its frontier
     // (a keyholder outside the roster) doesn't exist for a checked fold.
     if let WorkspaceAuthz::Timeline(t) = workspace {

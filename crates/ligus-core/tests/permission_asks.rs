@@ -211,3 +211,51 @@ fn only_the_asks_signer_or_its_host_closes_it() {
     );
     assert!(!r.w.state(r.chat).flow.asks[&q.ask_id].is_open());
 }
+
+/// A chat's seed snapshot is the founder's word: asks it carries are never
+/// permission prompts, and eviction reads only what older builds read from
+/// it (so both keep the same asks).
+#[test]
+fn a_seed_snapshot_carries_no_permission_prompt_and_no_eviction_hint() {
+    let mut w = SignedWorld::genesis(&["ana", "bo"], None);
+    w.admit("ana", "bo", WorkspaceRole::Contributor);
+    let mut s = ligus_core::ChatSession::new("Seeded", w.wid, "anthropic");
+    s.creator_actor_id = "bo".into();
+    s.members = vec![w.people["bo"].member(WorkspaceRole::Owner)];
+    let forged = ask(Uuid::new_v4(), true);
+    s.flow.asks.insert(
+        forged.ask_id,
+        ligus_core::flow::AskState {
+            ask: forged.clone(),
+            signer: Some(w.people["ana"].device_id),
+            host: Some(w.people["ana"].device_id),
+            legacy_settled: true,
+            ..Default::default()
+        },
+    );
+    let chat = s.id;
+    w.write("bo", Some(chat), SessionEvent::SessionSnapshot { session: Box::new(s) }, None, ligus_core::testkit::Proof::None);
+    let st = &w.state(chat).flow.asks[&forged.ask_id];
+    assert!(!st.ask.permission, "a seeded ask is never a permission prompt");
+    assert!(st.signer.is_none() && st.host.is_none());
+    assert!(!st.legacy_settled, "eviction reads the snapshot's answer and closed flags only");
+    assert!(st.is_open());
+}
+
+/// A grant counts only when the answer's signing device is certified for
+/// the person its stamp names.
+#[test]
+fn a_grant_signed_by_another_device_under_the_hosts_name_counts_for_nothing() {
+    let mut r = room();
+    let real = ask(r.turn, true);
+    record(&mut r, "ana", FlowRecord::HumanAsk(real.clone()));
+    let chat = r.chat;
+    let mut env = r.w.draft("bo", Some(chat), SessionEvent::FlowRecorded { record: answer(real.ask_id, "Ana") }, None);
+    if let Some(st) = env.actor_stamp.as_mut() {
+        st.actor = ligus_core::ActorIdentity::new("ana", "ana", ligus_core::ActorKind::Human);
+    }
+    r.w.finish(&mut env, "bo", None);
+    r.w.push_env(Some(chat), env);
+    let s = r.w.state(chat);
+    assert!(s.flow.asks[&real.ask_id].answer.is_none(), "Bo's device can't grant as Ana");
+}

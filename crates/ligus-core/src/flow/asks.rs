@@ -114,7 +114,7 @@ impl AskProvenance {
                     .flow
                     .asks
                     .get(&ans.ask_id)
-                    .is_none_or(|st| !st.ask.permission || may_grant(st, roster, &p.by.id));
+                    .is_none_or(|st| !st.ask.permission || may_grant(st, roster, &p.by.id, p.signer));
             }
             _ => {}
         }
@@ -162,11 +162,17 @@ fn turn_host_ok(
 
 /// Whether `author` may grant `st`'s permission: the asking agent's owner,
 /// or the person of the host that asked (an account that certified it).
-fn may_grant(st: &AskState, roster: &RosterState, author: &str) -> bool {
+/// The answer's signing device must be certified for the author's account,
+/// whatever its stamp names.
+fn may_grant(st: &AskState, roster: &RosterState, author: &str, signer: Option<Uuid>) -> bool {
     if author.is_empty() {
         return false;
     }
-    let account = roster.members.get(author).and_then(|m| m.account_id);
+    let Some(account) = roster.members.get(author).and_then(|m| m.account_id) else { return false };
+    if !signer.is_some_and(|d| roster.account_certified(account, d)) {
+        return false;
+    }
+    let account = Some(account);
     let owner = agent_from_key(&st.ask.agent_key)
         .and_then(|a| roster.agents.get(&a))
         .map(|a| a.owner.as_str());
@@ -181,6 +187,19 @@ fn may_grant(st: &AskState, roster: &RosterState, author: &str) -> bool {
 }
 
 impl FlowState {
+    /// Asks a base snapshot carries: what the snapshot claims about who
+    /// posted them isn't evidence, so none is a permission prompt or has a
+    /// known signer, and eviction reads exactly what older builds read from
+    /// the same snapshot (its answer and closed flags).
+    pub fn reseat_snapshot_asks(&mut self) {
+        for st in self.asks.values_mut() {
+            st.ask.permission = false;
+            st.signer = None;
+            st.host = None;
+            st.legacy_settled = !st.is_open();
+        }
+    }
+
     /// Fold an ask or an answer with its provenance (see the module docs).
     pub fn apply_ask(&mut self, record: &FlowRecord, p: &AskProvenance) {
         match record {
