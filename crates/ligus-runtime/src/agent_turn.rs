@@ -116,6 +116,9 @@ pub struct GrantRequest {
     /// The call reaches outside this turn's sandbox (a path outside the
     /// worktree, or open egress): the grant needs the person's passkey.
     pub outside_sandbox: bool,
+    /// The runtime reports the call comes from one of the turn's
+    /// sub-agents (ACP tool-call metadata).
+    pub subagent: bool,
     pub timeout: Duration,
 }
 

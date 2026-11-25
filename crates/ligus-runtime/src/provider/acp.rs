@@ -762,6 +762,7 @@ pub fn grant_request(agent_label: &str, tool: &Value, standing: bool, root: Opti
         cwd: root.map(|r| r.display().to_string()).unwrap_or_default(),
         standing,
         outside_sandbox: outside,
+        subagent: tool.pointer("/_meta/claudeCode/parentToolUseId").and_then(Value::as_str).is_some_and(|p| !p.is_empty()),
         timeout,
     }
 }
@@ -1057,6 +1058,28 @@ pub async fn stream_reply(
 
 #[cfg(test)]
 mod tests {
+    /// A grant card's detail is the call's own content, not its title; a
+    /// path outside the worktree or open egress needs a passkey; a call
+    /// too large to show offers no Allow; a sub-agent's call says so.
+    #[test]
+    fn grant_requests_carry_the_calls_own_content() {
+        let root = std::env::temp_dir().join(format!("grant-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::executor::canonical(&root);
+        let t = std::time::Duration::from_secs(5);
+        let call = json!({"kind": "execute", "title": "Run safe cleanup", "rawInput": {"command": "rm -rf build"}});
+        let r = grant_request("Builder", &call, false, Some(&root), false, t);
+        assert_eq!((r.detail.as_str(), r.title.as_str(), r.outside_sandbox, r.too_large, r.subagent), ("rm -rf build", "Run safe cleanup", false, false, false));
+        let edit = json!({"kind": "edit", "locations": [{"path": "/etc/hosts"}], "content": [{"type": "diff", "path": "/etc/hosts", "newText": "x"}], "_meta": {"claudeCode": {"parentToolUseId": "toolu_1"}}});
+        let r = grant_request("Builder", &edit, false, Some(&root), false, t);
+        assert!(r.outside_sandbox && r.detail.starts_with("/etc/hosts") && r.subagent);
+        let inside = json!({"kind": "edit", "locations": [{"path": "src/a.rs"}]});
+        assert!(!grant_request("Builder", &inside, false, Some(&root), false, t).outside_sandbox);
+        assert!(grant_request("Builder", &inside, false, Some(&root), true, t).outside_sandbox, "open egress");
+        let big = json!({"kind": "edit", "content": [{"type": "diff", "path": "a", "newText": "y".repeat(9000)}]});
+        let r = grant_request("Builder", &big, false, Some(&root), false, t);
+        assert!(r.too_large && r.detail.len() <= crate::agent_turn::MAX_GRANT_DETAIL_BYTES);
+    }
     use super::*;
 
     /// A Ligus tool call is pre-approved (Ligus authorizes it per call);
