@@ -73,22 +73,34 @@ export function sortProposals(proposals: readonly ProposalDto[]): ProposalDto[] 
 export interface InboxGroups {
   /// Open + approved-awaiting-implement, in inbox order.
   active: ProposalDto[];
-  /// Settled and still visible — collapsed behind a disclosure.
+  /// Settled and still in the inbox, collapsed behind a disclosure.
   settled: ProposalDto[];
-  /// Dismissed, shown only when the reader asks for them.
-  dismissed: ProposalDto[];
+  /// Archived (for everyone, or by the workspace's auto-archive days) or
+  /// hidden on this device: out of the pane, in the Archived proposals view.
+  archived: ProposalDto[];
 }
 
-/// Split the inbox into the three shelves the pane renders.
-///
-/// A dismissed proposal is hidden regardless of status: dismiss is the reader's
-/// explicit "I'm done looking at this", and honouring it only for settled items
-/// would silently ignore the action on anything else.
+/// Out of the inbox: archived for everyone, auto-archived, or hidden for me.
+/// The backend decides archived (`archived` is set only when it applies: an
+/// archive never takes out a proposal that still waits on someone).
+export function isArchived(p: ProposalDto): boolean {
+  return Boolean(p.archived) || Boolean(p.hidden);
+}
+
+/// Split the inbox into the shelves the pane renders.
 export function groupProposals(proposals: readonly ProposalDto[]): InboxGroups {
   const ordered = sortProposals(proposals);
   return {
-    active: ordered.filter((p) => !p.dismissed && !isSettled(p)),
-    settled: ordered.filter((p) => !p.dismissed && isSettled(p)),
-    dismissed: ordered.filter((p) => p.dismissed),
+    active: ordered.filter((p) => !isArchived(p) && !isSettled(p)),
+    settled: ordered.filter((p) => !isArchived(p) && isSettled(p)),
+    archived: ordered.filter((p) => isArchived(p)),
   };
+}
+
+/// The Archived view's search: title, chat and body, ignoring case.
+export function matchesArchived(item: { chatTitle: string; proposal: ProposalDto }, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const { proposal: p } = item;
+  return [p.title, item.chatTitle, p.body, p.authorName ?? "", ...(p.changedFiles ?? [])].some((s) => s.toLowerCase().includes(q));
 }

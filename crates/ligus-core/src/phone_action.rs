@@ -76,6 +76,10 @@ pub enum PhoneAction {
     },
     /// Withdraw an open apply request (`proposalApplyWithdrawn`).
     WithdrawApply { chat_id: Uuid, proposal_id: Uuid, request_id: Uuid },
+    /// Archive a settled proposal for everyone (`archived: true`), or
+    /// restore it to the inbox (`proposalDismissed`, the wire name kept
+    /// from Dismiss). Additive (0.4): an older box refuses the kind.
+    Archive { chat_id: Uuid, proposal_id: Uuid, archived: bool },
     /// Propose a workspace memory change as the person (`flowRecorded` /
     /// `memoryProposed`, on the workspace config log): a person decides it on
     /// a desktop. `chat_id` is the chat the phone was in (the source).
@@ -98,6 +102,7 @@ impl PhoneAction {
             PhoneAction::RequestApply { .. } => "requestApply",
             PhoneAction::WithdrawApply { .. } => "withdrawApply",
             PhoneAction::ProposeMemory { .. } => "proposeMemory",
+            PhoneAction::Archive { .. } => "archive",
         }
     }
 
@@ -110,7 +115,8 @@ impl PhoneAction {
             | PhoneAction::ClearLockdown { chat_id, .. }
             | PhoneAction::RequestApply { chat_id, .. }
             | PhoneAction::WithdrawApply { chat_id, .. }
-            | PhoneAction::ProposeMemory { chat_id, .. } => *chat_id,
+            | PhoneAction::ProposeMemory { chat_id, .. }
+            | PhoneAction::Archive { chat_id, .. } => *chat_id,
         }
     }
 
@@ -135,6 +141,7 @@ impl PhoneAction {
             PhoneAction::RequestApply { .. } => "proposalApplyRequested",
             PhoneAction::WithdrawApply { .. } => "proposalApplyWithdrawn",
             PhoneAction::ProposeMemory { .. } => "flowRecorded",
+            PhoneAction::Archive { .. } => "proposalDismissed",
         }
     }
 
@@ -348,6 +355,7 @@ pub struct CheckedPhoneAction {
 /// * `requestApply`: of `proposalId` on `hostDeviceId`, with that digest,
 ///   base and repo (the request id is the box's);
 /// * `withdrawApply`: of `requestId` for `proposalId`;
+/// * `archive`: of `proposalId`, archived or restored as asked;
 /// * `proposeMemory`: a memory proposal of exactly `op` and `rationale`, as
 ///   the person (no agent proposer), sourced from `chatId` (the proposal id
 ///   is the box's; a create's new entry is named by it, whatever entry id
@@ -433,6 +441,11 @@ pub fn check_phone_action_preimage(
                 return Err(mismatch);
             }
         }
+        (PhoneAction::Archive { proposal_id, archived, .. }, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed }) => {
+            if pid != proposal_id || dismissed != archived {
+                return Err(mismatch);
+            }
+        }
         (
             PhoneAction::ProposeMemory { chat_id, op, rationale },
             SessionEvent::FlowRecorded { record: crate::flow::FlowRecord::MemoryProposed(mp) },
@@ -478,4 +491,5 @@ pub const PHONE_ACTION_EVENT_KINDS: &[&str] = &[
     "chatLockdownCleared",
     "proposalApplyRequested",
     "proposalApplyWithdrawn",
+    "proposalDismissed",
 ];

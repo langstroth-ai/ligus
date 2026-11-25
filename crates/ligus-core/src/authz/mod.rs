@@ -286,6 +286,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny(why);
             }
         }
+        SessionEvent::ProposalArchivePolicySet { policy } => {
+            if policy.after_days > crate::proposal_archive::MAX_AFTER_DAYS {
+                return Decision::deny("auto-archive is at most a year");
+            }
+            if env.session_id != crate::channel::workspace_config_session_id(env.workspace_id) {
+                return Decision::deny("the auto-archive setting is kept on the workspace config log");
+            }
+        }
         SessionEvent::FlowRecorded { record } => {
             if !bounds::flow_within_bounds(fold, record) {
                 return Decision::deny("flow state bound reached");

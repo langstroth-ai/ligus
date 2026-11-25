@@ -96,6 +96,7 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
         PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
             SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
         }
+        PhoneAction::Archive { proposal_id, archived, .. } => SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived },
         PhoneAction::ProposeMemory { chat_id, op, rationale } => {
             // A new entry is named by its proposal (the box's id).
             let id = Uuid::new_v4();

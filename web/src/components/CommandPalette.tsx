@@ -59,6 +59,8 @@ export interface PaletteActions {
   showErrors?: () => void;
   /// Everything that needs you.
   openInbox?: () => void;
+  /// Archived and hidden-for-me proposals, across the workspace's chats.
+  archivedProposals?: () => void;
   /// Hide everything but the chat and the message box (and back).
   toggleFocusMode?: () => void;
 }
@@ -222,6 +224,15 @@ export function CommandPalette({
     }
     if (actions.openInbox) {
       items.push({ id: "inbox", label: "Open Inbox", hint: "Go", keywords: "needs you asks votes invites", run: run(actions.openInbox) });
+    }
+    if (actions.archivedProposals) {
+      items.push({
+        id: "archived-proposals",
+        label: "Archived proposals",
+        hint: "Review",
+        keywords: "archive dismissed hidden settled old restore",
+        run: run(actions.archivedProposals),
+      });
     }
     if (actions.showErrors) {
       items.push({

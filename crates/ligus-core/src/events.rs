@@ -156,6 +156,12 @@ pub enum SessionEvent {
     /// delete: the session is an event-sourced log, so a delete wouldn't survive
     /// a re-fold and wouldn't replicate.
     ProposalDismissed { proposal_id: Uuid, dismissed: bool },
+    /// Set how many days a settled proposal stays in the Review inbox before
+    /// it is auto-archived (config log; Admin; 0 = off). Auto-archive is a
+    /// view rule over the settled time every device folds alike
+    /// ([`crate::proposal_archive`]): no event is written when a proposal
+    /// ages out. Additive: an older build decodes it as `Unknown`.
+    ProposalArchivePolicySet { policy: crate::proposal_archive::ProposalArchivePolicy },
     /// Append a note to a proposal's refinement thread (a comment or change
     /// request) from a human member or role-qualified agent. A delta, like a vote
     /// — it merges into the proposal's `refinements` (idempotent by note id) so
@@ -600,6 +606,7 @@ impl SessionEvent {
             SessionEvent::ProposalUpserted { .. } => "proposalUpserted",
             SessionEvent::ProposalVoteCast { .. } => "proposalVoteCast",
             SessionEvent::ProposalDismissed { .. } => "proposalDismissed",
+            SessionEvent::ProposalArchivePolicySet { .. } => "proposalArchivePolicySet",
             SessionEvent::ProposalRefined { .. } => "proposalRefined",
             SessionEvent::ProposalSetOpened { .. } => "proposalSetOpened",
             SessionEvent::ProposalSetAlternativeAdded { .. } => "proposalSetAlternativeAdded",
@@ -695,6 +702,7 @@ impl SessionEvent {
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::AdmissionClosed { .. }
             | SessionEvent::WorkspaceSandboxSet { .. }
+            | SessionEvent::ProposalArchivePolicySet { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
@@ -934,6 +942,13 @@ impl ChatSession {
                     // to set `superseded_by`) or extra comments changes
                     // nothing here.
                     proposal.refinements = std::mem::take(&mut slot.refinements);
+                    // Settled and archived times are the fold's
+                    // (`crate::proposal_archive`), never the writer's.
+                    proposal.settled_at = slot.settled_at;
+                    proposal.archived_at = slot.archived_at;
+                    proposal.archived_by = slot.archived_by;
+                    proposal.archive_mark = slot.archive_mark;
+                    proposal.keep_unarchived = slot.keep_unarchived;
                     // A verified human approval is for the change that was
                     // reviewed: a re-upsert that changes what would be
                     // applied (patch, files, kind, workflow, command, base)
@@ -946,6 +961,12 @@ impl ChatSession {
                     proposal.repo_id = self.repo.as_ref().and_then(|r| r.repo_id);
                     // A new proposal starts with an empty thread.
                     proposal.refinements.clear();
+                    proposal.settled_at = None;
+                    proposal.archived_at = None;
+                    proposal.archived_by = None;
+                    // Filed in the inbox, whatever flag its writer set.
+                    proposal.archive_mark = Some(false);
+                    proposal.keep_unarchived = false;
                     self.proposals.push(proposal.clone());
                 }
                 crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
@@ -1227,6 +1248,9 @@ impl ChatSession {
             }
             SessionEvent::WorkspaceSandboxSet { grants } => {
                 self.guards.sandbox_grants = grants.clone();
+            }
+            SessionEvent::ProposalArchivePolicySet { policy } => {
+                self.guards.proposal_archive = Some(*policy);
             }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();
@@ -2290,6 +2314,10 @@ fn fold_pass(
                 }
                 _ => false,
             };
+            // Settled and archived times (`crate::proposal_archive`): the
+            // event's own recorded time, and who from its signed stamp.
+            let archive_before = crate::proposal_archive::touches_proposals(payload)
+                .then(|| crate::proposal_archive::settled_states(&session));
             if !superseded && !enveloped && !crate::guard::fold_authored(&mut session, payload, author) {
                 let ms = crate::admission::envelope_ms(env);
                 if let SessionEvent::TurnClaimed { trigger_id, device_id, epoch, supersedes, repo_id } = payload {
@@ -2322,6 +2350,20 @@ fn fold_pass(
                         crate::dispatch::note_answer_at(&mut session, message.id, o, Some(ms));
                     }
                 }
+            }
+            if let Some(before) = archive_before {
+                let account = env
+                    .actor_stamp
+                    .as_ref()
+                    .filter(|s| s.actor.kind != crate::identity::ActorKind::Agent)
+                    .and_then(|s| s.actor.account_id);
+                // Archiving is a Contributor's (the content floor): below
+                // that the event still folds as on every build, but the
+                // inbox ignores it (`ActionProposal::archive_mark`).
+                let may_archive = !checked
+                    || trusted
+                    || at.and_then(|r| r.role_of(author)).is_some_and(|r| r.rank() >= crate::identity::WorkspaceRole::Contributor.rank());
+                crate::proposal_archive::note_event(&mut session, &before, payload, env.timestamp, account, may_archive);
             }
             session.updated_at = env.timestamp;
         }

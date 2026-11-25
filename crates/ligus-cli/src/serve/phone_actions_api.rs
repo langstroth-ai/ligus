@@ -141,6 +141,11 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             v["hostLabel"] = json!(label.unwrap_or_else(|| host_device_id.to_string()));
         }
         PhoneAction::WithdrawApply { .. } => v["summary"] = json!("Withdraw an apply request"),
+        PhoneAction::Archive { proposal_id, archived, .. } => {
+            let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
+            v["summary"] = json!(if *archived { "Archive a proposal for everyone" } else { "Restore a proposal to the inbox" });
+            v["proposalTitle"] = json!(p.map(|p| shown(&p.title)).unwrap_or_default());
+        }
         PhoneAction::ProposeMemory { op, .. } => {
             use ligus_core::memory::MemoryOp;
             let m = s.lock().memory(s.ws).unwrap_or_default();

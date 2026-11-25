@@ -160,7 +160,7 @@ mod tests {
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
-    const GOLDEN: &str = "5edb7914ccd7eedfc7f7bd637b60de24b16b948710783205821c66e8a506d129";
+    const GOLDEN: &str = "ae67d97d34cdfd9a3071000c41da149ba369bbafdd2c484a91d895d172038322";
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {

@@ -17,6 +17,7 @@ import type { WorkspaceAgentDto } from "@/bindings/WorkspaceAgentDto";
 import type { SkillDto } from "@/bindings/SkillDto";
 import type { McpServerDto } from "@/bindings/McpServerDto";
 import type { ProposalDto } from "@/bindings/ProposalDto";
+import type { ArchivedProposalDto } from "@/bindings/ArchivedProposalDto";
 import type { ProposalSetDto } from "@/bindings/ProposalSetDto";
 import type { WorkspaceMemberDto } from "@/bindings/WorkspaceMemberDto";
 import type { VaultSourceDto } from "@/bindings/VaultSourceDto";
@@ -1278,13 +1279,30 @@ export const refineProposal = (
 export const requestProposalChanges = (sessionId: string, proposalId: string) =>
   invoke<void>("request_proposal_changes", { sessionId, proposalId });
 
-/// Hide (or restore) proposals in the Review inbox. Hides only — the proposals
-/// stay in the event log as a paper trail. Resolves to the number changed.
-export const dismissProposals = (
+/// Archive (or restore) proposals for everyone in the workspace. Archives
+/// only: the proposals stay in the event log as a paper trail. A proposal that
+/// still waits on someone is refused. Resolves to the number changed. (The
+/// command keeps its old name, from when this was Dismiss.)
+export const archiveProposals = (
   sessionId: string,
   proposalIds: string[],
-  dismissed: boolean,
-) => invoke<number>("dismiss_proposals", { sessionId, proposalIds, dismissed });
+  archived: boolean,
+) => invoke<number>("dismiss_proposals", { sessionId, proposalIds, dismissed: archived });
+
+/// Hide proposals for me on this device only, or show them again. Never synced.
+export const hideProposals = (proposalIds: string[], hidden: boolean) =>
+  invoke<void>("hide_proposals", { proposalIds, hidden });
+
+/// Every archived or hidden-for-me proposal in the workspace, newest first.
+export const listArchivedProposals = () => invoke<ArchivedProposalDto[]>("list_archived_proposals");
+
+/// The workspace's auto-archive days in force (`days: null`: off), and whether
+/// this person may change them (an Admin).
+export type ProposalArchiveSetting = { days: number | null; canEdit: boolean };
+export const proposalArchiveDays = () => invoke<ProposalArchiveSetting>("proposal_archive_days");
+
+/// Set the workspace's auto-archive days (0 = off). An Admin's.
+export const setProposalArchiveDays = (days: number) => invoke<void>("set_proposal_archive_days", { days });
 
 export const toggleReaction = (sessionId: string, messageId: string, emoji: string) =>
   invoke<void>("toggle_reaction", { sessionId, messageId, emoji });

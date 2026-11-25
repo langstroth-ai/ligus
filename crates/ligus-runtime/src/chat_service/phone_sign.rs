@@ -234,6 +234,17 @@ impl ChatService {
             PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
                 SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
             }
+            PhoneAction::Archive { proposal_id, archived, .. } => {
+                let Some(p) = chat.proposals.iter().find(|p| p.id == *proposal_id) else {
+                    return Err(ChatError::Unauthorized("no such proposal in this chat".into()));
+                };
+                // As on a desktop (`archive_proposals`): a proposal that
+                // still waits on someone isn't archived.
+                if *archived && ligus_core::proposal_archive::waits_on_someone(p, &chat) {
+                    return Err(ChatError::Unauthorized("it still waits on a decision, so it can't be archived".into()));
+                }
+                SessionEvent::ProposalDismissed { proposal_id: *proposal_id, dismissed: *archived }
+            }
             PhoneAction::ProposeMemory { chat_id, op, rationale } => {
                 // A new entry is named by its proposal; the source chat's
                 // egress is recorded (it can only narrow who reads the note).

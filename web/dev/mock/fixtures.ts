@@ -318,6 +318,45 @@ export const proposals = [
   { id: "pb", title: "Cron-style scheduler", body: "", authorActorId: "ag-builder", kind: "fileDiff", status: "open", requiredApprovals: 1, qualifyingApprovals: 0, quorumMet: false, approvals: [], changedFiles: ["src/scheduler.rs", "Cargo.toml"], createdAt: iso(29), dismissed: false, refinements: [], setId: "set-1" },
 ];
 
+// Settled proposals already out of the inbox (the Archived proposals view):
+// one archived by Maya, two aged out by the workspace's 7 days, one hidden
+// for you. `settledAt` is the settling event's own time.
+const settledDefaults = { body: "", authorActorId: "ag-builder", requiredApprovals: 1, qualifyingApprovals: 1, quorumMet: true, approvals: [], refinements: [], dismissed: false };
+export const archivedFixtures = [
+  { chatId: "chat-1", chatTitle: "Hive inspection scheduler", proposal: { ...settledDefaults, id: "pz1", title: "Pin the weather API client to v2", kind: "fileDiff", status: "applied", changedFiles: ["Cargo.toml"], createdAt: iso(60 * 24 * 12), settledAt: iso(60 * 24 * 11), archived: "auto" } },
+  { chatId: "chat-1", chatTitle: "Hive inspection scheduler", proposal: { ...settledDefaults, id: "pz2", title: "Log hive weight every hour", kind: "fileDiff", status: "rejected", changedFiles: ["src/scale.rs"], createdAt: iso(60 * 24 * 4), settledAt: iso(60 * 24 * 3), archived: "person", dismissed: true, archivedAt: iso(60 * 20), archivedBy: "Maya" } },
+  { chatId: "chat-3", chatTitle: "Varroa mite count import", proposal: { ...settledDefaults, id: "pz3", title: "Use the sugar-roll count as the default", kind: "decision", status: "applied", changedFiles: [], createdAt: iso(60 * 24 * 30), settledAt: iso(60 * 24 * 29), archived: "auto" } },
+  { chatId: "chat-2", chatTitle: "Relay reconnect backoff", proposal: { ...settledDefaults, id: "pz4", title: "Cap reconnect backoff at 30 s", kind: "decision", status: "open", quorumMet: false, qualifyingApprovals: 0, changedFiles: [], createdAt: iso(60 * 30), hidden: true } },
+];
+
+/// The open chat's proposals with this session's archive and hide changes.
+export function proposalsWithArchive(archive: Record<string, boolean>, hidden: Record<string, boolean>) {
+  return [...proposals, archivedFixtures[0].proposal, archivedFixtures[1].proposal].map((p) => {
+    const settled = p.status === "applied" || p.status === "rejected";
+    const a = archive[p.id];
+    const archived = a === undefined ? (p as { archived?: string }).archived : a && settled ? "person" : undefined;
+    return {
+      ...p,
+      archived,
+      dismissed: archived === "person",
+      archivedBy: archived === "person" ? ((p as { archivedBy?: string }).archivedBy ?? "You") : undefined,
+      hidden: hidden[p.id] ?? (p as { hidden?: boolean }).hidden ?? false,
+      canArchive: settled && !archived,
+    };
+  });
+}
+
+/// Every archived or hidden proposal, with this session's changes.
+export function archivedProposals(archive: Record<string, boolean>, hidden: Record<string, boolean>) {
+  const here = proposalsWithArchive(archive, hidden).filter((p) => p.archived || p.hidden);
+  const ids = new Set(here.map((p) => p.id));
+  const elsewhere = archivedFixtures
+    .filter((i) => i.chatId !== "chat-1" && !ids.has(i.proposal.id))
+    .map((i) => ({ ...i, proposal: { ...i.proposal, hidden: hidden[i.proposal.id] ?? i.proposal.hidden ?? false, archived: archive[i.proposal.id] === false ? undefined : i.proposal.archived } }))
+    .filter((i) => i.proposal.archived || i.proposal.hidden);
+  return [...here.map((p) => ({ chatId: "chat-1", chatTitle: "Hive inspection scheduler", proposal: p })), ...elsewhere];
+}
+
 const assess = (id: string, name: string, rt: string, score: number, rationale: string) => ({ id, scoutName: name, scoutRuntime: rt, score, currentSupport: score, rationale, round: 1, isSelf: false, createdAt: iso(20) });
 
 export const proposalSets = [

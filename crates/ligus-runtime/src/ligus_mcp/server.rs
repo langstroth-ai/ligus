@@ -774,9 +774,15 @@ impl LigusMcp {
                 }
                 let status = s("status");
                 let set = Uuid::parse_str(&s("setId")).ok();
+                // Archived and hidden-here proposals stay out of an agent's
+                // context unless it asks for them.
+                let with_archived = args.get("archived").and_then(Value::as_bool).unwrap_or(false);
+                let hidden = self.svc(|svc| svc.hidden_proposals(ws).ok()).unwrap_or_default();
+                let now = ligus_core::Timestamp::now();
                 let list: Vec<Value> = session
                     .proposals
                     .iter()
+                    .filter(|p| with_archived || crate::chat_service::in_inbox(p, &session, &hidden, now))
                     .filter(|p| status.is_empty() || status_str(p.status) == status)
                     .filter(|p| set.is_none_or(|x| p.set_id == Some(x)))
                     .rev()

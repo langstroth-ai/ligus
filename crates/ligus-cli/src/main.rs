@@ -813,6 +813,9 @@ fn cmd_proposals(cfg: &Config) -> Result<()> {
                 .collect();
             let status = format!("{:?}", p.status).to_lowercase();
             let mut line = format!("{}  {:<9} {}  [chat {}]", p.id, status, truncate(&p.title, 48), s.id);
+            if ligus_core::proposal_archive::archived(p, &s, ligus_core::Timestamp::now()).is_some() {
+                line.push_str("  (archived)");
+            }
             if !votes.is_empty() {
                 line.push_str(&format!("\n    votes: {}", votes.join(", ")));
             }
