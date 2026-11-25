@@ -322,7 +322,7 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
 }
 
 /// A presence provider from an Admin's recovery key (the headless path).
-struct RecoveryPresence(ligus_core::presence::RecoveryKey);
+pub(crate) struct RecoveryPresence(pub(crate) ligus_core::presence::RecoveryKey);
 
 impl ligus_runtime::chat_service::PresenceProvider for RecoveryPresence {
     fn assert(&self, req: &ligus_runtime::chat_service::PresenceRequest) -> std::result::Result<ligus_core::presence::PresenceAssertion, String> {
@@ -463,7 +463,7 @@ pub fn confirm_phone_fingerprint_on_tty(phone: &ligus_runtime::phone_enroll::Pho
 /// parent directory: that directory is the user's (a home dir, `/tmp`, a
 /// bind-mounted volume owned by someone else), so tightening it to 0700 is
 /// not ours to do and fails with EPERM when we don't own it.
-fn write_out(path: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_out(path: &str, bytes: &[u8]) -> Result<()> {
     let p = Path::new(path);
     let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {

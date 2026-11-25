@@ -25,6 +25,7 @@ pub mod box_admission;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;
+pub mod computer_link;
 pub mod connection_settings;
 pub mod context;
 pub mod device_enroll;
@@ -101,6 +102,8 @@ pub mod workspace_trust;
 // through the `test-relay` feature (a dev-dependency only).
 #[cfg(any(test, feature = "test-relay"))]
 pub mod test_relay;
+#[cfg(test)]
+mod computer_link_tests;
 #[cfg(test)]
 mod dearth_roster_tests;
 #[cfg(test)]

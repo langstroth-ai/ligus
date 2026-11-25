@@ -277,6 +277,49 @@ impl<V: KeyVault> IdentityStore<V> {
         Ok(stored)
     }
 
+    /// A new device key for this identity, kept in the vault next to the
+    /// current one but **not** switched to (a link request names it; the
+    /// install switches only when the request is answered, with
+    /// [`IdentityStore::adopt_device`]). Returns its id and keypair.
+    pub fn prepare_device(&self) -> Result<(Uuid, SigningKeypair), IdentityError> {
+        let device_kp = SigningKeypair::generate()?;
+        let device_id = device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes());
+        self.vault.store_seed(&device_key_id(device_id), &device_kp.seed_bytes())?;
+        Ok((device_id, device_kp))
+    }
+
+    /// Switch this identity to the device `device_id` a
+    /// [`IdentityStore::prepare_device`] made (its seed is in the vault),
+    /// certified under this identity's own account like any rotation. A
+    /// no-op when it is already the current device.
+    pub fn adopt_device(&self, device_id: Uuid) -> Result<StoredIdentity, IdentityError> {
+        let mut stored = self
+            .load()?
+            .ok_or_else(|| IdentityError::Vault("no identity to switch".into()))?;
+        if stored.device.id == device_id {
+            return Ok(stored);
+        }
+        let device_kp = self.device_keypair(device_id)?;
+        if device_id_for(SigAlg::Ed25519, &device_kp.public_key_bytes()) != device_id {
+            return Err(IdentityError::Vault("that device key doesn't derive its id".into()));
+        }
+        let account_kp = self.account_keypair(stored.account.id)?;
+        let now = Timestamp::now();
+        let certificate = DeviceCertificate::issue(&account_kp, stored.account.id, &device_kp.public_key_bytes(), now);
+        stored.device = DeviceIdentity {
+            id: device_id,
+            account_id: stored.account.id,
+            platform: stored.device.platform,
+            device_name: stored.device.device_name.clone(),
+            signing_public_key: device_kp.public_key_bytes().to_vec(),
+            certificate,
+            created_at: now,
+            revoked_at: None,
+        };
+        self.save(&stored)?;
+        Ok(stored)
+    }
+
     fn save(&self, stored: &StoredIdentity) -> Result<(), IdentityError> {
         if let Some(parent) = self.records_path.parent() {
             std::fs::create_dir_all(parent)?;

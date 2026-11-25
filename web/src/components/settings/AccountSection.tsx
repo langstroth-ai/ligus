@@ -7,8 +7,6 @@ import {
   setAvatar,
   setGitEmail,
   myProfile,
-  inspectDeviceCode,
-  approveDevice,
   listMyDevices,
   listDeviceRequests,
   revokeMyDevice,
@@ -19,7 +17,6 @@ import {
   setShareTyping,
   getPrimaryOpenToMembers,
   setPrimaryOpenToMembers,
-  type DeviceCodeDto,
   type DeviceRevocationDto,
   type MyDeviceDto,
   type RevocationStep,
@@ -33,6 +30,7 @@ import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { LinkedAccountsSection } from "@/components/settings/LinkedAccountsSection";
 import { AddPhonePanel } from "@/components/settings/AddPhonePanel";
+import { AddComputerPanel } from "@/components/settings/AddComputerPanel";
 import { Sheet } from "@/components/kit/Sheet";
 import { MoreMenu } from "@/components/MoreMenu";
 
@@ -258,10 +256,9 @@ function IdentitySection() {
   );
 }
 
-/// Your devices in the active workspace. A `ligus serve` box (the home host your
-/// phone talks through) becomes one of them when you approve its enrollment
-/// code here; from then on everything it does is authored as you. Revoking a
-/// device makes every member stop accepting its events.
+/// Your devices in the active workspace: add a phone, or another computer of
+/// yours (lt, the `ligus` CLI), so what it does is yours and not a separate
+/// member's. Revoking a device makes every member stop accepting its events.
 export function DevicesSection() {
   const qc = useQueryClient();
   const devices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, refetchInterval: 15_000 });
@@ -282,50 +279,12 @@ export function DevicesSection() {
     const t = window.setTimeout(() => phoneRef.current?.scrollIntoView?.({ block: "start" }), 200);
     return () => window.clearTimeout(t);
   }, []);
-  const [code, setCode] = useState("");
-  const [preview, setPreview] = useState<DeviceCodeDto | null>(null);
-  const [retire, setRetire] = useState(true);
-  const [busy, setBusy] = useState(false);
-
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["my-devices"] });
     qc.invalidateQueries({ queryKey: ["device-requests"] });
     qc.invalidateQueries({ queryKey: ["device-revocations"] });
     qc.invalidateQueries({ queryKey: ["device-pairings"] });
   };
-
-  async function check(next: string) {
-    setCode(next);
-    setPreview(null);
-    if (!next.trim()) return;
-    try {
-      setPreview(await inspectDeviceCode(next));
-    } catch (e) {
-      if (next.trim().startsWith("hivedev1:")) toast.error(errMsg(e));
-    }
-  }
-
-  async function approve() {
-    if (!preview) return;
-    setBusy(true);
-    try {
-      const r = await approveDevice(code, retire && Boolean(preview.replacesMember));
-      toast.success(
-        r.retired
-          ? `${preview.label} is now your device; its separate member "${r.retired}" was removed.`
-          : `${preview.label} is now your device.`,
-      );
-      if (r.retireError) toast.error(`Couldn't remove its separate member: ${r.retireError}`);
-      setAdding(false);
-      setCode("");
-      setPreview(null);
-      refresh();
-    } catch (e) {
-      toast.error(`Couldn't approve the device: ${errMsg(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function revoke(d: MyDeviceDto) {
     const label = deviceName(d, pairings.data ?? []);
@@ -346,11 +305,11 @@ export function DevicesSection() {
   return (
     <Section
       title="My devices"
-      info="Devices that act as you in this workspace. Add your phone's home host (ligus serve) here so what you do from your phone is yours, not a separate member's."
+      info="Devices that act as you in this workspace. Using Ligus on another computer? Add it here instead of inviting yourself, so it's you and not a second member."
       action={
         <div className="flex items-center gap-1.5">
           <Button size="sm" onClick={() => setAdding(true)}>
-            Add a device
+            Add a computer
           </Button>
           <MoreMenu label="More device actions" items={[{ label: "Add a phone…", onSelect: () => setAddingPhone(true) }]} />
         </div>
@@ -362,8 +321,8 @@ export function DevicesSection() {
           className="rounded-xl border px-3 py-2.5 text-xs"
           style={{ borderColor: "var(--ligus-accent-cool)" }}
         >
-          <strong>{r.label}</strong> says it's your device. On it, run <code>ligus serve enroll</code> (or look in
-          its log) and paste the code with <em>Add a device</em>.
+          <strong>{r.label}</strong> says it's your device, but boxes join as their own member now. On it, run{" "}
+          <code>ligus admit request</code>, then approve it under <em>workspace menu → Admit a box</em>.
         </div>
       ))}
       {addingPhone && (
@@ -380,75 +339,14 @@ export function DevicesSection() {
         </Sheet>
       )}
       {adding && (
-        <Sheet
-          title="Add a device"
-          side="center"
-          width={500}
-          onClose={() => {
-            setAdding(false);
-            setCode("");
-            setPreview(null);
-          }}
-        >
-        <div className="space-y-2">
-          <textarea
-            value={code}
-            onChange={(e) => void check(e.target.value)}
-            placeholder="Paste the code from the device: hivedev1:…"
-            rows={3}
-            className="w-full rounded-xl border px-3 py-2 font-mono text-xs"
-            style={fieldStyle}
-            aria-label="Device enrollment code"
+        <Sheet title="Add a computer" side="center" width={520} onClose={() => setAdding(false)}>
+          <AddComputerPanel
+            onDone={() => {
+              setAdding(false);
+              refresh();
+            }}
+            onCancel={() => setAdding(false)}
           />
-          {preview && (
-            <div className="space-y-1.5 text-xs">
-              <div>
-                <span className="text-ink-soft">Device</span> <strong>{preview.label || "unnamed"}</strong>
-              </div>
-              <div>
-                <span className="text-ink-soft">Fingerprint</span>{" "}
-                <code className="font-bold tracking-wider">{preview.fingerprint}</code>
-                <span className="text-ink-soft"> (must match the device's terminal)</span>
-              </div>
-              {!preview.knownWorkspace && (
-                <div style={{ color: "var(--ligus-danger-ink)" }}>This code is for a workspace this desktop doesn't have.</div>
-              )}
-              {preview.revoked && (
-                <div style={{ color: "var(--ligus-danger-ink)" }}>
-                  This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
-                </div>
-              )}
-              {preview.alreadyMine && <div className="text-ink-soft">Already your device.</div>}
-              {preview.replacesMember && (
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={retire} onChange={(e) => setRetire(e.target.checked)} />
-                  Remove its separate member "{preview.replacesMember.displayName}" (its past messages show as yours,
-                  via the device)
-                </label>
-              )}
-            </div>
-          )}
-          <div className="flex gap-2">
-            <Button
-              variant="primary"
-              size="md"
-              disabled={!preview || busy || preview.revoked || !preview.knownWorkspace || preview.alreadyMine}
-              onClick={() => void approve()}
-            >
-              Approve as my device
-            </Button>
-            <Button
-              size="md"
-              onClick={() => {
-                setAdding(false);
-                setCode("");
-                setPreview(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
         </Sheet>
       )}
       <RowList label="My devices">

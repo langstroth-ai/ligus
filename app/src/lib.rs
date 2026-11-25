@@ -5208,6 +5208,120 @@ pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_m
     Ok(out)
 }
 
+// ── My devices: Add a computer (`ligus_runtime::computer_link`) ──────────────
+// The computer prints a link request (`liguslink1:`); approving it here
+// publishes its certificate under your account key (one passkey ceremony) and
+// shows a grant sealed to that computer. The computer acts as you without your
+// account key. See docs/design/link-a-computer.md.
+
+/// A computer's link request, as the sheet shows it before approving.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerRequestDto {
+    device_id: String,
+    label: String,
+    /// Compare with the computer's screen.
+    fingerprint: String,
+    already_mine: bool,
+    revoked: bool,
+    /// Already in the workspace as someone else (their name).
+    someone_elses: Option<String>,
+    /// The separate member this computer proved it was here.
+    previous_member: Option<DeviceMemberDto>,
+    /// This desktop's fingerprint: the computer shows it when it redeems.
+    this_desktop: String,
+}
+
+/// What adding a computer produced.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerGrantDto {
+    /// `ligusgrant1:…`, sealed to the computer that asked.
+    grant: String,
+    expires_in_minutes: i64,
+    this_desktop: String,
+    previous_member: Option<DeviceMemberDto>,
+}
+
+#[tauri::command]
+async fn inspect_computer_request(ligus_app: tauri::AppHandle, request: String) -> Result<ComputerRequestDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| inspect_computer_request_sync(tauri::Manager::state::<AppState>(ligus_app), request)).await
+}
+
+pub(crate) fn inspect_computer_request_sync(state: State<AppState>, request: String) -> Result<ComputerRequestDto, String> {
+    let req = ligus_runtime::computer_link::LinkRequest::decode(&request).map_err(|e| e.to_string())?;
+    req.check_fresh(ligus_core::flow::now_ms()).map_err(|e| e.to_string())?;
+    let ws = state.active_workspace_id();
+    let svc = state.service.lock().unwrap();
+    let p = svc.preview_computer_link(ws, &req).map_err(map_err)?;
+    Ok(ComputerRequestDto {
+        device_id: p.device_id.to_string(),
+        label: p.label,
+        fingerprint: p.fingerprint,
+        already_mine: p.already_mine,
+        revoked: p.revoked,
+        someone_elses: p.someone_elses,
+        previous_member: p.previous_member.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
+        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
+    })
+}
+
+/// Add the computer whose request is given as one of your devices in the
+/// active workspace. `fingerprint` is the one the person compared; it must be
+/// the request's. Opens the passkey sheet.
+#[tauri::command]
+async fn add_computer(ligus_app: tauri::AppHandle, request: String, fingerprint: String) -> Result<ComputerGrantDto, String> {
+    crate::off_main(ligus_app, move |ligus_app| add_computer_sync(tauri::Manager::state::<AppState>(ligus_app), request, fingerprint)).await
+}
+
+pub(crate) fn add_computer_sync(state: State<AppState>, request: String, fingerprint: String) -> Result<ComputerGrantDto, String> {
+    let req = ligus_runtime::computer_link::LinkRequest::decode(&request).map_err(|e| e.to_string())?;
+    if !fingerprint.trim().eq_ignore_ascii_case(&req.fingerprint()) {
+        return Err("The fingerprint changed: paste the computer's request again and compare.".into());
+    }
+    let ws = state.active_workspace_id();
+    let mut conn = {
+        let s = state.settings.lock().unwrap();
+        s.workspaces.iter().find(|w| w.id() == ws).cloned().ok_or_else(|| "Add a computer to a team workspace (this one is on this device only).".to_string())?
+    };
+    if conn.dm_account.is_some() {
+        return Err("A computer is added to a team workspace, not a direct message.".into());
+    }
+    if let Some(problem) = invite_relay_problem(&conn.relay_url) {
+        return Err(problem);
+    }
+    conn.inv = None;
+    let conn = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn)));
+    let mut svc = state.service.lock().unwrap();
+    let previous = svc.preview_computer_link(ws, &req).ok().and_then(|p| p.previous_member);
+    let grant = svc.issue_computer_link(ws, &req, &conn, ligus_core::flow::now_ms()).map_err(map_err)?;
+    tracing::info!(target: "identity", device = %req.device_id, "added a computer as this account's device");
+    Ok(ComputerGrantDto {
+        grant,
+        expires_in_minutes: ligus_runtime::computer_link::GRANT_TTL_MS / 60_000,
+        this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
+        previous_member: previous.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
+    })
+}
+
+/// Remove the separate member a just-added computer proved it was (Add a
+/// computer's last step), from the active workspace. The ordinary member
+/// removal: its own passkey confirmation; their past messages keep their
+/// name.
+#[tauri::command]
+async fn remove_duplicate_member(ligus_app: tauri::AppHandle, member_id: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| remove_duplicate_member_sync(tauri::Manager::state::<AppState>(ligus_app), member_id)).await
+}
+
+pub(crate) fn remove_duplicate_member_sync(state: State<AppState>, member_id: String) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let mut svc = state.service.lock().unwrap();
+    if member_id == svc.author().id {
+        return Err("That is you.".into());
+    }
+    svc.remove_member(ligus_core::workspace_config_session_id(ws), ws, member_id).map_err(map_err)
+}
+
 #[tauri::command]
 async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>, String> {
     crate::off_main(ligus_app, move |ligus_app| list_my_devices_sync(tauri::Manager::state::<AppState>(ligus_app))).await
@@ -16390,6 +16504,9 @@ pub fn run() {
             remove_and_revoke,
             rotate_workspace_key,
             inspect_device_code,
+            inspect_computer_request,
+            add_computer,
+            remove_duplicate_member,
             approve_device,
             list_my_devices,
             list_device_pairings,

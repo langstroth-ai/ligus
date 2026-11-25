@@ -6,6 +6,11 @@ sync: the relay, the room, and the end-to-end-encryption key. No provider
 or directory is involved: you hand over a link, or invite someone you
 already share a workspace with.
 
+!!! tip "Your own second computer isn't a new person"
+    An invite always adds a **new member**. To use the workspace from another
+    computer of yours (`lt`, the `ligus` CLI), link it instead:
+    [Add a computer](linked-devices.md).
+
 <!-- Screenshot pending (Invite controls in the People pane): images/invite-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Create / join a team (the ＋ button)
 

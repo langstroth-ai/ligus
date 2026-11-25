@@ -1349,6 +1349,39 @@ export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
 
+/// Another computer's link request (`liguslink1:`), as Add a computer shows it.
+export interface ComputerRequestDto {
+  deviceId: string;
+  label: string;
+  /** Compare with the computer's screen. */
+  fingerprint: string;
+  alreadyMine: boolean;
+  revoked: boolean;
+  /** Already in the workspace as someone else (their name). */
+  someoneElses: string | null;
+  /** The separate member this computer proved it was here. */
+  previousMember: { memberId: string; displayName: string } | null;
+  /** This desktop's fingerprint: the computer shows it when it redeems. */
+  thisDesktop: string;
+}
+export interface ComputerGrantDto {
+  /** `ligusgrant1:…`, sealed to the computer that asked. */
+  grant: string;
+  expiresInMinutes: number;
+  thisDesktop: string;
+  previousMember: { memberId: string; displayName: string } | null;
+}
+/// Check a computer's link request (nothing written).
+export const inspectComputerRequest = (request: string) =>
+  invoke<ComputerRequestDto>("inspect_computer_request", { request });
+/// "Add a computer": certify it as one of your devices in the active
+/// workspace (opens the passkey sheet) and get the grant to paste on it.
+export const addComputer = (request: string, fingerprint: string) =>
+  invoke<ComputerGrantDto>("add_computer", { request, fingerprint });
+/// Remove the separate member a just-added computer was (its own passkey
+/// confirmation).
+export const removeDuplicateMember = (memberId: string) => invoke<void>("remove_duplicate_member", { memberId });
+
 /// A phone's `ligusphone1:` code, checked (nothing written).
 export interface PhoneCodeDto {
   /// The phone's workspace device id, as the phone presents it.
