@@ -959,6 +959,11 @@ notes still say to restart `ligus serve` after upgrading the CLI.
 | O11 | Inline model keys on the log | **Refuse new ones in 0.4, deny under rules 3, and prompt rotation** of keys already there |
 | O12 | A phone someone else also certified | **The phone's own signed enrollment statement names its person.** 0.4 warns and follows it; rules 3 counts only certificates with it, and the person may always revoke |
 
+### Decisions (owner, 2026-11-25)
+
+- O1 to O10 and O12: **accepted as recommended** above.
+- O11: **changed.** Keys are never stored in the workspace; the inline path is removed in 0.3.x.
+
 ## 16. Tests (executable, required before merge)
 
 | # | What | Where |
