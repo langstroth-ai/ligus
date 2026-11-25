@@ -222,6 +222,33 @@ impl ChatService {
         Ok(person)
     }
 
+    /// On a linked computer acting as its person, right after it accepted
+    /// its certificate: retire the separate member this install was here
+    /// before (identity model v2, 8.3; decision O5), signed by that
+    /// member's own account key (`old_account`). Rules 3 only. Returns
+    /// `None` when it retired it (or there was nothing to retire), else why
+    /// not, for the person to read ("needs an Admin to remove it").
+    pub fn retire_previous_member(&mut self, workspace_id: Uuid, old_account: &ligus_core::SigningKeypair, old_account_id: Uuid, old_member_id: &str) -> Result<Option<String>> {
+        let Some(account) = self.author.account_id else { return Ok(None) };
+        if account == old_account_id {
+            return Ok(None);
+        }
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(None) };
+        if !config.members.iter().any(|m| m.id == old_member_id) {
+            return Ok(None);
+        }
+        if timeline.current().rules < ligus_core::authz::RULES_V3 {
+            return Ok(Some("this workspace is on older rules: an Admin removes the earlier member".into()));
+        }
+        let retirement = ligus_core::retirement::MemberRetirement::sign(old_account, workspace_id, old_member_id, old_account_id, account, self.device_id);
+        match self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::MemberRetired { retirement }) {
+            Ok(_) => Ok(None),
+            Err(ChatError::Unauthorized(why)) => Ok(Some(why)),
+            Err(e) => Err(e),
+        }
+    }
+
     /// On a linked computer acting as its person (after
     /// [`Self::check_computer_link`] and `act_as_owner_device`): publish this
     /// device's own copy of the certificate the person's desktop published

@@ -133,6 +133,9 @@ pub struct DeviceLabel {
 pub struct Profile {
     pub display_name: Option<String>,
     pub avatar: Option<Avatar>,
+    /// The newest picture change removed the picture (render initials, not
+    /// an older copy).
+    pub avatar_cleared: bool,
     /// The `issuedAtMs` and event id of the newest change folded (the
     /// directory picks across workspaces by them).
     pub issued_at_ms: i64,
@@ -147,8 +150,10 @@ impl Profile {
         }
         if let Some(a) = &change.avatar {
             self.avatar = Some(a.clone());
+            self.avatar_cleared = false;
         } else if change.clear_avatar {
             self.avatar = None;
+            self.avatar_cleared = true;
         }
         self.issued_at_ms = change.issued_at_ms;
         self.event_id = Some(event_id);

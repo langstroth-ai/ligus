@@ -32,6 +32,7 @@ pub use computer_link::LinkPreview;
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
+mod identity;
 mod keys;
 mod links;
 mod memory;
@@ -46,7 +47,7 @@ pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJE
 mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
-pub use phone_sign::{PhoneDraft, STALE_DRAFT};
+pub use phone_sign::{PhoneDraft, BAD_CONSENT, STALE_DRAFT};
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
@@ -473,6 +474,15 @@ impl ChatService {
         let standing = crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
         let foreign = crate::device_enroll::foreign_certifiers(&trust, config.as_ref(), self.device_id, &own, &chosen);
         Ok((standing, foreign))
+    }
+
+    /// The author as it rides a stamp or a message: without the picture
+    /// (decision O2: pictures come from `ProfileUpdated`, never carried on
+    /// every event).
+    fn stamped_author(&self) -> ActorIdentity {
+        let mut a = self.author.clone();
+        a.avatar_url = None;
+        a
     }
 
     /// Tests only: found workspaces at rules `version` (fixtures written for
@@ -943,7 +953,7 @@ impl ChatService {
         // workspace roster are judged at it, on every device (Phase 0 A2).
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         env.actor_stamp = Some(ActorStamp {
-            actor: self.author.clone(),
+            actor: self.stamped_author(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(workspace_id, session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
@@ -1162,7 +1172,7 @@ impl ChatService {
         body: impl Into<String>,
     ) -> Result<ChatMessage> {
         let mut message = ChatMessage::new(MessageRole::User, &self.author.display_name, body);
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         let stored = message.clone();
         self.append_signed(
             session_id,
@@ -1183,7 +1193,7 @@ impl ChatService {
         run_id: Uuid,
     ) -> Result<ChatMessage> {
         let mut message = ChatMessage::new(MessageRole::User, &self.author.display_name, body);
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         message.workflow_run_id = Some(run_id);
         let stored = message.clone();
         self.append_signed(session_id, workspace_id, SessionEvent::MessageAppended { message })?;
@@ -1251,7 +1261,7 @@ impl ChatService {
         // answered (every user's default agent is named "ligus"). Rides synced like
         // a human's identity; message_dto surfaces it only for the primary agent
         // (named agents keep their roster avatar/name).
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         let id = message.id;
         // An agent with its own key on this host signs its own reply (A3).
         if let Some(agent) = responder_id {
@@ -1448,7 +1458,7 @@ impl ChatService {
         if self.store.rows_since_last_snapshot(workspace_id, session_id)? < Self::SNAPSHOT_EVERY {
             return Ok(());
         }
-        if let Some(session) = self.load_in(workspace_id, session_id)? {
+        if let Some(session) = self.load_in_unresolved(workspace_id, session_id)? {
             self.append_signed(
                 session_id,
                 workspace_id,
@@ -2027,8 +2037,22 @@ impl ChatService {
         self.device_id
     }
 
-    /// The workspace's registered hosts.
+    /// The workspace's registered hosts, without those of former members or
+    /// of revoked devices (identity model v2, 8.4; under rules 3 the fold
+    /// drops them too). [`Self::list_all_hosts`] keeps them, for Clean up.
     pub fn list_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
+        let Some(s) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else { return Ok(Vec::new()) };
+        let members: std::collections::HashSet<&str> = s.members.iter().map(|m| m.id.as_str()).collect();
+        Ok(s.workspace_hosts
+            .iter()
+            .filter(|h| h.owner_actor_id.is_empty() || members.contains(h.owner_actor_id.as_str()))
+            .filter(|h| Uuid::parse_str(&h.id).map_or(true, |d| !s.guards.revoked_devices.contains(&d)))
+            .cloned()
+            .collect())
+    }
+
+    /// Every registered host, former members' and revoked devices' included.
+    pub fn list_all_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
         Ok(self
             .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_hosts)
@@ -3602,6 +3626,25 @@ impl ChatService {
     /// the same id are another chat and never fold here, whatever their
     /// order or content.
     pub fn load_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
+        let Some(mut session) = self.load_in_unresolved(workspace_id, session_id)? else { return Ok(None) };
+        // Names and pictures are resolved at render time from the profiles
+        // on the config log (identity model v2, 4.3), never frozen copies.
+        let config_id = workspace_config_session_id(workspace_id);
+        if session_id == config_id {
+            let profiles = session.profiles.clone();
+            crate::profiles::resolve(&mut session, &profiles);
+        } else if let Ok((Some(cfg), _)) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id) {
+            crate::profiles::resolve(&mut session, &cfg.profiles);
+            session.device_labels = cfg.device_labels;
+            session.retired = cfg.retired;
+            session.profiles = cfg.profiles;
+        }
+        Ok(Some(session))
+    }
+
+    /// [`Self::load_in`] without the render-time names: what a snapshot is
+    /// written from, so no resolved name or picture is ever baked into the log.
+    fn load_in_unresolved(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
         // Pin the base seed to the out-of-band founder (B2 residual fix). This is
         // load-bearing for the workspace-config log — where the roster/ownership
         // lives — so a forged low-lamport config seed can't displace the founder's.

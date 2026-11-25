@@ -259,6 +259,11 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
     let logs = pinned_logs(store);
     let keys = account_keys(&logs);
     let mut by_account: BTreeMap<Uuid, CoMember> = BTreeMap::new();
+    // The newest profile per account across the workspaces (identity model
+    // v2, 5.4): (issuedAtMs clamped to now + 5 minutes, event id), never the
+    // first workspace iterated.
+    let ceiling = ligus_core::flow::now_ms().saturating_add(5 * 60 * 1000);
+    let mut newest: BTreeMap<Uuid, (i64, Uuid)> = BTreeMap::new();
     for log in &logs {
         let (ws, config, head) = (log.ws, &log.config, log.timeline.current());
         for m in head.members.values() {
@@ -296,6 +301,18 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
             }
             if !entry.workspaces.contains(&ws) {
                 entry.workspaces.push(ws);
+            }
+            if let Some(p) = config.profiles.get(&account) {
+                let key = (p.issued_at_ms.min(ceiling), p.event_id.unwrap_or_default());
+                if newest.get(&account).is_none_or(|k| key > *k) {
+                    newest.insert(account, key);
+                    if let Some(n) = &p.display_name {
+                        entry.display_name = ligus_proto::names::clean_display_name(n);
+                    }
+                    if let Some(a) = &p.avatar {
+                        entry.avatar_url = Some(a.data_url());
+                    }
+                }
             }
             if let Some(member) = config.members.iter().find(|x| x.actor.account_id == Some(account)) {
                 if entry.display_name.is_empty() {

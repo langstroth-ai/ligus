@@ -490,7 +490,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 }
             }
         }
-        if certificate.alg == crate::crypto::SigAlg::P256 && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
+        // A copy carrying the phone's own statement of a certificate already
+        // allowed here is the phone accepting it (rules 3): any member's
+        // device may relay it (its box).
+        let consent_copy = ctx.running.unaccepted.contains(&(certificate.device_id, certificate.account_id))
+            && certificate.phone_consent_ok(env.workspace_id);
+        if certificate.alg == crate::crypto::SigAlg::P256 && !consent_copy && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
             if !on_config {
                 return Decision::deny("a phone is enrolled on the workspace config log");
             }
