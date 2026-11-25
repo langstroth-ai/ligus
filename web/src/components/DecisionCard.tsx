@@ -167,12 +167,15 @@ export function DecisionCard({ sessionId, ask, origin }: { sessionId: string; as
     );
   }
 
+  // An ask someone else posted under the agent's name leads with them, and
+  // never carries the agent's origin tags (they would be that person's claim).
   const tags: string[] = [];
-  if (ask.origin?.via === "subagent") tags.push("via sub-agent");
-  if (ask.origin?.via === "outside") tags.push("outside Ligus");
-  if (origin) tags.push(`from ${origin}`);
-  if (ask.postedBy) tags.push(`posted by ${ask.postedBy}`);
-  const title = ask.origin?.via === "outside" ? `${ask.agentName} (outside Ligus)` : ask.agentName;
+  if (!ask.postedBy) {
+    if (ask.origin?.via === "subagent") tags.push("via sub-agent");
+    if (ask.origin?.via === "outside") tags.push("outside Ligus");
+    if (origin) tags.push(`from ${origin}`);
+  }
+  const title = ask.postedBy ? ask.postedBy : ask.origin?.via === "outside" ? `${ask.agentName} (outside Ligus)` : ask.agentName;
   const choose = (c: AskChoice) => {
     if (!send.isPending) send.mutate(c);
   };
@@ -210,6 +213,7 @@ export function DecisionCard({ sessionId, ask, origin }: { sessionId: string; as
         <Avatar name={ask.agentName} kind="agent" size={20} />
         <span className="text-sm">
           <span className="font-semibold">{title}</span> {asksWhom(ask)}
+          {ask.postedBy && <span className="text-ink-soft">, as {ask.agentName}</span>}
           {ask.quorum > 1 && (
             <span className="text-ink-soft">
               {" "}

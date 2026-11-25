@@ -188,4 +188,18 @@ describe("DecisionCard", () => {
     expect(screen.getByText("outside Ligus")).toBeInTheDocument();
     expect(screen.getByText("Claude Code (outside Ligus)")).toBeInTheDocument();
   });
+
+  it("leads with the poster of an ask someone else posted, without origin tags", () => {
+    mount(ask({ postedBy: "Bo", origin: { via: "outside", label: "shop", runtime: "claude-code" } }));
+    const header = screen.getByTestId("ask-card").querySelector('[data-part="header"]')!;
+    expect(header.textContent).toMatch(/^.*Bo asks you, as Builder/);
+    expect(screen.queryByText("outside Ligus")).toBeNull();
+    expect(screen.queryByText("via sub-agent")).toBeNull();
+  });
+
+  it("never removes characters from a grant's detail", () => {
+    const detail = "rm -rf build\u200B\u202E⟨U+200B⟩\t\n  x";
+    mount(ask(grant({ detail })));
+    expect(screen.getByTestId("ask-detail").textContent).toBe(detail);
+  });
 });
