@@ -106,8 +106,25 @@ pub fn parse_address(text: &str, insecure: bool) -> Result<ApprovalAddress> {
     Ok(a)
 }
 
-fn client_for(relay: &str, token: Option<String>) -> MailboxClient {
-    MailboxClient::new(relay).with_auth(token)
+fn client_for(cfg: &Config, relay: &str) -> MailboxClient {
+    let c = MailboxClient::new(relay).with_auth(cfg.token.clone());
+    #[cfg(test)]
+    {
+        let dir = cfg.data_dir.clone();
+        c.with_clock(std::sync::Arc::new(move || ligus_core::flow::now_ms() + CLOCK_SKEW.lock().unwrap().get(&dir).copied().unwrap_or(0)))
+    }
+    #[cfg(not(test))]
+    c
+}
+
+/// Tests: a data dir's mailbox clock runs this many ms ahead.
+#[cfg(test)]
+pub(crate) static CLOCK_SKEW: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, i64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Whether this process runs with an operator's relay override.
+fn relay_override() -> bool {
+    crate::env_opt("LIGUS_RELAY_URL").is_some()
 }
 
 /// Everything these commands print, kept for the tests' secret scan.
@@ -167,7 +184,7 @@ fn member_context(cfg: &Config) -> Result<(ligus_runtime::ChatService, Uuid, Str
     if epochs.is_empty() {
         return Err(problem(EXIT_FIXABLE, "no_key", "this device holds no workspace key here", Some("sync first (ligus sync)")));
     }
-    Ok((svc, ws, pin, epochs, client_for(&relay, cfg.token.clone())))
+    Ok((svc, ws, pin, epochs, client_for(cfg, &relay)))
 }
 
 /// `ligus admit address [--reset] [--json]`.
@@ -238,8 +255,9 @@ pub async fn cmd_admit_request_to(cfg: &Config, o: ToOptions, mut ask: Option<As
     let device = ids.device_keypair(join.device_id)?;
     let ka = ids.key_agreement(join.device_id)?;
     let spec = RequestSpec { kind: MatchKind::Box, code: paste_text.clone(), signer: Signer::Ed25519(device), ka: Some(ids.key_agreement(join.device_id)?) };
-    let client = client_for(&address.relay, cfg.token.clone());
+    let client = client_for(cfg, &address.relay);
     let mut req = Requester::post(client, &address, spec, Some(&cfg.data_dir)).await.map_err(|e| requester_problem(e, paste))?;
+    req.allow_relay_override(relay_override());
     let mut r = Report::new("admit request");
     r.add(Check::ok("approval.posted", "posted", format!("request {} in the workspace's approval mailbox", req.rid_hex())));
     note("Waiting for an approver…");
@@ -357,8 +375,10 @@ async fn box_check5(
 ) -> Result<String> {
     let CheckedGrant::Box { conn, .. } = checked else { return Err(anyhow!("not a box admission")) };
     let mut probe = cfg.clone();
-    if crate::env_opt("LIGUS_RELAY_URL").is_none() {
-        probe.relay_url = Some(conn.relay_url.trim().to_string());
+    // Check 5 reads the log on the approval address's relay (check 3 made
+    // the grant name the same one), unless the operator overrides it.
+    if !relay_override() {
+        probe.relay_url = Some(req.address().relay.clone());
     }
     probe.room = conn.room.clone();
     if probe.key.is_none() {
@@ -460,8 +480,9 @@ pub async fn cmd_devices_request_to(cfg: &Config, o: ToOptions, new_device: bool
         signer: Signer::Ed25519(ids.device_keypair(device_id)?),
         ka: Some(ids.key_agreement(device_id)?),
     };
-    let client = client_for(&address.relay, cfg.token.clone());
+    let client = client_for(cfg, &address.relay);
     let mut req = Requester::post(client, &address, spec, Some(&cfg.data_dir)).await.map_err(|e| requester_problem(e, paste))?;
+    req.allow_relay_override(relay_override());
     let mut r = Report::new("devices request");
     r.add(Check::ok("approval.posted", "posted", format!("request {} in the workspace's approval mailbox", req.rid_hex())));
     note("Waiting for an approver…");
@@ -586,6 +607,15 @@ async fn link_after_check5(
 
 // ---- The headless approver ----
 
+/// A refusal of [`ApproverSession::ready_to_commit`]: nothing was written.
+fn commit_problem(e: ApproverError) -> anyhow::Error {
+    match e {
+        ApproverError::CodeExpired => problem(EXIT_ERROR, "expired", "the code expired (5 minutes after it appeared): nothing was written", Some("start again from the requesting device")),
+        ApproverError::Aborted(r) => problem(EXIT_ERROR, "ended", format!("the request was ended ({r:?}): nothing was written"), None),
+        other => approver_problem(other),
+    }
+}
+
 /// `ligus approvals list [--json]`.
 pub async fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
     let (svc, ws, _, epochs, client) = member_context(cfg)?;
@@ -630,7 +660,7 @@ pub async fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
     let mut r = Report::new("approvals list");
     r.add(Check::ok("approvals.listed", "listed", format!("{} live request(s)", rows.len())));
     if !rows.is_empty() {
-        r.next("ligus approvals approve <rid> --code XXXXXXXX --recovery-words-file PATH");
+        r.next("ligus approvals approve <rid> --recovery-words-file PATH  (at a terminal: type the code the requesting device shows)");
     }
     let mut text = String::new();
     for row in &rows {
@@ -656,6 +686,8 @@ pub struct ApproveOptions {
     pub code: Option<String>,
     pub words: Option<String>,
     pub json: bool,
+    /// End a contested request (`--end`) instead of approving it.
+    pub end: bool,
 }
 
 /// `ligus approvals approve <rid> [--code K7Q4M9X2] --recovery-words-file PATH`:
@@ -665,7 +697,7 @@ pub struct ApproveOptions {
 /// `--code -`. It must equal what this device computes; the CLI never
 /// offers it.
 pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<&mut dyn FnMut() -> Result<String>>) -> Result<()> {
-    if o.code.is_none() && type_code.is_none() {
+    if o.code.is_none() && type_code.is_none() && !o.end {
         return Err(problem(
             EXIT_HUMAN,
             "code_needed",
@@ -684,14 +716,15 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
             Some("run this at a terminal and type the code when asked, or pass --code - and write it to stdin once the requesting device shows it"),
         ));
     }
-    let Some(words) = o.words.clone() else {
+    let words = o.words.clone();
+    if words.is_none() && !o.end {
         return Err(problem(
             EXIT_HUMAN,
             "presence_needed",
             "approving needs your passkey or recovery key",
             Some("use the desktop, or pass --recovery-words-file in your own terminal"),
         ));
-    };
+    }
     if identity(cfg).load()?.is_some_and(|s| s.service) {
         return Err(problem(EXIT_REFUSED, "box", "this data dir is a box: an Admin approves from their own identity", None));
     }
@@ -704,6 +737,30 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
     }
     let epoch = epochs.iter().find(|e| e.epoch == live.epoch).cloned().ok_or_else(|| anyhow!("no key for epoch {}", live.epoch))?;
     let ids = identity(cfg);
+    // Who is checking it already (design 6.4): another approver's request is
+    // theirs; a contested one is ended, never approved.
+    match am::claim_view(&live, svc.device_id(), &svc.approval_classifier(ws)?) {
+        am::ClaimView::ClaimedBy { name, .. } => {
+            return Err(problem(EXIT_REFUSED, "claimed", format!("{} is checking this request", shown(&name)), Some("leave it to them, or ask them to end it")));
+        }
+        am::ClaimView::Contested { by } => {
+            let who = by.map(|(n, _)| format!(" (by {})", shown(&n))).unwrap_or_default();
+            note(&format!("Opened by a device that can't approve this{who}. It may be an attempt to intercept it."));
+            if o.end {
+                let signer = Signer::Ed25519(ids.device_keypair(svc.device_id())?);
+                am::end_request(&client, &epoch, &live.request, &signer, AbortReason::Contested).await.map_err(approver_problem)?;
+                let mut r = Report::new("approvals approve");
+                r.add(Check::ok("approval.ended", "ended", "the request was ended; nothing was granted"));
+                print_report(&r, o.json, serde_json::json!({ "rid": rid, "ended": true }), "Ended the request. Nothing was granted.\n");
+                return Ok(());
+            }
+            return Err(problem(EXIT_HUMAN, "contested", "this request is contested: it won't be approved", Some("end it with --end, and ask the requester to start again")));
+        }
+        _ if o.end => {
+            return Err(problem(EXIT_USAGE, "not_contested", "--end ends a contested request; this one isn't", None));
+        }
+        _ => {}
+    }
     let me = ApproverIdentity {
         signer: Signer::Ed25519(ids.device_keypair(svc.device_id())?),
         device_name: format!("{}'s CLI", svc.author().display_name),
@@ -754,11 +811,15 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
         return Err(problem(EXIT_ERROR, "mismatch", "that isn't the code this device computed: nothing was granted", Some(MISMATCH_FIX)));
     }
     r.add(Check::ok("match-code", "match code", code.shown.clone()));
-    let key = crate::secret_arg::recovery_key_from_file(Path::new(&words))?;
+    // The code may have expired while the person typed, or the request
+    // been ended: check before anything is signed.
+    session.ready_to_commit().await.map_err(commit_problem)?;
+    let key = crate::secret_arg::recovery_key_from_file(Path::new(&words.unwrap_or_default()))?;
     svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(key))));
     let ctx = ligus_runtime::chat_service::MatchContext { label: live.label(), code: code.shown.clone() };
     match &live.request.subject {
         RequestSubject::Box(join) => {
+            session.ready_to_commit().await.map_err(commit_problem)?;
             svc.set_match_context(Some(ctx));
             let (inv, mut seed) = svc.issue_box_admission(ws, ligus_runtime::box_admission::DEFAULT_TTL_MS, Some(join))?;
             let invite = crate::serve::admission_code(cfg, &svc, inv, &seed);
@@ -784,6 +845,12 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
                     Err(e) => return Err(approver_problem(e)),
                 }
             }
+            session.ready_to_commit().await.map_err(|e| {
+                if e == ApproverError::DidntFinish {
+                    let _ = notices.record(notice(NoticeKind::DidntFinish));
+                }
+                commit_problem(e)
+            })?;
             svc.set_match_context(Some(ctx));
             svc.publish_computer_link(ws, link, &conn, now_ms())?;
             drop(svc);

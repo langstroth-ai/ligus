@@ -45,6 +45,9 @@ pub enum MailboxError {
     /// That request id already exists.
     #[error("that request id is taken")]
     RidExists,
+    /// The same message was already posted on this request.
+    #[error("that message was already posted")]
+    DuplicateMessage,
     /// A register or reset that is behind the relay's counter.
     #[error("the approval address was reset by another member meanwhile: try again")]
     StaleCounter,
@@ -390,6 +393,7 @@ async fn problem(resp: reqwest::Response) -> MailboxError {
         (403, "bad_put_cap") | (403, "bad_cap") => MailboxError::BadCap,
         (401 | 403, _) => MailboxError::Unauthorized,
         (409, "stale_counter") => MailboxError::StaleCounter,
+        (409, "duplicate_message") => MailboxError::DuplicateMessage,
         (409, _) => MailboxError::RidExists,
         (413, _) => MailboxError::TooLarge,
         (429, "mailbox_full") | (507, "mailbox_full" | "mailboxes_full" | "mailbox_storage") => MailboxError::MailboxFull,

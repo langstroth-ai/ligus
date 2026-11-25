@@ -482,6 +482,9 @@ fn the_approval_push_carries_the_request_not_a_chat() {
         claims: Vec::new(),
         opened_without_claim: false,
         ended: None,
+        requester_msgs_before_reveal: 0,
+        revealed: false,
+        listed_at: 0,
     };
     let content = crate::serve::approvals_api::push_content(ws, "Acme", &live);
     let pt = crate::serve::tunnel::push_plaintext(&content, false, 7, 9);

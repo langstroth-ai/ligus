@@ -143,6 +143,17 @@ pub struct WorkspaceApprovers {
     devices: std::collections::HashMap<uuid::Uuid, ligus_core::authz::DeviceState>,
     admins: std::collections::HashSet<uuid::Uuid>,
     humans: std::collections::HashSet<uuid::Uuid>,
+    /// The account whose sheet asks: a computer or a phone request is that
+    /// person's own, so only their own devices can approve it.
+    viewer: Option<uuid::Uuid>,
+}
+
+impl WorkspaceApprovers {
+    /// The same roster, read for `account`'s sheet.
+    pub fn for_viewer(mut self, account: Option<uuid::Uuid>) -> Self {
+        self.viewer = account;
+        self
+    }
 }
 
 impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
@@ -156,21 +167,28 @@ impl crate::approval_mailbox::ApproverClassifier for WorkspaceApprovers {
         let ok = match kind {
             // An Admin's device (a phone included).
             MatchKind::Box => d.accounts.iter().any(|a| self.admins.contains(a)),
-            // A person's own device holding their account key.
-            MatchKind::Computer | MatchKind::Phone => !d.phone && d.accounts.iter().any(|a| self.humans.contains(a) && !d.delegated_for(*a)),
+            // The viewer's own device holding their account key: another
+            // member's desktop can't add a device of the viewer's.
+            MatchKind::Computer | MatchKind::Phone => {
+                !d.phone && self.viewer.is_some_and(|v| self.humans.contains(&v) && d.accounts.contains(&v) && !d.delegated_for(v))
+            }
         };
         if ok { Approvability::CanApprove } else { Approvability::Cannot }
     }
 }
 
 impl ChatService {
-    /// [`WorkspaceApprovers`] for `workspace_id` (empty before it syncs: every
-    /// device then reads as unknown).
+    /// [`WorkspaceApprovers`] for `workspace_id`, read for this device's own
+    /// account (empty before it syncs: every device then reads as unknown).
     pub fn approval_classifier(&self, workspace_id: uuid::Uuid) -> Result<WorkspaceApprovers, ChatError> {
         let (config, timeline) = self.pinned_config(workspace_id)?;
         let Some(config) = config else { return Ok(WorkspaceApprovers::default()) };
         let head = timeline.current();
-        let mut out = WorkspaceApprovers { devices: head.devices.iter().map(|(k, v)| (*k, v.clone())).collect(), ..Default::default() };
+        let mut out = WorkspaceApprovers {
+            devices: head.devices.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            viewer: self.author.account_id,
+            ..Default::default()
+        };
         for m in config.members.iter().filter(|m| m.actor.kind == ActorKind::Human) {
             let Some(a) = m.actor.account_id else { continue };
             out.humans.insert(a);
@@ -179,5 +197,36 @@ impl ChatService {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+    use crate::approval_mailbox::{Approvability, ApproverClassifier};
+    use ligus_core::match_code::MatchKind;
+
+    /// Another member's desktop can't approve my computer or phone: only my
+    /// own devices can (design 6.4, the contested sheet).
+    #[test]
+    fn only_my_own_devices_can_approve_my_device_requests() {
+        let ana = uuid::Uuid::new_v4();
+        let mallory = uuid::Uuid::new_v4();
+        let (mallory_dev, ana_dev) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let key = vec![7u8; 32];
+        let mut w = WorkspaceApprovers::default();
+        w.humans.insert(ana);
+        w.humans.insert(mallory);
+        w.admins.insert(mallory);
+        w.devices.insert(mallory_dev, ligus_core::authz::DeviceState { accounts: [mallory].into_iter().collect(), public_key: key.clone(), ..Default::default() });
+        w.devices.insert(ana_dev, ligus_core::authz::DeviceState { accounts: [ana].into_iter().collect(), public_key: key.clone(), ..Default::default() });
+        let w = w.for_viewer(Some(ana));
+        assert_eq!(w.classify(MatchKind::Computer, mallory_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Phone, mallory_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Computer, ana_dev, &key), Approvability::CanApprove);
+        // A box: any Admin's device.
+        assert_eq!(w.classify(MatchKind::Box, mallory_dev, &key), Approvability::CanApprove);
+        assert_eq!(w.classify(MatchKind::Box, ana_dev, &key), Approvability::Cannot);
+        assert_eq!(w.classify(MatchKind::Box, mallory_dev, &[8; 32]), Approvability::Cannot, "another key");
     }
 }

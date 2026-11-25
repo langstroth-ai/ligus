@@ -1087,10 +1087,13 @@ pub const COMMANDS: &[Cmd] = &[
                   code this device computes; the CLI never offers the code. A box: an Admin issues the admission (recovery key), publishes it and sends it sealed \
                   to the box. A computer of yours: the grant is built, the computer acknowledges it, then the certificate \
                   is published with your recovery key and the grant sent. A wrong code ends the request and nothing is \
-                  granted.",
-        synopsis: &["ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]"],
+                  granted; an expired code or an ended request writes nothing. A request another approver is checking \
+                  is refused (exit 6); a contested one (opened by a device that can't approve it) is never approved: \
+                  --end ends it.",
+        synopsis: &["ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]", "ligus approvals approve <rid> --end [--json]"],
         flags: &[
             f("--code -", "asked at a terminal", "read the code from stdin once the request is opened (the code exists only then); case, spaces, I/L/O forgiven"),
+            f("--end", "off", "end a contested request (opened by a device that can't approve it) instead of approving it"),
             f("--recovery-words-file PATH", "required", "your recovery key's 24 words (an owner-only file): your presence"),
             JSON,
         ],
@@ -1100,7 +1103,8 @@ pub const COMMANDS: &[Cmd] = &[
             (2, "--code with a value: the code exists only once the request is opened (type it, or --code -)"),
             (4, "no terminal and no --code -, or no --recovery-words-file: a person's step"),
             (5, "no live request with that rid"),
-            (6, "refused: not an Admin (box), a phone (use the desktop), lockdown"),
+            (4, "the request is contested: end it with --end"),
+            (6, "refused: another approver is checking it, not an Admin (box), a phone (use the desktop), lockdown"),
             (7, "the relay is unreachable, or the requesting device didn't answer"),
         ],
         see_also: &["ligus approvals list", "ligus admit issue", "ligus devices approve"],

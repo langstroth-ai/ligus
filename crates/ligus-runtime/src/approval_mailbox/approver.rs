@@ -110,6 +110,12 @@ pub struct LiveRequest {
     pub opened_without_claim: bool,
     /// Ended by an abort members can read: its reason and signing device.
     pub ended: Option<(AbortReason, Uuid)>,
+    /// Messages to the requester (opens) before its first reveal.
+    pub requester_msgs_before_reveal: usize,
+    /// Whether the requester has revealed (to some approver).
+    pub revealed: bool,
+    /// When this listing was read (unix ms, this device's clock).
+    pub listed_at: i64,
 }
 
 impl LiveRequest {
@@ -180,9 +186,17 @@ pub async fn list_live(client: &MailboxClient, epochs: &[EpochKey]) -> Result<Li
             let mut claims = Vec::new();
             let mut ended = None;
             let mut first_to_requester = None;
+            let mut before_reveal = 0usize;
+            let mut revealed = false;
             for m in &msgs {
                 if m.to == "requester" && first_to_requester.is_none() {
                     first_to_requester = Some(m.seq);
+                }
+                if m.to == "approver" && m.from == "requester" {
+                    revealed = true;
+                }
+                if m.to == "requester" && !revealed {
+                    before_reveal += 1;
                 }
                 let Some(v) = open_blob(&seal, &m.blob).and_then(|p| Verified::parse(&p).ok()) else { continue };
                 match v.t {
@@ -190,7 +204,7 @@ pub async fn list_live(client: &MailboxClient, epochs: &[EpochKey]) -> Result<Li
                         if let Ok(c) = verify_claim(&v, &rid) {
                             claims.push(SeenClaim {
                                 approver_device_id: c.approver_device_id,
-                                approver_name: crate::display::shown(&c.approver_name),
+                                approver_name: super::envelope::hint(&c.approver_name),
                                 at: c.at,
                                 alg: v.alg,
                                 key: v.key.clone(),
@@ -218,6 +232,9 @@ pub async fn list_live(client: &MailboxClient, epochs: &[EpochKey]) -> Result<Li
                 claims,
                 opened_without_claim,
                 ended,
+                requester_msgs_before_reveal: before_reveal,
+                revealed,
+                listed_at: now,
             });
         }
     }
@@ -255,12 +272,29 @@ pub enum ClaimView {
 }
 
 /// How `live`'s claims read to the device `me`.
+/// How long after its claim a claimer waits for the reveal before its own
+/// view reads contested (someone else's open was taken).
+pub const REVEAL_WAIT_MS: i64 = 30_000;
+
+/// How `live`'s claims read to the device `me`. Contested when an open went
+/// to the requester before any claim, when more messages went to the
+/// requester before its reveal than there are claimers (an open with no
+/// claim of its own raced in), when the first claimer can't approve this
+/// kind, or, for this device's own claim, when no reveal came within
+/// [`REVEAL_WAIT_MS`].
 pub fn claim_view(live: &LiveRequest, me: Uuid, classifier: &dyn ApproverClassifier) -> ClaimView {
     if live.opened_without_claim {
         return ClaimView::Contested { by: None };
     }
     let Some(c) = live.claims.first() else { return ClaimView::Unclaimed };
+    let claimers: std::collections::BTreeSet<Uuid> = live.claims.iter().map(|c| c.approver_device_id).collect();
+    if live.requester_msgs_before_reveal > claimers.len() {
+        return ClaimView::Contested { by: None };
+    }
     if c.approver_device_id == me {
+        if !live.revealed && live.listed_at.saturating_sub(c.at) > REVEAL_WAIT_MS {
+            return ClaimView::Contested { by: None };
+        }
         return ClaimView::Mine;
     }
     match classifier.classify(live.request.kind, c.approver_device_id, &c.key) {
@@ -620,6 +654,57 @@ impl ApproverSession {
     /// Whether the offer was acknowledged (computers).
     pub fn acknowledged(&self) -> bool {
         self.acked
+    }
+
+    /// Whether the approval may be written now, checked right before the
+    /// passkey ceremony and the log write (and again after the person typed
+    /// or confirmed the code): the session isn't over, the code hasn't
+    /// expired (a box or a phone), the computer acknowledged within
+    /// [`ACK_WINDOW_MS`] of the offer, and no abort arrived (one read of the
+    /// mailbox, no wait). Anything else is an error and nothing should be
+    /// written.
+    pub async fn ready_to_commit(&mut self) -> Result<(), ApproverError> {
+        if self.ended {
+            return Err(ApproverError::Ended);
+        }
+        let now = self.client.now();
+        let code = self.code.as_ref().ok_or(ApproverError::NoCode)?;
+        if self.request.kind == MatchKind::Computer {
+            if let Some(o) = &self.offered {
+                if now > o.at.saturating_add(ACK_WINDOW_MS) {
+                    return Err(self.didnt_finish());
+                }
+            } else if code.expired(now) {
+                self.expire().await?;
+                return Err(ApproverError::CodeExpired);
+            }
+        } else if code.expired(now) {
+            self.expire().await?;
+            return Err(ApproverError::CodeExpired);
+        }
+        let msgs = self.client.get_msgs(MailboxAuth::Member(&self.keys), &self.request.mailbox, &self.request.rid, self.cursor, 0).await?;
+        let seal = self.keys.seal();
+        for m in msgs {
+            self.cursor = self.cursor.max(m.seq);
+            let plain = open_blob(&self.ka, &m.blob).or_else(|| open_blob(&seal, &m.blob));
+            let Some(v) = plain.and_then(|p| Verified::parse(&p).ok()) else { continue };
+            if v.t == MsgType::Abort {
+                if let Ok(reason) = verify_abort(&v, &self.request.rid) {
+                    self.ended = true;
+                    self.offered = None;
+                    return Err(ApproverError::Aborted(reason));
+                }
+            }
+            if v.t == MsgType::Ack && self.request.kind == MatchKind::Computer && !self.acked {
+                if let Ok(d) = verify_ack(&v, &self.request.rid, self.request.signer_alg, &self.request.signer_key) {
+                    self.acked = self.offered.as_ref().is_some_and(|o| o.digest == d);
+                }
+            }
+        }
+        if self.request.kind == MatchKind::Computer && self.offered.is_some() && !self.acked {
+            return Err(ApproverError::NotAcknowledged);
+        }
+        Ok(())
     }
 
     /// The approval is on the log: send the result with the grant and its

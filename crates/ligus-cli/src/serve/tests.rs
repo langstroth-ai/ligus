@@ -30,7 +30,7 @@ use crate::repos::RepoBindings;
 
 #[path = "../../../ligus-runtime/src/test_relay.rs"]
 #[allow(dead_code)]
-mod test_relay;
+pub(crate) mod test_relay;
 
 async fn spawn(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

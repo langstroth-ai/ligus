@@ -69,7 +69,7 @@ pub mod workspace_repos_api;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// How long `ligus serve` waits for a turn in flight on SIGTERM / Ctrl-C.
 const STOP_GRACE: Duration = Duration::from_secs(12);

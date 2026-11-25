@@ -139,12 +139,17 @@ async fn register(State(st): State<St>, Path(mb): Path<String>, Json(body): Json
             true
         }
         Some(m) if counter == m.counter && cap_hash == m.cap_hash => false,
-        Some(m) if counter > m.counter => {
+        // A reset moves to exactly the next counter.
+        Some(m) if Some(counter) == m.counter.checked_add(1) => {
             m.counter = counter;
             m.cap_hash = cap_hash;
             false
         }
-        Some(_) => return problem(StatusCode::CONFLICT, "stale_counter"),
+        Some(m) => {
+            let current = m.counter;
+            return (StatusCode::CONFLICT, Json(json!({ "error": "stale_counter", "code": "stale_counter", "message": "stale_counter", "counter": current })))
+                .into_response();
+        }
     };
     let status = if created { StatusCode::CREATED } else { StatusCode::OK };
     (status, Json(json!({ "mailbox": mb, "counter": counter }))).into_response()
@@ -278,6 +283,9 @@ async fn post_msg(State(st): State<St>, Path((mb, rid)): Path<(String, String)>,
     }
     if blob.len() > MAX_MSG_BLOB {
         return problem(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+    }
+    if r.msgs.iter().any(|m| m.blob == blob) {
+        return problem(StatusCode::CONFLICT, "duplicate_message");
     }
     if r.msgs.len() >= MAX_MSGS {
         return problem(StatusCode::TOO_MANY_REQUESTS, "too_many_messages");
