@@ -570,6 +570,11 @@ impl Shared {
     /// own signatures say whose it is); it is logged once and shown in
     /// `/v1/health`. Returns whether the standing changed.
     pub fn refresh_standing(&self) -> bool {
+        // Each phone's person, recorded while one account alone certified it,
+        // so a certificate someone adds later never moves it (7.3a).
+        if let Err(e) = self.lock().pin_phone_persons(self.ws) {
+            eprintln!("serve: recording phones' persons failed: {e}");
+        }
         let (next, foreign) = match self.lock().device_standing_and_foreign(self.ws) {
             Ok(s) => s,
             Err(e) => {

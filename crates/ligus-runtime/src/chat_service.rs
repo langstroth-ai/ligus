@@ -424,8 +424,19 @@ impl ChatService {
 
     /// The accounts `device` itself acted for in `workspace_id`: every event
     /// stored here that it signed, re-verified under `device_key` (see
-    /// [`crate::device_enroll::chosen_accounts`]).
+    /// [`crate::device_enroll::chosen_accounts`]), **and** that certified it
+    /// here (a certificate verifying under a key the account registered). A
+    /// device can sign a trust-bootstrap event stamped as anyone, and ingest
+    /// stores it inert: that is never choosing that account (design 7.2,
+    /// `chosen ∩ certified`).
     pub fn device_chosen_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
+        let certified = crate::device_enroll::certified_accounts(&self.store.trust_envelopes(workspace_id)?, device);
+        Ok(self.device_signed_accounts(workspace_id, device, device_key)?.into_iter().filter(|a| certified.contains(a)).collect())
+    }
+
+    /// The stamped accounts of everything `device` signed here, each
+    /// verified under `device_key`, certified or not.
+    fn device_signed_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
         // Streamed: an account already proved isn't checked again, and no
         // long history is held in memory.
         let mut proved = std::collections::BTreeSet::new();
@@ -5021,6 +5032,78 @@ mod tests {
         }
         let co: Vec<String> = ana.phone_co_holders(wid, phone.device_id).unwrap().into_iter().map(|a| a.id).collect();
         assert_eq!(co, vec![ben_id.clone()]);
+    }
+
+    /// Review R2: a store that receives a foreign phone certificate before
+    /// the genuine one (a relay reordering delivery) never redirects the
+    /// phone to the foreign certifier: with no recorded person it names no
+    /// one (fail closed). A box that recorded the person while one account
+    /// alone certified the phone keeps it, whatever arrives later.
+    #[test]
+    fn a_reordered_foreign_phone_certificate_never_redirects_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        let mut ben = svc_on(&path, "b", "Ben");
+        ben.set_author_account(ben_id.clone(), "Ben", None);
+        ben.store().set_join_invite(wid, invite).unwrap();
+        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.ensure_self_member(cfg, wid).unwrap();
+        ben.publish_identity(cfg, wid).unwrap();
+        let phone = ligus_core::testkit::Phone::new();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+
+        let mut all: Vec<SessionEventEnvelope> = Vec::new();
+        for env in ana.store().list(cfg).unwrap() {
+            if !all.iter().any(|e| e.event_id == env.event_id) {
+                all.push(env);
+            }
+        }
+        let is_cert_of = |e: &SessionEventEnvelope, who: &str| {
+            matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == phone.device_id && certificate.account_id.to_string() == who)
+        };
+        let ana_at = all.iter().position(|e| is_cert_of(e, &ana_id)).unwrap();
+        let ben_at = all.iter().position(|e| is_cert_of(e, &ben_id)).unwrap();
+
+        // A box that saw Ana's certificate alone first, then Ben's.
+        let pinned_path = dir.path().join("pinned.db");
+        {
+            let mut store = EventStore::open(&pinned_path).unwrap();
+            for env in all.iter().filter(|e| e.event_id != all[ben_at].event_id) {
+                store.ingest(env).unwrap();
+            }
+        }
+        svc_on(&pinned_path, "x", "Box").pin_phone_persons(wid).unwrap();
+        EventStore::open(&pinned_path).unwrap().ingest(&all[ben_at]).unwrap();
+        let pinned = svc_on(&pinned_path, "x", "Box");
+        assert_eq!(pinned.phone_person(wid, phone.device_id).unwrap().id, ana_id, "the recorded person moved");
+
+        // A box that got Ben's certificate first and never saw the phone with one.
+        let mut reordered = all.clone();
+        let ben_cert = reordered.remove(ben_at);
+        reordered.insert(ana_at, ben_cert);
+        let box_path = dir.path().join("box.db");
+        {
+            let mut store = EventStore::open(&box_path).unwrap();
+            for env in &reordered {
+                store.ingest(env).unwrap();
+            }
+        }
+        let boxed = svc_on(&box_path, "y", "Box");
+        boxed.pin_phone_persons(wid).unwrap();
+        match boxed.phone_person(wid, phone.device_id) {
+            Ok(p) => assert_ne!(p.id, ben_id, "the box redirected Ana's phone to Ben by arrival order"),
+            Err(_) => {} // fail closed
+        }
     }
 
     #[test]

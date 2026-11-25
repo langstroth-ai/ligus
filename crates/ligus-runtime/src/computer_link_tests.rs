@@ -561,3 +561,46 @@ async fn the_duplicate_member_moves_to_a_linked_device() {
     assert!(err.contains("isn't a member of this workspace") && err.contains("Link this computer"), "{err}");
     assert!(!err.contains("cannot perform"), "{err}");
 }
+
+/// Review R1: a device can sign a trust-bootstrap event stamped as anyone
+/// (ingest stores it inert); that is never choosing that account. Choice is
+/// `chosen ∩ certified` (design 7.2), so approving a box code never offers
+/// to remove a member the box merely signed as.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_never_chose_an_account_that_never_certified_it() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let room = "acme";
+    let ws = ligus_core::room_workspace_id(room);
+    let cfg = workspace_config_session_id(ws);
+    let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    mac.found(ws);
+    mac.sync().await;
+    let mut victor = Dev::open(&tmp.path().join("victor"), "Victor", &relay, ws);
+    victor.join_via(&mut mac, ws).await;
+    victor.sync().await;
+    let mut mallory = Dev::open(&tmp.path().join("mallory"), "Mallory", &relay, ws);
+    mallory.join_via(&mut mac, ws).await;
+    mallory.sync().await;
+    mac.sync().await;
+    let vacct = victor.account();
+    let (mdev, mkey) = (mallory.svc.device_id(), mallory.svc.device_public_key());
+
+    // Mallory's own device signs a trust-bootstrap event stamped as Victor
+    // (it re-publishes her own, valid certificate). Victor never certified it.
+    let ids = mallory.ids();
+    let stored = ids.load().unwrap().unwrap();
+    let akp = ids.account_keypair(stored.account.id).unwrap();
+    let cert = ligus_core::crypto::DeviceCertificate::issue(&akp, mallory.account(), &mkey, ligus_core::Timestamp::now());
+    let victor_actor = victor.svc.author().clone();
+    mallory.svc.act_as_owner_device(victor_actor);
+    let env = mallory.svc.draft_signed(cfg, ws, ligus_core::SessionEvent::DeviceCertificateAdded { certificate: cert }).unwrap();
+    mallory.engine.push_envelopes(&[env.clone()]).await.unwrap();
+    mac.sync().await;
+
+    assert!(mac.svc.store().trust_envelopes(ws).unwrap().iter().any(|e| e.event_id == env.event_id), "precondition: stored inert");
+    assert!(!mac.svc.accounts_certifying(ws, mdev).unwrap().contains(&vacct), "precondition: Victor never certified it");
+    let chosen = mac.svc.device_chosen_accounts(ws, mdev, &mkey).unwrap();
+    assert!(!chosen.contains(&vacct), "the device 'chose' Victor without Victor's certificate: {chosen:?}");
+    assert!(chosen.contains(&stored.account.id), "its own account it did choose: {chosen:?}");
+}

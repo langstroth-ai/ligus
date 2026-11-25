@@ -169,7 +169,7 @@ export function AddComputerPanel({
           )}
           {canAdd && (preview.alsoCertifiedBy?.length ?? 0) > 0 && (
             <div className="text-ink-soft" data-testid="also-certified">
-              {preview.alsoCertifiedBy!.join(", ")} also certified this computer's key. That gives them nothing over it.
+              {preview.alsoCertifiedBy!.join(", ")} also certified this computer's key. Add it only if it's the computer in front of you.
             </div>
           )}
           {canAdd && (

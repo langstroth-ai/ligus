@@ -417,6 +417,12 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
     out
 }
 
+/// The accounts holding a valid certificate for `device` (one verifying
+/// under a key the account registered).
+pub fn certified_accounts(trust: &[SessionEventEnvelope], device: Uuid) -> HashSet<Uuid> {
+    certified_devices(trust).remove(&device).map(|(_, a)| a).unwrap_or_default()
+}
+
 /// Accounts (other than `except`) holding a valid certificate for `device`.
 pub fn accounts_certifying(trust: &[SessionEventEnvelope], device: Uuid, except: Uuid) -> Vec<Uuid> {
     let mut v: Vec<Uuid> = certified_devices(trust)

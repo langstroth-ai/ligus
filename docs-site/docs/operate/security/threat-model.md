@@ -132,8 +132,8 @@ line ("Ben also certified this device's key. That gives Ben nothing over
 it."). The certifier isn't treated as the device's person for private
 agents or dispatch, inherits nothing from a removed member whose device it
 certified, and doesn't keep a removed member's device receiving new
-workspace keys. A phone keeps acting as the person whose certificate its
-box stored first (nobody can certify a key before seeing it); see
+workspace keys. A phone keeps acting as its person: the one it has signed
+as, or the one its box saw certify it alone; see
 [Known limitations](#known-limitations), item 33, for what is left.
 
 <a id="held-events"></a>**They can't stall your sync with events nobody can
@@ -998,8 +998,11 @@ it.
 33. **A second certificate on a phone's key.** A phone's key isn't secret
     (its `ligusphone1:` code and its certificate carry it). Anyone in the
     workspace can certify it for their own account. Since 0.3.x the phone
-    keeps acting as its person: a box follows the certificate it stored
-    first, and gives the later certifier nothing. The phone then has two
+    keeps acting as its person: a box follows the account the phone has
+    signed as, or the one it saw certify the phone alone, and gives the
+    later certifier nothing. A box that only ever saw both certificates
+    (both arrived in one sync, or a relay reordered them) names no one for
+    that phone until 0.4: it fails closed rather than guess. The phone then has two
     holders, though, and a revocation goes strictly down the ranks over
     both, so its person can revoke it only if they outrank the other
     member; otherwise an Owner (or the founder, for an Owner) revokes it.
@@ -1139,8 +1142,8 @@ where both copies meet, a member certifying someone else's phone key for
 their own account (a phone never vouches for its account on the log, so
 both accounts hold it: neither can revoke it as their own, so it is revoked
 by someone who outranks both, or by its person once that member is
-removed; the phone keeps acting as the person whose certificate its box
-stored first), an Admin revoking a device that isn't
+removed; the phone keeps acting as its person where its box saw it with
+one certifier, and names no one where it didn't), an Admin revoking a device that isn't
 certified on the workspace yet (a device id is derived from its key, so
 one who knows the key can name the device before it joins), a member who
 backdates a redemption of a person invite issued before redeem keys taking

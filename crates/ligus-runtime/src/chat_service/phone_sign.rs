@@ -75,17 +75,23 @@ impl ChatService {
     /// with the phone as its device). Refused for a revoked or unknown
     /// phone, or one whose person isn't a member.
     ///
-    /// A phone never vouches (its person's desktop enrolls it), so when
-    /// another member also certified its key for themselves (device keys
-    /// are public: every certificate on the log carries one), the fold's
-    /// holders name both. The phone's person is then the account whose
-    /// certificate of this key **this device stored first** (local arrival
-    /// order, not the log's order, which an author can steer by naming an
-    /// older head): nobody can certify a key before they have seen it, and
-    /// they see it in the genuine certificate. A later certificate never
-    /// redirects the phone or takes it away from its person (identity
-    /// model v2, 7.3a); if the first certifier is no longer a member, the
-    /// phone names no one (fail closed), never the later certifier.
+    /// A phone never vouches on the log (its person's desktop enrolls it),
+    /// so when another member also certified its key for themselves (device
+    /// keys are public: every certificate on the log carries one), the
+    /// fold's holders name both. The phone's person is then, in order:
+    ///
+    /// 1. the one holder the phone itself has signed as here (its actions,
+    ///    verified under its own key): its choice, which no certificate
+    ///    changes;
+    /// 2. the person this device resolved it to while it had a single
+    ///    certifier ([`Self::pin_phone_persons`] records it after every
+    ///    sync; device-local).
+    ///
+    /// Otherwise (both certificates arrived before this device ever saw
+    /// the phone with one), or if that person no longer holds it or isn't a
+    /// member, the phone names no one: fail closed, never another certifier
+    /// (identity model v2, 7.3a; the phone naming its account in its
+    /// requests, 0.4, removes this case).
     pub fn phone_person(&self, workspace_id: Uuid, phone: Uuid) -> Result<ligus_core::ActorIdentity> {
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let config = config.ok_or_else(|| ChatError::Unauthorized("the workspace configuration hasn't synced to this box yet".into()))?;
@@ -97,9 +103,23 @@ impl ChatService {
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
         let not_member = || ChatError::Unauthorized("that phone's person isn't a member here".into());
         let account = if device.holders.len() == 1 {
-            device.holders.first().copied()
+            let only = device.holders.first().copied();
+            if let Some(a) = only {
+                // Best effort: a failed write only loses the pin.
+                let _ = self.store.pin_phone_person(workspace_id, phone, a);
+            }
+            only
         } else {
-            self.first_certifier(workspace_id, phone, &device.holders)?
+            let signed = self.device_chosen_accounts(workspace_id, phone, &device.public_key)?;
+            let mut signed = signed.into_iter().filter(|a| device.holders.contains(a));
+            match (signed.next(), signed.next()) {
+                (Some(a), None) => Some(a),
+                // Signed as two holders: no choice to follow.
+                (Some(_), Some(_)) => None,
+                // A recorded person that no longer holds it names no one
+                // (fail closed), never another certifier.
+                (None, _) => self.store.phone_person_pin(workspace_id, phone)?.filter(|a| device.holders.contains(a)),
+            }
         }
         .ok_or_else(not_member)?;
         let member = config
@@ -112,20 +132,20 @@ impl ChatService {
         Ok(actor)
     }
 
-    /// Among `holders`, the account whose certificate of `device` this
-    /// store holds first (row order; see [`Self::phone_person`]).
-    fn first_certifier(
-        &self,
-        workspace_id: Uuid,
-        device: Uuid,
-        holders: &std::collections::BTreeSet<Uuid>,
-    ) -> Result<Option<Uuid>> {
-        Ok(self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
-            SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == device && holders.contains(&certificate.account_id) => {
-                Some(certificate.account_id)
+    /// Record, for every phone of `workspace_id` that one account alone
+    /// certified, that account as its person here ([`Self::phone_person`]):
+    /// a certificate someone adds later then changes nothing. Run after
+    /// every sync by the devices that act for phones (boxes).
+    pub fn pin_phone_persons(&self, workspace_id: Uuid) -> Result<()> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        for (id, d) in &timeline.current().devices {
+            if d.phone && !d.revoked && d.holders.len() == 1 {
+                if let Some(a) = d.holders.first() {
+                    self.store.pin_phone_person(workspace_id, *id, *a)?;
+                }
             }
-            _ => None,
-        }))
+        }
+        Ok(())
     }
 
     /// The current members other than its person ([`Self::phone_person`])
