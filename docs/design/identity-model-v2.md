@@ -1,6 +1,7 @@
 # Identity and data model v2 (design note)
 
-Status: design, not implemented; owner decisions pending (section 15).
+Status: design, being implemented; owner decisions in section 15 (O6 changed:
+rules version 3 ships in 0.4, see "Rules 3 in 0.4" there).
 Target: Ligus 0.4 for the parts marked 0.4 in section 14, later releases for
 the rest. Surfaces: the desktop, `lt` (ligus-term), the `ligus` CLI, `ligus
 serve` and `ligus worker`, the phone apps, and one additive relay route
@@ -930,13 +931,13 @@ notes still say to restart `ligus serve` after upgrading the CLI.
 9. Blob retain route and renewals (10.5); relay roster deprecated in docs
    (10.6).
 
+10. Rules version 3 (class G set, decision O6 as changed): new workspaces
+    start on it, existing ones switch by their Owner with the readiness
+    list. See "Rules 3 in 0.4" in section 15.
+
 **0.5 and later**
 
-- Rules version 3 (class G set): `MemberRetired` as removal, a phone counts
-  only with its signed enrollment statement and its person may always revoke
-  it, inline credentials denied, `MemberAdded` id invariant, hint mismatch denied, inert
-  hosts of removed members, a default-agent id. Offered to Owners once the
-  devices they see are on 0.4 or later (decision O6).
+- A default-agent id.
 - One connection list (10.1), one binding table (10.2), the events place
   split (M5), deleting the dormant local account seed and the old secret ids.
 - `ProfileHidden`, phone self-rename and profile edits from the phone,
@@ -961,8 +962,44 @@ notes still say to restart `ligus serve` after upgrading the CLI.
 
 ### Decisions (owner, 2026-11-25)
 
-- O1 to O10 and O12: **accepted as recommended** above.
+- O1 to O5, O7 to O10 and O12: **accepted as recommended** above.
 - O11: **changed.** Keys are never stored in the workspace; the inline path is removed in 0.3.x.
+- O6: **changed (2026-11-25, later the same day).** There are no real users
+  yet, so the strict rules aren't deferred to 0.5: **rules version 3 ships
+  in 0.4**. A workspace created by 0.4 starts on it. An existing workspace
+  gets the Owner-triggered switch in 0.4, with the readiness list, offered
+  to the Owner on upgrade with the switch on by default. 0.3 peers on a
+  rules 3 workspace go read-only (the existing fail-closed path); that is
+  accepted.
+
+#### Rules 3 in 0.4
+
+This overrides the "0.5 and later" placement in section 14 and every "until
+rules 3" in sections 3 to 13. Under rules 3:
+
+- a certificate counts only with the certified device's own acceptance: an
+  Ed25519 device must have vouched for the account (a certificate it
+  published, or an event it signed as the account), and a phone only with
+  its signed enrollment statement (`phoneConsent`, 7.3a) naming the
+  certificate's account and this workspace; the phone's person may always
+  revoke it, whatever the ranks;
+- `MemberRetired` (8.3) is a real removal of the old member, with its
+  watermark, from its position on;
+- inline credentials (`WorkspaceCredential::Inline`) are denied in the
+  fold;
+- the `MemberAdded` id invariant (4.1), hints that disagree with the stamp
+  denied (4.2), and hosts of removed or retired members inert (8.4).
+
+Simplifications, since 0.3 peers on a rules 3 workspace are read-only
+anyway: the mixed-version accommodations whose only purpose was to keep a
+0.3 peer writable are dropped (display-only `MemberRetired`, the rules 2
+"hint ignored" paths for workspaces on rules 3, legacy phones counting
+without a consent on a rules 3 workspace once their person re-consented).
+What stays: 0.3 peers still read (class R events stay `Unknown` no-ops for
+them), rules 2 workspaces keep folding exactly as 0.3 does until their Owner
+switches, and the X1 mixed-version fold test still holds for rules 2. A
+legacy phone without a consent shows in the readiness list and re-consents
+from its 0.4 app before the switch.
 
 ## 16. Tests (executable, required before merge)
 
