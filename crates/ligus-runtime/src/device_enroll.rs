@@ -626,11 +626,17 @@ mod flow_tests {
         let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
         taylor.join_via(&mut mac, ws).await;
         // Alex's box, enrolled as his device; Taylor's spare, as hers.
-        let bx = Dev::open(&tmp.path().join("box"), "Box", &relay, ws);
+        let mut bx = Dev::open(&tmp.path().join("box"), "Box", &relay, ws);
         mac.svc.certify_device(&DeviceEnrollment::decode(&bx.svc.enrollment_request(ws, "box").encode()).unwrap()).unwrap();
         let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
         taylor.svc.certify_device(&DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap()).unwrap();
         taylor.sync().await;
+        mac.sync().await;
+        // Rules 3: Alex's box accepts its certificate.
+        bx.sync().await;
+        bx.svc.act_as_owner_device(mac.svc.author().clone());
+        bx.svc.accept_device_certificate(ws).unwrap();
+        bx.sync().await;
         mac.sync().await;
         let (bx_id, td, sd) = (bx.svc.device_id(), taylor.svc.device_id(), spare.svc.device_id());
 
@@ -734,6 +740,8 @@ mod flow_tests {
         sff.sync().await;
         assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Own);
         sff.svc.act_as_owner_device(alex.clone());
+        // Rules 3: it accepts the certificate (its own copy) first.
+        sff.svc.accept_device_certificate(ws).unwrap();
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
         // Having signed as Alex, it is Alex's device.
         let Standing::OwnerDevice(owner) = sff.svc.device_standing(ws).unwrap() else { panic!("not enrolled") };
@@ -832,6 +840,7 @@ mod flow_tests {
         sff2.sync().await;
         assert_eq!(sff2.svc.device_standing(ws).unwrap(), Standing::Own, "a certificate alone adopts nothing");
         sff2.svc.act_as_owner_device(alex.clone());
+        sff2.svc.accept_device_certificate(ws).unwrap();
         sff2.svc.post_user_message(chat, ws, "re-enrolled").unwrap();
         assert!(matches!(sff2.svc.device_standing(ws).unwrap(), Standing::OwnerDevice(_)));
         sff2.sync().await;

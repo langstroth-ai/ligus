@@ -333,6 +333,11 @@ impl Phone {
     pub fn public_key(&self) -> Vec<u8> {
         crate::crypto::p256_public_key(&self.key)
     }
+
+    /// This phone's signature over `message` (r ‖ s, low-S).
+    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
+        crate::crypto::sign_p256(&self.key, message).to_vec()
+    }
 }
 
 impl Default for Phone {

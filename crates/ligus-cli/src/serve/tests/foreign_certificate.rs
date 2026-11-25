@@ -1,5 +1,6 @@
-//! B1 (identity model v2, 7.2): a certificate another member puts on a
-//! running box's device key never blocks, redirects or adopts the box.
+//! B1 (identity model v2, 7.2, and rules 3): a certificate another member
+//! puts on a running box's device key never blocks, redirects or adopts the
+//! box, even backdated before the box's own admission.
 //! Device keys are public (every certificate on the log carries one), so
 //! before 0.3.x any member could pause a box's writes by certifying its key
 //! for their own account. Only a revocation stops it.
@@ -32,23 +33,37 @@ async fn a_foreign_certificate_on_a_running_box_blocks_nothing_and_revocation_st
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
 
     // The desktop's person certifies the box's public device key for their
-    // own account (a modified client can; the rules accept it), after
-    // seeing the box's admission (a certificate drafted before it, sorting
-    // before the box's own redemption, is a fold matter: rules 3).
-    sync_once(&h.desktop).await.unwrap();
-    let founder = {
+    // own account (a modified client can; the rules accept it), drafted
+    // before the desktop saw the box's admission, so it sorts before the
+    // box's own redemption. Under rules 3 (every new workspace) it is a
+    // certificate the box never accepted: it certifies nothing.
+    let (founder, cert_count) = {
         let mut svc = open_service(&h.desktop).unwrap();
         svc.publish_foreign_certificate(ws, &box_key).unwrap();
-        svc.author().clone()
+        let n = svc.store().trust_envelopes(ws).unwrap().len();
+        (svc.author().clone(), n)
     };
+    let _ = cert_count;
     sync_once(&h.desktop).await.unwrap();
-    let health = health_until(&h, "the foreign certificate to reach the box", |v| {
-        v["identity"]["alsoCertifiedBy"].as_array().is_some_and(|a| !a.is_empty())
-    })
-    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let has = h.handle.shared.lock().store().trust_envelopes(ws).unwrap().iter().any(|e| {
+            matches!(&e.payload, ligus_core::SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == box_device && certificate.account_id != box_actor.account_id.unwrap())
+        });
+        if has {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the foreign certificate never reached the box");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    h.handle.shared.refresh_standing();
+    let health = h.get("/v1/health").await;
     assert_eq!(health["identity"]["mode"], "member", "{health}");
     assert_eq!(health["identity"]["actorId"], json!(box_actor.id), "the box still acts as itself: {health}");
+    assert!(health["identity"].get("alsoCertifiedBy").is_none(), "an unaccepted certificate counts: {health}");
     assert_eq!(h.handle.shared.standing(), Standing::Own);
+    let cfg = h.handle.shared.lock().load_in(ws, workspace_config_session_id(ws)).unwrap().unwrap();
+    assert!(cfg.members.iter().any(|m| m.id == box_actor.id), "the backdated certificate undid the box's admission");
 
     // Writes still work, as the box itself.
     let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "still here" }))).await;

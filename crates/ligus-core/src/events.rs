@@ -542,6 +542,19 @@ pub enum SessionEvent {
     /// older one. Grants nothing: whether it verifies against its forge is
     /// device-local, never fold state. Read by the roster tracker.
     IdentityLinkPublished { link: crate::identity_link::IdentityLink },
+    /// A person's name and picture (config log; identity model v2, 5):
+    /// render-only. Written by the account itself from one of its own,
+    /// non-delegated, non-phone devices; content checks in
+    /// [`crate::profile::change_ok`]. Never read by a rule.
+    ProfileUpdated { profile: crate::profile::ProfileChange },
+    /// A device's name under one account (config log; identity model v2, 6):
+    /// render-only. Written by the device itself or by a non-delegated,
+    /// non-phone device of the account. Never read by a rule.
+    DeviceLabelSet { label: crate::profile::DeviceLabel },
+    /// A computer that linked as its person retires the separate member it
+    /// was (config log; identity model v2, 8.3). Rules 3 only: removes that
+    /// member like a self-leave. See [`crate::retirement`].
+    MemberRetired { retirement: crate::retirement::MemberRetirement },
     /// Remove a linked identity (the account itself, or an Admin for
     /// moderation).
     IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
@@ -649,6 +662,9 @@ impl SessionEvent {
             SessionEvent::PasskeyRegistered { .. } => "passkeyRegistered",
             SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
+            SessionEvent::ProfileUpdated { .. } => "profileUpdated",
+            SessionEvent::DeviceLabelSet { .. } => "deviceLabelSet",
+            SessionEvent::MemberRetired { .. } => "memberRetired",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
             SessionEvent::ProposalApplyFailed { .. } => "proposalApplyFailed",
@@ -705,6 +721,9 @@ impl SessionEvent {
             | SessionEvent::PasskeyRemoved { .. }
             | SessionEvent::IdentityLinkPublished { .. }
             | SessionEvent::IdentityLinkRemoved { .. }
+            | SessionEvent::ProfileUpdated { .. }
+            | SessionEvent::DeviceLabelSet { .. }
+            | SessionEvent::MemberRetired { .. }
             | SessionEvent::WorkspaceRepoAdded { .. }
             | SessionEvent::WorkspaceRepoUpdated { .. }
             | SessionEvent::WorkspaceRepoRemoved { .. }
@@ -1055,6 +1074,16 @@ impl ChatSession {
             // Folded with their signed author in projection (`fold_pass`),
             // never from a bare payload.
             SessionEvent::AttachmentShared { .. } | SessionEvent::AttachmentDeleted { .. } => {}
+            // Folded with their signed event in projection (`fold_pass`).
+            SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => {}
+            // Allowed only under rules 3 (`authz::retire`): the member leaves.
+            SessionEvent::MemberRetired { retirement } => {
+                if self.members.iter().any(|m| m.id == retirement.member_id) {
+                    self.guards.removed_members.insert(retirement.member_id.clone());
+                }
+                self.members.retain(|m| m.id != retirement.member_id);
+                self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
+            }
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -1956,6 +1985,11 @@ fn fold_pass(
     // never depends on a position (see `authz::DeviceState::holders`).
     if keyed.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
         tracker.set_vouched(authz::RosterTracker::vouched(&keyed));
+        // Which certificates their devices accepted: read only once the log
+        // names rules 3 (an unallowed rules set changes nothing it reads).
+        if keyed.iter().any(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version >= authz::RULES_V3)) {
+            tracker.set_accepted(authz::RosterTracker::accepted(&keyed, ordered[base].workspace_id));
+        }
     }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
@@ -2233,6 +2267,22 @@ fn fold_pass(
                         a.deleted = true;
                     }
                 }
+                // Render-only (identity model v2, 5 and 6): last writer wins
+                // per field in fold order.
+                SessionEvent::ProfileUpdated { profile } => {
+                    session.profiles.entry(profile.account_id).or_default().apply(profile, env.event_id);
+                }
+                SessionEvent::DeviceLabelSet { label } => {
+                    let per = session.device_labels.entry(label.device_id).or_default();
+                    if label.label.is_empty() {
+                        per.remove(&label.account_id);
+                    } else {
+                        per.insert(label.account_id, label.label.clone());
+                    }
+                    if per.is_empty() {
+                        session.device_labels.remove(&label.device_id);
+                    }
+                }
                 _ => {}
             }
             // Where content was filed (see `AuthzState::content_frontier`).
@@ -2350,6 +2400,25 @@ fn fold_pass(
         WorkspaceAuthz::Timeline(t) => t.current().rules,
         _ => tracker.state.rules,
     };
+    // Rules 3: a host whose owner isn't a member any more is inert (agents
+    // bound to it become unbound everywhere at once).
+    if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
+        let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
+        let gone: Vec<String> = session
+            .workspace_hosts
+            .iter()
+            .filter(|h| !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+            .map(|h| h.id.clone())
+            .collect();
+        if !gone.is_empty() {
+            session.workspace_hosts.retain(|h| !gone.contains(&h.id));
+            for a in session.workspace_agents.iter_mut() {
+                if gone.contains(&a.host_id) {
+                    a.host_id.clear();
+                }
+            }
+        }
+    }
     Some(session)
 }
 

@@ -5115,6 +5115,10 @@ struct MyDeviceDto {
     /// (identity model v2, 7.2 and 7.3a), else `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// Approved here but never wrote anything (identity model v2, 8.2):
+    /// offered as Remove.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    never_written: bool,
 }
 
 /// A host that names you as its owner but isn't certified as your device
@@ -5336,6 +5340,53 @@ pub(crate) fn remove_duplicate_member_sync(state: State<AppState>, member_id: St
     svc.remove_member(ligus_core::workspace_config_session_id(ws), ws, member_id).map_err(map_err)
 }
 
+/// Migration M6 (identity model v2, 11), once caught up: where this
+/// account has no profile yet in `ws`, publish one from `identity.json`
+/// (only a desktop holding the account key; a stale laptop that starts later
+/// finds the profile and writes nothing), and a synced name for each phone
+/// this desktop named before names synced.
+fn first_profile(app: &AppHandle, ws: Uuid) {
+    let state = app.state::<AppState>();
+    let Ok(Some(stored)) = state.identity.load() else { return };
+    let phone_labels = state.settings.lock().unwrap().phone_labels.clone();
+    let mut svc = state.service.lock().unwrap();
+    let Some(me) = svc.author().account_id else { return };
+    let Ok(Some(cfg)) = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)) else { return };
+    if !cfg.members.iter().any(|m| m.actor.account_id == Some(me)) {
+        return;
+    }
+    if !cfg.profiles.contains_key(&me) {
+        let picture = stored.account.avatar_url.as_deref().and_then(|u| avatar_from_data_url(u).ok());
+        if let Err(e) = svc.set_profile(ws, Some(&stored.account.display_name), picture, false) {
+            tracing::debug!(target: "identity", "first profile not written yet: {e}");
+        }
+    }
+    let mine: Vec<Uuid> = svc.own_devices(ws).unwrap_or_default().into_iter().map(|d| d.device_id).collect();
+    for (device, label) in phone_labels {
+        let Ok(d) = Uuid::parse_str(&device) else { continue };
+        if !mine.contains(&d) || cfg.device_labels.get(&d).is_some_and(|m| m.contains_key(&me)) {
+            continue;
+        }
+        let _ = svc.set_device_label(ws, d, &label);
+    }
+}
+
+/// Rename one of your devices (or this one) in the active workspace: a
+/// synced `DeviceLabelSet` every member sees (identity model v2, 6). Empty
+/// clears it.
+#[tauri::command]
+async fn rename_device(ligus_app: tauri::AppHandle, device_id: String, label: String) -> Result<(), String> {
+    crate::off_main(ligus_app, move |ligus_app| rename_device_sync(tauri::Manager::state::<AppState>(ligus_app), device_id, label)).await
+}
+
+pub(crate) fn rename_device_sync(state: State<AppState>, device_id: String, label: String) -> Result<(), String> {
+    let device = Uuid::parse_str(device_id.trim()).map_err(|_| "That isn't a device id.".to_string())?;
+    let ws = state.active_workspace_id();
+    let mut svc = state.service.lock().unwrap();
+    svc.set_device_label(ws, device, &label).map_err(map_err)?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn list_my_devices(ligus_app: tauri::AppHandle) -> Result<Vec<MyDeviceDto>, String> {
     crate::off_main(ligus_app, move |ligus_app| list_my_devices_sync(tauri::Manager::state::<AppState>(ligus_app))).await
@@ -5357,10 +5408,32 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
         .filter(|d| !d.revoked && !d.also_certified_by.is_empty())
         .filter_map(|d| Some((d.device_id, device_note(&svc, ws, roster.as_ref()?, d.device_id, phones.contains(&d.device_id))?)))
         .collect();
+    // Synced names (identity model v2, 6.3) under this account.
+    let me = svc.author().account_id;
+    let synced: HashMap<Uuid, String> = svc
+        .load_in(ws, ligus_core::workspace_config_session_id(ws))
+        .ok()
+        .flatten()
+        .map(|c| c.device_labels.iter().filter_map(|(d, m)| Some((*d, m.get(&me?)?.clone()))).collect())
+        .unwrap_or_default();
     let mut rows = my_device_rows(devices, here, |d| phones.contains(&d), |d| {
         let host = hosts.iter().find(|h| h.id == d.to_string())?;
         Some((host.label.clone(), rfc3339(state.host_presence.last_seen(host))))
     }, &phone_labels);
+    for r in &mut rows {
+        let Ok(d) = Uuid::parse_str(&r.device_id) else { continue };
+        if let Some(l) = synced.get(&d) {
+            r.label = shown(l);
+            r.named = true;
+        }
+        if !r.phone && !r.revoked && !r.this_device {
+            if let Ok(Some(at)) = svc.never_written(ws, d) {
+                r.never_written = true;
+                let day = at.inner().date();
+                r.note = Some(format!("Approved on {} {}, {}. It hasn't written anything yet.", day.month(), day.day(), day.year()));
+            }
+        }
+    }
     for r in &mut rows {
         r.note = Uuid::parse_str(&r.device_id).ok().and_then(|d| notes.get(&d).cloned());
     }
@@ -5456,6 +5529,7 @@ fn my_device_rows(
                 phone: is_phone(d.device_id),
                 named,
                 note: None,
+                never_written: false,
             }
         })
         .collect()
@@ -12082,13 +12156,35 @@ async fn set_display_name(ligus_app: tauri::AppHandle, name: String) -> Result<(
 pub(crate) fn set_display_name_sync(state: State<AppState>, name: String) -> Result<(), String> {
     state.identity.update_display_name(&name).map_err(map_err)?;
     // Refresh the live ChatService author so new messages + signatures use the
-    // new name immediately (updating the persisted identity alone doesn't).
-    state
-        .service
-        .lock()
-        .unwrap()
-        .set_author_display_name(name.trim());
+    // new name immediately (updating the persisted identity alone doesn't),
+    // and publish it as this account's profile in every workspace it's a
+    // member of (identity model v2, 5.5): everyone sees the new name, in
+    // past content too.
+    let mut svc = state.service.lock().unwrap();
+    svc.set_author_display_name(name.trim());
+    let (_, err) = svc.set_profile_everywhere(Some(name.trim()), None, false);
+    if let Some(e) = err {
+        tracing::warn!(target: "identity", error = %e, "publishing the new name failed in a workspace");
+        return Err(format!("Your name changed on this device, but not in every workspace yet: {}", map_err(e)));
+    }
     Ok(())
+}
+
+/// A profile picture from a `data:image/…;base64,…` URL: PNG, JPEG or WebP,
+/// 16 KiB at most (decision O1).
+fn avatar_from_data_url(url: &str) -> Result<ligus_core::profile::Avatar, String> {
+    use base64::Engine as _;
+    let rest = url.strip_prefix("data:").ok_or("a picture is a data: URL")?;
+    let (meta, data) = rest.split_once(',').ok_or("a picture is a data: URL")?;
+    let content_type = meta.strip_suffix(";base64").ok_or("a picture is base64")?;
+    if !ligus_core::profile::AVATAR_TYPES.contains(&content_type) {
+        return Err("Use a PNG, JPEG or WebP picture.".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|_| "That picture is damaged.".to_string())?;
+    if bytes.len() > ligus_core::profile::MAX_AVATAR_BYTES {
+        return Err("Pick a smaller picture (16 KB at most).".into());
+    }
+    ligus_core::profile::Avatar::new(content_type, &bytes).map_err(|e| e.to_string())
 }
 
 /// A bounded `data:image/…` URL fit to ride the synced event log. Avatars fan
@@ -12145,8 +12241,18 @@ async fn set_avatar(ligus_app: tauri::AppHandle, avatar: Option<String>) -> Resu
 
 pub(crate) fn set_avatar_sync(state: State<AppState>, avatar: Option<String>) -> Result<(), String> {
     validate_avatar_data_url(&avatar)?;
+    let picture = avatar.as_deref().map(avatar_from_data_url).transpose()?;
     state.identity.update_avatar(avatar.clone()).map_err(map_err)?;
-    state.service.lock().unwrap().set_author_avatar(avatar);
+    let mut svc = state.service.lock().unwrap();
+    svc.set_author_avatar(avatar);
+    // The picture rides one profile event per workspace, never every
+    // message (decisions O1, O2).
+    let clear = picture.is_none();
+    let (_, err) = svc.set_profile_everywhere(None, picture, clear);
+    if let Some(e) = err {
+        tracing::warn!(target: "identity", error = %e, "publishing the new picture failed in a workspace");
+        return Err(format!("Your picture changed on this device, but not in every workspace yet: {}", map_err(e)));
+    }
     Ok(())
 }
 
@@ -12661,6 +12767,9 @@ enum InitFailure {
     /// The database needs a one-time upgrade and the disk is too full for
     /// it (nothing was changed): free some space and try again.
     DiskSpace(String),
+    /// The database was written by a newer Ligus (identity model v2, 10.4):
+    /// update, or use another data dir. Trying again can't help.
+    NewerData(String),
     /// Anything else.
     Other(String),
 }
@@ -12676,6 +12785,9 @@ impl InitFailure {
         }
         if l.contains("to upgrade the ligus database") {
             return Self::DiskSpace(e.to_string());
+        }
+        if l.contains("written by a newer ligus") {
+            return Self::NewerData(e.to_string());
         }
         Self::Other(e.to_string())
     }
@@ -12707,6 +12819,11 @@ impl InitFailure {
                 "Ligus needs more disk space",
                 format!("Ligus has to upgrade its database once, and there isn't room: {e}.\n\nFree up space on this disk, then choose Try again."),
                 true,
+            ),
+            Self::NewerData(e) => (
+                "This data is from a newer Ligus",
+                format!("Ligus can't use its data: {e}.\n\nInstall the newer version of Ligus. Nothing was changed."),
+                false,
             ),
             Self::Other(e) => (
                 "Ligus couldn't start",
@@ -12816,6 +12933,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
 
     let db_path = data_dir.join("ligus.db");
     let store = EventStore::open(&db_path).map_err(map_err)?;
+    // A newer Ligus wrote this database (identity model v2, 10.4): it opened
+    // read-only, and this build stops here rather than run on it.
+    if store.newer_schema().is_some() {
+        return Err(ligus_runtime::event_store::NEWER_DATA_MESSAGE.to_string());
+    }
     clock.phase("  event store");
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
@@ -13036,6 +13158,27 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         save_settings(&data_dir, &s);
         id
     };
+    // Identity model v2 (section 11, M1): the sync state is keyed by relay
+    // and workspace, once, while this is the only connection to the store
+    // (otherwise on a later launch; it starts from 0 meanwhile, which is
+    // safe).
+    {
+        let conns: Vec<(String, String)> = {
+            let s = settings.lock().unwrap();
+            let mut c: Vec<(String, String)> = s.workspaces.iter().map(|w| (w.relay_url.clone(), w.room.clone())).collect();
+            if let Some(url) = s.relay_url.clone().filter(|u| !u.is_empty()) {
+                c.push((url, s.sync_room.clone()));
+            }
+            c
+        };
+        match service.store().migrate_sync_tables(&conns) {
+            Ok(ligus_runtime::event_store::SyncMigration::Migrated { backup, reset, .. }) => {
+                tracing::info!(target: "sync", backup = ?backup, reset = reset.len(), "sync state is now kept per relay and workspace");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(target: "sync", "upgrading the sync state failed; it runs again on the next launch: {e}"),
+        }
+    }
     // The private local workspace skips governance authz (solo, never-synced), so
     // an identity churn can't lock the sole user out of routine actions in their
     // own Home workspace.
@@ -13422,6 +13565,7 @@ async fn sync_pull_once(
                 fulfil_apply_requests(app);
                 attachments::share_approved_offers(app);
                 attachments::renew_attachment_blobs(app);
+                first_profile(app, active);
             }
             if pulled > 0 {
                 let _ = app.emit("workspace://synced", pulled);
@@ -16613,6 +16757,7 @@ pub fn run() {
             remove_duplicate_member,
             approve_device,
             list_my_devices,
+            rename_device,
             list_device_pairings,
             list_device_requests,
             revoke_my_device,

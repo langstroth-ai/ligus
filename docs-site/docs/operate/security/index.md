@@ -40,6 +40,41 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
 `systemd-creds`, `k8s`, `file`) picks the backend on a device. See
 [known limitations](threat-model.md#known-limitations).
 
+### Invite seeds, backups and the database version {#seeds-and-backups}
+
+**Invite and admission seeds.** An invite you issue, and an admission a box
+redeems, each come with a small secret (a redeem key seed) that the code
+carries. From 0.4 that seed lives in the OS secret store, with the other
+secrets above. A copy also stays in `ligus.db` while the invite or admission
+is still open, so an older Ligus on the same data dir, or a downgrade, keeps
+working. Each start copies any seed it finds in the database to the secret
+store and reads it back. It removes the database copy once the invite is
+used or closed, or the admission has expired. A person invite that nobody
+redeems is removed 7 days after it was first copied. The removal overwrites
+the old bytes in the file and empties the write-ahead log, so the seed
+doesn't linger on disk.
+
+**Backups.** Before the 0.4 upgrade of its sync state, and before the
+cleanup of other workspaces' events, Ligus copies the whole database next to
+it (`ligus.db.bak-...`). A backup is a full copy, so it also holds the seeds
+the database held at the time. Ligus doesn't delete these by itself:
+`ligus doctor` lists each one with its path. Delete one once you no longer
+need the backup.
+
+**Database version.** `ligus.db` records which version of its layout it
+uses. A Ligus that finds data written by a newer Ligus opens it read-only and
+says "this data was written by a newer Ligus; update or use another data
+dir". The CLI stops with exit code 3, and `ligus doctor` reports it. Update
+Ligus, or point `LIGUS_DATA_DIR` at another data dir.
+
+**Sync state.** Where each workspace's sync left off is kept per relay, so
+two relays that happen to use the same room name never share progress. On
+the first start of 0.4 the old progress is carried over when exactly one
+relay is set up for that room; otherwise that workspace fetches again from
+the start, which is safe and only takes longer. The upgrade runs when no
+other Ligus process has the data dir open, so restart `ligus serve` after
+upgrading the CLI.
+
 ## Encryption {#encryption}
 
 - **Workspace events** are signed by the authoring device (Ed25519) and, for
@@ -225,10 +260,36 @@ it names.
   key signs for the agent (see
   [Known limitations](threat-model.md#known-limitations)).
 
+## Rules v3 {#rules-v3}
+
+Workspaces 0.4 creates start on **rules v3**; an Owner switches an older
+workspace in Settings (a passkey confirmation; there is no way back). Under
+rules v3:
+
+- **A device certificate counts only when the device accepted it.** A
+  computer or box accepts by signing as the account (its own copy of the
+  certificate, its admission, its name); a phone by its own signed
+  enrollment statement, or by being certified by one account alone. A
+  certificate someone puts on another person's device key, which anyone
+  can, counts for nothing: it can't take over, stop, borrow or redirect the
+  device, and a contested phone stays its person's to revoke.
+- **A duplicate member retires** into its person when a computer that was
+  its own member links as theirs (see
+  [Add a computer](../../ligus/features/linked-devices.md#its-name-and-your-earlier-member)).
+- **Model keys are never stored in the workspace:** a runtime carrying one
+  is refused.
+- **Member records must agree with themselves:** a member id is its actor
+  id, and an actor id its account id.
+- **Hosts of former members are inert:** agents bound to them are unbound.
+
+A 0.3 device on a rules v3 workspace is read-only there and says to update
+Ligus.
+
 ## Passkey presence {#presence}
 
 Signatures prove which device made an event, not that its person was there.
-Every workspace is on **rules v2** from its first event: creating one asks
+Every workspace is on **rules v2** or later from its first event (0.4 creates
+workspaces on **rules v3**, see [Rules v3](#rules-v3)): creating one asks
 for your passkey and a recovery key, and the events that change who can do
 what need a **passkey** assertion over the event:
 

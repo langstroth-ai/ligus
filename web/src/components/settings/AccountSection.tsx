@@ -24,6 +24,7 @@ import {
   setGitEmail,
   myProfile,
   listMyDevices,
+  renameDevice,
   listDeviceRequests,
   revokeMyDevice,
   listDeviceRevocations,
@@ -38,7 +39,7 @@ import {
   type RevocationStep,
 } from "@/lib/ipc";
 import { deviceName, pairingLine, revokeConfirmText } from "@/lib/myDevices";
-import { confirmDialog } from "@/components/Dialog";
+import { confirmDialog, promptDialog } from "@/components/Dialog";
 import { Button, Hint, InfoTip, ListRow, RowList, Section, Switch, fieldStyle } from "@/components/ui";
 import { Row } from "@/components/settings/FlowSection";
 import { toast, errMsg } from "@/components/Toast";
@@ -342,6 +343,22 @@ export function DevicesSection() {
     qc.invalidateQueries({ queryKey: ["device-pairings"] });
   };
 
+  async function rename(d: MyDeviceDto) {
+    const current = deviceName(d, pairings.data ?? []);
+    const next = await promptDialog("Every member sees this name.", {
+      title: "Rename device",
+      defaultValue: d.named ? current : "",
+      placeholder: current,
+    });
+    if (next === null) return;
+    try {
+      await renameDevice(d.deviceId, next.trim());
+      refresh();
+    } catch (e) {
+      toast.error(`Couldn't rename: ${errMsg(e)}`);
+    }
+  }
+
   async function revoke(d: MyDeviceDto) {
     const label = deviceName(d, pairings.data ?? []);
     const ok = await confirmDialog(revokeConfirmText(d, pairings.data ?? []), { danger: true });
@@ -477,7 +494,10 @@ export function DevicesSection() {
                 meta={<span className="font-mono">{d.fingerprint}</span>}
                 tip={pl || undefined}
                 actionsLabel={`Actions for ${nameOf(d)}`}
-                actions={!d.thisDevice ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []}
+                actions={[
+                  { label: "Rename…", onSelect: () => void rename(d) },
+                  ...(!d.thisDevice ? [{ label: d.neverWritten ? "Remove" : "Revoke", danger: true, onSelect: () => void revoke(d) }] : []),
+                ]}
               >
                 {d.note && (
                   <div className="px-1 text-[11px] text-ink-soft" data-testid={`device-note-${d.deviceId}`}>

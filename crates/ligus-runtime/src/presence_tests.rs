@@ -86,7 +86,7 @@ fn on_rules_v2() -> (ChatService, Uuid, Arc<SoftAuthenticator>, Arc<RecoveryKey>
     let k2 = key.clone();
     svc.register_passkey(wid, rc, &move |req| Ok(k2.get(&req.challenge))).unwrap();
     svc.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    svc.set_workspace_rules(wid, 2).unwrap();
+    svc.set_workspace_rules(wid, ligus_core::authz::RULES_NEW_WORKSPACE).unwrap();
     svc.set_presence_provider(None);
     (svc, wid, key, rec)
 }
@@ -128,20 +128,20 @@ fn second_passkey_needs_existing_presence() {
     assert_eq!(svc.passkeys_of(wid, account(&svc)).unwrap().len(), 2);
 }
 
-/// Phase A: a workspace is on rules v2 from its seed. The genesis
-/// `WorkspaceRulesSet` names the relying party without presence (nobody has a
-/// credential yet); governance needs the founder's passkey from the first
-/// event on; there is no rules v1 to switch to.
+/// Phase A, and rules 3 from 0.4: a workspace is on rules v3 from its seed.
+/// The genesis `WorkspaceRulesSet` names the relying party without presence
+/// (nobody has a credential yet); governance needs the founder's passkey
+/// from the first event on; there is no rules v1 to switch to.
 #[test]
-fn a_new_workspace_is_on_rules_v2_from_its_seed() {
+fn a_new_workspace_is_on_rules_v3_from_its_seed() {
     let (mut svc, wid) = founder();
     let cfg = workspace_config_session_id(wid);
     let log = config_log(&svc, wid);
     assert!(
-        log.iter().any(|e| matches!(&e.payload, SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(p) } if p.rp_id == "ligus.ai")),
-        "genesis writes rules v2 with the deployment's relying party"
+        log.iter().any(|e| matches!(&e.payload, SessionEvent::WorkspaceRulesSet { version: 3, presence: Some(p) } if p.rp_id == "ligus.ai")),
+        "genesis writes rules v3 with the deployment's relying party"
     );
-    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 2);
+    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 3);
     // Without a passkey the founder can't admit anyone.
     let err = svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap_err().to_string();
     assert!(err.contains(ligus_core::authz::PRESENCE_REQUIRED), "{err}");
@@ -176,7 +176,7 @@ fn rules_v1_is_refused_by_the_fold() {
     log.push(env.clone());
     assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&env.event_id], Verdict::Denied);
     let (cfg, _) = ligus_core::project_config(&log, None, None);
-    assert_eq!(cfg.unwrap().authz.rules, 2);
+    assert_eq!(cfg.unwrap().authz.rules, ligus_core::authz::RULES_NEW_WORKSPACE);
 }
 
 #[test]
@@ -410,6 +410,7 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
     );
     serve.disable_test_presence();
     serve.act_as_owner_device(desk.author().clone());
+    serve.accept_device_certificate(wid).unwrap();
 
     // Without presence: refused (the fold would not count it either).
     let err = serve.vote_on_proposal(chat, wid, pid, true).unwrap_err().to_string();
@@ -586,7 +587,7 @@ fn on_rules_v2_with_account_key() -> (ChatService, Uuid, Arc<SoftAuthenticator>,
     let k2 = key.clone();
     svc.register_passkey(wid, rec.credential(account, "Recovery key"), &move |req| Ok(k2.get(&req.challenge))).unwrap();
     svc.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    svc.set_workspace_rules(wid, 2).unwrap();
+    svc.set_workspace_rules(wid, ligus_core::authz::RULES_NEW_WORKSPACE).unwrap();
     svc.set_presence_provider(None);
     (svc, wid, key, SigningKeypair::from_seed(&seed).unwrap())
 }
@@ -644,9 +645,12 @@ fn device_key_thief_cannot_add_a_device_under_v2() {
     svc.set_presence_provider(Some(Arc::new(Soft(key))));
     svc.certify_device(&req).unwrap();
     svc.set_presence_provider(None);
-    let roster = crate::envelope_verifier::build_roster(&svc.store().trust_envelopes(wid).unwrap());
-    assert!(roster.is_certified(thief_dev));
-    assert!(svc.certify_device(&req).is_ok(), "re-publishing a certified device");
+    // Rules 3: allowed, and it counts once the device accepts it.
+    let (_, timeline) = ligus_core::project_config(&config_log(&svc, wid), None, None);
+    assert!(timeline.current().unaccepted.contains(&(thief_dev, account)));
+    // Not in force until then, so publishing it again asks again.
+    let err = svc.certify_device(&req).unwrap_err().to_string();
+    assert!(err.contains(ligus_core::authz::PRESENCE_REQUIRED), "{err}");
 }
 
 /// Track B residual 1a (same gap, account keys): rotating an account key is
@@ -815,7 +819,7 @@ fn switching_to_any_later_rules_version_needs_presence() {
     svc.register_passkey(wid, rec.credential(account(&svc), "Recovery"), &move |req| Ok(k.get(&req.challenge))).unwrap();
     let cfg = workspace_config_session_id(wid);
     let unknown = ligus_core::authz::RULES_SUPPORTED + 1;
-    for v in [2, unknown, 7] {
+    for v in [3, unknown, 7] {
         let err = svc.set_workspace_rules(wid, v).unwrap_err().to_string();
         assert!(err.contains(ligus_core::authz::PRESENCE_REQUIRED), "v{v}: {err}");
     }
@@ -877,7 +881,7 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     let k2 = key.clone();
     desk.register_passkey(wid, rec.credential(account, "Recovery key"), &move |req| Ok(k2.get(&req.challenge))).unwrap();
     desk.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    desk.set_workspace_rules(wid, 2).unwrap();
+    desk.set_workspace_rules(wid, ligus_core::authz::RULES_NEW_WORKSPACE).unwrap();
 
     // Ana's second laptop: same account key, its own device key.
     let mut laptop = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author);

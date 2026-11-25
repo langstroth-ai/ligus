@@ -128,6 +128,10 @@ impl ChatService {
             .find(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id == Some(account))
             .ok_or_else(not_member)?;
         let mut actor = member.actor.clone();
+        // The person's current name (identity model v2, 5.4), never the
+        // roster's frozen copy; stamps carry no picture (O2).
+        crate::profiles::resolve_actor(&mut actor, &config.profiles);
+        actor.avatar_url = None;
         actor.device_id = Some(phone);
         Ok(actor)
     }
@@ -146,6 +150,49 @@ impl ChatService {
             }
         }
         Ok(())
+    }
+
+    /// Whether phone `phone`'s certificate for `account` here carries the
+    /// phone's own enrollment statement (identity model v2, 7.3a).
+    pub fn phone_consented(&self, workspace_id: Uuid, phone: Uuid, account: Uuid) -> Result<bool> {
+        Ok(self.store.trust_envelopes(workspace_id)?.iter().any(|e| {
+            matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate: c }
+                if c.device_id == phone && c.account_id == account && c.phone_consent_ok(workspace_id))
+        }))
+    }
+
+    /// Publish phone `phone`'s enrollment statement (`signature`, its P-256
+    /// key over `ligus_core::crypto::phone_consent_preimage` for `account`
+    /// here) with a copy of its certificate for `account`: the phone's own
+    /// acceptance, which rules 3 counts. A box relays it for its phones.
+    /// Returns `Ok(false)` when it was already published.
+    pub fn publish_phone_consent(&mut self, workspace_id: Uuid, phone: Uuid, account: Uuid, signature: &[u8]) -> Result<bool> {
+        if self.phone_consented(workspace_id, phone, account)? {
+            return Ok(false);
+        }
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let key = timeline.current().account_keys.get(&account).cloned().unwrap_or_default();
+        let cert = self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
+            SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == phone
+                    && certificate.account_id == account
+                    && certificate.alg == SigAlg::P256
+                    && certificate.verify(&key).is_ok() =>
+            {
+                Some(certificate)
+            }
+            _ => None,
+        });
+        let Some(mut certificate) = cert else {
+            return Err(ChatError::Unauthorized("that phone isn't certified for that account here".into()));
+        };
+        certificate.phone_consent = Some(signature.to_vec());
+        if !certificate.phone_consent_ok(workspace_id) {
+            return Err(ChatError::Unauthorized(BAD_CONSENT.into()));
+        }
+        let config_id = workspace_config_session_id(workspace_id);
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(true)
     }
 
     /// The current members other than its person ([`Self::phone_person`])
@@ -439,6 +486,9 @@ impl ChatService {
         Ok(cert.device_id)
     }
 }
+
+/// The refusal of an enrollment statement that doesn't verify.
+pub const BAD_CONSENT: &str = "that statement isn't this phone's signature for this account and workspace";
 
 /// The refusal of a phone draft whose chain link went stale.
 pub const STALE_DRAFT: &str = "this phone signed something else here since the draft; prepare it again";

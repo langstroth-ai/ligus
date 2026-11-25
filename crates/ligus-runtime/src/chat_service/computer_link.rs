@@ -196,6 +196,16 @@ impl ChatService {
         if config.guards.dearth_on().is_some() {
             return Err(refused("the workspace is in lockdown: no device can be added until an Admin turns it off"));
         }
+        // Rules 3: the desktop's certificate counts once this computer
+        // accepts it (`accept_device_certificate`, right after the link is
+        // recorded); until then it is on the log, unaccepted.
+        if head.unaccepted.contains(&(self.device_id, account)) && !config.guards.revoked_devices.contains(&self.device_id) {
+            let chosen = self.device_chosen_accounts(ws, self.device_id, &self.keypair.public_key_bytes())?;
+            if chosen.iter().any(|a| *a != account) {
+                return Err(refused("this computer is already in the workspace as someone else: make a new request with a new device key"));
+            }
+            return Ok(person);
+        }
         let Some(me) = head.devices.get(&self.device_id) else {
             return Err(refused(crate::computer_link::NOT_ON_RELAY_YET));
         };
@@ -210,5 +220,60 @@ impl ChatService {
             return Err(refused(crate::computer_link::NOT_ON_RELAY_YET));
         }
         Ok(person)
+    }
+
+    /// On a linked computer acting as its person, right after it accepted
+    /// its certificate: retire the separate member this install was here
+    /// before (identity model v2, 8.3; decision O5), signed by that
+    /// member's own account key (`old_account`). Rules 3 only. Returns
+    /// `None` when it retired it (or there was nothing to retire), else why
+    /// not, for the person to read ("needs an Admin to remove it").
+    pub fn retire_previous_member(&mut self, workspace_id: Uuid, old_account: &ligus_core::SigningKeypair, old_account_id: Uuid, old_member_id: &str) -> Result<Option<String>> {
+        let Some(account) = self.author.account_id else { return Ok(None) };
+        if account == old_account_id {
+            return Ok(None);
+        }
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(None) };
+        if !config.members.iter().any(|m| m.id == old_member_id) {
+            return Ok(None);
+        }
+        if timeline.current().rules < ligus_core::authz::RULES_V3 {
+            return Ok(Some("this workspace is on older rules: an Admin removes the earlier member".into()));
+        }
+        let retirement = ligus_core::retirement::MemberRetirement::sign(old_account, workspace_id, old_member_id, old_account_id, account, self.device_id);
+        match self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::MemberRetired { retirement }) {
+            Ok(_) => Ok(None),
+            Err(ChatError::Unauthorized(why)) => Ok(Some(why)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// On a linked computer acting as its person (after
+    /// [`Self::check_computer_link`] and `act_as_owner_device`): publish this
+    /// device's own copy of the certificate the person's desktop published
+    /// for it. Under rules 3 that is the computer's acceptance, without
+    /// which the certificate counts for nothing; under rules 2 it changes
+    /// nothing. Needs no presence. A no-op when it already accepted.
+    pub fn accept_device_certificate(&mut self, workspace_id: Uuid) -> Result<bool> {
+        let Some(account) = self.author.account_id else { return Ok(false) };
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let head = timeline.current();
+        if !head.unaccepted.contains(&(self.device_id, account)) {
+            return Ok(false);
+        }
+        let mine = self.device_id;
+        let key = head.account_keys.get(&account).cloned().unwrap_or_default();
+        let cert = self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match e.payload {
+            SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == mine && certificate.account_id == account && certificate.verify(&key).is_ok() =>
+            {
+                Some(certificate)
+            }
+            _ => None,
+        });
+        let Some(certificate) = cert else { return Ok(false) };
+        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(true)
     }
 }

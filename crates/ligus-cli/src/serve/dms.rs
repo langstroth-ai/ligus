@@ -114,6 +114,18 @@ impl DmStore {
         Ok(f.dms.iter().map(DmConn::workspace_id).collect())
     }
 
+    /// Every DM's (relay URL, room) as `serve-dms.json` lists them, or an
+    /// error when the file exists but can't be read (the sync-table
+    /// migration must not take an unreadable list as "no DMs").
+    pub fn connections_checked(data_dir: &Path) -> Result<Vec<(String, String)>> {
+        let f = match std::fs::read_to_string(path(data_dir)) {
+            Ok(t) => serde_json::from_str::<DmFile>(&t)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DmFile::default(),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(f.dms.into_iter().map(|c| (c.relay_url, c.room)).collect())
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, DmFile> {
         self.file.lock().unwrap_or_else(|e| e.into_inner())
     }
