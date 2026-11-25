@@ -25,6 +25,7 @@ use ligus_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod approval_check;
 mod attachments;
 mod changes;
 mod computer_link;

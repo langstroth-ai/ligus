@@ -228,7 +228,7 @@ pub enum RelayProbe {
 /// 401s. Relay tokens are colon-free (hex, or `hrt1.<b64>.<b64>`), so a leading
 /// `identifier:` can be dropped safely; anything that doesn't look like that is
 /// returned unchanged.
-fn normalize_access_token(raw: &str) -> String {
+pub(crate) fn normalize_access_token(raw: &str) -> String {
     let t = raw.trim();
     if let Some((prefix, rest)) = t.split_once(':') {
         let prefix_ok = !prefix.is_empty()

@@ -98,11 +98,26 @@ the approver checks it when the `reveal` arrives and aborts on a mismatch.
 
 ## 4. Relay routes (`langstroth-relay`, additive)
 
-All bodies are JSON. Errors use the relay's problem documents. Every route
-answers 404 when mailboxes are off. Clients treat a 404 from
-`PUT /v1/mailboxes/{mailbox}` or a 404 without a `mailbox_unknown` problem
-code anywhere as "this relay has no mailbox routes" (fall back to paste,
-exit 3).
+All bodies are JSON. Errors are problem documents carrying the same code in
+both `error` and `code` (`{"error":"request_unknown","code":"request_unknown","message":…}`);
+`429` and `507` also carry `Retry-After`. Every route answers a plain 404
+(no problem document) when mailboxes are off. Clients read a 404 this way:
+
+- `mailbox_unknown`: no mailbox at that id. The relay keeps mailboxes in
+  memory and forgets them on a restart, so a member re-registers
+  (`ensure_registered`, counter 0) when it sees this.
+- `request_unknown`: the `rid` is unknown, expired or deleted: the request
+  is dead.
+- anything else, and any 404 from `PUT /v1/mailboxes/{mailbox}`: "this relay
+  has no mailbox routes" (fall back to paste, exit 3).
+
+Other problem codes: `rid_exists`, `stale_counter` (409); `bad_put_cap`,
+`bad_read_key`, `bad_member_auth`, `auth_required`, `token_required`,
+`bad_signature` (401/403); `mailbox_mismatch`, `invalid_request` (400);
+`too_large` (413); `mailbox_full`, `too_many_messages`, `mailbox_register`,
+`mailbox_polls` and the rate codes (429); `mailboxes_full`,
+`mailbox_storage` (507). Blobs are non-empty base64url, times are Unix ms,
+and a request's message `seq` starts at 1.
 
 ### 4.1 Auth
 
@@ -114,7 +129,8 @@ exit 3).
   registered `authPub` and refuses a `ts` more than 300 s from its clock. On
   a token-gated relay a member also sends its normal
   `Authorization: Bearer hrt1…` access token, checked as any other request
-  (any valid token; mailboxes aren't bound to rooms).
+  (any valid token; mailboxes aren't bound to rooms). Register and reset
+  send it too.
 - **Requester**: `X-Ligus-Read-Key: <b64u 16>` whose SHA-256 equals the
   `readKeyHash` stored with that `rid`. A requester needs no token.
 - **Put**: `X-Ligus-Put-Cap: <b64u 16>` whose SHA-256 equals the mailbox's
@@ -138,7 +154,7 @@ PUT    /v1/mailboxes/{mailbox}
 
 PUT    /v1/mailboxes/{mailbox}/requests/{rid}
        X-Ligus-Put-Cap; {"blob":"<= 8 KiB","readKeyHash":"<b64u 32>"}
-       -> 201 {"rid","putAt","expiresAt"} | 403 bad cap | 404 mailbox_unknown | 409 rid exists
+       -> 201 {"rid","putAt","expiresAt"} | 403 bad_put_cap | 404 mailbox_unknown | 409 rid_exists
           | 429 rate (10 puts/min/client address) | 429 {code:"mailbox_full"} (64 live)
 
 GET    /v1/mailboxes/{mailbox}/requests                       member
@@ -146,14 +162,14 @@ GET    /v1/mailboxes/{mailbox}/requests                       member
 
 POST   /v1/mailboxes/{mailbox}/requests/{rid}/msgs            member or requester (read key)
        {"blob":"<= 32 KiB","to":"members"|"requester"|"approver"}
-       -> 201 {"seq":N} | 404 unknown or expired rid | 429 {code:"too_many_messages"} (10 per rid)
+       -> 201 {"seq":N} | 404 request_unknown (unknown or expired rid) | 429 {code:"too_many_messages"} (10 per rid)
 
 GET    /v1/mailboxes/{mailbox}/requests/{rid}/msgs?after=N&wait=S   member or requester
        long poll up to min(S, 25) s while nothing is after N
        -> 200 {"msgs":[{"seq","blob","to","from":"member"|"requester","at"}]}
 
 DELETE /v1/mailboxes/{mailbox}/requests/{rid}                 requester (read key)
-       -> 204; the request and its messages are gone
+       -> 204; the request and its messages are gone | 404 request_unknown
 ```
 
 `from` is what the relay saw (member auth or a read key), a hint only.
@@ -198,6 +214,14 @@ minutes per workspace and the phone's Inbox shows "Several join requests".
 written with `private_file::write_private_atomic`, deleted entry by entry
 once settled. Nothing here is a workspace secret; `nR` is only useful before
 the reveal.
+
+`approval-dead.json`: `[{"rid","at"}]`, the requests that ended without an
+approval in the last 15 minutes (design note 6.4: the requester stops at 3).
+
+`approval-seen.json` (an approver): `{"<mailbox hex>":{"<rid hex>":<ms>}}`,
+the `rid`s this device opened, kept 24 hours.
+
+All three are device-local, owner-only, and read by nothing else.
 
 ## 7. Paste with a live request (design note 6.6)
 
