@@ -189,7 +189,7 @@ pub fn view(session: &ChatSession, st: &AskState, me: &str, now_ms: i64, host_la
         cwd: ask_text::clean_option(&e.cwd),
         host_device_id: e.host_device_id.or(st.host).map(|d| d.to_string()),
         host_label: e.host_device_id.or(st.host).and_then(host_label).unwrap_or_default(),
-        presence_required: e.needs_presence(),
+        presence_required: st.grant_needs_presence(),
         standing: e.standing,
         too_large: e.too_large,
     });
