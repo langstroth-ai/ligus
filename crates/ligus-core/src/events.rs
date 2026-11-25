@@ -1081,6 +1081,20 @@ impl ChatSession {
                 if self.members.iter().any(|m| m.id == retirement.member_id) {
                     self.guards.removed_members.insert(retirement.member_id.clone());
                 }
+                // The linked computer's host passes to the person (8.3).
+                let successor = self
+                    .members
+                    .iter()
+                    .find(|m| m.actor.account_id == Some(retirement.successor_account_id))
+                    .map(|m| m.id.clone());
+                if let Some(s) = successor {
+                    let device = retirement.device_id.to_string();
+                    for h in self.workspace_hosts.iter_mut() {
+                        if h.id == device && h.owner_actor_id == retirement.member_id {
+                            h.owner_actor_id = s.clone();
+                        }
+                    }
+                }
                 self.members.retain(|m| m.id != retirement.member_id);
                 self.retired.insert(retirement.member_id.clone(), retirement.successor_account_id);
             }

@@ -190,15 +190,16 @@ impl ChatService {
         if device == self.device_id {
             return Ok(None);
         }
-        let mine = self.device_id;
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let key = timeline.current().account_keys.get(&account).cloned().unwrap_or_default();
         let cert = self.store.trust_envelopes(workspace_id)?.into_iter().find_map(|e| match &e.payload {
             SessionEvent::DeviceCertificateAdded { certificate: c }
                 if c.device_id == device
                     && c.account_id == account
                     && c.alg == ligus_core::crypto::SigAlg::Ed25519
+                    && c.verify(&key).is_ok()
                     && e.signer_device_id.is_some_and(|s| s != device) =>
             {
-                let _ = mine;
                 Some(c.clone())
             }
             _ => None,

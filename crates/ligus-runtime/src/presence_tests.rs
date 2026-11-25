@@ -133,15 +133,15 @@ fn second_passkey_needs_existing_presence() {
 /// (nobody has a credential yet); governance needs the founder's passkey
 /// from the first event on; there is no rules v1 to switch to.
 #[test]
-fn a_new_workspace_is_on_rules_v3_from_its_seed() {
+fn a_new_workspace_is_on_rules_v2_from_its_seed_and_v3_from_its_first_passkey() {
     let (mut svc, wid) = founder();
     let cfg = workspace_config_session_id(wid);
     let log = config_log(&svc, wid);
     assert!(
-        log.iter().any(|e| matches!(&e.payload, SessionEvent::WorkspaceRulesSet { version: 3, presence: Some(p) } if p.rp_id == "ligus.ai")),
-        "genesis writes rules v3 with the deployment's relying party"
+        log.iter().any(|e| matches!(&e.payload, SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(p) } if p.rp_id == "ligus.ai")),
+        "genesis writes rules v2 with the deployment's relying party (a 0.3 build accepts it)"
     );
-    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 3);
+    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 2);
     // Without a passkey the founder can't admit anyone.
     let err = svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap_err().to_string();
     assert!(err.contains(ligus_core::authz::PRESENCE_REQUIRED), "{err}");
@@ -150,6 +150,7 @@ fn a_new_workspace_is_on_rules_v3_from_its_seed() {
     // The founder's first passkey registers with the seed's grant.
     let key = Arc::new(SoftAuthenticator::es256());
     register(&mut svc, wid, &key, None).unwrap();
+    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 3, "the founder's first passkey moves it to rules 3, with presence");
     assert!(!svc.workspace_secured(wid).unwrap(), "a passkey without a recovery key isn't secured yet");
     let rec = RecoveryKey::generate().unwrap();
     let k = key.clone();

@@ -29,6 +29,11 @@ pub fn retirement_ok(env: &SessionEventEnvelope, r: &MemberRetirement, on_config
         return Err("a member is retired by itself or by its person".into());
     }
     super::certified_signer(env, roster)?;
+    // Once: a retirement signature can't be replayed after an Admin
+    // deliberately added the member back.
+    if fold.retired.contains_key(&r.member_id) {
+        return Err("that member was retired before: an Admin removes it now".into());
+    }
     if r.account_id == r.successor_account_id {
         return Err("a member retires into someone else".into());
     }

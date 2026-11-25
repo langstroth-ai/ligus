@@ -155,9 +155,14 @@ impl ChatService {
     /// Whether phone `phone`'s certificate for `account` here carries the
     /// phone's own enrollment statement (identity model v2, 7.3a).
     pub fn phone_consented(&self, workspace_id: Uuid, phone: Uuid, account: Uuid) -> Result<bool> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let key = timeline.current().account_keys.get(&account).cloned().unwrap_or_default();
         Ok(self.store.trust_envelopes(workspace_id)?.iter().any(|e| {
             matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate: c }
-                if c.device_id == phone && c.account_id == account && c.phone_consent_ok(workspace_id))
+                if c.device_id == phone
+                    && c.account_id == account
+                    && c.verify(&key).is_ok()
+                    && c.phone_consent_ok(workspace_id))
         }))
     }
 
