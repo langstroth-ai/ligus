@@ -40,6 +40,41 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
 `systemd-creds`, `k8s`, `file`) picks the backend on a device. See
 [known limitations](threat-model.md#known-limitations).
 
+### Invite seeds, backups and the database version {#seeds-and-backups}
+
+**Invite and admission seeds.** An invite you issue, and an admission a box
+redeems, each come with a small secret (a redeem key seed) that the code
+carries. From 0.4 that seed lives in the OS secret store, with the other
+secrets above. A copy also stays in `ligus.db` while the invite or admission
+is still open, so an older Ligus on the same data dir, or a downgrade, keeps
+working. Each start copies any seed it finds in the database to the secret
+store and reads it back. It removes the database copy once the invite is
+used or closed, or the admission has expired. A person invite that nobody
+redeems is removed 7 days after it was first copied. The removal overwrites
+the old bytes in the file and empties the write-ahead log, so the seed
+doesn't linger on disk.
+
+**Backups.** Before the 0.4 upgrade of its sync state, and before the
+cleanup of other workspaces' events, Ligus copies the whole database next to
+it (`ligus.db.bak-...`). A backup is a full copy, so it also holds the seeds
+the database held at the time. Ligus doesn't delete these by itself:
+`ligus doctor` lists each one with its path. Delete one once you no longer
+need the backup.
+
+**Database version.** `ligus.db` records which version of its layout it
+uses. A Ligus that finds data written by a newer Ligus opens it read-only and
+says "this data was written by a newer Ligus; update or use another data
+dir". The CLI stops with exit code 3, and `ligus doctor` reports it. Update
+Ligus, or point `LIGUS_DATA_DIR` at another data dir.
+
+**Sync state.** Where each workspace's sync left off is kept per relay, so
+two relays that happen to use the same room name never share progress. On
+the first start of 0.4 the old progress is carried over when exactly one
+relay is set up for that room; otherwise that workspace fetches again from
+the start, which is safe and only takes longer. The upgrade runs when no
+other Ligus process has the data dir open, so restart `ligus serve` after
+upgrading the CLI.
+
 ## Encryption {#encryption}
 
 - **Workspace events** are signed by the authoring device (Ed25519) and, for

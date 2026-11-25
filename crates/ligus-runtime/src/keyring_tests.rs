@@ -912,10 +912,10 @@ async fn junk_epoch_body_does_not_pin_cursor() {
     round(&mut other_sync, &other_db).await;
     assert!(bodies(&other_db, chat).contains(&"after the junk".to_string()));
     let store = crate::EventStore::open(&other_db).unwrap();
-    let parked = store.parked_bodies(room).unwrap();
+    let parked = store.parked_bodies(&other_sync.sync_key()).unwrap();
     assert_eq!(parked.len(), 1, "the junk body is parked, not retried from the cursor");
     assert!(other_sync.cursor() >= parked[0].0, "the cursor moved past the junk body");
-    assert_eq!(store.sync_cursor(room).unwrap(), other_sync.cursor());
+    assert_eq!(store.sync_cursor(&other_sync.sync_key()).unwrap(), other_sync.cursor());
 }
 
 /// B2 residual: keys are only decided on a pinned fold. A device without a
@@ -1018,7 +1018,7 @@ fn parked_flood_does_not_evict_pending_rotation_bodies() {
         fetched.push((seq, junk));
     }
     engine.apply_fetched(&mut store, &fetched).unwrap();
-    let parked = store.parked_bodies(room).unwrap();
+    let parked = store.parked_bodies(&engine.sync_key()).unwrap();
     assert!(parked.len() as i64 <= crate::event_store::PARKED_KEEP, "the cap holds");
     assert!(parked.iter().any(|(seq, _)| *seq == 1), "the flood evicted the body waiting for the authorized rotation");
 }

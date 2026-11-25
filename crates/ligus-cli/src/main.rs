@@ -180,6 +180,65 @@ fn config() -> Config {
     }
 }
 
+/// Before any command opens the store (identity model v2, 10.4 and 11):
+/// data a newer Ligus wrote stops here with exit 3 (`ligus doctor` reports it
+/// instead), and opening it once moves the redeem key seeds to the secret
+/// store (M2). Then the sync state is keyed by relay and workspace (M1),
+/// when this process has the store alone; otherwise on a later start.
+fn prepare_store(cfg: &Config, command: &str) -> Result<()> {
+    let db = cfg.data_dir.join("ligus.db");
+    if !db.exists() {
+        return Ok(());
+    }
+    let store = match EventStore::open(&db) {
+        Ok(s) => s,
+        // (The command opens it again and says why it can't.)
+        Err(_) => return Ok(()),
+    };
+    if store.newer_schema().is_some() {
+        if command == "doctor" {
+            return Ok(());
+        }
+        return Err(newer_data_problem(cfg));
+    }
+    let conns = match sync_connections(cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ligus: serve-dms.json is unreadable ({e}); the sync state stays as it is for now");
+            return Ok(());
+        }
+    };
+    match store.migrate_sync_tables(&conns) {
+        Ok(ligus_runtime::event_store::SyncMigration::Migrated { backup: Some(b), reset, .. }) => {
+            eprintln!("ligus: upgraded the local sync state (backup: {})", b.display());
+            if !reset.is_empty() {
+                eprintln!("ligus: {} room(s) named on more than one relay, or on none, sync again from the start", reset.len());
+            }
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("ligus: upgrading the local sync state failed, it runs again on the next start: {e}"),
+    }
+    Ok(())
+}
+
+/// Exit 3: the data dir holds data a newer Ligus wrote.
+fn newer_data_problem(cfg: &Config) -> anyhow::Error {
+    anyhow::Error::new(problem::Problem {
+        exit: problem::EXIT_FIXABLE,
+        code: "newer_data",
+        message: ligus_runtime::event_store::NEWER_DATA_MESSAGE.to_string(),
+        fix: Some(format!("install the newer Ligus, or point LIGUS_DATA_DIR at another data dir (this one is {})", cfg.data_dir.display())),
+    })
+}
+
+/// This data dir's relay connections as (relay URL, room): its workspace
+/// and each DM `ligus serve` holds.
+fn sync_connections(cfg: &Config) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = cfg.relay_url.iter().map(|u| (u.clone(), cfg.room.clone())).collect();
+    out.extend(serve::dms::DmStore::connections_checked(&cfg.data_dir)?);
+    Ok(out)
+}
+
 /// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
 /// delivered epoch keys, founder pin), with the codec every client shares
 /// (`ligus_runtime::workspace_invite`).
@@ -2090,6 +2149,10 @@ fn cmd_doctor(cfg: &Config, o: &DoctorOpts) -> Result<i32> {
             r.add(c);
         }
     }
+    // Data a newer Ligus wrote: exit 3, as every other command does.
+    if code == 0 && r.checks.iter().any(|c| c.id == "store.schema" && c.status == Status::Fail) {
+        code = problem::EXIT_FIXABLE;
+    }
     if code == 0 && !r.ok() {
         code = help::EXIT_ERROR;
     }
@@ -2185,6 +2248,33 @@ fn keychain_access_check(access: &ligus_runtime::secret_store::KeychainAccess) -
 
 /// `ligus doctor`'s workspace checks: the secret store, the connection, the
 /// relay (one request), and the events held aside.
+/// The database's schema version (identity model v2, 10.4) and the backups
+/// of it next to it, which hold redeem key seeds (10.3): listed, never
+/// deleted.
+fn store_checks(cfg: &Config) -> Vec<checks::Check> {
+    use checks::Check;
+    let db = cfg.data_dir.join("ligus.db");
+    let mut out = Vec::new();
+    if db.exists() {
+        out.push(match EventStore::open(&db) {
+            Ok(s) if s.newer_schema().is_some() => Check::fail("store.schema", "database", ligus_runtime::event_store::NEWER_DATA_MESSAGE)
+                .fix(format!("install the newer Ligus, or point LIGUS_DATA_DIR at another data dir (this one is {})", cfg.data_dir.display())),
+            Ok(s) => Check::ok("store.schema", "database", format!("schema version {}", s.schema_version().unwrap_or(0))),
+            Err(e) => Check::warn("store.schema", "database", format!("couldn't open it: {e}")),
+        });
+    }
+    let backups = ligus_runtime::event_store::seed_backups(&db);
+    out.push(if backups.is_empty() {
+        Check::ok("store.backups", "database backups", "none")
+    } else {
+        let paths: Vec<String> = backups.iter().map(|p| p.display().to_string()).collect();
+        Check::warn("store.backups", "database backups", format!("{} backup(s) of the database hold invite and admission seeds: {}", paths.len(), paths.join(", ")))
+            .fix("delete once you no longer need the backup")
+            .notes(paths)
+    });
+    out
+}
+
 fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
     use checks::Check;
     let backend = ligus_runtime::secret_store::for_data_dir(&cfg.data_dir).backend();
@@ -2208,6 +2298,10 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
         } else {
             Check::skip("secrets.keychain-access", "keychain access", "not probed in tests")
         });
+    }
+
+    for c in store_checks(cfg) {
+        r.add(c);
     }
 
     let st = status_report(cfg);
@@ -2362,6 +2456,12 @@ fn run() -> Result<()> {
         hardening::set_not_dumpable();
     }
     let cfg = config();
+    // (`ligus doctor` never prompts: the seeds' move reads the store too.)
+    if first == "doctor" {
+        ligus_runtime::secret_store::without_prompts(|| prepare_store(&cfg, first))?;
+    } else {
+        prepare_store(&cfg, first)?;
+    }
     // Agent processes this host spawns never read its data dir (keys,
     // database, serve token) or its secret files; checked-out repos under
     // the data dir stay readable.
