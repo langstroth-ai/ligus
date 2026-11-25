@@ -46,6 +46,7 @@ mod auth;
 mod checks;
 mod cli_flags;
 mod devices_cmd;
+mod link_io;
 mod forge_cmd;
 mod gateway_check;
 mod hardening;
@@ -617,6 +618,13 @@ fn status_report(cfg: &Config) -> serde_json::Value {
             admission = svc.store().join_invite(ws).ok().flatten().is_some();
         }
     }
+    // A link waiting for the desktop's code (expired requests don't count;
+    // status only reads, the devices commands clean them up).
+    let now = ligus_core::flow::now_ms();
+    let linking = ligus_runtime::computer_link::LinkState::load(&cfg.data_dir)
+        .ok()
+        .and_then(|s| s.pending_status(now))
+        .map(|p| (p, link_io::pending_line(&p, now)));
     let tunnel = serve::tunnel::tunnel_dir(&cfg.data_dir);
     let remote = serve::tunnel::RelaySettings::file(&tunnel);
     let remote: Option<serve::tunnel::RelaySettings> = std::fs::read(&remote).ok().and_then(|b| serde_json::from_slice(&b).ok());
@@ -678,6 +686,13 @@ fn status_report(cfg: &Config) -> serde_json::Value {
             })),
         },
         "sandbox": { "tier": sandbox.tier(), "summary": sandbox.summary },
+        "linking": linking.map(|(p, line)| json!({
+            "startedAt": p.created_at,
+            "approveBy": p.approve_by,
+            "expiresAt": p.expires_at,
+            "pending": p.count,
+            "description": line,
+        })),
         "next": next,
     })
 }
@@ -728,6 +743,9 @@ fn cmd_status(cfg: &Config, json: bool) -> Result<()> {
     }
     if let Some(d) = sv["live"]["description"].as_str() {
         println!("serve link    : {d}");
+    }
+    if let Some(d) = r["linking"]["description"].as_str() {
+        println!("linking       : {d}");
     }
     println!("agent sandbox : {}", r["sandbox"]["tier"].as_str().unwrap_or(""));
     println!("next          : {}", r["next"].as_str().unwrap_or(""));
@@ -2540,11 +2558,15 @@ fn run() -> Result<()> {
         }
         "devices" => {
             let json = has("--json");
-            let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+            let interactive = link_io::interactive();
             let mut ask = devices_cmd::confirm_on_tty;
             match positional.first().map(|s| s.as_str()) {
                 Some("list") | None => devices_cmd::cmd_list(&cfg, json),
-                Some("request") => devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json),
+                Some("request") => {
+                    let mut copier = link_io::copy;
+                    let copy = has("--copy").then_some(&mut copier as devices_cmd::Copier<'_>);
+                    devices_cmd::cmd_request(&cfg, flag_val("--label"), has("--new-device"), json, copy)
+                }
                 Some("approve") => rt()?.block_on(devices_cmd::cmd_approve(
                     &cfg,
                     positional.get(1).map(|s| s.as_str()),
@@ -2557,12 +2579,16 @@ fn run() -> Result<()> {
                 )),
                 Some("redeem") => {
                     let mut cfg = cfg.clone();
+                    let mut paste = devices_cmd::paste_at_tty;
                     rt()?.block_on(devices_cmd::cmd_redeem(
                         &mut cfg,
                         positional.get(1).map(|s| s.as_str()),
                         flag_val("--code-file"),
                         flag_val("--approver-fingerprint"),
                         json,
+                        // No code given, at a terminal: a hidden paste or the clipboard.
+                        (interactive && std::io::IsTerminal::is_terminal(&std::io::stdin()))
+                            .then_some(&mut paste as devices_cmd::Paste<'_>),
                         interactive.then_some(&mut ask as devices_cmd::Confirm<'_>),
                     ))
                 }

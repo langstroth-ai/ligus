@@ -155,7 +155,8 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "one-screen summary: data dir, identity, workspace, relay, admission, serve, sandbox",
         purpose: "Summarise this data dir without changing it: the identity (and whether it is a box), the workspace and \
                   its relay, whether an access token, a workspace key and a local copy of the workspace are present, \
-                  whether this identity is a member, a kept admission, the serve and remote-access state, the agent \
+                  whether this identity is a member, a kept admission, a link to your devices still waiting for the \
+                  desktop's code (linking: started, approve by, expires), the serve and remote-access state, the agent \
                   sandbox tier, and the next step. Never creates an identity; reads only.",
         synopsis: &["ligus status [--json]"],
         flags: &[JSON],
@@ -209,16 +210,16 @@ pub const COMMANDS: &[Cmd] = &[
                   key: votes ask for your passkey, and account changes (devices, phones, passkeys, keys) stay on the \
                   desktop. One person per data dir. Revoke it from My devices.",
         synopsis: &[
-            "ligus devices request [--label NAME] [--new-device]",
-            "ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP]",
+            "ligus devices request [--label NAME] [--new-device] [--copy]",
+            "ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP]",
             "ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]",
             "ligus devices list",
         ],
         flags: &[JSON],
         conn: true,
         examples: &[
-            "ligus devices request",
-            "ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+            "ligus devices request | pbcopy",
+            "ligus devices redeem",
             "ligus devices list --json",
         ],
         exit: &[
@@ -234,17 +235,22 @@ pub const COMMANDS: &[Cmd] = &[
         name: "devices request",
         group: G_START,
         summary: "print this computer's link request for your desktop",
-        purpose: "Print this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remember it as \
-                  pending (15 minutes, single use). An install that was already connected (it may have written as its own \
+        purpose: "Print this computer's link request (`liguslink1:…`, no secret) and remember it as pending (15 \
+                  minutes to approve, single use). Only the request goes to stdout, so `ligus devices request | pbcopy` \
+                  copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. --copy \
+                  copies it to the clipboard instead (pbcopy, wl-copy, xclip, xsel, clip.exe; printed when none works). \
+                  --json prints one report whose result has code, fingerprint, label, expiresAt (unix ms: approve by \
+                  then) and newDevice. Expired requests are cleaned up as you go. An install that was already connected (it may have written as its own \
                   member) asks with a new device key, switched to only when you redeem, and adds a proof that it was that \
                   member, so the desktop can offer to remove the duplicate. A box can't: it joins with `ligus admit`.",
-        synopsis: &["ligus devices request [--label NAME] [--new-device] [--json]"],
+        synopsis: &["ligus devices request [--label NAME] [--new-device] [--copy] [--json]"],
         flags: &[
             f("--label NAME", "ligus on <host name>", "the label your desktop shows"),
             f("--new-device", "off (on when this data dir was connected)", "ask with a new device key"),
+            f("--copy", "off", "copy the request to the clipboard instead of printing it"),
             JSON,
         ],
-        examples: &["ligus devices request --label work-laptop"],
+        examples: &["ligus devices request --copy", "ligus devices request --label work-laptop | pbcopy"],
         exit: &[(6, "this data dir is a box")],
         see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
@@ -257,9 +263,14 @@ pub const COMMANDS: &[Cmd] = &[
                   confirm who approved it (the person, the workspace and the approving desktop's fingerprint: \
                   --approver-fingerprint, or a yes at a terminal), save the connection (the workspace key to the secret \
                   store), pull the workspace, check your desktop's certificate for this computer is there, and act as you \
-                  from then on. Publishes this computer's key-agreement key so later key rotations reach it. The relay \
+                  from then on. With no code at a terminal it asks for a hidden paste, and reads the clipboard when you \
+                  just press Enter (pbpaste, wl-paste, xclip, xsel, PowerShell); whatever surrounds the code (a whole \
+                  copied command, quotes, line breaks) is dropped, and the code is never echoed. Without \
+                  --approver-fingerprint, a terminal asks: Approved by <person>'s desktop · fingerprint … · for \
+                  <workspace>. Is that your desktop? [y/N] (y links it); anywhere else it exits 4. \
+                  Publishes this computer's key-agreement key so later key rotations reach it. The relay \
                   access token is never in the grant: on a gated relay, sign in here (ligus auth login).",
-        synopsis: &["ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint FP] [--json]"],
+        synopsis: &["ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP] [--json]"],
         flags: &[
             f("-", "", "read the grant from stdin"),
             f("--code-file PATH", "none", "read the grant from a file"),
@@ -267,9 +278,13 @@ pub const COMMANDS: &[Cmd] = &[
             JSON,
         ],
         conn: true,
-        examples: &["ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62"],
+        examples: &[
+            "ligus devices redeem",
+            "pbpaste | ligus devices redeem - --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+            "ligus devices redeem --code-file ./grant --approver-fingerprint 7F3A-91C0-77DE-0B14-5E62",
+        ],
         exit: &[
-            (4, "confirm the approving desktop (pass --approver-fingerprint or run at a terminal)"),
+            (4, "no code given away from a terminal, or confirm the approving desktop (pass --approver-fingerprint or run at a terminal)"),
             (6, "refused: already someone else's device, another workspace in this data dir, lockdown, revoked"),
             (7, "the relay is unreachable, or the desktop's approval hasn't synced yet (retry within 30 minutes)"),
         ],

@@ -213,16 +213,19 @@ nothing). It can be linked only if the one workspace it holds is the grant's
 `ligus.agent-deploy.v1` document):
 
 ```sh
-ligus devices request [--label NAME] [--new-device] [--json]          # on the new computer
-ligus devices redeem <ligusgrant1:…> | --code-file PATH | - \
+ligus devices request [--label NAME] [--new-device] [--copy] [--json] # on the new computer (the code alone on stdout)
+ligus devices redeem [<ligusgrant1:…> | --code-file PATH | -] \
       [--approver-fingerprint XXXX-…] [--json]                         # on the new computer
 ligus devices approve <liguslink1:…> | --code-file PATH --fingerprint XXXX-… \
       --recovery-words-file PATH [--out PATH] [--json]                # a person's headless approval (prefer the desktop)
 ligus devices list [--json]                                           # your devices, and where this one stands
 ```
 
-`redeem` without `--approver-fingerprint` asks at a terminal and otherwise
-exits 4 (a person must compare it). `approve` without `--fingerprint` asks at
+`redeem` with no code at a terminal reads a hidden paste or the clipboard
+(the desktop's **Copy for lt** copies the grant alone; its **Copy command**
+copies a command without the grant, so it never reaches argv or shell
+history). `redeem` without `--approver-fingerprint` asks at a terminal and
+otherwise exits 4 (a person must compare it). `approve` without `--fingerprint` asks at
 a terminal and otherwise exits 4; its recovery words are the person's
 presence, so it is a human step (AGENTS.md, human-only steps), like
 `ligus phones certify`. Exit codes (the shared table): 0 done; 1 a check

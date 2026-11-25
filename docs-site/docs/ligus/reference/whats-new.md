@@ -8,6 +8,17 @@ Full release notes are on the
 
 ### Changed
 
+- **Linking a computer without retyping codes.** On the desktop, Add a
+  computer's last step has one main button, **Copy for lt**, which copies
+  the grant alone, and shows This desktop's fingerprint large with its own
+  copy button. On the computer, paste it in lt, or run `ligus devices
+  redeem` (or `lt --plain link-redeem`) with nothing after it: it reads a
+  hidden paste or the clipboard and asks *Is that your desktop? [y/N]*.
+  `ligus devices request` prints only the request on stdout (`| pbcopy`
+  copies exactly it), with `--copy` and `--json`. A link waiting for the
+  desktop's code shows in `ligus status`, and expired requests are cleaned
+  up. See [Add a computer](../features/linked-devices.md#how-it-works).
+
 - **Linking a computer is easier to find.** ⌘K **Add a computer to my
   devices…** (type link, computer, device, lt or terminal) and ⌘K **My
   devices**; Profile has a **My devices** link at the top. In People, a
