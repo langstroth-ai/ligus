@@ -5164,6 +5164,45 @@ mod tests {
         }
     }
 
+    /// O12 under rules 3: a phone two accounts certified counts for no one
+    /// until it states its person; its statement, relayed by any member's
+    /// device (its box), makes it its person's alone.
+    #[test]
+    fn a_phones_statement_settles_a_contested_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_founding_rules(ligus_core::authz::RULES_NEW_WORKSPACE);
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        let mut ben = svc_on(&path, "b", "Ben");
+        ben.set_author_account(ben_id.clone(), "Ben", None);
+        ben.store().set_join_invite(wid, invite).unwrap();
+        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.ensure_self_member(cfg, wid).unwrap();
+        ben.publish_identity(cfg, wid).unwrap();
+        assert_eq!(ana.load(cfg).unwrap().unwrap().authz.rules, 3);
+        let phone = ligus_core::testkit::Phone::new();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        let ana_acct = Uuid::parse_str(&ana_id).unwrap();
+        assert!(ana.phone_person(wid, phone.device_id).is_err(), "contested without a statement: no one");
+        let bad = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, Uuid::parse_str(&ben_id).unwrap(), phone.device_id));
+        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &bad).is_err(), "a statement for someone else");
+        let sig = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, ana_acct, phone.device_id));
+        // Ben's device relays it (any member's device may): it is the phone's word.
+        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap());
+        assert!(!ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap(), "once");
+        assert!(ana.phone_consented(wid, phone.device_id, ana_acct).unwrap());
+        assert_eq!(ana.phone_person(wid, phone.device_id).unwrap().id, ana_id);
+        assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty(), "Ben's certificate counts for nothing");
+    }
+
     #[test]
     fn a_worker_manages_its_own_host_only_once_it_is_a_member() {
         // Every author must be a workspace member (0.1): a worker box holding
