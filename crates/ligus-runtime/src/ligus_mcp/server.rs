@@ -1134,12 +1134,13 @@ impl LigusMcp {
             .map(|a| a.iter().filter_map(|v| v.as_str()).map(|o| o.trim().chars().take(flow::MAX_ASK_OPTION_CHARS).collect::<String>()).filter(|o| !o.is_empty()).take(flow::MAX_ASK_OPTIONS).collect())
             .unwrap_or_default();
         let timeout = Duration::from_secs(args.get("timeoutSecs").and_then(Value::as_u64).unwrap_or(600).clamp(1, 3600));
-        let (ask_id, _rx) = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
-            Ok(a) => (a.ask_id, a),
+        let posted = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
+            Ok(a) => a,
             Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
         };
         let _pause = crate::agent_turn::pause_counter(&st.paused);
-        match wait_answer(&*self.host, ctx.session_id, ask_id, timeout, || st.revoked.load(Ordering::SeqCst)).await {
+        let ask_id = posted.ask_id;
+        match wait_answer(&*self.host, ctx.session_id, &posted.ask, timeout, || st.revoked.load(Ordering::SeqCst)).await {
             Some(ans) => (
                 ToolResult::ok(json!({"answer": ans.answer, "optionIndex": ans.option_index, "answeredBy": ans.by})),
                 None,
@@ -1228,6 +1229,8 @@ fn worktree_changes(wt: &std::path::Path) -> Vec<String> {
 /// A posted ask.
 pub struct PostedAsk {
     pub ask_id: Uuid,
+    /// The record as posted: an answer is waited for only on this ask.
+    pub ask: HumanAsk,
 }
 
 /// Post a [`HumanAsk`] as the agent (Agent tier) and tell the host.
@@ -1254,7 +1257,7 @@ pub fn post_ask_as(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, questio
     });
     r?;
     host.ask_posted(ctx.session_id, &ask);
-    Ok(PostedAsk { ask_id: ask.ask_id })
+    Ok(PostedAsk { ask_id: ask.ask_id, ask })
 }
 
 /// Close an unanswered ask (timeout, cancel).
@@ -1267,13 +1270,37 @@ pub fn close_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, ask_id: U
 
 /// Wait for the first answer to `ask_id` in the chat's fold (answers arrive
 /// from any device through sync), until `timeout` or `cancelled()`.
-pub async fn wait_answer(host: &dyn LigusHost, chat: Uuid, ask_id: Uuid, timeout: Duration, cancelled: impl Fn() -> bool) -> Option<flow::HumanAnswered> {
+///
+/// The folded ask under that id must be the one this host posted (its
+/// question, options and turn, signed here): someone who got a record under
+/// the same id in first owns the id in the fold, and an answer to their ask
+/// is never taken as an answer to this one.
+pub async fn wait_answer(host: &dyn LigusHost, chat: Uuid, posted: &HumanAsk, timeout: Duration, cancelled: impl Fn() -> bool) -> Option<flow::HumanAnswered> {
     let deadline = Instant::now() + timeout;
+    let ask_id = posted.ask_id;
     loop {
         let mut found = None;
+        let mut foreign = false;
         host.with_service(&mut |svc| {
-            found = svc.load(chat).ok().flatten().and_then(|s| s.flow.asks.get(&ask_id).and_then(|a| a.answer.clone()));
+            let device = svc.device_id();
+            let Some(st) = svc.load(chat).ok().flatten().and_then(|s| s.flow.asks.get(&ask_id).cloned()) else { return };
+            let ours = st.posted_by.is_none()
+                && st.host.is_none_or(|h| h == device)
+                && st.ask.turn_id == posted.turn_id
+                && st.ask.agent_key == posted.agent_key
+                && st.ask.question == posted.question
+                && st.ask.options == posted.options
+                && st.ask.permission == posted.permission;
+            if ours {
+                found = st.answer;
+            } else {
+                foreign = true;
+            }
         });
+        if foreign {
+            tracing::warn!(target: "ligus_mcp", "ask {ask_id} is held by another record; not waiting on it");
+            return None;
+        }
         if found.is_some() {
             return found;
         }
@@ -1412,7 +1439,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             }
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
             let posted = post_ask_as(&*self.host, &self.ctx, self.turn_id, q, options, timeout, true).ok()?;
-            match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
+            match wait_answer(&*self.host, self.ctx.session_id, &posted.ask, timeout, || false).await {
                 // A permission answer authorizes a run on this host: it counts
                 // only from the host's own person or the agent's owner. Any
                 // other first answer (a teammate on another device) denies.

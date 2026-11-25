@@ -126,6 +126,7 @@ mod tests {
             AskState {
                 ask: HumanAsk { ask_id: id, question: "30s or 60s?".into(), expires_at_ms, closed, ..Default::default() },
                 answer: answered.then(|| HumanAnswered { ask_id: id, answer: "30s".into(), ..Default::default() }),
+                ..Default::default()
             },
         );
     }

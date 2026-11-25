@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod asks;
 pub mod board;
 pub mod career;
 pub mod directives;
@@ -495,18 +496,62 @@ pub struct HumanAnswered {
 }
 
 /// An ask and its settlement, as folded.
+///
+/// Folded with its envelope's provenance ([`asks`]): `ask.permission` is
+/// set only when the asking turn's own host posted it, `ask.closed` only by
+/// a close from the ask's own signer (or its host), and `answer` is the
+/// first answer in canonical order from someone who may give it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskState {
     pub ask: HumanAsk,
-    /// The first answer in canonical order.
+    /// The first answer in canonical order that counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<HumanAnswered>,
+    /// Who posted the ask, when it wasn't the asking agent or its turn's
+    /// host (a person, or another device, signed it under the agent's
+    /// name). Shown as theirs; it is never a permission prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted_by: Option<AskPoster>,
+    /// The key that signed the ask (a device, or an agent key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<Uuid>,
+    /// The device that key resolves to (itself, or the host that certified
+    /// the agent key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Uuid>,
+    /// Settled as builds before these rules fold it (any close naming the
+    /// asking turn, any answer). Only eviction reads it, so every version
+    /// keeps the same asks and judges an answer's `optionIndex` alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_settled: bool,
+}
+
+/// Who signed an ask that isn't the asking agent's or its host's.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskPoster {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
 }
 
 impl AskState {
     pub fn is_open(&self) -> bool {
         self.answer.is_none() && !self.ask.closed
+    }
+
+    /// The name to show for [`AskState::posted_by`]: the roster's name for
+    /// that member (`members`, the chat's roster), never the stamp's own
+    /// claim, which its signer chose; the member id when unknown.
+    pub fn poster_name(&self, members: &[crate::identity::WorkspaceMember]) -> Option<String> {
+        let p = self.posted_by.as_ref()?;
+        Some(members.iter().find(|m| m.id == p.id).map(|m| m.actor.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| p.id.clone()))
+    }
+
+    /// Settled for eviction: what every version agrees on.
+    fn evictable(&self) -> bool {
+        self.legacy_settled || !self.is_open()
     }
 }
 
@@ -709,26 +754,8 @@ impl FlowState {
                     }
                 }
             }
-            FlowRecord::HumanAsk(a) => match self.asks.get_mut(&a.ask_id) {
-                // Only the asking turn may close it; the question is fixed.
-                Some(st) if st.ask.turn_id == a.turn_id && st.ask.agent_key == a.agent_key => st.ask.closed |= a.closed,
-                Some(_) => {}
-                None => {
-                    if self.asks.len() >= MAX_ASKS_PER_CHAT {
-                        if let Some(oldest) = self.asks.iter().filter(|(_, s)| !s.is_open()).min_by_key(|(_, s)| s.ask.at_ms).map(|(k, _)| *k) {
-                            self.asks.remove(&oldest);
-                        }
-                    }
-                    self.asks.insert(a.ask_id, AskState { ask: a.clone(), answer: None });
-                }
-            },
-            FlowRecord::HumanAnswered(ans) => {
-                if let Some(st) = self.asks.get_mut(&ans.ask_id) {
-                    // First answer in canonical order wins; a closed ask takes none.
-                    if st.answer.is_none() && !st.ask.closed {
-                        st.answer = Some(ans.clone());
-                    }
-                }
+            FlowRecord::HumanAsk(_) | FlowRecord::HumanAnswered(_) => {
+                self.apply_ask(record, &asks::AskProvenance::legacy());
             }
             FlowRecord::TurnToolSummary(t) => {
                 if !self.tool_summaries.iter().any(|x| x.turn_id == t.turn_id) {

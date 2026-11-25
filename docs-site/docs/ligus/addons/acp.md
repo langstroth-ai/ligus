@@ -78,10 +78,20 @@ Ligus answers from your permission tier for CLI agents (Settings, Agents):
 - "Asks a person" posts the request in the chat as a question (the same one
   `ligus_ask_human` uses). Because allowing it lets the agent act on this
   host, only **the host's own person or the agent's owner** can grant it,
-  from the desktop or the phone. If anyone else answers first, the request
-  is denied. The turn waits, and its idle timer is paused while it waits.
-  With no answer within 10 minutes (`LIGUS_ACP_ASK_TIMEOUT_SECS`), the
-  request is denied.
+  from the desktop or the phone. Anyone else's answer is kept in the chat
+  but counts for nothing, and the request keeps waiting. The turn waits, and
+  its idle timer is paused while it waits. With no answer within 10 minutes
+  (`LIGUS_ACP_ASK_TIMEOUT_SECS`), the request is denied.
+- Allowing means **once**: Ligus picks the agent's one-time option. An agent
+  that offers only a standing permission (one that lasts the rest of its
+  session) never gets it by default, not even for a call your tier allows.
+  Ligus asks a person instead, in words that say it lasts the session, and
+  picks it only on their explicit yes. With no one to ask, it is refused.
+- Only the host that runs the turn can post a permission request. A request
+  any other member or device signs (under the agent's name or not) shows as
+  their own question, attributed to them, and grants nothing. Likewise only
+  the asker (the agent or its host) can close a question; anyone else's
+  close is ignored.
 - When the message's author is below this host's tool floor (H1), edits and
   commands are **denied** outright. A person can't widen the gate from a
   permission prompt.
