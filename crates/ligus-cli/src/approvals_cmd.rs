@@ -661,8 +661,8 @@ pub struct ApproveOptions {
 /// `ligus approvals approve <rid> [--code K7Q4M9X2] --recovery-words-file PATH`:
 /// a person's own step. The request is opened first (that is when the
 /// requesting device shows its code); the person then types the code it
-/// shows (`type_code`, a terminal prompt), or gives it as `--code` when they
-/// already read it. It must equal what this device computes; the CLI never
+/// shows (`type_code`, a terminal prompt), or writes it to stdin with
+/// `--code -`. It must equal what this device computes; the CLI never
 /// offers it.
 pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<&mut dyn FnMut() -> Result<String>>) -> Result<()> {
     if o.code.is_none() && type_code.is_none() {
@@ -673,8 +673,16 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
             Some("run this at a terminal and type the code the requesting device shows, or pass --code"),
         ));
     }
-    if o.code.as_deref().is_some_and(|c| ligus_core::match_code::decode(c).is_none()) {
-        return Err(problem(EXIT_USAGE, "bad_code", "--code takes the 8 symbols the requesting device shows (like K7Q4M9X2)", None));
+    // The code exists only once this run has opened the request (it picks a
+    // fresh nonce), so it is never known up front: `--code -` reads it from
+    // stdin after the open, for a person typing into a pipe.
+    if o.code.as_deref().is_some_and(|c| c.trim() != "-") {
+        return Err(problem(
+            EXIT_USAGE,
+            "code_up_front",
+            "the code appears on the requesting device only after this command opens the request, so it can't be given in advance",
+            Some("run this at a terminal and type the code when asked, or pass --code - and write it to stdin once the requesting device shows it"),
+        ));
     }
     let Some(words) = o.words.clone() else {
         return Err(problem(
@@ -729,9 +737,14 @@ pub async fn cmd_approve(cfg: &Config, o: ApproveOptions, mut type_code: Option<
             Err(e) => return Err(approver_problem(e)),
         }
     };
+    note("Opened: the requesting device now shows a code.");
     let typed = match (&o.code, type_code.as_mut()) {
-        (Some(c), _) => c.clone(),
         (None, Some(t)) => t()?,
+        (Some(_), _) => {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.trim().to_string()
+        }
         (None, None) => unreachable!("checked above"),
     };
     let mut r = Report::new("approvals approve");

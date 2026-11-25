@@ -258,8 +258,8 @@ pub const COMMANDS: &[Cmd] = &[
         exit: &[
             (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus devices request)"),
             (4, "with --to: no terminal (a person confirms the code and who they link as here), or nobody approved within --wait"),
-            (6, "this data dir is a box"),
-            (7, "with --to: the relay is unreachable"),
+            (6, "this data dir is a box, or with --to the relay refused the access token"),
+            (7, "with --to: the relay is unreachable, rate-limited or its mailbox is full"),
         ],
         see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
         ..D
@@ -1056,7 +1056,7 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "Boxes and computers that asked through the approval address (`ligus admit address`). List them, or \
                   approve one headless with the code its screen shows and your recovery key. Prefer the desktop or the \
                   phone: they show the code next to Codes match.",
-        synopsis: &["ligus approvals list [--json]", "ligus approvals approve <rid> [--code XXXXXXXX] --recovery-words-file PATH [--json]"],
+        synopsis: &["ligus approvals list [--json]", "ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]"],
         conn: true,
         examples: &["ligus approvals list --json"],
         see_also: &["ligus approvals list", "ligus approvals approve", "ligus admit address"],
@@ -1083,21 +1083,22 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_BOX,
         summary: "headless approver: open a request, compare its code, approve with your recovery key",
         purpose: "A person's own step, like `ligus admit issue`. Opens the request (the requesting device then shows \
-                  a code), asks you to type the code it shows (or takes --code), and approves only when it equals the \
+                  a code), asks you to type the code it shows (or, with --code -, reads it from stdin), and approves only when it equals the \
                   code this device computes; the CLI never offers the code. A box: an Admin issues the admission (recovery key), publishes it and sends it sealed \
                   to the box. A computer of yours: the grant is built, the computer acknowledges it, then the certificate \
                   is published with your recovery key and the grant sent. A wrong code ends the request and nothing is \
                   granted.",
-        synopsis: &["ligus approvals approve <rid> [--code XXXXXXXX] --recovery-words-file PATH [--json]"],
+        synopsis: &["ligus approvals approve <rid> [--code -] --recovery-words-file PATH [--json]"],
         flags: &[
-            f("--code XXXXXXXX", "asked at a terminal", "the 8 symbols the requesting device shows (case, spaces, I/L/O forgiven)"),
+            f("--code -", "asked at a terminal", "read the code from stdin once the request is opened (the code exists only then); case, spaces, I/L/O forgiven"),
             f("--recovery-words-file PATH", "required", "your recovery key's 24 words (an owner-only file): your presence"),
             JSON,
         ],
         conn: true,
-        examples: &["ligus approvals approve 3f2a…c9 --code K7Q4M9X2 --recovery-words-file ~/.ligus-words"],
+        examples: &["ligus approvals approve 3f2a…c9 --recovery-words-file ~/.ligus-words"],
         exit: &[
-            (4, "no terminal and no --code, or no --recovery-words-file: a person's step"),
+            (2, "--code with a value: the code exists only once the request is opened (type it, or --code -)"),
+            (4, "no terminal and no --code -, or no --recovery-words-file: a person's step"),
             (5, "no live request with that rid"),
             (6, "refused: not an Admin (box), a phone (use the desktop), lockdown"),
             (7, "the relay is unreachable, or the requesting device didn't answer"),
@@ -1172,7 +1173,8 @@ pub const COMMANDS: &[Cmd] = &[
         exit: &[
             (3, "with --to: the relay has no approval mailbox (paste the request instead: ligus admit request)"),
             (4, "with --to: nobody approved within --wait, or the address is stale (ask an Admin for the current one)"),
-            (7, "with --to: the relay is unreachable"),
+            (6, "with --to: the relay refused the access token"),
+            (7, "with --to: the relay is unreachable, rate-limited or its mailbox is full"),
         ],
         see_also: &["ligus admit redeem", "ligus help box", "desktop: workspace menu > Admit a box (where the Admin approves)"],
         ..D

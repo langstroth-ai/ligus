@@ -6,6 +6,22 @@ Full release notes are on the
 
 ## Unreleased
 
+### New
+
+- **Approve a box or a computer by comparing a code.** An Admin copies the
+  workspace's approval address (`ligus admit address`, or workspace menu →
+  **Admit a box…**); a box runs `ligus admit request --to ligusaddr1:…` and a
+  computer `ligus devices request --to ligusaddr1:…`. The request reaches the
+  Inbox and, for a box, a paired phone; both screens show the same 8-symbol
+  code, and the approval takes one passkey. A headless box joins only once the
+  approval is on the real workspace log, signed by an Admin's device. A
+  mismatch grants nothing. On the phone, a push-started approval asks which of
+  three codes the box shows. `ligus approvals list` and `approve` are the
+  headless approver; `ligus admit address --reset` cuts off a leaked address.
+  Paste and the fingerprint still work, and Kubernetes admissions are
+  unchanged. See [Admitting a box](../../operate/ops/admitting-a-box.md#code-match)
+  and [Add a computer](../features/linked-devices.md#code-match).
+
 ### Changed
 
 - **Linking a computer is easier to find.** ⌘K **Add a computer to my
