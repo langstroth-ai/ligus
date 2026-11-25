@@ -276,7 +276,7 @@ impl LigusMcp {
     /// `ligus_ask_person` (`person`) or `ligus_ask_room`: post a v2 card,
     /// pause the turn, wait, close it, and return the outcome.
     pub(super) async fn ask_card(&self, st: &Arc<TurnState>, ctx: &EffectCtx, args: &Value, person: bool) -> (ToolResult, Option<Uuid>) {
-        let r = self.ask_card_inner(st, ctx, args, person).await;
+        let r = Box::pin(self.ask_card_inner(st, ctx, args, person)).await;
         if r.0.outcome == Outcome::Denied && r.0.text.contains("\"error\"") && !r.0.text.contains("\"status\"") {
             LigusMcp::refund_ask(st);
         }
@@ -356,7 +356,7 @@ impl LigusMcp {
             Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
         };
         let _pause = crate::agent_turn::pause_counter(&st.paused);
-        let outcome = wait_card(&*self.host, chat, &posted, card.timeout, || st.revoked.load(Ordering::SeqCst)).await;
+        let outcome = Box::pin(wait_card(&*self.host, chat, &posted, card.timeout, || st.revoked.load(Ordering::SeqCst))).await;
         match &outcome {
             CardOutcome::Answered(s) => close_card(&*self.host, ctx, &posted.ask, acted_on(s).and_then(|v| v.event_id)),
             CardOutcome::Foreign => {}

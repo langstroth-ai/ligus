@@ -834,9 +834,11 @@ impl LigusMcp {
             "ligus_memory_search" | "ligus_memory_read" | "ligus_memory_propose" | "ligus_task_update" | "ligus_task_state" => {
                 self.memory_tool(st, tool, args)
             }
-            "ligus_ask_human" => self.ask_human(st, &ctx, args).await,
-            "ligus_ask_person" => self.ask_card(st, &ctx, args, true).await,
-            "ligus_ask_room" => self.ask_card(st, &ctx, args, false).await,
+            // Boxed: their waits are large futures, and inlined into this
+            // one they overflow a default-sized tokio worker's stack.
+            "ligus_ask_human" => Box::pin(self.ask_human(st, &ctx, args)).await,
+            "ligus_ask_person" => Box::pin(self.ask_card(st, &ctx, args, true)).await,
+            "ligus_ask_room" => Box::pin(self.ask_card(st, &ctx, args, false)).await,
             "ligus_report" => {
                 let status = s("status");
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
@@ -1454,7 +1456,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             }
             let ask = self.grant_card(&req)?;
             let posted = decision::post_card(&*self.host, &self.ctx, ask).ok()?;
-            let outcome = decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked()).await;
+            let outcome = Box::pin(decision::wait_card(&*self.host, self.ctx.session_id, &posted, req.timeout, || self.revoked())).await;
             match outcome {
                 // The fold counted it (the named people, their passkey where
                 // needed, the digest of this card); the host checks the
