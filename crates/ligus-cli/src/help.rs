@@ -596,9 +596,10 @@ pub const COMMANDS: &[Cmd] = &[
         name: "config",
         group: G_START,
         summary: "export or import the workspace runtime set as TOML",
-        purpose: "Round-trip the workspace runtimes. `export` prints them as TOML (an inline secret is never exported: \
-                  it becomes a secretRef named after the runtime); `import` adds or replaces runtimes by id from a \
-                  file. Share imports with `ligus sync`.",
+        purpose: "Round-trip the workspace runtimes. `export` prints them as TOML (no key is ever exported: a key an \
+                  older version stored in the workspace becomes a secretRef named after the runtime); `import` adds \
+                  or replaces runtimes by id from a file and refuses one with an inline key. Share imports with \
+                  `ligus sync`.",
         synopsis: &["ligus config export", "ligus config import <file.toml>"],
         conn: true,
         examples: &["ligus config export > runtimes.toml", "ligus config import runtimes.toml && ligus sync"],
@@ -609,7 +610,7 @@ pub const COMMANDS: &[Cmd] = &[
         name: "config export",
         group: G_START,
         summary: "print the workspace runtimes as TOML",
-        purpose: "Print the workspace runtimes as TOML on stdout; inline secrets become a secretRef.",
+        purpose: "Print the workspace runtimes as TOML on stdout; a legacy inline key becomes a secretRef (its value is never read).",
         synopsis: &["ligus config export"],
         conn: true,
         examples: &["ligus config export > runtimes.toml"],
@@ -730,7 +731,9 @@ pub const COMMANDS: &[Cmd] = &[
         group: G_AGENTS,
         summary: "list workspace-owned runtimes",
         purpose: "List the workspace runtimes synced onto this box: id, name, provider/model and credential (keyless, \
-                  inline, or secretRef with whether LIGUS_WS_SECRET_<ref> is set here). Never prints a secret.",
+                  secretRef with whether LIGUS_WS_SECRET_<ref> is set here, or \"stored key (unused)\" with a warning \
+                  for a key an older version stored in the workspace: rotate it and use --secret-ref). Never prints a \
+                  secret.",
         synopsis: &["ligus runtimes [--json]"],
         flags: &[JSON],
         env: &["LIGUS_WS_SECRET_<ref>"],
@@ -745,14 +748,13 @@ pub const COMMANDS: &[Cmd] = &[
         summary: "define (or replace by id) a workspace runtime",
         purpose: "Define a workspace-owned runtime. <provider> is anthropic, openai, openrouter, ollama, custom (any \
                   OpenAI-compatible server), claude-code, codex, antigravity (agy) or copilot. Credential: \
-                  --secret-ref keeps the key off the shared log (each host that runs it sets LIGUS_WS_SECRET_<name>); \
-                  --secret puts it end-to-end encrypted on the workspace config log, where every member's device \
-                  holds it; neither is keyless. Share with `ligus sync`.",
-        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME | --secret - | @FILE] [--dry-run]"],
+                  --secret-ref NAME: each host that runs it sets LIGUS_WS_SECRET_<NAME> (or a file in \
+                  LIGUS_WS_SECRET_DIR); without it the runtime is keyless. Keys are never stored in the workspace: \
+                  --secret is a usage error. Share with `ligus sync`.",
+        synopsis: &["ligus add-runtime <id> <name> <provider> <model> [--endpoint URL] [--secret-ref NAME] [--dry-run]"],
         flags: &[
             f("--endpoint URL", "the provider's default", "model endpoint (custom, ollama, a gateway)"),
-            f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME> (preferred)"),
-            f("--secret - | @FILE", "none", "the key itself, from stdin or an owner-only file; synced encrypted"),
+            f("--secret-ref NAME", "none", "hosts read the key from LIGUS_WS_SECRET_<NAME>; keys are never stored in the workspace"),
             DRY_RUN,
         ],
         conn: true,
@@ -2395,8 +2397,9 @@ by a host: its owner's device, or a worker or serve box.
      verify: ligus queue                  # empty once answered ; ligus tail <chat-id>
 
 Credentials: --secret-ref NAME keeps the key off the shared log; every host running
-the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). --secret
-syncs it encrypted to every member's device; prefer --secret-ref.
+the agent sets LIGUS_WS_SECRET_<NAME> (or a file in LIGUS_WS_SECRET_DIR). Keys are never stored
+in the workspace (--secret was removed); ligus doctor warns about a key an older
+version stored there (runtimes.inline-key): rotate it and use --secret-ref.
 
 Access controls:
 - Who may use an agent (only its owner, or everyone; daily turn limits; spending

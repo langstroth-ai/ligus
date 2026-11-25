@@ -983,8 +983,8 @@ fn provider_kind(s: &str) -> Result<ModelProviderKind> {
 }
 
 /// Define (or replace by id) a workspace-owned runtime. `--secret-ref <name>`
-/// keeps the key off the synced log (worker env `LIGUS_WS_SECRET_<name>`);
-/// `--secret <value>` carries it E2EE on the config log; neither = keyless.
+/// names the key each worker holds (env `LIGUS_WS_SECRET_<name>`); without it
+/// the runtime is keyless. Keys are never stored in the workspace.
 #[allow(clippy::too_many_arguments)]
 fn cmd_add_runtime(
     cfg: &Config,
@@ -994,21 +994,18 @@ fn cmd_add_runtime(
     model: &str,
     endpoint: Option<String>,
     secret_ref: Option<String>,
-    secret: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
     let mut wr = WorkspaceRuntime::new(id, name, provider_kind(provider)?, model);
     wr.endpoint = endpoint.unwrap_or_default();
-    wr.credential = match (secret_ref, secret) {
-        (Some(r), _) => WorkspaceCredential::SecretRef { secret_ref: r },
-        (None, Some(s)) => WorkspaceCredential::Inline { secret: s },
-        (None, None) => WorkspaceCredential::None,
+    wr.credential = match secret_ref {
+        Some(r) => WorkspaceCredential::SecretRef { secret_ref: r },
+        None => WorkspaceCredential::None,
     };
     if dry_run {
         let cred = match &wr.credential {
             WorkspaceCredential::SecretRef { secret_ref } => format!("the secret ref {secret_ref}"),
-            WorkspaceCredential::Inline { .. } => "an inline key (stored encrypted in the workspace)".into(),
-            WorkspaceCredential::None => "no key".into(),
+            WorkspaceCredential::Inline {} | WorkspaceCredential::None => "no key".into(),
         };
         println!("dry run: would define runtime '{id}' ({name}: {provider}, model {model}, {cred}); nothing was signed or written.");
         return Ok(());
@@ -1140,9 +1137,9 @@ struct WorkspaceRuntimesToml {
     runtimes: Vec<WorkspaceRuntime>,
 }
 
-/// `ligus config export` — print the workspace runtimes as portable TOML. Inline
-/// secrets are NEVER exported: they're downgraded to a secretRef the importer
-/// resolves from LIGUS_WS_SECRET_<ref>.
+/// `ligus config export` — print the workspace runtimes as portable TOML. Keys
+/// are never exported: a legacy inline credential (its key never decoded)
+/// becomes a secretRef the importer resolves from LIGUS_WS_SECRET_<ref>.
 fn cmd_config_export(cfg: &Config) -> Result<()> {
     let svc = open_service(cfg)?;
     let mut runtimes = svc.list_workspace_runtimes(uuid_of_room(&cfg.room))?;
@@ -1163,6 +1160,9 @@ fn cmd_config_import(cfg: &Config, path: &str) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let mut n = 0;
+    if let Some(wr) = doc.runtimes.iter().find(|r| r.credential.is_legacy_inline()) {
+        return Err(no_workspace_keys(&format!("runtime '{}' in {path} has an inline key", wr.id)));
+    }
     for wr in doc.runtimes {
         let id = wr.id.clone();
         svc.add_workspace_runtime(ws, wr)?;
@@ -1185,9 +1185,10 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
                     WorkspaceCredential::SecretRef { secret_ref } => {
                         ("secretRef", Some(secret_ref.clone()), Some(ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok()))
                     }
-                    WorkspaceCredential::Inline { .. } => ("inline", None, None),
+                    WorkspaceCredential::Inline {} => ("legacyInline", None, None),
                     WorkspaceCredential::None => ("keyless", None, None),
                 };
+                let warning = r.credential.is_legacy_inline().then_some(ligus_core::LEGACY_INLINE_WARNING);
                 serde_json::json!({
                     "id": r.id,
                     "name": shown(&r.name),
@@ -1197,6 +1198,7 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
                     "credential": kind,
                     "secretRef": secret_ref,
                     "secretPresent": present,
+                    "warning": warning,
                 })
             })
             .collect();
@@ -1212,10 +1214,13 @@ fn cmd_runtimes(cfg: &Config, json: bool) -> Result<()> {
                 let have = ligus_core::names::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
                 format!("secretRef:{secret_ref}{}", if have { " ✓" } else { " (missing)" })
             }
-            WorkspaceCredential::Inline { .. } => "inline".into(),
+            WorkspaceCredential::Inline {} => ligus_core::LEGACY_INLINE_LABEL.into(),
             WorkspaceCredential::None => "keyless".into(),
         };
         println!("{:<16} {:<22} {:?}/{}  [{cred}]", r.id, shown(&r.name), r.provider, r.model);
+        if r.credential.is_legacy_inline() {
+            println!("{:<16} ! {}", "", ligus_core::LEGACY_INLINE_WARNING);
+        }
     }
     Ok(())
 }
@@ -2256,7 +2261,25 @@ fn doctor_workspace_checks(cfg: &Config, r: &mut checks::Report) {
                 Check::ok("sync.held", "held events", detail).notes(notes)
             });
         }
+        if let Ok(rts) = svc.list_workspace_runtimes(uuid_of_room(&cfg.room)) {
+            r.add(inline_key_check(&rts));
+        }
     }
+}
+
+/// `runtimes.inline-key`: a runtime whose key an older version stored in the
+/// workspace. That key is never used (or shown); the fix is to rotate it and
+/// move to a secret ref.
+fn inline_key_check(rts: &[WorkspaceRuntime]) -> checks::Check {
+    use checks::Check;
+    const ID: &str = "runtimes.inline-key";
+    const TITLE: &str = "runtime keys";
+    let legacy: Vec<&str> = rts.iter().filter(|r| r.credential.is_legacy_inline()).map(|r| r.id.as_str()).collect();
+    if legacy.is_empty() {
+        return Check::ok(ID, TITLE, "no runtime keys stored in the workspace");
+    }
+    Check::warn(ID, TITLE, format!("{}: {}", legacy.join(", "), ligus_core::LEGACY_INLINE_WARNING))
+        .fix("rotate the key with the provider, set LIGUS_WS_SECRET_<NAME> on each worker, then ligus add-runtime <id> ... --secret-ref <NAME>")
 }
 
 /// A current-thread runtime (the CLI only ever `block_on`s).
@@ -2331,6 +2354,9 @@ fn run() -> Result<()> {
     // command would really run (sign, write, sync): refuse it up front,
     // before the data dir, config or secrets are touched.
     dry_run_supported(&args)?;
+    // `add-runtime --secret` would store a key in the workspace: refused
+    // before anything (stdin included) is read.
+    refuse_secret_flag(&args)?;
     // `ligus app` only opens the desktop app: no data dir, config or secrets.
     if first == "app" {
         return app_cmd::cmd_app(&args[1..]);
@@ -2453,7 +2479,7 @@ fn run() -> Result<()> {
         "runtimes" => cmd_runtimes(&cfg, has("--json")),
         "add-runtime" => {
             if positional.len() < 4 {
-                bail!("usage: ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret - | @FILE]");
+                bail!("usage: ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>]");
             }
             cmd_add_runtime(
                 &cfg,
@@ -2463,7 +2489,6 @@ fn run() -> Result<()> {
                 positional[3],
                 flag_val("--endpoint"),
                 flag_val("--secret-ref"),
-                secret_arg::secret_flag_warn("--secret", flag_val("--secret"), &mut secret_arg::stdin_once())?,
                 has("--dry-run"),
             )
         }
@@ -2843,6 +2868,31 @@ fn dry_run_supported(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The usage error for a key that would be stored in the workspace: what,
+/// why (keys aren't stored there) and the fix (a secret ref on each worker).
+fn no_workspace_keys(what: &str) -> anyhow::Error {
+    anyhow::Error::new(problem::Problem {
+        exit: problem::EXIT_USAGE,
+        code: "usage",
+        message: "keys aren't stored in the workspace".into(),
+        fix: Some("put the key on each worker as LIGUS_WS_SECRET_<NAME> and use --secret-ref <NAME>".into()),
+    })
+    .context(what.to_string())
+}
+
+/// `ligus add-runtime --secret` is a usage error: keys are never stored in the
+/// workspace. Checked before the flag's value (stdin, a file) is read.
+fn refuse_secret_flag(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) != Some("add-runtime") {
+        return Ok(());
+    }
+    let given = args.iter().skip(1).take_while(|a| *a != "--").any(|a| a == "--secret" || a.starts_with("--secret="));
+    if given {
+        return Err(no_workspace_keys("ligus add-runtime doesn't take --secret"));
+    }
+    Ok(())
+}
+
 fn positional_args(rest: &[String]) -> Vec<&String> {
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -2864,6 +2914,47 @@ fn positional_args(rest: &[String]) -> Vec<&String> {
 
 #[cfg(test)]
 mod cli_tests {
+    /// `add-runtime --secret` (any form) is a usage error with what, why and
+    /// the fix; `--secret-ref` and other commands pass.
+    #[test]
+    fn add_runtime_secret_is_a_usage_error() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for args in [
+            a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret", "-"]),
+            a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret=@/tmp/k"]),
+        ] {
+            let e = super::refuse_secret_flag(&args).unwrap_err();
+            let r = crate::problem::render(&e, "add-runtime", "ligus add-runtime --help");
+            assert_eq!(r.exit, crate::problem::EXIT_USAGE);
+            assert!(r.text.contains("doesn't take --secret"), "{}", r.text);
+            assert!(r.text.contains("why: keys aren't stored in the workspace"), "{}", r.text);
+            assert!(r.text.contains("LIGUS_WS_SECRET_<NAME>") && r.text.contains("--secret-ref <NAME>"), "{}", r.text);
+        }
+        assert!(super::refuse_secret_flag(&a(&["add-runtime", "oa", "OpenAI", "openai", "gpt-4o", "--secret-ref", "oa"])).is_ok());
+        assert!(super::refuse_secret_flag(&a(&["send", "--", "--secret"])).is_ok());
+    }
+
+    /// A config import carrying an inline key is refused, and nothing is
+    /// written.
+    #[test]
+    fn an_imported_inline_key_is_never_decoded() {
+        let mut old = ligus_core::WorkspaceRuntime::new("oa", "OpenAI", ligus_core::ModelProviderKind::OpenAI, "gpt-4o");
+        let ok = super::inline_key_check(std::slice::from_ref(&old));
+        assert_eq!(ok.status, crate::checks::Status::Ok);
+        old.credential = ligus_core::WorkspaceCredential::Inline {};
+        let warn = super::inline_key_check(&[old]);
+        assert_eq!(warn.status, crate::checks::Status::Warn);
+        assert_eq!(warn.id, "runtimes.inline-key");
+        assert!(warn.detail.contains("oa: This runtime's key was stored in the workspace"), "{}", warn.detail);
+
+        let doc: super::WorkspaceRuntimesToml = toml::from_str(
+            "[[runtime]]\nid = \"oa\"\nname = \"OpenAI\"\nprovider = \"openAI\"\nmodel = \"gpt-4o\"\n[runtime.credential]\nkind = \"inline\"\nsecret = \"sk-IMPORT-1\"\n",
+        )
+        .unwrap();
+        assert!(doc.runtimes[0].credential.is_legacy_inline());
+        assert!(!toml::to_string(&doc).unwrap().contains("sk-IMPORT"));
+    }
+
     /// `--dry-run` on a command without one is a usage error (exit 2),
     /// never silently ignored; the four that have one, and text after
     /// `--`, pass.
@@ -2987,7 +3078,8 @@ mod cli_tests {
     fn ligus_agent_keeps_the_runtimes_gateway() {
         let mut wr = ligus_core::WorkspaceRuntime::new("gw", "Gateway", ligus_core::ModelProviderKind::Custom, "m");
         wr.endpoint = "https://api.example.com/v1/chat/completions".into();
-        wr.credential = ligus_core::WorkspaceCredential::Inline { secret: "sk-RUNTIME-OWN".into() };
+        std::env::set_var("LIGUS_WS_SECRET_agent_gateway_test", "sk-RUNTIME-OWN");
+        wr.credential = ligus_core::WorkspaceCredential::SecretRef { secret_ref: "agent_gateway_test".into() };
         wr.gateway = "litellm".into();
         let rt = workspace_runtime_resolved(&wr);
         assert_eq!(rt.gateway.as_ref().map(|g| g.name.as_str()), Some("litellm"));

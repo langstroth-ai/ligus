@@ -1147,6 +1147,11 @@ pub(super) fn agent_dto(s: &Shared, a: &ligus_core::WorkspaceAgent, config: &Cha
     if let Some(r) = rt.filter(|r| !r.model.trim().is_empty()) {
         v["model"] = json!(r.model);
     }
+    // A key an older version stored in the workspace is never used or sent;
+    // the phone and lt show this calm warning on the agent's row.
+    if rt.is_some_and(|r| r.credential.is_legacy_inline()) {
+        v["runtimeWarning"] = json!(ligus_core::LEGACY_INLINE_WARNING);
+    }
     if !a.host_id.is_empty() {
         v["hostId"] = json!(a.host_id);
         let label = if a.host_id == s.host_id {
