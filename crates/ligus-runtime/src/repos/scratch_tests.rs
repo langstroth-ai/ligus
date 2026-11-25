@@ -207,10 +207,16 @@ fn removal_refuses_traversal_symlinks_and_foreign_folders() {
         assert!(r4.path.exists());
     }
 
-    // The scratch root itself moved under a symlink after creation.
+    // A recorded root that is reached through a symlink (it isn't the
+    // canonical folder any more): refused.
     let r5 = mk(&e, "rootmove", "", 0);
-    let moved = ScratchRepo { root: e.t.path().join("data/./scratch"), ..r5.clone() };
-    assert!(remove_dir_checked(&moved).is_err());
+    #[cfg(unix)]
+    {
+        let link = e.t.path().join("root-link");
+        std::os::unix::fs::symlink(&r5.root, &link).unwrap();
+        let moved = ScratchRepo { root: link, ..r5.clone() };
+        assert!(remove_dir_checked(&moved).is_err());
+    }
     remove_dir_checked(&r5).unwrap();
 }
 
