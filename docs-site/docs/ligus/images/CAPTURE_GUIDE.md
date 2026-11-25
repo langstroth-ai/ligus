@@ -8,19 +8,22 @@ names listed in [`README.md`](README.md).
 ## Desktop
 
 The desktop app's web UI runs in a browser against its fixture backend
-(`web/dev/mock`, which never ships), and Playwright drives it:
+(`web/dev/mock`, which never ships), and Playwright drives it. The script
+starts the mock server itself:
 
 ```bash
-git checkout v0.3.0
-cd web && bun install && bun run dev:mock      # serves the UI with demo data
-node docs-site/tools/screenshots/capture-desktop.mjs   # in another terminal
+git worktree add ../ligus-v0.3.0 v0.3.0 && cd ../ligus-v0.3.0
+(cd web && bun install)
+node docs-site/tools/screenshots/capture-desktop.mjs --out /tmp/ligus-shots
+cp /tmp/ligus-shots/png/desktop-*-light.png /tmp/ligus-shots/png/desktop-*-dark.png docs-site/docs/ligus/images/
 ```
 
-`docs-site/tools/screenshots/README.md` documents the script's options.
-It opens each view at 1440 × 900 with a device scale factor of 2, in the
-Pollen palette in light and dark (set through the `ligus.theme` and
-`ligus.appearance` local-storage keys), crops panes and dialogs, and
-compresses the PNGs with `pngquant`.
+`docs-site/tools/screenshots/README.md` lists what it writes and which
+file goes where (these docs, langstroth.ai, the READMEs). Each view is
+opened at 1440 × 900, at scale 1 and 2, in the Pollen palette light and
+dark (plus Harbor for the themes shots); panes and dialogs are cropped,
+PNGs compressed with `pngquant` and WebP made with `cwebp`. Copy only the
+files a page links.
 
 ## lt
 
@@ -30,12 +33,9 @@ backend; the script lives in the ligus-term repository:
 ```bash
 git clone https://github.com/langstroth-ai/ligus-term && cd ligus-term
 git checkout v0.3.0
-cargo run --example screenshots -- --gallery DIR   # every view, row menus and popups
-cargo run --example screenshots -- --themes DIR    # chats and proposals in every palette, light and dark
+scripts/capture-screenshots.sh /tmp/lt-shots   # every view, Pollen light and dark: SVG, PNG, WebP
+cp /tmp/lt-shots/png/lt-chats-light.png /tmp/lt-shots/png/lt-chats-dark.png docs-site/docs/ligus/images/
 ```
-
-The output is SVG; render it to PNG at 2× (any headless browser), then
-compress it.
 
 ## Phone
 
