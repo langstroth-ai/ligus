@@ -31,7 +31,7 @@ export function ReviewSection() {
   });
   if (q.isError) {
     return (
-      <Section title="Review">
+      <Section title="Archiving">
         <p role="alert" className="text-sm" style={{ color: "var(--ligus-danger-ink)" }}>
           Couldn't load the setting: {errMsg(q.error)}
         </p>
@@ -42,7 +42,7 @@ export function ReviewSection() {
   const days = q.data.days ?? 0;
   const choices = ARCHIVE_DAY_CHOICES.includes(days) ? ARCHIVE_DAY_CHOICES : [...ARCHIVE_DAY_CHOICES, days].sort((a, b) => a - b);
   return (
-    <Section title="Review">
+    <Section title="Archiving">
       <InfoField
         label="Auto-archive settled proposals"
         info="Applied, rejected and replaced proposals move to Archived proposals after this long, for everyone in the workspace. Nothing waiting on a decision is archived. An Admin changes it."

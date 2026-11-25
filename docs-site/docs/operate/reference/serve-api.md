@@ -273,6 +273,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 | `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
+| `archive` | `chatId`, `proposalId`, `archived` (`false` restores) | `proposalDismissed` (`dismissed` = `archived`; the box refuses a proposal that still waits on a decision) | the chat | never |
 | `proposeMemory` | `chatId` (the chat the phone is in; recorded as the source), `op` (`{op: "create", entryId, title, body, tags?}` (the new note is named by the proposal: send any `entryId`, a nil UUID is fine), `{op: "edit", entryId, base, title, body, tags?}` or `{op: "remove", entryId, base}`), `rationale?` (at most 500 characters) | `flowRecorded` / `memoryProposed`, as the person (no agent proposer) | the workspace config log | never |
 
 The box decides `presenceRequired` by judging the draft; the fold decides in
@@ -322,6 +323,7 @@ word until the phone has read it; refuse to sign unless all of these hold:
     - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
       `expectedBaseCommit` and `repoId` as asked;
     - `withdrawApply`: `requestId` and `proposalId` as asked;
+    - `archive`: `proposalId` as asked, and `dismissed` equal to `archived`;
     - `proposeMemory`: a memory proposal whose `op` and `rationale` are
       exactly as asked (except a create's `entryId`, which must equal the
       `proposalId`), `proposer` empty (the person's own), and `source`
@@ -355,7 +357,7 @@ voter's account, so they never act as the person (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
+| `GET /v1/proposals` | `?status=open\|all\|archived` (default `open`) | newest first. `open`: waiting for review; `all`: every proposal still in the inbox (archived ones left out); `archived`: archived only, newest archived first. Every proposal carries `archived` (`person` or `auto`, absent while in the inbox), `archivedAt?`, `settledAt?` (that event's own time) and `canArchive` (settled or stale and not archived: the `archive` [phone action](#phone-actions) may archive it) |
 | `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine` (for the person asking: through the tunnel, the member the calling phone is certified for, not the box; a phone the box can't place gets no role and no vote; the operator and the direct-path bearer get the box's own identity), `diffDigest` (what a vote or an apply request binds), `baseCommit?`, `repoId?`, `applyRequests` (`[{id, hostDeviceId, state, expectedBaseCommit?, reason?, commit?}]`, `state` one of `open`, `applied`, `failed`, `withdrawn`; at most one `open`) and `canRequestApply` (approved, and no request open). Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan`. A proposal that offers a file (an agent's offer) carries `attachment`: `{id, sha256, size, contentType, name}`, the reference `diffDigest` binds as its ninth part, so a phone can show the file and recompute the digest |
 | `POST /v1/proposals/:id/approve`, `/reject` | | **410 Gone** `{error: "gone", message, use: "POST /v1/phone-actions/prepare"}`: a person votes from the phone with the `vote` [phone action](#phone-actions), signed by the phone's own key. The box never votes from the API, as itself or for anyone; approving never applies anything (a box applies only when a person asks it to, [Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
 | `GET /v1/proposals/:id/comments` | | refinement thread |

@@ -43,7 +43,7 @@ changes workspace settings.
 | `ligus_react` | `messageId?`, `emoji` | A reaction |
 | `ligus_list_chats` | `channel?`, `limit ≤ 50` | The workspace's chats |
 | `ligus_read_chat` | `chatId?`, `sinceMessageId?`, `limit ≤ 100` | Messages from **any chat in the workspace** whose egress is no stricter than this one's |
-| `ligus_read_proposals` | `chatId?`, `status?`, `setId?` | Proposals |
+| `ligus_read_proposals` | `chatId?`, `status?`, `setId?`, `archived?` | Proposals in the inbox; `archived: true` adds archived ones and ones hidden on this device |
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
