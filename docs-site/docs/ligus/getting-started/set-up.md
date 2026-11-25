@@ -15,7 +15,7 @@ and (next) in `lt`, because one engine runs them.
 | The relay the workspace syncs through | **Set up a relay** | `ligus setup relay` |
 
 `ligus setup` on its own lists the flows and what each has already done on
-this device. In the desktop, an empty **Agents & tools** list (agents, MCP
+this device. In the desktop, an empty list in the **Tools** pane (runtimes, MCP
 servers, hosts) offers its flow as its one action.
 
 ## How every flow behaves

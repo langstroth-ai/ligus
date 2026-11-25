@@ -24,7 +24,7 @@ Full release notes are on the
   phone**, **Invite a person** and **Set up a relay**; `/setup` in the
   composer does the same. Each opens one wizard, one step per screen, that
   checks before it changes anything and shows a failure's fix right under
-  it. An empty list of agents, tools or hosts offers its flow.
+  it. An empty list of runtimes, MCP servers or hosts offers its flow.
 - **Choose which agents may use a tool.** A tool (MCP server) can be
   limited to some agents. The choice is kept on the device that runs the
   server, never in a file a commit could change, and a turn of the
