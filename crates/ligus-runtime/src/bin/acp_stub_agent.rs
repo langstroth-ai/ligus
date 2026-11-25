@@ -15,6 +15,8 @@
 //! - `flood`: answers the prompt after writing one 100 MiB line.
 //! - `spend`: reports a cost of $0.25, then $0.50, then answers.
 //! - `eur`: reports a cost in EUR, then answers.
+//! - `always`: as `copilot`, but its permission request offers only a
+//!   standing `allow_always` option (no `allow_once`).
 //!
 //! Std-only; exits when stdin closes.
 
@@ -116,10 +118,17 @@ fn main() {
                 send(json!({"jsonrpc":"2.0","id":perm_id,"method":"session/request_permission","params":{
                     "sessionId": sid,
                     "toolCall": {"toolCallId":"t1","title":"Edit notes.txt","kind":"edit"},
-                    "options": [
-                        {"optionId":"allow-once","name":"Allow","kind":"allow_once"},
-                        {"optionId":"reject-once","name":"Reject","kind":"reject_once"}
-                    ]
+                    "options": if mode == "always" {
+                        json!([
+                            {"optionId":"allow-always","name":"Always allow","kind":"allow_always"},
+                            {"optionId":"reject-once","name":"Reject","kind":"reject_once"}
+                        ])
+                    } else {
+                        json!([
+                            {"optionId":"allow-once","name":"Allow","kind":"allow_once"},
+                            {"optionId":"reject-once","name":"Reject","kind":"reject_once"}
+                        ])
+                    }
                 }}));
                 let mut outcome = String::from("none");
                 let mut wrote = String::from("no");
@@ -136,7 +145,7 @@ fn main() {
                         break;
                     }
                 }
-                if outcome == "allow-once" {
+                if outcome == "allow-once" || outcome == "allow-always" {
                     next_id += 1;
                     let wid = next_id;
                     send(json!({"jsonrpc":"2.0","id":wid,"method":"fs/write_text_file","params":{

@@ -205,6 +205,27 @@ describe("CommandPalette", () => {
     expect(addPhone).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["link", "computer", "lt", "terminal", "device"])("finds Add a computer by %s", async (q) => {
+    const user = userEvent.setup();
+    const addComputer = vi.fn();
+    setup({ addComputer });
+    await screen.findByText("Fix login flow");
+    await user.type(screen.getByPlaceholderText(/search/i), q);
+    expect(screen.getByText("Add a computer to my devices…")).toBeInTheDocument();
+    await user.click(screen.getByText("Add a computer to my devices…"));
+    expect(addComputer).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumps to My devices", async () => {
+    const user = userEvent.setup();
+    const myDevices = vi.fn();
+    setup({ myDevices });
+    await screen.findByText("Fix login flow");
+    await user.type(screen.getByPlaceholderText(/search/i), "my devices");
+    await user.keyboard("{Enter}");
+    expect(myDevices).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the shortcuts sheet", async () => {
     const user = userEvent.setup();
     const showShortcuts = vi.fn();

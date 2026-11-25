@@ -1883,6 +1883,7 @@ fn fold_pass(
     session.updated_at = ordered[base].timestamp;
     session.authz = Default::default();
     session.attachments.clear();
+    session.flow.reseat_snapshot_asks();
     // A chat founded by someone who wasn't a workspace member at its frontier
     // (a keyholder outside the roster) doesn't exist for a checked fold.
     if let WorkspaceAuthz::Timeline(t) = workspace {
@@ -2276,7 +2277,16 @@ fn fold_pass(
             // Memory and task state fold with their envelope's provenance.
             let enveloped = match payload {
                 SessionEvent::FlowRecorded { record } => {
-                    crate::memory::apply_enveloped(&mut session.flow, record, &crate::memory::RevCtx::of(env))
+                    // Asks and answers fold with who signed them
+                    // (`flow::asks`), judged at the event's position.
+                    let roster = at.unwrap_or(&tracker.state);
+                    match crate::flow::asks::AskProvenance::of(record, env, &session, roster, trusted) {
+                        Some(p) => {
+                            session.flow.apply_ask(record, &p);
+                            true
+                        }
+                        None => crate::memory::apply_enveloped(&mut session.flow, record, &crate::memory::RevCtx::of(env)),
+                    }
                 }
                 _ => false,
             };

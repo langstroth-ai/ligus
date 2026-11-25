@@ -1,4 +1,20 @@
-import { addPhoneRequested, clearAddPhoneRequest } from "@/lib/nav";
+import {
+  DEVICES_REQUEST_EVENT,
+  clearDevicesRequest,
+  pendingDevicesRequest,
+  type DevicesRequest,
+} from "@/lib/nav";
+import {
+  cleanupWarning,
+  groupDevices,
+  loadHiddenRevoked,
+  loadRevokedOpen,
+  revokedOn,
+  saveHiddenRevoked,
+  saveRevokedOpen,
+  unfinishedCleanup,
+} from "@/lib/revokedDevices";
+import { IconChevronDown } from "@/lib/icons";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -40,6 +56,19 @@ import { MoreMenu } from "@/components/MoreMenu";
 export function AccountSection() {
   return (
     <>
+      <nav aria-label="On this page" className="mb-3 px-1 text-[11.5px] text-ink-soft">
+        <a
+          href="#my-devices"
+          className="underline hover:text-ink"
+          data-testid="jump-my-devices"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("my-devices")?.scrollIntoView?.({ block: "start" });
+          }}
+        >
+          My devices
+        </a>
+      </nav>
       <IdentitySection />
       <SafetyCodeSection />
       <LinkedAccountsSection />
@@ -259,25 +288,52 @@ function IdentitySection() {
 /// Your devices in the active workspace: add a phone, or another computer of
 /// yours (lt, the `ligus` CLI), so what it does is yours and not a separate
 /// member's. Revoking a device makes every member stop accepting its events.
+/// Revoked devices sit in a collapsed "Revoked" group at the bottom; one
+/// whose cleanup isn't finished on some box stays in view with its retry.
 export function DevicesSection() {
   const qc = useQueryClient();
   const devices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, refetchInterval: 15_000 });
   const requests = useQuery({ queryKey: ["device-requests"], queryFn: listDeviceRequests, refetchInterval: 15_000 });
   const revocations = useQuery({ queryKey: ["device-revocations"], queryFn: listDeviceRevocations, refetchInterval: 15_000 });
   const pairings = useQuery({ queryKey: ["device-pairings"], queryFn: listDevicePairings, refetchInterval: 30_000 });
-  const [adding, setAdding] = useState(false);
-  // Opened straight from the palette's "Add a phone".
-  const [addingPhone, setAddingPhone] = useState(addPhoneRequested);
-  const phoneRef = useRef<HTMLDivElement>(null);
-  const phoneRequested = useRef(addingPhone);
-  // Asked for from the palette: bring the panel into view (it sits below the
-  // profile fields), then use the request up.
+  // Asked for from elsewhere (the palette, People, Set up): My devices, maybe
+  // with Add a phone or Add a computer open.
+  const initial = useRef<DevicesRequest | null>(pendingDevicesRequest());
+  const [adding, setAdding] = useState(initial.current?.open === "computer");
+  const [suggested, setSuggested] = useState<DevicesRequest["member"] | null>(initial.current?.member ?? null);
+  const [addingPhone, setAddingPhone] = useState(initial.current?.open === "phone");
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const [revokedOpen, setRevokedOpen] = useState(loadRevokedOpen);
+  const [hidden, setHidden] = useState(loadHiddenRevoked);
+  const [showHidden, setShowHidden] = useState(false);
+  const [details, setDetails] = useState<Set<string>>(() => new Set());
+  // Bring the section into view (it sits below the profile fields), then use
+  // the request up. A section already on screen hears later requests.
   useEffect(() => {
-    if (!phoneRequested.current) return;
-    clearAddPhoneRequest();
-    // After the sheet and the sections above have laid out.
-    const t = window.setTimeout(() => phoneRef.current?.scrollIntoView?.({ block: "start" }), 200);
-    return () => window.clearTimeout(t);
+    let t: number | undefined;
+    const bring = () => {
+      window.clearTimeout(t);
+      // After the sheet and the sections above have laid out.
+      t = window.setTimeout(() => sectionRef.current?.scrollIntoView?.({ block: "start" }), 200);
+    };
+    if (initial.current) {
+      clearDevicesRequest();
+      bring();
+    }
+    const onRequest = (e: Event) => {
+      const req = (e as CustomEvent<DevicesRequest>).detail;
+      clearDevicesRequest();
+      if (req.open === "computer") {
+        setSuggested(req.member ?? null);
+        setAdding(true);
+      } else if (req.open === "phone") setAddingPhone(true);
+      bring();
+    };
+    window.addEventListener(DEVICES_REQUEST_EVENT, onRequest);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener(DEVICES_REQUEST_EVENT, onRequest);
+    };
   }, []);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["my-devices"] });
@@ -299,35 +355,91 @@ export function DevicesSection() {
     }
   }
 
+  const toggleRevoked = () => {
+    setRevokedOpen((v) => {
+      saveRevokedOpen(!v);
+      return !v;
+    });
+  };
+  const setHiddenOne = (id: string, hide: boolean) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (hide) next.add(id);
+      else next.delete(id);
+      saveHiddenRevoked(next);
+      return next;
+    });
+  };
+  const toggleDetails = (id: string) =>
+    setDetails((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const list = devices.data ?? [];
   const pending = requests.data ?? [];
+  const reports = revocations.data ?? [];
+  const pairs = pairings.data ?? [];
+  const groups = groupDevices(list, reports, hidden);
+  const revokedShown = showHidden ? [...groups.revoked, ...groups.hidden] : groups.revoked;
+  const nameOf = (d: MyDeviceDto) => deviceName(d, pairs);
+  const reportsOf = (d: MyDeviceDto) => reports.filter((r) => r.deviceId === d.deviceId);
+
+  // The cleanup report (tunnel, push, session per box), behind Details.
+  const detailsOf = (d: MyDeviceDto) => {
+    if (!details.has(d.deviceId)) return null;
+    const revs = reportsOf(d);
+    return (
+      <div className="px-1" data-testid={`device-details-${d.deviceId}`}>
+        {revs.length === 0 ? (
+          <div className="text-[11px] text-ink-soft">No box reports on it. Every member refuses its events.</div>
+        ) : (
+          revs.map((r) => <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />)
+        )}
+      </div>
+    );
+  };
+  const detailsAction = (d: MyDeviceDto) => ({
+    label: details.has(d.deviceId) ? "Hide details" : "Details",
+    onSelect: () => toggleDetails(d.deviceId),
+    title: "What each box did: tunnel, push, session",
+  });
 
   return (
     <Section
+      id="my-devices"
       title="My devices"
       info="Devices that act as you in this workspace. Using Ligus on another computer? Add it here instead of inviting yourself, so it's you and not a second member."
       action={
         <div className="flex items-center gap-1.5">
-          <Button size="sm" onClick={() => setAdding(true)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setSuggested(null);
+              setAdding(true);
+            }}
+          >
             Add a computer
           </Button>
           <MoreMenu label="More device actions" items={[{ label: "Add a phone…", onSelect: () => setAddingPhone(true) }]} />
         </div>
       }
     >
-      {pending.map((r) => (
-        <div
-          key={r.hostId}
-          className="rounded-xl border px-3 py-2.5 text-xs"
-          style={{ borderColor: "var(--ligus-accent-cool)" }}
-        >
-          <strong>{r.label}</strong> says it's your device, but boxes join as their own member now. On it, run{" "}
-          <code>ligus admit request</code>, then approve it under <em>workspace menu → Admit a box</em>.
-        </div>
-      ))}
-      {addingPhone && (
-        <Sheet title="Add a phone" side="center" width={520} onClose={() => setAddingPhone(false)}>
-          <div ref={phoneRef}>
+      <div ref={sectionRef} className="space-y-2.5">
+        {pending.map((r) => (
+          <div
+            key={r.hostId}
+            className="rounded-xl border px-3 py-2.5 text-xs"
+            style={{ borderColor: "var(--ligus-accent-cool)" }}
+          >
+            <strong>{r.label}</strong> says it's your device, but boxes join as their own member now. On it, run{" "}
+            <code>ligus admit request</code>, then approve it under <em>workspace menu → Admit a box</em>.
+          </div>
+        ))}
+        {addingPhone && (
+          <Sheet title="Add a phone" side="center" width={520} onClose={() => setAddingPhone(false)}>
             <AddPhonePanel
               onDone={() => {
                 setAddingPhone(false);
@@ -335,53 +447,147 @@ export function DevicesSection() {
               }}
               onCancel={() => setAddingPhone(false)}
             />
-          </div>
-        </Sheet>
-      )}
-      {adding && (
-        <Sheet title="Add a computer" side="center" width={520} onClose={() => setAdding(false)}>
-          <AddComputerPanel
-            onDone={() => {
-              setAdding(false);
-              refresh();
-            }}
-            onCancel={() => setAdding(false)}
-          />
-        </Sheet>
-      )}
-      <RowList label="My devices">
-        {list.map((d) => {
-          const pl = !d.revoked ? pairingLine(d, pairings.data ?? []) : "";
-          const revs = d.revoked ? (revocations.data ?? []).filter((r) => r.deviceId === d.deviceId) : [];
-          return (
-            <ListRow
-              key={d.deviceId}
-              title={
-                <span style={{ opacity: d.revoked ? 0.55 : 1 }}>
-                  {deviceName(d, pairings.data ?? [])}
-                  {d.thisDevice && <span className="font-normal text-ink-soft"> · this device</span>}
-                  {d.revoked && <span style={{ color: "var(--ligus-danger-ink)" }}> · revoked</span>}
+          </Sheet>
+        )}
+        {adding && (
+          <Sheet title="Add a computer" side="center" width={520} onClose={() => setAdding(false)}>
+            <AddComputerPanel
+              suggested={suggested ?? undefined}
+              onDone={() => {
+                setAdding(false);
+                refresh();
+              }}
+              onCancel={() => setAdding(false)}
+            />
+          </Sheet>
+        )}
+        <RowList label="My devices">
+          {groups.active.map((d) => {
+            const pl = pairingLine(d, pairs) ?? "";
+            return (
+              <ListRow
+                key={d.deviceId}
+                testId={`device-${d.deviceId}`}
+                title={
+                  <span>
+                    {nameOf(d)}
+                    {d.thisDevice && <span className="font-normal text-ink-soft"> · this device</span>}
+                  </span>
+                }
+                meta={<span className="font-mono">{d.fingerprint}</span>}
+                tip={pl || undefined}
+                actionsLabel={`Actions for ${nameOf(d)}`}
+                actions={!d.thisDevice ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []}
+              />
+            );
+          })}
+          {groups.attention.map((d) => {
+            const left = unfinishedCleanup(d.deviceId, reports);
+            return (
+              <ListRow
+                key={d.deviceId}
+                testId={`device-${d.deviceId}`}
+                title={<span style={{ opacity: 0.7 }}>{nameOf(d)}</span>}
+                meta={
+                  <span style={{ color: "var(--ligus-warn-ink)" }} role="status">
+                    revoked · {cleanupWarning(left[0])}
+                  </span>
+                }
+                tip={d.fingerprint}
+                trailing={<RetryButton deviceId={d.deviceId} hostLabel={left[0].hostLabel} onRetry={refresh} />}
+                actionsLabel={`Actions for ${nameOf(d)}`}
+                actions={[detailsAction(d)]}
+              >
+                {detailsOf(d)}
+              </ListRow>
+            );
+          })}
+        </RowList>
+        {groups.revoked.length + groups.hidden.length > 0 && (
+          <div data-testid="revoked-group">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <button
+                type="button"
+                className="flex items-center gap-1 text-[11.5px] text-ink-soft hover:text-ink"
+                aria-expanded={revokedOpen}
+                onClick={toggleRevoked}
+              >
+                <span aria-hidden style={{ display: "inline-flex", transform: revokedOpen ? "none" : "rotate(-90deg)" }}>
+                  <IconChevronDown size={12} />
                 </span>
-              }
-              meta={<span className="font-mono">{d.fingerprint}</span>}
-              actionsLabel={`Actions for ${deviceName(d, pairings.data ?? [])}`}
-              actions={
-                !d.thisDevice && !d.revoked ? [{ label: "Revoke", danger: true, onSelect: () => void revoke(d) }] : []
-              }
-            >
-              {(pl || revs.length > 0) && (
-                <div className="px-1">
-                  {pl && <div className="truncate text-[11px] text-ink-soft">{pl}</div>}
-                  {revs.map((r) => (
-                    <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />
-                  ))}
-                </div>
+                Revoked ({groups.revoked.length})
+              </button>
+              {groups.hidden.length > 0 && (
+                <MoreMenu
+                  label="Revoked devices actions"
+                  items={[
+                    {
+                      label: showHidden ? "Leave hidden ones out" : `Show hidden (${groups.hidden.length})`,
+                      onSelect: () => {
+                        setShowHidden((v) => !v);
+                        if (!revokedOpen) toggleRevoked();
+                      },
+                    },
+                  ]}
+                />
               )}
-            </ListRow>
-          );
-        })}
-      </RowList>
+            </div>
+            {revokedOpen && (
+              <RowList label="Revoked devices">
+                {revokedShown.map((d) => {
+                  const on = revokedOn(d.deviceId, reports);
+                  const isHidden = hidden.has(d.deviceId);
+                  return (
+                    <ListRow
+                      key={d.deviceId}
+                      testId={`device-${d.deviceId}`}
+                      title={<span style={{ opacity: 0.55 }}>{nameOf(d)}</span>}
+                      meta={`revoked${on ? ` ${on}` : ""}${isHidden ? " · hidden" : ""}`}
+                      tip={d.fingerprint}
+                      actionsLabel={`Actions for ${nameOf(d)}`}
+                      actions={[
+                        detailsAction(d),
+                        isHidden
+                          ? { label: "Show in this list", onSelect: () => setHiddenOne(d.deviceId, false) }
+                          : {
+                              label: "Hide from this list",
+                              onSelect: () => setHiddenOne(d.deviceId, true),
+                              title: "Hides it here; it stays revoked",
+                            },
+                      ]}
+                    >
+                      {detailsOf(d)}
+                    </ListRow>
+                  );
+                })}
+              </RowList>
+            )}
+          </div>
+        )}
+      </div>
     </Section>
+  );
+}
+
+/// The one visible action on a revoked device whose cleanup isn't finished.
+function RetryButton({ deviceId, hostLabel, onRetry }: { deviceId: string; hostLabel: string; onRetry: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function retry() {
+    setBusy(true);
+    try {
+      await retryDeviceRevocation(deviceId);
+      toast.success(`Asked ${hostLabel} to retry.`);
+      onRetry();
+    } catch (e) {
+      toast.error(`Couldn't ask for a retry: ${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Button size="sm" disabled={busy} onClick={() => void retry()}>
+      Retry now
+    </Button>
   );
 }
 

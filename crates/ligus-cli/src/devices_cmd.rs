@@ -40,6 +40,14 @@ fn clamp(s: &str) -> String {
     out
 }
 
+/// Two fingerprints are the same whether typed with dashes, spaces (as a
+/// copy from the desktop gives them) or in lower case.
+pub fn same_fingerprint(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
+    let (a, b) = (norm(a), norm(b));
+    !a.is_empty() && a == b
+}
+
 fn now_ms() -> i64 {
     ligus_core::flow::now_ms()
 }
@@ -74,8 +82,21 @@ fn print(report: &Report, code: i32, json: bool, extra: serde_json::Value, text:
     }
 }
 
-/// `ligus devices request [--label NAME] [--new-device]`.
-pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: bool) -> Result<()> {
+/// Copies a code to the clipboard: the tool's name, `None` when none worked
+/// ([`crate::link_io::copy`]).
+pub type Copier<'a> = &'a mut dyn FnMut(&str) -> Option<&'static str>;
+
+/// `ligus devices request [--label NAME] [--new-device] [--copy]`: the code
+/// alone on stdout (so `| pbcopy` copies just it); the fingerprint and the
+/// next steps on stderr. `copy` copies it instead (`copier`: the clipboard
+/// tool, injectable for tests).
+pub fn cmd_request(
+    cfg: &Config,
+    label: Option<String>,
+    new_device: bool,
+    json: bool,
+    copy: Option<Copier<'_>>,
+) -> Result<()> {
     let ids = identity(cfg);
     if ids.load()?.is_some_and(|s| s.service) {
         return Err(problem(
@@ -92,7 +113,11 @@ pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: 
     if let Some(p) = state.linked_in(ws) {
         let mut r = Report::new("devices request");
         r.add(Check::ok("devices.linked", "linked", format!("this computer is already one of {}'s devices in '{}'", shown(&p.display_name), cfg.room)));
-        print(&r, 0, json, serde_json::json!({ "linked": true }), &format!("This computer is already one of {}'s devices in '{}'.\n", shown(&p.display_name), cfg.room));
+        if json {
+            print(&r, 0, json, serde_json::json!({ "linked": true }), "");
+        } else {
+            eprintln!("This computer is already one of {}'s devices in '{}'.", shown(&p.display_name), cfg.room);
+        }
         return Ok(());
     }
     // An install that has been connected (it may have written as its own
@@ -100,6 +125,7 @@ pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: 
     let connected = load_file_config(&cfg.data_dir).room.is_some() || (existed && cfg.data_dir.join("ligus.db").exists());
     let fresh_key = new_device || connected;
     let now = now_ms();
+    state.prune_expired(now);
     let (device_id, device_kp) = if fresh_key {
         match state.latest_pending(now).filter(|p| p.device_id != stored.device.id) {
             Some(p) => (p.device_id, ids.device_keypair(p.device_id)?),
@@ -117,23 +143,41 @@ pub fn cmd_request(cfg: &Config, label: Option<String>, new_device: bool, json: 
     state.add_pending(&request, now);
     state.save(&cfg.data_dir)?;
     let code = request.encode();
+    let fingerprint = request.fingerprint();
+    let approve_by = request.created_at.saturating_add(ligus_runtime::computer_link::REQUEST_TTL_MS);
     let mut r = Report::new("devices request");
-    r.add(Check::ok("devices.request", "request", format!("fingerprint {}", request.fingerprint())));
+    r.add(Check::ok("devices.request", "request", format!("fingerprint {fingerprint}")));
     r.add(
         Check::warn("devices.approve", "approve", "a person approves it on their desktop with a passkey")
             .fix("desktop: Settings > Profile > My devices > Add a computer; paste the request, compare the fingerprint"),
     );
-    r.next("ligus devices redeem --code-file <grant-file>");
-    let text = format!(
-        "\nAsk your desktop to add this computer: Settings > Profile > My devices > Add a computer.\n\
-         Paste this request there (it holds no secret), check the fingerprint matches, and confirm with your passkey:\n\n  {code}\n\n\
-         Fingerprint: {}  (label \"{}\")\n\nThen run `ligus devices redeem --code-file PATH` here with the code the desktop shows \
-         (within 15 minutes of this request).{}\n",
-        request.fingerprint(),
+    r.next("ligus devices redeem");
+    if json {
+        let extra = serde_json::json!({
+            "code": code, "request": code, "fingerprint": fingerprint, "label": request.label,
+            "expiresAt": approve_by, "newDevice": fresh_key,
+        });
+        print(&r, 0, true, extra, "");
+        return Ok(());
+    }
+    let asked = copy.is_some();
+    match copy.and_then(|c| c(&code)) {
+        Some(_) => eprintln!("Copied this computer's link request (it holds no secret)."),
+        None => {
+            if asked {
+                eprintln!("ligus: couldn't reach the clipboard (pbcopy, wl-copy, xclip, xsel or clip.exe): the request is below");
+            }
+            println!("{code}");
+        }
+    }
+    eprintln!(
+        "Fingerprint: {fingerprint}  (label \"{}\")\n\
+         On your desktop: Settings > Profile > My devices > Add a computer; paste the request, compare the fingerprint, confirm with your passkey (by {}).\n\
+         Then here: ligus devices redeem   (it reads the desktop's code from the clipboard or a hidden paste){}",
         request.label,
+        crate::link_io::hh_mm(approve_by),
         if fresh_key { "\nThis install was already connected, so it asks with a new device key (used only once you redeem)." } else { "" }
     );
-    print(&r, 0, json, serde_json::json!({ "request": code, "fingerprint": request.fingerprint(), "label": request.label, "newDevice": fresh_key }), &text);
     Ok(())
 }
 
@@ -169,15 +213,19 @@ fn connection(cfg: &Config, svc: &ligus_runtime::ChatService) -> Result<String> 
 /// Asks the person at a terminal whether `what` matches; `Ok(true)` is yes.
 pub type Confirm<'a> = &'a mut dyn FnMut(&str) -> Result<bool>;
 
-/// `y`/`yes` on stdin after printing `prompt` on stderr.
+/// `y`/`yes` typed at the terminal after printing `prompt` on stderr (from
+/// the controlling terminal when stdin carried a code).
 pub fn confirm_on_tty(prompt: &str) -> Result<bool> {
-    use std::io::Write;
-    let mut err = std::io::stderr();
-    write!(err, "{prompt} [y/N] ")?;
-    err.flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    crate::link_io::confirm(prompt)
+}
+
+/// Reads the desktop's code from the person at the terminal (a hidden
+/// paste, or the clipboard): [`crate::link_io::read_pasted`].
+pub type Paste<'a> = &'a mut dyn FnMut() -> Result<String>;
+
+/// The paste reader at a real terminal.
+pub fn paste_at_tty() -> Result<String> {
+    crate::link_io::read_pasted(&mut crate::link_io::read_hidden, &mut crate::link_io::paste)
 }
 
 fn read_code(arg: Option<&str>, file: Option<String>, usage: &str) -> Result<String> {
@@ -211,7 +259,7 @@ pub async fn cmd_approve(
     let text = read_code(code, code_file, usage)?;
     let request = LinkRequest::decode(&text).map_err(|e| anyhow!(e))?;
     match (fingerprint, confirm) {
-        (Some(f), _) if f.trim().eq_ignore_ascii_case(&request.fingerprint()) => {}
+        (Some(f), _) if same_fingerprint(&f, &request.fingerprint()) => {}
         (Some(f), _) => {
             return Err(problem(
                 EXIT_ERROR,
@@ -300,6 +348,27 @@ fn open_for_pending(cfg: &Config, state: &LinkState, code: &str) -> Result<(Open
     })
 }
 
+/// The desktop's code from what was given: the argument, `-` (stdin), a
+/// file, or with none of them the person's paste or clipboard (`paste`, at
+/// a terminal). Whatever surrounds the code (a whole copied command,
+/// quotes, blank lines) is dropped; the text is never shown back.
+fn read_grant(code: Option<&str>, code_file: Option<String>, paste: Option<Paste<'_>>, usage: &str) -> Result<String> {
+    let (text, from) = match (code, code_file, paste) {
+        (None, None, Some(p)) => return p(),
+        (None, None, None) => {
+            return Err(problem(
+                EXIT_HUMAN,
+                "code_needed",
+                "redeem needs the code your desktop showed",
+                Some("run this at a terminal (it reads the clipboard or a hidden paste), or pipe the code in: ligus devices redeem - (or --code-file PATH)"),
+            ))
+        }
+        (Some("-"), None, _) => (read_code(Some("-"), None, usage)?, "the input"),
+        (c, f, _) => (read_code(c, f, usage)?, "the code given"),
+    };
+    crate::link_io::extract_grant(&text).ok_or_else(|| anyhow!(crate::link_io::no_grant_message(&text, from)))
+}
+
 /// `ligus devices redeem`.
 pub async fn cmd_redeem(
     cfg: &mut Config,
@@ -307,10 +376,11 @@ pub async fn cmd_redeem(
     code_file: Option<String>,
     approver_fingerprint: Option<String>,
     json: bool,
+    paste: Option<Paste<'_>>,
     confirm: Option<Confirm<'_>>,
 ) -> Result<()> {
-    let usage = "usage: ligus devices redeem <ligusgrant1:code> | - | --code-file PATH [--approver-fingerprint XXXX-…]";
-    let text = read_code(code, code_file, usage)?;
+    let usage = "usage: ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint XXXX-…]";
+    let text = read_grant(code, code_file, paste, usage)?;
     let ids = identity(cfg);
     let Some(stored) = ids.load()? else {
         return Err(problem(EXIT_ERROR, "no_request", "this computer hasn't made a link request", Some("run `ligus devices request` first")));
@@ -319,6 +389,9 @@ pub async fn cmd_redeem(
         return Err(problem(EXIT_REFUSED, "box", "this data dir is a box: a box joins as its own member (ligus admit)", None));
     }
     let mut state = link_state(cfg)?;
+    if state.prune_expired(now_ms()) {
+        state.save(&cfg.data_dir)?;
+    }
     let (grant, device_id) = open_for_pending(cfg, &state, &text)?;
     let now = now_ms();
     if state.pending_for(&grant.request, now).is_none() {
@@ -344,7 +417,7 @@ pub async fn cmd_redeem(
     // is public, so anyone could answer it from their own workspace.
     let shown_ws = clamp(&shown(if grant.conn.name.trim().is_empty() { &grant.conn.room } else { &grant.conn.name }));
     match (approver_fingerprint, confirm) {
-        (Some(f), _) if f.trim().eq_ignore_ascii_case(&grant.approver_fingerprint()) => {}
+        (Some(f), _) if same_fingerprint(&f, &grant.approver_fingerprint()) => {}
         (Some(f), _) => {
             return Err(problem(
                 EXIT_ERROR,
@@ -355,7 +428,7 @@ pub async fn cmd_redeem(
         }
         (None, Some(ask)) => {
             let prompt = format!(
-                "Approved by {}'s desktop {} for workspace '{shown_ws}'.\nIs that you, and does your desktop show this fingerprint (My devices > Add a computer)?",
+                "Approved by {}'s desktop · fingerprint {} · for {shown_ws}. Is that your desktop?",
                 clamp(&shown(&person.display_name)),
                 grant.approver_fingerprint()
             );
@@ -472,9 +545,18 @@ async fn finish_redeem(cfg: &mut Config, grant: &OpenedGrant, state: &mut LinkSt
     Ok(person)
 }
 
+/// The link state with expired requests cleaned up (and saved).
+pub fn pruned_link_state(cfg: &Config) -> Result<LinkState> {
+    let mut state = link_state(cfg)?;
+    if state.prune_expired(now_ms()) {
+        state.save(&cfg.data_dir)?;
+    }
+    Ok(state)
+}
+
 /// `ligus devices list`.
 pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
-    let state = link_state(cfg)?;
+    let state = pruned_link_state(cfg)?;
     let svc = crate::open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let here = svc.device_id();
@@ -494,7 +576,11 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
         let extra = serde_json::json!({
             "thisDevice": here,
             "standing": me,
-            "pending": state.pending.iter().map(|p| serde_json::json!({ "deviceId": p.device_id, "createdAt": p.created_at })).collect::<Vec<_>>(),
+            "pending": state.pending.iter().map(|p| serde_json::json!({
+                "deviceId": p.device_id, "createdAt": p.created_at,
+                "approveBy": p.created_at.saturating_add(ligus_runtime::computer_link::REQUEST_TTL_MS),
+                "expiresAt": p.created_at.saturating_add(LinkState::PENDING_TTL_MS),
+            })).collect::<Vec<_>>(),
             "devices": rows.iter().map(|d| serde_json::json!({
                 "deviceId": d.device_id, "fingerprint": d.fingerprint, "revoked": d.revoked, "thisDevice": d.device_id == here,
             })).collect::<Vec<_>>(),
@@ -515,8 +601,8 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
             if d.revoked { "  revoked" } else { "" }
         );
     }
-    if !state.pending.is_empty() {
-        println!("{} link request(s) waiting (ligus devices request shows the newest)", state.pending.len());
+    if let Some(p) = state.pending_status(now_ms()) {
+        println!("{}{}", crate::link_io::pending_line(&p, now_ms()), if p.count > 1 { format!(" ({} requests)", p.count) } else { String::new() });
     }
     Ok(())
 }

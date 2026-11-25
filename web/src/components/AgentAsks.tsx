@@ -32,8 +32,14 @@ function AskCard({ sessionId, ask }: { sessionId: string; ask: AskDto }) {
   return (
     <div className="rounded-xl border px-3 py-2" style={{ borderColor: "var(--ligus-line)" }} data-testid="ask-card">
       <div className="flex items-center gap-2">
-        <Badge tone="info">{ask.agentName} asks</Badge>
-        <span className="text-xs text-ink-soft">its turn is waiting</span>
+        <Badge tone="info">{ask.postedBy ? `${ask.postedBy} asks` : ask.kind === "permission" ? `${ask.agentName} asks permission` : `${ask.agentName} asks`}</Badge>
+        <span className="text-xs text-ink-soft">
+          {ask.postedBy
+            ? `not from ${ask.agentName}`
+            : ask.kind === "permission"
+              ? "only the host's person or the agent's owner can grant it"
+              : "its turn is waiting"}
+        </span>
       </div>
       <Markdown content={ask.question} size="sm" className="mt-1.5" />
       {ask.options.length > 0 && (

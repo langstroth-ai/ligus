@@ -471,4 +471,25 @@ async fn the_duplicate_member_moves_to_a_linked_device() {
     assert_eq!(mac.svc.device_links(ws).unwrap().person(&old_member), old_member, "no alias: nothing is re-attributed");
     let config = mac.svc.load(cfg).unwrap().unwrap();
     assert!(!config.members.iter().any(|m| m.id == old_member));
+
+    // Removing the old member doesn't touch the linked device: it still
+    // posts as Alex (the owner's 0.3.0 report).
+    lt.svc.post_user_message(chat, ws, "after the removal").unwrap();
+    lt.sync().await;
+    mac.sync().await;
+    assert!(mac.bodies(chat).contains(&("after the removal".into(), mac.id())), "{:?}", mac.bodies(chat));
+
+    // A second process on the same data dir that still signs as the old
+    // member (an lt left open across the link) is refused, in words that
+    // say why and how to fix it, never "role Viewer cannot perform".
+    let mut stale = ChatService::new(
+        EventStore::open(lt.dir.join("ligus.db")).unwrap(),
+        ids.device_keypair(stored.device.id).unwrap(),
+        ids.account_keypair(stored.account.id).unwrap(),
+        stored.account.actor(),
+    );
+    stale.set_trusted_founder(Some(mac.id()));
+    let err = stale.post_user_message(chat, ws, "as the removed member").unwrap_err().to_string();
+    assert!(err.contains("isn't a member of this workspace") && err.contains("Link this computer"), "{err}");
+    assert!(!err.contains("cannot perform"), "{err}");
 }

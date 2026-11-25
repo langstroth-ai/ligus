@@ -283,17 +283,31 @@ pub fn is_ligus_tool_call(tool: &Value) -> bool {
     candidates.into_iter().flatten().any(is_ligus)
 }
 
-/// Pick the option id for a decision: `allow_once` (else `allow_always`) to
-/// allow, `reject_once` (else `reject_always`) to deny. `None` = cancel.
+/// Pick the option id for a decision: `allow_once` to allow, `reject_once`
+/// (else `reject_always`) to deny. `None` = cancel. Never `allow_always`:
+/// a standing permission is only ever a person's explicit choice
+/// ([`standing_option`]).
 pub fn option_for(options: &[Value], allow: bool) -> Option<String> {
-    let kinds: &[&str] = if allow { &["allow_once", "allow_always"] } else { &["reject_once", "reject_always"] };
-    kinds.iter().find_map(|k| {
-        options
-            .iter()
-            .find(|o| o.get("kind").and_then(Value::as_str) == Some(*k))
-            .and_then(|o| o.get("optionId").and_then(Value::as_str))
-            .map(str::to_owned)
-    })
+    let kinds: &[&str] = if allow { &["allow_once"] } else { &["reject_once", "reject_always"] };
+    kinds.iter().find_map(|k| option_of_kind(options, k))
+}
+
+/// The agent's `allow_always` option, when it offers no `allow_once`: the
+/// only way to allow it is a standing permission, which a person must pick
+/// knowingly.
+pub fn standing_option(options: &[Value]) -> Option<String> {
+    if option_of_kind(options, "allow_once").is_some() {
+        return None;
+    }
+    option_of_kind(options, "allow_always")
+}
+
+fn option_of_kind(options: &[Value], kind: &str) -> Option<String> {
+    options
+        .iter()
+        .find(|o| o.get("kind").and_then(Value::as_str) == Some(kind))
+        .and_then(|o| o.get("optionId").and_then(Value::as_str))
+        .map(str::to_owned)
 }
 
 /// The largest file `fs/read_text_file` loads (the host reads it in its own
@@ -630,12 +644,23 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 } else {
                     judge_request(tool_kind, self.mode, self.writes_allowed, self.egress_open, self.shell_allowed)
                 };
-                let allow = match decision {
-                    PermDecision::Allow => true,
-                    PermDecision::Deny => false,
-                    PermDecision::Escalate => self.escalate(&tool, &options).await,
+                // Allowing means `allow_once`. An agent that offers only a
+                // standing permission gets one only when a person picks it
+                // knowingly, even for a call its tier would allow; with no
+                // one to ask, it is refused.
+                let standing = standing_option(&options);
+                let chosen = match decision {
+                    PermDecision::Deny => None,
+                    PermDecision::Allow if standing.is_none() => option_for(&options, true),
+                    PermDecision::Allow | PermDecision::Escalate => match &standing {
+                        Some(id) => self.escalate(&tool, true).await.then(|| id.clone()),
+                        None => match option_for(&options, true) {
+                            Some(id) => self.escalate(&tool, false).await.then_some(id),
+                            None => None,
+                        },
+                    },
                 };
-                let outcome = match option_for(&options, allow) {
+                let outcome = match chosen.or_else(|| option_for(&options, false)) {
                     Some(id) => json!({"outcome": "selected", "optionId": id}),
                     None => json!({"outcome": "cancelled"}),
                 };
@@ -658,19 +683,34 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
         }
     }
 
-    /// Put an out-of-tier permission request to the chat's humans. The turn
-    /// is paused (idle timers off) while it waits.
-    async fn escalate(&mut self, tool: &Value, options: &[Value]) -> bool {
+    /// Put a permission request to the chat's humans. The turn is paused
+    /// (idle timers off) while it waits. `standing`: the agent offers only
+    /// a permission that lasts the rest of its session, and the question
+    /// says so. Allowed only by the first option.
+    async fn escalate(&mut self, tool: &Value, standing: bool) -> bool {
         let Some(scope) = self.scope.clone() else { return false };
         let Some(asker) = scope.asker.clone() else { return false };
-        let title = tool.get("title").and_then(Value::as_str).unwrap_or("a tool");
-        let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other");
-        let question = format!("{} asks permission to run {title} ({kind}). Allow it once?", self.agent_label);
-        let choices = vec!["Allow once".to_string(), "Deny".to_string()];
+        let (question, choices) = permission_question(&self.agent_label, tool, standing);
         let _pause = scope.pause();
         let answer = asker.ask(question, choices, ask_timeout()).await;
-        let _ = options;
         answer.is_some_and(|a| a.option_index == Some(0))
+    }
+}
+
+/// The question and the choices a permission request is put to people
+/// with. The first choice allows, in the words of what the agent will get.
+pub fn permission_question(agent_label: &str, tool: &Value, standing: bool) -> (String, Vec<String>) {
+    let title = tool.get("title").and_then(Value::as_str).unwrap_or("a tool");
+    let kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other");
+    if standing {
+        (
+            format!(
+                "{agent_label} asks permission to run {title} ({kind}). It offers no one-time permission: allowing it lets it run this kind of call for the rest of its session without asking again. Allow that?"
+            ),
+            vec!["Allow for the rest of the session".to_string(), "Deny".to_string()],
+        )
+    } else {
+        (format!("{agent_label} asks permission to run {title} ({kind}). Allow it once?"), vec!["Allow once".to_string(), "Deny".to_string()])
     }
 }
 
@@ -1037,6 +1077,30 @@ mod tests {
         assert_eq!(option_for(&opts, true).as_deref(), Some("a0"));
         assert_eq!(option_for(&opts, false).as_deref(), Some("r0"));
         assert_eq!(option_for(&opts[..1], false), None);
+        assert_eq!(standing_option(&opts), None, "a one-time option is on offer");
+    }
+
+    /// A standing permission is never picked for anyone: with no
+    /// `allow_once` on offer, allowing selects nothing, and only
+    /// [`standing_option`] names the `allow_always` id (for a person's
+    /// explicit choice).
+    #[test]
+    fn allow_always_is_never_the_default() {
+        let opts = vec![
+            json!({"optionId": "a1", "name": "Always", "kind": "allow_always"}),
+            json!({"optionId": "r0", "name": "No", "kind": "reject_once"}),
+        ];
+        assert_eq!(option_for(&opts, true), None);
+        assert_eq!(option_for(&opts, false).as_deref(), Some("r0"));
+        assert_eq!(standing_option(&opts).as_deref(), Some("a1"));
+        assert_eq!(option_for(&opts[..1], true), None);
+        assert_eq!(option_for(&opts[..1], false), None, "nothing to reject with: cancelled");
+        let (q, choices) = permission_question("@coder", &json!({"title": "rm -rf build", "kind": "execute"}), true);
+        assert!(q.contains("rest of its session"), "{q}");
+        assert_eq!(choices[0], "Allow for the rest of the session");
+        let (q, choices) = permission_question("@coder", &json!({"title": "rm", "kind": "execute"}), false);
+        assert!(q.ends_with("Allow it once?"), "{q}");
+        assert_eq!(choices, vec!["Allow once".to_string(), "Deny".to_string()]);
     }
 
     #[test]

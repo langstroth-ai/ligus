@@ -124,6 +124,8 @@ import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
 import { MemoryPane } from "@/components/MemoryPane";
 import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
+import { LIKELY_ME_HINT, likelyMeReason } from "@/lib/likelyMe";
+import { requestDevices } from "@/lib/nav";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -2143,6 +2145,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     );
   const relayState = relayMembership.data?.state;
   const relayEnforced = relayOn && (relayState === "claimed" || relayState === "hidden");
+  // "Is this you on another computer?": only where Add a computer works (a
+  // team workspace, a desktop holding your account key).
+  const canLinkComputers = Boolean(activeRoom && profile.data?.safetyCode);
   const openInvites = (invites.data ?? []).filter((i) => !i.revoked);
 
   return (
@@ -2210,6 +2215,11 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   )
                 }
                 onRemoveFromRelay={relay ? () => removeFromRelay(relay, member.displayName) : undefined}
+                onLinkComputer={
+                  canLinkComputers && selfMember && likelyMeReason(member, selfMember.displayName, hosts.data ?? [])
+                    ? () => requestDevices({ open: "computer", member: { memberId: member.id, displayName: member.displayName } })
+                    : undefined
+                }
               />
             );
           })}
@@ -2492,11 +2502,11 @@ function RelayMark({ role }: { role: string }) {
   );
 }
 
-type RosterMember = import("@/bindings/WorkspaceMemberDto").WorkspaceMemberDto & { index: number };
+export type RosterMember = import("@/bindings/WorkspaceMemberDto").WorkspaceMemberDto & { index: number };
 
 /// One workspace member as a single row; role changes and removal live in
 /// the row menu (right-click, the hover "⋯", or Shift+F10).
-function MemberRow({
+export function MemberRow({
   member,
   online,
   presenceKnown,
@@ -2507,6 +2517,7 @@ function MemberRow({
   onRegrant,
   onRevoke,
   onRemoveFromRelay,
+  onLinkComputer,
 }: {
   member: RosterMember;
   online: boolean;
@@ -2519,6 +2530,9 @@ function MemberRow({
   onRegrant: () => void;
   onRevoke: () => void;
   onRemoveFromRelay?: () => void;
+  /// Set when this member looks like you on another computer (lib/likelyMe):
+  /// offer Add a computer, never act.
+  onLinkComputer?: () => void;
 }) {
   // The backend computes each refusal with the fold's own rules (an older
   // backend sends none: everything stays offered).
@@ -2530,6 +2544,15 @@ function MemberRow({
     title: refusalOf(r) ?? undefined,
   }));
   const rm = useRowMenu(`Actions for ${member.displayName}`, [
+    ...(onLinkComputer
+      ? [
+          {
+            label: `${LIKELY_ME_HINT}…`,
+            onSelect: onLinkComputer,
+            title: "Opens Add a computer: make it one of your devices, then remove this member",
+          },
+        ]
+      : []),
     ...roleActions,
     {
       label: "Allow new passkey",
@@ -2566,7 +2589,7 @@ function MemberRow({
   ]);
   return (
     <li className="px-1" {...rm.rowProps} data-testid={`member-${member.id}`}>
-      <div className="ligus-listrow flex items-center gap-2">
+      <div className="ligus-listrow flex items-center gap-2" data-tip={onLinkComputer ? LIKELY_ME_HINT : undefined}>
         <span className="relative shrink-0">
           <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={22} />
           <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--ligus-panel)" }}>
@@ -2582,6 +2605,7 @@ function MemberRow({
           )}
           <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-soft">
             {member.title ? `${member.title} · ${member.role}` : member.role}
+            {onLinkComputer && <span data-testid="likely-me"> · you on another computer?</span>}
           </span>
         </span>
         {member.isFounder && <Badge title="The workspace's founder: nobody can remove or demote them">founder</Badge>}

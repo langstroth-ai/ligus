@@ -33,22 +33,37 @@ export function openSettingsTab(tab: string) {
   window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));
 }
 
-/// "Add a phone" from anywhere (the palette): open Settings on Profile with
-/// the add-a-phone panel already open. The devices section reads the flag
-/// when it mounts and then clears it.
-let addPhoneRequestPending = false;
+/// My devices from anywhere (the palette, People, Set up): open Settings on
+/// Profile at My devices, optionally with Add a phone or Add a computer open.
+/// `member` is the separate member People thinks is this person on another
+/// computer: Add a computer offers to remove it once the computer is added.
+/// The devices section reads the request when it mounts and then clears it;
+/// one already on screen hears it through DEVICES_REQUEST_EVENT.
+export type DevicesRequest = {
+  open: "list" | "phone" | "computer";
+  member?: { memberId: string; displayName: string };
+};
+
+export const DEVICES_REQUEST_EVENT = "ligus:devices-request";
+
+let devicesRequestPending: DevicesRequest | null = null;
+
+export function requestDevices(req: DevicesRequest) {
+  devicesRequestPending = req;
+  openSettingsTab("account");
+  window.dispatchEvent(new CustomEvent<DevicesRequest>(DEVICES_REQUEST_EVENT, { detail: req }));
+}
+
+export function pendingDevicesRequest(): DevicesRequest | null {
+  return devicesRequestPending;
+}
+
+export function clearDevicesRequest() {
+  devicesRequestPending = null;
+}
 
 export function requestAddPhone() {
-  addPhoneRequestPending = true;
-  openSettingsTab("account");
-}
-
-export function addPhoneRequested(): boolean {
-  return addPhoneRequestPending;
-}
-
-export function clearAddPhoneRequest() {
-  addPhoneRequestPending = false;
+  requestDevices({ open: "phone" });
 }
 
 /// Open "Admit a box" for the active shared workspace from anywhere (e.g. the

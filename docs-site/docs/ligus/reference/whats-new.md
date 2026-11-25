@@ -6,6 +6,33 @@ Full release notes are on the
 
 ## Unreleased
 
+### Changed
+
+- **Linking a computer without retyping codes.** On the desktop, Add a
+  computer's last step has one main button, **Copy for lt**, which copies
+  the grant alone, and shows This desktop's fingerprint large with its own
+  copy button. On the computer, paste it in lt, or run `ligus devices
+  redeem` (or `lt --plain link-redeem`) with nothing after it: it reads a
+  hidden paste or the clipboard and asks *Is that your desktop? [y/N]*.
+  `ligus devices request` prints only the request on stdout (`| pbcopy`
+  copies exactly it), with `--copy` and `--json`. A link waiting for the
+  desktop's code shows in `ligus status`, and expired requests are cleaned
+  up. See [Add a computer](../features/linked-devices.md#how-it-works).
+
+- **Linking a computer is easier to find.** ⌘K **Add a computer to my
+  devices…** (type link, computer, device, lt or terminal) and ⌘K **My
+  devices**; Profile has a **My devices** link at the top. In People, a
+  member that looks like you on another computer says so, and its row menu
+  opens Add a computer for it, with removing that member offered once it's
+  added. In lt, Settings and People say when the terminal is its own member,
+  and **D** links it. See
+  [Already invited yourself?](../features/linked-devices.md#already-invited-yourself).
+- **Revoked devices are out of the way.** My devices folds them into a
+  collapsed **Revoked (N)** group, one line each, with the cleanup report
+  behind **Details** and **Hide from this list** (it stays revoked). One whose
+  cleanup isn't finished stays in view with **Retry now**. See
+  [Revoked devices](../features/linked-devices.md#revoked-devices).
+
 ### Fixed
 
 - **Claiming a workspace on the relay.** The People pane offered

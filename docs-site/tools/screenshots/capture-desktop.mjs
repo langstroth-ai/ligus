@@ -137,6 +137,48 @@ const VIEWS = {
     "",
     { "settings-profile": settingsDialog },
   ],
+  // Linked devices: a member that is you on another computer, and My
+  // devices with revoked ones folded away (?devices=1).
+  "people-link-hint": [
+    async (p) => {
+      await pane("People")(p);
+      await p.waitForTimeout(500);
+      await p.locator("aside").getByText(/^\w+ \(lt\)$/).first().click({ button: "right" });
+    },
+    "&devices=1",
+    { "people-link-hint-window": null, "people-link-hint": [760, 56, 1440, 560] },
+  ],
+  "palette-add-computer": [async (p) => palette(p, "link"), "&devices=1", { "palette-add-computer": [464, 108, 976, 574] }],
+  "settings-devices": [
+    async (p) => {
+      await settings("Profile")(p);
+      await p.waitForTimeout(500);
+      await p.getByRole("button", { name: /^Revoked \(/ }).click();
+      await p.waitForTimeout(300);
+      await p.getByRole("button", { name: /^Revoked \(/ }).scrollIntoViewIfNeeded();
+    },
+    "&devices=1",
+    { "settings-devices": settingsDialog },
+  ],
+  "settings-devices-collapsed": [
+    async (p) => {
+      await settings("Profile")(p);
+      await p.waitForTimeout(500);
+      await p.getByRole("link", { name: "My devices" }).click();
+    },
+    "&devices=1",
+    { "settings-devices-collapsed": settingsDialog },
+  ],
+  "add-computer-from-people": [
+    async (p) => {
+      await pane("People")(p);
+      await p.waitForTimeout(500);
+      await p.locator("aside").getByText(/^\w+ \(lt\)$/).first().click({ button: "right" });
+      await p.getByRole("menuitem", { name: /another computer/ }).click();
+    },
+    "&devices=1",
+    { "add-computer-from-people": null },
+  ],
   "settings-models": [settings("Models & runtimes"), "", { "settings-models": settingsDialog }],
   "settings-tools": [settings("Tools & MCP"), "", { "settings-tools": settingsDialog }],
   "settings-sync": [settings("Team sync"), "", { "settings-sync": settingsDialog }],

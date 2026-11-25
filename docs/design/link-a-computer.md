@@ -213,16 +213,19 @@ nothing). It can be linked only if the one workspace it holds is the grant's
 `ligus.agent-deploy.v1` document):
 
 ```sh
-ligus devices request [--label NAME] [--new-device] [--json]          # on the new computer
-ligus devices redeem <ligusgrant1:…> | --code-file PATH | - \
+ligus devices request [--label NAME] [--new-device] [--copy] [--json] # on the new computer (the code alone on stdout)
+ligus devices redeem [<ligusgrant1:…> | --code-file PATH | -] \
       [--approver-fingerprint XXXX-…] [--json]                         # on the new computer
 ligus devices approve <liguslink1:…> | --code-file PATH --fingerprint XXXX-… \
       --recovery-words-file PATH [--out PATH] [--json]                # a person's headless approval (prefer the desktop)
 ligus devices list [--json]                                           # your devices, and where this one stands
 ```
 
-`redeem` without `--approver-fingerprint` asks at a terminal and otherwise
-exits 4 (a person must compare it). `approve` without `--fingerprint` asks at
+`redeem` with no code at a terminal reads a hidden paste or the clipboard
+(the desktop's **Copy for lt** copies the grant alone; its **Copy command**
+copies a command without the grant, so it never reaches argv or shell
+history). `redeem` without `--approver-fingerprint` asks at a terminal and
+otherwise exits 4 (a person must compare it). `approve` without `--fingerprint` asks at
 a terminal and otherwise exits 4; its recovery words are the person's
 presence, so it is a human step (AGENTS.md, human-only steps), like
 `ligus phones certify`. Exit codes (the shared table): 0 done; 1 a check
@@ -403,3 +406,32 @@ vault.
   v3 workspace until updated. Not built here.
 - **F1 (follow-up).** Notify the person's other devices and phone when a
   computer is added, with Revoke.
+
+## 13. After 0.3.0: one install, two processes
+
+Found on 0.3.0: an `lt` left open while another `lt` on the same data dir
+redeemed the link (`lt --plain link-redeem`) kept its open identity, the
+old member's device key and account. It posted as that member until the
+desktop removed it, then every post failed with "role Viewer cannot perform
+messageAppended". Nothing on the wire was wrong: the fold refused, correctly,
+a removed member. Fixed in the clients, no rule or event changed:
+
+- An open `lt` follows a link recorded on disk (reopens as the new device,
+  acting as the person) and refuses to sign while its open identity isn't the
+  data dir's. It follows only a recorded link, never a redeem half way (the
+  device key switches before the link is recorded).
+- A linked install signs only where it was linked, and every write path
+  (posts, agent turns, MCP tools, apply, setup) checks that the open
+  identity is the data dir's. A refusal of a device the workspace certifies
+  for someone the install doesn't act as (its `computer-link.json` missing
+  or stale) says so and to re-link. The certificates only word the message:
+  they never block a device, since anyone can publish a certificate for a
+  public device key (review M1).
+- The person's actor comes from the roster (name, avatar), not the grant's
+  snapshot.
+- The role gate's refusal reads as what, why and the fix
+  (`ligus_runtime::role_refusal`), on the desktop, the CLI and `lt`.
+
+Recovery for an install already in that state: quit every `lt` on the data
+dir and start one again; if it still refuses, link it again (a new request
+with a new device key, approved under My devices > Add a computer).

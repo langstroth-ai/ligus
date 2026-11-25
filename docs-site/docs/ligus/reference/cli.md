@@ -246,19 +246,25 @@ acts as you, not as a second person with your name. See
 
 | Command | What it does |
 |---|---|
-| `ligus devices request [--label NAME] [--new-device]` | prints this computer's link request (`liguslink1:…`, no secret) and its fingerprint, and remembers it as pending (15 minutes, single use). A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
-| `ligus devices redeem <ligusgrant1:code> \| - \| --code-file PATH [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer), asks you to confirm who approved it (the person, the workspace and the approving desktop's fingerprint; `--approver-fingerprint`, or a yes at a terminal, else exit 4), saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
+| `ligus devices request [--label NAME] [--new-device] [--copy] [--json]` | prints this computer's link request (`liguslink1:…`, no secret) and remembers it as pending (15 minutes to approve, single use). Only the request goes to stdout, so `ligus devices request \| pbcopy` copies exactly it; the fingerprint, the time to approve by and the next step go to stderr. `--copy` copies it to the clipboard instead; `--json` prints one report whose `result` has `code`, `fingerprint`, `label`, `expiresAt` (unix ms) and `newDevice`. A data dir that was already connected asks with a new device key, switched to only when you redeem. A box can't: it joins with `ligus admit` |
+| `ligus devices redeem [<ligusgrant1:code> \| - \| --code-file PATH] [--approver-fingerprint FP]` | opens the grant your desktop showed (sealed to this computer). With no code at a terminal it asks for a hidden paste, or reads the clipboard when you just press Enter (**Copy for lt** on the desktop copies the grant alone); a pasted whole command or line breaks around the code are fine, and the code is never echoed. It asks you to confirm who approved it: *Approved by Alex's desktop · fingerprint … · for acme. Is that your desktop? [y/N]* (or `--approver-fingerprint`; away from a terminal without it, exit 4). Then it saves the connection, pulls, checks your desktop's certificate for this computer is there (exit 7 until it has synced) and acts as you from then on |
 | `ligus devices approve <liguslink1:request> \| --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]` | a person's own headless approval (prefer the desktop's My devices > Add a computer): certifies the computer as yours with your recovery key, syncs, and prints the grant (or writes it owner-only to `--out`) |
-| `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and pending requests |
+| `ligus devices list [--json]` | your devices in this workspace, whether this computer acts as you, and a link still waiting for the desktop's code (`ligus status` shows that too). Expired requests are cleaned up as you go |
 
 ```console
-$ ligus devices request --label work-laptop
-Ask your desktop to add this computer: Settings > Profile > My devices > Add a computer.
-…
-Fingerprint: 7F3A-91C0-77DE-0B14-5E62  (label "work-laptop")
-$ ligus devices redeem --code-file ./grant --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73
+$ ligus devices request --copy
+Copied this computer's link request (it holds no secret).
+Fingerprint: 7F3A-91C0-77DE-0B14-5E62  (label "ligus on work-laptop")
+On your desktop: Settings > Profile > My devices > Add a computer; paste the request, compare the fingerprint, confirm with your passkey (by 14:17).
+Then here: ligus devices redeem   (it reads the desktop's code from the clipboard or a hidden paste)
+$ ligus devices redeem
+Paste the desktop's code (hidden) and press Enter, or just press Enter to read it from the clipboard:
+Approved by Alex's desktop · fingerprint 2C41-88E0-1B9D-04AF-6E73 · for acme. Is that your desktop? [y/N] y
 This computer is now one of Alex's devices in workspace 'acme' (approved by desktop 2C41-88E0-1B9D-04AF-6E73).
 ```
+
+In a script, pipe the grant in and pin the desktop, so nothing secret is on
+the command line: `pbpaste | ligus devices redeem - --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73`.
 
 A linked computer acts as you without your account key: a vote asks for your
 passkey, and account changes (devices, phones, passkeys, keys, invites as

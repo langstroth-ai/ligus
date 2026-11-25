@@ -1878,6 +1878,12 @@ export type AskDto = {
   answer?: string | null;
   answeredBy?: string | null;
   open: boolean;
+  /// "permission": the turn's host asks to run something (only its person or
+  /// the agent's owner can grant it); "question" otherwise.
+  kind?: "permission" | "question";
+  /// Posted by someone other than the agent or its turn's host: theirs, never
+  /// a permission request.
+  postedBy?: string | null;
 };
 
 /// The agents' questions in a chat, newest first.
