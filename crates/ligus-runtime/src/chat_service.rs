@@ -741,7 +741,14 @@ impl ChatService {
                 let decision =
                     authorize(&payload, &self.author.id, self.actor_role(&session), &session);
                 if !decision.allowed {
-                    return Err(ChatError::Unauthorized(decision.summary));
+                    let why = crate::role_refusal::explain(
+                        decision.summary,
+                        &payload,
+                        &self.author.id,
+                        &self.author.display_name,
+                        &session.members,
+                    );
+                    return Err(ChatError::Unauthorized(why));
                 }
             }
         }
@@ -916,7 +923,13 @@ impl ChatService {
         };
         match authz::authorize(env, &ctx) {
             Decision::Allow => Ok(()),
-            Decision::Deny(why) => Err(ChatError::Unauthorized(why.0)),
+            Decision::Deny(why) => Err(ChatError::Unauthorized(crate::role_refusal::explain(
+                why.0,
+                &env.payload,
+                &self.author.id,
+                &self.author.display_name,
+                config.map_or(&fold.members[..], |c| &c.members[..]),
+            ))),
             Decision::Hold(h) => Err(ChatError::Unauthorized(format!("not yet decidable on this device ({h:?})"))),
         }
     }
