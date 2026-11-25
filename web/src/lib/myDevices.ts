@@ -38,7 +38,7 @@ export function pairingLine(d: MyDeviceDto, pairings: DevicePairingDto[], nowMs:
 export function revokeConfirmText(d: MyDeviceDto, pairings: DevicePairingDto[], nowMs: number = Date.now()): string {
   const name = deviceName(d, pairings);
   if (!d.phone) {
-    return `Revoke ${name}? Every member stops accepting its events right away. To use it again, run \`ligus serve enroll --new-device\` on it and approve the new code.`;
+    return `Revoke ${name}? Every member stops accepting its events right away. It keeps what it already read: to cut that too, an Admin rotates the workspace key. To use it again, make a new request on it (Add to my devices in lt, or \`ligus devices request --new-device\`) and add it again.`;
   }
   const ps = pairingsOf(d.deviceId, pairings);
   const recent = ps.find((p) => p.lastSeen != null && nowMs / 1000 - p.lastSeen < 86_400);

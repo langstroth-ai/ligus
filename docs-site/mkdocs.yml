@@ -126,6 +126,7 @@ plugins:
         features/git.md: ligus/features/git.md
         features/guards.md: ligus/features/guards.md
         features/invites.md: ligus/features/invites.md
+        features/linked-devices.md: ligus/features/linked-devices.md
         features/linked-identities.md: ligus/features/linked-identities.md
         features/mentions-and-notifications.md: ligus/features/mentions-and-notifications.md
         features/multi-agent.md: ligus/features/multi-agent.md
@@ -201,6 +202,7 @@ nav:
           - Security & trust: ligus/concepts/security.md
       - Features:
           - Settings: ligus/features/settings.md
+          - Themes: ligus/features/themes.md
           - Right Rail: ligus/features/right-rail.md
           - Multi-agent collaboration: ligus/features/multi-agent.md
           - Who can use your agents: ligus/features/agent-access.md
@@ -213,6 +215,7 @@ nav:
           - Flow (routing, hand-offs, task board): ligus/features/flow.md
           - Workspace memory and task state: ligus/features/memory.md
           - Ligus on your phone: ligus/features/phone-app.md
+          - Add a computer: ligus/features/linked-devices.md
           - Host dashboard: ligus/features/dashboard.md
           - Scheduled agents: ligus/features/scheduling.md
           - Managing context: ligus/features/voice-and-slash.md

@@ -445,6 +445,11 @@ export const listWorkspaceFiles = () => invoke<string[]>("list_workspace_files")
 export const exportChat = (sessionId: string) =>
   invoke<string | null>("export_chat", { sessionId });
 
+/// Save a theme file (Settings → Appearance → Export current theme) via a
+/// save dialog. Resolves to the written path, or null if cancelled.
+export const exportThemeFile = (fileName: string, contents: string) =>
+  invoke<string | null>("export_theme", { fileName, contents });
+
 /// Persist a composer attachment (base64 bytes) to disk; resolves to its
 /// absolute path, embedded in the message as a `[Attached: ...]` marker.
 export const saveAttachment = (name: string, dataBase64: string) =>
@@ -1343,6 +1348,39 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+
+/// Another computer's link request (`liguslink1:`), as Add a computer shows it.
+export interface ComputerRequestDto {
+  deviceId: string;
+  label: string;
+  /** Compare with the computer's screen. */
+  fingerprint: string;
+  alreadyMine: boolean;
+  revoked: boolean;
+  /** Already in the workspace as someone else (their name). */
+  someoneElses: string | null;
+  /** The separate member this computer proved it was here. */
+  previousMember: { memberId: string; displayName: string } | null;
+  /** This desktop's fingerprint: the computer shows it when it redeems. */
+  thisDesktop: string;
+}
+export interface ComputerGrantDto {
+  /** `ligusgrant1:…`, sealed to the computer that asked. */
+  grant: string;
+  expiresInMinutes: number;
+  thisDesktop: string;
+  previousMember: { memberId: string; displayName: string } | null;
+}
+/// Check a computer's link request (nothing written).
+export const inspectComputerRequest = (request: string) =>
+  invoke<ComputerRequestDto>("inspect_computer_request", { request });
+/// "Add a computer": certify it as one of your devices in the active
+/// workspace (opens the passkey sheet) and get the grant to paste on it.
+export const addComputer = (request: string, fingerprint: string) =>
+  invoke<ComputerGrantDto>("add_computer", { request, fingerprint });
+/// Remove the separate member a just-added computer was (its own passkey
+/// confirmation).
+export const removeDuplicateMember = (memberId: string) => invoke<void>("remove_duplicate_member", { memberId });
 
 /// A phone's `ligusphone1:` code, checked (nothing written).
 export interface PhoneCodeDto {

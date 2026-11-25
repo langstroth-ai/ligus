@@ -93,8 +93,10 @@ Onboarding shows your **safety code**, the fingerprint of that key, which
 people compare with the code they see for you (see
 [Identity & devices](../concepts/identity.md#safety-code)).
 
-- **More devices** join your account through an enrollment code, from
-  **Settings → Profile → My devices**. They don't sign in anywhere.
+- **More devices** join your account from **Settings → Profile → My
+  devices** (**Add a phone**, **Add a computer**). They don't sign in
+  anywhere. Don't invite yourself from another computer: that makes a second
+  member. See [Add a computer](../features/linked-devices.md).
 - **Commits** Ligus makes on your behalf are attributed to the commit email
   in your profile.
 - **Reaching people** works through invite links and through the workspaces

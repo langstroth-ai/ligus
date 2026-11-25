@@ -20,9 +20,11 @@ authorize.
 
 No provider signs you in. The account id is never derived from anything
 public (not a GitHub or other forge id, not an email, not a handle), and it
-never changes after first launch. More devices join your account through an
-enrollment code (`hivedev1:`, Settings → Profile → **My devices**), never by
-signing in somewhere.
+never changes after first launch. More devices join your account from
+Settings → Profile → **My devices**: **Add a phone**, and **Add a computer**
+for a second computer (see [Add a computer](../features/linked-devices.md)),
+never by signing in somewhere. Your account key stays on the desktop that made
+it; a linked computer acts as you without it.
 
 ## Profile
 
