@@ -560,7 +560,10 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
     let svc = crate::open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
     let here = svc.device_id();
-    let standing = svc.device_standing(ws, state.linked_in(ws).map(|p| p.id.as_str()))?;
+    let (standing, foreign) = svc.device_standing_and_foreign(ws)?;
+    // A certificate another member put on this computer's key: shown, never
+    // obeyed (it gives them nothing over this computer).
+    let foreign: Vec<String> = foreign.iter().map(|a| shown(&a.display_name)).collect();
     let me = match (&standing, state.linked_in(ws)) {
         (ligus_runtime::device_enroll::Standing::Revoked, _) => "revoked: this computer's device was revoked here".to_string(),
         (_, Some(p)) => format!("one of {}'s devices", shown(&p.display_name)),
@@ -576,6 +579,7 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
         let extra = serde_json::json!({
             "thisDevice": here,
             "standing": me,
+            "alsoCertifiedBy": foreign,
             "pending": state.pending.iter().map(|p| serde_json::json!({
                 "deviceId": p.device_id, "createdAt": p.created_at,
                 "approveBy": p.created_at.saturating_add(ligus_runtime::computer_link::REQUEST_TTL_MS),
@@ -589,6 +593,9 @@ pub fn cmd_list(cfg: &Config, json: bool) -> Result<()> {
         return Ok(());
     }
     println!("this computer: {me} (device {here})");
+    for n in &foreign {
+        println!("{n}'s account also certified this computer's key. That gives {n} nothing over it.");
+    }
     if !has_config {
         println!("no copy of workspace '{}' here yet (ligus sync)", cfg.room);
     }

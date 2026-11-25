@@ -74,6 +74,24 @@ impl ChatService {
     /// The member phone `phone` is certified for here (its actor, stamped
     /// with the phone as its device). Refused for a revoked or unknown
     /// phone, or one whose person isn't a member.
+    ///
+    /// A phone never vouches on the log (its person's desktop enrolls it),
+    /// so when another member also certified its key for themselves (device
+    /// keys are public: every certificate on the log carries one), the
+    /// fold's holders name both. The phone's person is then, in order:
+    ///
+    /// 1. the one holder the phone itself has signed as here (its actions,
+    ///    verified under its own key): its choice, which no certificate
+    ///    changes;
+    /// 2. the person this device resolved it to while it had a single
+    ///    certifier ([`Self::pin_phone_persons`] records it after every
+    ///    sync; device-local).
+    ///
+    /// Otherwise (both certificates arrived before this device ever saw
+    /// the phone with one), or if that person no longer holds it or isn't a
+    /// member, the phone names no one: fail closed, never another certifier
+    /// (identity model v2, 7.3a; the phone naming its account in its
+    /// requests, 0.4, removes this case).
     pub fn phone_person(&self, workspace_id: Uuid, phone: Uuid) -> Result<ligus_core::ActorIdentity> {
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let config = config.ok_or_else(|| ChatError::Unauthorized("the workspace configuration hasn't synced to this box yet".into()))?;
@@ -83,19 +101,71 @@ impl ChatService {
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        // The one member who holds this phone (someone else who certified
-        // its key for themselves leaves it naming no one: fail closed).
-        let mut people = config
+        let not_member = || ChatError::Unauthorized("that phone's person isn't a member here".into());
+        let account = if device.holders.len() == 1 {
+            let only = device.holders.first().copied();
+            if let Some(a) = only {
+                // Best effort: a failed write only loses the pin.
+                let _ = self.store.pin_phone_person(workspace_id, phone, a);
+            }
+            only
+        } else {
+            let signed = self.device_chosen_accounts(workspace_id, phone, &device.public_key)?;
+            let mut signed = signed.into_iter().filter(|a| device.holders.contains(a));
+            match (signed.next(), signed.next()) {
+                (Some(a), None) => Some(a),
+                // Signed as two holders: no choice to follow.
+                (Some(_), Some(_)) => None,
+                // A recorded person that no longer holds it names no one
+                // (fail closed), never another certifier.
+                (None, _) => self.store.phone_person_pin(workspace_id, phone)?.filter(|a| device.holders.contains(a)),
+            }
+        }
+        .ok_or_else(not_member)?;
+        let member = config
             .members
             .iter()
-            .filter(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.holders.contains(&a)));
-        let member = match (people.next(), people.next()) {
-            (Some(m), None) => m,
-            _ => return Err(ChatError::Unauthorized("that phone's person isn't a member here".into())),
-        };
+            .find(|m| m.actor.kind == ligus_core::ActorKind::Human && m.actor.account_id == Some(account))
+            .ok_or_else(not_member)?;
         let mut actor = member.actor.clone();
         actor.device_id = Some(phone);
         Ok(actor)
+    }
+
+    /// Record, for every phone of `workspace_id` that one account alone
+    /// certified, that account as its person here ([`Self::phone_person`]):
+    /// a certificate someone adds later then changes nothing. Run after
+    /// every sync by the devices that act for phones (boxes).
+    pub fn pin_phone_persons(&self, workspace_id: Uuid) -> Result<()> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        for (id, d) in &timeline.current().devices {
+            if d.phone && !d.revoked && d.holders.len() == 1 {
+                if let Some(a) = d.holders.first() {
+                    self.store.pin_phone_person(workspace_id, *id, *a)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The current members other than its person ([`Self::phone_person`])
+    /// who also certified phone `phone`'s key. A revocation goes strictly
+    /// down the ranks over every holder, so while one at or above the
+    /// person's rank holds it, the person can't revoke their own phone: My
+    /// devices says so and who can. Empty for a phone only its person holds.
+    pub fn phone_co_holders(&self, workspace_id: Uuid, phone: Uuid) -> Result<Vec<ligus_core::ActorIdentity>> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Some(config) = config else { return Ok(Vec::new()) };
+        let roster = timeline.current();
+        let Some(device) = roster.devices.get(&phone).filter(|d| d.phone && !d.revoked) else { return Ok(Vec::new()) };
+        let person = self.phone_person(workspace_id, phone).ok().and_then(|p| p.account_id);
+        Ok(config
+            .members
+            .iter()
+            .filter(|m| m.actor.kind == ligus_core::ActorKind::Human)
+            .filter(|m| m.actor.account_id.is_some_and(|a| Some(a) != person && device.holders.contains(&a)))
+            .map(|m| m.actor.clone())
+            .collect())
     }
 
     /// The accounts of the person who admitted this box (repos review F12,

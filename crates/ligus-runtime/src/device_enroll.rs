@@ -22,8 +22,10 @@
 //!    `DeviceCertificateAdded` signed by the owner's account key. Without that
 //!    approval the box cannot claim the owner: an event it stamps as the owner is
 //!    quarantined everywhere as impersonation.
-//! 3. The box sees the certificate after its next pull ([`standing`]) and from
-//!    then on authors as the owner. The desktop also retires the box's old
+//! 3. The box sees the certificate after its next pull and from then on
+//!    may author as the owner. Its own signature as the owner, not the
+//!    certificate, is what [`standing`] reads: a certificate anyone else
+//!    puts on the box's public key adopts nothing. The desktop also retires the box's old
 //!    member, which becomes a *retired alias* of the owner
 //!    ([`retired_aliases`], `ligus_core::DeviceLinks::link_retired`).
 //! 4. Revoking: the owner's desktop appends `DeviceRevoked` for the box's
@@ -31,7 +33,7 @@
 //!    it and stops writing. Re-enrolling takes a fresh device key
 //!    (`ligus serve enroll --new-device`), since a revoked device id stays revoked.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -216,19 +218,46 @@ fn certified_devices(trust: &[SessionEventEnvelope]) -> HashMap<Uuid, (Vec<u8>, 
     out
 }
 
+/// The accounts `device` itself acted for: the stamped account of each
+/// envelope in `signed` whose signer is `device` **and whose signature
+/// verifies under `device_key`** (the key its id derives from). Nobody but
+/// the device's holder can add one. The signer index alone is not enough:
+/// ingest stores some trust-bootstrap kinds from a signer it can't verify
+/// yet, so anyone could plant a row "signed by" a device; each candidate is
+/// checked, and an account already proved is not checked again.
+pub fn chosen_accounts(signed: impl IntoIterator<Item = SessionEventEnvelope>, device: Uuid, device_key: &[u8]) -> BTreeSet<Uuid> {
+    let mut out = BTreeSet::new();
+    for env in signed {
+        if env.signer_device_id != Some(device) {
+            continue;
+        }
+        let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { continue };
+        if !out.contains(&account) && verify_envelope(&env, device_key).is_ok() {
+            out.insert(account);
+        }
+    }
+    out
+}
+
 /// This device's standing in a workspace, from its trust history (`trust`: the
-/// workspace's key/cert/revocation/membership events) and roster (`config`).
+/// workspace's key/cert/revocation/membership events), roster (`config`) and
+/// the accounts it chose itself (`chosen`: [`chosen_accounts`] over
+/// everything it signed here).
 ///
 /// `own_account_key` is the box's own account public key: a cert under it is
-/// the box's own, not an owner's. With several owners certifying the device
-/// (unusual), `prefer` (an actor id or display name) picks one, else the
-/// smallest account id wins (deterministic).
+/// the box's own, not an owner's. **A certificate alone never makes this
+/// device anyone's** (identity model v2, 7.1): device keys are public, so any
+/// member can certify one for their own account. It is an owner's device
+/// only when a member's account certified it *and* the device itself signed
+/// as that account. Every other certificate is foreign: see
+/// [`foreign_certifiers`]. With several such owners (unusual), the smallest
+/// account id wins (deterministic). No display name is ever read.
 pub fn standing(
     trust: &[SessionEventEnvelope],
     config: Option<&ChatSession>,
     device_id: Uuid,
     own_account_key: &[u8],
-    prefer: Option<&str>,
+    chosen: &BTreeSet<Uuid>,
 ) -> Standing {
     let roster = build_roster(trust);
     if roster.is_revoked(device_id) {
@@ -241,32 +270,55 @@ pub fn standing(
         .filter(|m| m.actor.kind == ActorKind::Human)
         .filter(|m| {
             m.actor.account_id.is_some_and(|a| {
-                roster.device_signs_for(device_id, a)
+                chosen.contains(&a)
+                    && roster.device_signs_for(device_id, a)
                     && !roster.is_disputed(a)
                     && roster.account_signing_key(a).is_some_and(|k| k != own_account_key)
             })
         })
         .collect();
     owners.sort_by_key(|m| m.actor.account_id);
-    let preferred = prefer.and_then(|p| {
-        owners.iter().find(|m| m.actor.id == p || m.actor.display_name.eq_ignore_ascii_case(p)).copied()
-    });
-    match preferred.or_else(|| owners.first().copied()) {
+    match owners.first() {
         Some(m) => Standing::OwnerDevice(m.actor.clone()),
         None => Standing::Own,
     }
 }
 
-/// Retired aliases: `(alias actor id, owner actor id)` for each actor that is
-/// no longer a member of `config` but whose device — one that **signed events
-/// as that actor** — the owner's account has certified. Signing as the alias
-/// proves the device was the alias's own; the owner's cert proves the owner
-/// claims it. A former member that certifies someone else's device under its
-/// own account gets nothing: that device never signed as it.
-pub fn retired_aliases(trust: &[SessionEventEnvelope], config: &ChatSession) -> Vec<(String, String)> {
-    let devices = certified_devices(trust);
-    // (device, account) pairs proven by a signature.
-    let mut signed_as: HashSet<(Uuid, Uuid)> = HashSet::new();
+/// The members (other than the device's own account, `own_account_key`)
+/// whose account certified this device without the device ever acting for
+/// them: a **foreign** certificate. It gives them nothing over the device;
+/// it is only shown ("Ben's account also certified this box's key").
+pub fn foreign_certifiers(
+    trust: &[SessionEventEnvelope],
+    config: Option<&ChatSession>,
+    device_id: Uuid,
+    own_account_key: &[u8],
+    chosen: &BTreeSet<Uuid>,
+) -> Vec<ActorIdentity> {
+    let Some(config) = config else { return Vec::new() };
+    let roster = build_roster(trust);
+    let mut out: Vec<ActorIdentity> = config
+        .members
+        .iter()
+        .filter(|m| {
+            m.actor.account_id.is_some_and(|a| {
+                !chosen.contains(&a)
+                    && roster.device_signs_for(device_id, a)
+                    && roster.account_signing_key(a).is_some_and(|k| k != own_account_key)
+            })
+        })
+        .map(|m| m.actor.clone())
+        .collect();
+    out.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+    out.dedup_by(|a, b| a.account_id == b.account_id);
+    out
+}
+
+/// `(device, account)` pairs proven by the device's own signature among
+/// `trust`: an envelope signed by a certified device, stamped for the
+/// account, verifying under the device's certified key.
+fn signed_as(trust: &[SessionEventEnvelope], devices: &HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>) -> HashSet<(Uuid, Uuid)> {
+    let mut out: HashSet<(Uuid, Uuid)> = HashSet::new();
     for env in trust {
         let (Some(dev), Some(acct)) =
             (env.signer_device_id, env.actor_stamp.as_ref().and_then(|s| s.actor.account_id))
@@ -274,11 +326,36 @@ pub fn retired_aliases(trust: &[SessionEventEnvelope], config: &ChatSession) -> 
             continue;
         };
         if let Some((key, _)) = devices.get(&dev) {
-            if !signed_as.contains(&(dev, acct)) && verify_envelope(env, key).is_ok() {
-                signed_as.insert((dev, acct));
+            if !out.contains(&(dev, acct)) && verify_envelope(env, key).is_ok() {
+                out.insert((dev, acct));
             }
         }
     }
+    out
+}
+
+/// `(device, account)` pairs where `device` is certified for `account` and
+/// signed as it (verified), over `trust`: what [`ligus_core::DeviceLinks`]
+/// reads. A certificate someone put on another person's device key is never
+/// such a pair.
+pub fn acting_pairs(trust: &[SessionEventEnvelope]) -> HashSet<(Uuid, Uuid)> {
+    let devices = certified_devices(trust);
+    signed_as(trust, &devices).into_iter().filter(|(d, a)| devices.get(d).is_some_and(|(_, accts)| accts.contains(a))).collect()
+}
+
+/// Retired aliases: `(alias actor id, owner actor id)` for each actor that is
+/// no longer a member of `config` but whose device — one that **signed events
+/// as that actor** — the owner's account has certified **and the device has
+/// since signed as the owner too**. Signing as the alias proves the device
+/// was the alias's own; the owner's certificate plus the device's own
+/// signature as the owner prove it is the owner's now. A member who merely
+/// certifies a removed member's device key for themselves inherits nothing
+/// (identity model v2, 7.3): the device never vouched for them. A former
+/// member that certifies someone else's device under its own account gets
+/// nothing either: that device never signed as it.
+pub fn retired_aliases(trust: &[SessionEventEnvelope], config: &ChatSession) -> Vec<(String, String)> {
+    let devices = certified_devices(trust);
+    let signed_as = signed_as(trust, &devices);
     let member_of_account = |a: Uuid| {
         config.members.iter().find(|m| m.actor.kind == ActorKind::Human && m.actor.account_id == Some(a))
     };
@@ -292,7 +369,11 @@ pub fn retired_aliases(trust: &[SessionEventEnvelope], config: &ChatSession) -> 
             if is_member(*alias) || !signed_as.contains(&(*dev, *alias)) {
                 continue;
             }
-            let mut owners: Vec<_> = accounts.iter().filter(|o| *o != alias).filter_map(|o| member_of_account(*o)).collect();
+            let mut owners: Vec<_> = accounts
+                .iter()
+                .filter(|o| *o != alias && signed_as.contains(&(*dev, **o)))
+                .filter_map(|o| member_of_account(*o))
+                .collect();
             owners.sort_by_key(|m| m.actor.account_id);
             if let Some(owner) = owners.first() {
                 out.push((alias.to_string(), owner.actor.id.clone()));
@@ -334,6 +415,12 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
         .collect();
     out.sort_by_key(|d| d.device_id);
     out
+}
+
+/// The accounts holding a valid certificate for `device` (one verifying
+/// under a key the account registered).
+pub fn certified_accounts(trust: &[SessionEventEnvelope], device: Uuid) -> HashSet<Uuid> {
+    certified_devices(trust).remove(&device).map(|(_, a)| a).unwrap_or_default()
 }
 
 /// Accounts (other than `except`) holding a valid certificate for `device`.
@@ -602,7 +689,7 @@ mod flow_tests {
         let box_actor = sff.id();
         sff.svc.post_user_message(chat, ws, "before enrollment").unwrap();
         sff.sync().await;
-        assert_eq!(sff.svc.device_standing(ws, None).unwrap(), Standing::Own);
+        assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Own);
 
         // Unapproved, the box tries to claim Alex: stamped as Alex, signed by its
         // own device. Everyone else drops it as impersonation.
@@ -641,12 +728,16 @@ mod flow_tests {
         assert_eq!(listed.also_certified_by, vec![Uuid::parse_str(&box_actor).unwrap()]);
         mac.sync().await;
 
-        // The box sees the certificate and switches to Alex.
+        // The box sees the certificate. A certificate alone adopts nothing
+        // (anyone can certify a public device key): the box is still its
+        // own until it chooses to act as Alex itself.
         sff.sync().await;
-        let Standing::OwnerDevice(owner) = sff.svc.device_standing(ws, None).unwrap() else { panic!("not enrolled") };
-        assert_eq!(owner.id, alex.id);
-        sff.svc.act_as_owner_device(owner);
+        assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Own);
+        sff.svc.act_as_owner_device(alex.clone());
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
+        // Having signed as Alex, it is Alex's device.
+        let Standing::OwnerDevice(owner) = sff.svc.device_standing(ws).unwrap() else { panic!("not enrolled") };
+        assert_eq!(owner.id, alex.id);
         // P0.6: a vote it signs as Alex needs Alex's passkey presence; without
         // it, it is refused here and would be dropped by every fold
         // (delegated_host_vote_not_counted_for_human_gate).
@@ -689,7 +780,7 @@ mod flow_tests {
         mac.svc.remove_member(cfg, ws, box_actor.clone()).unwrap();
         mac.sync().await;
         sff.sync().await;
-        assert!(matches!(sff.svc.device_standing(ws, None).unwrap(), Standing::OwnerDevice(_)));
+        assert!(matches!(sff.svc.device_standing(ws).unwrap(), Standing::OwnerDevice(_)));
         sff.svc.post_user_message(chat, ws, "after retirement").unwrap();
         sff.sync().await;
         mac.sync().await;
@@ -711,7 +802,7 @@ mod flow_tests {
         mac.sync().await;
         taylor.sync().await;
         sff.sync().await;
-        assert_eq!(sff.svc.device_standing(ws, None).unwrap(), Standing::Revoked);
+        assert_eq!(sff.svc.device_standing(ws).unwrap(), Standing::Revoked);
         // Whatever the box still sends is dropped — by the desktop and by a
         // teammate that pulled the revocation in an earlier batch.
         sff.svc.post_user_message(chat, ws, "after revocation").unwrap();
@@ -734,14 +825,15 @@ mod flow_tests {
         sff2.engine = SyncEngine::new(RelayClient::new(&relay), ws.to_string()).with_room_workspace(ws)
             .with_key(ligus_core::derive_workspace_key("enroll flow passphrase"));
         sff2.sync().await;
-        assert_eq!(sff2.svc.device_standing(ws, None).unwrap(), Standing::Own);
+        assert_eq!(sff2.svc.device_standing(ws).unwrap(), Standing::Own);
         let request = DeviceEnrollment::decode(&sff2.svc.enrollment_request(ws, "sff").encode()).unwrap();
         mac.svc.certify_device(&request).unwrap();
         mac.sync().await;
         sff2.sync().await;
-        let Standing::OwnerDevice(owner) = sff2.svc.device_standing(ws, None).unwrap() else { panic!("not re-enrolled") };
-        sff2.svc.act_as_owner_device(owner);
+        assert_eq!(sff2.svc.device_standing(ws).unwrap(), Standing::Own, "a certificate alone adopts nothing");
+        sff2.svc.act_as_owner_device(alex.clone());
         sff2.svc.post_user_message(chat, ws, "re-enrolled").unwrap();
+        assert!(matches!(sff2.svc.device_standing(ws).unwrap(), Standing::OwnerDevice(_)));
         sff2.sync().await;
         mac.sync().await;
         assert!(mac.bodies(chat).contains(&("re-enrolled".into(), alex.id.clone())));

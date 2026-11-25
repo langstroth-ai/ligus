@@ -146,7 +146,8 @@ a one-line warning and **Retry now**.
 | "the clipboard doesn't hold a desktop code" | something else was copied last | on the desktop choose **Copy for lt** again, then press Enter |
 | "the clipboard holds this computer's request" | the computer's own request is still on the clipboard | add it on the desktop first, then **Copy for lt** |
 | "your desktop's approval hasn't reached this computer yet" | the desktop hasn't synced since you added it | keep the desktop online a moment, then try again (the grant lasts 30 minutes) |
-| "already in the workspace as someone else" | this computer's device key is another member's here | make a new request on it (`ligus devices request --new-device`) |
+| "already in the workspace as someone else" | this computer already acted as another member here (it signed as them) | make a new request on it (`ligus devices request --new-device`) |
+| "Ben also certified this computer's key. That gives them nothing over it." | another member certified the computer's public key for their own account | nothing: the link goes through, and the computer acts only as you. If you didn't expect it, tell an Admin |
 | "the workspace is in lockdown" | dearth mode is on | an Admin turns it off first |
 | "add a passkey first" | your account has no passkey here | Settings → Passkeys & keys |
 | the relay refuses the computer | a gated relay | sign in as yourself on the computer (`ligus auth login`) |

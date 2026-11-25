@@ -118,6 +118,25 @@ certified itself under that key still disputes it, fail closed (no Ligus
 client adds an account that way: the desktop's Add member writes a
 placeholder with no account, so this is left to older logs).
 
+<a id="foreign-certificates"></a>**They can't take over, stop or borrow a
+device by certifying its key.** Device keys are public (every certificate on
+the log carries one, and so does every link or phone request), and a
+certificate needs only the certifying account's signature, so any member
+can certify someone else's device key for their own account. Since 0.3.x
+such a *foreign* certificate gives them nothing: a device acts only for the
+accounts it signed as itself (each signature checked under its own key, so
+rows planted "from" the device don't count). A `ligus serve` box keeps
+writing as itself (only a revocation stops it) and lists the certifier in
+`/v1/health`; a computer being linked still links, and redeems as the
+person who approved it; `ligus devices list` and My devices show one quiet
+line ("Ben also certified this device's key. That gives Ben nothing over
+it."). The certifier isn't treated as the device's person for private
+agents or dispatch, inherits nothing from a removed member whose device it
+certified, and doesn't keep a removed member's device receiving new
+workspace keys. A phone keeps acting as its person: the one it has signed
+as, or the one its box saw certify it alone; see
+[Known limitations](#known-limitations), item 33, for what is left.
+
 <a id="held-events"></a>**They can't stall your sync with events nobody can
 judge.** An event a device can't judge yet (a device not certified for the
 account it claims, an account not admitted yet, a disputed account key)
@@ -977,12 +996,20 @@ it.
     locks its person out of the workspace until they reset the phone's
     device key. The relay sees that a phone is being added, by which box and
     when.
-33. **The paste fallback can lock a phone out.** A phone's `ligusphone1:`
-    code isn't secret (the phone shows it). Anyone in the workspace who has
-    it can certify it for their own account; the phone then has two holders,
-    its person can't act from it in that workspace, and they reset the
-    phone's device key. The QR flow isn't affected. A fix is planned after
-    0.1.1.
+33. **A second certificate on a phone's key.** A phone's key isn't secret
+    (its `ligusphone1:` code and its certificate carry it). Anyone in the
+    workspace can certify it for their own account. Since 0.3.x the phone
+    keeps acting as its person: a box follows the account the phone has
+    signed as, or the one it saw certify the phone alone, and gives the
+    later certifier nothing. A box that only ever saw both certificates
+    (both arrived in one sync, or a relay reordered them) names no one for
+    that phone until 0.4: it fails closed rather than guess. The phone then has two
+    holders, though, and a revocation goes strictly down the ranks over
+    both, so its person can revoke it only if they outrank the other
+    member; otherwise an Owner (or the founder, for an Owner) revokes it.
+    My devices says so on the phone's row. A phone-signed enrollment
+    statement, planned for 0.4 and enforced with workspace rules 3, removes
+    this.
 34. **Older members can still show a forged proposal comment.** Since 0.2.0
     a proposal comment whose named author isn't its signer is refused, and
     only verified comments are forwarded to an agent. The check runs on each
@@ -1116,7 +1143,8 @@ where both copies meet, a member certifying someone else's phone key for
 their own account (a phone never vouches for its account on the log, so
 both accounts hold it: neither can revoke it as their own, so it is revoked
 by someone who outranks both, or by its person once that member is
-removed, and its pairing names no one until then), an Admin revoking a device that isn't
+removed; the phone keeps acting as its person where its box saw it with
+one certifier, and names no one where it didn't), an Admin revoking a device that isn't
 certified on the workspace yet (a device id is derived from its key, so
 one who knows the key can name the device before it joins), a member who
 backdates a redemption of a person invite issued before redeem keys taking

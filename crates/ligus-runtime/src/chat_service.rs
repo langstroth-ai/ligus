@@ -423,18 +423,78 @@ impl ChatService {
         crate::device_enroll::DeviceEnrollment::new(workspace_id, &self.keypair, label)
     }
 
-    /// Where this device stands in `workspace_id`: its own identity, enrolled as
-    /// an owner's device, or revoked. See [`crate::device_enroll::standing`].
-    pub fn device_standing(&self, workspace_id: Uuid, prefer: Option<&str>) -> Result<crate::device_enroll::Standing> {
+    /// The accounts `device` itself acted for in `workspace_id`: every event
+    /// stored here that it signed, re-verified under `device_key` (see
+    /// [`crate::device_enroll::chosen_accounts`]), **and** that certified it
+    /// here (a certificate verifying under a key the account registered). A
+    /// device can sign a trust-bootstrap event stamped as anyone, and ingest
+    /// stores it inert: that is never choosing that account (design 7.2,
+    /// `chosen ∩ certified`).
+    pub fn device_chosen_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
+        let certified = crate::device_enroll::certified_accounts(&self.store.trust_envelopes(workspace_id)?, device);
+        Ok(self.device_signed_accounts(workspace_id, device, device_key)?.into_iter().filter(|a| certified.contains(a)).collect())
+    }
+
+    /// The stamped accounts of everything `device` signed here, each
+    /// verified under `device_key`, certified or not.
+    fn device_signed_accounts(&self, workspace_id: Uuid, device: Uuid, device_key: &[u8]) -> Result<std::collections::BTreeSet<Uuid>> {
+        // Streamed: an account already proved isn't checked again, and no
+        // long history is held in memory.
+        let mut proved = std::collections::BTreeSet::new();
+        self.store.for_each_signed_by(workspace_id, device, |env| {
+            let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+            if account.is_some_and(|a| !proved.contains(&a)) {
+                proved.extend(crate::device_enroll::chosen_accounts([env], device, device_key));
+            }
+            true
+        })?;
+        Ok(proved)
+    }
+
+    /// Where this device stands in `workspace_id`: its own identity, an
+    /// owner's device (only when it signed as that owner itself), or
+    /// revoked. See [`crate::device_enroll::standing`]: a certificate
+    /// someone else put on this device's key changes nothing.
+    pub fn device_standing(&self, workspace_id: Uuid) -> Result<crate::device_enroll::Standing> {
+        Ok(self.device_standing_and_foreign(workspace_id)?.0)
+    }
+
+    /// [`Self::device_standing`], and the members whose account certified
+    /// **this** device's key without this device ever acting for them
+    /// ([`crate::device_enroll::foreign_certifiers`]): shown, never obeyed.
+    pub fn device_standing_and_foreign(&self, workspace_id: Uuid) -> Result<(crate::device_enroll::Standing, Vec<ActorIdentity>)> {
         let trust = self.store.trust_envelopes(workspace_id)?;
         let config = self.load_in(workspace_id, workspace_config_session_id(workspace_id))?;
-        Ok(crate::device_enroll::standing(
-            &trust,
-            config.as_ref(),
-            self.device_id,
-            &self.account_keypair.public_key_bytes(),
-            prefer,
-        ))
+        let chosen = self.device_chosen_accounts(workspace_id, self.device_id, &self.keypair.public_key_bytes())?;
+        let own = self.account_keypair.public_key_bytes();
+        let standing = crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
+        let foreign = crate::device_enroll::foreign_certifiers(&trust, config.as_ref(), self.device_id, &own, &chosen);
+        Ok((standing, foreign))
+    }
+
+    /// Tests only: certify **any** Ed25519 device key under this account in
+    /// `workspace_id`, without the device's proof of possession, the way a
+    /// modified client could (the rules accept it: device keys are public
+    /// and a certificate needs only the certifying account's signature).
+    /// What the foreign-certificate tests attack with.
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn publish_foreign_certificate(&mut self, workspace_id: Uuid, device_public_key: &[u8]) -> Result<()> {
+        let account_id = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, device_public_key, Timestamp::now());
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(())
+    }
+
+    /// Tests only: certify a phone's P-256 key under this account without
+    /// the desktop's checks (a modified client racing a genuine enrollment).
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn publish_foreign_phone_certificate(&mut self, workspace_id: Uuid, phone_public_key: &[u8]) -> Result<()> {
+        let account_id = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("no account".into()))?;
+        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account_id, phone_public_key, Timestamp::now());
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(())
     }
 
     /// Approve `request` as one of **your** devices: issue a certificate for its
@@ -1972,10 +2032,12 @@ impl ChatService {
     /// * **retired aliases** — a former member whose device (one that signed
     ///   as it) the owner's account has since certified: a `ligus serve` box
     ///   enrolled as its owner's device (`device_enroll`), its old member removed;
-    /// * **host claims** (pre-enrollment stopgap) — an Admin member's host naming
-    ///   another member as owner, see [`ligus_core::DeviceLinks`]. A device counts
+    /// * **host claims** — an Admin member's host naming another member as
+    ///   owner, where the host device signed as that Admin itself and the
+    ///   owner certified it, see [`ligus_core::DeviceLinks`]. A device counts
     ///   as an account's only if its certificate verifies against a key that
-    ///   account registered in this workspace.
+    ///   account registered in this workspace; a certificate someone put on
+    ///   another person's device key never maps them to that person.
     pub fn device_links(&self, workspace_id: Uuid) -> Result<ligus_core::DeviceLinks> {
         let Some(config) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else {
             return Ok(ligus_core::DeviceLinks::default());
@@ -2007,7 +2069,10 @@ impl ChatService {
         let mut links = if config.workspace_hosts.iter().all(|h| h.owner_actor_id.is_empty()) {
             ligus_core::DeviceLinks::default()
         } else {
-            ligus_core::DeviceLinks::from_config(&config, certified)
+            // A member maps to a host's owner only when the host device itself
+            // signed as that member (verified), never on a certificate alone.
+            let acting = crate::device_enroll::acting_pairs(&trust);
+            ligus_core::DeviceLinks::from_config(&config, |d, a| acting.contains(&(d, a)), certified)
         };
         for (alias, owner) in crate::device_enroll::retired_aliases(&trust, &config) {
             links.link_retired(&config, &alias, &owner);
@@ -4851,7 +4916,8 @@ mod tests {
     }
 
     /// A `ligus serve` box registered as its owner's device (host owned by the
-    /// owner, cert under the box's own account) links only once it's an Admin.
+    /// owner, cert under the box's own account, the box signing as itself)
+    /// links only once it's an Admin and the owner certified its device too.
     #[test]
     fn serve_box_host_owned_by_owner_links_as_their_device() {
         let dir = tempfile::tempdir().unwrap();
@@ -4884,6 +4950,10 @@ mod tests {
         assert!(owner.device_links(wid).unwrap().is_empty());
 
         owner.set_member_role(cfg, wid, &box_id, WorkspaceRole::Admin).unwrap();
+        // The host record alone (anyone holding the device can write one)
+        // isn't the owner's word: nothing links until the owner certified it.
+        assert!(owner.device_links(wid).unwrap().is_empty());
+        owner.publish_foreign_certificate(wid, &boxed.device_public_key()).unwrap();
         let links = owner.device_links(wid).unwrap();
         assert_eq!(links.owner_of(&box_id), Some(owner_id.as_str()));
         let chat = boxed.create_chat("phone chat", wid, "rt").unwrap();
@@ -4901,6 +4971,190 @@ mod tests {
         forged.owner_actor_id = owner_id.clone();
         boxed.register_host(wid, forged).unwrap();
         assert_eq!(owner.device_links(wid).unwrap(), links);
+    }
+
+    /// F2a (identity model v2, 7.3): an Admin who certifies another
+    /// member's host device key for their own account doesn't become that
+    /// member. Before, `DeviceLinks` mapped the Admin to the host's owner, so
+    /// the Admin's turns counted as the owner's own on the owner's private
+    /// agents.
+    #[test]
+    fn an_admin_certifying_someone_elses_host_borrows_no_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, mallory_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        ana.store().set_join_invite(wid, invite).unwrap();
+        ana.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        let mut mallory = svc_on(&path, "m", "Mallory");
+        mallory.set_author_account(mallory_id.clone(), "Mallory", None);
+        mallory.ensure_self_member(cfg, wid).unwrap();
+        mallory.publish_identity(cfg, wid).unwrap();
+        ana.set_member_role(cfg, wid, &mallory_id, WorkspaceRole::Admin).unwrap();
+        // Ana's desktop is a host she owns.
+        let host = ligus_core::WorkspaceHost::new(ana.device_id().to_string(), ligus_core::HostKind::Device, "ana-mbp");
+        ana.register_host(wid, host).unwrap();
+        // Mallory certifies Ana's public device key for her own account.
+        mallory.publish_foreign_certificate(wid, &ana.device_public_key()).unwrap();
+        for svc in [&ana, &mallory] {
+            let links = svc.device_links(wid).unwrap();
+            assert_eq!(links.person(&mallory_id), mallory_id, "Mallory became Ana: {links:?}");
+            assert!(links.owner_of(&mallory_id).is_none());
+        }
+    }
+
+    /// F2b (identity model v2, 7.3): a member who certifies a removed
+    /// member's device key for themselves inherits no alias: not the removed
+    /// member's history, chats or agents. Before, any certifier of a device
+    /// that once signed as the removed member became its owner.
+    #[test]
+    fn certifying_a_removed_members_device_inherits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (owner_id, eve_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut owner = svc_on(&path, "o", "Owner");
+        owner.set_author_account(owner_id.clone(), "Owner", None);
+        let chat = owner.create_chat("general", wid, "rt").unwrap();
+        owner.ensure_workspace_config(wid).unwrap();
+        let mut join = |name: &str, id: &str| {
+            let invite = owner.issue_invite(wid).unwrap();
+            let mut svc = svc_on(&path, name, name);
+            svc.set_author_account(id.to_string(), name, None);
+            svc.store().set_join_invite(wid, invite).unwrap();
+            svc.store().set_join_redeem(wid, owner.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+            svc.ensure_self_member(cfg, wid).unwrap();
+            svc.publish_identity(cfg, wid).unwrap();
+            svc
+        };
+        let mut eve = join("Eve", &eve_id);
+        let mut ben = join("Ben", &ben_id);
+        eve.post_user_message(chat.id, wid, "Eve's plan").unwrap();
+        // Ben certifies Eve's public device key for his own account.
+        ben.publish_foreign_certificate(wid, &eve.device_public_key()).unwrap();
+        owner.remove_member(cfg, wid, eve_id.clone()).unwrap();
+        for svc in [&owner, &ben] {
+            let links = svc.device_links(wid).unwrap();
+            assert_eq!(links.person(&eve_id), eve_id, "Ben inherited the removed member: {links:?}");
+            assert!(!links.ids_of(&ben_id).any(|a| a == eve_id));
+        }
+    }
+
+    /// B2 (identity model v2, 7.3a): Ben certifies Ana's phone key for his
+    /// own account after Ana enrolled it. The phone still acts as Ana (her
+    /// certificate was stored first: nobody can certify a key before seeing
+    /// it); before, the box found two holders and refused every phone action.
+    /// My devices learns who else holds it (Ana can't revoke it past Ben).
+    #[test]
+    fn a_foreign_certificate_on_a_phone_neither_breaks_nor_redirects_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        let mut ben = svc_on(&path, "b", "Ben");
+        ben.set_author_account(ben_id.clone(), "Ben", None);
+        ben.store().set_join_invite(wid, invite).unwrap();
+        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.ensure_self_member(cfg, wid).unwrap();
+        ben.publish_identity(cfg, wid).unwrap();
+
+        let phone = ligus_core::testkit::Phone::new();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        assert_eq!(ana.phone_person(wid, phone.device_id).unwrap().id, ana_id);
+        assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty());
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        for svc in [&ana, &ben] {
+            let p = svc.phone_person(wid, phone.device_id).expect("the phone still has its person");
+            assert_eq!(p.id, ana_id, "redirected to Ben");
+            assert_eq!(p.device_id, Some(phone.device_id));
+        }
+        let co: Vec<String> = ana.phone_co_holders(wid, phone.device_id).unwrap().into_iter().map(|a| a.id).collect();
+        assert_eq!(co, vec![ben_id.clone()]);
+    }
+
+    /// Review R2: a store that receives a foreign phone certificate before
+    /// the genuine one (a relay reordering delivery) never redirects the
+    /// phone to the foreign certifier: with no recorded person it names no
+    /// one (fail closed). A box that recorded the person while one account
+    /// alone certified the phone keeps it, whatever arrives later.
+    #[test]
+    fn a_reordered_foreign_phone_certificate_never_redirects_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        let mut ben = svc_on(&path, "b", "Ben");
+        ben.set_author_account(ben_id.clone(), "Ben", None);
+        ben.store().set_join_invite(wid, invite).unwrap();
+        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.ensure_self_member(cfg, wid).unwrap();
+        ben.publish_identity(cfg, wid).unwrap();
+        let phone = ligus_core::testkit::Phone::new();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+
+        let mut all: Vec<SessionEventEnvelope> = Vec::new();
+        for env in ana.store().list(cfg).unwrap() {
+            if !all.iter().any(|e| e.event_id == env.event_id) {
+                all.push(env);
+            }
+        }
+        let is_cert_of = |e: &SessionEventEnvelope, who: &str| {
+            matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == phone.device_id && certificate.account_id.to_string() == who)
+        };
+        let ana_at = all.iter().position(|e| is_cert_of(e, &ana_id)).unwrap();
+        let ben_at = all.iter().position(|e| is_cert_of(e, &ben_id)).unwrap();
+
+        // A box that saw Ana's certificate alone first, then Ben's.
+        let pinned_path = dir.path().join("pinned.db");
+        {
+            let mut store = EventStore::open(&pinned_path).unwrap();
+            for env in all.iter().filter(|e| e.event_id != all[ben_at].event_id) {
+                store.ingest(env).unwrap();
+            }
+        }
+        svc_on(&pinned_path, "x", "Box").pin_phone_persons(wid).unwrap();
+        EventStore::open(&pinned_path).unwrap().ingest(&all[ben_at]).unwrap();
+        let pinned = svc_on(&pinned_path, "x", "Box");
+        assert_eq!(pinned.phone_person(wid, phone.device_id).unwrap().id, ana_id, "the recorded person moved");
+
+        // A box that got Ben's certificate first and never saw the phone with one.
+        let mut reordered = all.clone();
+        let ben_cert = reordered.remove(ben_at);
+        reordered.insert(ana_at, ben_cert);
+        let box_path = dir.path().join("box.db");
+        {
+            let mut store = EventStore::open(&box_path).unwrap();
+            for env in &reordered {
+                store.ingest(env).unwrap();
+            }
+        }
+        let boxed = svc_on(&box_path, "y", "Box");
+        boxed.pin_phone_persons(wid).unwrap();
+        match boxed.phone_person(wid, phone.device_id) {
+            Ok(p) => assert_ne!(p.id, ben_id, "the box redirected Ana's phone to Ben by arrival order"),
+            Err(_) => {} // fail closed
+        }
     }
 
     #[test]

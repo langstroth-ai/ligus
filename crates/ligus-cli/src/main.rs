@@ -610,7 +610,7 @@ fn status_report(cfg: &Config) -> serde_json::Value {
                 copy = true;
                 member = c.members.iter().any(|m| m.id == svc.author().id);
             }
-            standing = svc.device_standing(ws, None).ok().map(|s| match s {
+            standing = svc.device_standing(ws).ok().map(|s| match s {
                 ligus_runtime::device_enroll::Standing::Own => "own".to_string(),
                 ligus_runtime::device_enroll::Standing::OwnerDevice(_) => "owner-device".to_string(),
                 ligus_runtime::device_enroll::Standing::Revoked => "revoked".to_string(),
@@ -1750,7 +1750,7 @@ async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) 
     let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
     let ws = uuid_of_room(&cfg.room);
     let id = svc.device_id().to_string();
-    if svc.device_standing(ws, None)? == ligus_runtime::device_enroll::Standing::Revoked {
+    if svc.device_standing(ws)? == ligus_runtime::device_enroll::Standing::Revoked {
         bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");
     }
     svc.ensure_host(ws, with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label.to_string())))

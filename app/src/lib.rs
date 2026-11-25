@@ -5111,6 +5111,10 @@ struct MyDeviceDto {
     /// The label is a name (a host's, or one the phone gave itself here),
     /// not the "Device 1a2b3c4d" fallback.
     named: bool,
+    /// One quiet line when another member also certified this device's key
+    /// (identity model v2, 7.2 and 7.3a), else `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 /// A host that names you as its owner but isn't certified as your device
@@ -5137,8 +5141,12 @@ fn decode_device_code(code: &str) -> Result<ligus_runtime::device_enroll::Device
 
 /// Human members (not you) whose account certified `device`: the box's own
 /// pre-enrollment identity.
-fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid) -> Vec<WorkspaceMember> {
-    let accounts = svc.accounts_certifying(ws, device).unwrap_or_default();
+/// The members (not you) a device being approved was before: the accounts
+/// it **signed as itself** here (verified under `key`, its own). A
+/// certificate another member put on its public key doesn't make them its
+/// member, so approving the device never offers to remove them.
+fn device_own_members(svc: &ChatService, ws: Uuid, device: Uuid, key: &[u8]) -> Vec<WorkspaceMember> {
+    let accounts = svc.device_chosen_accounts(ws, device, key).unwrap_or_default();
     let me = svc.author().id.clone();
     svc.load_in(ws, ligus_core::workspace_config_session_id(ws))
         .ok()
@@ -5171,7 +5179,7 @@ pub(crate) fn inspect_device_code_sync(state: State<AppState>, code: String) -> 
         known_workspace,
         already_mine: entry.is_some_and(|d| !d.revoked),
         revoked,
-        replaces_member: device_own_members(&svc, ws, req.device_id)
+        replaces_member: device_own_members(&svc, ws, req.device_id, &req.device_public_key)
             .first()
             .map(|m| DeviceMemberDto { member_id: m.id.clone(), display_name: shown(&m.actor.display_name) }),
     })
@@ -5200,7 +5208,7 @@ pub(crate) fn approve_device_sync(state: State<AppState>, code: String, retire_m
     let mut out = ApproveDeviceDto { retired: None, retire_error: None };
     if retire_member {
         let cfg = ligus_core::workspace_config_session_id(ws);
-        for m in device_own_members(&svc, ws, req.device_id) {
+        for m in device_own_members(&svc, ws, req.device_id, &req.device_public_key) {
             match svc.remove_member(cfg, ws, m.id.clone()) {
                 Ok(()) => out.retired = Some(m.actor.display_name.clone()),
                 Err(e) => out.retire_error = Some(e.to_string()),
@@ -5226,8 +5234,11 @@ struct ComputerRequestDto {
     fingerprint: String,
     already_mine: bool,
     revoked: bool,
-    /// Already in the workspace as someone else (their name).
+    /// Already in the workspace as someone else (their name): it signed as them.
     someone_elses: Option<String>,
+    /// Members whose account certified this computer's key without it ever
+    /// acting for them: shown in one quiet line, never a refusal.
+    also_certified_by: Vec<String>,
     /// The separate member this computer proved it was here.
     previous_member: Option<DeviceMemberDto>,
     /// This desktop's fingerprint: the computer shows it when it redeems.
@@ -5263,6 +5274,7 @@ pub(crate) fn inspect_computer_request_sync(state: State<AppState>, request: Str
         already_mine: p.already_mine,
         revoked: p.revoked,
         someone_elses: p.someone_elses,
+        also_certified_by: p.also_certified_by,
         previous_member: p.previous_member.map(|m| DeviceMemberDto { member_id: m.id, display_name: shown(&m.actor.display_name) }),
         this_desktop: ligus_runtime::device_enroll::fingerprint(&svc.device_public_key()),
     })
@@ -5336,15 +5348,83 @@ pub(crate) fn list_my_devices_sync(state: State<AppState>) -> Result<Vec<MyDevic
     let svc = state.service.lock().unwrap();
     let here = svc.device_id();
     let hosts = svc.list_hosts(ws).unwrap_or_default();
-    let phones: std::collections::HashSet<Uuid> = svc
-        .store()
-        .load_config(ws, None, None)
-        .map(|(_, t)| t.current().devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect())
-        .unwrap_or_default();
-    Ok(my_device_rows(svc.own_devices(ws).map_err(map_err)?, here, |d| phones.contains(&d), |d| {
+    let roster = svc.store().load_config(ws, None, None).map(|(_, t)| t.current().clone()).ok();
+    let phones: std::collections::HashSet<Uuid> =
+        roster.as_ref().map(|r| r.devices.iter().filter(|(_, d)| d.phone).map(|(id, _)| *id).collect()).unwrap_or_default();
+    let devices = svc.own_devices(ws).map_err(map_err)?;
+    let notes: HashMap<Uuid, String> = devices
+        .iter()
+        .filter(|d| !d.revoked && !d.also_certified_by.is_empty())
+        .filter_map(|d| Some((d.device_id, device_note(&svc, ws, roster.as_ref()?, d.device_id, phones.contains(&d.device_id))?)))
+        .collect();
+    let mut rows = my_device_rows(devices, here, |d| phones.contains(&d), |d| {
         let host = hosts.iter().find(|h| h.id == d.to_string())?;
         Some((host.label.clone(), rfc3339(state.host_presence.last_seen(host))))
-    }, &phone_labels))
+    }, &phone_labels);
+    for r in &mut rows {
+        r.note = Uuid::parse_str(&r.device_id).ok().and_then(|d| notes.get(&d).cloned());
+    }
+    Ok(rows)
+}
+
+/// My devices' quiet line for a device of yours whose key another member
+/// also certified (identity model v2, 7.2 and 7.3a). A computer or box
+/// acts only for the accounts it signed as itself, so the certificate gives
+/// them nothing. A phone never signs for anyone but its person, and a
+/// revocation goes strictly down the ranks over everyone who certified it:
+/// say who can revoke it when you can't.
+fn device_note(svc: &ChatService, ws: Uuid, roster: &ligus_core::authz::RosterState, device: Uuid, phone: bool) -> Option<String> {
+    let me = svc.author().account_id?;
+    let my_id = svc.author().id.clone();
+    let names = |people: &[ligus_core::ActorIdentity]| {
+        let mut v: Vec<String> = people.iter().map(|a| shown(&a.display_name)).collect();
+        v.sort();
+        v.dedup();
+        v.join(", ")
+    };
+    if phone {
+        let co = svc.phone_co_holders(ws, device).ok()?;
+        let co: Vec<_> = co.into_iter().filter(|a| a.account_id != Some(me)).collect();
+        if co.is_empty() {
+            return None;
+        }
+        // The same cut rule the fold applies to a revocation
+        // (`ligus_core::authz`): never the founder, an Owner only by the
+        // founder, anyone else strictly down the ranks.
+        let my_role = roster.role_of(&my_id);
+        let founder = roster.founder.as_str();
+        let can_cut = co.iter().all(|a| match roster.role_of(&a.id) {
+            _ if a.id == founder => false,
+            None => true,
+            Some(ligus_core::WorkspaceRole::Owner) => my_id == founder && my_role == Some(ligus_core::WorkspaceRole::Owner),
+            Some(r) => my_role.is_some_and(|m| r.rank() < m.rank()),
+        });
+        if can_cut {
+            return None;
+        }
+        let who = if co.iter().any(|a| roster.role_of(&a.id) == Some(ligus_core::WorkspaceRole::Owner) || a.id == founder) {
+            "the workspace's founder"
+        } else {
+            "an Owner"
+        };
+        return Some(format!("{} also certified this phone's key. If you lose the phone, ask {who} to revoke it.", names(&co)));
+    }
+    let key = roster.devices.get(&device).map(|d| d.public_key.clone())?;
+    let chosen = svc.device_chosen_accounts(ws, device, &key).ok()?;
+    let config = svc.load_in(ws, ligus_core::workspace_config_session_id(ws)).ok().flatten()?;
+    let d = roster.devices.get(&device)?;
+    let foreign: Vec<ligus_core::ActorIdentity> = config
+        .members
+        .iter()
+        .filter(|m| m.actor.kind == ActorKind::Human)
+        .filter(|m| m.actor.account_id.is_some_and(|a| a != me && d.accounts.contains(&a) && !chosen.contains(&a)))
+        .map(|m| m.actor.clone())
+        .collect();
+    if foreign.is_empty() {
+        return None;
+    }
+    let n = names(&foreign);
+    Some(format!("{n} also certified this device's key. That gives {n} nothing over it."))
 }
 
 /// My devices' rows: exactly one per device id (the trust log can hold more
@@ -5375,6 +5455,7 @@ fn my_device_rows(
                 last_seen: host.map(|h| h.1),
                 phone: is_phone(d.device_id),
                 named,
+                note: None,
             }
         })
         .collect()
@@ -17156,7 +17237,12 @@ mod dispatch_target_tests {
         let mut host = ligus_core::WorkspaceHost::new(box_device.to_string(), ligus_core::HostKind::Worker, "sff");
         host.owner_actor_id = "owner".into();
         config.workspace_hosts = vec![host];
-        let links = ligus_core::DeviceLinks::from_config(&config, |d, a| d == box_device && a == box_account);
+        let owner_account = config.members[0].actor.account_id.unwrap();
+        let links = ligus_core::DeviceLinks::from_config(
+            &config,
+            |d, a| d == box_device && a == box_account,
+            |d, a| d == box_device && (a == box_account || a == owner_account),
+        );
         let mut chat = ChatSession::new("phone @ligus test", Uuid::nil(), "rt");
         chat.creator_actor_id = box_account.to_string();
         chat.members = config.members.clone();

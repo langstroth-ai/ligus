@@ -98,6 +98,14 @@ describe("AddComputerPanel", () => {
     expect(screen.queryByRole("button", { name: "Add with passkey" })).toBeNull();
   });
 
+  it("adds a computer someone else only certified, with one quiet line", async () => {
+    vi.mocked(ipc.inspectComputerRequest).mockResolvedValue({ ...request, previousMember: null, alsoCertifiedBy: ["Taylor"] });
+    render(<AddComputerPanel onDone={() => {}} onCancel={() => {}} />);
+    await userEvent.type(screen.getByLabelText("The computer's link request"), "liguslink1:x");
+    expect((await screen.findByTestId("also-certified")).textContent).toContain("Taylor also certified this computer's key");
+    expect(screen.getByRole("button", { name: "Add with passkey" })).toBeInTheDocument();
+  });
+
   it("says what to paste when it isn't a link request", async () => {
     vi.mocked(ipc.inspectComputerRequest).mockRejectedValue(new Error("not a Ligus link request"));
     render(<AddComputerPanel onDone={() => {}} onCancel={() => {}} />);

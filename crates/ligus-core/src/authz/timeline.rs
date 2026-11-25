@@ -243,14 +243,18 @@ impl RosterState {
     /// devices and the serve or worker boxes enrolled for them, which is how
     /// an agent's host gets the key). A device an agent is merely bound to
     /// is not enough: a removed member's box still hosting an agent would
-    /// otherwise get every later key. Device id → X25519 public key.
+    /// otherwise get every later key. Nor is a certificate alone: a current
+    /// member who certified a removed member's device key for themselves
+    /// doesn't hold it ([`DeviceState::holders`]), so the device stops
+    /// getting keys when its own person leaves. Read only by the rotating
+    /// device (no fold rule reads it). Device id → X25519 public key.
     pub fn rotation_recipients(&self) -> BTreeMap<Uuid, Vec<u8>> {
         let accounts: BTreeSet<Uuid> = self.members.values().filter_map(|m| m.account_id).collect();
         self.ka_keys
             .iter()
             .filter(|(device, _)| {
                 let Some(d) = self.devices.get(device) else { return false };
-                !d.revoked && d.accounts.iter().any(|a| accounts.contains(a))
+                !d.revoked && d.holders.iter().any(|a| accounts.contains(a))
             })
             .map(|(d, k)| (*d, k.clone()))
             .collect()

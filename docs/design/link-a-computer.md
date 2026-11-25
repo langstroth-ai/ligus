@@ -153,8 +153,12 @@ request is fresh and not its own device; it is a human member of the
 workspace, holds the account key the workspace pins for the person, and is
 itself a confirmed, non-delegated device; the workspace isn't in lockdown;
 the account holds a credential (a passkey or recovery key); the request's
-device isn't certified here for anyone (yours: "already your device";
-anyone else's: "already in the workspace as someone else") or revoked. Then
+device isn't already yours here ("already your device"), revoked, or one
+that **acted as someone else** here: a signature by the device's own key
+stamped for another account ("already in the workspace as someone else").
+A certificate another member put on the device's public key alone is
+foreign (identity model v2, 7.2): it doesn't block the link and is shown in
+one quiet line. Then
 it appends the certificate on the config log (the rules ask the person's
 presence for a new device of an account with a credential: **one
 ceremony**), and seals the grant. The certificate syncs from the desktop
@@ -169,8 +173,9 @@ shows the same fingerprint as "This desktop"; section 11, M4). Then it pins
 the grant's founder, pulls the workspace and checks: the founding is
 verified; the person is a human member; the approver is a certified,
 unrevoked, non-delegated, non-phone device of the person whose key is the
-grant's; this device is certified for the person and for no one else, and
-isn't revoked; no lockdown. A missing certificate means the desktop hasn't
+grant's; this device is certified for the person, never signed as anyone
+else here (a foreign certificate of its key is ignored), and isn't revoked;
+no lockdown. A missing certificate means the desktop hasn't
 synced yet: retry. On success the pending request is used up and the install
 records that it acts for the person (`LinkState::record_link`).
 
