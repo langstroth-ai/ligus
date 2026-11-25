@@ -26,7 +26,7 @@ function clock(ms: number): string {
 /// Who a card asks, for its header ("asks you", "asks Admins").
 export function asksWhom(a: AskDto): string {
   if (a.audience.kind === "people") {
-    if (a.eligible && (a.audience.memberIds?.length ?? 0) === 1) return "asks you";
+    if (a.eligible) return a.kind === "question" ? "asks you" : "asks you to allow";
     return `asks ${(a.audience.names ?? []).join(", ") || "someone"}`;
   }
   return `asks ${ROLE_LABEL[a.audience.minRole ?? "contributor"] ?? "the room"}`;
@@ -161,7 +161,7 @@ export function DecisionCard({ sessionId, ask, origin }: { sessionId: string; as
     if (hidden && ask.live) return null;
     const by = ask.answeredBy[ask.answeredBy.length - 1];
     return (
-      <div className="py-1 text-xs text-ink-soft" data-testid="ask-settled" data-tip={by?.deviceId ? `Signed by device ${by.deviceId.slice(0, 8)}` : undefined}>
+      <div className="px-3 py-1 text-xs text-ink-soft" data-testid="ask-settled" data-tip={by?.deviceId ? `Signed by device ${by.deviceId.slice(0, 8)}` : undefined}>
         {settledLine(ask)}
       </div>
     );
@@ -210,7 +210,12 @@ export function DecisionCard({ sessionId, ask, origin }: { sessionId: string; as
         <Avatar name={ask.agentName} kind="agent" size={20} />
         <span className="text-sm">
           <span className="font-semibold">{title}</span> {asksWhom(ask)}
-          {ask.quorum > 1 && <span className="text-ink-soft"> · needs {ask.quorum} of you</span>}
+          {ask.quorum > 1 && (
+            <span className="text-ink-soft">
+              {" "}
+              · needs {ask.quorum} of you · {Math.max(0, ...ask.tally)} so far
+            </span>
+          )}
         </span>
         {tags.map((t) => (
           <Badge key={t}>{t}</Badge>
@@ -220,9 +225,13 @@ export function DecisionCard({ sessionId, ask, origin }: { sessionId: string; as
           {clock(ask.atMs)}
         </span>
       </div>
-      <blockquote data-part="quote" className="mt-1.5 whitespace-pre-wrap break-words text-sm" style={{ overflowWrap: "anywhere" }}>
-        {`“${ask.question}”`}
-      </blockquote>
+      {/* A v2 grant's question is the host's own words (its effect line says
+          it); every other card quotes the agent. */}
+      {!(grant && ask.v >= 2) && (
+        <blockquote data-part="quote" className="mt-1.5 whitespace-pre-wrap break-words text-sm" style={{ overflowWrap: "anywhere" }}>
+          {`“${ask.question}”`}
+        </blockquote>
+      )}
       {grant && (
         <div data-part="effect" className="mt-1.5 text-xs text-ink-soft">
           {grant.tooLarge ? (
