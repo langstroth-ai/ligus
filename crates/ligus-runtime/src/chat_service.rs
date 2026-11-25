@@ -1837,7 +1837,8 @@ impl ChatService {
                 self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
-            // Genesis rules (Phase A): every workspace starts on rules v2 under
+            // Genesis rules (Phase A; rules 3 from 0.4, identity model v2):
+            // every workspace this build founds starts on rules v3 under
             // this deployment's passkey relying party. Written before anyone
             // holds a credential, so it carries no presence; the founder then
             // registers a passkey and a recovery key with the seed's one grant
@@ -1848,7 +1849,7 @@ impl ChatService {
                 config_id,
                 workspace_id,
                 SessionEvent::WorkspaceRulesSet {
-                    version: ligus_core::authz::RULES_GENESIS,
+                    version: ligus_core::authz::RULES_NEW_WORKSPACE,
                     presence: Some(self.deployment_presence.clone()),
                 },
             )?;

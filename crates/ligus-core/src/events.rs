@@ -1971,6 +1971,11 @@ fn fold_pass(
     // never depends on a position (see `authz::DeviceState::holders`).
     if keyed.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
         tracker.set_vouched(authz::RosterTracker::vouched(&keyed));
+        // Which certificates their devices accepted: read only once the log
+        // names rules 3 (an unallowed rules set changes nothing it reads).
+        if keyed.iter().any(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version >= authz::RULES_V3)) {
+            tracker.set_accepted(authz::RosterTracker::accepted(&keyed, ordered[base].workspace_id));
+        }
     }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
@@ -2381,6 +2386,25 @@ fn fold_pass(
         WorkspaceAuthz::Timeline(t) => t.current().rules,
         _ => tracker.state.rules,
     };
+    // Rules 3: a host whose owner isn't a member any more is inert (agents
+    // bound to it become unbound everywhere at once).
+    if session.authz.rules >= authz::RULES_V3 && session.id == crate::channel::workspace_config_session_id(session.workspace_id) {
+        let members: std::collections::BTreeSet<&str> = session.members.iter().map(|m| m.id.as_str()).collect();
+        let gone: Vec<String> = session
+            .workspace_hosts
+            .iter()
+            .filter(|h| !h.owner_actor_id.is_empty() && !members.contains(h.owner_actor_id.as_str()))
+            .map(|h| h.id.clone())
+            .collect();
+        if !gone.is_empty() {
+            session.workspace_hosts.retain(|h| !gone.contains(&h.id));
+            for a in session.workspace_agents.iter_mut() {
+                if gone.contains(&a.host_id) {
+                    a.host_id.clear();
+                }
+            }
+        }
+    }
     Some(session)
 }
 

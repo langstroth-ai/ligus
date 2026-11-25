@@ -65,7 +65,14 @@ use crate::session::ChatSession;
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
-pub const RULES_SUPPORTED: u32 = 2;
+pub const RULES_SUPPORTED: u32 = 3;
+/// Rules version 3 (identity model v2, "Rules 3 in 0.4"): a certificate
+/// counts only with its device's own acceptance, a retired member is
+/// removed, inline credentials and member records whose ids disagree are
+/// denied, and hosts of former members are inert.
+pub const RULES_V3: u32 = 3;
+/// The rules a workspace founded by this build starts at.
+pub const RULES_NEW_WORKSPACE: u32 = 3;
 /// The rules every workspace starts at (the seed's roster), and the lowest
 /// version a `WorkspaceRulesSet` may name.
 pub const RULES_GENESIS: u32 = 2;
@@ -538,6 +545,15 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // Rules 3 (identity model v2): records whose ids disagree, and model
+    // keys stored in the workspace, are refused.
+    let rules_here = if on_config { ctx.running.rules } else { ctx.workspace.map(|w| w.rules).unwrap_or(ctx.running.rules) };
+    if rules_here >= RULES_V3 {
+        if let Some(why) = rules3_refusal(&env.payload) {
+            return Decision::deny(why);
+        }
+    }
+
     // The workspace rules: the relying party is well formed and on the
     // config log; only the Owner changes it (with presence verified under
     // the policy in force before the change) or the version.
@@ -552,6 +568,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         if *version != ctx.running.rules && fold.role_of(author) != WorkspaceRole::Owner {
             return Decision::deny("only the Owner changes the rules version");
+        }
+        // Rules only tighten: a workspace on rules 3 never goes back (its
+        // older devices are read-only there already).
+        if *version < ctx.running.rules && ctx.running.rules_written {
+            return Decision::deny("the rules version never goes back");
         }
         // The relying party decides which page every member's desktop opens
         // for each passkey ceremony and what a re-registration under it binds:
@@ -607,7 +628,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         // needs it.
         // Once: the first rules set on the log, never a second one written
         // while the workspace still holds no credential.
-        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version == RULES_GENESIS)
+        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if (RULES_GENESIS..=RULES_SUPPORTED).contains(&version))
             && on_config
             && !roster.rules_written
             && roster.passkeys.values().all(|m| m.is_empty());
@@ -1157,6 +1178,30 @@ pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r Roste
     }
     d.verifying_key(env).ok_or("bad signature")?;
     Ok(d)
+}
+
+/// What rules 3 refuses outright (identity model v2, "Rules 3 in 0.4"): a
+/// member record whose member id isn't its actor id, or whose actor id isn't
+/// its account id (when it names one); and a workspace runtime carrying a
+/// model key on the log (keys are never stored in the workspace, O11).
+fn rules3_refusal(e: &SessionEvent) -> Option<&'static str> {
+    let inline = |r: &crate::workspace_runtime::WorkspaceRuntime| matches!(r.credential, crate::workspace_runtime::WorkspaceCredential::Inline { .. });
+    match e {
+        SessionEvent::MemberAdded { member, .. } => {
+            if member.id != member.actor.id {
+                return Some("a member's id is its actor's id");
+            }
+            if member.actor.account_id.is_some_and(|a| a.to_string() != member.actor.id) {
+                return Some("a member's actor id is its account id");
+            }
+            None
+        }
+        SessionEvent::WorkspaceRuntimeUpserted { runtime } if inline(runtime) => Some("model keys are never stored in the workspace"),
+        SessionEvent::WorkspaceRuntimesUpdated { runtimes } if runtimes.iter().any(inline) => {
+            Some("model keys are never stored in the workspace")
+        }
+        _ => None,
+    }
 }
 
 /// `DeviceKeyAgreementPublished`: on the config log, signed by the very device
