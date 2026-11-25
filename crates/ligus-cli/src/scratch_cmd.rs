@@ -95,7 +95,10 @@ pub fn of_chat(data_dir: &Path, svc: &ChatService, chat: Uuid) -> Option<Scratch
 pub fn create(data_dir: &Path, svc: &ChatService, ws: Uuid, chat: Option<Uuid>, name: &str, created_by: &str) -> std::result::Result<ScratchRepo, scratch::ScratchError> {
     let st = settings(svc, data_dir);
     scratch::reserve(svc.store(), &st, created_by)?;
-    let root = scratch::check_root(&st.root, &forbidden())?;
+    // Never the repos dir itself (or around it): keep moves into it.
+    let mut no = forbidden();
+    no.push(repos_dir(data_dir));
+    let root = scratch::check_root(&st.root, &no)?;
     let now = scratch::now();
     let e = scratch::init_dir(&root, ws, name, created_by, now)?;
     if let Err(err) = scratch::record(svc.store(), &st, &e) {
@@ -236,19 +239,31 @@ pub fn sweep(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str,
     out
 }
 
+/// `ligus repo scratch …` and `ligus repo keep …` (the other repository
+/// commands are `ligus repos …`).
+pub fn cmd_repo(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    match pos.first().copied() {
+        Some("scratch") => cmd_scratch(data_dir, svc, ws, host_label, pos.get(1).copied(), flag),
+        Some("keep") => cmd_keep(data_dir, svc, ws, host_label, pos.get(1).copied(), flag),
+        _ => Err(crate::help::usage_error("usage: ligus repo scratch [--chat ID] | ligus repo keep <scratch> (ligus repos for the others)")),
+    }
+}
+
 fn find(svc: &ChatService, ws: Uuid, sel: &str) -> Result<ScratchRepo> {
     scratch::find(svc.store(), ws, sel).ok_or_else(|| anyhow!("no scratch repository on this host matches '{sel}' (ligus repo scratch --list)"))
 }
 
 /// `ligus repo scratch [--chat ID] [--name N] [--workspace] [--json]`,
-/// `--list`, `--remove ID`, `--set-root PATH | --reset-root`,
+/// `--list`, `--remove <scratch>`, `--set-root PATH | --reset-root`,
 /// `--cleanup-days N` (0 = off), `--sweep`.
-pub fn cmd_scratch(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+pub fn cmd_scratch(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, target: Option<&str>, flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     let json_out = flag("--json").is_some();
     let now = scratch::now();
     if let Some(root) = flag("--set-root").filter(|r| !r.is_empty()) {
         let p = crate::repos_cmd::abs(&root)?;
-        let c = scratch::set_root(svc.store(), Some(&p), &forbidden()).map_err(|e| anyhow!("{e}"))?;
+        let mut no = forbidden();
+        no.push(repos_dir(data_dir));
+        let c = scratch::set_root(svc.store(), Some(&p), &no).map_err(|e| anyhow!("{e}"))?;
         println!("scratch root: {}", c.map(|c| c.display().to_string()).unwrap_or_default());
         return Ok(());
     }
@@ -266,6 +281,7 @@ pub fn cmd_scratch(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label:
     if flag("--sweep").is_some() {
         let r = sweep(data_dir, svc, ws, host_label, now);
         let r2 = ligus_runtime::repos::scratch_host::sweep(svc, ws, &settings(svc, data_dir), host_label, now);
+        scratch::purge_trash(svc.store());
         let (noticed, removed) = (r.noticed.len() + r2.noticed.len(), r.removed.len() + r2.removed.len());
         if json_out {
             println!("{}", json!({ "noticed": noticed, "removed": removed, "failed": r.failed.iter().chain(&r2.failed).map(|(i, e)| json!({"id": i, "error": e})).collect::<Vec<_>>() }));
@@ -277,14 +293,16 @@ pub fn cmd_scratch(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label:
         }
         return Ok(());
     }
-    if let Some(sel) = flag("--remove").filter(|s| !s.is_empty()) {
-        let e = find(svc, ws, &sel)?;
+    if flag("--remove").is_some() {
+        let sel = target.ok_or_else(|| crate::help::usage_error("usage: ligus repo scratch --remove <scratch id | name>"))?;
+        let e = find(svc, ws, sel)?;
         let removed = if e.repo_id.is_some() {
             ligus_runtime::repos::scratch_host::remove(svc, ws, e.id, host_label, None).map_err(|x| anyhow!("{x}"))?
         } else {
             remove(data_dir, svc, ws, e.id, host_label, Some(&format!("The scratch repository {} was removed from {host_label}. This chat has no repository now; its proposals and diffs stay in the chat.", e.name)))
                 .map_err(|x| anyhow!("{x}"))?
         };
+        scratch::purge_trash(svc.store());
         println!("removed the scratch repository {}.", removed.name);
         return Ok(());
     }
@@ -347,7 +365,7 @@ pub fn cmd_scratch(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label:
 
 /// `ligus repo keep <scratch> [--to PATH] [--name N] [--json]`.
 pub fn cmd_keep(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, sel: Option<&str>, flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
-    let Some(sel) = sel else { bail!(crate::help::usage_error("usage: ligus repo keep <scratch id | name> [--to PATH] [--name N]")) };
+    let Some(sel) = sel else { return Err(crate::help::usage_error("usage: ligus repo keep <scratch id | name> [--to PATH] [--name N]")) };
     let e = find(svc, ws, sel)?;
     if !e.is_live() {
         bail!("{} isn't a live scratch repository (it was kept or removed)", e.name);
@@ -369,7 +387,7 @@ pub fn cmd_keep(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &s
     } else {
         println!("kept {} at {}; it is an ordinary repository now.", kept.name, kept.path.display());
         if workspace == Some(false) {
-            println!("the workspace still tags it scratch: an Admin drops that with ligus repos rename.");
+            println!("the workspace still tags it scratch (dropping that needs an Admin).");
         }
     }
     Ok(())

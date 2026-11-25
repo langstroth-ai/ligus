@@ -6,6 +6,20 @@ Full release notes are on the
 
 ## Unreleased
 
+### Added
+
+- **Scratch repositories.** No code yet? **New scratch repo**, the first
+  choice in every repository picker (desktop, phone, lt, and the guided
+  setup's code folder flow), has the host that runs the chat's agents create
+  an empty repository for it. Agents work in it with the chat's branch,
+  proposals, approvals and the sandbox as usual; a small **scratch** tag
+  marks it. **Keep it as a repo** moves it out of the scratch folder, with an
+  optional, confirmed **Publish to GitHub (private)**. Unkept ones are
+  removed after 14 quiet days (a setting), with a notice two days before;
+  their chats keep their history. On the command line: `ligus repo scratch`
+  and `ligus repo keep`. See
+  [Scratch repositories](../features/repositories.md#scratch).
+
 ### Changed
 
 - **Linking a computer without retyping codes.** On the desktop, Add a

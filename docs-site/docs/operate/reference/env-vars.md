@@ -132,6 +132,8 @@ step with the code.
 | `LIGUS_SERVE_PALETTE` / `LIGUS_SERVE_APPEARANCE` | unset | theme for *Match host* |
 | `LIGUS_DESKTOP_DATA_DIR` | the OS app-data dir for `ai.ligus.desktop` | where to read the desktop's theme on the same machine |
 | `LIGUS_REPOS_DIR` | `<data dir>/repos` | checkouts the phone may bind and clone into |
+| `LIGUS_SCRATCH_DIR` | `<data dir>/scratch` | where this host creates scratch repositories (`ligus repo scratch --set-root` overrides it; never inside another repository or the desktop app's data dir) |
+| `LIGUS_SCRATCH_SWEEP_SECS` | `3600` | how often `ligus serve` runs the scratch cleanup (at least 30) |
 | `LIGUS_REPOS_MAX_CLONE_MB` | `2048` | clone size cap |
 | `LIGUS_GITHUB_APP_CLIENT_ID` | unset | the Ligus GitHub App's client id for device sign-in (also read at build time); no secret |
 | `LIGUS_GITLAB_CLIENT_ID` | unset | the gitlab.com OAuth application id for device sign-in (also read at build time); no secret |

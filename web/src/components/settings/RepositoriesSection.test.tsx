@@ -47,6 +47,13 @@ vi.mock("@/lib/ipc", () => ({
   chatWorkspaceRepo: vi.fn(),
   setChatWorkspaceRepo: vi.fn(async () => undefined),
   repinChatBase: vi.fn(async () => "89abcdef0123456789abcdef0123456789abcdef"),
+  listScratchRepos: vi.fn(async () => ({ scratch: [], settings: { root: "/tmp/scratch", rootIsDefault: true, cleanupDays: null, noticeDays: 2, maxPerHost: 20, maxPerMember: 10, live: 0 } })),
+  createScratchRepo: vi.fn(),
+  keepScratchRepo: vi.fn(),
+  publishScratchRepo: vi.fn(),
+  removeScratchRepo: vi.fn(),
+  setScratchSettings: vi.fn(),
+  forgesList: vi.fn(async () => []),
 }));
 
 function wrap(ui: React.ReactNode) {
@@ -199,13 +206,20 @@ describe("ChatRepoChip", () => {
     expect(ipc.repinChatBase).toHaveBeenCalledWith("s2");
   });
 
-  it("is hidden while there are no repos", async () => {
-    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ repos: [] }));
+  it("is hidden while there are no repos, for a member who can't start a scratch repo", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ repos: [], canAdmin: false }));
     vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(null);
     const { container } = wrap(<ChatRepoChip sessionId="s1" />);
     await new Promise((r) => setTimeout(r, 20));
     expect(container.textContent).toBe("");
     expect(repoWarning(null, "x")).toBeNull();
+  });
+
+  it("shows No repository to an Admin with no repos, so a scratch repo can be started", async () => {
+    vi.mocked(ipc.listWorkspaceRepos).mockResolvedValue(data({ repos: [], canAdmin: true }));
+    vi.mocked(ipc.chatWorkspaceRepo).mockResolvedValue(null);
+    wrap(<ChatRepoChip sessionId="s1" />);
+    expect(await screen.findByText("No repository")).toBeInTheDocument();
   });
 });
 

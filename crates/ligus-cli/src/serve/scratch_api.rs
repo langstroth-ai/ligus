@@ -202,7 +202,7 @@ pub async fn publish(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id):
         }
         None => s.repos.github(&s.cfg.data_dir).ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "no GitHub connection on this host"))?,
     };
-    let url = ligus_runtime::repos::scratch_host::publish(handle.forge.as_ref(), &e.path, &req.owner, &req.name, &req.confirm)
+    let url = ligus_runtime::repos::scratch_host::publish(handle.forge.as_ref(), &e, &req.owner, &req.name, &req.confirm)
         .await
         .map_err(|m| ApiError::new(StatusCode::CONFLICT, m))?;
     {
@@ -228,6 +228,8 @@ pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
     .await?
     .map_err(api_err)?;
     s.after_write();
+    let trash = scratch::pending_trash(s.lock().store());
+    let _ = blocking(move || trash.iter().for_each(|t| drop(scratch::delete_trash(t)))).await;
     Ok(Json(json!({ "ok": true, "id": removed.id })))
 }
 
@@ -278,7 +280,15 @@ pub async fn sweep_loop(shared: Arc<Shared>, mut stop: tokio::sync::watch::Recei
 
 /// One cleanup pass at `now` (the loop's body; tests call it directly).
 pub fn sweep_once(s: &Shared, now: i64) -> ligus_runtime::repos::scratch_host::SweepReport {
-    let _g = s.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
-    let mut svc = s.lock();
-    scratch_cmd::sweep(&s.cfg.data_dir, &mut svc, s.ws, &s.opts.label, now)
+    let (report, trash) = {
+        let _g = s.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut svc = s.lock();
+        let r = scratch_cmd::sweep(&s.cfg.data_dir, &mut svc, s.ws, &s.opts.label, now);
+        (r, scratch::pending_trash(svc.store()))
+    };
+    // The deletes run without any lock: a big tree never stalls the API.
+    for t in trash {
+        let _ = scratch::delete_trash(&t);
+    }
+    report
 }

@@ -428,6 +428,15 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 | `ligus trust enable-all [--repo PATH]` | trusts all of them |
 | `ligus facts export --jsonl [--since C]` | this host's content-free facts as `ligus.facts.v1` JSON lines (measurements, guard signals, and state facts from its projection), for external observability tools; the last line carries the cursor to pass as the next `--since` (unix milliseconds also work) ([Telemetry](../concepts/security.md#facts)) |
 
+### Scratch repositories {#scratch}
+
+| Command | What it does |
+|---|---|
+| `ligus repo scratch [--chat ID] [--name N] [--workspace] [--json]` | creates an empty scratch repository (one empty commit on `main`) under this host's scratch root and binds the chat to it here; `--workspace` (a person's own device, Admin) also adds it to the workspace flagged scratch ([Scratch repositories](../features/repositories.md#scratch)) |
+| `ligus repo scratch --list [--json]` / `--remove <scratch>` / `--sweep` | this host's scratch repositories and settings; removes one now; runs the cleanup once (`ligus serve` runs it hourly) |
+| `ligus repo scratch --set-root PATH` / `--reset-root` / `--cleanup-days N` | where scratch repositories go (`LIGUS_SCRATCH_DIR`, default `<data dir>/scratch`; never inside another repository or the desktop app's data folder); days without activity before removal (default 14, `0` off) |
+| `ligus repo keep <scratch> [--to PATH] [--name N] [--json]` | keeps a scratch repository: moves it out of the scratch root (default: the repos dir) and points its chats there |
+
 There is no `ligus serve enroll` (a box is never a person's device): it
 stops with an error that points to box admission. See
 [Admitting a box](../../operate/ops/admitting-a-box.md).

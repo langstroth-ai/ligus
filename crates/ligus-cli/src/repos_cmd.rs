@@ -187,8 +187,6 @@ pub(crate) fn abs(p: &str) -> Result<PathBuf> {
 pub fn cmd(data_dir: &Path, svc: &mut ChatService, ws: Uuid, host_label: &str, pos: &[&str], flag: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     let entries = || -> Result<Vec<RepoEntry>> { svc_entries(svc, ws) };
     match pos.first().copied() {
-        Some("scratch") => crate::scratch_cmd::cmd_scratch(data_dir, svc, ws, host_label, flag),
-        Some("keep") => crate::scratch_cmd::cmd_keep(data_dir, svc, ws, host_label, pos.get(1).copied(), flag),
         None | Some("list") => {
             let es = entries()?;
             let maps = svc.store().repo_mappings(ws)?;

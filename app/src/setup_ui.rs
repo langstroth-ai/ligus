@@ -252,6 +252,10 @@ impl SetupOps for DesktopOps<'_> {
     fn bind_folder(&mut self, repo_id: &str, path: &str) -> OpsResult<()> {
         service::bind_folder(&self.state().service.lock().unwrap(), self.ws, &crate::repos_ui::host_label(), repo_id, path)
     }
+    fn create_scratch(&mut self, name: &str) -> OpsResult<(String, String)> {
+        let root = self.state().data_dir.join("scratch");
+        service::create_scratch(&mut self.state().service.lock().unwrap(), self.ws, &crate::repos_ui::host_label(), &root, &[], name)
+    }
 
     // box, phone, invite
     fn hosts(&self) -> Vec<HostFact> {

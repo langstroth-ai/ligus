@@ -613,6 +613,61 @@ export const workspaceRepos = {
   ],
 };
 
+// ── Scratch repositories (`&scratch=1`): the picker, the chat's tag and
+// removal notice, Keep it as a repo, Settings → Repositories ──
+const secs = Math.floor(now / 1000);
+const scratchDir = "/Users/ana/Library/Application Support/ai.ligus.app/scratch";
+export const scratchEntry = (over: Record<string, unknown> = {}) => ({
+  id: "sc-spike",
+  name: "varroa-spike",
+  folder: "varroa-spike-1a2b3c4d",
+  path: `${scratchDir}/varroa-spike-1a2b3c4d`,
+  state: "live",
+  repoId: "repo-scratch",
+  createdAt: secs - 12 * 86400 - 3600,
+  lastActivity: secs - 12 * 86400,
+  removeAt: secs + 2 * 86400 - 3600,
+  noticeFrom: secs - 3600,
+  notice: true,
+  chats: 1,
+  published: null,
+  ...over,
+});
+export const scratchRepos = (on: boolean) => ({
+  scratch: on
+    ? [
+        scratchEntry(),
+        scratchEntry({ id: "sc-frames", name: "frame-counter", folder: "frame-counter-77e0c2a9", path: `${scratchDir}/frame-counter-77e0c2a9`, repoId: "repo-scratch-2", lastActivity: secs - 3 * 86400, removeAt: secs + 11 * 86400, noticeFrom: secs + 9 * 86400, notice: false }),
+        scratchEntry({ id: "sc-queen", name: "queen-tracker", folder: "queen-tracker-0c4d9e11", path: "/Users/ana/projects/queen-tracker", state: "kept", removeAt: null, noticeFrom: null, notice: false, repoId: "repo-scratch-3" }),
+      ]
+    : [],
+  settings: { root: scratchDir, rootIsDefault: true, cleanupDays: null, noticeDays: 2, maxPerHost: 20, maxPerMember: 10, live: on ? 2 : 0 },
+});
+export const scratchWorkspaceRepo = {
+  id: "repo-scratch",
+  name: "varroa-spike",
+  canonical: "local:5e1f0a9c33",
+  forgeKind: "local",
+  defaultBranch: "main",
+  removed: false,
+  here: { state: "present", code: "present", viaFork: false, path: `${scratchDir}/varroa-spike-1a2b3c4d`, found: [] },
+  hosts: [],
+  scratch: true,
+  scratchInfo: scratchEntry(),
+};
+export const scratchChatRepo = {
+  id: "repo-scratch",
+  name: "varroa-spike",
+  canonical: "local:5e1f0a9c33",
+  removed: false,
+  baseBranch: "main",
+  basePinned: false,
+  canRepin: true,
+  here: { state: "present", reason: "" },
+  scratch: true,
+  scratchInfo: scratchEntry(),
+};
+
 // ── Workspace memory (the Memory pane) ──
 const maya = { id: "a-maya", name: "Maya", kind: "human" as const };
 const zaz = { id: "a-zaz", name: "Zaz", kind: "human" as const };

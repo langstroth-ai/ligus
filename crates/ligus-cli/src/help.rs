@@ -432,9 +432,10 @@ pub const COMMANDS: &[Cmd] = &[
         purpose: "Check the folder is a main git checkout (not a linked worktree), not managed by another host here and \
                   not bound to another repository, before anything is written; then match the workspace repository by \
                   its remote (adding it, with its default branch, takes an Admin) and bind the folder (Contributor).",
-        synopsis: &["ligus setup folder --path DIR [--name NAME] [--branch B] [--json] [--dry-run]"],
+        synopsis: &["ligus setup folder --path DIR [--name NAME] [--branch B] [--json] [--dry-run]", "ligus setup folder --scratch [--name NAME] [--json] [--dry-run]"],
         flags: &[
-            f("--path DIR", "required", "the checkout"),
+            f("--scratch", "off", "start with a scratch repository instead: an empty one this host creates, added to the workspace flagged scratch (Admin) and bound here"),
+            f("--path DIR", "required without --scratch", "the checkout"),
             f("--name NAME", "the repository's name", "the display name when the repository is added"),
             f("--branch B", "origin's HEAD, else main or master", "the default branch when the repository is added"),
             JSON,
@@ -1562,6 +1563,78 @@ pub const COMMANDS: &[Cmd] = &[
         ..D
     },
     Cmd {
+        name: "repo",
+        group: G_REPOS,
+        summary: "scratch repositories: start one for a chat, keep it",
+        purpose: "Scratch repositories: an empty repository (one empty commit on main) this host creates under its \
+                  scratch root for a chat to work in, with the chat's branch, proposals, approvals and the sandbox as \
+                  for any checkout. Unkept ones are removed after a quiet spell. The other repository commands are \
+                  `ligus repos`.",
+        synopsis: &["ligus repo scratch [--chat CHAT-ID] [--name N] [--workspace] [--json]", "ligus repo keep <scratch> [--to PATH] [--name N] [--json]"],
+        flags: &[f("--label NAME", "LIGUS_HOST_LABEL, else $HOSTNAME, else \"this host\"", "this host's label in messages"), JSON],
+        env: &["LIGUS_HOST_LABEL", "HOSTNAME", "LIGUS_SCRATCH_DIR", "LIGUS_REPOS_DIR"],
+        conn: true,
+        examples: &["ligus repo scratch --chat 6f1c2a9b-…", "ligus repo scratch --list", "ligus repo keep 1a2b3c4d --to ~/src/parser"],
+        see_also: &["ligus repo scratch", "ligus repo keep", "ligus help repos"],
+        ..D
+    },
+    Cmd {
+        name: "repo scratch",
+        group: G_REPOS,
+        summary: "create, list or remove scratch repositories; set the cleanup",
+        purpose: "Create an empty repository under this host's scratch root (LIGUS_SCRATCH_DIR, else <data dir>/scratch, \
+                  or --set-root; never inside another repository or the desktop app's data folder) and, with --chat, bind \
+                  that chat to it here. --workspace (a person's own device, Admin) also adds it to the workspace flagged \
+                  scratch and sets it as the chat's workspace repository. Limits: 16 per host, 8 per member by default. \
+                  The cleanup removes an unkept one after 14 days without activity (a turn, a commit, a bind), with a \
+                  notice in its chats 2 days before; it only ever deletes a folder this host created and recorded, \
+                  directly under the scratch root, not a symlink. Its chats are left with no repository; their proposals \
+                  and diffs stay.",
+        synopsis: &[
+            "ligus repo scratch [--chat CHAT-ID] [--name N] [--workspace] [--json]",
+            "ligus repo scratch --list [--json] | --remove <scratch> | --sweep [--json]",
+            "ligus repo scratch --set-root PATH | --reset-root | --cleanup-days N",
+        ],
+        flags: &[
+            f("--chat CHAT-ID", "none", "bind this chat to the new scratch repository on this host"),
+            f("--name N", "scratch-<id>", "its display name (and folder slug)"),
+            f("--workspace", "off", "also add it to the workspace, flagged scratch (Admin, with presence)"),
+            f("--list", "off", "list this host's scratch repositories and settings"),
+            f("--remove", "off", "remove the named scratch repository now (its chats get no repository and a note)"),
+            f("--sweep", "off", "run the cleanup once now (ligus serve runs it hourly)"),
+            f("--set-root PATH", "<data dir>/scratch", "where new scratch repositories go"),
+            f("--reset-root", "off", "back to the default scratch root"),
+            f("--cleanup-days N", "14", "days without activity before removal; 0 turns the cleanup off"),
+            f("--label NAME", "LIGUS_HOST_LABEL, else $HOSTNAME", "this host's label in messages"),
+            JSON,
+        ],
+        env: &["LIGUS_SCRATCH_DIR", "LIGUS_REPOS_DIR", "LIGUS_HOST_LABEL"],
+        conn: true,
+        examples: &["ligus repo scratch --chat 6f1c2a9b-… --name \"Parser spike\"", "ligus repo scratch --list --json", "ligus repo scratch --cleanup-days 0"],
+        see_also: &["ligus repo keep", "ligus repos", "ligus bind-repo"],
+        ..D
+    },
+    Cmd {
+        name: "repo keep",
+        group: G_REPOS,
+        summary: "keep a scratch repository: move it out of the scratch root",
+        purpose: "Keep a scratch repository as an ordinary one: move it to --to (default: the repos dir, under its name), \
+                  repair its worktrees, and point its chats there. It is never removed by the cleanup after that. A \
+                  workspace-registered one also loses its scratch tag (Admin). Publishing to a code host is the phone's \
+                  or the desktop's explicit action, with a confirmation naming the account and repository.",
+        synopsis: &["ligus repo keep <scratch> [--to PATH] [--name N] [--json]"],
+        flags: &[
+            f("--to PATH", "<repos dir>/<name>", "where to keep it (must not exist; outside the scratch root and other repositories; the same disk)"),
+            f("--name N", "its scratch name", "the kept repository's name"),
+            JSON,
+        ],
+        env: &["LIGUS_REPOS_DIR"],
+        conn: true,
+        examples: &["ligus repo keep 1a2b3c4d", "ligus repo keep \"Parser spike\" --to ~/src/parser"],
+        see_also: &["ligus repo scratch", "ligus repos"],
+        ..D
+    },
+    Cmd {
         name: "bind-repo",
         group: G_REPOS,
         summary: "bind a checkout for agent file tools (legacy, per box)",
@@ -2023,6 +2096,8 @@ pub const ENV: &[(&str, &[EnvVar])] = &[
             e("LIGUS_PROMETHEUS_URL", "http://127.0.0.1:9090", "Prometheus for dashboard panels; set: a lab section is generated"),
             e("LIGUS_LAB_TEMPS", "unset", "temperature queries for the generated lab section"),
             e("LIGUS_REPOS_DIR", "<data dir>/repos", "checkouts agents and the phone may bind and clone into"),
+            e("LIGUS_SCRATCH_DIR", "<data dir>/scratch", "where this host creates scratch repositories (ligus repo scratch)"),
+            e("LIGUS_SCRATCH_SWEEP_SECS", "3600", "how often ligus serve runs the scratch cleanup (at least 30)"),
             e("LIGUS_REPOS_MAX_CLONE_MB", "2048", "clone size cap"),
             e("LIGUS_REPOS_CLONE_TIMEOUT_SECS", "900", "clone and fetch timeout"),
             e("LIGUS_AUTH_ADMIN_URL", "unset", "langstroth-auth admin API, to revoke a phone's sign-in (with the two below)"),
@@ -2388,6 +2463,10 @@ branch.
 
 LIGUS_REPOS_DIR (default <data dir>/repos) holds clones. SSH host aliases:
 ligus repos alias; synced aliases: ligus repos aliases, then ligus repos accept.
+
+No code yet? Start a scratch repository for a chat (an empty one, on this host):
+  ligus repo scratch --chat <chat-id>       # removed after 14 quiet days unless kept
+  ligus repo keep <scratch> --to ~/src/x    # keep it as an ordinary repository
 ",
     },
     Topic {
@@ -3051,6 +3130,7 @@ mod tests {
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),
             ("memory", src("memory_cmd.rs"), "pub fn run(", "\n}\n", &[]),
             ("repos", src("repos_cmd.rs"), "pub fn cmd(", "\n}\n", &["on", "off", "default"]),
+            ("repo", src("scratch_cmd.rs"), "pub fn cmd_repo(", "\n}\n", &[]),
             ("forge", src("forge_cmd.rs"), "pub fn cmd(", "\n}\n", &["oauth", "gh", "none"]),
             ("setup", src("setup_cmd.rs"), "pub fn cmd(", "\n}\n", &["-", "--json", "--dry-run"]),
         ];
@@ -3088,7 +3168,7 @@ mod tests {
             .flat_map(|fl| fl.flag.split([' ', ',']).filter(|w| w.starts_with("--")).map(|w| w.to_string()).collect::<Vec<_>>())
             .collect();
         let mut missing = Vec::new();
-        for file in ["main.rs", "admit.rs", "repos_cmd.rs"] {
+        for file in ["main.rs", "admit.rs", "repos_cmd.rs", "scratch_cmd.rs"] {
             let text = src(file);
             for pat in ["flag_val(\"", "has(\"", "flag(\""] {
                 for part in text.split(pat).skip(1) {

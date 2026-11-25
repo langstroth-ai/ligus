@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   chatWorkspaceRepo,
+  createScratchRepo,
   getAppSettings,
   getGitStatus,
   listWorkspaceRepos,
@@ -14,6 +15,7 @@ import {
 import { runtimeLabelWithModel, useChatModel } from "@/components/ModelPicker";
 import { toast, errMsg } from "@/components/Toast";
 import { REPOS_KEY } from "@/components/settings/RepositoriesSection";
+import { KeepScratchDialog, ScratchNotice, ScratchTag, refreshScratch } from "@/components/ScratchRepo";
 
 /// The warning a chat shows when this device can't run a turn in its repo.
 export function repoWarning(r: ChatWorkspaceRepoDto | null | undefined, hostLabel: string): string | null {
@@ -32,15 +34,18 @@ export function repoWarning(r: ChatWorkspaceRepoDto | null | undefined, hostLabe
 /// The chat's repo chip: "WeFit · main" (or "No repository"), a picker of
 /// the workspace's repos, and a warning when this device has no checkout of
 /// the chat's repo. Hidden while the workspace has no repos and the chat
-/// names none.
+/// names none, unless this person can start a scratch repo (an Admin).
 export function ChatRepoChip({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const repos = useQuery({ queryKey: REPOS_KEY, queryFn: listWorkspaceRepos });
   const mine = useQuery({ queryKey: ["chat-repo", sessionId], queryFn: () => chatWorkspaceRepo(sessionId) });
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [scratchErr, setScratchErr] = useState<string | null>(null);
+  const [keeping, setKeeping] = useState(false);
   const live = (repos.data?.repos ?? []).filter((r) => !r.removed);
   const current = mine.data ?? null;
-  if (!current && live.length === 0) return null;
+  if (!current && live.length === 0 && !repos.data?.canAdmin) return null;
   const hostLabel = repos.data?.hostLabel ?? "this device";
   const warning = repoWarning(current, hostLabel);
   const pick = async (repoId: string | null) => {
@@ -62,6 +67,21 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
       toast.error(`Couldn't move the chat's base: ${errMsg(e)}`);
     }
   };
+  const newScratch = async () => {
+    setScratchErr(null);
+    setCreating(true);
+    try {
+      await createScratchRepo(sessionId);
+      setOpen(false);
+      refreshScratch(qc);
+    } catch (e) {
+      setOpen(false);
+      setScratchErr(`Couldn't make a scratch repo: ${errMsg(e)}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+  const scratchInfo = current && !current.removed ? (current.scratchInfo ?? null) : null;
   const label = current ? `${current.name ?? "Unknown repository"}${current.baseBranch ? ` · ${current.baseBranch}` : ""}` : "No repository";
   return (
     <div className="relative flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs" style={{ borderColor: "var(--ligus-line)" }}>
@@ -74,22 +94,59 @@ export function ChatRepoChip({ sessionId }: { sessionId: string }) {
       >
         {warning && <span aria-hidden style={{ color: "var(--ligus-accent-warm, orange)" }}>●</span>}
         {label}
+        {current?.scratch && !current.removed && <ScratchTag />}
       </button>
       {warning && <span className="text-ink-soft">{warning}</span>}
+      {scratchInfo && <ScratchNotice entry={scratchInfo} onKeep={() => setKeeping(true)} />}
+      {scratchErr && (
+        <span role="alert" className="inline-flex items-center gap-1.5 text-ink-soft">
+          {scratchErr}
+          <button type="button" className="underline" onClick={() => setScratchErr(null)}>
+            Dismiss
+          </button>
+        </span>
+      )}
+      {keeping && scratchInfo && <KeepScratchDialog entry={scratchInfo} onClose={() => setKeeping(false)} />}
       {open && (
         <div
           role="menu"
           className="absolute left-3 top-8 z-20 min-w-56 rounded-xl border p-1 shadow"
           style={{ borderColor: "var(--ligus-line)", background: "var(--ligus-panel)" }}
         >
+          <button
+            role="menuitem"
+            type="button"
+            className="mb-1 block w-full rounded-lg border-b px-2 py-1 text-left hover:bg-black/5 disabled:opacity-50"
+            style={{ borderColor: "var(--ligus-line)" }}
+            disabled={creating}
+            data-tip="An empty repository on this device for this chat; removed after a while without activity unless you keep it"
+            onClick={() => void newScratch()}
+          >
+            {creating ? "Making a scratch repo…" : "New scratch repo"}
+          </button>
           {live.map((r) => (
-            <button key={r.id} role="menuitem" type="button" className="block w-full rounded-lg px-2 py-1 text-left hover:bg-black/5" onClick={() => void pick(r.id)}>
-              {r.name} <span className="text-ink-soft">{r.canonical}</span>
+            <button key={r.id} role="menuitem" type="button" className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left hover:bg-black/5" onClick={() => void pick(r.id)}>
+              <span>{r.name}</span>
+              {r.scratch ? <ScratchTag /> : <span className="truncate text-ink-soft">{r.canonical}</span>}
             </button>
           ))}
           <button role="menuitem" type="button" className="block w-full rounded-lg px-2 py-1 text-left hover:bg-black/5" onClick={() => void pick(null)}>
             No repository
           </button>
+          {scratchInfo?.state === "live" && (
+            <button
+              role="menuitem"
+              type="button"
+              className="mt-1 block w-full rounded-lg border-t px-2 py-1 text-left hover:bg-black/5"
+              style={{ borderColor: "var(--ligus-line)" }}
+              onClick={() => {
+                setOpen(false);
+                setKeeping(true);
+              }}
+            >
+              Keep it as a repo…
+            </button>
+          )}
           {current?.canRepin && !current.removed && (
             <button
               role="menuitem"

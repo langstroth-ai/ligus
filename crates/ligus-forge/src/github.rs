@@ -318,9 +318,14 @@ impl Forge for GitHub {
             return Err(ForgeError::Rejected(format!("GitHub didn't create the repository: {}", v.as_str().unwrap_or(""))));
         }
         let m = meta(&v).ok_or_else(|| ForgeError::Transport("GitHub's answer had no repository".into()))?;
-        // GitHub created it private; refuse to go on if it says otherwise.
-        if v["private"].as_bool() != Some(true) {
-            return Err(ForgeError::Rejected("GitHub created the repository but didn't report it as private; nothing was pushed".into()));
+        // GitHub created it private; refuse to go on if it says otherwise
+        // (an Enterprise "internal" repository also says private: true).
+        let visibility = v["visibility"].as_str();
+        if v["private"].as_bool() != Some(true) || visibility.is_some_and(|x| x != "private") {
+            return Err(ForgeError::Rejected(format!(
+                "GitHub created {} but didn't report it as private; nothing was pushed (delete it on GitHub if you don't want it)",
+                m.repo.full_name()
+            )));
         }
         Ok(m.repo)
     }

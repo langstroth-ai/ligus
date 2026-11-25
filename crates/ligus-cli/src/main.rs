@@ -2735,12 +2735,19 @@ fn run() -> Result<()> {
             flag_val("--chat").as_deref(),
             has("--clear"),
         ),
-        "repos" | "repo" => {
+        "repos" => {
             let mut svc = open_service(&cfg)?;
             let ws = uuid_of_room(&cfg.room);
             let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
             repos_cmd::cmd(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
+        }
+        "repo" => {
+            let mut svc = open_service(&cfg)?;
+            let ws = uuid_of_room(&cfg.room);
+            let label = flag_val("--label").or_else(|| env_opt("LIGUS_HOST_LABEL")).or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "this host".into());
+            let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
+            scratch_cmd::cmd_repo(&cfg.data_dir, &mut svc, ws, &label, &pos, &|f: &str| flag_val(f).or_else(|| has(f).then(String::new)))
         }
         "forge" => {
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
@@ -2779,7 +2786,6 @@ fn enroll_invite(arg: Option<&str>, file: Option<String>, stdin: &mut dyn FnMut(
 const VALUE_FLAGS: &[&str] = &[
     "--set-root",
     "--cleanup-days",
-    "--remove",
     "--to",
     "--approver-fingerprint",
     "--timeout",

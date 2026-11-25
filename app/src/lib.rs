@@ -53,6 +53,7 @@ mod agent_iface;
 mod attachments;
 mod memory_ui;
 mod repos_ui;
+mod scratch_ui;
 mod setup_ui;
 mod turn_host;
 mod attention;
@@ -16341,6 +16342,7 @@ pub fn run() {
             // the phone (via `ligus serve`) can tell whether @ligus can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
             tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
+            tauri::async_runtime::spawn(crate::scratch_ui::run_sweep_loop(app.handle().clone()));
             // DM invites held for a peer whose contact id wasn't known yet.
             tauri::async_runtime::spawn(crate::people::run_held_dm_loop(app.handle().clone()));
 
@@ -16577,6 +16579,12 @@ pub fn run() {
             repos_ui::clone_workspace_repo,
             repos_ui::open_chat_checkout,
             repos_ui::repin_chat_base,
+            scratch_ui::list_scratch_repos,
+            scratch_ui::create_scratch_repo,
+            scratch_ui::keep_scratch_repo,
+            scratch_ui::publish_scratch_repo,
+            scratch_ui::remove_scratch_repo,
+            scratch_ui::set_scratch_settings,
             ask_agent_to_rebase,
             add_workspace_to_list,
             pick_workspace_folder,

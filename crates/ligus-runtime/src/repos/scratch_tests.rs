@@ -269,3 +269,54 @@ fn chats_and_lookup() {
     assert_eq!(by_repo(&e.store, rid).map(|x| x.id), Some(r.id));
     assert!(set_chat(&e.store, Uuid::new_v4(), c, true, 0).is_err());
 }
+
+/// Security pass: an agent can make part of its tree unwritable; the
+/// removal still completes (the folder is gone at once, the trash is
+/// retried until it is deleted), so it never sticks around holding a slot.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_tree_is_still_removed() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = env();
+    let r = mk(&e, "stuck", "", 0);
+    let locked = r.path.join("x");
+    std::fs::create_dir_all(locked.join("y")).unwrap();
+    std::fs::write(locked.join("y/f"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+    remove_dir_checked(&r).unwrap();
+    mark_removed(&e.store, r.id, 1).unwrap();
+    assert!(!r.path.exists());
+    assert!(live(&e.store, e.ws).is_empty(), "no live entry holds a slot");
+    assert_eq!(purge_trash(&e.store), 0);
+    assert!(pending_trash(&e.store).is_empty());
+    assert_eq!(std::fs::read_dir(&r.root).unwrap().count(), 0, "no trash left behind");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_anyone_may_write_to_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = env();
+    let open = e.t.path().join("open");
+    std::fs::create_dir_all(&open).unwrap();
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(check_root(&open, &[]).is_err());
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(check_root(&open, &[]).is_ok());
+}
+
+#[test]
+fn the_scratch_hint_shows_on_local_repos_only() {
+    use ligus_core::workspace_repo::{repo_id, WorkspaceRepo};
+    let c = format!("local:{}", "a".repeat(40));
+    let local = WorkspaceRepo { id: repo_id(&c), canonical: c, display_name: "s".into(), forge_kind: String::new(), default_branch: "main".into(), root_commit: None, scratch: true };
+    assert!(local.is_scratch());
+    let real = WorkspaceRepo { id: repo_id("github.com/a/b"), canonical: "github.com/a/b".into(), ..local.clone() };
+    assert!(!real.is_scratch(), "nobody labels a forge repository throwaway");
+    // Additive on the wire: absent when false, absent fields decode as false.
+    let plain = WorkspaceRepo { scratch: false, ..local.clone() };
+    assert!(!serde_json::to_string(&plain).unwrap().contains("scratch"));
+    let old: WorkspaceRepo = serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
+    assert!(!old.scratch);
+    assert!(serde_json::to_string(&local).unwrap().contains("\"scratch\":true"));
+}

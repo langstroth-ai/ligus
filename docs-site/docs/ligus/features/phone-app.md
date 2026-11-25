@@ -476,6 +476,15 @@ Forgejo, Gitea or Codeberg; filter by host), pull the latest, or open a pull
 or merge request from the chat's branch. **Settings → Code hosts** lists
 your host's connections (it holds the tokens, never the phone). See [Repos on the home host](../../operate/ops/serve-repos.md).
 
+**New scratch repo**, the first choice in the picker, has your home host
+create an empty repository for the chat (one empty commit on `main`); the
+chip shows a small **scratch** tag. **Keep it as a repo** moves it into the
+host's repos folder, and then, only if you tap **Publish to GitHub
+(private)** and confirm the account and name, creates a private repository
+and pushes it. An unkept one is removed after 14 days without activity, with
+a notice in the chat two days before. See
+[Scratch repositories](repositories.md#scratch).
+
 ## Reviewing proposals
 
 Proposals (an agent's file changes, a command, a decision) appear on the

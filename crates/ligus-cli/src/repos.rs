@@ -546,7 +546,8 @@ pub fn repos_json(data_dir: &Path) -> serde_json::Value {
         "reposDir": dir,
         "bindings": {
             "workspace": b.workspace.as_ref().map(|w| resolve_path(&dir, w)),
-            "chats": b.chats.iter().map(|(c, t)| (c.clone(), serde_json::json!(resolve_path(&dir, t)))).collect::<serde_json::Map<_, _>>(),
+            // "" = explicitly no repository (a removed scratch repository's chats).
+            "chats": b.chats.iter().map(|(c, t)| (c.clone(), if t.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(resolve_path(&dir, t)) })).collect::<serde_json::Map<_, _>>(),
         },
     })
 }
@@ -561,7 +562,11 @@ pub fn cmd_repos(data_dir: &Path) -> Result<()> {
         None => println!("workspace : (unbound: agent turns get no file tools)"),
     }
     for (chat, target) in &b.chats {
-        println!("chat {chat} : {target} -> {}", resolve_path(&dir, target).display());
+        if target.trim().is_empty() {
+            println!("chat {chat} : (no repository)");
+        } else {
+            println!("chat {chat} : {target} -> {}", resolve_path(&dir, target).display());
+        }
     }
     for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
         if let Some(f) = fork_layout(&e.path()) {

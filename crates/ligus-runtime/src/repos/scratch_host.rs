@@ -86,18 +86,18 @@ pub fn create(
             "only an Admin can add a repository to this workspace, scratch ones too; ask an Admin, or use the phone's home host".into(),
         ));
     }
+    // An Admin is here (with the passkey this add asks for anyway): retire
+    // the workspace entries of scratch repositories the cleanup removed, so
+    // they don't hold the workspace's repository slots.
+    let _ = retire_removed(svc, workspace_id);
     scratch::reserve(svc.store(), settings, &me)?;
     let root = scratch::check_root(&settings.root, forbidden)?;
     let entry = scratch::init_dir(&root, workspace_id, name, &me, now)?;
+    let mut recorded = false;
     let made = (|| -> Result<(ScratchRepo, WorkspaceRepo)> {
         scratch::record(svc.store(), settings, &entry)?;
-        let repo = match svc.add_scratch_workspace_repo(workspace_id, &entry.root_commit, &entry.name) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = scratch::mark_removed(svc.store(), entry.id, now);
-                return Err(e.into());
-            }
-        };
+        recorded = true;
+        let repo = svc.add_scratch_workspace_repo(workspace_id, &entry.root_commit, &entry.name)?;
         let e = scratch::set_repo_id(svc.store(), entry.id, Some(repo.id))?;
         super::bind(svc.store(), svc.device_id(), host_label, workspace_id, &repo, &e.path, CheckoutSource::Bound)
             .map_err(|b| HostError::Other(b.to_string()))?;
@@ -112,8 +112,32 @@ pub fn create(
     })();
     if made.is_err() {
         scratch::discard_dir(&entry);
+        if recorded {
+            // Never a live entry without its folder (it would count against
+            // the limits); a workspace entry already added is retired later.
+            let _ = scratch::mark_removed(svc.store(), entry.id, now);
+        }
     }
     made
+}
+
+/// Remove the workspace entries of this device's removed scratch
+/// repositories (`WorkspaceRepoRemoved`: an Admin's, with presence), for
+/// those still in the workspace and still scratch there. Returns how many.
+/// Each that the workspace refuses stays pending.
+pub fn retire_removed(svc: &mut ChatService, workspace_id: Uuid) -> usize {
+    let Ok(roster) = svc.workspace_roster(workspace_id) else { return 0 };
+    let mut n = 0;
+    for e in scratch::retire_pending(svc.store(), workspace_id) {
+        let Some(repo_id) = e.repo_id else { continue };
+        let live_scratch = roster.repos.get(&repo_id).is_some_and(|r| !r.removed && r.repo.is_scratch());
+        // Someone kept it elsewhere (no longer scratch), or it's gone already.
+        if !live_scratch || svc.remove_workspace_repo(workspace_id, repo_id).is_ok() {
+            let _ = scratch::mark_retired(svc.store(), e.id);
+            n += live_scratch as usize;
+        }
+    }
+    n
 }
 
 /// Point `chat` at an existing live scratch repository of this device.
@@ -212,13 +236,15 @@ pub fn sweep(svc: &mut ChatService, workspace_id: Uuid, settings: &Settings, hos
 }
 
 /// Publish a kept scratch repository as a new **private** repository on
-/// `forge` and push its branches (`main` and the chats' branches). Only on
-/// an explicit request whose `confirm` repeats `owner/name` exactly (what
-/// the confirmation showed); never public, never a force push. Returns the
-/// web URL.
-pub async fn publish(forge: &dyn ligus_forge::Forge, dir: &Path, owner: &str, name: &str, confirm: &str) -> std::result::Result<String, String> {
+/// `forge` and push `main` and its chats' branches (`ligus/chat/<id>`).
+/// Only on an explicit request whose `confirm` repeats `owner/name` exactly
+/// (what the confirmation showed); never public, never a force push, and
+/// only from the repository itself (its own top level, its own root commit).
+/// Returns the web URL.
+pub async fn publish(forge: &dyn ligus_forge::Forge, entry: &ScratchRepo, owner: &str, name: &str, confirm: &str) -> std::result::Result<String, String> {
     let owner = owner.trim();
     let name = name.trim();
+    let dir = entry.path.clone();
     if confirm.trim() != format!("{owner}/{name}") {
         return Err("confirm the account and the repository name first (they must match what you confirmed)".into());
     }
@@ -228,20 +254,84 @@ pub async fn publish(forge: &dyn ligus_forge::Forge, dir: &Path, owner: &str, na
     if !forge.has_write() {
         return Err(forge.signed_out_reason().unwrap_or_else(|| "this host has no write access to that code host; sign in first".into()));
     }
-    if super::git::git(dir, &["remote", "get-url", "origin"]).is_ok() {
+    // This very repository, never one around the folder it was kept in.
+    let top = super::git::git(&dir, &["rev-parse", "--show-toplevel"]).map(|t| super::git::canonical(Path::new(&t))).ok();
+    if top.as_deref() != Some(super::git::canonical(&dir).as_path()) || !super::git::has_root(&dir, &entry.root_commit) {
+        return Err("its folder isn't the kept repository any more".into());
+    }
+    if super::git::git(&dir, &["remote", "get-url", "origin"]).is_ok() {
         return Err("it already has an origin remote; push it yourself".into());
+    }
+    // The push runs on this host, unsandboxed, with its code-host access:
+    // agents worked in this repository and could have written its config
+    // (a credential helper or `url.*.insteadOf` would run a command or send
+    // the push elsewhere). Only plain settings may be there.
+    if let Some(key) = unsafe_local_config(&dir) {
+        return Err(format!("its git config sets {key}, which a publish won't push with; remove it (git config --unset) and try again"));
+    }
+    let mut refs = vec!["refs/heads/main:refs/heads/main".to_string()];
+    for c in &entry.chats {
+        let b = crate::git_worktree::chat_branch_name(&c.to_string());
+        if super::git::git(&dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_ok() {
+            refs.push(format!("refs/heads/{b}:refs/heads/{b}"));
+        }
     }
     let login = forge.whoami().await.map_err(|e| e.summary())?.map(|u| u.login).ok_or_else(|| "this host isn't signed in to that code host".to_string())?;
     let created = forge.create_private_repo(owner, &login, name).await.map_err(|e| e.summary())?;
+    let left = |what: String| format!("created the private repository {} (still empty), but {what}; push to it yourself or delete it", created.full_name());
     let url = forge.clone_url(&created, ligus_forge::Transport::Https);
-    super::git::git(dir, &["remote", "add", "origin", &url]).map_err(|e| format!("created {}, but couldn't add it as origin: {e}", created.full_name()))?;
+    super::git::git(&dir, &["remote", "add", "origin", &url]).map_err(|e| left(format!("couldn't add it as origin: {e}")))?;
     let mut cmd = ligus_core::process_util::git();
-    cmd.args(forge.git_auth_args()).arg("-C").arg(dir).args(["push", "--quiet", "origin", "refs/heads/*:refs/heads/*"]);
-    let out = cmd.output().map_err(|e| e.to_string())?;
+    cmd.args(forge.git_auth_args()).arg("-C").arg(&dir).args(["push", "--quiet", "origin"]).args(&refs).env("GIT_TERMINAL_PROMPT", "0");
+    let push = tokio::task::spawn_blocking(move || cmd.output());
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(300), push).await {
+        Ok(Ok(Ok(o))) => o,
+        Ok(Ok(Err(e))) => return Err(left(format!("the push didn't start: {e}"))),
+        Ok(Err(e)) => return Err(left(e.to_string())),
+        Err(_) => return Err(left("the push took longer than 5 minutes".into())),
+    };
     if !out.status.success() {
-        return Err(format!("created {}, but the push failed: {}", created.full_name(), String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(left(format!("the push failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
     Ok(format!("{}/{}", forge.web_base().trim_end_matches('/'), created.full_name()))
+}
+
+/// The first key in the repository's own config (local, and a worktree's
+/// when enabled) that isn't a plain setting a publish can push with.
+pub fn unsafe_local_config(dir: &Path) -> Option<String> {
+    const PLAIN: &[&str] = &[
+        "core.repositoryformatversion",
+        "core.filemode",
+        "core.bare",
+        "core.logallrefupdates",
+        "core.ignorecase",
+        "core.precomposeunicode",
+        "core.symlinks",
+        "core.autocrlf",
+        "core.eol",
+        "extensions.worktreeconfig",
+        "user.name",
+        "user.email",
+        "init.defaultbranch",
+    ];
+    let bad = |names: String| {
+        names
+            .lines()
+            .map(|l| l.trim().to_ascii_lowercase())
+            .filter(|k| !k.is_empty())
+            .find(|k| !(PLAIN.contains(&k.as_str()) || k.starts_with("branch.") || k.starts_with("ligus.")))
+    };
+    let local = super::git::git(dir, &["config", "--local", "--name-only", "--list"]).unwrap_or_default();
+    if let Some(k) = bad(local) {
+        return Some(k);
+    }
+    // Per-worktree config, when the repository turned it on (without it,
+    // `--worktree` is the local config again).
+    let on = super::git::git(dir, &["config", "--local", "--bool", "extensions.worktreeConfig"]).is_ok_and(|v| v == "true");
+    if on {
+        return bad(super::git::git(dir, &["config", "--worktree", "--name-only", "--list"]).unwrap_or_default());
+    }
+    None
 }
 
 #[cfg(test)]

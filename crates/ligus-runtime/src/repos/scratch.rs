@@ -106,6 +106,9 @@ pub struct ScratchRepo {
     /// The web URL it was published to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
+    /// Removed here, but its workspace repository entry isn't yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retire_pending: bool,
 }
 
 impl ScratchRepo {
@@ -281,7 +284,19 @@ pub fn check_root(root: &Path, forbidden: &[PathBuf]) -> Result<PathBuf> {
     for f in forbidden {
         let fc = super::git::canonical(f);
         if inside(&c, &fc) || inside(&fc, &c) {
-            return Err(ScratchError::Path("the scratch root can't be inside (or contain) the desktop app's data folder".into()));
+            return Err(ScratchError::Path(format!("the scratch root can't be inside (or contain) {}", fc.display())));
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(&c).map_err(io_err)?;
+        // Someone else's folder, or one anyone may write to (`/tmp`): another
+        // user could plant or swap folders there.
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        if m.uid() != me || m.mode() & 0o002 != 0 {
+            return Err(ScratchError::Path("the scratch root must be your own folder, not one anyone may write to".into()));
         }
     }
     Ok(c)
@@ -326,6 +341,11 @@ fn update(store: &EventStore, id: Uuid, f: impl FnOnce(&mut ScratchRepo)) -> Res
 /// first (kept and removed ones too).
 pub fn list(store: &EventStore, workspace_id: Uuid) -> Vec<ScratchRepo> {
     load_all(store).into_iter().filter(|e| e.workspace_id == workspace_id).collect()
+}
+
+/// The live ones in every workspace (a host's cleanup walks them all).
+pub fn live_all(store: &EventStore) -> Vec<ScratchRepo> {
+    load_all(store).into_iter().filter(ScratchRepo::is_live).collect()
 }
 
 /// The live ones.
@@ -522,6 +542,7 @@ pub fn init_dir(root: &Path, workspace_id: Uuid, name: &str, created_by: &str, n
         noticed_at: None,
         removed_at: None,
         published: None,
+        retire_pending: false,
     })
 }
 
@@ -596,15 +617,83 @@ pub fn verify_dir(entry: &ScratchRepo) -> Result<PathBuf> {
     Ok(c)
 }
 
-/// Delete a live scratch entry's folder after [`verify_dir`]. It is first
-/// renamed to a hidden name in the same root (so a half-finished removal
-/// never leaves a usable checkout), then removed without following any
-/// symlink inside. Filesystem only: [`mark_removed`] records it.
+/// Delete a live scratch entry's folder after [`verify_dir`]: under the
+/// checkout's management lock (a turn preparing its branch holds it), it is
+/// renamed to a hidden name in the same root, so the checkout is gone at
+/// once and a half-finished delete never leaves a usable one; then the
+/// trash is deleted later, without holding any lock, by [`purge_trash`] or
+/// [`delete_trash`] on each of [`pending_trash`] (never following a
+/// symlink; trash that resists, such as a folder an agent made unwritable,
+/// is retried on the next pass). Filesystem only: [`mark_removed`] records it.
 pub fn remove_dir_checked(entry: &ScratchRepo) -> Result<()> {
     let dir = verify_dir(entry)?;
-    let trash = entry.root.join(format!(".removing-{}", entry.id.simple()));
-    std::fs::rename(&dir, &trash).map_err(io_err)?;
-    std::fs::remove_dir_all(&trash).map_err(io_err)
+    let trash = trash_path(entry);
+    {
+        let _lock = super::marker::lock(&dir, std::time::Duration::from_secs(30)).map_err(|e| ScratchError::Io(e.to_string()))?;
+        let dir = verify_dir(entry)?;
+        std::fs::rename(&dir, &trash).map_err(io_err)?;
+    }
+    Ok(())
+}
+
+fn trash_path(entry: &ScratchRepo) -> PathBuf {
+    entry.root.join(format!(".removing-{}", entry.id.simple()))
+}
+
+/// Delete a trash folder: `remove_dir_all` (which never follows a symlink),
+/// and if that fails, make every real folder in it writable by its owner
+/// (never through a symlink) and try once more.
+pub fn delete_trash(trash: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(trash) {
+        Err(_) => return Ok(()),
+        Ok(m) if !m.is_dir() => return std::fs::remove_file(trash),
+        Ok(_) => {}
+    }
+    if std::fs::remove_dir_all(trash).is_ok() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    fn open_up(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(m) = std::fs::symlink_metadata(dir) else { return };
+        if !m.is_dir() {
+            return;
+        }
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(m.permissions().mode() | 0o700));
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                open_up(&e.path());
+            }
+        }
+    }
+    #[cfg(unix)]
+    open_up(trash);
+    std::fs::remove_dir_all(trash)
+}
+
+/// The trash folders of removed entries still on disk (read under the
+/// store's lock; delete them with [`delete_trash`] without it).
+pub fn pending_trash(store: &EventStore) -> Vec<PathBuf> {
+    load_all(store)
+        .into_iter()
+        .filter(|e| e.state == ScratchState::Removed)
+        .map(|e| trash_path(&e))
+        .filter(|t| std::fs::symlink_metadata(t).is_ok())
+        .collect()
+}
+
+/// Retry deleting the trash of removed entries (each `.removing-<id>`
+/// folder of a removed entry, in that entry's own root). Returns how many
+/// are still there.
+pub fn purge_trash(store: &EventStore) -> usize {
+    let mut left = 0;
+    for e in load_all(store).into_iter().filter(|e| e.state == ScratchState::Removed) {
+        let t = trash_path(&e);
+        if std::fs::symlink_metadata(&t).is_ok() && delete_trash(&t).is_err() {
+            left += 1;
+        }
+    }
+    left
 }
 
 /// Record that a scratch entry's folder is gone; its chats are returned
@@ -613,7 +702,20 @@ pub fn mark_removed(store: &EventStore, id: Uuid, now: i64) -> Result<ScratchRep
     update(store, id, |e| {
         e.state = ScratchState::Removed;
         e.removed_at = Some(now);
+        // A registered one still holds a workspace repository slot: an
+        // Admin's next scratch action here retires it (`scratch_host`).
+        e.retire_pending = e.repo_id.is_some();
     })
+}
+
+/// Removed entries whose workspace repository is still to be removed.
+pub fn retire_pending(store: &EventStore, workspace_id: Uuid) -> Vec<ScratchRepo> {
+    list(store, workspace_id).into_iter().filter(|e| e.state == ScratchState::Removed && e.retire_pending && e.repo_id.is_some()).collect()
+}
+
+/// Note that a removed entry's workspace repository was removed too.
+pub fn mark_retired(store: &EventStore, id: Uuid) -> Result<ScratchRepo> {
+    update(store, id, |e| e.retire_pending = false)
 }
 
 /// Check a destination for [`keep_dir`]: absolute, not there yet, its

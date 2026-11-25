@@ -76,6 +76,16 @@ pub struct WorkspaceRepo {
     pub scratch: bool,
 }
 
+impl WorkspaceRepo {
+    /// Whether to show it as a scratch repository: the hint, on a `local:`
+    /// repository only (a scratch repository has no remote; a hint on a
+    /// forge repository is ignored, so nobody can label a real one
+    /// throwaway).
+    pub fn is_scratch(&self) -> bool {
+        self.scratch && self.canonical.starts_with("local:")
+    }
+}
+
 /// The repo id for a canonical.
 pub fn repo_id(canonical: &str) -> Uuid {
     Uuid::new_v5(&LIGUS_REPO_NS, canonical.as_bytes())
