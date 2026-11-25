@@ -83,6 +83,8 @@ function handle(cmd: string, args: Args): unknown {
       return fx.members;
     case "workspace_members":
       return fx.serverMembers;
+    case "relay_membership_status":
+      return { state: fx.serverMembers.length ? "claimed" : "unclaimed", members: fx.serverMembers, identified: false, community: true };
     case "presence_list":
       return fx.presence;
     case "get_share_typing":

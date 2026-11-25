@@ -14848,14 +14848,59 @@ fn hostname_label() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether this device's relay token names an account (an unexpired `hrt1`
+/// token with a subject). Without one the relay can't tell who is calling, so
+/// it refuses a claim or any roster change. The token never leaves here.
+fn relay_token_identified(state: &AppState) -> bool {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    state.relay_token().is_some_and(|t| ligus_runtime::token_subject(&t, now).is_some())
+}
+
 /// Claim the active team workspace's room on a membership-enforcing relay, making
 /// this account the `Owner` and turning enforcement on. Best-effort: returns
 /// `false` on an open/self-host relay (no membership) or if already claimed.
+/// Refused here, without calling the relay, when this device's token names no
+/// account: the relay would answer 401.
 #[tauri::command]
 async fn workspace_claim_membership(state: State<'_, AppState>) -> Result<bool, String> {
     let relay = configured_relay(&state)?;
+    if !relay_token_identified(&state) {
+        return Err(ligus_runtime::UNIDENTIFIED_ROSTER_MESSAGE.to_string());
+    }
     let room = state.settings.lock().unwrap().sync_room.clone();
     state.relay_client(&relay).claim_membership(&room).await.map_err(|e| e.to_string())
+}
+
+/// The People pane's view of relay-side membership for the active workspace.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayMembershipDto {
+    /// `off` (the relay has membership off), `unclaimed`, `claimed` (the
+    /// relay enforces `members`) or `hidden` (claimed; this device isn't on
+    /// the roster).
+    state: &'static str,
+    members: Vec<ligus_runtime::MemberEntry>,
+    /// This device's relay token names an account, so a claim can work.
+    identified: bool,
+    /// The relay is the community relay, which has no sign-in.
+    community: bool,
+}
+
+/// Relay-side membership for the active workspace, and whether this device
+/// could claim it. Never returns the token, only whether it names an account.
+#[tauri::command]
+async fn relay_membership_status(state: State<'_, AppState>) -> Result<RelayMembershipDto, String> {
+    let relay = configured_relay(&state)?;
+    let room = state.settings.lock().unwrap().sync_room.clone();
+    let identified = relay_token_identified(&state);
+    let community = ligus_runtime::setup::validate::same_origin(&relay, ligus_core::COMMUNITY_RELAY_URL);
+    let (state_name, members) = match state.relay_client(&relay).roster_state(&room).await.map_err(|e| e.to_string())? {
+        ligus_runtime::RosterState::Unsupported => ("off", vec![]),
+        ligus_runtime::RosterState::Unclaimed => ("unclaimed", vec![]),
+        ligus_runtime::RosterState::Members(m) => ("claimed", m),
+        ligus_runtime::RosterState::Hidden => ("hidden", vec![]),
+    };
+    Ok(RelayMembershipDto { state: state_name, members, identified, community })
 }
 
 /// List the active workspace's server-side members (empty on open relays).
@@ -16657,6 +16702,7 @@ pub fn run() {
             workspace_share_code,
             redeem_short_code,
             workspace_claim_membership,
+            relay_membership_status,
             workspace_members,
             workspace_list_invites,
             workspace_create_invite,

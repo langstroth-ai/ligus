@@ -4,6 +4,22 @@ Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
+## Unreleased
+
+### Fixed
+
+- **Claiming a workspace on the relay.** The People pane offered
+  **Claim ownership** to every device, and a device whose relay token names
+  no account got "the relay refused (HTTP 401)". It now offers the claim
+  only when this device's token names an account; on a self-hosted relay
+  without one it offers **Add a relay token**, and on the community relay
+  (no sign-in) or a relay with membership off it offers nothing. The
+  warning is one calm line, with what the relay checks and what Ligus
+  enforces anyway behind **?**, a claim asks first, and a refused claim
+  says what's missing and how to fix it. A workspace that is claimed but
+  hides its roster from you no longer reads as "anyone can write". See
+  [Claiming a workspace](../../operate/ops/server-side-membership.md#claiming-a-workspace).
+
 ## 0.3.0
 
 A calmer desktop, guided setup for everything you connect (on the desktop,

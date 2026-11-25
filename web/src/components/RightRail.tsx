@@ -12,7 +12,7 @@ import {
   removeAndRevoke,
   setMemberRole,
   passkeyRegrant,
-  workspaceMembers,
+  relayMembershipStatus,
   workspaceRemoveMember,
   workspaceClaimMembership,
   workspaceListInvites,
@@ -79,6 +79,8 @@ import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
 import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
+import { openSettingsTab } from "@/lib/nav";
+import { RelayMembershipLine } from "@/components/RelayMembershipLine";
 import { useRowMenu, type RowAction } from "@/components/RowMenu";
 import { MoreMenu, type MoreMenuItem } from "@/components/MoreMenu";
 import { Sheet } from "@/components/kit/Sheet";
@@ -2030,9 +2032,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   // Server-side membership (enforced by a relay with membership on). Distinct from
   // the roster above: this is who the *relay* will accept writes from.
   const relayOn = Boolean(sync.data?.relayConfigured);
-  const srvMembers = useQuery({
+  const relayMembership = useQuery({
     queryKey: ["server-members"],
-    queryFn: workspaceMembers,
+    queryFn: relayMembershipStatus,
     enabled: relayOn,
   });
   const audit = useQuery({ queryKey: ["membership-audit", sessionId], queryFn: listMembershipAudit });
@@ -2041,14 +2043,19 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     mutationFn: workspaceClaimMembership,
     onSuccess: (claimed) => {
       refreshSrv();
-      toast.success(
-        claimed
-          ? "Membership enabled — you're the owner. The relay now enforces who can write."
-          : "This relay doesn't enforce membership (open/self-host), or it's already enabled.",
-      );
+      if (claimed) {
+        toast.success("Claimed. You're the owner on the relay, and it now refuses devices whose token names no member.");
+      } else {
+        toast.error("Not claimed: this relay has membership turned off, or someone already claimed this workspace.");
+      }
     },
     onError: (e) => toast.error(`Couldn't claim: ${errMsg(e)}`),
   });
+  const claim = () =>
+    confirmThen(
+      "Claim this workspace on the relay? You become its owner there, and the relay then refuses reads and writes from every device whose relay token doesn't name a member, including your other devices and boxes until you add them. Ligus can't undo a claim.",
+      () => claimMutation.mutate(),
+    );
   const srvRemoveMutation = useMutation({
     mutationFn: (account: string) => workspaceRemoveMember(account),
     onSuccess: (r) => {
@@ -2124,7 +2131,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   const roster = members.data ?? [];
   const relayByMember = new Map<string, ServerMember>();
   const relayOnly: ServerMember[] = [];
-  for (const m of srvMembers.data ?? []) {
+  for (const m of relayMembership.data?.members ?? []) {
     const hit = relayMemberFor(m, profile.data?.accountId, roster);
     if (hit) relayByMember.set(hit.id, m);
     else relayOnly.push(m);
@@ -2134,7 +2141,8 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       `Remove ${name} from this workspace? They're removed on the relay and from the workspace, then the key is rotated so they can't read new messages.`,
       () => srvRemoveMutation.mutate(m.account),
     );
-  const relayEnforced = relayOn && (srvMembers.data ?? []).length > 0;
+  const relayState = relayMembership.data?.state;
+  const relayEnforced = relayOn && (relayState === "claimed" || relayState === "hidden");
   const openInvites = (invites.data ?? []).filter((i) => !i.revoked);
 
   return (
@@ -2163,23 +2171,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             your own, re-create it; identity is stable going forward.
           </div>
         )}
-        {relayOn && srvMembers.isSuccess && (srvMembers.data ?? []).length === 0 && (
-          <div
-            className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs"
-            style={{ borderColor: "var(--ligus-warn-line)", background: "var(--ligus-warn-tint)" }}
-          >
-            <span className="font-semibold" style={{ color: "var(--ligus-warn-ink)" }}>
-              Not enforced: anyone can write
-            </span>
-            <InfoTip
-              label="member controls"
-              text="Who the relay accepts writes from (server-enforced). Claim this workspace on the relay so it enforces who can write; you become the owner. Requires a relay with membership turned on (LANGSTROTH_RELAY_MEMBERSHIP=1); no-op on an open relay."
-            />
-            <span className="flex-1" />
-            <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate()}>
-              {claimMutation.isPending ? "…" : "Claim ownership"}
-            </Button>
-          </div>
+        {relayOn && relayMembership.data && (
+          <RelayMembershipLine
+            status={relayMembership.data}
+            claiming={claimMutation.isPending}
+            onClaim={claim}
+            onToken={() => openSettingsTab("team-sync")}
+          />
         )}
         <RowList label="Members">
           {selfMember && (

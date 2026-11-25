@@ -128,8 +128,8 @@ pub use mcp::{McpReach,
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
-    RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
+    token_subject, EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RosterState, ENVELOPE_PAGE_LIMIT, UNIDENTIFIED_ROSTER_MESSAGE,
 };
 pub use relay_refusal::{RefusalClass, RelayRefusal};
 pub use remote_manifest::resolve_manifest_url;
