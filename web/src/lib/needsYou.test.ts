@@ -111,8 +111,8 @@ describe("approval requests", () => {
       approvalFacts: [{ key: "mismatch:r0", kind: "mismatch", label: "build-0", at: 1 }],
     });
     expect(items.map((i) => i.kind)).toEqual(["phone", "approval", "approvalFact", "sandbox", "trust", "ask"]);
-    expect(items[1].title).toBe("build-1 wants to join");
-    expect(items[2].title).toBe("Request from build-0 didn't match. Nothing was granted.");
+    expect(items[1].title).toBe("A box asks to join: \u201Cbuild-1\u201D");
+    expect(items[2].title).toBe("Request from \u201Cbuild-0\u201D didn't match. Nothing was granted.");
   });
 
   it("names a device of mine, and a link that didn't finish", () => {
@@ -120,7 +120,10 @@ describe("approval requests", () => {
       approvals: [a("r1", "computer", "lt on mbp")],
       approvalFacts: [{ key: "didntFinish:r2", kind: "didntFinish", label: "build-2", at: 1 }],
     });
-    expect(items.map((i) => i.title)).toEqual(["lt on mbp wants to be your device", "Linking build-2 didn't finish. Nothing was added."]);
+    expect(items.map((i) => i.title)).toEqual([
+      "A computer asks to be your device: \u201Clt on mbp\u201D",
+      "Linking \u201Cbuild-2\u201D didn't finish. Nothing was added.",
+    ]);
   });
 
   it("collapse past three into one row that counts each request; facts don't count", () => {

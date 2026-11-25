@@ -42,7 +42,20 @@ export function Inbox({ items, actions }: { items: readonly NeedsYouItem[]; acti
   const [severalOpen, setSeveralOpen] = useState(false);
   const qc = useQueryClient();
   // One request: one line, opening the sheet. Nothing is approved here.
-  const approvalRow = (a: ApprovalRef) => (
+  const approvalRow = (a: ApprovalRef) =>
+    a.kind === "phone" ? (
+      // Phones are added from My devices until they send code-match
+      // requests themselves: read-only here.
+      <InboxItem
+        key={`approval:${a.rid}`}
+        state="idle"
+        title={approvalTitle(a)}
+        detail="Add phones from My devices > Add a phone."
+        when={shortAgo(a.createdAt)}
+        whenInline
+        onOpen={() => actions.openSettingsTab("account")}
+      />
+    ) : (
     <InboxItem
       key={`approval:${a.rid}`}
       state="idle"

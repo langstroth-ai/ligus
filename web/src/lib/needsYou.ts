@@ -65,10 +65,28 @@ export interface ApprovalRef {
 /// More approval requests than this collapse into one row.
 export const APPROVAL_COLLAPSE = 3;
 
-/// "build-1 wants to join" / "lt on mbp wants to be your device".
+/// The longest label shown (the runtime's hint() bound).
+export const MAX_LABEL_CHARS = 64;
+
+/// A requester's label as every approval surface shows it: invisible and
+/// direction-changing characters removed, spaces collapsed, at most 64
+/// characters, in quotes, so it can't pass for the app's own words.
+export function quoteLabel(raw: string): string {
+  const clean = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const chars = [...clean];
+  const shown = chars.length > MAX_LABEL_CHARS ? chars.slice(0, MAX_LABEL_CHARS - 1).join("") + "…" : clean;
+  return `\u201C${shown || "unnamed"}\u201D`;
+}
+
+/// Verb first, from the request's kind; the label last and quoted:
+/// "A box asks to join: “build-1”".
 export function approvalTitle(a: { kind: string; label: string }): string {
-  if (a.kind === "box") return `${a.label || "A box"} wants to join`;
-  return `${a.label || "A device"} wants to be your device`;
+  const what = a.kind === "box" ? "A box asks to join" : a.kind === "phone" ? "A phone asks to be your device" : "A computer asks to be your device";
+  return `${what}: ${quoteLabel(a.label)}`;
 }
 
 /// Most urgent first: security checks (a phone alert, then changed sandbox
@@ -139,10 +157,9 @@ export function needsYouItems(s: NeedsYouSources): NeedsYouItem[] {
       key: `approvalFact:${f.key}`,
       kind: "approvalFact",
       title:
-        f.text ??
-        (f.kind === "mismatch"
-          ? `Request from ${f.label || "a device"} didn't match. Nothing was granted.`
-          : `Linking ${f.label || "a computer"} didn't finish. Nothing was added.`),
+        f.kind === "mismatch"
+          ? `Request from ${quoteLabel(f.label)} didn't match. Nothing was granted.`
+          : `Linking ${quoteLabel(f.label)} didn't finish. Nothing was added.`,
       at: f.at,
       fact: { kind: f.kind, key: f.key, help: f.help },
     });

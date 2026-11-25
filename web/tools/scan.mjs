@@ -58,7 +58,7 @@ const inbox = async (p) => {
 };
 const approvalSheet = async (p) => {
   await inbox(p);
-  await p.getByText("build-1 wants to join").click();
+  await p.getByText(/A box asks to join/).first().click();
 };
 
 export const VIEWS = [

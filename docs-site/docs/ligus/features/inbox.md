@@ -16,9 +16,9 @@ Most urgent first:
 | Item | What you do |
 |---|---|
 | **Another phone answered the code you showed** | **Review** reopens the alert, where you compare fingerprints and keep or revoke the phone you added (see [Ligus on your phone](phone-app.md)) |
-| **build-1 wants to join** · **lt on mbp wants to be your device** | a box, or a computer of yours, asked through the workspace's approval address (0.4). Open it: the sheet shows a code to compare with the device's screen, then **Codes match** and your passkey, or **Don't match**. Nothing is approved from the row itself; more than three collapse into one row ([Approving by code](#approving-by-code), [Admitting a box](../../operate/ops/admitting-a-box.md#code-match), [Add a computer](linked-devices.md#code-match)) |
-| **Request from build-1 didn't match. Nothing was granted.** | the two screens showed different codes, so the request ended and nothing was written. Its **?** says: "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice." Kept for a day |
-| **Linking lt on mbp didn't finish. Nothing was added.** | you matched the codes, but the computer didn't confirm within 2 minutes, so nothing was signed or published and no key left this device. Start again from the computer. Kept for a day |
+| **A box asks to join: “build-1”** · **A computer asks to be your device: “lt on mbp”** | a box, or a computer of yours, asked through the workspace's approval address (0.4). Open it: the sheet shows a code to compare with the device's screen, then **Codes match** and your passkey, or **Don't match**. Nothing is approved from the row itself; more than three collapse into one row ([Approving by code](#approving-by-code), [Admitting a box](../../operate/ops/admitting-a-box.md#code-match), [Add a computer](linked-devices.md#code-match)) |
+| **Request from “build-1” didn't match. Nothing was granted.** | the two screens showed different codes, so the request ended and nothing was written. Its **?** says: "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice." Kept for a day |
+| **Linking “lt on mbp” didn't finish. Nothing was added.** | you matched the codes, but the computer didn't confirm within 2 minutes, so nothing was signed or published and no key left this device. Start again from the computer. Kept for a day |
 | **This workspace's sandbox grants changed** | **Review** opens Settings → Sandbox; **Dismiss** marks it seen ([guards](guards.md)) |
 | **This workspace wants to run N commands** | **Review** lists each command the repository ships; nothing runs until you enable it ([Trust this workspace](../concepts/security.md#workspace-trust)) |
 | **An agent asked you something** | answer it right there (pick an option or type an answer), or **Open chat**. The agent's turn waits until someone answers |
@@ -48,10 +48,14 @@ the old one stop arriving.
 
 The request shows in the Inbox of the people who can approve it: Admins for
 a box, and for a device of yours, your desktops that hold your account key.
-Clicking it opens a sheet:
+Clicking it opens a sheet. Its title comes from the kind of request (**Admit
+a box?**, **Add a computer to your devices?**); the name the device gave
+itself sits beneath it in quotes, never in the title, and Details say when
+that name matches a device or member you already have. A phone that sends a
+request shows read-only: add phones from My devices → **Add a phone**.
 
-![Admit build-1?: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-light.png#only-light){ width="760" loading=lazy }
-![Admit build-1?: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-dark.png#only-dark){ width="760" loading=lazy }
+![Admit a box? “build-1”: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-light.png#only-light){ width="760" loading=lazy }
+![Admit a box? “build-1”: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-dark.png#only-dark){ width="760" loading=lazy }
 
 1. Both screens show the same 8-character code, such as `K7Q4 M9X2`. There
    is no Copy button: the code is for comparing, not for sending. It isn't a
@@ -67,7 +71,8 @@ Clicking it opens a sheet:
 The quiet number in the corner is the code's time left (5 minutes). Details
 (collapsed) hold the kind, the label, the 80-bit fingerprint, when it was
 asked and the relay. When someone else is already checking a request, the
-sheet says so ("Ben's desktop is checking this request"). When a device that
+sheet says so ("“Ben's desktop” is checking this request"). If a device that
+can't approve opens it after you did, the warning still shows. When a device that
 can't approve it opened it, the sheet says it may be an attempt to intercept
 it and offers **End this request**.
 

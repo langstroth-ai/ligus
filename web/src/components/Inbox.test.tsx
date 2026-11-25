@@ -113,10 +113,10 @@ describe("Inbox", () => {
 
   it("an approval request is one line that opens the sheet, with nothing to approve on the row", async () => {
     mount(needsYouItems({ approvals: [{ workspaceId: "w1", rid: "r1", kind: "box", label: "build-1", createdAt: Date.now() - 120_000 }] }));
-    const row = screen.getByText("build-1 wants to join").closest('[role="listitem"]') as HTMLElement;
+    const row = screen.getByText("A box asks to join: \u201Cbuild-1\u201D").closest('[role="listitem"]') as HTMLElement;
     expect(within(row).getByText("2m")).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /approve|codes match|admit/i })).toBeNull();
-    await userEvent.click(screen.getByText("build-1 wants to join"));
+    await userEvent.click(screen.getByText("A box asks to join: \u201Cbuild-1\u201D"));
     expect(approvalSheet.snapshot()).toEqual({ workspaceId: "w1", rid: "r1" });
     approvalSheet.close();
   });
@@ -125,14 +125,22 @@ describe("Inbox", () => {
     const reqs = ["b1", "b2", "b3", "b4"].map((l, i) => ({ workspaceId: "w1", rid: `r${i}`, kind: "box" as const, label: l, createdAt: Date.now() - i }));
     mount(needsYouItems({ approvals: reqs }));
     expect(screen.getByText("4 need you")).toBeInTheDocument();
-    expect(screen.queryByText("b1 wants to join")).toBeNull();
+    expect(screen.queryByText("A box asks to join: \u201Cb1\u201D")).toBeNull();
     await userEvent.click(screen.getByText("4 requests to approve"));
-    expect(screen.getByText("b4 wants to join")).toBeInTheDocument();
+    expect(screen.getByText("A box asks to join: \u201Cb4\u201D")).toBeInTheDocument();
+  });
+
+  it("shows a phone request read-only, pointing at Add a phone", async () => {
+    const a = mount(needsYouItems({ approvals: [{ workspaceId: "w1", rid: "p1", kind: "phone", label: "Ana's iPhone", createdAt: Date.now() }] }));
+    expect(screen.getByText("Add phones from My devices > Add a phone.")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("A phone asks to be your device: \u201CAna's iPhone\u201D"));
+    expect(approvalSheet.snapshot()).toBeNull();
+    expect(a.openSettingsTab).toHaveBeenCalledWith("account");
   });
 
   it("keeps a mismatch fact with a ? explaining it", () => {
     mount(needsYouItems({ approvalFacts: [{ key: "mismatch:r1", kind: "mismatch", label: "build-1", at: Date.now() }] }));
-    const row = screen.getByText("Request from build-1 didn't match. Nothing was granted.").closest('[role="listitem"]') as HTMLElement;
+    const row = screen.getByText("Request from \u201Cbuild-1\u201D didn't match. Nothing was granted.").closest('[role="listitem"]') as HTMLElement;
     expect(within(row).getByRole("button", { name: "About a request that didn't match" })).toBeInTheDocument();
     expect(screen.getByText("Nothing needs you.")).toBeInTheDocument();
   });

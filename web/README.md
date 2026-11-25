@@ -64,7 +64,11 @@ CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
 
 `ApprovalSheet` (opened from the Inbox's `approval` rows, or from a pasted
 request that is live in the mailbox) follows the code rules in
-docs/design/code-match-approval.md 7.1 and 7.2: the code is one line, 28px
+docs/design/code-match-approval.md 7.1 and 7.2. The title comes from the
+request's kind only ("Admit a box?"); the requester's label is quoted and
+bounded (`quoteLabel`, 64 characters) on its own line beneath, after a kind
+word, and never leads an Inbox row ("A box asks to join: “build-1”"). The
+code is one line, 28px
 mono, two groups (`MatchCode`), and screen readers hear it spelled in groups
 (`spellMatchCode` in `kit/Fingerprint`: "Code: K, 7, Q, 4. M, 9, X, 2."). It
 has no Copy button and isn't hidden during screen sharing (it isn't a

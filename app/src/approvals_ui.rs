@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use ligus_core::match_code::MatchKind;
 use ligus_core::WorkspaceRole;
 use ligus_runtime::approval_mailbox::{
-    claim_view, current_address, end_request, list_live, AbortReason, ApprovalAddress, ApproverError, ApproverIdentity, ApproverPerson, ApproverSession,
+    claim_view, current_address, end_request, hint, list_live, AbortReason, ApprovalAddress, ApproverError, ApproverIdentity, ApproverPerson, ApproverSession,
     ClaimView, EpochKey, LiveRequest, MailboxClient, MailboxError, Notice, NoticeKind, Notices, RequestSubject, SeenSet, Signer, VerifiedRequest,
 };
 use ligus_runtime::chat_service::{MatchContext, WorkspaceApprovers};
@@ -53,6 +53,11 @@ const POLL: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(120);
 /// How long a relay without mailbox routes is left alone.
 const NO_ROUTES_RECHECK: Duration = Duration::from_secs(600);
+/// Phone requests in the mailbox are shown, never approved from it.
+const PHONE_READ_ONLY: &str = "Add phones from My devices > Add a phone.";
+/// How long after the code appears Codes match is refused (design 7.2): the
+/// sheet holds the button as long, and the backend enforces it too.
+pub(crate) const HOLD_MS: i64 = 3_000;
 /// The long-poll each wait step uses (the session is locked meanwhile).
 const STEP_WAIT_SECS: u64 = 5;
 
@@ -71,6 +76,45 @@ pub(crate) fn paste_match<'a>(text: &str, live: impl IntoIterator<Item = (&'a st
         return None;
     }
     live.into_iter().find(|(_, code)| code.trim() == t).map(|(rid, _)| rid)
+}
+
+/// A name folded for "looks the same": lower case, confusable letters and
+/// digits mapped to one form, everything but letters and digits dropped. A
+/// requester's label whose skeleton equals an existing device or member
+/// name gets one quiet Details line.
+pub(crate) fn skeleton(name: &str) -> String {
+    let lower: String = name.to_lowercase().replace("rn", "m").replace("vv", "w");
+    lower
+        .chars()
+        .filter_map(|c| {
+            let c = match c {
+                '0' | 'ο' | 'о' => 'o',
+                '1' | 'i' | 'l' | '|' | 'ı' | 'і' => 'l',
+                '5' => 's',
+                '3' => 'e',
+                '4' => 'a',
+                'а' => 'a',
+                'е' => 'e',
+                'с' => 'c',
+                'р' => 'p',
+                'х' => 'x',
+                'у' => 'y',
+                c => c,
+            };
+            c.is_alphanumeric().then_some(c)
+        })
+        .collect()
+}
+
+/// Run `write` (the passkey ceremony and the log write) only when the
+/// session may still commit (UI-1): not ended, the code not expired, a
+/// computer's ack in time, no abort. Otherwise nothing is written.
+pub(crate) async fn commit_if_ready<T, F: std::future::Future<Output = T>>(
+    session: &tokio::sync::Mutex<ApproverSession>,
+    write: impl FnOnce() -> F,
+) -> Result<T, ApproverError> {
+    session.lock().await.ready_to_commit().await?;
+    Ok(write().await)
 }
 
 fn kind_str(k: MatchKind) -> &'static str {
@@ -149,6 +193,10 @@ struct Target {
     founder_pin: String,
     epochs: Vec<EpochKey>,
     approvers: WorkspaceApprovers,
+    /// Folded names: a device id's "<member>'s device", from the log.
+    device_names: HashMap<Uuid, String>,
+    /// Skeletons of the existing member and device names.
+    name_skeletons: HashSet<String>,
     can_box: bool,
     can_devices: bool,
     is_admin: bool,
@@ -215,13 +263,16 @@ pub(crate) enum ClaimDto {
     Contested { name: Option<String> },
 }
 
-impl From<ClaimView> for ClaimDto {
-    fn from(v: ClaimView) -> Self {
+impl ClaimDto {
+    /// The view, naming a claimer by its folded name where the log knows
+    /// the device, else by its own (bounded) hint.
+    fn from_view(v: ClaimView, names: &HashMap<Uuid, String>) -> Self {
+        let name = |hinted: String, id: Uuid| names.get(&id).cloned().unwrap_or_else(|| hint(&hinted));
         match v {
             ClaimView::Unclaimed => Self::Unclaimed,
             ClaimView::Mine => Self::Mine,
-            ClaimView::ClaimedBy { name, .. } => Self::ClaimedBy { name },
-            ClaimView::Contested { by } => Self::Contested { name: by.map(|(n, _)| n) },
+            ClaimView::ClaimedBy { name: n, device_id } => Self::ClaimedBy { name: name(n, device_id) },
+            ClaimView::Contested { by } => Self::Contested { name: by.map(|(n, id)| name(n, id)) },
         }
     }
 }
@@ -246,6 +297,8 @@ pub(crate) struct ApprovalDto {
     pub parallel: usize,
     /// The phase of this device's session for it, if one is open.
     pub phase: Option<String>,
+    /// The label looks like an existing device or member name.
+    pub name_clash: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -299,22 +352,45 @@ fn phase(slot: &Slot) -> String {
 fn ended_by(e: &ApproverError) -> (&'static str, String) {
     match e {
         ApproverError::Aborted(AbortReason::Mismatch) | ApproverError::RevealMismatch => ("mismatch", "The codes didn't match. Nothing was granted.".into()),
-        ApproverError::Aborted(AbortReason::Cancelled) => ("ended", "The other device cancelled the request. Nothing was granted.".into()),
-        ApproverError::Aborted(AbortReason::Contested) => ("ended", "The request was ended as possibly intercepted. Nothing was granted.".into()),
-        ApproverError::CodeExpired | ApproverError::RequestExpired => ("expired", "The code expired. Nothing was granted. Ask for a new request.".into()),
+        ApproverError::CodeExpired | ApproverError::RequestExpired => ("expired", "Expired. Nothing was granted.".into()),
         ApproverError::DidntFinish => ("didntFinish", "The computer didn't confirm in time. Nothing was added.".into()),
-        ApproverError::Mailbox(MailboxError::RequestUnknown) | ApproverError::Ended => ("ended", "The request is over. Nothing was granted.".into()),
+        ApproverError::Aborted(_)
+        | ApproverError::Mailbox(MailboxError::RequestUnknown)
+        | ApproverError::Ended
+        | ApproverError::NoCode
+        | ApproverError::NotAcknowledged => ("ended", "The request was ended. Nothing was granted.".into()),
         other => ("failed", other.to_string()),
     }
 }
 
 // ── The loop ─────────────────────────────────────────────────────────────
 
+/// The log's names: each certified device as "<member>'s device" (or
+/// phone), and the skeletons of the member names.
+fn folded_names(svc: &ligus_runtime::ChatService, ws: Uuid, local: Uuid) -> (HashMap<Uuid, String>, HashSet<String>) {
+    let mut names = HashMap::new();
+    let mut skeletons = HashSet::new();
+    let Some(pin) = svc.store().workspace_pin(ws).ok().flatten() else { return (names, skeletons) };
+    let Ok((config, timeline)) = svc.store().load_config(ws, Some(&pin.founder_account.to_string()), Some(local)) else { return (names, skeletons) };
+    let members: HashMap<Uuid, String> = config
+        .map(|c| c.members.iter().filter_map(|m| Some((m.actor.account_id?, crate::shown(&m.actor.display_name)))).collect())
+        .unwrap_or_default();
+    for n in members.values() {
+        skeletons.insert(skeleton(n));
+    }
+    for (id, d) in &timeline.current().devices {
+        if let Some(n) = d.accounts.iter().find_map(|a| members.get(a)) {
+            names.insert(*id, hint(&format!("{n}'s {}", if d.phone { "phone" } else { "device" })));
+        }
+    }
+    (names, skeletons)
+}
+
 /// Every team workspace this device can approve in, with its epoch keys.
 fn targets(state: &AppState) -> Vec<Target> {
-    let (conns, static_token) = {
+    let (conns, static_token, phone_labels) = {
         let s = state.settings.lock().unwrap();
-        (s.workspaces.clone(), s.relay_access_token.clone())
+        (s.workspaces.clone(), s.relay_access_token.clone(), s.phone_labels.values().cloned().collect::<Vec<String>>())
     };
     let mut out = Vec::new();
     for conn in conns {
@@ -333,6 +409,12 @@ fn targets(state: &AppState) -> Vec<Target> {
         let is_admin = role.is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank());
         let human = svc.author().kind == ligus_core::ActorKind::Human && svc.author().account_id.is_some();
         let approvers = svc.approval_classifier(ws).unwrap_or_default();
+        let (device_names, mut name_skeletons) = folded_names(&svc, ws, state.local_workspace_id);
+        for h in svc.list_hosts(ws).unwrap_or_default() {
+            name_skeletons.insert(skeleton(&h.label));
+        }
+        name_skeletons.extend(phone_labels.iter().map(|l| skeleton(l)));
+        name_skeletons.remove("");
         out.push(Target {
             id: ws,
             name: crate::shown(&conn.display_name()),
@@ -341,6 +423,8 @@ fn targets(state: &AppState) -> Vec<Target> {
             founder_pin,
             epochs,
             approvers,
+            device_names,
+            name_skeletons,
             can_box: is_admin,
             can_devices: human && !svc.is_delegated(),
             is_admin,
@@ -445,7 +529,7 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
             if !allowed {
                 continue;
             }
-            let claim: ClaimDto = claim_view(l, me, &t.approvers).into();
+            let claim = ClaimDto::from_view(claim_view(l, me, &t.approvers), &t.device_names);
             // Ended, or opened here before a restart (it can't be answered
             // twice): only a session still on screen shows it.
             if session.is_none() && (l.ended.is_some() || claim == ClaimDto::Mine) {
@@ -464,6 +548,7 @@ pub(crate) fn list_approvals(state: tauri::State<AppState>) -> ApprovalsDto {
                 claim,
                 parallel: open.iter().filter(|o| same_group(o.kind(), l.kind())).count(),
                 phase: session.map(|s| phase(s)),
+                name_clash: t.name_skeletons.contains(&skeleton(&l.label())),
             });
         }
     }
@@ -584,6 +669,11 @@ pub(crate) async fn approval_open(app: AppHandle, workspace_id: String, rid: Str
     if active != ws {
         return Err(format!("Switch to {} to approve this request.", t.name));
     }
+    // A phone is added from My devices > Add a phone until phones send
+    // code-match requests themselves: never certified from the mailbox.
+    if live.kind() == MatchKind::Phone {
+        return Err(PHONE_READ_ONLY.into());
+    }
     let allowed = if live.kind() == MatchKind::Box { t.can_box } else { t.can_devices };
     if !allowed {
         return Err(if live.kind() == MatchKind::Box {
@@ -683,83 +773,73 @@ fn back_to_code(app: &AppHandle, slot: &Slot, why: String) -> SessionDto {
 
 /// **Codes match**: write the approval exactly as today over this request's
 /// keys, with the passkey (its sheet names the label and the code), and
-/// send the result. For a computer, the offer and its ack come first.
+/// send the result. For a computer, the offer and its ack come first. The
+/// session is checked right after the person chose and again right before
+/// the passkey and the log write ([`commit_if_ready`]); anything else ends
+/// it with nothing written.
 #[tauri::command]
 pub(crate) async fn approval_codes_match(app: AppHandle, rid: String) -> Result<SessionDto, String> {
     let slot = slot(&rid)?;
-    let (ph, code) = {
-        let v = slot.view.lock().unwrap();
-        (v.phase.clone(), v.code.clone())
-    };
-    if ph != "code" {
-        return Err("There is no code to confirm.".into());
-    }
-    let code = code.ok_or("There is no code to confirm.")?;
     if app.state::<AppState>().active_workspace_id() != slot.ws {
         return Err("Switch back to this request's workspace to approve it.".into());
     }
+    if slot.kind == MatchKind::Phone {
+        return Err(PHONE_READ_ONLY.into());
+    }
+    // One Codes match at a time, never inside the hold: the phase moves on
+    // under the same lock that checks it.
+    let code = {
+        let mut v = slot.view.lock().unwrap();
+        claim_codes_match(&mut v, now_ms())?
+    };
+    let _ = app.emit(SESSION_EVENT, slot.view.lock().unwrap().clone());
+    if let Err(e) = slot.session.lock().await.ready_to_commit().await {
+        return Ok(fail(&app, &slot, &e));
+    }
     let ctx = MatchContext { label: slot.label.clone(), code };
     let ws = slot.ws;
-    match slot.kind {
-        MatchKind::Box => {
-            set_view(&app, &slot, |v| {
-                v.phase = "passkey".into();
-                v.message = None;
-            });
-            let req_code = slot.request.code.clone();
-            let issued = crate::off_main(app.clone(), move |app| {
-                let st = app.state::<AppState>();
-                // The passkey sheet names the label and the code.
-                st.service.lock().unwrap().set_match_context(Some(ctx));
-                let r = crate::issue_box_admission_code(&st, ws, Some(req_code), None);
-                st.service.lock().unwrap().set_match_context(None);
-                r
-            })
-            .await;
-            let (dto, _) = match issued {
-                Ok(d) => d,
-                Err(e) => return Ok(back_to_code(&app, &slot, e)),
-            };
-            tracing::info!(target: "approvals", rid = %rid, "admitted a box by code match");
-            let r = slot.session.lock().await.finish_approved(Some(&dto.code)).await;
-            Ok(match r {
-                Ok(()) => set_view(&app, &slot, |v| v.phase = "approved".into()),
-                Err(e) => fail(&app, &slot, &e),
-            })
-        }
-        MatchKind::Phone => {
-            let RequestSubject::Phone(pc) = slot.request.subject.clone() else { return Err("Not a phone request.".into()) };
-            set_view(&app, &slot, |v| {
-                v.phase = "passkey".into();
-                v.message = None;
-            });
-            let certified = crate::off_main(app.clone(), move |app| {
-                let st = app.state::<AppState>();
-                let r = {
-                    let mut svc = st.service.lock().unwrap();
-                    svc.set_match_context(Some(ctx));
-                    let r = svc.certify_phone_code(ws, &pc).map_err(|e| e.to_string());
-                    svc.set_match_context(None);
-                    r
-                };
-                if let Ok(id) = &r {
-                    crate::remember_phone_label(&st, *id, &pc.label);
-                }
-                r
-            })
-            .await;
-            if let Err(e) = certified {
-                return Ok(back_to_code(&app, &slot, e));
-            }
-            tracing::info!(target: "approvals", rid = %rid, "certified a phone by code match");
-            let r = slot.session.lock().await.finish_approved(None).await;
-            Ok(match r {
-                Ok(()) => set_view(&app, &slot, |v| v.phase = "approved".into()),
-                Err(e) => fail(&app, &slot, &e),
-            })
-        }
-        MatchKind::Computer => computer_match(app, slot, ctx).await,
+    if slot.kind == MatchKind::Computer {
+        return computer_match(app, slot, ctx).await;
     }
+    let req_code = slot.request.code.clone();
+    let app2 = app.clone();
+    let issued = commit_if_ready(&slot.session, move || {
+        crate::off_main(app2, move |app| {
+            let st = app.state::<AppState>();
+            // The passkey sheet names the label and the code.
+            st.service.lock().unwrap().set_match_context(Some(ctx));
+            let r = crate::issue_box_admission_code(&st, ws, Some(req_code), None);
+            st.service.lock().unwrap().set_match_context(None);
+            r
+        })
+    })
+    .await;
+    let (dto, _) = match issued {
+        Err(e) => return Ok(fail(&app, &slot, &e)),
+        Ok(Err(e)) => return Ok(back_to_code(&app, &slot, e)),
+        Ok(Ok(d)) => d,
+    };
+    tracing::info!(target: "approvals", rid = %rid, "admitted a box by code match");
+    let r = slot.session.lock().await.finish_approved(Some(&dto.code)).await;
+    Ok(match r {
+        Ok(()) => set_view(&app, &slot, |v| v.phase = "approved".into()),
+        Err(e) => fail(&app, &slot, &e),
+    })
+}
+
+/// The check-and-move of Codes match on the session's view: only from the
+/// code, only once the hold passed. Returns the code.
+pub(crate) fn claim_codes_match(v: &mut SessionDto, now: i64) -> Result<String, String> {
+    if v.phase != "code" {
+        return Err("There is no code to confirm.".into());
+    }
+    let code = v.code.clone().ok_or("There is no code to confirm.")?;
+    if now.saturating_sub(v.code_at.unwrap_or(i64::MAX)) < HOLD_MS {
+        return Err("Compare the codes first.".into());
+    }
+    v.phase = if v.kind == "computer" { "confirming" } else { "passkey" }.into();
+    v.message = None;
+    Ok(code)
 }
 
 /// Identity model v2, 8.1: grant sealed now, offer, wait for the ack (2
@@ -806,19 +886,24 @@ async fn computer_match(app: AppHandle, slot: Arc<Slot>, ctx: MatchContext) -> R
         v.phase = "passkey".into();
         v.message = None;
     });
-    let published = crate::off_main(app.clone(), move |app| {
-        let st = app.state::<AppState>();
-        let conn = crate::computer_link_conn(&st, ws)?;
-        let mut svc = st.service.lock().unwrap();
-        svc.set_match_context(Some(ctx));
-        let r = svc.publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string());
-        svc.set_match_context(None);
-        r
+    let app2 = app.clone();
+    let published = commit_if_ready(&slot.session, move || {
+        crate::off_main(app2, move |app| {
+            let st = app.state::<AppState>();
+            let conn = crate::computer_link_conn(&st, ws)?;
+            let mut svc = st.service.lock().unwrap();
+            svc.set_match_context(Some(ctx));
+            let r = svc.publish_computer_link(ws, &req, &conn, now_ms()).map_err(|e| e.to_string());
+            svc.set_match_context(None);
+            r
+        })
     })
     .await;
-    if let Err(e) = published {
+    match published {
+        Err(e) => return Ok(fail(&app, &slot, &e)),
         // Acknowledged, nothing written: Codes match again runs the passkey.
-        return Ok(back_to_code(&app, &slot, e));
+        Ok(Err(e)) => return Ok(back_to_code(&app, &slot, e)),
+        Ok(Ok(())) => {}
     }
     tracing::info!(target: "approvals", rid = %slot.request.rid_hex(), "added a computer by code match");
     let r = slot.session.lock().await.finish_approved(None).await;
@@ -945,6 +1030,82 @@ mod tests {
         assert_eq!(d.help, n.help());
         let d = fact_dto(&Notice { kind: NoticeKind::DidntFinish, ..n });
         assert_eq!((d.kind.as_str(), d.text.as_str()), ("didntFinish", "Linking build-1 didn't finish. Nothing was added."));
+    }
+
+    fn view(phase: &str, code_at: i64) -> SessionDto {
+        SessionDto { phase: phase.into(), kind: "box".into(), code: Some("K7Q4 M9X2".into()), code_at: Some(code_at), ..SessionDto::default() }
+    }
+
+    #[test]
+    fn codes_match_is_refused_inside_the_hold_and_runs_once() {
+        let mut v = view("code", 10_000);
+        assert!(claim_codes_match(&mut v, 10_000 + HOLD_MS - 1).is_err(), "inside the 3-second hold");
+        assert_eq!(v.phase, "code");
+        assert_eq!(claim_codes_match(&mut v, 10_000 + HOLD_MS).unwrap(), "K7Q4 M9X2");
+        assert_eq!(v.phase, "passkey");
+        assert!(claim_codes_match(&mut v, 10_000 + HOLD_MS + 1).is_err(), "a second Codes match");
+        let mut c = SessionDto { kind: "computer".into(), ..view("code", 0) };
+        claim_codes_match(&mut c, HOLD_MS).unwrap();
+        assert_eq!(c.phase, "confirming");
+        assert!(claim_codes_match(&mut view("waiting", 0), HOLD_MS).is_err());
+        assert!(claim_codes_match(&mut SessionDto { code_at: None, ..view("code", 0) }, i64::MAX).is_err());
+    }
+
+    #[test]
+    fn look_alike_names_share_a_skeleton() {
+        assert_eq!(skeleton("Ana's MacBook"), skeleton("ana s rnacbook"));
+        assert_eq!(skeleton("build-1"), skeleton("BUILD-l"));
+        assert_eq!(skeleton("lt on mbp"), skeleton("1t 0n mbp"));
+        assert_ne!(skeleton("build-1"), skeleton("build-2"));
+        assert_eq!(skeleton("Аna"), skeleton("Ana"), "Cyrillic A");
+    }
+
+    /// UI-1: past the code's 5 minutes, Codes match writes nothing.
+    #[tokio::test]
+    async fn past_the_code_ttl_codes_match_writes_nothing() {
+        use ligus_core::crypto::{device_id_for, SigAlg, SigningKeypair};
+        use ligus_core::e2ee::KeyAgreementKeypair;
+        use ligus_runtime::approval_mailbox::{Requester, RequestSpec};
+        let (router, clock) = ligus_runtime::test_relay::router_with_clock();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = MailboxClient::new(&base).with_clock(clock.clock());
+        let key = [7u8; 32];
+        let counter = client.ensure_registered(&key).await.unwrap();
+        let address = ApprovalAddress::derive(&base, Uuid::new_v4(), &"ab".repeat(16), 1, &key, counter);
+        let epoch = EpochKey { epoch: 1, key };
+        // A box asks.
+        let bk = SigningKeypair::generate().unwrap();
+        let ka = KeyAgreementKeypair::generate().unwrap();
+        let pk = bk.public_key_bytes();
+        let join = ligus_runtime::box_admission::JoinRequest::new(Uuid::new_v4(), device_id_for(SigAlg::Ed25519, &pk), &pk, &ka.public_key_bytes(), "build-1");
+        let spec = RequestSpec { kind: MatchKind::Box, code: join.encode(), signer: Signer::Ed25519(bk), ka: Some(ka) };
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = Requester::post(client.clone(), &address, spec, Some(tmp.path())).await.unwrap();
+        let live = list_live(&client, std::slice::from_ref(&epoch)).await.unwrap().live.remove(0);
+        let ak = SigningKeypair::generate().unwrap();
+        let me = ApproverIdentity {
+            signer: Signer::Ed25519(ak),
+            device_name: "Ana's desktop".into(),
+            person: ApproverPerson { account_id: Uuid::new_v4(), name: "Ana".into() },
+        };
+        let session = ApproverSession::begin(client.clone(), &epoch, &live.request, me, &mut SeenSet::in_memory()).await.unwrap();
+        let session = tokio::sync::Mutex::new(session);
+        req.poll(0).await.unwrap();
+        assert!(session.lock().await.await_reveal(0).await.unwrap().is_some(), "the code shows");
+        // Ready while the code lasts.
+        let wrote = std::sync::atomic::AtomicBool::new(false);
+        assert!(commit_if_ready(&session, || async {}).await.is_ok());
+        // Six minutes later the person chooses Codes match.
+        clock.advance(6 * 60_000);
+        let r = commit_if_ready(&session, || async {
+            wrote.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        assert_eq!(r.unwrap_err(), ApproverError::CodeExpired);
+        assert!(!wrote.load(std::sync::atomic::Ordering::SeqCst), "no passkey, nothing on the log");
+        assert_eq!(ended_by(&ApproverError::CodeExpired).1, "Expired. Nothing was granted.");
     }
 
     #[test]

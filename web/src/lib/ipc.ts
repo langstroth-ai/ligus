@@ -1708,6 +1708,8 @@ export interface ApprovalDto {
   parallel: number;
   /// The phase of this device's session for it, if one is open.
   phase: ApprovalPhase | null;
+  /// The label looks like an existing device or member name.
+  nameClash?: boolean;
 }
 
 /// A device-local Inbox fact kept for a day.

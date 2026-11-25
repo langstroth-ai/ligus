@@ -23,6 +23,7 @@ import { Countdown, Sheet, groupMatchCode, spellMatchCode } from "@/components/k
 import { Button, InfoTip } from "@/components/ui";
 import { errMsg, toast } from "@/components/Toast";
 import { APPROVALS_KEY, sessionKey, useApprovals } from "@/state/approvals";
+import { quoteLabel } from "@/lib/needsYou";
 
 /// How long Codes match stays disabled after the code appears.
 export const HOLD_MS = 3_000;
@@ -38,9 +39,27 @@ export const COPY = {
     "The two screens showed different codes, so someone may have tried to intercept the request. Check the device you're adding and start again; tell an Admin if it happens twice.",
 };
 
-export function titleFor(kind: string, label: string): string {
-  const l = label || (kind === "box" ? "this box" : "this device");
-  return kind === "box" ? `Admit ${l}?` : `Add ${l} to your devices?`;
+/// The sheet's title, from the request's kind only: the requester's label
+/// never leads (it sits quoted on its own line beneath).
+export function titleFor(kind: string): string {
+  return kind === "box" ? "Admit a box?" : kind === "phone" ? "Add a phone to your devices?" : "Add a computer to your devices?";
+}
+
+/// The small kind word beside the label, from the request's kind.
+export function kindWord(kind: string): string {
+  return kind === "box" ? "Box" : kind === "phone" ? "Phone" : "Computer";
+}
+
+/// The quoted label on its own line, after the kind word.
+function Subject({ kind, label }: { kind: string; label: string }) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-2" data-testid="approval-subject">
+      <span className="shrink-0 text-[11.5px] font-medium uppercase tracking-wide">{kindWord(kind)}</span>
+      <span className="min-w-0 break-words" style={{ color: "var(--ligus-ink)" }}>
+        {quoteLabel(label)}
+      </span>
+    </span>
+  );
 }
 
 /// The code, large, one line, two groups; spelled for screen readers.
@@ -71,7 +90,21 @@ function when(ms: number): string {
   }
 }
 
-function Details({ kind, label, fingerprint, createdAt, relay }: { kind: string; label: string; fingerprint: string; createdAt: number; relay: string }) {
+function Details({
+  kind,
+  label,
+  fingerprint,
+  createdAt,
+  relay,
+  nameClash,
+}: {
+  kind: string;
+  label: string;
+  fingerprint: string;
+  createdAt: number;
+  relay: string;
+  nameClash?: boolean;
+}) {
   const row = (k: string, v: string, mono = false) => (
     <div className="flex gap-3">
       <dt className="w-24 shrink-0 text-ink-soft">{k}</dt>
@@ -83,11 +116,16 @@ function Details({ kind, label, fingerprint, createdAt, relay }: { kind: string;
       <summary className="cursor-pointer select-none text-ink-soft">Details</summary>
       <dl className="mt-2 space-y-1">
         {row("Kind", kind === "box" ? "A box joining as its own member" : kind === "computer" ? "A computer of yours" : "A phone of yours")}
-        {row("Label", label || "unnamed")}
+        {row("Label", quoteLabel(label))}
         {row("Fingerprint", fingerprint, true)}
         {row("Asked at", when(createdAt))}
         {row("Relay", relay, true)}
       </dl>
+      {nameClash && (
+        <p className="mt-2 text-ink-soft" data-testid="approval-name-clash">
+          This name matches an existing device.
+        </p>
+      )}
     </details>
   );
 }
@@ -100,6 +138,8 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   // Someone else is checking it, or a device that can't approve opened it:
   // don't open it from here.
   const blocked = !request?.phase && (claim === "claimedBy" || claim === "contested");
+  // Begun here, but a device that can't approve opened it too: still warn.
+  const contestedWhileWaiting = request?.phase === "waiting" && claim === "contested";
   const [openError, setOpenError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const opened = useRef(false);
@@ -166,7 +206,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
 
   let body: React.ReactNode;
   let footer: React.ReactNode = null;
-  if (blocked && claim === "contested") {
+  if ((blocked && claim === "contested") || (contestedWhileWaiting && (!s || s.phase === "waiting"))) {
     body = (
       <p className="text-[13px]" role="alert" style={{ color: "var(--ligus-danger-ink)" }} data-testid="approval-contested">
         {COPY.contested}
@@ -185,7 +225,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   } else if (blocked && request?.claim.state === "claimedBy") {
     body = (
       <p className="text-[13px]" data-testid="approval-claimed">
-        {request.claim.name || "Another device"} is checking this request
+        {request.claim.name ? quoteLabel(request.claim.name) : "Another device"} is checking this request
       </p>
     );
     footer = (
@@ -258,7 +298,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   } else if (s.phase === "approved") {
     body = (
       <p className="text-[13px]" role="status" data-testid="approval-approved">
-        {kind === "box" ? `${label || "The box"} is admitted. It joins on its own.` : `${label || "The device"} is one of your devices.`}
+        {kind === "box" ? `The box ${quoteLabel(label)} is admitted. It joins on its own.` : `The computer ${quoteLabel(label)} is one of your devices.`}
       </p>
     );
     footer = (
@@ -269,12 +309,14 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
   } else {
     const text =
       s.phase === "mismatch"
-        ? kind === "box"
-          ? `Request from ${label || "the box"} didn't match. Nothing was granted.`
-          : `Request from ${label || "the device"} didn't match. Nothing was granted.`
+        ? `Request from ${quoteLabel(label)} didn't match. Nothing was granted.`
         : s.phase === "didntFinish"
-          ? `Linking ${label || "the computer"} didn't finish. Nothing was added.`
-          : (s.message ?? "This request is over. Nothing was granted.");
+          ? `Linking ${quoteLabel(label)} didn't finish. Nothing was added.`
+          : s.phase === "expired"
+            ? "Expired. Nothing was granted."
+            : s.phase === "ended" || s.phase === "declined"
+              ? "The request was ended. Nothing was granted."
+              : (s.message ?? "The request was ended. Nothing was granted.");
     body = (
       <p className="flex items-center gap-2 text-[13px]" role="status" data-testid="approval-over">
         <span>{text}</span>
@@ -290,7 +332,8 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
 
   return (
     <Sheet
-      title={titleFor(kind, label)}
+      title={titleFor(kind)}
+      description={<Subject kind={kind} label={label} />}
       titleAddon={<InfoTip label="what a match proves" text={COPY.aboutMatch} />}
       corner={corner}
       side="center"
@@ -307,6 +350,7 @@ export function ApprovalSheet({ workspaceId, rid, onClose, now = Date.now }: { w
             fingerprint={s?.fingerprint ?? request?.fingerprint ?? ""}
             createdAt={s?.createdAt ?? request?.createdAt ?? 0}
             relay={s?.relay ?? request?.relay ?? ""}
+            nameClash={request?.nameClash}
           />
         )}
       </div>

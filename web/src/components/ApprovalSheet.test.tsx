@@ -75,8 +75,9 @@ describe("the code", () => {
   });
 
   it("titles name the label and the kind", () => {
-    expect(titleFor("box", "build-1")).toBe("Admit build-1?");
-    expect(titleFor("computer", "lt on mbp")).toBe("Add lt on mbp to your devices?");
+    expect(titleFor("box")).toBe("Admit a box?");
+    expect(titleFor("computer")).toBe("Add a computer to your devices?");
+    expect(titleFor("phone")).toBe("Add a phone to your devices?");
   });
 });
 
@@ -125,7 +126,8 @@ describe("ApprovalSheet", () => {
     vi.mocked(ipc.approvalOpen).mockResolvedValueOnce(session({ kind: "computer", label: "lt on mbp" }));
     mount();
     expect(await screen.findByText(COPY.checkMine)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Add lt on mbp to your devices?" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add a computer to your devices?" })).toBeInTheDocument();
+    expect(screen.getByTestId("approval-subject")).toHaveTextContent("Computer\u201Clt on mbp\u201D");
     expect(screen.getByTestId("approval-parallel")).toHaveTextContent("2 devices are asking. Check the code on the one you're holding.");
   });
 
@@ -152,7 +154,7 @@ describe("ApprovalSheet", () => {
   it("names who else is checking it", async () => {
     listing = [request({ claim: { state: "claimedBy", name: "Ben's desktop" } })];
     mount();
-    expect(await screen.findByTestId("approval-claimed")).toHaveTextContent("Ben's desktop is checking this request");
+    expect(await screen.findByTestId("approval-claimed")).toHaveTextContent("\u201CBen's desktop\u201D is checking this request");
     expect(ipc.approvalOpen).not.toHaveBeenCalled();
   });
 
@@ -160,6 +162,22 @@ describe("ApprovalSheet", () => {
     mount();
     await screen.findByTestId("match-code");
     await userEvent.click(screen.getByRole("button", { name: "Don't match" }));
-    expect(await screen.findByTestId("approval-over")).toHaveTextContent("Request from build-1 didn't match. Nothing was granted.");
+    expect(await screen.findByTestId("approval-over")).toHaveTextContent("Request from \u201Cbuild-1\u201D didn't match. Nothing was granted.");
+  });
+
+  it("still warns when a device that can't approve opens it after this desktop began", async () => {
+    listing = [request({ phase: "waiting", claim: { state: "contested", name: null } })];
+    vi.mocked(ipc.approvalSession).mockResolvedValue(session({ phase: "waiting", code: null, codeAt: null }));
+    mount();
+    expect(await screen.findByTestId("approval-contested")).toHaveTextContent(COPY.contested);
+    expect(screen.getByRole("button", { name: "End this request" })).toBeInTheDocument();
+    vi.mocked(ipc.approvalSession).mockResolvedValue(null);
+  });
+
+  it("says when the label matches an existing device, under Details", async () => {
+    listing = [request({ nameClash: true })];
+    mount();
+    await screen.findByTestId("match-code");
+    expect(screen.getByTestId("approval-name-clash")).toHaveTextContent("This name matches an existing device.");
   });
 });
