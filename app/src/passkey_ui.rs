@@ -367,8 +367,38 @@ pub struct DesktopPresence(pub AppHandle);
 
 impl PresenceProvider for DesktopPresence {
     fn assert(&self, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
-        presence_get(&self.0, req)
+        let note = APPROVAL_NOTE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match summary_with_note(req, note.as_ref()) {
+            Some(summary) => presence_get(&self.0, &PresenceRequest { summary, ..req.clone() }),
+            None => presence_get(&self.0, req),
+        }
     }
+}
+
+/// What a code-match approval adds to its one passkey ceremony: the event
+/// kind it drafts and the sheet's summary naming the label and the code
+/// (Admit box "build-1", code K7Q4 M9X2). Shown on this device's sheet
+/// only: nothing about the code reaches the log.
+static APPROVAL_NOTE: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+/// The summary to show for `req` while `note` is set: the note's, when it is
+/// for this event kind.
+pub(crate) fn summary_with_note(req: &PresenceRequest, note: Option<&(String, String)>) -> Option<String> {
+    note.filter(|(kind, _)| *kind == req.kind).map(|(_, summary)| summary.clone())
+}
+
+/// Run `f` (which drafts one `kind` event and asks for the passkey) with the
+/// sheet's summary set to `summary`.
+pub(crate) fn with_approval_summary<T>(kind: &str, summary: String, f: impl FnOnce() -> T) -> T {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            *APPROVAL_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+    *APPROVAL_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((kind.to_string(), summary));
+    let _clear = Clear;
+    f()
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
