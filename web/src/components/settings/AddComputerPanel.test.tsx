@@ -48,12 +48,46 @@ describe("AddComputerPanel", () => {
     await userEvent.click(add);
     expect(ipc.addComputer).toHaveBeenCalledWith("liguslink1:x", request.fingerprint);
     await screen.findByTestId("add-computer-grant");
+    expect(screen.queryByLabelText("Grant for the computer")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Show code" }));
     expect((screen.getByLabelText("Grant for the computer") as HTMLTextAreaElement).value).toBe("ligusgrant1:abc");
     expect(screen.getByRole("img", { name: /This desktop's fingerprint/ })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
     await waitFor(() => expect(ipc.removeDuplicateMember).toHaveBeenCalledWith("m-lt"));
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(onDone).toHaveBeenCalled();
+  });
+
+  it("Copy for lt copies the grant alone; Copy command and the fingerprint never carry it", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(ipc.inspectComputerRequest).mockResolvedValue({ ...request, previousMember: null });
+    vi.mocked(ipc.addComputer).mockResolvedValue({
+      grant: "ligusgrant1:SEALED",
+      expiresInMinutes: 30,
+      thisDesktop: request.thisDesktop,
+      previousMember: null,
+    });
+    const log = vi.spyOn(console, "log");
+    render(<AddComputerPanel onDone={() => {}} onCancel={() => {}} />);
+    await userEvent.type(screen.getByLabelText("The computer's link request"), "liguslink1:x");
+    await userEvent.click(await screen.findByLabelText("The computer shows the same fingerprint"));
+    await userEvent.click(screen.getByRole("button", { name: "Add with passkey" }));
+    await screen.findByTestId("add-computer-grant");
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy for lt" }));
+    expect(writeText).toHaveBeenLastCalledWith("ligusgrant1:SEALED");
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy command" }));
+    const command = writeText.mock.calls.at(-1)![0] as string;
+    expect(command).toBe("lt --plain link-redeem --approver-fingerprint 2C41-88E0-1B9D-04AF-6E73");
+    expect(command).not.toContain("ligusgrant1");
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy this desktop's fingerprint" }));
+    expect(writeText).toHaveBeenLastCalledWith("2C41-88E0-1B9D-04AF-6E73");
+    expect(screen.getByTestId("add-computer-how").textContent).toContain("lt --plain link-redeem");
+    for (const call of log.mock.calls) expect(String(call)).not.toContain("SEALED");
   });
 
   it("refuses a computer that is someone else's here", async () => {
