@@ -1332,8 +1332,10 @@ export interface MyDeviceDto {
   phone: boolean;
   /** The label is a real name, not the "Device 1a2b3c4d" fallback. */
   named: boolean;
-  /** One quiet line when another member also certified this device's key. */
+  /** One quiet line when another member also certified this device's key, or it never finished linking. */
   note?: string;
+  /** Approved here but it never wrote anything: offered as Remove. */
+  neverWritten?: boolean;
 }
 export interface DeviceRequestDto {
   hostId: string;
@@ -1350,6 +1352,8 @@ export const inspectDeviceCode = (code: string) => invoke<DeviceCodeDto>("inspec
 export const approveDevice = (code: string, retireMember: boolean) =>
   invoke<ApproveDeviceDto>("approve_device", { code, retireMember });
 export const listMyDevices = () => invoke<MyDeviceDto[]>("list_my_devices");
+/// Rename one of your devices: a synced name every member sees; empty clears it.
+export const renameDevice = (deviceId: string, label: string) => invoke<void>("rename_device", { deviceId, label });
 
 /// Another computer's link request (`liguslink1:`), as Add a computer shows it.
 export interface ComputerRequestDto {
@@ -2343,6 +2347,10 @@ export type SecurityStatusDto = {
   /// This device counts on the workspace (rules v2: a new device of an
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
+  /** This account is an Owner here (only an Owner switches the rules). */
+  isOwner?: boolean;
+  /** Rules 3's readiness list: devices whose certificate would stop counting. */
+  rules3Gaps?: string[];
 };
 /** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
  * `browser` (the hand-off page is open), `native` (the system passkey dialog

@@ -176,6 +176,7 @@ impl Dev {
         state.record_link(&person, g.workspace_id).map_err(|e| e.to_string())?;
         state.save(&self.dir).unwrap();
         self.svc.act_as_owner_device(person.clone());
+        self.svc.accept_device_certificate(g.workspace_id).map_err(|e| e.to_string())?;
         self.sync().await;
         Ok(person)
     }
@@ -396,6 +397,7 @@ async fn a_computer_is_never_certified_as_someone_else() {
     // It acts as Taylor (its own signature as Taylor, what the redeem's
     // key-agreement key publishes): from then on it chose Taylor.
     lt.svc.act_as_owner_device(person);
+    lt.svc.accept_device_certificate(ws).unwrap();
     let chat = lt.svc.create_chat("lt", ws, "").unwrap().id;
     lt.svc.post_user_message(chat, ws, "as Taylor").unwrap();
     lt.sync().await;
@@ -441,7 +443,9 @@ async fn a_foreign_certificate_doesnt_block_or_redirect_a_link() {
     mac.sync().await;
     let preview = mac.svc.preview_computer_link(ws, &req).unwrap();
     assert_eq!(preview.someone_elses, None, "a certificate alone isn't the computer choosing Taylor");
-    assert_eq!(preview.also_certified_by, vec!["Taylor".to_string()], "shown, quietly");
+    // Rules 3 (every new workspace): a certificate the computer never
+    // accepted counts for nothing, so there is nothing to show.
+    assert!(preview.also_certified_by.is_empty(), "{:?}", preview.also_certified_by);
     let grant = mac.svc.issue_computer_link(ws, &req, &mac.conn(room), now_ms()).unwrap();
     mac.sync().await;
     lt.svc.store().set_workspace_pin(ws, &mac.id(), &crate::envelope_verifier::FounderPin::fingerprint_hex(&mac.svc.account_public_key())).unwrap();
@@ -453,7 +457,7 @@ async fn a_foreign_certificate_doesnt_block_or_redirect_a_link() {
     assert!(mac.bodies(chat).contains(&("from lt".into(), mac.id())), "{:?}", mac.bodies(chat));
     let (standing, foreign) = lt.svc.device_standing_and_foreign(ws).unwrap();
     assert!(matches!(standing, crate::device_enroll::Standing::OwnerDevice(ref a) if a.id == mac.id()), "{standing:?}");
-    assert_eq!(foreign.iter().map(|a| a.id.clone()).collect::<Vec<_>>(), vec![taylor.id()], "the certifier is only shown");
+    assert!(foreign.is_empty(), "under rules 3 Taylor's certificate certifies nothing: {foreign:?}");
 
     // Having acted as Alex, the computer is Alex's: someone else can't link
     // it now (Sam never certified it, so this is the "chose" check).
@@ -603,4 +607,81 @@ async fn a_device_never_chose_an_account_that_never_certified_it() {
     let chosen = mac.svc.device_chosen_accounts(ws, mdev, &mkey).unwrap();
     assert!(!chosen.contains(&vacct), "the device 'chose' Victor without Victor's certificate: {chosen:?}");
     assert!(chosen.contains(&stored.account.id), "its own account it did choose: {chosen:?}");
+}
+
+/// P2 and L1/L2 (identity model v2, 5 and 6): a rename on the desktop
+/// reaches a teammate's view of the roster and of past messages; a linked
+/// computer can't rename its person but names itself; the desktop renames
+/// it; the duplicate member retires at redeem (rules 3, O5); an approved
+/// computer that never redeems shows as never written (8.2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn names_come_from_profiles_and_labels() {
+    let relay = spawn_relay().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let room = "acme";
+    let ws = ligus_core::room_workspace_id(room);
+    let cfg = workspace_config_session_id(ws);
+    let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+    mac.found(ws);
+    let chat = mac.svc.create_chat("plans", ws, "").unwrap().id;
+    mac.svc.post_user_message(chat, ws, "before the rename").unwrap();
+    mac.sync().await;
+    let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+    taylor.join_via(&mut mac, ws).await;
+    taylor.sync().await;
+
+    // Rename: one profile event; Taylor sees it in the roster and on the
+    // earlier message.
+    assert!(mac.svc.set_profile(ws, Some("Alex Ruiz"), None, false).unwrap());
+    assert!(!mac.svc.set_profile(ws, Some("Alex Ruiz"), None, false).unwrap(), "unchanged writes nothing");
+    let err = mac.svc.set_profile(ws, Some("Alex R."), None, false).unwrap_err().to_string();
+    assert!(err.contains("a moment ago"), "{err}");
+    mac.sync().await;
+    taylor.sync().await;
+    let c = taylor.svc.load(cfg).unwrap().unwrap();
+    assert!(c.members.iter().any(|m| m.id == mac.id() && m.actor.display_name == "Alex Ruiz"), "{:?}", c.members);
+    let s = taylor.svc.load(chat).unwrap().unwrap();
+    let m = s.messages.iter().find(|m| m.body == "before the rename").unwrap();
+    assert_eq!(m.author, "Alex Ruiz");
+    assert_eq!(m.actor_identity.as_ref().unwrap().display_name, "Alex Ruiz");
+
+    // The duplicate member (lt joined as its own member first).
+    let mut lt = Dev::open(&tmp.path().join("lt"), "Alex (lt)", &relay, ws);
+    lt.join_via(&mut mac, ws).await;
+    let old_member = lt.id();
+    lt.sync().await;
+    mac.sync().await;
+    let ids = lt.ids();
+    let stored = ids.load().unwrap().unwrap();
+    let (new_id, new_key) = ids.prepare_device().unwrap();
+    let ka = ids.key_agreement(new_id).unwrap();
+    let account_kp = ids.account_keypair(stored.account.id).unwrap();
+    let req = LinkRequest::new(&new_key, &ka.public_key_bytes(), "lt on mbp", now_ms(), Some((stored.account.id, &account_kp)));
+    let mut state = LinkState::default();
+    state.add_pending(&req, now_ms());
+    state.save(&lt.dir).unwrap();
+    let grant = mac.svc.issue_computer_link(ws, &req, &mac.conn(room), now_ms()).unwrap();
+    mac.sync().await;
+    // Never written yet, but too new to say so; 46 minutes on, it is.
+    let later = ligus_core::Timestamp(ligus_core::Timestamp::now().inner() + time::Duration::minutes(46));
+    assert!(mac.svc.never_written(ws, new_id).unwrap().is_none());
+    assert!(mac.svc.never_written_at(ws, new_id, later).unwrap().is_some());
+    ids.adopt_device(new_id).unwrap();
+    drop(lt);
+    let mut lt = Dev::open(&tmp.path().join("lt"), "Alex (lt)", &relay, ws);
+    lt.redeem(&grant).await.unwrap();
+    assert_eq!(lt.svc.retire_previous_member(ws, &account_kp, stored.account.id, &old_member).unwrap(), None, "retired");
+    assert!(lt.svc.set_device_label(ws, new_id, "lt on mbp").unwrap());
+    let err = lt.svc.set_profile(ws, Some("Stolen"), None, false).unwrap_err().to_string();
+    assert!(err.contains("desktop"), "{err}");
+    lt.sync().await;
+    mac.sync().await;
+    assert!(mac.svc.never_written_at(ws, new_id, later).unwrap().is_none(), "it wrote");
+    let c = mac.svc.load(cfg).unwrap().unwrap();
+    assert!(!c.members.iter().any(|m| m.id == old_member), "the duplicate member stayed");
+    assert_eq!(c.retired.get(&old_member), Some(&mac.account()));
+    assert_eq!(mac.svc.device_label_of(ws, new_id, mac.account()).as_deref(), Some("lt on mbp"));
+    // The desktop renames it.
+    assert!(mac.svc.set_device_label(ws, new_id, "Alex's lt").unwrap());
+    assert_eq!(mac.svc.device_label_of(ws, new_id, mac.account()).as_deref(), Some("Alex's lt"));
 }

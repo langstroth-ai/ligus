@@ -214,6 +214,7 @@ pub const COMMANDS: &[Cmd] = &[
             "ligus devices redeem [<ligusgrant1:code> | - | --code-file PATH] [--approver-fingerprint FP]",
             "ligus devices approve <liguslink1:request> | --code-file PATH --fingerprint FP --recovery-words-file PATH [--out PATH]",
             "ligus devices list",
+            "ligus devices rename <device-id> <name>",
         ],
         flags: &[JSON],
         conn: true,
@@ -253,6 +254,58 @@ pub const COMMANDS: &[Cmd] = &[
         examples: &["ligus devices request --copy", "ligus devices request --label work-laptop | pbcopy"],
         exit: &[(6, "this data dir is a box")],
         see_also: &["ligus devices redeem", "desktop: Settings > Profile > My devices > Add a computer"],
+        ..D
+    },
+    Cmd {
+        name: "devices rename",
+        group: G_START,
+        summary: "give one of your devices (or this one) a name every member sees",
+        purpose: "Set the synced name of one of your devices in this workspace: this computer, or another device of \
+                  yours (from a computer that holds your account key; a linked computer renames only itself). Every \
+                  member's My devices and People show it. An empty name clears it. `ligus devices list --json` lists the \
+                  device ids.",
+        synopsis: &["ligus devices rename <device-id> <name> [--json]", "ligus devices rename this <name> [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus devices rename this \"Ana's build box\"", "ligus devices rename 3c1e0f2a-... \"Ana's iPhone\""],
+        exit: &[(2, "no device id or name"), (6, "refused: not one of your devices, or a linked computer renaming another device")],
+        see_also: &["ligus devices list", "desktop: Settings > Profile > My devices > Rename"],
+        ..D
+    },
+    Cmd {
+        name: "profile",
+        group: G_START,
+        summary: "your name and picture, as every member sees them",
+        purpose: "Your profile is the one place your name and picture come from in a workspace: every member's \
+                  People, chats and devices show it, in past content too. Set it with `ligus profile set` (or on your \
+                  desktop: Settings > Profile).",
+        synopsis: &["ligus profile set [--name NAME] [--avatar FILE | --clear-avatar] [--json]"],
+        flags: &[JSON],
+        conn: true,
+        examples: &["ligus profile set --name \"Ana Ruiz\""],
+        exit: &[(2, "unknown subcommand")],
+        see_also: &["ligus profile set"],
+        ..D
+    },
+    Cmd {
+        name: "profile set",
+        group: G_START,
+        summary: "set your name and picture in every workspace you're in",
+        purpose: "Publish your name and/or picture as your profile in every workspace this data dir holds where you \
+                  are a member: every member sees the new name, in past content too. Only a computer that holds your \
+                  account key can (a linked computer, a box or a phone can't: change it on your desktop). A picture is a \
+                  PNG, JPEG or WebP file of 16 KB at most. At most one change a minute and 20 a day per workspace.",
+        synopsis: &["ligus profile set [--name NAME] [--avatar FILE | --clear-avatar] [--json]"],
+        flags: &[
+            f("--name NAME", "unchanged", "your display name"),
+            f("--avatar FILE", "unchanged", "a PNG, JPEG or WebP picture, 16 KB at most"),
+            f("--clear-avatar", "off", "remove your picture"),
+            JSON,
+        ],
+        conn: true,
+        examples: &["ligus profile set --name \"Ana Ruiz\"", "ligus profile set --avatar ./me.webp"],
+        exit: &[(1, "the throttle: try again in a minute"), (2, "nothing to set, or a picture that isn't PNG, JPEG or WebP, or is over 16 KB"), (6, "this computer acts for you without your account key")],
+        see_also: &["desktop: Settings > Profile"],
         ..D
     },
     Cmd {
@@ -3046,6 +3099,7 @@ mod tests {
             ("remote", main.clone(), "\"remote\" => {", "\n        }\n", &[]),
             ("phones", main.clone(), "\"phones\" => {", "\n        \"dashboard\"", &[]),
             ("devices", main.clone(), "\"devices\" => {", "\n        \"recovery-key\"", &[]),
+            ("profile", main.clone(), "\"profile\" => match", "\n        },\n", &[]),
             ("dashboard", main.clone(), "\"dashboard\" => match", "\n        },\n", &[]),
             ("facts", main.clone(), "\"facts\" => {", "\n        }\n", &[]),
             ("trust", main.clone(), "fn cmd_trust", "\n}\n", &[]),

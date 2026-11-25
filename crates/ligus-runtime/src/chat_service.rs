@@ -32,6 +32,7 @@ pub use computer_link::LinkPreview;
 pub use changes::{ChangeFeed, ChangeOrigin, ChatChange, CHANGE_FEED_CAPACITY};
 mod facts;
 mod guards;
+mod identity;
 mod keys;
 mod links;
 mod memory;
@@ -46,7 +47,7 @@ pub use relay_removal::{RelayRemoval, RelayRemovalError, RelaySubject, BOX_SUBJE
 mod repos;
 pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
-pub use phone_sign::{PhoneDraft, STALE_DRAFT};
+pub use phone_sign::{PhoneDraft, BAD_CONSENT, STALE_DRAFT};
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
@@ -130,6 +131,9 @@ pub struct ChatService {
     /// The relying party this device writes into a workspace it founds
     /// (deployment setting; authoring only, never read by the fold).
     deployment_presence: ligus_core::presence::PresencePolicy,
+    /// The rules version a workspace this service founds starts at
+    /// (`RULES_NEW_WORKSPACE`; tests of older behaviour lower it).
+    founding_rules: u32,
     /// Tests only ([`ChatService::enable_test_presence`]): answer presence
     /// prompts with a recovery key derived from the account, when no provider
     /// is set. Never on otherwise.
@@ -203,6 +207,7 @@ impl ChatService {
             runtime_effect: false,
             presence_provider: None,
             deployment_presence: ligus_core::presence::PresencePolicy::ligus(),
+            founding_rules: ligus_core::authz::RULES_NEW_WORKSPACE,
             // This crate's own unit tests run every service with a test
             // recovery key (rules v2 everywhere); a test of the refusal path
             // turns it off with `disable_test_presence`.
@@ -469,6 +474,22 @@ impl ChatService {
         let standing = crate::device_enroll::standing(&trust, config.as_ref(), self.device_id, &own, &chosen);
         let foreign = crate::device_enroll::foreign_certifiers(&trust, config.as_ref(), self.device_id, &own, &chosen);
         Ok((standing, foreign))
+    }
+
+    /// The author as it rides a stamp or a message: without the picture
+    /// (decision O2: pictures come from `ProfileUpdated`, never carried on
+    /// every event).
+    fn stamped_author(&self) -> ActorIdentity {
+        let mut a = self.author.clone();
+        a.avatar_url = None;
+        a
+    }
+
+    /// Tests only: found workspaces at rules `version` (fixtures written for
+    /// rules 2, whose member records use names for ids).
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn set_founding_rules(&mut self, version: u32) {
+        self.founding_rules = version;
     }
 
     /// Tests only: certify **any** Ed25519 device key under this account in
@@ -932,7 +953,7 @@ impl ChatService {
         // workspace roster are judged at it, on every device (Phase 0 A2).
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         env.actor_stamp = Some(ActorStamp {
-            actor: self.author.clone(),
+            actor: self.stamped_author(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(workspace_id, session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
@@ -1151,7 +1172,7 @@ impl ChatService {
         body: impl Into<String>,
     ) -> Result<ChatMessage> {
         let mut message = ChatMessage::new(MessageRole::User, &self.author.display_name, body);
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         let stored = message.clone();
         self.append_signed(
             session_id,
@@ -1172,7 +1193,7 @@ impl ChatService {
         run_id: Uuid,
     ) -> Result<ChatMessage> {
         let mut message = ChatMessage::new(MessageRole::User, &self.author.display_name, body);
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         message.workflow_run_id = Some(run_id);
         let stored = message.clone();
         self.append_signed(session_id, workspace_id, SessionEvent::MessageAppended { message })?;
@@ -1240,7 +1261,7 @@ impl ChatService {
         // answered (every user's default agent is named "ligus"). Rides synced like
         // a human's identity; message_dto surfaces it only for the primary agent
         // (named agents keep their roster avatar/name).
-        message.actor_identity = Some(self.author.clone());
+        message.actor_identity = Some(self.stamped_author());
         let id = message.id;
         // An agent with its own key on this host signs its own reply (A3).
         if let Some(agent) = responder_id {
@@ -1437,7 +1458,7 @@ impl ChatService {
         if self.store.rows_since_last_snapshot(workspace_id, session_id)? < Self::SNAPSHOT_EVERY {
             return Ok(());
         }
-        if let Some(session) = self.load_in(workspace_id, session_id)? {
+        if let Some(session) = self.load_in_unresolved(workspace_id, session_id)? {
             self.append_signed(
                 session_id,
                 workspace_id,
@@ -1837,7 +1858,8 @@ impl ChatService {
                 self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
-            // Genesis rules (Phase A): every workspace starts on rules v2 under
+            // Genesis rules (Phase A; rules 3 from 0.4, identity model v2):
+            // every workspace this build founds starts on rules v3 under
             // this deployment's passkey relying party. Written before anyone
             // holds a credential, so it carries no presence; the founder then
             // registers a passkey and a recovery key with the seed's one grant
@@ -1848,7 +1870,7 @@ impl ChatService {
                 config_id,
                 workspace_id,
                 SessionEvent::WorkspaceRulesSet {
-                    version: ligus_core::authz::RULES_GENESIS,
+                    version: self.founding_rules,
                     presence: Some(self.deployment_presence.clone()),
                 },
             )?;
@@ -2015,8 +2037,22 @@ impl ChatService {
         self.device_id
     }
 
-    /// The workspace's registered hosts.
+    /// The workspace's registered hosts, without those of former members or
+    /// of revoked devices (identity model v2, 8.4; under rules 3 the fold
+    /// drops them too). [`Self::list_all_hosts`] keeps them, for Clean up.
     pub fn list_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
+        let Some(s) = self.load_in(workspace_id, workspace_config_session_id(workspace_id))? else { return Ok(Vec::new()) };
+        let members: std::collections::HashSet<&str> = s.members.iter().map(|m| m.id.as_str()).collect();
+        Ok(s.workspace_hosts
+            .iter()
+            .filter(|h| h.owner_actor_id.is_empty() || members.contains(h.owner_actor_id.as_str()))
+            .filter(|h| Uuid::parse_str(&h.id).map_or(true, |d| !s.guards.revoked_devices.contains(&d)))
+            .cloned()
+            .collect())
+    }
+
+    /// Every registered host, former members' and revoked devices' included.
+    pub fn list_all_hosts(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceHost>> {
         Ok(self
             .load_in(workspace_id, workspace_config_session_id(workspace_id))?
             .map(|s| s.workspace_hosts)
@@ -3590,6 +3626,25 @@ impl ChatService {
     /// the same id are another chat and never fold here, whatever their
     /// order or content.
     pub fn load_in(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
+        let Some(mut session) = self.load_in_unresolved(workspace_id, session_id)? else { return Ok(None) };
+        // Names and pictures are resolved at render time from the profiles
+        // on the config log (identity model v2, 4.3), never frozen copies.
+        let config_id = workspace_config_session_id(workspace_id);
+        if session_id == config_id {
+            let profiles = session.profiles.clone();
+            crate::profiles::resolve(&mut session, &profiles);
+        } else if let Ok((Some(cfg), _)) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id) {
+            crate::profiles::resolve(&mut session, &cfg.profiles);
+            session.device_labels = cfg.device_labels;
+            session.retired = cfg.retired;
+            session.profiles = cfg.profiles;
+        }
+        Ok(Some(session))
+    }
+
+    /// [`Self::load_in`] without the render-time names: what a snapshot is
+    /// written from, so no resolved name or picture is ever baked into the log.
+    fn load_in_unresolved(&self, workspace_id: Uuid, session_id: Uuid) -> Result<Option<ChatSession>> {
         // Pin the base seed to the out-of-band founder (B2 residual fix). This is
         // load-bearing for the workspace-config log — where the roster/ownership
         // lives — so a forged low-lamport config seed can't displace the founder's.
@@ -4730,7 +4785,10 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, ligus_core::ActorKind::Human);
-        ChatService::new(store, kp, account_kp, author)
+        let mut svc = ChatService::new(store, kp, account_kp, author);
+        // Fixtures name their members (ids that aren't account ids): rules 2.
+        svc.set_founding_rules(2);
+        svc
     }
 
     /// The founder names the workspace on its config log once; a later
@@ -5104,6 +5162,45 @@ mod tests {
             Ok(p) => assert_ne!(p.id, ben_id, "the box redirected Ana's phone to Ben by arrival order"),
             Err(_) => {} // fail closed
         }
+    }
+
+    /// O12 under rules 3: a phone two accounts certified counts for no one
+    /// until it states its person; its statement, relayed by any member's
+    /// device (its box), makes it its person's alone.
+    #[test]
+    fn a_phones_statement_settles_a_contested_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ligus.db");
+        let wid = Uuid::new_v4();
+        let cfg = workspace_config_session_id(wid);
+        let (ana_id, ben_id) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut ana = svc_on(&path, "a", "Ana");
+        ana.set_founding_rules(ligus_core::authz::RULES_NEW_WORKSPACE);
+        ana.set_author_account(ana_id.clone(), "Ana", None);
+        ana.create_chat("general", wid, "rt").unwrap();
+        ana.ensure_workspace_config(wid).unwrap();
+        let invite = ana.issue_invite(wid).unwrap();
+        let mut ben = svc_on(&path, "b", "Ben");
+        ben.set_author_account(ben_id.clone(), "Ben", None);
+        ben.store().set_join_invite(wid, invite).unwrap();
+        ben.store().set_join_redeem(wid, ana.take_invite_redeem_seed(wid, invite).unwrap().as_ref()).unwrap();
+        ben.ensure_self_member(cfg, wid).unwrap();
+        ben.publish_identity(cfg, wid).unwrap();
+        assert_eq!(ana.load(cfg).unwrap().unwrap().authz.rules, 3);
+        let phone = ligus_core::testkit::Phone::new();
+        ana.certify_phone(wid, phone.device_id, &phone.public_key()).unwrap();
+        ben.publish_foreign_phone_certificate(wid, &phone.public_key()).unwrap();
+        let ana_acct = Uuid::parse_str(&ana_id).unwrap();
+        assert!(ana.phone_person(wid, phone.device_id).is_err(), "contested without a statement: no one");
+        let bad = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, Uuid::parse_str(&ben_id).unwrap(), phone.device_id));
+        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &bad).is_err(), "a statement for someone else");
+        let sig = phone.sign(&ligus_core::crypto::phone_consent_preimage(wid, ana_acct, phone.device_id));
+        // Ben's device relays it (any member's device may): it is the phone's word.
+        assert!(ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap());
+        assert!(!ben.publish_phone_consent(wid, phone.device_id, ana_acct, &sig).unwrap(), "once");
+        assert!(ana.phone_consented(wid, phone.device_id, ana_acct).unwrap());
+        assert_eq!(ana.phone_person(wid, phone.device_id).unwrap().id, ana_id);
+        assert!(ana.phone_co_holders(wid, phone.device_id).unwrap().is_empty(), "Ben's certificate counts for nothing");
     }
 
     #[test]

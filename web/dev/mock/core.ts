@@ -288,8 +288,13 @@ function handle(cmd: string, args: Args): unknown {
       return [
         { deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null, phone: false, named: true },
         { deviceId: "p1", label: "Ana's iPhone", fingerprint: "e5f6-a7b8", thisDevice: false, revoked: false, lastSeen: null, phone: true, named: true },
+        { deviceId: "c1", label: "Device 376b5d72", fingerprint: "7f3a-91c0", thisDevice: false, revoked: false, lastSeen: null, phone: false, named: false },
         ...(flags.devices ? fx.revokedDevices : []),
-      ];
+      ].map((d) => (deviceNames[d.deviceId] ? { ...d, label: deviceNames[d.deviceId], named: true } : d));
+    case "rename_device":
+      deviceNames[String(args?.deviceId)] = String(args?.label ?? "");
+      if (!deviceNames[String(args?.deviceId)]) delete deviceNames[String(args?.deviceId)];
+      return null;
     case "inspect_computer_request":
       return {
         deviceId: "c1",
@@ -399,6 +404,9 @@ function inboxExtras(cmd: string, args: Args, base: unknown): unknown {
       return base;
   }
 }
+
+/** Device names set with Rename in this mock session. */
+const deviceNames: Record<string, string> = {};
 
 export async function invoke<T>(cmd: string, args?: Args): Promise<T> {
   if (flags.loading && !["get_app_settings", "list_workspaces", "list_runtimes"].includes(cmd)) {

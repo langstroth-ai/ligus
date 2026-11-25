@@ -21,7 +21,11 @@ the app data dir; the theme is stored locally per device.
 
 - **Profile** — your **display name**, an optional **picture** and your
   **git email** (the commit author for work an agent does on your behalf;
-  members of your workspaces can see it). No provider signs you in.
+  members of your workspaces can see it). No provider signs you in. Your
+  name and picture are your **profile** in every workspace you're in: a
+  change shows for everyone, in past messages too. A picture is a PNG, JPEG
+  or WebP of 16 KB at most (the desktop shrinks it for you). Change them on
+  a desktop: a linked computer, a box or a phone can't.
 - **Safety code** — the fingerprint of your account key, as eight groups of
   four hex characters, to compare out of band with people you invite. See
   [Identity & devices](../concepts/identity.md#safety-code).
@@ -30,7 +34,12 @@ the app data dir; the theme is stored locally per device.
   proven with an SSH key the forge lists for you. Also
   here: **Contact forges to check linked identities** (on by default) and the
   self-managed forges this device may ask. See [Linked accounts](linked-identities.md).
-- **My devices** — devices that act as you in this workspace. **Add a
+- **My devices** — devices that act as you in this workspace. **Rename…**
+  on a row gives it a name every member sees ("Ana's MacBook Air"); a box
+  names itself after its `--label`, and a linked computer after its link
+  request. A computer you approved that never redeemed its code says
+  *Approved on …, it hasn't written anything yet* and offers **Remove**.
+  **Add a
   computer** takes the link request another computer of yours shows (`lt`,
   `ligus devices request`): compare the fingerprint, confirm with your passkey,
   and paste the grant it shows on that computer, so it acts as you instead of

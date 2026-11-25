@@ -260,10 +260,36 @@ it names.
   key signs for the agent (see
   [Known limitations](threat-model.md#known-limitations)).
 
+## Rules v3 {#rules-v3}
+
+Workspaces 0.4 creates start on **rules v3**; an Owner switches an older
+workspace in Settings (a passkey confirmation; there is no way back). Under
+rules v3:
+
+- **A device certificate counts only when the device accepted it.** A
+  computer or box accepts by signing as the account (its own copy of the
+  certificate, its admission, its name); a phone by its own signed
+  enrollment statement, or by being certified by one account alone. A
+  certificate someone puts on another person's device key, which anyone
+  can, counts for nothing: it can't take over, stop, borrow or redirect the
+  device, and a contested phone stays its person's to revoke.
+- **A duplicate member retires** into its person when a computer that was
+  its own member links as theirs (see
+  [Add a computer](../../ligus/features/linked-devices.md#its-name-and-your-earlier-member)).
+- **Model keys are never stored in the workspace:** a runtime carrying one
+  is refused.
+- **Member records must agree with themselves:** a member id is its actor
+  id, and an actor id its account id.
+- **Hosts of former members are inert:** agents bound to them are unbound.
+
+A 0.3 device on a rules v3 workspace is read-only there and says to update
+Ligus.
+
 ## Passkey presence {#presence}
 
 Signatures prove which device made an event, not that its person was there.
-Every workspace is on **rules v2** from its first event: creating one asks
+Every workspace is on **rules v2** or later from its first event (0.4 creates
+workspaces on **rules v3**, see [Rules v3](#rules-v3)): creating one asks
 for your passkey and a recovery key, and the events that change who can do
 what need a **passkey** assertion over the event:
 
