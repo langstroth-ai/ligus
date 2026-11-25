@@ -2347,6 +2347,10 @@ export type SecurityStatusDto = {
   /// This device counts on the workspace (rules v2: a new device of an
   /// account with a passkey needs Confirm this device).
   deviceConfirmed: boolean;
+  /** This account is an Owner here (only an Owner switches the rules). */
+  isOwner?: boolean;
+  /** Rules 3's readiness list: devices whose certificate would stop counting. */
+  rules3Gaps?: string[];
 };
 /** What the "Confirm with passkey" sheet shows while a ceremony runs. `via`:
  * `browser` (the hand-off page is open), `native` (the system passkey dialog

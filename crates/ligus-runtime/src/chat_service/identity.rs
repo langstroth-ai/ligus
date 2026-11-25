@@ -211,3 +211,39 @@ impl ChatService {
         Ok((age_ms > NEVER_FINISHED_AFTER_MS as i128).then_some(cert.issued_at))
     }
 }
+
+/// A device whose certificate would stop counting under rules 3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rules3Gap {
+    pub device_id: Uuid,
+    pub account_id: Uuid,
+    pub phone: bool,
+}
+
+impl ChatService {
+    /// The readiness list for switching `workspace_id` to rules 3 (decision
+    /// O6): every device certified here today whose device never accepted
+    /// that certificate, so it would stop counting (a computer that never
+    /// redeemed, a phone two accounts certified without its statement, a
+    /// certificate someone put on another device's key). Empty when the
+    /// switch changes nothing for anyone.
+    pub fn rules3_readiness(&self, workspace_id: Uuid) -> Result<Vec<Rules3Gap>> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let envs = self.store.config_envelopes(workspace_id)?;
+        let refs: Vec<&ligus_core::SessionEventEnvelope> = envs.iter().collect();
+        let accepted = ligus_core::authz::RosterTracker::accepted(&refs, workspace_id);
+        let head = timeline.current();
+        let mut out = Vec::new();
+        for (device, d) in &head.devices {
+            if d.revoked {
+                continue;
+            }
+            for account in &d.accounts {
+                if !accepted.contains(&(*device, *account)) && head.members.values().any(|m| m.account_id == Some(*account)) {
+                    out.push(Rules3Gap { device_id: *device, account_id: *account, phone: d.phone });
+                }
+            }
+        }
+        Ok(out)
+    }
+}

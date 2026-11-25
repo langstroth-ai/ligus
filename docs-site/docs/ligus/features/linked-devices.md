@@ -57,6 +57,19 @@ Ligus is short for *ligustica*, the Italian honeybee.
 From then on the computer acts as you in that workspace: your name, your
 role, your chats.
 
+## Its name, and your earlier member
+
+When it redeems the code, the computer **accepts** your desktop's approval
+(it publishes its own copy of the certificate; on a workspace on rules 3,
+every workspace 0.4 creates, the approval counts only then), names itself
+after its link request (rename it in My devices, or with `ligus devices
+rename this NAME` or `lt --plain device-rename NAME` on it), and, if it was
+already a separate member here, **retires** that member into you: the member
+leaves, and its history stays its own. It does that only when it's safe (the
+earlier member ranks no higher than you, isn't the founder or the last
+Owner, and has no passkey); otherwise it says so and an Admin removes it in
+People.
+
 ## What a linked computer can and can't do
 
 It **can** read and post, start chats and workflow runs, answer, run the
@@ -72,6 +85,10 @@ proves who you are, which never leaves that desktop):
   linked accounts, creating workspaces and inviting people as their founder.
 - Applying a proposal yourself and sharing a file from the computer's disk:
   do those on the desktop.
+
+It can't change your name or picture (a stolen one would rename you
+everywhere): do that on the desktop. In a workspace it wasn't linked into, it
+is read-only and says how to link it there.
 
 A linked computer is one person's: it doesn't accept invites, can't be linked
 to someone else as well, and isn't a box (a `ligus serve` or `ligus worker`

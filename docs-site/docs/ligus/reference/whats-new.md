@@ -6,6 +6,23 @@ Full release notes are on the
 
 ## Unreleased
 
+### Added
+
+- **Your name and picture are one profile.** A rename or a new picture on
+  the desktop shows for everyone in every workspace you're in, in past
+  messages too; pictures no longer ride every message (16 KB at most, PNG,
+  JPEG or WebP). `ligus profile set` does it headless. See
+  [Settings → Profile](../features/settings.md#profile).
+- **Device names sync.** **Rename…** in My devices, `ligus devices rename`,
+  `lt --plain device-rename`; boxes name themselves from `--label`. A
+  computer approved but never redeemed says so and offers **Remove**.
+- **Rules v3** for new workspaces: a device certificate counts only when its
+  device accepted it, duplicate members retire into their person, model keys
+  are refused on the log. See [Rules v3](../../operate/security/index.md#rules-v3).
+- **Phones state their person.** The phone app asks once to confirm *this
+  phone is Ana's in Hive Lab*; that signed statement settles a phone
+  another member also certified.
+
 ### Changed
 
 - **Linking a computer without retyping codes.** On the desktop, Add a
