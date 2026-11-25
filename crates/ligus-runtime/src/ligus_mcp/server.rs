@@ -1250,6 +1250,7 @@ pub fn post_ask_as(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, questio
         expires_at_ms: flow::now_ms() + timeout.as_millis() as i64,
         closed: false,
         at_ms: flow::now_ms(),
+        ..Default::default()
     };
     let mut r = Ok(());
     host.with_service(&mut |svc| {

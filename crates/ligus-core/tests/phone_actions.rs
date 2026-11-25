@@ -78,6 +78,7 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                 option_index: *option_index,
                 by: mara.display_name.clone(),
                 at_ms: 1,
+                ..Default::default()
             }),
         },
         PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },

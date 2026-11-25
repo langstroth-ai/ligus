@@ -1,30 +1,84 @@
 //! Asks folded with their envelope's provenance.
 //!
-//! [`FlowState::apply`] sees only a record; who signed it decides three
+//! [`FlowState::apply`] sees only a record; who signed it decides these
 //! things here, all fold-local (nothing is refused, so every version accepts
 //! the same events and keeps the same asks):
 //!
-//! * **A permission ask** counts only when its signer is the asking turn's
-//!   host: the device whose reply placeholder committed that turn (or an
-//!   agent key it certified), with the agent bound to it. Anyone else's
-//!   `permission: true` folds as a plain question, attributed to them.
+//! * **An effect** (a permission prompt, the older `permission: true`, or a
+//!   v2 `effect`) counts only when its signer is the asking turn's host:
+//!   the device whose reply placeholder committed that turn (or an agent key
+//!   it certified), with the agent bound to it, and the effect names that
+//!   device. An outside prompt (`ligus hook permission`) counts when a
+//!   person's own device raises it to that person alone. Anyone else's
+//!   effect folds as a plain question, attributed to them.
 //! * **A close** counts only from the ask's own signer, or the other half
 //!   of its host pair (the host device, or an agent key it certified).
-//! * **An answer to a permission ask** counts only from the host's person
-//!   or the agent's owner. Other answers stay in the log and count for
-//!   nothing.
+//! * **An answer to a grant** counts only from the host's person or the
+//!   agent's owner, and with their passkey presence when the effect says
+//!   so. Other answers stay in the log and count for nothing.
+//! * **An answer to a v2 ask** counts only from a person its audience
+//!   names (a member, or a role at the answer's own config frontier, which
+//!   may be no older than the ask's), signed by a device of theirs, over
+//!   the ask's digest ([`ask_digest`]). A quorum settles at the first
+//!   position where one option has enough distinct people, and stays
+//!   settled. The asker's closing record (`settledBy`) has the last word.
 //!
 //! Every input is the chat log in canonical order and the workspace roster
-//! at each event's position, so every device decides the same.
+//! at each event's position, so every device decides the same. No wall
+//! clock enters: expiry is a view ([`AskState::is_live`]).
+//!
+//! The v1 shadow ([`AskState::legacy_settled`]) is folded as builds before
+//! these rules fold it, and only eviction (and so the ingest check of an
+//! answer's `optionIndex`) reads it.
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{
-    agent_from_key, AskPoster, AskState, FlowRecord, FlowState, MAX_ASKS_PER_CHAT, PRIMARY,
+    agent_from_key, AskEffect, AskPoster, AskState, AskVote, FlowRecord, FlowState, HumanAnswered, HumanAsk,
+    EFFECT_PERMISSION, EFFECT_SECRET, MAX_ASKS_PER_CHAT, MAX_AUDIENCE_PEOPLE, MAX_COUNTED_ANSWERS,
+    MAX_EFFECT_DETAIL_BYTES, ORIGIN_OUTSIDE, PRIMARY,
 };
+use crate::identity::{ActorKind, CfgFrontier};
 use crate::authz::RosterState;
 use crate::events::SessionEventEnvelope;
 use crate::session::ChatSession;
+
+/// The signing context of [`ask_digest`]. Frozen: answers on the log name
+/// digests made with it.
+pub const ASK_DIGEST_CONTEXT: &[u8] = b"ligus-ask-digest-v1\0";
+
+/// `SHA256("ligus-ask-digest-v1\0" ‖ askId (16 bytes) ‖ payload)` as lowercase
+/// hex, where `payload` is the asking envelope's payload bytes exactly as
+/// signed ([`signed_payload`]): what an answer binds (`askDigest`). Any
+/// change to the question, the options, the audience or the effect gives
+/// another digest.
+pub fn ask_digest(ask_id: Uuid, payload: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(ASK_DIGEST_CONTEXT);
+    h.update(ask_id.as_bytes());
+    h.update(payload);
+    crate::keys::hex(&h.finalize())
+}
+
+/// The payload bytes `env`'s signature covers: the bytes it arrived with,
+/// else this build's serialization (what it signed, for its own events).
+pub fn signed_payload(env: &SessionEventEnvelope) -> Vec<u8> {
+    match env.raw() {
+        Some(r) => r.payload().as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.payload).unwrap_or_default(),
+    }
+}
+
+/// The digest of the ask `env` posts, when it carries one.
+pub fn envelope_ask_digest(env: &SessionEventEnvelope) -> Option<String> {
+    match &env.payload {
+        crate::events::SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(a) } => {
+            Some(ask_digest(a.ask_id, &signed_payload(env)))
+        }
+        _ => None,
+    }
+}
 
 /// What the fold knows about the envelope carrying an ask or an answer.
 #[derive(Debug, Clone, Default)]
@@ -43,8 +97,19 @@ pub struct AskProvenance {
     pub from_host: bool,
     /// An ask: its signer is the asking agent's own key.
     pub own_agent_key: bool,
-    /// An answer: its author may grant the ask's permission.
+    /// An ask: its effect (if any) counts.
+    pub effect_ok: bool,
+    /// An answer: its author may grant the ask's permission (the 0.3.1
+    /// rule, for asks without the v2 rules).
     pub may_grant: bool,
+    /// The event that carried it.
+    pub event_id: Option<Uuid>,
+    /// Its stamped config frontier.
+    pub frontier: Option<CfgFrontier>,
+    /// An ask: [`ask_digest`] of its envelope.
+    pub digest: String,
+    /// An answer: why it doesn't count (empty: it counts).
+    pub why: String,
 }
 
 impl AskProvenance {
@@ -53,6 +118,7 @@ impl AskProvenance {
         Self {
             legacy: true,
             from_host: true,
+            effect_ok: true,
             may_grant: true,
             ..Default::default()
         }
@@ -75,7 +141,14 @@ impl AskProvenance {
             return None;
         }
         if trusted {
-            return Some(Self::legacy());
+            let mut p = Self::legacy();
+            p.event_id = Some(env.event_id);
+            if let FlowRecord::HumanAsk(a) = record {
+                if !session.flow.asks.contains_key(&a.ask_id) {
+                    p.digest = ask_digest(a.ask_id, &signed_payload(env));
+                }
+            }
+            return Some(p);
         }
         let stamp = env.actor_stamp.as_ref();
         let by = AskPoster {
@@ -91,6 +164,8 @@ impl AskProvenance {
             signer,
             host,
             by,
+            event_id: Some(env.event_id),
+            frontier: stamp.and_then(|s| s.cfg_frontier),
             ..Default::default()
         };
         match record {
@@ -108,18 +183,122 @@ impl AskProvenance {
                         h,
                     )
                 });
+                p.effect_ok = match &a.effect {
+                    None => true,
+                    Some(e) => {
+                        effect_well_formed(e)
+                            && ((p.from_host && e.host_device_id.is_some() && e.host_device_id == host)
+                                || outside_ok(a, e, env, roster, &p))
+                    }
+                };
+                if !session.flow.asks.contains_key(&a.ask_id) {
+                    p.digest = ask_digest(a.ask_id, &signed_payload(env));
+                }
             }
             FlowRecord::HumanAnswered(ans) => {
-                p.may_grant = session
-                    .flow
-                    .asks
-                    .get(&ans.ask_id)
-                    .is_none_or(|st| !st.ask.permission || may_grant(st, roster, &p.by.id, p.signer));
+                let st = session.flow.asks.get(&ans.ask_id);
+                p.may_grant = st.is_none_or(|st| {
+                    !st.ask.permission || may_grant(st, roster, &p.by.id, p.signer)
+                });
+                if let Some(st) = st {
+                    p.why = answer_why(st, ans, env, roster, &p).unwrap_or_default();
+                }
             }
             _ => {}
         }
         Some(p)
     }
+}
+
+/// An effect a reader can show: a kind this build knows, a detail within
+/// [`MAX_EFFECT_DETAIL_BYTES`], and a host named.
+fn effect_well_formed(e: &AskEffect) -> bool {
+    (e.kind == EFFECT_PERMISSION || e.kind == EFFECT_SECRET)
+        && e.detail.len() <= MAX_EFFECT_DETAIL_BYTES
+        && e.title.len() <= MAX_EFFECT_DETAIL_BYTES
+        && e.host_device_id.is_some()
+}
+
+/// An outside prompt (section 8.2): a person's own device raises it, as
+/// that person, to that person alone, naming that device as its host.
+fn outside_ok(a: &HumanAsk, e: &AskEffect, env: &SessionEventEnvelope, roster: &RosterState, p: &AskProvenance) -> bool {
+    let Some(device) = p.signer else { return false };
+    let human = env
+        .actor_stamp
+        .as_ref()
+        .is_some_and(|s| s.actor.kind == ActorKind::Human && !s.runtime_effect);
+    // A device signing as itself, not an agent key.
+    let own_device = roster.valid_agent_key(device).is_none() && p.host == Some(device);
+    let account = roster.members.get(&p.by.id).and_then(|m| m.account_id);
+    let holds = account.is_some_and(|acct| roster.account_holds_device(acct, device));
+    human
+        && own_device
+        && holds
+        && e.host_device_id == Some(device)
+        && a.origin.as_ref().is_some_and(|o| o.via == ORIGIN_OUTSIDE)
+        && a.audience.as_ref().and_then(|au| au.single()) == Some(p.by.id.as_str())
+}
+
+/// Why `ans` doesn't count for `st` (`None`: it counts).
+fn answer_why(st: &AskState, ans: &HumanAnswered, env: &SessionEventEnvelope, roster: &RosterState, p: &AskProvenance) -> Option<String> {
+    let grant = st.grant();
+    if !st.is_v2() && grant.is_none() {
+        // The older rule: any answer counts.
+        return None;
+    }
+    if st.ask.permission && !st.is_v2() {
+        return (!p.may_grant).then(|| "not the host's person or the agent's owner".into());
+    }
+    let author = p.by.id.as_str();
+    let account = roster.members.get(author).and_then(|m| m.account_id);
+    let Some(account) = account else { return Some("not a person in this workspace".into()) };
+    if !p.signer.is_some_and(|d| roster.account_certified(account, d)) {
+        return Some("not signed by a device of theirs".into());
+    }
+    if st.is_v2() {
+        // A config position older than the ask's own can't keep a demoted
+        // member eligible.
+        if let Some(asked) = st.frontier {
+            if p.frontier.is_none_or(|f| f < asked) {
+                return Some("stamped before the ask".into());
+            }
+        }
+        match st.ask.audience.as_ref() {
+            Some(au) if au.kind == super::AUDIENCE_PEOPLE => {
+                if au.member_ids.len() > MAX_AUDIENCE_PEOPLE || !au.member_ids.iter().any(|m| m == author) {
+                    return Some("not asked".into());
+                }
+            }
+            Some(au) if au.kind == super::AUDIENCE_ROOM => {
+                let Some(floor) = au.floor() else { return Some("not asked".into()) };
+                let floor = floor.rank().max(crate::WorkspaceRole::Contributor.rank());
+                if roster.role_of(author).is_none_or(|r| r.rank() < floor) {
+                    return Some("below the role it asks".into());
+                }
+            }
+            Some(_) => return Some("not asked".into()),
+            None => {
+                if roster.role_of(author).is_none_or(|r| r.rank() < crate::WorkspaceRole::Contributor.rank()) {
+                    return Some("below the role it asks".into());
+                }
+            }
+        }
+        if !st.digest.is_empty() && ans.ask_digest != st.digest {
+            return Some(if ans.ask_digest.is_empty() { "answered on an older version".into() } else { "answers another question".into() });
+        }
+    }
+    if let Some(e) = grant {
+        if !may_grant(st, roster, author, p.signer) {
+            return Some("not the host's person or the agent's owner".into());
+        }
+        if e.needs_presence() {
+            let present = crate::authz::passkeys::verify_stamped(env, roster).ok().flatten();
+            if present != Some(account) {
+                return Some("no passkey".into());
+            }
+        }
+    }
+    None
 }
 
 /// Whether `host` runs the turn `turn_id` for `agent_key`: its reply
@@ -195,6 +374,7 @@ impl FlowState {
     pub fn reseat_snapshot_asks(&mut self) {
         for st in self.asks.values_mut() {
             st.ask.permission = false;
+            st.ask.effect = None;
             st.signer = None;
             st.host = None;
             st.legacy_settled = !st.is_open();
@@ -213,6 +393,11 @@ impl FlowState {
                         || (p.host.is_some() && p.host == st.host);
                     if p.legacy || unknown || pair {
                         st.ask.closed |= a.closed;
+                        // The asker has the last word: what it acted on.
+                        if let Some(e) = a.settled_by {
+                            st.settle_on(e);
+                            st.ask.closed = true;
+                        }
                     }
                 }
                 Some(_) => {}
@@ -230,6 +415,12 @@ impl FlowState {
                     }
                     let mut ask = a.clone();
                     ask.permission &= p.from_host;
+                    if !p.effect_ok {
+                        // An effect that doesn't count takes the older flag
+                        // with it: the ask is a plain question.
+                        ask.effect = None;
+                        ask.permission = false;
+                    }
                     let theirs = !p.legacy && !p.from_host && !p.own_agent_key;
                     self.asks.insert(
                         a.ask_id,
@@ -240,6 +431,9 @@ impl FlowState {
                             signer: p.signer,
                             host: p.host,
                             legacy_settled: a.closed,
+                            digest: p.digest.clone(),
+                            frontier: p.frontier,
+                            ..Default::default()
                         },
                     );
                 }
@@ -247,15 +441,130 @@ impl FlowState {
             FlowRecord::HumanAnswered(ans) => {
                 if let Some(st) = self.asks.get_mut(&ans.ask_id) {
                     st.legacy_settled = true;
-                    // First answer that counts, in canonical order; a closed
-                    // ask takes none.
-                    if st.answer.is_none() && !st.ask.closed && (p.legacy || p.may_grant) {
-                        st.answer = Some(ans.clone());
-                    }
+                    st.answer_with(ans, p);
                 }
             }
             _ => {}
         }
+    }
+}
+
+impl AskState {
+    /// Fold one answer (`p.why` empty: it counts).
+    fn answer_with(&mut self, ans: &HumanAnswered, p: &AskProvenance) {
+        let vote = AskVote {
+            member_id: p.by.id.clone(),
+            name: if p.by.name.is_empty() { ans.by.clone() } else { p.by.name.clone() },
+            event_id: p.event_id,
+            device_id: p.signer,
+            option_index: ans.option_index,
+            answer: ans.answer.clone(),
+            text: if self.ask.allow_text || !self.is_v2() { ans.text.clone() } else { String::new() },
+            decline: ans.decline,
+            at_ms: ans.at_ms,
+            why: String::new(),
+        };
+        let counts = p.legacy || (p.why.is_empty() && p.may_grant);
+        if !counts {
+            if self.uncounted.len() < MAX_COUNTED_ANSWERS {
+                let why = if p.why.is_empty() { "not the host's person or the agent's owner".into() } else { p.why.clone() };
+                self.uncounted.push(AskVote { why, ..vote });
+            }
+            return;
+        }
+        if !self.is_v2() {
+            // A closed or settled ask takes none.
+            if !self.is_open() {
+                return;
+            }
+            // First answer that counts, in canonical order (the older rule;
+            // a "Not now" there is an answer like any other).
+            self.answer = Some(ans.clone());
+            self.counted.push(vote.clone());
+            self.answered_by = vec![vote];
+            return;
+        }
+        let has_option = ans.option_index.is_some_and(|i| (i as usize) < self.ask.options.len());
+        let text_only = ans.option_index.is_none() && self.ask.allow_text && !ans.text.trim().is_empty();
+        if !ans.decline && !has_option && !text_only {
+            if self.uncounted.len() < MAX_COUNTED_ANSWERS {
+                self.uncounted.push(AskVote { why: "no option chosen".into(), ..vote });
+            }
+            return;
+        }
+        // Closed or declined: nothing more is kept.
+        if self.ask.closed || self.declined {
+            return;
+        }
+        // Each person's latest answer is their vote. One that arrives after
+        // the ask settled is kept (the asker may have acted on it: see
+        // `settledBy`) but settles nothing.
+        let settled = self.answer.is_some();
+        let known = self.counted.iter().position(|v| v.member_id == vote.member_id);
+        match known {
+            Some(i) => {
+                self.counted.remove(i);
+            }
+            None if self.counted.len() >= MAX_COUNTED_ANSWERS => return,
+            None => {}
+        }
+        self.counted.push(vote.clone());
+        if settled {
+            return;
+        }
+        if ans.decline {
+            // "Not now" closes an ask put to one person; in a room it is
+            // that person's abstention.
+            if self.ask.audience.as_ref().and_then(|a| a.single()) == Some(vote.member_id.as_str()) {
+                self.declined = true;
+                self.answered_by = vec![vote];
+            }
+            return;
+        }
+        let q = self.quorum() as usize;
+        if text_only {
+            if q == 1 {
+                self.answer = Some(ans.clone());
+                self.answered_by = vec![vote];
+            }
+            return;
+        }
+        let pick = ans.option_index;
+        let voters: Vec<AskVote> = self.counted.iter().filter(|v| !v.decline && v.option_index == pick).cloned().collect();
+        if voters.len() >= q {
+            // Settled at the first position it is reached, and frozen.
+            self.answer = Some(ans.clone());
+            self.answered_by = voters;
+        }
+    }
+
+    /// The asker acted on answer event `e`: show that one, when it counted.
+    fn settle_on(&mut self, e: Uuid) {
+        if self.answered_by.iter().any(|v| v.event_id == Some(e)) {
+            return;
+        }
+        let Some(v) = self.counted.iter().find(|v| v.event_id == Some(e)).cloned() else { return };
+        let pick = v.option_index;
+        let voters: Vec<AskVote> = if v.decline {
+            vec![v.clone()]
+        } else {
+            self.counted.iter().filter(|x| !x.decline && x.option_index == pick).cloned().collect()
+        };
+        if v.decline {
+            self.declined = true;
+            self.answer = None;
+        } else {
+            self.answer = Some(HumanAnswered {
+                ask_id: self.ask.ask_id,
+                answer: v.answer.clone(),
+                option_index: v.option_index,
+                by: v.name.clone(),
+                at_ms: v.at_ms,
+                text: v.text.clone(),
+                ..Default::default()
+            });
+        }
+        self.answered_by = voters;
     }
 }
 

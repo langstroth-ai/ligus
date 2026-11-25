@@ -1,0 +1,30 @@
+{
+  "context": "ligus-ask-digest-v1\\0",
+  "note": "digest = hex(SHA-256(context bytes ‖ askId as 16 raw bytes ‖ payload bytes)); payload is the envelope's payload JSON exactly as signed (the fourth length-prefixed field of the hive-envelope-v3 preimage)",
+  "cases": [
+    {
+      "name": "question",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"options\":[\"Postgres\",\"SQLite\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "digest": "6e75e383688073a5c1e9ff3f60323534d1e3f425bcbd1478e97a2e151560c9d8"
+    },
+    {
+      "name": "options swapped",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Use Postgres or SQLite for the test fixtures?\",\"options\":[\"SQLite\",\"Postgres\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "digest": "e63b8098369b8d00060f65eca328614ccb79a94544a5aaf0ad1bb8f3924f5482"
+    },
+    {
+      "name": "grant",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Ligus asks to run cargo publish --dry-run\",\"options\":[\"Allow once\",\"Deny\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]},\"permission\":true,\"effect\":{\"kind\":\"permission\",\"tool\":\"execute\",\"detail\":\"cargo publish --dry-run\",\"cwd\":\"/home/ana/shop\",\"hostDeviceId\":\"9a8b7c6d-5e4f-4321-8765-0fedcba98765\",\"presence\":\"none\"}}}",
+      "digest": "f02173dab05edc64d443b226037a0b0d565c14dd73083b7ffafc5112b832bea0"
+    },
+    {
+      "name": "unicode",
+      "askId": "0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59",
+      "payload": "{\"kind\":\"flowRecorded\",\"record\":{\"type\":\"humanAsk\",\"askId\":\"0b7e2f8a-3c41-4d2e-9a55-6f1d2c3b4a59\",\"turnId\":\"5d6c1b2a-0f9e-4c8d-b7a6-958473625140\",\"agentKey\":\"primary\",\"question\":\"Use Postgres or SQLite for the tést fixtures ✓?\",\"options\":[\"Postgres\",\"SQLite\"],\"expiresAtMs\":1764064931000,\"atMs\":1764064331000,\"v\":2,\"audience\":{\"kind\":\"people\",\"memberIds\":[\"ana\"]}}}",
+      "digest": "956d26f76ac708e6cbc45852a9c87cda44dba4749c9a0478f836ed08958c0ad3"
+    }
+  ]
+}

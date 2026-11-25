@@ -131,7 +131,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
             },
         },
         PhoneAction::Answer { ask_id, answer, option_index, .. } => SessionEvent::FlowRecorded {
-            record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: *ask_id, answer: answer.clone(), option_index: *option_index, by: "Mara".into(), at_ms: 1_700_000_000_000 }),
+            record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: *ask_id, answer: answer.clone(), option_index: *option_index, by: "Mara".into(), at_ms: 1_700_000_000_000, ..Default::default() }),
         },
         PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
         PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => SessionEvent::ProposalApplyRequested {

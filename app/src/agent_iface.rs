@@ -172,6 +172,7 @@ pub(crate) fn answer_in(svc: &mut ChatService, session: &ligus_core::ChatSession
         option_index,
         by,
         at_ms: ligus_core::flow::now_ms(),
+        ..Default::default()
     });
     svc.record_flow(session.id, session.workspace_id, rec).map_err(|e| e.to_string())
 }

@@ -479,6 +479,164 @@ pub struct HumanAsk {
     /// lack the field and are questions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub permission: bool,
+    /// [`ASK_V2`] for an ask with the 0.4 rules (who may answer, quorum,
+    /// effect; `docs/design/agent-questions.md` section 5). Absent before.
+    /// Every field from here on decodes leniently: a value this build can't
+    /// read folds as absent, never as an event it can't decode (which older
+    /// builds would accept), so every version accepts the same events.
+    #[serde(default, skip_serializing_if = "is_zero_u8", deserialize_with = "lenient")]
+    pub v: u8,
+    /// Who may answer. Absent: any Contributor or above (the older rule).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub audience: Option<AskAudience>,
+    /// Distinct eligible people who must pick the same option (1 when
+    /// absent).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub quorum: Option<u8>,
+    /// A free-text answer is allowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "lenient")]
+    pub allow_text: bool,
+    /// What an answer authorises, written only by a host (absent: a
+    /// question). It counts only when [`asks`] says so.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub effect: Option<AskEffect>,
+    /// Where the ask came from (a sub-agent, a child chat, outside Ligus).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub origin: Option<AskOrigin>,
+    /// On a closing record by the asker: the answer event it acted on.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub settled_by: Option<Uuid>,
+}
+
+/// The ask rules version [`HumanAsk::v`] names.
+pub const ASK_V2: u8 = 2;
+/// [`AskAudience::kind`]: one or more named members.
+pub const AUDIENCE_PEOPLE: &str = "people";
+/// [`AskAudience::kind`]: any member at or above a role.
+pub const AUDIENCE_ROOM: &str = "room";
+/// [`AskEffect::kind`]: allow one tool call once.
+pub const EFFECT_PERMISSION: &str = "permission";
+/// [`AskEffect::kind`]: reveal a secret (defined, posted by no host yet).
+pub const EFFECT_SECRET: &str = "secret";
+/// [`AskEffect::presence`]: an answer counts only with the person's passkey.
+pub const PRESENCE_REQUIRED: &str = "required";
+/// [`AskOrigin::via`] values.
+pub const ORIGIN_SUBAGENT: &str = "subagent";
+pub const ORIGIN_CHAT: &str = "chat";
+pub const ORIGIN_OUTSIDE: &str = "outside";
+/// The most members an audience names, and the most voters a quorum needs.
+pub const MAX_AUDIENCE_PEOPLE: usize = 8;
+pub const MAX_QUORUM: u8 = 5;
+/// The longest effect detail a reader shows (larger: the effect is inert).
+pub const MAX_EFFECT_DETAIL_BYTES: usize = 16 * 1024;
+
+/// Who may answer a [`HumanAsk`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskAudience {
+    /// [`AUDIENCE_PEOPLE`] or [`AUDIENCE_ROOM`]; anything else: nobody.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+    /// For a room: `contributor`, `admin` or `owner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_role: Option<String>,
+}
+
+impl AskAudience {
+    pub fn people(ids: Vec<String>) -> Self {
+        Self { kind: AUDIENCE_PEOPLE.into(), member_ids: ids, min_role: None }
+    }
+    pub fn room(min_role: crate::WorkspaceRole) -> Self {
+        let r = match min_role {
+            crate::WorkspaceRole::Owner => "owner",
+            crate::WorkspaceRole::Admin => "admin",
+            _ => "contributor",
+        };
+        Self { kind: AUDIENCE_ROOM.into(), member_ids: Vec::new(), min_role: Some(r.into()) }
+    }
+    /// The room's floor, never below Contributor; `None` for anything this
+    /// build can't read.
+    pub fn floor(&self) -> Option<crate::WorkspaceRole> {
+        match self.min_role.as_deref().unwrap_or("contributor") {
+            "contributor" => Some(crate::WorkspaceRole::Contributor),
+            "admin" => Some(crate::WorkspaceRole::Admin),
+            "owner" => Some(crate::WorkspaceRole::Owner),
+            _ => None,
+        }
+    }
+    /// A single named person.
+    pub fn single(&self) -> Option<&str> {
+        (self.kind == AUDIENCE_PEOPLE && self.member_ids.len() == 1).then(|| self.member_ids[0].as_str())
+    }
+}
+
+/// What answering a [`HumanAsk`] authorises (section 6 of the note).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskEffect {
+    /// [`EFFECT_PERMISSION`] or [`EFFECT_SECRET`].
+    pub kind: String,
+    /// The tool the call is for (`Bash`, an ACP tool kind).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool: String,
+    /// The agent's own description of the call (unverified; shown as such).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// The call's own content: the command, the path and content or diff.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cwd: String,
+    /// A secret's name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The device that posted it and would act on the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_device_id: Option<Uuid>,
+    /// [`PRESENCE_REQUIRED`], or `none`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub presence: String,
+    /// The agent offered only a permission for the rest of its session
+    /// (the 0.3.1 rule: a person may pick it knowingly).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub standing: bool,
+    /// The call is too large to review on a card: no Allow is offered.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub too_large: bool,
+}
+
+impl AskEffect {
+    /// An answer counts only with its author's passkey presence.
+    pub fn needs_presence(&self) -> bool {
+        self.presence == PRESENCE_REQUIRED || self.kind == EFFECT_SECRET
+    }
+}
+
+/// Where a [`HumanAsk`] came from.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskOrigin {
+    /// [`ORIGIN_SUBAGENT`], [`ORIGIN_CHAT`] or [`ORIGIN_OUTSIDE`].
+    pub via: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<Uuid>,
+    /// For an outside prompt: the runtime (`claude-code`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub runtime: String,
+}
+
+fn is_zero_u8(x: &u8) -> bool {
+    *x == 0
+}
+
+/// Decode a field, or take its default when the value isn't one this build
+/// reads (the record still decodes).
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 /// A human's answer to a [`HumanAsk`].
@@ -493,6 +651,18 @@ pub struct HumanAnswered {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub by: String,
     pub at_ms: i64,
+    /// Free text, apart from the chosen option (whose text stays in
+    /// `answer` for older readers).
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
+    pub text: String,
+    /// [`asks::ask_digest`] of the ask this answers, computed by the
+    /// answering device from the signed record it received (hex).
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
+    pub ask_digest: String,
+    /// "Not now": closes an ask to one named person; in a room, that
+    /// person's abstention.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "lenient")]
+    pub decline: bool,
 }
 
 /// An ask and its settlement, as folded.
@@ -525,6 +695,63 @@ pub struct AskState {
     /// keeps the same asks and judges an answer's `optionIndex` alike.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_settled: bool,
+    /// [`asks::ask_digest`] of the record that posted the ask (hex; empty
+    /// when it was folded without its envelope).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
+    /// The config frontier the ask was stamped with: an answer stamped
+    /// with an older one doesn't count (v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontier: Option<crate::identity::CfgFrontier>,
+    /// Answers that count, in canonical order (at most
+    /// [`MAX_COUNTED_ANSWERS`]): each eligible person's latest is their vote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counted: Vec<AskVote>,
+    /// Who settled it: the voters for the winning option (one for a
+    /// first-answer ask), in canonical order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answered_by: Vec<AskVote>,
+    /// The one person it was put to said "Not now".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub declined: bool,
+    /// Answers that were kept but don't count (not eligible, no or another
+    /// digest, no presence where it is needed), at most
+    /// [`MAX_COUNTED_ANSWERS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncounted: Vec<AskVote>,
+}
+
+/// Answers an ask keeps in [`AskState::counted`] and [`AskState::uncounted`].
+pub const MAX_COUNTED_ANSWERS: usize = 32;
+
+/// One answer as an ask's fold keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskVote {
+    /// The answer's signed author (a member id).
+    pub member_id: String,
+    /// The name its stamp gave (readers show the roster's).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The option's text as answered.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub answer: String,
+    /// The event that carried it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Uuid>,
+    /// The device that signed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub decline: bool,
+    pub at_ms: i64,
+    /// Why it doesn't count (an [`AskState::uncounted`] entry).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
 }
 
 /// Who signed an ask that isn't the asking agent's or its host's.
@@ -537,8 +764,53 @@ pub struct AskPoster {
 }
 
 impl AskState {
+    /// Not settled, closed or declined (expiry is a view: see
+    /// [`AskState::is_live`]).
     pub fn is_open(&self) -> bool {
-        self.answer.is_none() && !self.ask.closed
+        self.answer.is_none() && !self.ask.closed && !self.declined
+    }
+
+    /// Open and not past its expiry at `now_ms` (readers and attention
+    /// counts; never the fold).
+    pub fn is_live(&self, now_ms: i64) -> bool {
+        self.is_open() && (self.ask.expires_at_ms == 0 || now_ms < self.ask.expires_at_ms)
+    }
+
+    /// An ask with the 0.4 rules.
+    pub fn is_v2(&self) -> bool {
+        self.ask.v >= ASK_V2
+    }
+
+    /// The effect that counts (a grant card), if any: a v2 effect that
+    /// passed the fold, or an older permission prompt from the turn's host.
+    pub fn grant(&self) -> Option<AskEffect> {
+        if let Some(e) = &self.ask.effect {
+            return Some(e.clone());
+        }
+        self.ask.permission.then(|| AskEffect { kind: EFFECT_PERMISSION.into(), ..Default::default() })
+    }
+
+    /// The quorum, between 1 and [`MAX_QUORUM`].
+    pub fn quorum(&self) -> u8 {
+        self.ask.quorum.unwrap_or(1).clamp(1, MAX_QUORUM)
+    }
+
+    /// Each eligible person's current vote (their latest counted answer;
+    /// a "Not now" in a room is an abstention and no vote).
+    pub fn tally(&self) -> Vec<u32> {
+        let mut latest: BTreeMap<&str, &AskVote> = BTreeMap::new();
+        for v in &self.counted {
+            latest.insert(v.member_id.as_str(), v);
+        }
+        let mut t = vec![0u32; self.ask.options.len()];
+        for v in latest.values() {
+            if let Some(i) = v.option_index.filter(|_| !v.decline) {
+                if let Some(slot) = t.get_mut(i as usize) {
+                    *slot += 1;
+                }
+            }
+        }
+        t
     }
 
     /// The name to show for [`AskState::posted_by`]: the roster's name for
@@ -549,9 +821,11 @@ impl AskState {
         Some(members.iter().find(|m| m.id == p.id).map(|m| m.actor.display_name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| p.id.clone()))
     }
 
-    /// Settled for eviction: what every version agrees on.
+    /// Settled for eviction: what every version agrees on (the v1 shadow:
+    /// any close naming the asking turn, any answer). Every way an ask
+    /// stops being open sets it too, so this is what 0.3 reads.
     fn evictable(&self) -> bool {
-        self.legacy_settled || !self.is_open()
+        self.legacy_settled
     }
 }
 
