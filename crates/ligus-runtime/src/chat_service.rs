@@ -272,6 +272,7 @@ impl ChatService {
         if let Some(reason) = &self.write_block {
             return Err(ChatError::Unauthorized(reason.clone()));
         }
+        refuse_workspace_keys(&payload)?;
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(None);
         }
@@ -717,6 +718,7 @@ impl ChatService {
         if let Some(reason) = &self.write_block {
             return Err(ChatError::Unauthorized(reason.clone()));
         }
+        refuse_workspace_keys(&payload)?;
         self.require_verified_founder(workspace_id)?;
         if let Some(agent) = self.acting_agent.take() {
             let r = self.append_agent_effect(session_id, workspace_id, agent, payload);
@@ -848,6 +850,7 @@ impl ChatService {
     /// must fit what the relay takes ([`crate::event_store::syncable`]): it is
     /// refused here, with a clear error, instead of waiting in the outbox.
     pub(crate) fn store_authored(&self, env: &SessionEventEnvelope) -> Result<()> {
+        refuse_workspace_keys(&env.payload)?;
         if self.local_workspace_id != Some(env.workspace_id) {
             crate::event_store::syncable(env)?;
         }
@@ -3799,8 +3802,9 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
 /// Resolve a workspace runtime's credential to a usable secret — where a
 /// headless worker turns a **workspace-owned** runtime into an actual key (spec
 /// §12.5), never a personal one. `SecretRef` reads the worker's out-of-band env
-/// (`LIGUS_WS_SECRET_<ref>`); `Inline` returns the secret carried E2EE on the
-/// config log; `None` is keyless.
+/// (`LIGUS_WS_SECRET_<ref>`); `None` is keyless. A legacy `Inline` credential
+/// (a key an older version stored in the workspace) resolves as **no key**:
+/// keys are never taken from the workspace.
 pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String> {
     match cred {
         WorkspaceCredential::SecretRef { secret_ref } => {
@@ -3808,9 +3812,23 @@ pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String
                 .ok()
                 .filter(|s| !s.is_empty())
         }
-        WorkspaceCredential::Inline { secret } => (!secret.is_empty()).then(|| secret.clone()),
-        WorkspaceCredential::None => None,
+        WorkspaceCredential::Inline {} | WorkspaceCredential::None => None,
     }
+}
+
+/// Refuse to author an event that would store a model key in the workspace (a
+/// legacy inline credential). Older peers may still author one; this version
+/// never does (the fold keeps accepting old events; rules can deny it later).
+pub fn refuse_workspace_keys(payload: &SessionEvent) -> Result<()> {
+    let inline = match payload {
+        SessionEvent::WorkspaceRuntimeUpserted { runtime } => runtime.credential.is_legacy_inline(),
+        SessionEvent::WorkspaceRuntimesUpdated { runtimes } => runtimes.iter().any(|r| r.credential.is_legacy_inline()),
+        _ => false,
+    };
+    if inline {
+        return Err(ChatError::Unauthorized(ligus_core::NO_WORKSPACE_KEYS.to_string()));
+    }
+    Ok(())
 }
 
 /// Map a session's transcript into provider wire turns, attributed for the
@@ -4463,19 +4481,52 @@ mod tests {
         assert_eq!(loaded.workspace_runtimes.len(), 1);
         assert_eq!(loaded.workspace_runtimes[0].id, "ws-claude");
 
-        // SecretRef resolves from the worker's env; Inline returns the carried secret.
+        // SecretRef resolves from the worker's env; a legacy Inline never
+        // yields a key.
         assert_eq!(resolve_workspace_credential(&rt.credential), None);
         std::env::set_var("LIGUS_WS_SECRET_acme", "sk-workspace-123");
         assert_eq!(resolve_workspace_credential(&rt.credential).as_deref(), Some("sk-workspace-123"));
         std::env::remove_var("LIGUS_WS_SECRET_acme");
-        assert_eq!(
-            resolve_workspace_credential(&WorkspaceCredential::Inline { secret: "sk-inline".into() }).as_deref(),
-            Some("sk-inline")
-        );
+        assert_eq!(resolve_workspace_credential(&WorkspaceCredential::Inline {}), None);
 
         // Removal clears it everywhere.
         svc.remove_workspace_runtime(wid, "ws-claude").unwrap();
         assert!(svc.load(chat.id).unwrap().unwrap().workspace_runtimes.is_empty());
+    }
+
+    #[test]
+    fn a_runtime_with_a_key_in_the_workspace_is_never_authored() {
+        use ligus_core::{ModelProviderKind, WorkspaceCredential, WorkspaceRuntime};
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        svc.create_chat("A", wid, "anthropic").unwrap();
+        let mut rt = WorkspaceRuntime::new("oa", "OpenAI", ModelProviderKind::OpenAI, "gpt-4o");
+        rt.credential = WorkspaceCredential::Inline {};
+        let err = svc.add_workspace_runtime(wid, rt.clone()).unwrap_err().to_string();
+        assert!(err.contains("Keys aren't stored in the workspace"), "{err}");
+        assert!(err.contains("--secret-ref"), "{err}");
+        assert!(svc.list_workspace_runtimes(wid).unwrap().is_empty());
+        // The whole-list legacy event is refused too.
+        assert!(refuse_workspace_keys(&SessionEvent::WorkspaceRuntimesUpdated { runtimes: vec![rt] }).is_err());
+    }
+
+    #[test]
+    fn a_legacy_inline_runtime_from_an_older_peer_folds_without_its_key() {
+        // An older peer's event, as it arrives on the wire: the key is dropped
+        // on decode, the runtime still folds, and it resolves as no key.
+        let wire = serde_json::json!({
+            "kind": "workspaceRuntimeUpserted",
+            "runtime": {"id": "old", "name": "Old", "provider": "openAI", "model": "gpt-4o",
+                        "credential": {"kind": "inline", "secret": "sk-OLDPEER-789"}}
+        });
+        let ev: std::result::Result<SessionEvent, _> = serde_json::from_value(wire);
+        let Ok(SessionEvent::WorkspaceRuntimeUpserted { runtime }) = ev else {
+            panic!("legacy event must still decode: {ev:?}");
+        };
+        assert!(runtime.credential.is_legacy_inline());
+        assert_eq!(resolve_workspace_credential(&runtime.credential), None);
+        assert!(!format!("{runtime:?}").contains("sk-OLDPEER"));
+        assert!(!serde_json::to_string(&runtime).unwrap().contains("sk-OLDPEER"));
     }
 
     #[test]

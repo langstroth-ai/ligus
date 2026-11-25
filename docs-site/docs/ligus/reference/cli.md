@@ -327,12 +327,12 @@ refused on the command line.
 
 | Command | What it does |
 |---|---|
-| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`) |
-| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> \| --secret - \| --secret @FILE] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
+| `ligus runtimes [--json]` | lists workspace-owned runtimes synced onto this box (never a secret: a `secretRef` shows whether this host has `LIGUS_WS_SECRET_<ref>`; a key an older version stored in the workspace shows as `stored key (unused)` with a warning) |
+| `ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name>] [--dry-run]` | defines (or replaces by id) a workspace runtime. `--dry-run` checks the arguments and prints what it would define, signing and writing nothing (the same on `rm-runtime`, `add-agent` and `set-agent-host`; `add-agent --dry-run` also checks the runtime exists). Any other command refuses `--dry-run` with a usage error (exit 2) and runs nothing. |
 | `ligus rm-runtime <id> [--dry-run]` | removes a workspace runtime. |
 | `ligus setup runtimes [--apply]` | detects what this box can reach (API keys in env, Ollama on `127.0.0.1:11434`, `claude`, `codex`, `agy`, `copilot`); `--apply` defines the keyless ones as workspace runtimes. This was `ligus setup [--apply]`; `ligus setup --apply` still works for one release |
-| `ligus config export` | prints the workspace runtimes as TOML. Inline secrets are never exported; they become a `secretRef` |
-| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id) |
+| `ligus config export` | prints the workspace runtimes as TOML. No key is ever exported; a key an older version stored in the workspace becomes a `secretRef` |
+| `ligus config import <file.toml>` | adds or replaces runtimes from that TOML (by id); a runtime with an inline key is refused |
 | `ligus agents [--json]` | lists workspace agents. |
 | `ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>] [--dry-run]` | defines an agent. |
 | `ligus hosts [--json]` | lists workspace hosts (devices and workers) |
@@ -346,12 +346,18 @@ refused on the command line.
 
 Credentials for `add-runtime`:
 
-- `--secret-ref <name>`: the key stays off the shared log; each host that runs
-  the agent sets `LIGUS_WS_SECRET_<name>`.
-- `--secret - | @FILE`: the key (read from stdin, or from an owner-only
-  file) travels **E2EE on the workspace config log**, so every member's
-  device holds it. Prefer `--secret-ref`.
-- neither: keyless (local models, subscription CLIs).
+- `--secret-ref <name>`: each host that runs the agent sets
+  `LIGUS_WS_SECRET_<name>` (or a file in `LIGUS_WS_SECRET_DIR`). Keys are
+  never stored in the workspace.
+- without it: keyless (local models, subscription CLIs).
+
+`--secret` was removed: passing it is a usage error (exit 2). A runtime whose key an older version stored in the workspace (the removed
+`--secret` flag) keeps working only if it can run keyless; its stored key is
+never used, shown or exported (it reads as "stored key (unused)"), and
+`ligus doctor` warns about it (`runtimes.inline-key`). Every member's device
+received that key, so rotate it with the provider, set the new one on each
+worker as `LIGUS_WS_SECRET_<NAME>`, and redefine the runtime with
+`--secret-ref <NAME>`.
 
 ## The worker daemon
 
