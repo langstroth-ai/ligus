@@ -14,9 +14,7 @@ use crate::approvals_cmd::{self as ac, ApproveOptions, ToOptions};
 use crate::problem::{classify, EXIT_ERROR, EXIT_FIXABLE, EXIT_HUMAN};
 use crate::{open_service, sync_once, Config};
 
-#[path = "../../ligus-runtime/src/test_relay.rs"]
-#[allow(dead_code)]
-mod test_relay;
+use crate::serve::tests::test_relay;
 
 const PASSPHRASE: &str = "code match cli passphrase";
 
@@ -49,9 +47,13 @@ struct World {
 
 /// Alex founds a workspace with a recovery key registered (an Admin's presence).
 async fn world() -> World {
+    world_on(test_relay::router()).await
+}
+
+async fn world_on(router: axum::Router) -> World {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
-    let relay = spawn(test_relay::router()).await;
+    let relay = spawn(router).await;
     let room = format!("cm-{}", Uuid::new_v4().simple());
     let ws = crate::uuid_of_room(&room);
     let desk = config(&root.join("desk"), &relay, &room);
@@ -107,7 +109,7 @@ fn to(addr: &am::ApprovalAddress, label: &str, tx: Option<mpsc::Sender<String>>)
 }
 
 fn approve(w: &World, rid: &str) -> ApproveOptions {
-    ApproveOptions { rid: rid.into(), code: None, words: Some(w.words.clone()), json: true }
+    ApproveOptions { rid: rid.into(), code: None, words: Some(w.words.clone()), json: true, end: false }
 }
 
 /// The config log's admissions and members (what a mismatch must not change).
@@ -346,4 +348,257 @@ async fn the_passkey_sheet_names_the_label_and_the_code() {
     assert_eq!(seen[1], "Let someone join with a single-use invite");
     let envs = svc.store().config_envelopes(w.ws).unwrap();
     assert!(!format!("{envs:?}").contains("K7Q4"), "nothing about the code on the log");
+}
+
+// ---- Regressions from the security review ----
+
+/// Another member joins (through an invite from Alex), with a recovery key.
+async fn join_member(w: &World, name: &str) -> (Config, String) {
+    let cfg = config(&w.root.join(name), &w.relay, &w.room);
+    let (inv, seed, pin) = {
+        let mut svc = open_service(&w.desk).unwrap();
+        let inv = svc.issue_invite(w.ws).unwrap();
+        let seed = svc.take_invite_redeem_seed(w.ws, inv).unwrap();
+        (inv, seed, svc.store().workspace_pin(w.ws).unwrap().unwrap())
+    };
+    sync_once(&w.desk).await.unwrap();
+    {
+        let svc = open_service(&cfg).unwrap();
+        svc.store().set_workspace_pin(w.ws, &pin.founder_account.to_string(), &pin.fk.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+        svc.store().set_join_invite(w.ws, inv).unwrap();
+        svc.store().set_join_redeem(w.ws, seed.as_ref()).unwrap();
+    }
+    sync_once(&cfg).await.unwrap();
+    let acct = {
+        let mut svc = open_service(&cfg).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(w.ws), w.ws).unwrap();
+        let acct = svc.author().account_id.unwrap();
+        let key = ligus_core::testkit::test_recovery_key(acct);
+        svc.register_passkey(w.ws, key.credential(acct, "Recovery key"), &|req| Ok(key.assert(&req.challenge))).unwrap();
+        acct
+    };
+    sync_once(&cfg).await.unwrap();
+    sync_once(&w.desk).await.unwrap();
+    let words = w.root.join(format!("{name}-words"));
+    ligus_runtime::private_file::write_private_atomic(&words, ligus_core::testkit::test_recovery_key(acct).words().as_bytes()).unwrap();
+    (cfg, words.display().to_string())
+}
+
+fn device_key(cfg: &Config) -> ligus_core::crypto::SigningKeypair {
+    let svc = open_service(cfg).unwrap();
+    let ids = ligus_runtime::IdentityStore::new(&cfg.data_dir, ligus_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
+    ids.device_keypair(svc.device_id()).unwrap()
+}
+
+async fn live_of(w: &World, rid: &str) -> am::LiveRequest {
+    let svc = open_service(&w.desk).unwrap();
+    let keys = svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap();
+    am::list_live(&am::MailboxClient::new(&w.relay), &keys).await.unwrap().live.into_iter().find(|l| l.rid_hex() == rid).unwrap()
+}
+
+/// `racer` (a device key that isn't an Admin's) opens the box's request
+/// first and sends a well-formed admission for an invite never issued.
+async fn race_a_fake_admission(w: &World, rid: &str, racer: ligus_core::crypto::SigningKeypair) {
+    let (keys, pin) = {
+        let svc = open_service(&w.desk).unwrap();
+        (svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap(), svc.founder_pin_hex(w.ws).unwrap().unwrap())
+    };
+    let live = live_of(w, rid).await;
+    let me = am::ApproverIdentity {
+        signer: am::Signer::Ed25519(racer),
+        device_name: "Alex's desktop".into(),
+        person: am::ApproverPerson { account_id: Uuid::new_v4(), name: "Alex".into() },
+    };
+    let mut s = am::ApproverSession::begin(am::MailboxClient::new(&w.relay), &keys[0], &live.request, me, &mut am::SeenSet::in_memory()).await.unwrap();
+    while s.await_reveal(5).await.unwrap().is_none() {}
+    let am::RequestSubject::Box(join) = &live.request.subject else { panic!() };
+    let conn = ligus_runtime::workspace_invite::WorkspaceConn {
+        name: String::new(),
+        relay_url: w.relay.clone(),
+        room: w.room.clone(),
+        key: Some(PASSPHRASE.into()),
+        icon: None,
+        dm_account: None,
+        founder_actor_id: Some(Uuid::new_v4().to_string()),
+        fk: Some(pin),
+        inv: Some(Uuid::new_v4().to_string()),
+        ek: Vec::new(),
+        sig: None,
+    };
+    let invite = ligus_runtime::box_admission::with_redeem_key(&ligus_runtime::workspace_invite::encode_workspace_invite(&conn), &[4; 32]).unwrap();
+    s.finish_approved(Some(&join.seal(&invite).unwrap())).await.unwrap();
+}
+
+/// M6b: a member who isn't an Admin, a service member (a box), and a device
+/// revoked (the workspace key it still holds) each race an open and a
+/// grant: the box never joins, and Alex's sheet reads contested.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn headless_box_capture_attempts_all_fail() {
+    let w = world().await;
+    let addr = address(&w).await;
+    let (member, _) = join_member(&w, "member").await;
+    // A box that joined properly, through the mailbox.
+    let svc_box = fresh(&w.root.join("svc-box"));
+    {
+        let (tx, rx) = mpsc::channel();
+        let o = to(&addr, "svc-box", Some(tx));
+        let bc = svc_box.clone();
+        let boxed = tokio::spawn(async move { ac::cmd_admit_request_to(&bc, o, None).await.map_err(|e| e.to_string()) });
+        let rid = first_rid(&w).await;
+        let mut typed = || Ok(rx.recv_timeout(Duration::from_secs(30))?);
+        ac::cmd_approve(&w.desk, approve(&w, &rid), Some(&mut typed)).await.unwrap();
+        boxed.await.unwrap().unwrap();
+    }
+    let f = crate::load_file_config(&svc_box.data_dir);
+    let svc_box = Config { room: w.room.clone(), relay_url: f.relay_url.clone(), key: f.key.clone(), epoch_keys: f.ek.clone(), ..svc_box };
+    sync_once(&svc_box).await.unwrap();
+    open_service(&svc_box).unwrap().ensure_self_member(workspace_config_session_id(w.ws), w.ws).unwrap();
+    sync_once(&svc_box).await.unwrap();
+    // A device revoked by Alex (no rotation yet: it still holds the key).
+    let (revoked, _) = join_member(&w, "revoked").await;
+    let revoked_id = open_service(&revoked).unwrap().device_id();
+    {
+        let mut svc = open_service(&w.desk).unwrap();
+        let acct = svc.author().account_id.unwrap();
+        svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(ligus_core::testkit::test_recovery_key(acct)))));
+        svc.revoke_device(workspace_config_session_id(w.ws), w.ws, revoked_id).unwrap();
+    }
+    sync_once(&w.desk).await.unwrap();
+
+    for (who, racer) in [("a member", device_key(&member)), ("a box", device_key(&svc_box)), ("a revoked device", device_key(&revoked))] {
+        let boxc = fresh(&w.root.join(format!("victim-{}", who.replace(' ', "-"))));
+        let mut o = to(&addr, "build-1", None);
+        o.log_retry = Duration::from_secs(3);
+        let bc = boxc.clone();
+        let boxed = tokio::spawn(async move { ac::cmd_admit_request_to(&bc, o, None).await.map_err(|e| (classify(&e).0, e.to_string())) });
+        let rid = first_rid(&w).await;
+        race_a_fake_admission(&w, &rid, racer).await;
+        // Alex's sheet, meanwhile: contested.
+        let live = live_of(&w, &rid).await;
+        let svc = open_service(&w.desk).unwrap();
+        let view = am::claim_view(&live, svc.device_id(), &svc.approval_classifier(w.ws).unwrap());
+        assert!(matches!(view, am::ClaimView::Contested { .. }), "{who}: {view:?}");
+        drop(svc);
+        let (code, why) = boxed.await.unwrap().unwrap_err();
+        assert_eq!(code, EXIT_ERROR, "{who}: {why}");
+        assert!(why.contains("workspace log"), "{who}: {why}");
+        assert!(crate::load_file_config(&boxc.data_dir).room.is_none(), "{who}: nothing was kept");
+    }
+}
+
+/// M6d: another member (Mallory) races Ana's computer request and
+/// approves it from their own desktop: the computer shows Mallory as the
+/// verified person, and a No links nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_racing_my_computer_request_is_named_and_a_no_links_nothing() {
+    let w = world().await;
+    let addr = address(&w).await;
+    let (mallory, mallory_words) = join_member(&w, "mallory").await;
+    let mallory_name = open_service(&mallory).unwrap().author().display_name.clone();
+    let comp = fresh(&w.root.join("laptop"));
+    let (tx, rx) = mpsc::channel();
+    let o = to(&addr, "laptop", Some(tx));
+    let cc = comp.clone();
+    let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let p2 = prompts.clone();
+    let linking = tokio::spawn(async move {
+        let mut ask = move |q: &str| {
+            p2.lock().unwrap().push(q.to_string());
+            Ok(!q.starts_with("Link this computer"))
+        };
+        ac::cmd_devices_request_to(&cc, o, false, Some(&mut ask)).await.map_err(|e| (classify(&e).0, e.to_string()))
+    });
+    let rid = first_rid(&w).await;
+    let mut typed = || Ok(rx.recv_timeout(Duration::from_secs(30))?);
+    let o = ApproveOptions { rid: rid.clone(), code: None, words: Some(mallory_words), json: true, end: false };
+    ac::cmd_approve(&mallory, o, Some(&mut typed)).await.unwrap();
+    let (code, _) = linking.await.unwrap().unwrap_err();
+    assert_eq!(code, EXIT_ERROR);
+    let asked = prompts.lock().unwrap().clone();
+    let want = format!("Link this computer as {} (verified on the workspace log)?", ligus_runtime::display::shown(&mallory_name));
+    assert!(asked.contains(&want), "{asked:?}");
+    let state = ligus_runtime::computer_link::LinkState::load(&comp.data_dir).unwrap();
+    assert!(state.person.is_none() && state.linked_in(w.ws).is_none(), "nothing linked");
+}
+
+/// An expired code writes nothing: past 5 minutes, typing the right code
+/// signs and publishes no admission (the clock is moved, not waited).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_code_writes_nothing_on_the_log() {
+    let (router, clock) = test_relay::router_with_clock();
+    let w = world_on(router).await;
+    let addr = address(&w).await;
+    let before = config_state(&w);
+    let boxc = fresh(&w.root.join("box"));
+    let (tx, rx) = mpsc::channel();
+    let mut o = to(&addr, "build-1", Some(tx));
+    o.wait = Duration::from_secs(60);
+    let bc = boxc.clone();
+    let boxed = tokio::spawn(async move { ac::cmd_admit_request_to(&bc, o, None).await.map_err(|e| (classify(&e).0, e.to_string())) });
+    let rid = first_rid(&w).await;
+    let desk_dir = w.desk.data_dir.clone();
+    let mut typed = || {
+        let real = rx.recv_timeout(Duration::from_secs(30))?;
+        // The person took longer than the code lives.
+        let late = ligus_core::match_code::CODE_TTL_MS + 5_000;
+        clock.advance(late);
+        ac::CLOCK_SKEW.lock().unwrap().insert(desk_dir.clone(), late);
+        Ok(real)
+    };
+    let e = ac::cmd_approve(&w.desk, approve(&w, &rid), Some(&mut typed)).await.unwrap_err();
+    ac::CLOCK_SKEW.lock().unwrap().remove(&w.desk.data_dir);
+    assert_eq!(classify(&e).1, "expired", "{e}");
+    let (code, _) = boxed.await.unwrap().unwrap_err();
+    assert_eq!(code, EXIT_ERROR);
+    sync_once(&w.desk).await.unwrap();
+    assert_eq!(config_state(&w), before, "nothing on the log");
+}
+
+/// A request another Admin is checking is refused (exit 6); a contested
+/// one isn't approved (exit 4) and `--end` ends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approve_respects_claims_and_ends_contested_requests() {
+    let w = world().await;
+    let addr = address(&w).await;
+    let (ben, _) = join_member(&w, "ben").await;
+    // Ben is an Admin.
+    {
+        let mut svc = open_service(&w.desk).unwrap();
+        let acct = svc.author().account_id.unwrap();
+        svc.set_presence_provider(Some(std::sync::Arc::new(crate::admit::RecoveryPresence(ligus_core::testkit::test_recovery_key(acct)))));
+        let ben_id = open_service(&ben).unwrap().author().id.clone();
+        svc.set_member_role(workspace_config_session_id(w.ws), w.ws, ben_id, ligus_core::WorkspaceRole::Admin).unwrap();
+    }
+    sync_once(&w.desk).await.unwrap();
+    let (vic, _) = join_member(&w, "vic").await;
+    for (racer, want) in [(&ben, crate::problem::EXIT_REFUSED), (&vic, EXIT_HUMAN)] {
+        let boxc = fresh(&w.root.join(format!("box-{want}")));
+        let mut o = to(&addr, "build-1", None);
+        o.wait = Duration::from_secs(5);
+        let bc = boxc.clone();
+        let boxed = tokio::spawn(async move { ac::cmd_admit_request_to(&bc, o, None).await.map_err(|e| classify(&e).0) });
+        let rid = first_rid(&w).await;
+        // The racer claims (and opens) first.
+        let (keys, live) = {
+            let svc = open_service(&w.desk).unwrap();
+            (svc.approval_epoch_keys(w.ws, &crate::key_source(&w.desk).unwrap()).unwrap(), live_of(&w, &rid).await)
+        };
+        let me = am::ApproverIdentity {
+            signer: am::Signer::Ed25519(device_key(racer)),
+            device_name: "racer".into(),
+            person: am::ApproverPerson { account_id: Uuid::new_v4(), name: "racer".into() },
+        };
+        let _s = am::ApproverSession::begin(am::MailboxClient::new(&w.relay), &keys[0], &live.request, me, &mut am::SeenSet::in_memory()).await.unwrap();
+        let mut typed = || Ok("0000 0000".to_string());
+        let e = ac::cmd_approve(&w.desk, approve(&w, &rid), Some(&mut typed)).await.unwrap_err();
+        assert_eq!(classify(&e).0, want, "{e}");
+        if want == EXIT_HUMAN {
+            let o = ApproveOptions { rid: rid.clone(), code: None, words: None, json: true, end: true };
+            ac::cmd_approve(&w.desk, o, None).await.unwrap();
+            // The box sees the abort and ends too (and deletes its request).
+            assert_eq!(boxed.await.unwrap().unwrap_err(), EXIT_ERROR, "the box was told it ended");
+            continue;
+        }
+        let _ = boxed.await;
+    }
 }

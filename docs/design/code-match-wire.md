@@ -129,7 +129,7 @@ both `error` and `code` (`{"error":"request_unknown","code":"request_unknown","m
 - anything else, and any 404 from `PUT /v1/mailboxes/{mailbox}`: "this relay
   has no mailbox routes" (fall back to paste, exit 3).
 
-Other problem codes: `rid_exists`, `stale_counter` (409); `bad_put_cap`,
+Other problem codes: `rid_exists`, `stale_counter`, `duplicate_message` (409); `bad_put_cap`,
 `bad_read_key`, `bad_member_auth`, `auth_required`, `token_required`,
 `bad_signature` (401/403); `mailbox_mismatch`, `invalid_request` (400);
 `too_large` (413); `mailbox_full`, `too_many_messages`, `mailbox_register`,
@@ -166,8 +166,10 @@ PUT    /v1/mailboxes/{mailbox}
        sig: Ed25519 by authPub over match_code::register_preimage(mailbox, putCapHash, counter)
        relay checks mailbox == hex(SHA256(authPub)[..16]) and the sig.
        new mailbox -> 201; same counter and same hash -> 200 (idempotent);
-       higher counter -> 200 (reset: the old cap stops working); lower counter, or same
-       counter with another hash -> 409 {code:"stale_counter"}
+       exactly counter + 1 -> 200 (reset: the old cap stops working); anything else
+       (lower, higher by more than one, or the same counter with another hash)
+       -> 409 {code:"stale_counter","counter":<the current counter>}
+       mailbox ≠ the authPub's id -> 400 {code:"mailbox_mismatch"}
        -> {"mailbox","counter"}
 
 PUT    /v1/mailboxes/{mailbox}/requests/{rid}
@@ -180,7 +182,8 @@ GET    /v1/mailboxes/{mailbox}/requests                       member
 
 POST   /v1/mailboxes/{mailbox}/requests/{rid}/msgs            member or requester (read key)
        {"blob":"<= 32 KiB","to":"members"|"requester"|"approver"}
-       -> 201 {"seq":N} | 404 request_unknown (unknown or expired rid) | 429 {code:"too_many_messages"} (10 per rid)
+       -> 201 {"seq":N} | 404 request_unknown (unknown or expired rid) | 409 {code:"duplicate_message"} (the same
+          blob already on this rid) | 429 {code:"too_many_messages"} (10 per rid)
 
 GET    /v1/mailboxes/{mailbox}/requests/{rid}/msgs?after=N&wait=S   member or requester
        long poll up to min(S, 25) s while nothing is after N
@@ -194,6 +197,14 @@ DELETE /v1/mailboxes/{mailbox}/requests/{rid}                 requester (read ke
 Requests and their messages expire 15 minutes after the put. A `rid` is never
 overwritten, and an expired or deleted `rid` can't be put again (the relay
 keeps its hash until the expiry would have passed).
+
+**Who holds the read key.** `readKey` travels inside the request, sealed to
+`sealKey`, so every member that holds the epoch key (and a paired phone,
+through its box's `GET /v1/approvals`) learns it and can read the request's
+messages, post as the requester, or delete the request. Accepted: what it
+reads is sealed to the requester or the approver, anything it posts as the
+requester fails their signature checks, and deleting a request is denial of
+service only, like a racing `open` (design note threat T7).
 
 ## 5. The serve API for a phone approver (`ligus serve`, paired phones only)
 

@@ -222,6 +222,7 @@ pub struct Requester {
     /// A computer's offered digest, and whether it was acknowledged.
     offered: Option<String>,
     acked: Option<String>,
+    other_relay: bool,
     ended: bool,
     pending: Option<PendingStore>,
     dead: Option<DeadLog>,
@@ -314,6 +315,7 @@ impl Requester {
             match_code: None,
             offered: None,
             acked: None,
+            other_relay: false,
             ended: false,
             pending,
             dead,
@@ -322,6 +324,11 @@ impl Requester {
 
     pub fn rid(&self) -> [u8; 16] {
         self.rid
+    }
+
+    /// The approval address the request went to.
+    pub fn address(&self) -> &ApprovalAddress {
+        &self.address
     }
 
     pub fn rid_hex(&self) -> String {
@@ -383,7 +390,7 @@ impl Requester {
                     let Some(open) = &self.open else { continue };
                     let Ok(o) = verify_offer(&v, &self.rid, open) else { continue };
                     self.offered = Some(o.grant_digest.clone());
-                    out.push(RequesterEvent::Offered { grant_digest: o.grant_digest, person_name: crate::display::shown(&o.person.name) });
+                    out.push(RequesterEvent::Offered { grant_digest: o.grant_digest, person_name: super::envelope::hint(&o.person.name) });
                 }
                 MsgType::Result => {
                     let Some(open) = &self.open else { continue };
@@ -472,6 +479,14 @@ impl Requester {
         Ok(())
     }
 
+    /// Take a grant whose connection names another relay than the address
+    /// (check 3 pins the relay otherwise). Only for an operator's explicit
+    /// relay override (the CLI's `LIGUS_RELAY_URL`); check 5 and the redeem
+    /// then use that override, never the grant's relay.
+    pub fn allow_relay_override(&mut self, yes: bool) {
+        self.other_relay = yes;
+    }
+
     /// Tests: acknowledge `digest` without an offer (to reach checks 1 to 4).
     #[cfg(test)]
     pub(crate) fn set_acked_for_tests(&mut self, digest: &str) {
@@ -543,7 +558,7 @@ impl Requester {
         } else if self.match_code.as_ref().is_none_or(|c| c.expired(now_ms)) {
             return Err(GrantError::CodeExpired);
         }
-        check_grant(&self.address, self.kind, open, result, target, now_ms)
+        check_grant(&self.address, self.kind, open, result, target, now_ms, self.other_relay)
     }
 }
 
@@ -551,7 +566,7 @@ fn claimed(open: &VerifiedOpen) -> ClaimedApprover {
     ClaimedApprover {
         device_id: open.approver_device_id,
         account_id: open.person.account_id,
-        name: crate::display::shown(&open.person.name),
+        name: super::envelope::hint(&open.person.name),
         alg: open.approver_alg,
         sig_key: open.approver_sig_key.clone(),
         fingerprint: crate::device_enroll::fingerprint(&open.approver_sig_key),
@@ -609,15 +624,34 @@ pub enum GrantError {
     WrongFounder,
     #[error("the grant's workspace keys are older than the approval address")]
     OldEpoch,
+    #[error("the grant names another relay than the approval address")]
+    WrongRelay,
 }
 
 fn newest_epoch(conn: &WorkspaceConn) -> u32 {
     conn.ek.iter().map(|k| k.v).max().unwrap_or(0)
 }
 
-fn check_conn(address: &ApprovalAddress, conn: &WorkspaceConn) -> Result<(), GrantError> {
+/// The same relay: scheme, host (any case), port and path, ignoring a
+/// trailing slash and the default port.
+pub(crate) fn same_relay(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        url::Url::parse(s.trim()).ok().map(|u| {
+            let port = u.port_or_known_default();
+            (u.scheme().to_string(), u.host_str().map(str::to_ascii_lowercase), port, u.path().trim_end_matches('/').to_string())
+        })
+    };
+    matches!((norm(a), norm(b)), (Some(x), Some(y)) if x == y)
+}
+
+fn check_conn(address: &ApprovalAddress, conn: &WorkspaceConn, other_relay: bool) -> Result<(), GrantError> {
     if conn.id() != address.workspace_id || conn.dm_account.is_some() {
         return Err(GrantError::WrongWorkspace);
+    }
+    // A grant names the relay its connection syncs with: check 5 reads the
+    // log there, so it must be the address's relay.
+    if !other_relay && !same_relay(&conn.relay_url, &address.relay) {
+        return Err(GrantError::WrongRelay);
     }
     let fk = conn.fk.as_deref().map(|s| s.trim().to_ascii_lowercase());
     if fk.as_deref() != Some(address.founder_pin.as_str()) || hex_fixed::<16>(&address.founder_pin).is_none() {
@@ -638,6 +672,7 @@ pub(crate) fn check_grant(
     result: &ResultBody,
     target: GrantTarget<'_>,
     now_ms: i64,
+    other_relay: bool,
 ) -> Result<CheckedGrant, GrantError> {
     let (Some(grant), Some(digest)) = (&result.grant, &result.grant_digest) else {
         return Err(GrantError::NoGrant);
@@ -660,7 +695,7 @@ pub(crate) fn check_grant(
                 return Err(GrantError::NotForThisRequest("that code isn't a box admission".into()));
             };
             // Check 3.
-            check_conn(address, &conn)?;
+            check_conn(address, &conn, other_relay)?;
             Ok(CheckedGrant::Box { invite, invite_id, conn: Box::new(conn) })
         }
         (MatchKind::Computer, GrantTarget::Computer { request, ka, device_key }) => {
@@ -678,7 +713,7 @@ pub(crate) fn check_grant(
             if g.workspace_id != address.workspace_id {
                 return Err(GrantError::WrongWorkspace);
             }
-            check_conn(address, &g.conn)?;
+            check_conn(address, &g.conn, other_relay)?;
             Ok(CheckedGrant::Computer { grant: Box::new(g), person })
         }
         _ => Err(GrantError::NotForThisRequest("the grant is for another kind of request".into())),

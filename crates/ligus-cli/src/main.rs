@@ -2558,8 +2558,8 @@ fn run() -> Result<()> {
         "approvals" => match positional.first().map(|s| s.as_str()) {
             Some("list") | None => rt()?.block_on(approvals_cmd::cmd_list(&cfg, has("--json"))),
             Some("approve") => {
-                let rid = positional.get(1).map(|s| s.to_string()).ok_or_else(|| help::usage_error("usage: ligus approvals approve <rid> --code XXXXXXXX --recovery-words-file PATH"))?;
-                let o = approvals_cmd::ApproveOptions { rid, code: flag_val("--code"), words: flag_val("--recovery-words-file"), json: has("--json") };
+                let rid = positional.get(1).map(|s| s.to_string()).ok_or_else(|| help::usage_error("usage: ligus approvals approve <rid> --recovery-words-file PATH [--code -] | <rid> --end"))?;
+                let o = approvals_cmd::ApproveOptions { rid, code: flag_val("--code"), words: flag_val("--recovery-words-file"), json: has("--json"), end: has("--end") };
                 let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
                 let mut type_code = approvals_cmd::type_code_on_tty;
                 rt()?.block_on(approvals_cmd::cmd_approve(&cfg, o, interactive.then_some(&mut type_code as &mut dyn FnMut() -> Result<String>)))

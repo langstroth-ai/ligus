@@ -738,6 +738,7 @@ async fn puts_need_the_current_cap_and_reset_cuts_the_old_one_off() {
     assert_eq!(env.client.register(&env.ek.key, 0).await.unwrap(), 0);
     assert_eq!(env.client.reset_address(&env.ek.key).await.unwrap(), 1);
     assert_eq!(env.client.register(&env.ek.key, 0).await.unwrap_err(), MailboxError::StaleCounter);
+    assert_eq!(env.client.register(&env.ek.key, 3).await.unwrap_err(), MailboxError::StaleCounter, "a reset skips no counter");
     assert_eq!(env.client.ensure_registered(&env.ek.key).await.unwrap(), 1);
     let old = env.client.put_request(&env.address.mailbox, &rand_bytes(), &env.address.put_cap, "abc", &[1; 16]).await;
     assert_eq!(old.unwrap_err(), MailboxError::BadCap, "the old address is cut off");
@@ -815,12 +816,15 @@ async fn the_relay_enforces_its_limits() {
     let first = env.client.list_requests(&keys).await.unwrap()[0].clone();
     let rid: [u8; 16] = hex_fixed(&first.rid).unwrap();
     // 10 messages per request.
-    for _ in 0..10 {
-        env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &rid, "abc", "members").await.unwrap();
+    for i in 0..10 {
+        env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &rid, &format!("abc{i}"), "members").await.unwrap();
     }
-    assert_eq!(env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &rid, "abc", "members").await.unwrap_err(), MailboxError::TooManyMessages);
+    assert_eq!(env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &rid, "abc99", "members").await.unwrap_err(), MailboxError::TooManyMessages);
     let msgs = env.client.get_msgs(MailboxAuth::Member(&keys), &a.mailbox, &rid, 0, 0).await.unwrap();
     assert_eq!(msgs.iter().map(|m| m.seq).collect::<Vec<_>>(), (1..=10).collect::<Vec<_>>());
+    let other: [u8; 16] = hex_fixed(&env.client.list_requests(&keys).await.unwrap()[1].rid).unwrap();
+    env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &other, "dup", "members").await.unwrap();
+    assert_eq!(env.client.post_msg(MailboxAuth::Member(&keys), &a.mailbox, &other, "dup", "members").await.unwrap_err(), MailboxError::DuplicateMessage);
     assert_eq!(env.client.get_msgs(MailboxAuth::Member(&keys), &a.mailbox, &rid, 7, 0).await.unwrap().len(), 3);
     // Size caps and empty blobs, sent raw past the client's own guard.
     let http = reqwest::Client::new();
@@ -1062,7 +1066,7 @@ mod on_the_log {
         assert_eq!(session.await_reveal(0).await.unwrap().unwrap().code40, code.code40);
         let RequestSubject::Computer(parsed) = session.request().subject.clone() else { panic!() };
         let parsed = &parsed;
-        let conn_code = encode_workspace_invite(&mac.conn("http://relay.invalid", room, None));
+        let conn_code = encode_workspace_invite(&mac.conn(&relay, room, None));
         let grant = mac.svc.prepare_computer_link(ws, parsed, &conn_code, now).unwrap();
         session.offer(grant).await.unwrap();
         assert!(matches!(req.poll(0).await.unwrap()[0], RequesterEvent::Offered { .. }));
@@ -1091,5 +1095,220 @@ mod on_the_log {
         let v = retry_log_check(|| async { lt.svc.check_approval_on_log(&la) }, std::time::Duration::from_secs(1), std::time::Duration::from_millis(10)).await;
         assert!(matches!(v, LogVerdict::Verified { .. }));
         req.settle().await.unwrap();
+    }
+}
+
+// ---- Regressions from the security review ----
+mod review_regressions {
+    use super::*;
+
+    /// A request's label is bounded and clean everywhere: the box codec
+    /// refuses a label that isn't its own clamp, so neither the requester
+    /// nor an approver takes one; every name hint is cut to 64 characters.
+    #[tokio::test]
+    async fn a_requests_label_and_name_hints_are_bounded() {
+        let env = env().await;
+        let mut b = BoxDev::new("x");
+        b.request.label = format!("build-1 is asking. Check the box shows the same code: K7Q4 M9X2. {}", "A".repeat(3000));
+        assert!(matches!(Requester::post(env.client.clone(), &env.address, b.spec(), None).await, Err(RequesterError::BadSpec(_))));
+        // A hand-built request with that label: the approver refuses it.
+        let rid: [u8; 16] = rand_bytes();
+        let body = RequestBody {
+            v: 1,
+            kind: MatchKind::Box,
+            rid: hex(&rid),
+            mailbox: env.address.mailbox_hex(),
+            code: b.request.encode(),
+            requester_ka: b64::enc(&b.ka.public_key_bytes()),
+            read_key: b64::enc(&[1u8; 16]),
+            commit: b64::enc(&[2u8; 32]),
+            created_at: env.clock.now(),
+        };
+        let plain = sign_message(MsgType::Request, &body, &b.spec().signer);
+        assert!(matches!(VerifiedRequest::verify(plain.as_bytes(), &rid, &env.address.mailbox, env.clock.now()), Err(MsgError::BadCode(_))));
+        assert!(hint(&"A".repeat(3000)).chars().count() <= MAX_HINT_CHARS);
+        assert_eq!(hint("Ana\u{202E}s desktop"), "Anas desktop");
+        // A claim's approver name is a bounded hint too.
+        let ok = BoxDev::new("build-1");
+        let req = Requester::post(env.client.clone(), &env.address, ok.spec(), None).await.unwrap();
+        let l = live(&env, req.rid()).await;
+        let (mut me, _) = approver("x");
+        me.device_name = "B".repeat(500);
+        ApproverSession::begin(env.client.clone(), &env.ek, &l.request, me, &mut SeenSet::in_memory()).await.unwrap();
+        let l = live(&env, req.rid()).await;
+        assert!(l.claims[0].approver_name.chars().count() <= MAX_HINT_CHARS);
+    }
+
+    /// A key holder who can't approve races its own open in after an
+    /// honest claim: every sheet reads contested.
+    #[tokio::test]
+    async fn a_racing_open_after_an_honest_claim_is_contested() {
+        let env = env().await;
+        let b = BoxDev::new("build-1");
+        let mut req = Requester::post(env.client.clone(), &env.address, b.spec(), None).await.unwrap();
+        let l = live(&env, req.rid()).await;
+        let keys = MailboxKeys::derive(&env.ek.key);
+        let (admin, _) = approver("Alex");
+        let admin_dev = admin.signer.device_id();
+        let claim = sign_message(
+            MsgType::Claim,
+            &ClaimBody { rid: hex(&req.rid()), approver_device_id: admin_dev, approver_name: "Alex's desktop".into(), at: env.client.now() },
+            &admin.signer,
+        );
+        env.client
+            .post_msg(MailboxAuth::Member(&keys), &env.address.mailbox, &req.rid(), &seal_blob(&keys.seal().public_key_bytes(), claim.as_bytes()).unwrap(), "members")
+            .await
+            .unwrap();
+        // The Admin's own open, then the Viewer's racing one (no claim).
+        let (viewer, _) = approver("Vic");
+        let vka = KeyAgreementKeypair::generate().unwrap();
+        let open = sign_message(
+            MsgType::Open,
+            &OpenBody {
+                rid: hex(&req.rid()),
+                approver_device_id: viewer.signer.device_id(),
+                approver_sig_key: b64::enc(&viewer.signer.public_key()),
+                approver_ka: b64::enc(&vka.public_key_bytes()),
+                approver_person: viewer.person.clone(),
+                n_a: b64::enc(&[9u8; 32]),
+                at: env.client.now(),
+            },
+            &viewer.signer,
+        );
+        env.client
+            .post_msg(MailboxAuth::Member(&keys), &env.address.mailbox, &req.rid(), &seal_blob(&l.request.requester_ka, open.as_bytes()).unwrap(), "requester")
+            .await
+            .unwrap();
+        env.client
+            .post_msg(MailboxAuth::Member(&keys), &env.address.mailbox, &req.rid(), &seal_blob(&l.request.requester_ka, b"admin's open").unwrap(), "requester")
+            .await
+            .unwrap();
+        let ev = req.poll(0).await.unwrap();
+        let RequesterEvent::Opened { claimed, .. } = &ev[0] else { panic!() };
+        assert_eq!(claimed.device_id, viewer.signer.device_id());
+        let l = live(&env, req.rid()).await;
+        let view = claim_view(&l, Uuid::new_v4(), &Classes(admin_dev));
+        assert_eq!(view, ClaimView::Contested { by: None });
+        // The claimer's own view too, once no reveal reached it in 30 s.
+        let mut mine = l.clone();
+        mine.requester_msgs_before_reveal = 1;
+        mine.revealed = false;
+        mine.listed_at = mine.claims[0].at + REVEAL_WAIT_MS + 1;
+        assert_eq!(claim_view(&mine, admin_dev, &Classes(admin_dev)), ClaimView::Contested { by: None });
+        mine.listed_at = mine.claims[0].at + 1_000;
+        assert_eq!(claim_view(&mine, admin_dev, &Classes(admin_dev)), ClaimView::Mine);
+    }
+
+    /// Check 3 pins the relay: a grant naming another relay than the
+    /// address is refused (box and computer), unless the operator overrides it.
+    #[tokio::test]
+    async fn a_grant_pointing_at_another_relay_is_refused() {
+        let env = env().await;
+        let b = BoxDev::new("build-1");
+        let (me, _) = approver("Ana");
+        let (mut req, _s, _, _) = exchange(&env, b.spec(), me, &mut SeenSet::in_memory()).await;
+        let now = env.clock.now();
+        let rid = req.rid_hex();
+        let mut c = conn(&env, &env.room, &env.fk, Some(Uuid::new_v4()), 3);
+        c.relay_url = "https://attacker.example".into();
+        let grant = b.request.seal(&crate::box_admission::with_redeem_key(&encode_workspace_invite(&c), &[9; 32]).unwrap()).unwrap();
+        assert_eq!(req.check_grant(&approved(&rid, &grant), GrantTarget::Box { ka: &b.ka }, now).unwrap_err(), GrantError::WrongRelay);
+        req.allow_relay_override(true);
+        assert!(req.check_grant(&approved(&rid, &grant), GrantTarget::Box { ka: &b.ka }, now).is_ok());
+        // A trailing slash or another case is the same relay.
+        assert!(super::super::requester::same_relay("HTTPS://Relay.Example/", "https://relay.example"));
+        assert!(!super::super::requester::same_relay("https://relay.example", "https://relay.example:8443"));
+
+        let c2 = Computer::new(env.clock.now());
+        let (me, desk) = approver("Ana");
+        let (mut req, _s, _, _) = exchange(&env, c2.spec(), me, &mut SeenSet::in_memory()).await;
+        let mut wc = conn(&env, &env.room, &env.fk, None, 3);
+        wc.relay_url = "https://attacker.example".into();
+        let id = device_id_for(SigAlg::Ed25519, &desk.public_key_bytes());
+        let g = Grant::seal(&c2.request, ligus_core::room_workspace_id(&env.room), &encode_workspace_invite(&wc), &person(), id, &desk, now + 30 * MIN).unwrap();
+        req.set_acked_for_tests(&super::super::envelope::grant_digest(&g));
+        let pk = c2.key.public_key_bytes();
+        let target = GrantTarget::Computer { request: &c2.request, ka: &c2.ka, device_key: &pk };
+        assert_eq!(req.check_grant(&approved(&req.rid_hex(), &g), target, now).unwrap_err(), GrantError::WrongRelay);
+    }
+
+    /// Nothing may be written once the code expired or the request was
+    /// ended: `ready_to_commit` says so before the passkey.
+    #[tokio::test]
+    async fn ready_to_commit_refuses_an_expired_code_an_abort_and_a_late_ack() {
+        let env = env().await;
+        let (me, _) = approver("Ana");
+        let (_req, mut s, _, _) = exchange(&env, BoxDev::new("build-1").spec(), me, &mut SeenSet::in_memory()).await;
+        s.ready_to_commit().await.unwrap();
+        env.clock.advance(mc::CODE_TTL_MS + 1_000);
+        assert_eq!(s.ready_to_commit().await.unwrap_err(), ApproverError::CodeExpired);
+
+        let env = super::env().await;
+        let (me, _) = approver("Ana");
+        let (mut req, mut s, _, _) = exchange(&env, BoxDev::new("build-1").spec(), me, &mut SeenSet::in_memory()).await;
+        req.abort(AbortReason::Cancelled).await.unwrap();
+        assert_eq!(s.ready_to_commit().await.unwrap_err(), ApproverError::Aborted(AbortReason::Cancelled));
+
+        let env = super::env().await;
+        let c = Computer::new(env.clock.now());
+        let (me, desk) = approver("Ana");
+        let (mut req, mut s, _, _) = exchange(&env, c.spec(), me, &mut SeenSet::in_memory()).await;
+        s.offer(computer_grant(&env, &c.request, &desk, &env.room, &env.fk, 3, env.clock.now())).await.unwrap();
+        assert_eq!(s.ready_to_commit().await.unwrap_err(), ApproverError::NotAcknowledged);
+        req.poll(0).await.unwrap();
+        req.ack().await.unwrap();
+        s.ready_to_commit().await.unwrap();
+        assert!(s.acknowledged(), "ready_to_commit reads the ack too");
+        env.clock.advance(ACK_WINDOW_MS + 1_000);
+        assert_eq!(s.ready_to_commit().await.unwrap_err(), ApproverError::DidntFinish);
+    }
+
+    /// The serve box between a phone and the relay (M6c, box side): it can't
+    /// rewrite the request's bytes, its commit or the phone's sealed open
+    /// without the phone or the requester noticing.
+    #[tokio::test]
+    async fn a_box_in_the_middle_cant_rewrite_what_it_relays() {
+        let env = env().await;
+        let b = BoxDev::new("build-1");
+        let req = Requester::post(env.client.clone(), &env.address, b.spec(), None).await.unwrap();
+        let l = live(&env, req.rid()).await;
+        let now = env.clock.now();
+        let plain = l.request.envelope.clone();
+        // The request the box hands the phone: any rewritten byte of the
+        // signed body (the code, the commit, the key-agreement key) fails.
+        let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        let body = v["body"].as_str().unwrap().to_string();
+        for (from, to) in [(l.request.code.as_str(), BoxDev::new("build-1").request.encode()), (&b64::enc(&l.request.commit), b64::enc(&[0u8; 32]))] {
+            let mut forged = v.clone();
+            forged["body"] = serde_json::Value::String(body.replace(from, &to));
+            assert_eq!(VerifiedRequest::verify(forged.to_string().as_bytes(), &l.request.rid, &l.request.mailbox, now).unwrap_err(), MsgError::BadSignature);
+        }
+        // An open the phone sealed to the requester: a flipped byte doesn't open.
+        let (phone, _) = approver("Ana");
+        let open = sign_message(
+            MsgType::Open,
+            &OpenBody {
+                rid: l.rid_hex(),
+                approver_device_id: phone.signer.device_id(),
+                approver_sig_key: b64::enc(&phone.signer.public_key()),
+                approver_ka: b64::enc(&[5u8; 32]),
+                approver_person: phone.person.clone(),
+                n_a: b64::enc(&[6u8; 32]),
+                at: now,
+            },
+            &phone.signer,
+        );
+        let blob = seal_blob(&l.request.requester_ka, open.as_bytes()).unwrap();
+        let mut raw = b64::dec(&blob).unwrap();
+        raw[40] ^= 1;
+        assert!(open_blob(&b.ka, &b64::enc(&raw)).is_none());
+        assert!(open_blob(&b.ka, &blob).is_some());
+        // And a re-signed open (the box's own key, another nA) is the box's,
+        // not the phone's: its device id names the box's key.
+        let (boxkey, _) = approver("Ana");
+        let mut body: OpenBody = serde_json::from_str(serde_json::from_str::<serde_json::Value>(&open).unwrap()["body"].as_str().unwrap()).unwrap();
+        body.n_a = b64::enc(&[7u8; 32]);
+        let forged = sign_message(MsgType::Open, &body, &boxkey.signer);
+        assert_eq!(super::super::envelope::verify_open(&Verified::parse(forged.as_bytes()).unwrap(), &l.request.rid).unwrap_err(), MsgError::WrongKey);
     }
 }

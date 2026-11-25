@@ -41,12 +41,12 @@ mod tests;
 pub use address::{AddressError, ApprovalAddress, ADDRESS_PREFIX};
 pub use approver::{
     claim_view, end_request, list_live, ApproverError, ApproverIdentity, ApproverSession, Approvability, ApproverClassifier, ClaimView, EpochKey,
-    LiveRequest, Listing, SeenClaim, SeenSet, ACK_WINDOW_MS, SEEN_FILE, SEEN_TTL_MS,
+    LiveRequest, Listing, SeenClaim, SeenSet, ACK_WINDOW_MS, REVEAL_WAIT_MS, SEEN_FILE, SEEN_TTL_MS,
 };
 pub use client::{current_address, ListedRequest, MailboxAuth, MailboxClient, MailboxError, MailboxMsg, PutAck, MAX_MSG_BLOB, MAX_REQUEST_BLOB, MAX_WAIT_SECS};
 pub use envelope::{
-    open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
-    ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS,
+    hint, open_blob, seal_blob, AbortBody, AckBody, OfferBody, AbortReason, ApproverPerson, ClaimBody, MsgError, MsgType, OpenBody, Outcome, RequestBody, RequestSubject,
+    ResultBody, RevealBody, Signer, Verified, VerifiedOpen, VerifiedRequest, CLOCK_SKEW_MS, MAX_HINT_CHARS,
 };
 pub use notices::{Notice, NoticeKind, Notices, NOTICES_FILE, NOTICE_TTL_MS};
 pub use log_check::{retry_log_check, LogApproval, LogApprovalCheck, LogSubject, LogVerdict, LOG_CHECK_RETRY_MS};

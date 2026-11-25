@@ -47,7 +47,7 @@ pub struct Notice {
 impl Notice {
     /// The Inbox line.
     pub fn text(&self) -> String {
-        let label = crate::display::shown(&self.label);
+        let label = super::envelope::hint(&self.label);
         match self.kind {
             NoticeKind::Mismatch => format!("Request from {label} didn't match. Nothing was granted."),
             NoticeKind::DidntFinish => format!("Linking {label} didn't finish. Nothing was added."),

@@ -382,6 +382,23 @@ pub struct AckBody {
     pub grant_digest: String,
 }
 
+/// The longest label or name hint any surface shows, in characters.
+pub const MAX_HINT_CHARS: usize = 64;
+
+/// A label or name someone else chose (a request's label, a claim's or an
+/// open's approver name), as every surface shows it: hidden and reordering
+/// characters removed, spaces collapsed, at most [`MAX_HINT_CHARS`]
+/// characters (a cut one ends in "…").
+pub fn hint(raw: &str) -> String {
+    let clean = crate::display::shown(raw);
+    if clean.chars().count() <= MAX_HINT_CHARS {
+        return clean;
+    }
+    let mut out: String = clean.chars().take(MAX_HINT_CHARS - 1).collect();
+    out.push('…');
+    out
+}
+
 /// The code a request carries, decoded and verified as today.
 #[derive(Debug, Clone)]
 pub enum RequestSubject {
@@ -398,7 +415,7 @@ impl RequestSubject {
             Self::Computer(r) => &r.label,
             Self::Phone(c) => &c.label,
         };
-        crate::display::shown(l)
+        hint(l)
     }
 
     /// The 80-bit fingerprint the paste path compares (Details).
