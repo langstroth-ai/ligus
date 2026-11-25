@@ -251,8 +251,10 @@ pub fn result_of(outcome: &CardOutcome, members: &[ligus_core::identity::Workspa
 }
 
 /// Whether the chat can take another open ask from `agent_key` at `now`.
-fn open_caps(session: &ligus_core::ChatSession, agent_key: &str, now: i64) -> Result<(), Refusal> {
-    let live: Vec<&AskState> = session.flow.asks.values().filter(|a| a.is_live(now)).collect();
+pub(crate) fn open_caps(session: &ligus_core::ChatSession, agent_key: &str, now: i64) -> Result<(), Refusal> {
+    // Only cards agents posted through a host count: an ask a member posted
+    // (with whatever expiry they chose) can't crowd agents out.
+    let live: Vec<&AskState> = session.flow.asks.values().filter(|a| a.posted_by.is_none() && a.is_live(now)).collect();
     if live.iter().filter(|a| a.ask.agent_key == agent_key).count() >= MAX_OPEN_PER_AGENT {
         return Err(refuse("too_many_open", format!("you already have {MAX_OPEN_PER_AGENT} open questions in this chat")));
     }

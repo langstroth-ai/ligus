@@ -1153,6 +1153,22 @@ impl LigusMcp {
             .map(|a| a.iter().filter_map(|v| v.as_str()).map(|o| o.trim().chars().take(flow::MAX_ASK_OPTION_CHARS).collect::<String>()).filter(|o| !o.is_empty()).take(flow::MAX_ASK_OPTIONS).collect())
             .unwrap_or_default();
         let timeout = Duration::from_secs(args.get("timeoutSecs").and_then(Value::as_u64).unwrap_or(600).clamp(1, 3600));
+        // The same guards as the decision cards: no option posing as a
+        // Ligus control, and the open caps.
+        if options.iter().any(|o| ligus_proto::ask_text::is_reserved(o)) {
+            Self::refund_ask(st);
+            return (ToolResult::err(Outcome::Denied, json!({"error": "option_reserved", "message": "an option is one of Ligus's own control labels; word it differently"})), None);
+        }
+        let mut caps = Ok(());
+        self.host.with_service(&mut |svc| {
+            if let Ok(Some(s)) = svc.load_in(ctx.workspace_id, ctx.session_id) {
+                caps = decision::open_caps(&s, &ctx.agent_key(), flow::now_ms());
+            }
+        });
+        if let Err(r) = caps {
+            Self::refund_ask(st);
+            return (r.result(), None);
+        }
         let posted = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
             Ok(a) => a,
             Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
