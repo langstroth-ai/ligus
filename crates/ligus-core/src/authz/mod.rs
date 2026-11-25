@@ -41,6 +41,7 @@ pub mod timeline;
 pub mod votes;
 pub mod passkeys;
 pub mod links;
+pub mod profiles;
 pub mod phone;
 pub mod rules;
 
@@ -643,6 +644,18 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         SessionEvent::IdentityLinkRemoved { account_id, link_id } => {
             return match links::removal_ok(env, *account_id, *link_id, on_config, ctx.running, fold, author) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::ProfileUpdated { profile } => {
+            return match profiles::profile_ok(env, profile, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::DeviceLabelSet { label } => {
+            return match profiles::label_ok(env, label, on_config, ctx.running) {
                 Ok(()) => Decision::Allow,
                 Err(why) => Decision::deny(why),
             };

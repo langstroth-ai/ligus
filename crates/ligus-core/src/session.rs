@@ -146,6 +146,16 @@ pub struct ChatSession {
     /// plant one.
     #[serde(skip)]
     pub attachments: BTreeMap<Uuid, crate::attachment::SharedAttachment>,
+    /// Each account's profile (`ProfileUpdated`, identity model v2, 5), on
+    /// the config log. Render-only, folded only from signed events and never
+    /// serialized, so a snapshot can't plant one. A removed member's stays,
+    /// for rendering history.
+    #[serde(skip)]
+    pub profiles: BTreeMap<Uuid, crate::profile::Profile>,
+    /// Device names (`DeviceLabelSet`, identity model v2, 6): device →
+    /// account → label. Render-only and never serialized, like `profiles`.
+    #[serde(skip)]
+    pub device_labels: BTreeMap<Uuid, BTreeMap<Uuid, String>>,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -248,6 +258,8 @@ impl ChatSession {
             updated_at: now,
             authz: Default::default(),
             attachments: BTreeMap::new(),
+            profiles: BTreeMap::new(),
+            device_labels: BTreeMap::new(),
         }
     }
 

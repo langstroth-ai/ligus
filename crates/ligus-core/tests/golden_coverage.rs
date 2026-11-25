@@ -106,6 +106,8 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::AttachmentHashUnblocked { .. } => "attachmentHashUnblocked",
         E::AttachmentShared { .. } => "attachmentShared",
         E::AttachmentDeleted { .. } => "attachmentDeleted",
+        E::ProfileUpdated { .. } => "profileUpdated",
+        E::DeviceLabelSet { .. } => "deviceLabelSet",
         E::Unknown => "unknown",
     }
 }
@@ -128,6 +130,7 @@ const ALL: &[&str] = &[
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
     "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
+    "profileUpdated", "deviceLabelSet",
     "proposalApplyWithdrawn", "workspaceSandboxSet", "workspaceRepoAliasesSet", "workspaceHostAliasSet", "chatBaseRepinned", "attachmentPolicySet", "attachmentHashBlocked", "attachmentHashUnblocked", "attachmentShared",
     "attachmentDeleted",
 ];
@@ -562,6 +565,56 @@ fn repos_v2_goldens() {
             log_head: None,
         });
         ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6005) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the identity v2 lines (design identity-model-v2 5 and 6): a
+/// profile with a name, one with a picture, one clearing it, a device label
+/// and its clearing. Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then
+/// append the lines.
+#[test]
+#[ignore]
+fn identity_v2_goldens() {
+    use ligus_core::profile::{Avatar, DeviceLabel, ProfileChange};
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let cfg = ligus_core::workspace_config_session_id(ws);
+    let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+    let change = |name: Option<&str>, avatar: Option<Avatar>, clear: bool| SessionEvent::ProfileUpdated {
+        profile: ProfileChange { account_id: u(9), display_name: name.map(String::from), avatar, clear_avatar: clear, issued_at_ms: 1_764_000_000_000 },
+    };
+    let cases = [
+        ("profileUpdated", 0u64, change(Some("Mara Ruiz"), None, false)),
+        ("profileUpdated/avatar", 1, change(None, Some(Avatar::new("image/png", &png).unwrap()), false)),
+        ("profileUpdated/clearAvatar", 2, change(None, None, true)),
+        ("deviceLabelSet", 3, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: "Mara's MacBook Air".into() } }),
+        ("deviceLabelSet/clear", 4, SessionEvent::DeviceLabelSet { label: DeviceLabel { device_id: u(1), account_id: u(9), label: String::new() } }),
+    ];
+    let mut out = String::new();
+    for (label, i, payload) in cases {
+        let mut e = SessionEventEnvelope::new(cfg, ws, 701 + i as i64, payload);
+        e.id = u(0x7010 + 2 * i as u128);
+        e.event_id = u(0x7011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x7003) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x7004)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        ligus_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 70, event_id: u(0x7005) }));
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }

@@ -44,6 +44,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::PasskeyRegistered { .. } => false,
         // A link grants nothing, so it needs no presence (§2.2).
         SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => false,
+        // Names and pictures are render-only (identity model v2, 5.2, 6.2).
+        SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => false,
         // Guards.
         SessionEvent::DearthModeChanged { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
         // Zones and the beacon (the governance flow records).

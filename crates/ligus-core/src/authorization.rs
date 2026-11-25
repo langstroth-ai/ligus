@@ -331,6 +331,9 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Linked identities: an account's own (see `authz::links`); removing
         // someone else's is an Admin's.
         SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => WorkspaceRole::Viewer,
+        // A person's own name and picture, a device's own name: any member
+        // (`authz::profiles`).
+        SessionEvent::ProfileUpdated { .. } | SessionEvent::DeviceLabelSet { .. } => WorkspaceRole::Viewer,
         // The attachment policy and blocklist are an Admin's (issue #118).
         SessionEvent::AttachmentPolicySet { .. }
         | SessionEvent::AttachmentHashBlocked { .. }

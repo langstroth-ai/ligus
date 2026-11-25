@@ -43,6 +43,7 @@ pub mod phone_action;
 pub mod policy;
 pub mod presence;
 pub mod process_util;
+pub mod profile;
 pub mod proposal_sets;
 pub mod proposals;
 pub mod runtime;
