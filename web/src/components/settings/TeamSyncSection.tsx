@@ -280,7 +280,7 @@ function SyncSection() {
         </label>
         <InfoTip
           label="Relay access token"
-          text="Needed only for a relay that gates access with tokens. Leave blank for an open relay. Paste only the token value: if yours looks like name:abc123, drop the name: prefix."
+          text="Needed for a relay that gates access with tokens, and to claim a workspace on a relay with membership on (the token must name your account). Leave blank otherwise. Paste only the token value: if yours looks like name:abc123, drop the name: prefix."
         />
       </div>
       <div className="flex items-center gap-2">
