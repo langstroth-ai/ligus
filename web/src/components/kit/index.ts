@@ -5,7 +5,7 @@ export { Sheet } from "./Sheet";
 export { Stepper } from "./Stepper";
 export { DataTable, type Column } from "./DataTable";
 export { Combobox, type ComboOption } from "./Combobox";
-export { Fingerprint, groupFingerprint, spellFingerprint } from "./Fingerprint";
+export { Fingerprint, groupFingerprint, groupMatchCode, spellFingerprint, spellMatchCode } from "./Fingerprint";
 export { AvatarStack, PresenceDot, presenceColor, type Presence, type StackPerson } from "./Presence";
 export { InboxItem } from "./InboxItem";
 export { StatusBar, StatusBarItem } from "./StatusBar";

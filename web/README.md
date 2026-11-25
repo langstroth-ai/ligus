@@ -49,7 +49,8 @@ gallery page in mock mode at `/dev/gallery/` (`?theme=harbor&mode=dark`,
 ### Design QA
 
 `bun run design-qa` (with `bun run dev:mock` running) renders the mock app in
-headless Chrome across seven themes and six views and checks each capture:
+headless Chrome across seven themes and eight views (including the Inbox with
+a code-match approval row and the approval sheet open) and checks each capture:
 text contrast (WCAG AA), no text below 11px, at most one banner (elements
 marked `data-calm="banner"`), at most three count badges and at most four
 accent-filled regions. What already breaks a rule is recorded in
@@ -58,6 +59,22 @@ change that fixes some of it, shrink the baseline with
 `node tools/scan.mjs --update-baseline` (it never grows). `--out DIR` keeps
 the screenshots and a `report.json`; `--only chat,review` limits the views.
 CI runs it in `.github/workflows/design-qa.yml` and uploads the screenshots.
+
+### The code-match approval sheet
+
+`ApprovalSheet` (opened from the Inbox's `approval` rows, or from a pasted
+request that is live in the mailbox) follows the code rules in
+docs/design/code-match-approval.md 7.1 and 7.2: the code is one line, 28px
+mono, two groups (`MatchCode`), and screen readers hear it spelled in groups
+(`spellMatchCode` in `kit/Fingerprint`: "Code: K, 7, Q, 4. M, 9, X, 2."). It
+has no Copy button and isn't hidden during screen sharing (it isn't a
+secret). **Codes match** stays disabled for `HOLD_MS` (3 s) after the code
+appears. The countdown is one muted number in the sheet's corner
+(`Sheet corner`), the "?" sits beside the title (`Sheet titleAddon`), and
+the fingerprint lives under a collapsed Details. No banner. The approval
+address (`ApprovalAddress`, with Copy) sits in Admit a box and in My devices'
+Add a computer and Add a phone. Mock knobs: `&approvals=box|computer|contested|several|mismatch`,
+`&approvalphase=confirming`.
 
 ### Panes: rows, menus, one primary action
 

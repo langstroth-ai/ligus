@@ -8,6 +8,7 @@ vi.mock("@/lib/ipc", () => ({
   inspectComputerRequest: vi.fn(),
   addComputer: vi.fn(),
   removeDuplicateMember: vi.fn(async () => {}),
+  approvalMatchPaste: vi.fn(async () => null),
 }));
 vi.mock("@/components/Toast", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -109,5 +110,18 @@ describe("AddComputerPanel", () => {
     expect((await screen.findByTestId("add-computer-remove-old")).textContent).toContain("Alex (lt)");
     await userEvent.click(screen.getByRole("button", { name: "Remove…" }));
     await waitFor(() => expect(ipc.removeDuplicateMember).toHaveBeenCalledWith("m-lt"));
+  });
+
+  it("a pasted request that is live runs the code match instead of the fingerprint", async () => {
+    vi.mocked(ipc.approvalMatchPaste).mockResolvedValueOnce({ workspaceId: "w1", rid: "r9" });
+    const { approvalSheet } = await import("@/state/approvals");
+    const onCancel = vi.fn();
+    render(<AddComputerPanel onDone={() => {}} onCancel={onCancel} />);
+    await userEvent.click(screen.getByLabelText("The computer's link request"));
+    await userEvent.paste("liguslink1:live");
+    await waitFor(() => expect(approvalSheet.snapshot()).toEqual({ workspaceId: "w1", rid: "r9" }));
+    expect(onCancel).toHaveBeenCalled();
+    expect(ipc.inspectComputerRequest).not.toHaveBeenCalled();
+    approvalSheet.close();
   });
 });

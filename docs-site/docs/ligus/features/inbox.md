@@ -16,6 +16,8 @@ Most urgent first:
 | Item | What you do |
 |---|---|
 | **Another phone answered the code you showed** | **Review** reopens the alert, where you compare fingerprints and keep or revoke the phone you added (see [Ligus on your phone](phone-app.md)) |
+| **build-1 wants to join** / **lt on mbp wants to be your device** | a box or a device of yours sent its request to the workspace's approval address. Click the row to compare the code ([below](#approving-by-code)); nothing is approved from the row. More than three collapse into one row |
+| **Request from build-1 didn't match. Nothing was granted.** | kept for a day. The **?** says what to do: check the device you're adding, start again from it, and tell an Admin if it happens twice. **Linking … didn't finish. Nothing was added.** is the same for a computer that never confirmed. Neither is counted |
 | **This workspace's sandbox grants changed** | **Review** opens Settings → Sandbox; **Dismiss** marks it seen ([guards](guards.md)) |
 | **This workspace wants to run N commands** | **Review** lists each command the repository ships; nothing runs until you enable it ([Trust this workspace](../concepts/security.md#workspace-trust)) |
 | **An agent asked you something** | answer it right there (pick an option or type an answer), or **Open chat**. The agent's turn waits until someone answers |
@@ -27,6 +29,46 @@ Most urgent first:
 
 An item leaves the Inbox when it's done: the question is answered, you
 voted, the proposal was applied, you reviewed or dismissed the change.
+
+## Approving by code
+
+A box (`ligus admit request --to <address>`) or another computer of yours
+(`ligus devices request --to <address>`) sends its request to the
+workspace's **approval address**. Copy it from the workspace menu → **Admit
+a box** (the first tab), or from Settings → Profile → My devices → **Add a
+computer** (and **Add a phone** → Can't scan?). The address isn't a secret
+and grants nothing; an Admin can **Reset address**, after which requests to
+the old one stop arriving.
+
+The request shows in the Inbox of the people who can approve it: Admins for
+a box, and for a device of yours, your desktops that hold your account key.
+Clicking it opens a sheet:
+
+![Admit build-1?: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-light.png#only-light){ width="760" loading=lazy }
+![Admit build-1?: the code K7Q4 M9X2, large, with Codes match and Don't match (demo data)](../images/desktop-approval-sheet-dark.png#only-dark){ width="760" loading=lazy }
+
+1. Both screens show the same 8-character code, such as `K7Q4 M9X2`. There
+   is no Copy button: the code is for comparing, not for sending. It isn't a
+   secret, so it stays visible while you share your screen.
+2. Check that the box, or the device you're holding, shows the same code.
+3. **Codes match** enables after 3 seconds, then asks for your passkey. The
+   passkey sheet names the box or device and the code. For a computer, the
+   sheet first says *Waiting for the computer to confirm…*: nothing is
+   signed until the computer confirms (2 minutes at most).
+4. **Don't match** ends the request. Nothing is granted, and the Inbox keeps
+   a note for a day.
+
+The quiet number in the corner is the code's time left (5 minutes). Details
+(collapsed) hold the kind, the label, the 80-bit fingerprint, when it was
+asked and the relay. When someone else is already checking a request, the
+sheet says so ("Ben's desktop is checking this request"). When a device that
+can't approve it opened it, the sheet says it may be an attempt to intercept
+it and offers **End this request**.
+
+Pasting a request in **Admit a box** or **Add a computer** still works. When
+the pasted text is a request that's also waiting in the mailbox, the same
+code sheet opens instead of the fingerprint compare. Otherwise you compare
+the fingerprint as before.
 
 ## Suggestions
 

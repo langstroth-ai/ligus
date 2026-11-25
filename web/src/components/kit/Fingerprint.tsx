@@ -19,6 +19,24 @@ export function spellFingerprint(groups: string[]): string {
   return groups.map((g) => g.split("").join(" ")).join(", ");
 }
 
+/// A code-match code ("K7Q4 M9X2", Crockford base32) as its two groups:
+/// upper case, spaces and dashes ignored, I and L read as 1 and O as 0.
+export function groupMatchCode(code: string): string[] {
+  const clean = code
+    .replace(/[\s-]/g, "")
+    .toUpperCase()
+    .replace(/[IL]/g, "1")
+    .replace(/O/g, "0");
+  return [clean.slice(0, 4), clean.slice(4, 8)].filter(Boolean);
+}
+
+/// "K7Q4 M9X2" → "K, 7, Q, 4. M, 9, X, 2.": letter by letter, in groups.
+export function spellMatchCode(code: string): string {
+  return groupMatchCode(code)
+    .map((g) => `${g.split("").join(", ")}.`)
+    .join(" ");
+}
+
 export function Fingerprint({
   value,
   label = "Fingerprint",
