@@ -936,19 +936,33 @@ pass a permission request off as a question or swap the options:
    payload). Parse it strictly. When the app knows the signer's Ed25519
    key (`signed.signerDeviceId`), verify `signed.signature` over it.
 2. Decode the payload (`{"kind":"flowRecorded","record":{"type":"humanAsk",…}}`)
-   and draw from it: the question and options as **plain text** (no
-   Markdown, no links; strip bidi, zero-width and control characters;
-   options on one line), in the record's order, full width. `effect`
-   present: a **grant** card. Its buttons are Ligus's labels **by index**,
-   0 allows and 1 denies: `["Allow once", "Deny"]`, or `["Allow for the rest
-   of the session", "Deny"]` when `effect.standing`. Never use the record's
-   option text for them. `effect.tooLarge`: Deny only.
+   with the strict parser (duplicate keys refused) and draw from it: the
+   question and options as **plain text** (no Markdown, no links; strip
+   bidi, zero-width and control characters; options on one line), in the
+   record's order, full width. A **grant** needs both the signed bytes and
+   the box to agree: the record carries an `effect` (or the older
+   `permission: true`) **and** `card.kind` is `permission` (the box's own
+   fold counts it). An effect only one side claims is drawn as a plain
+   question with a muted note that it grants nothing. When the app knows
+   the signer's Ed25519 key, the signature must verify or there is no card.
+   A grant's buttons are Ligus's labels **by index**, 0 allows and 1
+   denies: `["Allow once", "Deny"]`, or `["Allow for the rest of the
+   session", "Deny"]` when `effect.standing`. Never use the record's option
+   text for them. `effect.tooLarge`: Deny only. The detail is shown
+   verbatim with every hidden or control character made visible as
+   `⟨U+200B⟩` (`ask_view::visible_detail`), never silently dropped.
 3. Compute `askDigest = hex(SHA-256("ligus-ask-digest-v1\0" ‖ askId (16
-   raw bytes) ‖ payload bytes))` from those payload bytes (golden vectors:
-   `crates/ligus-core/tests/golden/ask_digest_v1.json`), and send it in the
-   `answer` action. Check the preimage the box drafts names that `askId`,
-   that digest and the `optionIndex` you tapped (`check_phone_action_preimage`
-   does). An answer over any other digest counts for nothing.
+   raw bytes) ‖ canonical payload))`: parse the payload bytes and write them
+   back as canonical JSON (keys sorted by UTF-16 code units, no whitespace,
+   RFC 8785 string escapes, integers in decimal) with your own writer, never
+   a platform JSON encoder's escaping or number formatting (golden vectors,
+   re-encoded and escaped cases included:
+   `crates/ligus-core/tests/golden/ask_digest_v1.json`, whose `canonical`
+   field shows the bytes hashed). Send it in the `answer` action. Check
+   the preimage the box drafts names that `askId`, that digest and the
+   `optionIndex` you tapped (`check_phone_action_preimage` does). An answer
+   over any other digest counts for nothing. `signed` is the envelope the
+   fold credits with the ask, never a refused record under the same id.
 4. **Face ID on every answer** in 0.4 (decision D1), as for every phone
    action but a post. The reason names the effect for a grant: "Allow
    Builder to run ‹detail cut to 60› on ‹host›". A grant with

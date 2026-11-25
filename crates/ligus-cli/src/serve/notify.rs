@@ -186,11 +186,15 @@ pub const ASK_PUSH_CHARS: usize = 80;
 /// you · Fixtures" (or "asks Admins", "asks the room"), cut to
 /// [`ASK_PUSH_CHARS`], with the question as the preview (the previews
 /// setting applies) and no options or actions: nothing is decided from the
-/// lock screen. Only when the user is in its audience. An ask someone other
-/// than the agent or its host posted is sent as theirs.
+/// lock screen. Only when the user is in its audience, and never for an ask
+/// someone other than the agent or its host posted.
 pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Option<(Notice, PushContent)> {
     let a = &st.ask;
-    if !st.is_open() || !in_audience(st, me) {
+    // A member-posted ask (someone signed it under an agent's name) is shown
+    // as theirs in the chat, but never pushed: a member can't use the
+    // agents' question channel to reach people's lock screens, nor spend
+    // their push cap.
+    if !st.is_open() || !in_audience(st, me) || st.posted_by.is_some() {
         return None;
     }
     let outside = a.origin.as_ref().is_some_and(|o| o.via == ligus_core::flow::ORIGIN_OUTSIDE);
@@ -201,8 +205,7 @@ pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Opt
             .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
             .map(|x| format!("@{}", shown(&x.name)))
     };
-    let poster = if outside { None } else { st.poster_name(&s.members).map(|n| shown(&n)) };
-    let agent = poster.clone().unwrap_or_else(|| agent_name.clone().unwrap_or_else(|| "An agent".into()));
+    let agent = agent_name.clone().unwrap_or_else(|| "An agent".into());
     let whom = match a.audience.as_ref() {
         Some(au) if au.kind == ligus_core::flow::AUDIENCE_PEOPLE => "asks you",
         Some(au) if au.floor() == Some(WorkspaceRole::Owner) => "asks Owners",
@@ -212,12 +215,7 @@ pub fn for_ask(s: &ChatSession, st: &ligus_core::flow::AskState, me: &Me) -> Opt
     let chat = shown(&s.title);
     let chat = if chat.trim().is_empty() { "Untitled".to_string() } else { chat };
     let mut notice = ntfy::ask_notice(&agent, &chat, s.id);
-    let mut title = format!("{agent} {whom} · {chat}");
-    if poster.is_some() {
-        // Posted under an agent's name by someone else: say so.
-        let not_from = format!(" (not from {})", agent_name.as_deref().unwrap_or("the agent"));
-        title = format!("{agent}{not_from} {whom} · {chat}");
-    }
+    let title = format!("{agent} {whom} · {chat}");
     let title = ligus_proto::ask_text::cut(&title, ASK_PUSH_CHARS);
     notice.title = title.clone();
     let mut push = base("ask.pending", s, title);
@@ -730,11 +728,10 @@ mod tests {
         assert!(for_recruit(&sessions, &f.s, &stop, &me).is_none());
     }
 
-    /// An ask someone else posted under an agent's name is pushed as theirs,
-    /// by the roster's name for them (not the name their stamp chose), and
-    /// says it isn't from the agent.
+    /// An ask someone else posted under an agent's name is never pushed
+    /// (it stays in the chat as theirs, and spends nobody's push cap).
     #[test]
-    fn a_forged_ask_is_pushed_as_its_posters() {
+    fn a_member_posted_ask_is_never_pushed() {
         let mut s = ChatSession::new("Fixes", Uuid::new_v4(), "rt");
         let bo = actor("bo-1", "Bo");
         s.members.push(member(&bo, WorkspaceRole::Contributor, 1));
@@ -747,9 +744,7 @@ mod tests {
             ..Default::default()
         };
         let me = Me::in_chat(&bo, &s, &DeviceLinks::default());
-        let (notice, push) = for_ask(&s, &st, &me).unwrap();
-        assert!(notice.title.starts_with("Bo (not from @coder) asks the room"), "{}", notice.title);
-        assert_eq!(push.sender.as_deref(), Some("Bo"));
+        assert!(for_ask(&s, &st, &me).is_none());
         let own = ligus_core::flow::AskState { ask: ligus_core::flow::HumanAsk { agent_key: key, question: "Which db?".into(), ..Default::default() }, ..Default::default() };
         let (notice, _) = for_ask(&s, &own, &me).unwrap();
         assert_eq!(notice.title, "@coder asks the room · Fixes");

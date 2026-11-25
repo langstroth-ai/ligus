@@ -5301,3 +5301,62 @@ async fn the_phone_answers_a_decision_card_over_its_signed_ask() {
     assert_eq!(st.answered_by.iter().map(|v| v.member_id.as_str()).collect::<Vec<_>>(), vec![person.as_str()], "{st:?}");
     assert_eq!(st.answer.as_ref().map(|a| a.text.as_str()), Some("keep the dev db"));
 }
+
+/// The signed ask a phone gets is the envelope the fold credits with the
+/// ask, never a refused squat under the same id, even one that sorts first
+/// (a smaller canonical key).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_gets_the_credited_ask_never_a_refused_squat() {
+    use ligus_core::flow::{AskAudience, FlowRecord, HumanAsk, ASK_V2};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Fixtures" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    bind_here(&h, &this_host(&h).await, &[h.agent_id]).await;
+    let ask = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        turn_id: Uuid::new_v4(),
+        agent_key: ligus_core::flow::agent_key(Some(h.agent_id)),
+        question: "Use Postgres or SQLite?".into(),
+        options: vec!["Postgres".into(), "SQLite".into()],
+        at_ms: ligus_core::flow::now_ms(),
+        v: ASK_V2,
+        audience: Some(AskAudience::room(ligus_core::WorkspaceRole::Contributor)),
+        ..Default::default()
+    };
+    h.handle.shared.lock().as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, FlowRecord::HumanAsk(ask.clone()))).unwrap();
+    // A stranger's key signs a different card under the same id, at lamport
+    // 1: it sorts before the real one, and the fold refuses it.
+    let squat = HumanAsk { question: "Deny the cleanup?".into(), options: vec!["Yes, deny".into(), "No".into()], ..ask.clone() };
+    let kp = ligus_core::crypto::SigningKeypair::generate().unwrap();
+    let device = ligus_core::crypto::device_id_for(ligus_core::crypto::SigAlg::Ed25519, &kp.public_key_bytes());
+    let mut env = ligus_core::SessionEventEnvelope::new(chat_id, ws, 1, ligus_core::SessionEvent::FlowRecorded { record: FlowRecord::HumanAsk(squat) });
+    env.lamport = 1;
+    let mut actor = ligus_core::ActorIdentity::new("mallory", "Mallory", ligus_core::ActorKind::Human);
+    actor.device_id = Some(device);
+    env.actor_stamp = Some(ligus_core::ActorStamp {
+        actor,
+        recorded_at: ligus_core::Timestamp::now(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev: None,
+        sig_alg: Default::default(),
+        log_head: None,
+    });
+    ligus_core::crypto::sign_envelope(&mut env, device, &kp);
+    let squat_key = env.canonical_key();
+    h.handle.shared.lock().store().append_envelope(&env).unwrap();
+    let real_key = {
+        let svc = h.handle.shared.lock();
+        let s = svc.load_in(ws, chat_id).unwrap().unwrap();
+        assert_eq!(s.flow.asks[&ask.ask_id].ask.question, "Use Postgres or SQLite?", "the fold credits the real ask");
+        svc.store().list_copies_in(ws, chat_id).unwrap().into_iter().find(|e| Some(e.event_id) == s.flow.asks[&ask.ask_id].event_id).unwrap().canonical_key()
+    };
+    assert!(squat_key < real_key, "the squat sorts first");
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    let pre = b64d(listed["asks"][0]["signed"]["preimage"].as_str().unwrap());
+    let payload: Value = serde_json::from_slice(&preimage_payload(&pre)).unwrap();
+    assert_eq!(payload["record"]["question"], "Use Postgres or SQLite?", "the phone gets the credited envelope");
+}
