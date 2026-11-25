@@ -104,7 +104,7 @@ pub(crate) fn turn_repo(state: &AppState, session: &ChatSession) -> Result<Optio
     };
     let prepared = rr::prepare_chat(&ready, session, &label)?;
     // A turn in a scratch repository is activity: its cleanup clock restarts.
-    rr::scratch::touch(state.service.lock().unwrap().store(), &ready.path, rr::scratch::now());
+    rr::scratch::turn_in(state.service.lock().unwrap().store(), &ready.path, rr::scratch::now());
     if let Some(pin) = &prepared.pin {
         if let Err(e) = state.service.lock().unwrap().pin_chat_base(session.id, session.workspace_id, ready.repo.id, pin) {
             tracing::warn!(target: "repos", "couldn't pin the chat's base: {e}");

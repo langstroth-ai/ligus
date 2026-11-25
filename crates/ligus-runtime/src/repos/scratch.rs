@@ -393,6 +393,20 @@ pub fn touch(store: &EventStore, path: &Path, now: i64) -> bool {
     .is_ok()
 }
 
+/// Before a turn in the checkout at `path`: when it is one of this host's
+/// live scratch repositories, record the activity and let agent processes
+/// work in exactly that folder (it is usually inside the data dir, which
+/// they are otherwise refused). The sandbox's rules for the turn's worktree
+/// are the same as for any repository. `false` when it isn't one.
+pub fn turn_in(store: &EventStore, path: &Path, now: i64) -> bool {
+    let Some(e) = by_path(store, path) else { return false };
+    if verify_dir(&e).is_err() {
+        return false;
+    }
+    crate::executor::allow_agent_dir(&e.path);
+    touch(store, path, now)
+}
+
 /// Note that `chat` works in it (or, with `on` false, no longer does).
 pub fn set_chat(store: &EventStore, id: Uuid, chat: Uuid, on: bool, now: i64) -> Result<ScratchRepo> {
     update(store, id, |e| {

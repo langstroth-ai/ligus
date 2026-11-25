@@ -61,7 +61,7 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                     }
                     crate::repos::ensure_chat_base(r);
                     // A turn in a scratch repository is activity.
-                    ligus_runtime::repos::scratch::touch(lock(svc).store(), r, ligus_runtime::repos::scratch::now());
+                    ligus_runtime::repos::scratch::turn_in(lock(svc).store(), r, ligus_runtime::repos::scratch::now());
                 }
                 return Ok(RepoTurn { repo_root, context: crate::repos::turn_context(data_dir, s.id), base: None });
             }
@@ -79,7 +79,7 @@ pub async fn repo_for_turn(data_dir: &Path, svc: &Mutex<ChatService>, s: &ChatSe
                     let label = host_label.to_string();
                     tokio::task::spawn_blocking(move || rr::prepare_chat(&ready, &s, &label)).await.map_err(|e| e.to_string())??
                 };
-                ligus_runtime::repos::scratch::touch(lock(svc).store(), &ready.path, ligus_runtime::repos::scratch::now());
+                ligus_runtime::repos::scratch::turn_in(lock(svc).store(), &ready.path, ligus_runtime::repos::scratch::now());
                 if let Some(pin) = &prepared.pin {
                     if let Err(e) = lock(svc).pin_chat_base(s.id, s.workspace_id, ready.repo.id, pin) {
                         eprintln!("repos: couldn't pin the chat's base: {e}");
